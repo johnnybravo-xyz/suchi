@@ -4,6 +4,7 @@ use (
 	./core
 	./distro
 	./plugin-api
+	./plugins/llm-classifier
 	./plugins/local-auth
 	./plugins/oidc
 )
