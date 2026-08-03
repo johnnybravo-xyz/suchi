@@ -1,0 +1,49 @@
+# suchi — English UI strings.
+#
+# Flat key → phrase. Sections are convention only; the loader flattens.
+# Keep values plain-text; HTML lives in templates.
+
+# Navigation / chrome
+nav.brand: suchi
+nav.documents: Documents
+nav.inbox: Inbox
+nav.categories: Categories
+nav.settings: Settings
+
+# Document list
+doc.list.title: Documents
+doc.list.empty: No documents yet.
+doc.list.count: "%d documents"
+doc.list.col.title: Title
+doc.list.col.correspondent: Correspondent
+doc.list.col.type: Type
+doc.list.col.category: Category
+doc.list.col.created: Created
+doc.list.col.tags: Tags
+doc.list.pager.prev: Previous
+doc.list.pager.next: Next
+doc.list.pager.page: "Page %d"
+
+# Document detail
+doc.detail.title: Document
+doc.detail.section.metadata: Metadata
+doc.detail.section.content: Content
+doc.detail.section.notes: Notes
+doc.detail.field.title: Title
+doc.detail.field.created: Created
+doc.detail.field.added: Added
+doc.detail.field.correspondent: Correspondent
+doc.detail.field.type: Type
+doc.detail.field.category: Category
+doc.detail.field.tags: Tags
+doc.detail.field.original: Original file
+doc.detail.field.archive: Archive (OCR)
+doc.detail.field.asn: Archive serial
+doc.detail.field.legacy: Imported from Bundle (id)
+doc.detail.download.original: Download original
+doc.detail.download.archive: Download archive
+doc.detail.notes.empty: No notes on this document.
+
+# Global
+none: "—"
+unclassified: Uncategorized
