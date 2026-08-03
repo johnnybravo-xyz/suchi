@@ -97,11 +97,15 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		conflict bool
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Alive collision → 409.
+		// Alive collision → 409. Scoped per-owner so two household
+		// members can hold the same insurance PDF independently — the
+		// design's "no silent divergence between users" line from the
+		// v6 changelog.
 		var aliveID int64
 		errAlive := tx.QueryRowContext(r.Context(),
-			`SELECT id FROM documents WHERE original_blob = ? AND trashed_at IS NULL`,
-			ref.SHA256,
+			`SELECT id FROM documents
+			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
+			principal.UserID, ref.SHA256,
 		).Scan(&aliveID)
 		if errAlive == nil {
 			outID = aliveID
@@ -112,12 +116,13 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return errAlive
 		}
 
-		// Trashed collision → undelete.
+		// Trashed collision → undelete, still owner-scoped.
 		var trashedID int64
 		errTrashed := tx.QueryRowContext(r.Context(),
-			`SELECT id FROM documents WHERE original_blob = ? AND trashed_at IS NOT NULL
+			`SELECT id FROM documents
+			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NOT NULL
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			ref.SHA256,
+			principal.UserID, ref.SHA256,
 		).Scan(&trashedID)
 		if errTrashed == nil {
 			if _, err := tx.ExecContext(r.Context(),
