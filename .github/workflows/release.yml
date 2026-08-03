@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write   # for keyless cosign signing
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - name: build + push -slim image
+        id: slim
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/johnnybravo-xyz/suchi:${{ github.ref_name }}-slim
+            ghcr.io/johnnybravo-xyz/suchi:latest-slim
+
+      - name: build + push full image
+        id: full
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: full
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/johnnybravo-xyz/suchi:${{ github.ref_name }}
+            ghcr.io/johnnybravo-xyz/suchi:latest
+
+      # Keyless cosign sig + SBOM for supply-chain hygiene (E1).
+      - name: cosign sign slim
+        run: cosign sign --yes ghcr.io/johnnybravo-xyz/suchi@${{ steps.slim.outputs.digest }}
+      - name: cosign sign full
+        run: cosign sign --yes ghcr.io/johnnybravo-xyz/suchi@${{ steps.full.outputs.digest }}
+      - name: syft SBOM (slim)
+        run: syft ghcr.io/johnnybravo-xyz/suchi:${{ github.ref_name }}-slim -o spdx-json > slim.sbom.json
+      - name: syft SBOM (full)
+        run: syft ghcr.io/johnnybravo-xyz/suchi:${{ github.ref_name }} -o spdx-json > full.sbom.json
+      - name: attach SBOMs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            slim.sbom.json
+            full.sbom.json
+
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        working-directory: distro
+        run: |
+          bin=suchi-${GOOS}-${GOARCH}
+          [ "$GOOS" = "windows" ] && bin=${bin}.exe
+          go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o /tmp/$bin ./cmd/suchi
+      - name: upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/suchi-*

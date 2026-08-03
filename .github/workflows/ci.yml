@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - plugin-api
+          - core
+          - plugins/local-auth
+          - plugins/oidc
+          - distro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            **/go.sum
+      - name: go vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: go test
+        working-directory: ${{ matrix.module }}
+        # -race would be nice but modernc/sqlite is pure-Go by design;
+        # enabling CGO for race just to test SQLite defeats the point.
+        run: go test -count=1 -timeout 60s ./...
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - name: staticcheck across all modules
+        # go.work makes staticcheck see every module in one pass.
+        run: staticcheck ./plugin-api/... ./core/... ./plugins/local-auth/... ./plugins/oidc/... ./distro/...
+
+  gofmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: gofmt -d must be empty
+        run: |
+          out=$(gofmt -d $(find . -type f -name '*.go' -not -path './*/vendor/*'))
+          if [ -n "$out" ]; then
+            echo "$out"
+            exit 1
+          fi
+
+  build-matrix:
+    # Cross-compile every OS/arch combo we ship. Cross-compile only — this
+    # job proves the code compiles for every target; images/signing happen
+    # in release.yml.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - name: build suchi
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        working-directory: distro
+        run: |
+          go build -trimpath -ldflags="-s -w" -o /tmp/suchi ./cmd/suchi
+          ls -la /tmp/suchi

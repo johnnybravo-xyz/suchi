@@ -1,0 +1,9 @@
+go 1.26.0
+
+use (
+	./core
+	./distro
+	./plugin-api
+	./plugins/local-auth
+	./plugins/oidc
+)
