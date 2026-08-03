@@ -1,0 +1,140 @@
+---
+title: "HTTP API"
+description: "JSON endpoints under /api/ — current + planned Paperless-mobile compat."
+---
+
+Phase 0/1 surface — grows through Phase 2 (ingest endpoints) and
+Phase 4 (Paperless-mobile compat surface).
+
+All endpoints under `/api/` return JSON. Everything else is either a
+UI page (HTML), a static asset, or a blob stream. Every request gets
+an `X-Request-Id` header — carry it into bug reports.
+
+## Auth
+
+Two credential shapes, both routed through the same auth chain:
+
+- **Cookie** — set by `POST /login` (form-encoded) or the OIDC
+  callback. HttpOnly + SameSite=Lax + Secure when TLS is in use.
+- **Token** — `Authorization: Token <hex>` header. Deliberately not
+  `Bearer` — matches Paperless-ngx wire format so the mobile apps
+  work unchanged.
+
+## Endpoints (as of Phase 1)
+
+### `GET /healthz`
+
+Process-alive. Cheap. Never touches the DB. Suitable for k8s
+liveness probes.
+
+**200** `{"status":"ok"}`
+
+### `GET /readyz`
+
+DB-reachable + schema at the expected `user_version`. Suitable for
+load-balancer readiness gating.
+
+**200** `{"status":"ok","user_version":<int>}`
+**503** `{"status":"db_unreachable"|"schema_stale", ...}`
+
+### `GET /metrics`
+
+Prometheus exposition. Includes:
+
+- `suchi_http_requests_total{method,route,status}`
+- `suchi_http_request_duration_seconds{method,route}` (histogram)
+- `suchi_jobs_pending`, `suchi_jobs_running` (gauges)
+- `suchi_jobs_retries_total{kind}`, `suchi_jobs_dead_total{kind}`
+- Standard Go runtime + process collectors.
+
+### `POST /setup`
+
+First-boot admin creation. Consumes the one-time setup token minted
+at boot when no users exist. `409 Conflict` if already initialized.
+
+Request:
+```json
+{ "token": "<hex>", "email": "you@example.com",
+  "display_name": "You (Admin)", "password": "..." }
+```
+
+### `POST /api/login`
+
+Local-password login. Content-Type decides the response shape:
+
+- `application/json` → returns `{"token": "<hex>"}` (an API token).
+  This is the mobile-compat path.
+- `application/x-www-form-urlencoded` → plants a session cookie and
+  returns 204 (the browser path — served under `POST /login`).
+
+**401** on bad credentials. One error path for every failure mode —
+no username/password oracle.
+
+### `GET /api/whoami`
+
+Returns the authenticated Principal:
+
+```json
+{ "kind": "user|token", "user_id": 1, "email": "you@example.com",
+  "role": "admin|member", "authn_by": "local-auth|oidc" }
+```
+
+**401** if anonymous.
+
+### `POST /api/documents/`
+
+Multipart upload. Streams the file into the CAS by SHA-256; the
+document row lands in one write transaction alongside the blob write.
+MIME is sniffed server-side — the multipart Content-Type header is
+a hint only.
+
+**201 Created** `{ "id": ..., "sha256": "...", "size": ..., "mime_type": ..., "title": "..." }`
+
+Dedup state machine:
+
+- Hash matches an existing **live** doc → `409 Conflict` with the
+  existing id in the body.
+- Hash matches only a **trashed** doc → clears `trashed_at`, returns
+  `200 OK` with `"restored": true`.
+- Fresh hash → new row, `201 Created`.
+
+### `DELETE /api/documents/{id}`
+
+Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
+later. `204 No Content` on success, `404` if the doc isn't live.
+
+### `POST /api/documents/{id}/restore`
+
+Clears `trashed_at`. Idempotent — restoring a live doc returns
+`200 OK` with `{"affected": 0}`.
+
+### `GET /oidc/login` / `GET /oidc/callback`
+
+OIDC login flow. Only registered when OIDC is configured. State token
+is a signed cookie; the callback plants a session cookie via
+`local-auth`'s `IssueSession` (one code path mints all cookies).
+
+## Paperless-mobile compat (Phase 4)
+
+The endpoints below are planned for Phase 4. They match Paperless-ngx
+byte-for-byte on request/response shape so `swift-paperless` and
+`Paperless Mobile` work against suchi unchanged.
+
+- `POST /api/token/`
+- `GET/POST /api/documents/`, `GET /api/documents/{id}/`
+- `GET /api/documents/{id}/thumb/`, `preview/`, `download/?original=`
+- `GET/POST /api/tags/`, `correspondents/`, `document_types/`,
+  `storage_paths/`, `custom_fields/`, `saved_views/`
+- `GET /api/tasks/`, `share_links/`, `trash/`
+- `GET /api/search/`, `autocomplete/`
+- `GET /api/schema/` (OpenAPI)
+
+## Errors
+
+Standard shape when a handler returns JSON:
+
+```json
+{ "error": "human message", "code": "snake_case_kind" }
+```
+
+`code` is programmatically stable across releases; `error` is not.

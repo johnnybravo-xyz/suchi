@@ -1,0 +1,118 @@
+---
+title: "Privacy & encryption"
+description: "What leaves the box (nothing, unless you wire it). The encryption ladder. What suchi never logs."
+---
+
+A DMS holds the most sensitive files a household or company owns —
+identity documents, tax records, medical papers. The posture, stated
+plainly and honored structurally:
+
+## What leaves the box
+
+<Note>
+**Nothing, unless you wire it.**
+
+A stock install makes zero outbound connections. No telemetry. No
+update pings. No CDN assets — every asset the UI serves is bundled
+in the binary. No external OCR or search services in Phase 0/1.
+</Note>
+
+The complete list of *possible* egress points, each opt-in, each
+visible in `config.yaml`, each producing a log line when active:
+
+- **OIDC discovery** — when `OIDC_ISSUER_URL` is set, suchi fetches
+  the issuer's JWKS at boot and periodically thereafter.
+- **Export sinks** (Phase 4+) — rclone-export to any rclone remote,
+  webhook sinks. Enabled per-sink in `config.yaml`.
+- **Notification webhooks** (Phase 3+) — outbound HTTP POST on job
+  events.
+- **Cloud LLM classifier** (Phase 3) — when `llm-classifier` is
+  configured with a non-local endpoint, OCR text of every ingested
+  document leaves the box. **Requires explicit `egress_ack: true`
+  in the plugin config**, and the UI shows an egress badge when
+  it's on.
+- **Email ingest IMAP polling** (Phase 2) — outbound IMAP TCP to
+  whatever `INGEST_IMAP_URL` points at.
+
+Every one of these is off in a stock install. At boot, suchi logs
+`main.egress.surface` with the current list — `outbound: none` is
+the default. `suchi doctor` (Phase 2.5) will print the same list for
+one-command auditing.
+
+## Encryption is a ladder
+
+Described honestly, not marketing-tier-by-tier:
+
+### 1. In transit
+
+TLS everywhere. The documented deployment terminates TLS at the
+reverse proxy (Caddy/nginx/Traefik snippets in `deploy/`). For
+proxy-less installs, suchi serves native TLS with a provided cert
+and key (`TLS_CERT_FILE`/`TLS_KEY_FILE`).
+
+All cookies: `Secure` + `HttpOnly` + `SameSite=Lax`. HSTS is behind
+a flag because it belongs at the proxy in most installs.
+
+### 2. Volume encryption (the recommended baseline)
+
+Full-volume encryption is the boring, first-choice answer and covers
+blobs, DB, FTS, and thumbnails in one move:
+
+- LUKS on a Linux host,
+- Encrypted VPS volumes,
+- NAS-native encryption on a Synology/unRAID/TrueNAS deployment.
+
+The docs recommend this explicitly rather than pretending
+application-layer crypto is a substitute.
+
+### 3. Backups
+
+**Encrypted for free.** [restic](https://restic.net/) and
+[borg](https://www.borgbackup.org/) encrypt client-side by default.
+The documented backup story — `VACUUM INTO backups/latest.db` +
+`blobs/` copied by restic/borg — is end-to-end encrypted off-box
+without suchi doing anything special.
+
+### 4. Blob-level encryption (planned)
+
+A `blob-crypt` storage-plugin wrapper doing envelope encryption per
+blob with [age](https://age-encryption.org/) (X25519 +
+ChaCha20-Poly1305). Wraps any inner storage backend. Key from file
+or `_FILE` secret.
+
+<Warning>
+Honest trade-off: thumbnails and the FTS index still contain
+document-derived content in the SQLite file, so `blob-crypt` without
+volume encryption protects the originals but not the metadata
+surface. That's exactly why the ladder starts at volume encryption.
+</Warning>
+
+Status: `PARK: post-Phase 4; interface reserved in the storage
+plugin kind now so it wraps, not rewrites.`
+
+### 5. KMS-backed keys (enterprise)
+
+KMS plugins, per-tenant keys, and WORM/Object-Lock live in the E3
+compliance track.
+
+## What suchi itself never does
+
+- Log document content or OCR text at any log level. Log lines carry
+  IDs, sizes, and hashes — never text.
+- Put content in `audit_events` — `before_json`/`after_json` cover
+  metadata fields only.
+- Include content in health-check or metrics output.
+- Embed document text in share-link URLs (tokens are random,
+  single-purpose, revocable).
+
+Secrets follow the `_FILE` convention, are never logged, and the
+auto-generated session key sits at 0600.
+
+## Subject rights
+
+GDPR/DPDP-class export and erasure build on the ownership model and
+live in the E3 track. Erasure is honest from MVP though: deleting a
+document and running `suchi gc` genuinely removes the blob.
+Soft-delete windows and the backup retention the operator chose are
+documented as the places deleted data persists, because pretending
+otherwise is how privacy pages lie.

@@ -1,0 +1,156 @@
+---
+title: "Importing from Paperless"
+description: "suchi import paperless — verbatim metadata, dedup, --map-jd, --auto-jd, --verify."
+---
+
+`suchi import paperless` consumes a standard `document_exporter`
+output bundle (with or without `--split-manifest`). Migration is
+one command and is idempotent — safe to re-run against a nightly
+export during a shadow window.
+
+## Prerequisites
+
+- A completed Paperless-ngx export at `/path/to/export`. If you don't
+  have one, run this on the Paperless side:
+  ```bash
+  document_exporter /path/to/export
+  ```
+- A running suchi instance with at least one user (usually the admin
+  from `/setup`).
+- Enough free disk for the CAS to absorb every unique document
+  blob (originals + optional archive PDFs).
+
+## The one-liner
+
+```bash
+suchi import paperless --from /path/to/export --owner-email you@example.com
+```
+
+The importer:
+
+1. Loads every manifest object (top-level `manifest.json` plus any
+   per-document sidecar files under `<root>/` or `<root>/documents/`).
+2. Upserts tags, correspondents, document types, storage paths, and
+   custom-field definitions **verbatim**. Names are the identity —
+   re-running against a modified export updates the row.
+3. For each document, streams the original (and optional archive)
+   file into the CAS by SHA-256, then inserts one `documents` row
+   plus tag junctions and custom-field values in a single
+   transaction. `paperless_id_legacy` is preserved for round-tripping
+   and dedup.
+
+## Dedup
+
+Documents are keyed by the SHA-256 of the ingested bytes and by
+`paperless_id_legacy`. A re-run against the same bundle skips every
+already-imported document — the counter is reported as
+`Skipped (dupes)`. Idempotent by construction.
+
+## Category resolution
+
+By default, every imported document lands in the JD **inbox** —
+visible, bulk-reassignable, never lost. Three flags override:
+
+<Tabs>
+  <Tab title="--flat">
+    Force every doc to the inbox. Never consult a rule. Use this if
+    you're a Paperless-classic migrator and want your tag/correspondent
+    workflow untouched — the inbox is your one bucket, JD affordances
+    stay hidden in the UI.
+
+    ```bash
+    suchi import paperless --from ./export --owner-email you@ex.com --flat
+    ```
+  </Tab>
+  <Tab title="--map-jd">
+    Apply first-match user rules. Rules live in a YAML file:
+
+    ```yaml mapping.yaml
+    rules:
+      - if: tag:tax          ; category: 22
+      - if: storage_path:Insurance ; category: 23
+      - if: document_type:Utility  ; category: 31
+      - if: correspondent:Landlord ; category: 32
+    ```
+
+    `if` is `<kind>:<name>` where kind is `tag`, `correspondent`,
+    `document_type`, or `storage_path`. `category` is the JD code.
+
+    ```bash
+    suchi import paperless --from ./export --owner-email you@ex.com \
+        --map-jd mapping.yaml
+    ```
+
+    Unmatched docs → inbox.
+  </Tab>
+  <Tab title="--auto-jd">
+    Apply the built-in heuristics — deterministic keyword matches
+    against the starter tree (`tax` → 22 Tax, `insurance` → 23,
+    `bescom`/`electricity`/`water` → 31 Utilities, `passport` /
+    `aadhaar` → 11 Identity, and so on).
+
+    ```bash
+    suchi import paperless --from ./export --owner-email you@ex.com --auto-jd
+    ```
+
+    Bias: **high precision over recall**. A miss lands in inbox;
+    silently mis-filing to the wrong category is worse than
+    under-classifying.
+  </Tab>
+</Tabs>
+
+<Info>
+The three flags are mutually exclusive — pick one strategy.
+</Info>
+
+## Verify (dry-diff)
+
+The shadow-window primitive: diff a nightly export against the live
+suchi DB without writing.
+
+```bash
+suchi import paperless --from ./nightly-export --verify
+```
+
+Report partitions every document in the bundle into:
+
+- **New** — would be imported (no matching `paperless_id_legacy`).
+- **Match** — present locally + compared fields all agree.
+- **Differ** — present locally, but at least one compared field
+  diverges. The report lists the field names.
+- **Orphan** — present in suchi with a `paperless_id_legacy` that
+  isn't in this bundle. Suggests a Paperless-side deletion since the
+  last export.
+
+Compared fields (Phase 1): `title`, `original_size`. Deliberately
+minimal — OCR text drifts trivially across Paperless versions and
+would false-positive.
+
+## Shadow migration recipe
+
+The recommended cutover for cautious operators:
+
+<Steps>
+  <Step title="Stand suchi up alongside Paperless">
+    Point it at the same backup pipeline.
+  </Step>
+  <Step title="Every night, verify">
+    Run `document_exporter` on the Paperless side and
+    `suchi import paperless --verify` on the suchi side.
+  </Step>
+  <Step title="Watch the diffs settle">
+    Any long-standing Differ or Orphan entries are the real migration
+    surface to investigate.
+  </Step>
+  <Step title="Cut over">
+    When diffs are boring, do a full `--auto-jd` (or `--map-jd`) import.
+  </Step>
+  <Step title="Repoint clients">
+    Update mobile apps and staging-dir producers to point at suchi.
+  </Step>
+  <Step title="Cool off">
+    Keep Paperless running for a two-week cool-off, then decommission.
+  </Step>
+</Steps>
+
+The maintainer's own instance follows this recipe (Phase 8).
