@@ -60,6 +60,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Jobs (Bundle-mobile compat surface uses this shape too).
 	mux.HandleFunc("GET /api/tasks/", s.ListTasks)
+
+	// Rules — deterministic classifier config surface.
+	mux.HandleFunc("GET /api/rules/", s.ListRules)
+	mux.HandleFunc("POST /api/rules/", s.CreateRule)
+	mux.HandleFunc("PATCH /api/rules/{id}", s.UpdateRule)
+	mux.HandleFunc("DELETE /api/rules/{id}", s.DeleteRule)
 }
 
 // ---------- shared helpers ----------
