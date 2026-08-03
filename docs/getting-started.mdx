@@ -1,0 +1,74 @@
+---
+title: "Getting started"
+description: "Five-minute quickstart. Docker Compose, bare binary, or NAS."
+---
+
+Pick the deployment shape that fits.
+
+## Docker Compose (canonical)
+
+```yaml docker-compose.yml
+services:
+  suchi:
+    image: ghcr.io/johnnybravo-xyz/suchi:latest
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    environment:
+      PUBLIC_URL: https://docs.example.com
+```
+
+```bash
+docker compose up -d
+docker compose logs suchi | grep 'setup.token'
+```
+
+Copy the token from the log and POST it to `/setup`:
+
+```bash
+curl -X POST http://localhost:8000/setup \
+    -H 'Content-Type: application/json' \
+    -d '{"token":"<the token>","email":"you@example.com","password":"..."}'
+```
+
+Then hit `http://localhost:8000/` in a browser and sign in.
+
+## Bare binary + systemd
+
+Download the `suchi` binary for your OS/arch from the
+[releases page](https://github.com/johnnybravo-xyz/suchi/releases).
+
+```bash
+install -m 0755 suchi /usr/local/bin/suchi
+mkdir -p /var/lib/suchi
+suchi serve
+```
+
+A systemd unit example lives under
+[`deploy/systemd`](https://github.com/johnnybravo-xyz/suchi/tree/main/deploy)
+in the repo (arrives in Phase 4.5).
+
+## What just happened?
+
+- On first boot, suchi ran embedded migrations up to the current
+  schema version.
+- It auto-loaded the Johnny.Decimal starter tree (four areas: Life
+  admin, Money, Home, System). See [JD](/jd) for the shape.
+- It printed a one-time setup token to the log at WARN level.
+- `/healthz` is process-alive; `/readyz` is DB-reachable + schema
+  current.
+- `/metrics` exposes Prometheus counters (idle counts, HTTP latency
+  histogram, job pipeline gauges).
+
+## Next steps
+
+- Import an existing an existing DMS archive: [importer](/importer)
+- Tune the running instance: [config](/config)
+- Add OIDC for team sign-in: [config#oidc](/config#oidc)

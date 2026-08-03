@@ -1,0 +1,58 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "suchi",
+  "description": "Document management as one Go binary. SQLite-first, plugin seams, an existing DMS mobile-compat.",
+  "colors": {
+    "primary": "#0c6b58",
+    "light": "#12a488",
+    "dark": "#075042"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["index"]
+          },
+          {
+            "group": "Getting started",
+            "pages": ["getting-started"]
+          },
+          {
+            "group": "Reference",
+            "pages": ["config", "cli", "api", "importer"]
+          },
+          {
+            "group": "Concepts",
+            "pages": ["architecture", "jd", "privacy"]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/johnnybravo-xyz/suchi"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/johnnybravo-xyz/suchi"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/johnnybravo-xyz/suchi"
+    }
+  }
+}
