@@ -60,6 +60,8 @@ func main() {
 		os.Exit(runImport(os.Args[2:]))
 	case "gc":
 		os.Exit(runGC(os.Args[2:]))
+	case "taxonomy":
+		os.Exit(runTaxonomy(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -79,6 +81,7 @@ Usage:
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import bundle [flags]  import a an existing DMS export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
+  suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
