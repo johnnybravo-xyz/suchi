@@ -38,12 +38,12 @@ var assetFS embed.FS
 // Server bundles the state UI handlers need. Constructed once at boot
 // and passed to a router.
 type Server struct {
-	DB      *db.DB
-	CAS     *blob.CAS
-	Cat     *i18n.Catalog
-	Log     *slog.Logger
-	Assets  http.Handler
-	tmpls   map[string]*template.Template
+	DB     *db.DB
+	CAS    *blob.CAS
+	Cat    *i18n.Catalog
+	Log    *slog.Logger
+	Assets http.Handler
+	tmpls  map[string]*template.Template
 
 	// LoginPath is where the RequireUI middleware sends unauthenticated
 	// browsers. Baked into the server so tests can override.
@@ -443,4 +443,3 @@ func safeFilename(title, ext string) string {
 	}
 	return s
 }
-

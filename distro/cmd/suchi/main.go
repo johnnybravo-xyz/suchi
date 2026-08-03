@@ -22,10 +22,10 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
-	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/i18n"
 	"github.com/johnnybravo-xyz/suchi/core/jd"

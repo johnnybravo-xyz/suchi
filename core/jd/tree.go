@@ -57,8 +57,8 @@ const (
 	ModeJD   TaxonomyMode = "jd"
 	ModeFlat TaxonomyMode = "flat"
 
-	SettingTaxonomy         = "taxonomy"
-	SettingInboxCategoryID  = "jd_inbox_category_id"
+	SettingTaxonomy        = "taxonomy"
+	SettingInboxCategoryID = "jd_inbox_category_id"
 )
 
 // FlatTree is the degenerate one-area, one-category tree used when a
