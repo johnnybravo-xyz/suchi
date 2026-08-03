@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/suchi-dms/suchi/core/blob"
+	"github.com/suchi-dms/suchi/core/classify/rules"
 	"github.com/suchi-dms/suchi/core/db"
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
@@ -134,7 +135,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 	}
 
-	return h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize)
+	if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
+		return err
+	}
+
+	// Rules engine runs after content lands so title/content triggers
+	// see the extracted text. Rules failure is logged, not fatal —
+	// classification is best-effort; the doc is already ingested.
+	if applied, err := rules.Apply(ctx, h.db, log, e.DocID); err != nil {
+		log.Warn("post-ingest.rules.error", "err", err.Error())
+	} else if len(applied) > 0 {
+		log.Info("post-ingest.rules.applied", "count", len(applied))
+	}
+	return nil
 }
 
 // loadDoc reads original_blob + mime_type. The trashed_at guard means
