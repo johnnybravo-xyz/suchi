@@ -58,15 +58,30 @@ Any OIDC provider works: Pocket-ID, Authentik, Keycloak, Microsoft
 Entra, Google.
 </Info>
 
-## Email ingest (v1, Phase 2)
+## Filesystem-watch ingest (Phase 2)
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `INGEST_FS_OWNER_EMAIL` | (unset = idle) | User that owns docs picked up from the staging dir. Setting this activates the watcher. |
+| `INGEST_FS_DIR` | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
+
+## Email ingest (v1 stub, Phase 2)
 
 | Env var | Purpose |
 |---------|---------|
 | `INGEST_IMAP_URL` | `imaps://user@imap.fastmail.com/INBOX` etc. Unset = email ingest idle. |
 | `INGEST_IMAP_PASSWORD` or `INGEST_IMAP_PASSWORD_FILE` | Mailbox password / app password. |
 
-Full options (fetch cadence, allowlist, plus-address routing) will
-land in `config.yaml` in Phase 2.
+<Note>
+Phase 2 ships a stub polling loop that logs `emailwatch.stub` and
+does nothing. Real IMAP client wiring lands in a follow-up commit
+when there's a mailbox to integration-test against. URL parsing,
+plus-address routing (`archive+22@…` → JD 22), and sidecar
+synthesis from headers are already implemented + tested.
+</Note>
+
+Full options (fetch cadence, processed-folder, size caps) will land
+in `config.yaml` when the polling loop lands.
 
 ## Secrets convention
 
