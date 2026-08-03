@@ -396,22 +396,49 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID int64) error {
 	now := time.Now().Unix()
 
-	if s.Correspondent != "" {
-		var corID int64
+	// Correspondents. Multi-party (roles) form takes precedence when
+	// set; singular Correspondent is kept for backwards-compat and
+	// applied when the array is empty.
+	corrs := s.Correspondents
+	if len(corrs) == 0 && s.Correspondent != "" {
+		corrs = []sidecar.Correspondent{{Name: s.Correspondent, Role: "sender"}}
+	}
+	seenSender := false
+	for i, c := range corrs {
+		if c.Name == "" {
+			continue
+		}
+		role := c.Role
+		if role == "" {
+			role = "sender"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO correspondents(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, s.Correspondent, slugify(s.Correspondent), now, now); err != nil {
+		`, c.Name, slugify(c.Name), now, now); err != nil {
 			return fmt.Errorf("upsert correspondent: %w", err)
 		}
+		var corID int64
 		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM correspondents WHERE name = ?`, s.Correspondent).Scan(&corID); err != nil {
+			`SELECT id FROM correspondents WHERE name = ?`, c.Name).Scan(&corID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE documents SET correspondent_id = ? WHERE id = ?`, corID, docID); err != nil {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role, position)
+			VALUES (?, ?, ?, ?)
+		`, docID, corID, role, i); err != nil {
 			return err
+		}
+		// First sender also becomes the primary FK so single-correspondent
+		// consumers (UI list view, importer round-trip, existing rules
+		// that key on correspondent) still find the sender.
+		if role == "sender" && !seenSender {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE documents SET correspondent_id = ? WHERE id = ?`, corID, docID); err != nil {
+				return err
+			}
+			seenSender = true
 		}
 	}
 
