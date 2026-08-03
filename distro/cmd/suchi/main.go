@@ -34,10 +34,10 @@ import (
 	oidcauth "github.com/suchi-dms/suchi/plugins/oidc"
 )
 
-// The target schema version is baked into the binary. /readyz checks
-// against this; migrations run up to (and including) it on boot.
-// Bump when adding a migration file.
-const targetSchemaVersion = 1
+// targetSchemaVersion is derived from the highest embedded migration at
+// boot — no manual bump when adding files under core/db/migrations. Set
+// in runServe() after LoadMigrations; used by /readyz.
+var targetSchemaVersion int
 
 func main() {
 	if len(os.Args) < 2 {
@@ -138,6 +138,7 @@ func runServe() int {
 		log.Error("main.migrations.load", "err", err.Error())
 		return 1
 	}
+	targetSchemaVersion = migs[len(migs)-1].Version
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		log.Error("main.migrate", "err", err.Error())
 		return 1
