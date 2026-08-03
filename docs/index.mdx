@@ -1,0 +1,57 @@
+---
+title: "suchi"
+description: "Document management as one Go binary. SQLite-first, plugin seams, an existing DMS mobile-compat."
+---
+
+**suchi** (Sanskrit *सूची*, "an index, a catalog, a list") is a document
+management system: one Go binary, SQLite by default, content-addressed
+storage, plugin seams at every layer, wire-compatible with the
+an existing DMS mobile ecosystem.
+
+<Warning>
+suchi is under active development. **Not for production use yet.** The
+API and schema are still moving. Track releases on
+[GitHub](https://github.com/johnnybravo-xyz/suchi/releases) — a `v1.0` tag
+is the stability signal.
+</Warning>
+
+## What it is
+
+- **One binary.** No Postgres, no Redis, no Celery, no external
+  services for the MVP. Idle RAM budget: ~100 MB.
+- **Content-addressed storage.** Dedup for free; rename never touches
+  bytes; backups are `blobs/` + a SQLite snapshot.
+- **Plugin at every layer.** Ingest, OCR, storage, search, auth,
+  classification, export — every seam is an interface.
+- **an existing DMS ecosystem inheritance.** `suchi import bundle`
+  brings tags, correspondents, custom fields verbatim. The
+  swift-bundle (iOS) and Bundle Mobile (Android) apps work
+  against suchi via API compat.
+- **Johnny.Decimal as the default taxonomy.** Ships a starter tree
+  on first boot; flat mode is available for migrators.
+- **Local-first by default, every egress opt-in.** No telemetry,
+  ever. See [privacy](/privacy).
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Getting started" icon="rocket" href="/getting-started">
+    Five-minute quickstart — docker compose or bare binary.
+  </Card>
+  <Card title="Importing from Bundle" icon="file-import" href="/importer">
+    `suchi import bundle` — verbatim metadata, dedup, --verify.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/config">
+    Every env var + purpose. `PUBLIC_URL` is the only required one.
+  </Card>
+  <Card title="HTTP API" icon="terminal" href="/api">
+    Endpoints today + planned Bundle-mobile compat surface.
+  </Card>
+  <Card title="Architecture" icon="layer-group" href="/architecture">
+    Data flow, design principles, SQLite discipline, CAS.
+  </Card>
+  <Card title="Privacy & encryption" icon="lock" href="/privacy">
+    What leaves the box (nothing). The encryption ladder. What
+    suchi never logs.
+  </Card>
+</CardGroup>

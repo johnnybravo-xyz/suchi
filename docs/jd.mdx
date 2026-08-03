@@ -1,0 +1,80 @@
+---
+title: "Johnny.Decimal taxonomy"
+description: "The JD opinion, the starter tree, and the invariants that make it a schema — not a suggestion."
+---
+
+suchi ships with [Johnny.Decimal](https://johnnydecimal.com/) as the
+default filing system — a schema-level taxonomy the app validates,
+routes on, browses by number, and (in the enterprise track) hangs
+retention policies off.
+
+## The opinion
+
+**JD is on by default.** First boot loads a generic starter tree with
+zero configuration. Every document has a JD category from the moment
+it's ingested. URLs, search, and default storage paths are JD-shaped
+out of the box.
+
+Flat mode exists as an explicit opt-out (`taxonomy: flat` in
+settings). Crucially, flat mode is a **degenerate JD tree**, not a
+second code path: the internal representation is always
+`jd_areas` + `jd_categories`, flat mode just hides the tree in the UI
+and collapses everything to a single inbox category. One code path,
+one opinion, a respectful escape hatch.
+
+## The starter tree
+
+Auto-loaded on first boot. Delete and replace freely — `suchi jd
+import` (arrives post-Phase-1) will pipe a fresh YAML in.
+
+```yaml the default
+areas:
+  - start: 10, end: 19, name: Life admin
+    categories:
+      - { code: 11, name: Identity }
+      - { code: 12, name: Health }
+      - { code: 13, name: Education }
+      - { code: 14, name: Vehicles }
+      - { code: 15, name: Membership & subscriptions }
+
+  - start: 20, end: 29, name: Money
+    categories:
+      - { code: 21, name: Banking }
+      - { code: 22, name: Tax }
+      - { code: 23, name: Insurance }
+      - { code: 24, name: Investments }
+      - { code: 25, name: Salary & benefits }
+
+  - start: 30, end: 39, name: Home
+    categories:
+      - { code: 31, name: Utilities }
+      - { code: 32, name: Rent & mortgage }
+      - { code: 33, name: Purchases & warranties }
+      - { code: 34, name: Repairs & maintenance }
+
+  - start: 40, end: 49, name: System
+    categories:
+      - { code: 41, name: Templates }
+      - { code: 42, name: Archive notes }
+      - { code: 49, name: Inbox }    # system category — undeletable
+```
+
+## Invariants
+
+- Every document has a `jd_category_id` — schema `NOT NULL`.
+- The inbox category (`system=1`) is undeletable via API/UI.
+- `settings.jd_inbox_category_id` always points at a live system
+  category. If pruned, suchi repairs the pointer at boot and logs
+  `jd.inbox.repaired`.
+- Category codes are unique. Ranges nest exactly: category `22` must
+  live inside an area `20..29`.
+
+## What the inbox is for
+
+<Note>
+Ingest paths never silently mis-file. When a classifier (or the
+importer, without a matching `--map-jd` rule) can't confidently pick
+a category, the document lands in inbox with a `needs-review` tag.
+It's browsable, searchable, and bulk-reassignable. Nothing is ever
+"unclassified" in a way that hides it.
+</Note>

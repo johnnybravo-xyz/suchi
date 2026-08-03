@@ -1,0 +1,137 @@
+---
+title: "Architecture"
+description: "Layout, data flow, design principles, SQLite discipline, CAS."
+---
+
+## Layout
+
+Monorepo, multiple Go modules glued by `go.work`. Module boundaries
+are the contract, not repo count.
+
+```
+suchi/
+├── plugin-api/          # interfaces + Event/Principal/BlobRef.
+│                        # The ONLY shared dep.
+├── core/                # SQLite discipline, HTTP layer, job outbox,
+│                        # audit log, auth chain, blob CAS, i18n,
+│                        # ingest importer, sandbox, UI.
+├── plugins/
+│   ├── local-auth/      # first-boot setup token, password login,
+│   │                    # API tokens, session cookies
+│   └── oidc/            # generic OIDC (any provider)
+└── distro/              # the shipped binary. Pins versions, blank-
+    └── cmd/suchi/       # imports enabled plugins in the compile-linked
+                         # Filestash-style registry.
+```
+
+Plugins never touch the core schema directly — every plugin gets
+`plugin_kv(plugin_name, key, value_json)` for its scratch space.
+
+## Data flow
+
+```mermaid
+flowchart LR
+    UP[HTTP upload] --> ING((Ingest))
+    FS[fs-watch] --> ING
+    MAIL[IMAP mailbox] --> ING
+    ING -->|blob| CAS[(blobs/sha256/...)]
+    ING -->|row + job, one tx| DB[(SQLite: metadata + jobs + FTS5)]
+    DB -->|dispatcher polls| SNIFF((pdf-inspector))
+    SNIFF -->|text-native pages| DB
+    SNIFF -->|scanned pages| OCR((OCRmyPDF))
+    OCR -->|archive blob| CAS
+    OCR -->|text + hOCR| DB
+    DB --> CLS((Classify: rules / LLM / agent))
+    CLS -->|PATCH| API[HTTP API]
+    API --> UI
+    API --> MOB[Bundle mobile apps]
+```
+
+## Non-negotiable design principles
+
+Every architectural decision is tested against these.
+
+<AccordionGroup>
+  <Accordion title="1. Ultra-lightweight on resources">
+    Idle RAM ≤ ~100 MB; ~35 MB slim image; runs on a $5 VPS or a Pi.
+  </Accordion>
+  <Accordion title="2. Easy to get around">
+    One binary, one config, one data dir. `suchi --help` fits on a
+    screen. Every knob has an env-var equivalent.
+  </Accordion>
+  <Accordion title="3. Boring underneath">
+    stdlib where possible, SQLite by default, no message broker, no
+    cache tier. *Modern is adopted only when it makes the stack more
+    boring.*
+  </Accordion>
+  <Accordion title="4. Batteries included but every battery is swappable">
+    Every integration point is an interface in `plugin-api/`.
+  </Accordion>
+  <Accordion title="5. Every decision is a log line — every unit of work is a row">
+    No in-memory-only work queues; the durable outbox table is the
+    truth.
+  </Accordion>
+  <Accordion title="6. Regenerable data layout">
+    Blobs + SQLite are the source of truth. Rendered file tree,
+    thumbnails, FTS index are all regenerable.
+  </Accordion>
+  <Accordion title="7. Hostile-input posture">
+    PDFs are the malware delivery format. Every parser runs as a
+    subprocess with timeouts, rlimits, output caps, no network. See
+    `core/sandbox/`.
+  </Accordion>
+  <Accordion title="8. Your documents, your data">
+    No telemetry, ever. Every egress opt-in, visible in config,
+    logged. See [privacy](/privacy).
+  </Accordion>
+  <Accordion title="9. Email is a first-class ingest path">
+    Not an add-on. Ships in every default image alongside filesystem
+    watch and upload.
+  </Accordion>
+</AccordionGroup>
+
+## Durable job outbox
+
+Every unit of async work is a row in `jobs`. The dispatcher polls
+`jobs_ready` (partial index on `state='pending' AND next_run_at<=now`)
+and hands rows to registered subscribers.
+
+- Handlers are **idempotent** — retry semantics assume this.
+- Ingest writes the document row AND its `post-ingest` job in the
+  **same transaction**. There is no window where a doc exists but its
+  work is lost.
+- Failures back off exponentially, cap at `attempts=5`, then move to
+  `state='dead'`. Dead rows are visible via `/api/tasks/` — the same
+  table doubles as the mobile-app tasks endpoint in Phase 4, free.
+
+## SQLite discipline
+
+Two connection pools on the same file:
+
+- **Write pool**: `MaxOpenConns=1` + `BEGIN IMMEDIATE`. One writer,
+  serialized at the pool level so `SQLITE_BUSY` is structurally
+  impossible.
+- **Read pool**: ordinary WAL readers, concurrent with the writer.
+
+Pragmas set in the DSN so the first connection is already correctly
+configured: `journal_mode=WAL`, `synchronous=NORMAL`,
+`busy_timeout=5000`, `foreign_keys=ON`, `mmap_size=256M`,
+`temp_store=MEMORY`.
+
+Migrations are one-way and gated by `PRAGMA user_version`. Down
+migrations aren't supported — production rollbacks restore from the
+pre-migration snapshot backups take before each schema change.
+
+## Content-addressed storage
+
+Blobs live at `$DATA_DIR/blobs/sha256/{aa}/{bb}/{full-hash}`. Puts
+stream through SHA-256 into a per-put temp file in the destination
+shard, fsync, atomic rename. Same-device by construction so the
+rename is POSIX-atomic. Duplicate puts return the existing ref
+without rewriting — free dedup.
+
+Documents carry two blob references:
+
+- `original_blob` (NOT NULL) — the bytes as ingested. Dedup key.
+- `archive_blob` (nullable) — the OCR-rewritten PDF. Regenerable in
+  principle; stored because OCR is expensive.

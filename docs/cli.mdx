@@ -1,0 +1,53 @@
+---
+title: "CLI reference"
+description: "suchi subcommands: serve, healthcheck, import bundle, version."
+---
+
+```
+suchi <subcommand> [flags]
+```
+
+All configuration is via env vars — see [config](/config).
+
+## `suchi serve`
+
+Runs the HTTP server. Blocks until SIGINT/SIGTERM.
+
+- Applies embedded migrations up to the current schema version.
+- Auto-loads the JD starter tree on first boot.
+- Starts the durable-outbox dispatcher.
+- Logs the effective egress surface at INFO.
+- Listens on `LISTEN_ADDR` (default `:8000`).
+
+## `suchi healthcheck`
+
+Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server
+answers `200`, non-zero otherwise. Wired as the Docker `HEALTHCHECK`
+so the distroless-static image doesn't need `wget`/`curl`.
+
+## `suchi import bundle [flags]`
+
+Import a an existing DMS export bundle. See [importer](/importer) for
+the full walkthrough.
+
+### Flags
+
+| Flag | Required | Purpose |
+|------|----------|---------|
+| `--from <path>` | yes | Path to the exporter output dir. |
+| `--owner-email <email>` | yes, unless `--dry-run` | User that will own imported documents. |
+| `--dry-run` | no | Parse + report counts without writing. |
+| `--flat` | no | Every doc → inbox. Skip JD resolution. |
+| `--map-jd <path>` | no | Rules YAML: bundle metadata → JD code. |
+| `--auto-jd` | no | Apply built-in JD heuristics (deterministic keyword matches). Off by default — inbox is the safe fallback. |
+| `--verify` | no | Dry-diff the bundle against the live DB. No writes. |
+
+<Info>
+Category-resolution flags (`--flat`, `--map-jd`, `--auto-jd`) are
+mutually exclusive.
+</Info>
+
+## `suchi version`
+
+Prints the binary version, build revision, and the Go version it
+was compiled with.

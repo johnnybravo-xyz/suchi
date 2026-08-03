@@ -1,0 +1,86 @@
+---
+title: "Configuration"
+description: "Every env var + purpose. PUBLIC_URL is the only required one."
+---
+
+Env-var-first. `config.yaml` is the advanced-mode escape hatch and
+does not exist in Phase 0/1. Anything a `config.yaml` field would set
+has an env-var equivalent — that's design principle 2 ("easy to get
+around").
+
+## Required
+
+| Env var | Purpose |
+|---------|---------|
+| `PUBLIC_URL` | External URL. Used for cookies, OIDC callbacks, share-link URLs. Must be the URL your reverse proxy exposes suchi at. |
+
+## Storage & runtime
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `DATA_DIR` | `/data` | Root of `blobs/`, `dms.db` + WAL, `backups/`, `config.yaml`, `staging/`. |
+| `LISTEN_ADDR` | `:8000` | HTTP listener. |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. |
+| `BODY_LIMIT` | `100M` | Multipart cap; uploads stream to disk. Accepts `K`/`M`/`G` suffixes or raw bytes. |
+| `SESSION_KEY_FILE` | `$DATA_DIR/.session-key` | Signed-cookie key. Auto-generated 0600 on first boot. |
+| `BACKUP_INTERVAL` | `24h` | `VACUUM INTO` snapshot cadence. `0` disables. |
+| `OCR_LANGUAGES` | `eng` | Comma-separated tesseract langs; shortcut for the OCR plugin's config. |
+
+## TLS
+
+If a reverse proxy terminates TLS (recommended), leave these unset.
+For proxy-less installs, set both:
+
+| Env var | Purpose |
+|---------|---------|
+| `TLS_CERT_FILE` | Cert file (PEM). |
+| `TLS_KEY_FILE` | Key file (PEM). |
+
+## Local auth
+
+No config needed. On first boot with no admin user, suchi prints a
+one-time **setup token** to the log at WARN. POST it to `/setup` with
+an email + password to create the admin.
+
+## OIDC
+
+All-or-nothing group. Set the whole set or none:
+
+| Env var | Purpose |
+|---------|---------|
+| `OIDC_ISSUER_URL` | e.g. `https://id.example.com` |
+| `OIDC_CLIENT_ID` | From your IdP. |
+| `OIDC_CLIENT_SECRET` or `OIDC_CLIENT_SECRET_FILE` | The secret. `_FILE` variant reads from disk (docker/k8s secrets). |
+| `ADMIN_EMAIL` | Required when OIDC is enabled. The email that gets admin role on first login. Everyone else defaults to `member`. |
+
+<Info>
+Any OIDC provider works: Pocket-ID, Authentik, Keycloak, Microsoft
+Entra, Google.
+</Info>
+
+## Email ingest (v1, Phase 2)
+
+| Env var | Purpose |
+|---------|---------|
+| `INGEST_IMAP_URL` | `imaps://user@imap.fastmail.com/INBOX` etc. Unset = email ingest idle. |
+| `INGEST_IMAP_PASSWORD` or `INGEST_IMAP_PASSWORD_FILE` | Mailbox password / app password. |
+
+Full options (fetch cadence, allowlist, plus-address routing) will
+land in `config.yaml` in Phase 2.
+
+## Secrets convention
+
+Every secret env var has a `_FILE` variant. The file's contents (trimmed
+of trailing newlines) becomes the value. Matches docker + k8s secret
+mounts. Secrets are never logged. Session key sits at 0600.
+
+## Egress surface
+
+<Note>
+A stock install makes **zero outbound connections** (principle 8).
+At boot, suchi logs `main.egress.surface` listing every configured
+outbound path — OIDC discovery, IMAP polling, cloud LLM endpoints,
+export sinks. `outbound: none` is the honest default.
+</Note>
+
+See [privacy](/privacy) for the full posture.
