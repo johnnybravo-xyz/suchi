@@ -26,6 +26,7 @@ import (
 	"github.com/suchi-dms/suchi/core/db"
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
 	"github.com/suchi-dms/suchi/core/httpx"
+	"github.com/suchi-dms/suchi/core/jd"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/logx"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
@@ -141,6 +142,19 @@ func runServe() int {
 	targetSchemaVersion = migs[len(migs)-1].Version
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		log.Error("main.migrate", "err", err.Error())
+		return 1
+	}
+
+	// JD invariants: load starter tree on first boot; repair the inbox
+	// pointer if it's ever missing. Runs before any handler so ingest
+	// paths can always dereference jd_inbox_category_id.
+	mode, err := jd.Mode(ctx, d)
+	if err != nil {
+		log.Error("main.jd.mode", "err", err.Error())
+		return 1
+	}
+	if err := jd.EnsureTree(ctx, d, log, mode); err != nil {
+		log.Error("main.jd.ensure", "err", err.Error())
 		return 1
 	}
 
