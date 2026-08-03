@@ -16,9 +16,14 @@ Two credential shapes, both routed through the same auth chain:
 
 - **Cookie** — set by `POST /login` (form-encoded) or the OIDC
   callback. HttpOnly + SameSite=Lax + Secure when TLS is in use.
-- **Token** — `Authorization: Token <hex>` header. Deliberately not
-  `Bearer` — matches Paperless-ngx wire format so the mobile apps
+- **Token** — `Authorization: Token <hex>` header. Canonical scheme
+  because it matches Paperless-ngx wire format so the mobile apps
   work unchanged.
+- **Bearer** — `Authorization: Bearer <hex>` also accepted for the
+  same API token, because many HTTP clients default to Bearer.
+  Ambiguity vs OIDC bearer tokens is resolved by shape: suchi tokens
+  are exactly 64 lowercase hex chars; anything else with `Bearer`
+  scheme falls through to the OIDC authenticator.
 
 ## Endpoints (as of Phase 1)
 
