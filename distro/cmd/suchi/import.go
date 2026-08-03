@@ -42,10 +42,18 @@ func runImportBundle(args []string) int {
 		flat       = fs.Bool("flat", false, "force every imported doc to the inbox category — skip JD resolution")
 		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping bundle metadata → JD code")
 		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
+		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// --verify is orthogonal to the write modes (--flat/--map-jd/--auto-jd)
+	// because verify never writes and never resolves JD categories. It
+	// answers "what would change" against current DB state.
+	if *verify {
+		return runImportBundleVerify(*from)
+	}
+
 	mapping, err := bundle.LoadMapping(*mapJD)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load --map-jd: %v\n", err)
@@ -141,6 +149,53 @@ Import complete (dry_run=%v).
 	if len(rep.Warnings) > 0 {
 		for _, w := range rep.Warnings {
 			fmt.Fprintf(os.Stderr, "  ! %s\n", w)
+		}
+	}
+	return 0
+}
+
+// runImportBundleVerify is the --verify entry point. Reads-only:
+// parses the bundle, diffs against the live DB, prints a partition.
+// Never opens a write transaction and never resolves owner-email.
+func runImportBundleVerify(bundleRoot string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
+	}
+	log := logx.Setup(os.Stdout, cfg.LogLevel)
+	slog.SetDefault(log)
+
+	ctx := context.Background()
+	d, err := db.Open(ctx, cfg.DataDir+"/dms.db")
+	if err != nil {
+		log.Error("verify.db.open", "err", err.Error())
+		return 1
+	}
+	defer d.Close()
+
+	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{BundleRoot: bundleRoot})
+	if err != nil {
+		log.Error("verify.bundle", "err", err.Error())
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, `
+Verify (no writes).
+  New:     %d
+  Match:   %d
+  Differ:  %d
+  Orphan:  %d
+`, len(rep.New), len(rep.Match), len(rep.Differ), len(rep.Orphan))
+	if len(rep.Differ) > 0 {
+		fmt.Fprintln(os.Stderr, "\nDiffering docs:")
+		for _, d := range rep.Differ {
+			fmt.Fprintf(os.Stderr, "  pk=%d  fields=%v\n", d.BundleID, d.Fields)
+		}
+	}
+	if len(rep.Orphan) > 0 {
+		fmt.Fprintln(os.Stderr, "\nOrphan docs (in suchi, not in bundle):")
+		for _, pk := range rep.Orphan {
+			fmt.Fprintf(os.Stderr, "  pk=%d\n", pk)
 		}
 	}
 	return 0
