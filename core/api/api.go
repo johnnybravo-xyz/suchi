@@ -58,6 +58,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
 	mux.HandleFunc("POST /api/documents/{id}/restore", s.RestoreDocument)
 
+	// Document correspondents (multi-party per doc).
+	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)
+	mux.HandleFunc("POST /api/documents/{id}/correspondents/", s.AddDocCorrespondent)
+	mux.HandleFunc("DELETE /api/documents/{id}/correspondents/{cid}/{role}", s.RemoveDocCorrespondent)
+
 	// Jobs (Bundle-mobile compat surface uses this shape too).
 	mux.HandleFunc("GET /api/tasks/", s.ListTasks)
 
