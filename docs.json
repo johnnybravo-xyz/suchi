@@ -33,6 +33,10 @@
           {
             "group": "Concepts",
             "pages": ["architecture", "jd", "privacy"]
+          },
+          {
+            "group": "Development",
+            "pages": ["cookbook"]
           }
         ]
       }

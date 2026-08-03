@@ -1,0 +1,321 @@
+---
+title: "Developer cookbook"
+description: "Copy-paste recipes for testing suchi locally — bootstrap, upload, dedup, fs-watch, gc. Onboarding kit for a new contributor."
+---
+
+Every recipe assumes you've built the binary once:
+
+```bash
+make build          # produces ./dist/suchi
+```
+
+Recipes use disposable data directories under `/tmp/suchi-*` so
+runs don't collide. Kill the server at the end of each recipe
+(`kill $PID`) before starting the next one.
+
+<Note>
+The recipes below use small text-like "PDFs" (a `%PDF-1.7 ...`
+header + `%%EOF`). They exercise the ingest pipeline shape but
+don't trigger real OCR — for that you need `qpdf`, `pdftotext`, and
+`ocrmypdf` installed on the box (the Docker `full` image ships
+them all).
+</Note>
+
+## Recipe 0 — Bootstrap an instance
+
+Every other recipe starts here. Boot with a fresh data dir, grab
+the setup token from the log, create the admin.
+
+```bash
+rm -rf /tmp/suchi-r0 && mkdir -p /tmp/suchi-r0
+PUBLIC_URL=http://127.0.0.1:8800 LISTEN_ADDR=:8800 DATA_DIR=/tmp/suchi-r0 \
+    ./dist/suchi serve > /tmp/suchi-r0.log 2>&1 &
+PID=$!; sleep 1.2
+
+TOKEN=$(grep 'token_minted' /tmp/suchi-r0.log | grep -oP '"token":"\K[^"]+')
+
+curl -sf -X POST http://127.0.0.1:8800/setup \
+    -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\",\"email\":\"you@ex.dev\",\"password\":\"pw\"}"
+
+# API token for headless calls (mobile-app shape):
+API_TOKEN=$(curl -s -X POST http://127.0.0.1:8800/api/login \
+    -H 'Accept: application/json' -H 'Content-Type: application/json' \
+    -d '{"username":"you@ex.dev","password":"pw"}' \
+    | grep -oP '"token":"\K[^"]+')
+
+# ... hack ...
+
+kill $PID
+```
+
+## Recipe 1 — Upload API + dedup state machine
+
+Exercises `POST /api/documents/`, the three dedup branches (fresh /
+alive-collision / trashed-collision), and soft-delete/restore.
+
+```bash
+echo "%PDF-1.7 sample bytes" > /tmp/sample.pdf
+
+# Fresh upload → 201
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@/tmp/sample.pdf"
+
+# Same bytes again → 409 with existing id
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@/tmp/sample.pdf"
+
+# Trash the doc → 204
+curl -s -w "HTTP %{http_code}\n" -X DELETE http://127.0.0.1:8800/api/documents/1 \
+    -H "Authorization: Token $API_TOKEN"
+
+# Re-upload same bytes → 200 with "restored": true
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@/tmp/sample.pdf"
+```
+
+## Recipe 2 — Per-user dedup keyspace
+
+Verifies that two users hold the same bytes as two independent
+docs (see `phase-2(dedup)` commit).
+
+```bash
+# After Recipe 0 with $API_TOKEN as Alice.
+# Insert a second user directly (no admin-create-user API yet).
+sqlite3 /tmp/suchi-r0/dms.db \
+  "INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
+   VALUES ('bob@ex.dev', 'bob', 'member',
+           (SELECT password_hash FROM users WHERE email='you@ex.dev'), 0, 0)"
+
+BOB=$(curl -s -X POST http://127.0.0.1:8800/api/login \
+    -H 'Accept: application/json' -H 'Content-Type: application/json' \
+    -d '{"username":"bob@ex.dev","password":"pw"}' \
+    | grep -oP '"token":"\K[^"]+')
+
+echo "%PDF-1.7 shared family doc" > /tmp/shared.pdf
+
+# Alice → 201
+curl -s -o /dev/null -w "Alice: %{http_code}\n" -X POST \
+    http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@/tmp/shared.pdf"
+
+# Alice again → 409
+curl -s -o /dev/null -w "Alice-again: %{http_code}\n" -X POST \
+    http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@/tmp/shared.pdf"
+
+# Bob → 201 (per-user scope kicks in)
+curl -s -o /dev/null -w "Bob: %{http_code}\n" -X POST \
+    http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $BOB" \
+    -F "document=@/tmp/shared.pdf"
+
+# Confirm two doc rows over one sha:
+sqlite3 /tmp/suchi-r0/dms.db \
+  "SELECT id, owner_id, substr(original_blob,1,16) FROM documents ORDER BY id"
+```
+
+## Recipe 3 — Post-ingest pipeline + /api/tasks/
+
+Uses a real PDF to exercise qpdf → pdf-inspector → ocrmypdf routing
+and the durable outbox.
+
+```bash
+# Find a real PDF on the system (or use your own).
+REAL_PDF=$(find /usr/lib /usr/share -name '*.pdf' 2>/dev/null | head -1)
+curl -sf -X POST http://127.0.0.1:8800/api/documents/ \
+    -H "Authorization: Token $API_TOKEN" \
+    -F "document=@$REAL_PDF" > /dev/null
+sleep 2   # let the dispatcher run the pipeline
+
+# Task queue view (default hides state=done):
+curl -s "http://127.0.0.1:8800/api/tasks/" -H "Authorization: Token $API_TOKEN"
+
+# Show the completed post-ingest job explicitly:
+curl -s "http://127.0.0.1:8800/api/tasks/?state=done" -H "Authorization: Token $API_TOKEN"
+
+# Extracted content should be in documents.content:
+sqlite3 /tmp/suchi-r0/dms.db "SELECT id, length(content), mime_type FROM documents"
+
+# FTS trigger fired?
+sqlite3 /tmp/suchi-r0/dms.db "SELECT COUNT(*) FROM documents_fts"
+
+# Watch the routing decision in the log:
+grep -E 'post-ingest\.|qpdf\.|pdf-inspector\.|ocrmypdf\.' /tmp/suchi-r0.log
+```
+
+<Info>
+Missing binaries (qpdf / ocrmypdf) log `skip.no_binary` and the
+pipeline continues. The pdftotext-backed pdf-inspector fallback is
+available on any box with `poppler-utils` installed.
+</Info>
+
+## Recipe 4 — fs-watch + sidecar
+
+Bootstrap the instance without fs-watch first, then restart with it
+enabled so the owner-email resolves.
+
+```bash
+# Recipe 0 first, then kill the server.
+
+# Restart with fs-watch on
+PUBLIC_URL=http://127.0.0.1:8800 LISTEN_ADDR=:8800 DATA_DIR=/tmp/suchi-r0 \
+    INGEST_FS_OWNER_EMAIL=you@ex.dev \
+    ./dist/suchi serve > /tmp/suchi-r0.log 2>&1 &
+PID=$!; sleep 1.2
+
+# Drop a doc + a sidecar (either <name>.json or <path>.json works):
+cat > /tmp/suchi-r0/staging/bill.pdf <<'EOF'
+%PDF-1.7 electricity bill body
+%%EOF
+EOF
+cat > /tmp/suchi-r0/staging/bill.json <<'EOF'
+{
+  "suchi_sidecar": 1,
+  "title": "Electricity bill Mar 2026",
+  "correspondent": "BESCOM",
+  "tags": ["utilities", "source:fs-watch"],
+  "created": "2026-03-02",
+  "notes": "auto-picked-up",
+  "jd_category": 31
+}
+EOF
+sleep 1.5
+
+# Doc landed with sidecar metadata applied:
+sqlite3 /tmp/suchi-r0/dms.db "
+  SELECT d.id, d.title, c.name AS correspondent, jc.code
+  FROM documents d
+  LEFT JOIN correspondents c  ON c.id  = d.correspondent_id
+  LEFT JOIN jd_categories  jc ON jc.id = d.jd_category_id"
+
+# Tags attached:
+sqlite3 /tmp/suchi-r0/dms.db "
+  SELECT t.name FROM tags t
+  JOIN document_tags dt ON dt.tag_id = t.id"
+
+# Staging cleared:
+ls /tmp/suchi-r0/staging/
+# → errors/ only
+
+# Now drop a broken sidecar to see the failure path:
+echo "%PDF-1.7 doc" > /tmp/suchi-r0/staging/broken.pdf
+echo "{malformed" > /tmp/suchi-r0/staging/broken.json
+sleep 1
+ls /tmp/suchi-r0/staging/errors/
+# → broken.pdf, broken.json, broken.pdf.err
+```
+
+## Recipe 5 — Paperless import (dry-run first, then full)
+
+```bash
+# --verify: dry-diff against the live DB.
+./dist/suchi import paperless \
+    --from /path/to/paperless-export --verify
+
+# Full import into inbox (safe default).
+./dist/suchi import paperless \
+    --from /path/to/paperless-export \
+    --owner-email you@ex.dev
+
+# ...or with the built-in heuristics:
+./dist/suchi import paperless \
+    --from /path/to/paperless-export \
+    --owner-email you@ex.dev \
+    --auto-jd
+```
+
+Env for the CLI: `PUBLIC_URL` + `DATA_DIR` are the only knobs; the
+subcommand doesn't start a server, it just reads the same DB the
+running server would.
+
+## Recipe 6 — suchi gc (unreferenced-blob reclamation)
+
+```bash
+# Add an orphan blob directly onto the CAS (bypasses the API — for
+# testing only):
+python3 <<'PY'
+import hashlib, os, pathlib
+data = b'orphan bytes'
+h = hashlib.sha256(data).hexdigest()
+p = pathlib.Path('/tmp/suchi-r0/blobs/sha256')/h[:2]/h[2:4]/h
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_bytes(data)
+os.utime(p, (1, 1))    # backdate mtime so short grace catches it
+print('orphan:', h)
+PY
+
+# Dry-run — no deletions:
+./dist/suchi gc --older-than 1s
+
+# Apply:
+./dist/suchi gc --older-than 1s --apply
+
+# Verify orphan is gone; referenced blob remains:
+find /tmp/suchi-r0/blobs -type f
+```
+
+## Recipe 7 — Poking at the durable outbox
+
+The `jobs` table IS the truth of what suchi is doing. Every ingest
+producer writes a `post-ingest` job in the same tx as the doc row.
+Retries, backoff, dead-letters all live there.
+
+```bash
+# Full outbox view (skip the placeholder counts — go to source):
+sqlite3 /tmp/suchi-r0/dms.db "
+  SELECT id, kind, state, attempts, doc_id, last_error, next_run_at
+  FROM jobs
+  ORDER BY id DESC LIMIT 20"
+
+# Same view via HTTP (auth-required):
+curl -s "http://127.0.0.1:8800/api/tasks/?limit=20" \
+    -H "Authorization: Token $API_TOKEN"
+
+# Force a job to re-run by nudging manually:
+sqlite3 /tmp/suchi-r0/dms.db "
+  UPDATE jobs SET state='pending', attempts=0, next_run_at=unixepoch()
+  WHERE id=1"
+# The dispatcher polls every 5s or on a producer's nudge.
+```
+
+## Recipe 8 — /metrics scrape
+
+```bash
+curl -s http://127.0.0.1:8800/metrics | grep -E '^suchi_' | head -20
+```
+
+Metrics of interest during development:
+
+- `suchi_http_requests_total{route,status}` — is the mux catching
+  what you expect?
+- `suchi_http_request_duration_seconds` histogram — slow handler
+  regression detector.
+- `suchi_jobs_pending` / `suchi_jobs_running` — outbox backlog.
+- `suchi_jobs_dead_total{kind}` — has anything given up permanently?
+
+## Recipe 9 — Clean shutdown + restart
+
+```bash
+kill $PID              # SIGTERM
+wait $PID              # let the deferred cleanup run
+
+# Look for the shutdown breadcrumbs:
+grep -E 'shutdown|dispatcher.stop' /tmp/suchi-r0.log
+```
+
+The dispatcher drains gracefully; migrations, JD tree, and every
+plugin re-initialize on the next boot from the same data dir.
+
+---
+
+Everything above is deliberately verbose so a new contributor can
+copy any single recipe and see something happen. Once you're
+comfortable, the same recipes compose: bootstrap once, then loop
+through 1 → 4 → 6 against a single running instance to touch every
+Phase-2 path in one session.
