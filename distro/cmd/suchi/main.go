@@ -29,6 +29,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/i18n"
+	"github.com/johnnybravo-xyz/suchi/core/ingest/fswatch"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
@@ -224,6 +225,18 @@ func runServe() int {
 	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages))
 	go disp.Run(ctx)
 	defer disp.Stop()
+
+	// fs-watch: staging-dir producer. Idle unless INGEST_FS_OWNER_EMAIL
+	// is set — matches the design's "opt-in, never surprise" posture.
+	if watcher, err := fswatch.New(ctx, fswatch.Config{
+		Dir:        cfg.IngestFSDir,
+		OwnerEmail: cfg.IngestFSOwnerEmail,
+	}, d, cas, disp, log); err != nil {
+		log.Error("main.fswatch.new", "err", err.Error())
+		return 1
+	} else if watcher != nil {
+		go watcher.Run(ctx)
+	}
 
 	// Metrics
 	m := httpx.NewMetrics()
