@@ -26,16 +26,16 @@ type Options struct {
 // Report is what Run returns. Zero values are meaningful (0 tags means
 // no tag rows, not "unknown").
 type Report struct {
-	Tags            int
-	Correspondents  int
-	DocumentTypes   int
-	StoragePaths    int
-	CustomFields    int
-	Documents       int
+	Tags             int
+	Correspondents   int
+	DocumentTypes    int
+	StoragePaths     int
+	CustomFields     int
+	Documents        int
 	DocumentsSkipped int // paperless_id_legacy already imported
-	Notes           int
-	Blobs           int // count of Put calls (both original + archive)
-	Warnings        []string
+	Notes            int
+	Blobs            int // count of Put calls (both original + archive)
+	Warnings         []string
 }
 
 // Run imports the bundle at opts.BundleRoot. Idempotent: reruns replay

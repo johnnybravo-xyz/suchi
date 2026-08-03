@@ -22,10 +22,10 @@ import (
 
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/config"
 	"github.com/suchi-dms/suchi/core/db"
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
-	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/httpx"
 	"github.com/suchi-dms/suchi/core/i18n"
 	"github.com/suchi-dms/suchi/core/jd"
