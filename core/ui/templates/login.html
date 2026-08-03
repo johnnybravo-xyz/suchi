@@ -1,0 +1,20 @@
+{{define "login"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in · suchi</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="auth">
+  <main class="login-card">
+    <h1>suchi</h1>
+    {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
+    <form method="post" action="/login">
+      <label>Email <input name="username" type="email" autocomplete="username" required autofocus></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>{{end}}

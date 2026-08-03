@@ -25,10 +25,13 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
+	"github.com/johnnybravo-xyz/suchi/core/i18n"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
@@ -223,6 +226,25 @@ func runServe() int {
 	// A tiny /whoami handler proves the auth chain wiring end-to-end
 	// without needing any Phase-1 code.
 	mux.Handle("GET /api/whoami", httpx.RequireAuth(http.HandlerFunc(whoamiHandler)))
+
+	// CAS + i18n + read-only UI.
+	cas, err := blob.New(cfg.DataDir)
+	if err != nil {
+		log.Error("main.cas", "err", err.Error())
+		return 1
+	}
+	cat, err := i18n.Load("en", log)
+	if err != nil {
+		log.Error("main.i18n", "err", err.Error())
+		return 1
+	}
+	uiSrv, err := ui.New(d, cas, cat, log)
+	if err != nil {
+		log.Error("main.ui.new", "err", err.Error())
+		return 1
+	}
+	uiSrv.LoginSubmit = la.LoginFormHandler
+	uiSrv.Register(mux)
 
 	// Baseline audit ping — proves audit_events writes work.
 	audit.Log(ctx, d, log, audit.Event{

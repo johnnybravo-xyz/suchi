@@ -1,0 +1,84 @@
+/* suchi — minimal, no framework. ~200 lines total.
+   Design goal: readable at 640px+, decent on mobile, works with JS off.
+   Colors are intentionally close to the Oat palette so a full Oat swap
+   later is a stylesheet-only diff.                                    */
+
+:root {
+  --bg:            #fafaf7;
+  --surface:       #ffffff;
+  --ink:           #1c1c1a;
+  --muted:         #6b6b6b;
+  --border:        #e6e5e0;
+  --accent:        #0c6b58;   /* teal-ish; distinct from bundle orange */
+  --accent-soft:   #e3f2ee;
+  --danger:        #b71c1c;
+  --radius:        4px;
+  --pad:           16px;
+  --pad-lg:        24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+body { line-height: 1.5; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--pad-lg);
+  padding: 12px var(--pad-lg); background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+.topbar .brand { font-weight: 600; font-size: 18px; color: var(--ink); }
+.topbar nav a { color: var(--muted); font-size: 14px; }
+.topbar nav a:hover { color: var(--ink); }
+.topbar .me { margin-left: auto; font-size: 13px; color: var(--muted); }
+
+main { padding: var(--pad-lg); max-width: 1200px; margin: 0 auto; }
+
+h1 { font-size: 22px; margin: 0 0 16px 0; }
+h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 24px 0 8px 0; }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--pad-lg); }
+.muted  { color: var(--muted); font-size: 13px; }
+.empty  { color: var(--muted); font-style: italic; padding: 32px 0; text-align: center; }
+
+table.rows { width: 100%; border-collapse: collapse; }
+table.rows th, table.rows td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+table.rows th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+table.rows tbody tr:hover { background: #f6f5f1; }
+
+.jd  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--accent); }
+.tag { display: inline-block; background: var(--accent-soft); color: var(--accent); font-size: 12px; padding: 2px 8px; border-radius: 999px; margin-right: 4px; }
+
+.pager { display: flex; gap: 16px; align-items: center; margin-top: 20px; font-size: 14px; }
+.pager .page { color: var(--muted); }
+
+.doc-detail .crumb { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.doc-detail .two-col { display: grid; grid-template-columns: 300px 1fr; gap: var(--pad-lg); align-items: flex-start; }
+.doc-detail .meta dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 13px; }
+.doc-detail .meta dt { color: var(--muted); }
+.doc-detail .meta dd { margin: 0; }
+.doc-detail .viewer { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.doc-detail .notes { margin-top: 32px; }
+.doc-detail .notes ul { list-style: none; padding: 0; }
+.doc-detail .notes li { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.doc-detail .notes time { color: var(--muted); font-size: 12px; margin-right: 12px; }
+
+body.auth { display: grid; place-items: center; min-height: 100vh; }
+.login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 340px; }
+.login-card h1 { text-align: center; margin: 0 0 20px 0; font-size: 28px; }
+.login-card form { display: flex; flex-direction: column; gap: 12px; }
+.login-card label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.login-card input { padding: 8px 10px; font: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
+.login-card input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.login-card button { padding: 10px; font: inherit; font-weight: 500; background: var(--accent); color: #fff; border: 0; border-radius: var(--radius); cursor: pointer; margin-top: 8px; }
+.login-card button:hover { filter: brightness(1.05); }
+.login-card .error { background: #ffecec; color: var(--danger); padding: 8px 12px; border-radius: var(--radius); font-size: 13px; }
+
+@media (max-width: 720px) {
+  .doc-detail .two-col { grid-template-columns: 1fr; }
+}

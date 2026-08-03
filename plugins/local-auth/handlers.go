@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -141,6 +142,60 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 func wantsJSON(r *http.Request) bool {
 	a := r.Header.Get("Accept")
 	return a == "application/json" || a == "application/json, text/plain, */*"
+}
+
+// LoginFormHandler is the sibling of LoginHandler for browser HTML
+// forms (Content-Type: application/x-www-form-urlencoded). Returns a
+// 302 back to the login page with ?error=... on failure, or plants a
+// session cookie and 302s to / on success. Cookie-only — never issues
+// tokens on this path.
+func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	username := r.PostForm.Get("username")
+	password := r.PostForm.Get("password")
+	if username == "" || password == "" {
+		http.Redirect(w, r, "/login?error=missing", http.StatusFound)
+		return
+	}
+
+	var (
+		userID int64
+		hash   sql.NullString
+	)
+	err := p.db.Read.QueryRowContext(r.Context(),
+		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
+		username).Scan(&userID, &hash)
+	if errors.Is(err, sql.ErrNoRows) || !hash.Valid || VerifyPassword(hash.String, password) != nil {
+		http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	sid, err := p.IssueSession(r.Context(), userID, r)
+	if err != nil {
+		http.Error(w, "session failed", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     CookieName,
+		Value:    sid,
+		Path:     "/",
+		Expires:  time.Now().Add(SessionTTL),
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+	next := r.URL.Query().Get("next")
+	if next == "" || !strings.HasPrefix(next, "/") {
+		next = "/"
+	}
+	http.Redirect(w, r, next, http.StatusFound)
 }
 
 // IssueSession creates a fresh session row and returns its opaque id.
