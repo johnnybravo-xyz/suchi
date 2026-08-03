@@ -71,6 +71,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/rules/", s.CreateRule)
 	mux.HandleFunc("PATCH /api/rules/{id}", s.UpdateRule)
 	mux.HandleFunc("DELETE /api/rules/{id}", s.DeleteRule)
+
+	// Tags — read + parent-hierarchy operations.
+	mux.HandleFunc("GET /api/tags/", s.ListTags)
+	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
+
+	// Document versions (chain of previous_version_id).
+	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
+	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
 }
 
 // ---------- shared helpers ----------
