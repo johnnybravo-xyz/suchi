@@ -1,0 +1,81 @@
+# suchi importer auto-heuristics — used when --auto-jd is set and the
+# operator hasn't supplied --map-jd. Deterministic keyword matches against
+# tag / correspondent / document_type / storage_path names, targeting the
+# starter JD tree. First rule wins; unmatched docs fall through to inbox.
+#
+# Bias: **high precision over recall**. Missing a category is fine (inbox
+# is browsable + bulk-reassignable). Silently mis-filing to the wrong
+# code is not fine — it hides docs from where the user expects them.
+#
+# All rule values are lowercased on match, so entries here should also be
+# lowercase.
+rules:
+  # 20-29 Money — narrowest first (tax before generic bank/statement).
+  - { if: tag:tax,               category: 22 }
+  - { if: tag:taxes,             category: 22 }
+  - { if: tag:itr,               category: 22 }
+  - { if: tag:income-tax,        category: 22 }
+  - { if: tag:gst,               category: 22 }
+  - { if: document_type:tax,     category: 22 }
+  - { if: tag:insurance,         category: 23 }
+  - { if: document_type:insurance, category: 23 }
+  - { if: tag:investment,        category: 24 }
+  - { if: tag:mutual-fund,       category: 24 }
+  - { if: tag:sip,               category: 24 }
+  - { if: tag:demat,             category: 24 }
+  - { if: tag:portfolio,         category: 24 }
+  - { if: tag:salary,            category: 25 }
+  - { if: tag:payslip,           category: 25 }
+  - { if: document_type:payslip, category: 25 }
+  - { if: tag:bank,              category: 21 }
+  - { if: tag:banking,           category: 21 }
+  - { if: tag:statement,         category: 21 }
+  - { if: document_type:bank-statement, category: 21 }
+
+  # 30-39 Home
+  - { if: tag:electricity,   category: 31 }
+  - { if: tag:water,         category: 31 }
+  - { if: tag:gas,           category: 31 }
+  - { if: tag:internet,      category: 31 }
+  - { if: tag:broadband,     category: 31 }
+  - { if: tag:phone,         category: 31 }
+  - { if: tag:utility,       category: 31 }
+  - { if: tag:utilities,     category: 31 }
+  - { if: tag:bescom,        category: 31 }   # Karnataka electricity
+  - { if: document_type:utility-bill, category: 31 }
+  - { if: tag:rent,          category: 32 }
+  - { if: tag:mortgage,      category: 32 }
+  - { if: tag:lease,         category: 32 }
+  - { if: tag:home-loan,     category: 32 }
+  - { if: tag:warranty,      category: 33 }
+  - { if: tag:purchase,      category: 33 }
+  - { if: document_type:receipt, category: 33 }
+  - { if: tag:repair,        category: 34 }
+  - { if: tag:maintenance,   category: 34 }
+
+  # 10-19 Life admin
+  - { if: tag:passport,      category: 11 }
+  - { if: tag:aadhaar,       category: 11 }
+  - { if: tag:aadhar,        category: 11 }
+  - { if: tag:pan,           category: 11 }
+  - { if: tag:license,       category: 11 }
+  - { if: tag:driver-license, category: 11 }
+  - { if: tag:voter-id,      category: 11 }
+  - { if: tag:medical,       category: 12 }
+  - { if: tag:prescription,  category: 12 }
+  - { if: tag:hospital,      category: 12 }
+  - { if: tag:health,        category: 12 }
+  - { if: document_type:medical-report, category: 12 }
+  - { if: tag:education,     category: 13 }
+  - { if: tag:school,        category: 13 }
+  - { if: tag:university,    category: 13 }
+  - { if: tag:tuition,       category: 13 }
+  - { if: document_type:certificate, category: 13 }
+  - { if: tag:vehicle,       category: 14 }
+  - { if: tag:car,           category: 14 }
+  - { if: tag:bike,          category: 14 }
+  - { if: tag:motorcycle,    category: 14 }
+  - { if: tag:registration,  category: 14 }
+  - { if: tag:membership,    category: 15 }
+  - { if: tag:subscription,  category: 15 }
+  - { if: tag:gym,           category: 15 }

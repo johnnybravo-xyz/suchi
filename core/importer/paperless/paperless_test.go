@@ -174,6 +174,47 @@ func must(t *testing.T, err error) {
 	}
 }
 
+// buildAutoJDBundle: two docs, one tagged "tax" (heuristic → code 22),
+// one tagged "cli-test" (no rule → inbox).
+func buildAutoJDBundle(t *testing.T, tmp string) string {
+	t.Helper()
+	root := tmp + "/bundle-auto"
+	must(t, os.MkdirAll(root+"/originals", 0o755))
+	writeFile := func(p, content string) {
+		must(t, os.WriteFile(root+"/"+p, []byte(content), 0o644))
+	}
+	writeFile("originals/tax.pdf", "%PDF-1.7\ntax\n%%EOF\n")
+	writeFile("originals/misc.pdf", "%PDF-1.7\nmisc\n%%EOF\n")
+
+	mk := func(model string, pk int64, fields any) bundle.Object {
+		f, err := json.Marshal(fields)
+		must(t, err)
+		return bundle.Object{Model: model, PK: pk, Fields: f}
+	}
+	manifest := bundle.Manifest{
+		mk("documents.tag", 1, bundle.TagFields{Name: "tax", Slug: "tax", Color: "#000"}),
+		mk("documents.tag", 2, bundle.TagFields{Name: "cli-test", Slug: "cli-test", Color: "#000"}),
+		mk("documents.document", 200, bundle.DocumentFields{
+			Title:            "ITR 2025-26",
+			OriginalFilename: "tax.pdf",
+			MimeType:         "application/pdf",
+			Created:          time.Now().UTC().Format(time.RFC3339),
+			Tags:             []int64{1},
+		}),
+		mk("documents.document", 201, bundle.DocumentFields{
+			Title:            "Random note",
+			OriginalFilename: "misc.pdf",
+			MimeType:         "application/pdf",
+			Created:          time.Now().UTC().Format(time.RFC3339),
+			Tags:             []int64{2},
+		}),
+	}
+	b, err := json.Marshal(manifest)
+	must(t, err)
+	must(t, os.WriteFile(root+"/manifest.json", b, 0o644))
+	return root
+}
+
 // setupTarget: opens an in-tmpdir DB + CAS, seeds an admin user, returns
 // everything plus the admin email so the importer can resolve owner.
 func setupTarget(t *testing.T, ctx context.Context, dataDir string) (*db.DB, *blob.CAS, *slog.Logger, string) {

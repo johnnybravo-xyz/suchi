@@ -15,12 +15,62 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
-// Options carries CLI flags to Run. Zero-value is not useful; the caller
-// (main.go) fills in DataDir + OwnerEmail.
+// Options carries CLI flags to Run. Every field is documented; see
+// Validate() for the invariants across them.
+//
+// Zero value is not runnable — BundleRoot is required always, OwnerEmail
+// is required unless DryRun. Validate() enforces these so the CLI and
+// any programmatic caller share one source of truth.
 type Options struct {
-	BundleRoot string // path to the exporter output dir
-	OwnerEmail string // must resolve to a users row; imported docs land under this user
-	DryRun     bool   // parse+plan but do not write
+	// BundleRoot is the path to the Bundle exporter output dir. Required.
+	BundleRoot string
+
+	// OwnerEmail resolves to a users row; imported documents land under
+	// that user. Required unless DryRun is set.
+	OwnerEmail string
+
+	// DryRun parses + plans the import but does not write to the DB or CAS.
+	// Owner resolution is skipped so the mode works before any user exists.
+	DryRun bool
+
+	// Category-resolution flags. At most ONE of Flat / MapJD / AutoJD may
+	// be set — they are mutually exclusive strategies for picking a JD
+	// category per imported document.
+	//
+	//   Flat=true         : every doc → inbox. No rules consulted.
+	//   MapJD != nil      : first-match user rules; unmatched → inbox.
+	//   AutoJD=true       : built-in heuristic rules (AutoMapping()).
+	//   (none set)        : safe default — every doc → inbox.
+	Flat   bool
+	MapJD  *Mapping
+	AutoJD bool
+}
+
+// Validate returns an error if opts violates any invariant. Callers
+// (CLI parsers, integration tests, agents driving the importer) should
+// call this before Run — Run will call it too, but returning the error
+// earlier gives better error messages next to the flag definitions.
+func (opts Options) Validate() error {
+	if opts.BundleRoot == "" {
+		return errors.New("BundleRoot is required")
+	}
+	if !opts.DryRun && opts.OwnerEmail == "" {
+		return errors.New("OwnerEmail is required unless DryRun is set")
+	}
+	picked := 0
+	if opts.Flat {
+		picked++
+	}
+	if opts.MapJD != nil {
+		picked++
+	}
+	if opts.AutoJD {
+		picked++
+	}
+	if picked > 1 {
+		return errors.New("at most one of Flat, MapJD, AutoJD may be set — they are mutually exclusive category-resolution strategies")
+	}
+	return nil
 }
 
 // Report is what Run returns. Zero values are meaningful (0 tags means
@@ -35,6 +85,7 @@ type Report struct {
 	DocumentsSkipped int // bundle_id_legacy already imported
 	Notes            int
 	Blobs            int // count of Put calls (both original + archive)
+	MappedByRule     int // documents whose JD category came from --map-jd (vs inbox fallback)
 	Warnings         []string
 }
 
@@ -42,7 +93,30 @@ type Report struct {
 // reference tables (upsert) and skip documents whose bundle_id_legacy
 // is already present.
 func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Options) (*Report, error) {
-	log = log.With("component", "import.bundle", "bundle", opts.BundleRoot, "dry_run", opts.DryRun)
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+	// Resolve the effective mapping up front. Precedence (highest wins):
+	//   --flat  → nil (everything to inbox; JD resolution skipped)
+	//   --map-jd → the user's file
+	//   --auto-jd → the embedded AutoMapping()
+	//   (nothing) → nil
+	effective := opts.MapJD
+	source := "user"
+	if opts.Flat {
+		effective = nil
+		source = "flat"
+	} else if effective == nil && opts.AutoJD {
+		auto, err := AutoMapping()
+		if err != nil {
+			return nil, err
+		}
+		effective = auto
+		source = "auto"
+	} else if effective == nil {
+		source = "none"
+	}
+	log = log.With("component", "import.bundle", "bundle", opts.BundleRoot, "dry_run", opts.DryRun, "map_source", source)
 	rep := &Report{}
 
 	// Resolve owner up front so we fail fast on a bad --owner-email.
@@ -82,6 +156,22 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 	spMap := map[int64]int64{}
 	cfMap := map[int64]int64{}
 
+	// Name lookup for --map-jd rules. Same PK space as the *Map remaps,
+	// but carries the human-readable name the ruleset compares against.
+	names := nameSets{
+		tags:           map[int64]string{},
+		correspondents: map[int64]string{},
+		documentTypes:  map[int64]string{},
+		storagePaths:   map[int64]string{},
+	}
+
+	// JD code → suchi jd_categories.id, for --map-jd category lookup.
+	// Loaded once here so the per-doc resolve does not re-query.
+	codeToCat, err := loadJDCodeMap(ctx, d)
+	if err != nil {
+		return nil, fmt.Errorf("load jd code map: %w", err)
+	}
+
 	// ---------- phase 1: reference tables (upsert-verbatim) ----------
 
 	for _, o := range buckets[ModelTag] {
@@ -94,6 +184,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			return nil, err
 		}
 		tagMap[o.PK] = id
+		names.tags[o.PK] = f.Name
 		rep.Tags++
 	}
 	for _, o := range buckets[ModelCorrespondent] {
@@ -106,6 +197,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			return nil, err
 		}
 		corMap[o.PK] = id
+		names.correspondents[o.PK] = f.Name
 		rep.Correspondents++
 	}
 	for _, o := range buckets[ModelDocumentType] {
@@ -118,6 +210,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			return nil, err
 		}
 		dtMap[o.PK] = id
+		names.documentTypes[o.PK] = f.Name
 		rep.DocumentTypes++
 	}
 	for _, o := range buckets[ModelStoragePath] {
@@ -130,6 +223,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			return nil, err
 		}
 		spMap[o.PK] = id
+		names.storagePaths[o.PK] = f.Name
 		rep.StoragePaths++
 	}
 	for _, o := range buckets[ModelCustomField] {
@@ -171,11 +265,29 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode document pk=%d: %w", o.PK, err)
 		}
+		// Category resolution:
+		//   --flat        → inbox, always. Never consult a rule.
+		//   --map-jd + rule hit → jd_categories.id for that code (if it
+		//                          resolves; else warn + inbox).
+		//   otherwise     → inbox.
+		catID := inboxCat
+		mapped := false
+		if effective != nil {
+			if code := effective.Resolve(f, names); code != 0 {
+				if id, ok := codeToCat[code]; ok {
+					catID = id
+					mapped = true
+				} else {
+					rep.Warnings = append(rep.Warnings,
+						fmt.Sprintf("doc pk=%d: rule matched JD code %d but no such category — falling back to inbox", o.PK, code))
+				}
+			}
+		}
 		res, err := importDoc(ctx, d, cas, log, opts, docInput{
 			BundleID: o.PK,
 			Fields:      f,
 			OwnerID:     ownerID,
-			InboxCat:    inboxCat,
+			InboxCat:    catID,
 			TagMap:      tagMap,
 			CorMap:      corMap,
 			DTMap:       dtMap,
@@ -192,6 +304,9 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			rep.Documents++
 			rep.Blobs += res.blobs
 			rep.Notes += res.notes
+			if mapped {
+				rep.MappedByRule++
+			}
 		case docSkipped:
 			rep.DocumentsSkipped++
 		}
@@ -208,6 +323,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		"custom_fields", rep.CustomFields,
 		"documents", rep.Documents,
 		"documents_skipped", rep.DocumentsSkipped,
+		"mapped_by_rule", rep.MappedByRule,
 		"notes", rep.Notes,
 		"blobs_written", rep.Blobs,
 		"warnings", len(rep.Warnings),
@@ -629,6 +745,27 @@ func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFie
 		return tx.QueryRowContext(ctx, `SELECT id FROM custom_fields WHERE name = ?`, f.Name).Scan(&id)
 	})
 	return id, err
+}
+
+// loadJDCodeMap returns a map from JD code (jd_categories.code) → row id.
+// Called once at import start; --map-jd resolves rule categories through
+// this map instead of round-tripping the DB per document.
+func loadJDCodeMap(ctx context.Context, d *db.DB) (map[int]int64, error) {
+	rows, err := d.Read.QueryContext(ctx, `SELECT code, id FROM jd_categories`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]int64{}
+	for rows.Next() {
+		var code int
+		var id int64
+		if err := rows.Scan(&code, &id); err != nil {
+			return nil, err
+		}
+		out[code] = id
+	}
+	return out, rows.Err()
 }
 
 func defaultString(v, d string) string {
