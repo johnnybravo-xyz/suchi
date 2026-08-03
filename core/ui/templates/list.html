@@ -1,0 +1,47 @@
+{{define "list"}}{{ template "base" . }}{{end}}
+
+{{define "title"}}{{ msg "doc.list.title" }}{{end}}
+
+{{define "content"}}
+<section class="panel">
+  <h1>{{ msg "doc.list.title" }}</h1>
+  <p class="muted">{{ msgf "doc.list.count" .Total }}</p>
+
+  {{ if not .Documents }}
+    <p class="empty">{{ msg "doc.list.empty" }}</p>
+  {{ else }}
+    <table class="rows">
+      <thead>
+        <tr>
+          <th>{{ msg "doc.list.col.title" }}</th>
+          <th>{{ msg "doc.list.col.correspondent" }}</th>
+          <th>{{ msg "doc.list.col.category" }}</th>
+          <th>{{ msg "doc.list.col.created" }}</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{ range .Documents }}
+        <tr>
+          <td><a href="/docs/{{ .ID }}">{{ .Title }}</a></td>
+          <td>{{ if .Correspondent }}{{ .Correspondent }}{{ else }}{{ msg "none" }}{{ end }}</td>
+          <td>
+            {{- if .JDLabel -}}
+              <span class="jd">{{ .JDLabel }}</span>
+            {{- else -}}
+              {{ msg "unclassified" }}
+            {{- end -}}
+          </td>
+          <td>{{ .CreatedFmt }}</td>
+        </tr>
+      {{ end }}
+      </tbody>
+    </table>
+
+    <nav class="pager">
+      {{ if gt .Page 1 }}<a href="?page={{ dec .Page }}">← {{ msg "doc.list.pager.prev" }}</a>{{ end }}
+      <span class="page">{{ msgf "doc.list.pager.page" .Page }}</span>
+      {{ if .HasNext }}<a href="?page={{ inc .Page }}">{{ msg "doc.list.pager.next" }} →</a>{{ end }}
+    </nav>
+  {{ end }}
+</section>
+{{end}}

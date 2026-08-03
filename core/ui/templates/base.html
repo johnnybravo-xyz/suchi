@@ -1,0 +1,23 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ block "title" . }}{{ msg "nav.brand" }}{{ end }} · {{ msg "nav.brand" }}</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">{{ msg "nav.brand" }}</a>
+    <nav>
+      <a href="/">{{ msg "nav.documents" }}</a>
+    </nav>
+    {{ if .Principal }}
+      <div class="me">{{ .Principal.Email }}</div>
+    {{ end }}
+  </header>
+  <main>
+    {{ block "content" . }}{{ end }}
+  </main>
+</body>
+</html>{{end}}
