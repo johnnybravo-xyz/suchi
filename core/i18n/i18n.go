@@ -26,9 +26,9 @@ var catalogFS embed.FS
 
 // Catalog is one language's string table.
 type Catalog struct {
-	Locale string
+	Locale  string
 	Strings map[string]string
-	log    *slog.Logger
+	log     *slog.Logger
 }
 
 // Load reads strings/<locale>.yaml from the embedded FS.

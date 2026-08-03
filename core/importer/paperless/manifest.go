@@ -141,13 +141,13 @@ func trimSpaces(b []byte) []byte {
 
 // TagFields is what documents.tag rows look like in the manifest.
 type TagFields struct {
-	Name       string `json:"name"`
-	Slug       string `json:"slug"`
-	Color      string `json:"color"`
-	IsInboxTag bool   `json:"is_inbox_tag"`
-	MatchAlg   int    `json:"matching_algorithm"`
-	Match      string `json:"match"`
-	Insensitive bool  `json:"is_insensitive"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Color       string `json:"color"`
+	IsInboxTag  bool   `json:"is_inbox_tag"`
+	MatchAlg    int    `json:"matching_algorithm"`
+	Match       string `json:"match"`
+	Insensitive bool   `json:"is_insensitive"`
 }
 
 // CorrespondentFields, DocumentTypeFields, StoragePathFields share the
@@ -174,7 +174,7 @@ type StoragePathFields struct {
 // CustomFieldFields is one field DEFINITION. Values live in CustomFieldInstance rows.
 type CustomFieldFields struct {
 	Name      string          `json:"name"`
-	DataType  int             `json:"data_type"`  // Bundle enum
+	DataType  int             `json:"data_type"` // Bundle enum
 	ExtraData json.RawMessage `json:"extra_data,omitempty"`
 }
 
@@ -196,23 +196,23 @@ type NoteFields struct {
 // DocumentFields is the main event. Bundle serializes many optional
 // fields; we consume only what suchi needs and log any surprises.
 type DocumentFields struct {
-	Title              string     `json:"title"`
-	Content            string     `json:"content"`
-	MimeType           string     `json:"mime_type"`
-	Checksum           string     `json:"checksum"`         // md5 of original
-	ArchiveChecksum    *string    `json:"archive_checksum"` // md5 of archive; nil when no archive
-	OriginalFilename   string     `json:"original_filename"`
-	ArchiveFilename    *string    `json:"archive_filename"`
-	StorageType        string     `json:"storage_type"`
-	ArchiveSerialNo    *int64     `json:"archive_serial_number"`
-	Created            string     `json:"created"`
-	Modified           string     `json:"modified"`
-	Added              string     `json:"added"`
-	Correspondent      *int64     `json:"correspondent"`
-	DocumentType       *int64     `json:"document_type"`
-	StoragePath        *int64     `json:"storage_path"`
-	Tags               []int64    `json:"tags"`
-	Owner              *int64     `json:"owner"`
+	Title            string  `json:"title"`
+	Content          string  `json:"content"`
+	MimeType         string  `json:"mime_type"`
+	Checksum         string  `json:"checksum"`         // md5 of original
+	ArchiveChecksum  *string `json:"archive_checksum"` // md5 of archive; nil when no archive
+	OriginalFilename string  `json:"original_filename"`
+	ArchiveFilename  *string `json:"archive_filename"`
+	StorageType      string  `json:"storage_type"`
+	ArchiveSerialNo  *int64  `json:"archive_serial_number"`
+	Created          string  `json:"created"`
+	Modified         string  `json:"modified"`
+	Added            string  `json:"added"`
+	Correspondent    *int64  `json:"correspondent"`
+	DocumentType     *int64  `json:"document_type"`
+	StoragePath      *int64  `json:"storage_path"`
+	Tags             []int64 `json:"tags"`
+	Owner            *int64  `json:"owner"`
 }
 
 // Model constants — the "documents.foo" strings that appear in the
