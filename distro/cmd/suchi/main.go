@@ -29,6 +29,7 @@ import (
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
 	"github.com/suchi-dms/suchi/core/httpx"
 	"github.com/suchi-dms/suchi/core/i18n"
+	"github.com/suchi-dms/suchi/core/ingest/emailwatch"
 	"github.com/suchi-dms/suchi/core/ingest/fswatch"
 	"github.com/suchi-dms/suchi/core/jd"
 	"github.com/suchi-dms/suchi/core/jobs"
@@ -250,6 +251,21 @@ func runServe() int {
 		OwnerEmail: cfg.IngestFSOwnerEmail,
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.fswatch.new", "err", err.Error())
+		return 1
+	} else if watcher != nil {
+		go watcher.Run(ctx)
+	}
+
+	// email-watch: IMAP producer. Same "opt-in" posture. Ships a stub
+	// polling loop today — real IMAP client wiring lands in a
+	// follow-up commit once we have a mailbox to integration-test
+	// against.
+	if watcher, err := emailwatch.New(ctx, emailwatch.Config{
+		URL:        cfg.IngestIMAPURL,
+		Password:   cfg.IngestIMAPPassword,
+		OwnerEmail: cfg.IngestFSOwnerEmail, // reuse the fs-watch owner for now
+	}, d, cas, disp, log); err != nil {
+		log.Error("main.emailwatch.new", "err", err.Error())
 		return 1
 	} else if watcher != nil {
 		go watcher.Run(ctx)
