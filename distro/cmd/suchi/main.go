@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/api"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -245,6 +246,14 @@ func runServe() int {
 	}
 	uiSrv.LoginSubmit = la.LoginFormHandler
 	uiSrv.Register(mux)
+
+	// JSON API surface (/api/*).
+	apiSrv, err := api.New(d, cas, log)
+	if err != nil {
+		log.Error("main.api.new", "err", err.Error())
+		return 1
+	}
+	apiSrv.Register(mux)
 
 	// Baseline audit ping — proves audit_events writes work.
 	audit.Log(ctx, d, log, audit.Event{
