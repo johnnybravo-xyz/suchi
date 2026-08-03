@@ -39,17 +39,30 @@ func runImportBundle(args []string) int {
 		from       = fs.String("from", "", "path to the Bundle export bundle root (required)")
 		ownerEmail = fs.String("owner-email", "", "email of the user that will own imported documents (required unless --dry-run)")
 		dryRun     = fs.Bool("dry-run", false, "parse the bundle and report counts without writing")
+		flat       = fs.Bool("flat", false, "force every imported doc to the inbox category — skip JD resolution")
+		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping bundle metadata → JD code")
+		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *from == "" {
-		fmt.Fprintln(os.Stderr, "--from is required")
-		fs.Usage()
+	mapping, err := bundle.LoadMapping(*mapJD)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load --map-jd: %v\n", err)
 		return 2
 	}
-	if !*dryRun && *ownerEmail == "" {
-		fmt.Fprintln(os.Stderr, "--owner-email is required (unless --dry-run)")
+	opts := bundle.Options{
+		BundleRoot: *from,
+		OwnerEmail: *ownerEmail,
+		DryRun:     *dryRun,
+		Flat:       *flat,
+		MapJD:      mapping,
+		AutoJD:     *autoJD,
+	}
+	// Delegate cross-field validation to Options.Validate() so the CLI
+	// and every programmatic caller share one rulebook.
+	if err := opts.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid options: %v\n", err)
 		fs.Usage()
 		return 2
 	}
@@ -101,11 +114,7 @@ func runImportBundle(args []string) int {
 		return 1
 	}
 
-	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
-		BundleRoot: *from,
-		OwnerEmail: *ownerEmail,
-		DryRun:     *dryRun,
-	})
+	rep, err := bundle.Run(ctx, d, cas, log, opts)
 	if err != nil {
 		log.Error("import.bundle", "err", err.Error())
 		return 1
@@ -120,14 +129,15 @@ Import complete (dry_run=%v).
   Custom fields:   %d
   Documents:       %d
   Skipped (dupes): %d
+  Mapped by rule:  %d
   Notes:           %d
   Blobs written:   %d
   Warnings:        %d
 `,
 		*dryRun,
 		rep.Tags, rep.Correspondents, rep.DocumentTypes, rep.StoragePaths,
-		rep.CustomFields, rep.Documents, rep.DocumentsSkipped, rep.Notes,
-		rep.Blobs, len(rep.Warnings))
+		rep.CustomFields, rep.Documents, rep.DocumentsSkipped, rep.MappedByRule,
+		rep.Notes, rep.Blobs, len(rep.Warnings))
 	if len(rep.Warnings) > 0 {
 		for _, w := range rep.Warnings {
 			fmt.Fprintf(os.Stderr, "  ! %s\n", w)
