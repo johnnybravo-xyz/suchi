@@ -32,6 +32,7 @@ import (
 	"github.com/suchi-dms/suchi/core/jd"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/logx"
+	"github.com/suchi-dms/suchi/core/pipeline/postingest"
 	"github.com/suchi-dms/suchi/core/ui"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 
@@ -206,8 +207,11 @@ func runServe() int {
 	}
 	authChain.Authenticators = append(authChain.Authenticators, la)
 
-	// Jobs
+	// Jobs — the durable outbox dispatcher. Every ingest producer
+	// enqueues a post-ingest job in the same tx as its doc row insert;
+	// this dispatcher hands the row off to a Subscriber.
 	disp := jobs.New(d, log)
+	disp.Register(postingest.New(log))
 	go disp.Run(ctx)
 	defer disp.Stop()
 
@@ -250,13 +254,14 @@ func runServe() int {
 	uiSrv.LoginSubmit = la.LoginFormHandler
 	uiSrv.Register(mux)
 
-	// JSON API surface (/api/*).
+	// JSON API surface (/api/*). Attach the dispatcher so upload
+	// handlers can nudge it when a fresh doc's post-ingest job lands.
 	apiSrv, err := api.New(d, cas, log)
 	if err != nil {
 		log.Error("main.api.new", "err", err.Error())
 		return 1
 	}
-	apiSrv.Register(mux)
+	apiSrv.WithJobs(disp).Register(mux)
 
 	// Baseline audit ping — proves audit_events writes work.
 	audit.Log(ctx, d, log, audit.Event{

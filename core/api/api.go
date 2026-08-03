@@ -18,23 +18,35 @@ import (
 
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/db"
+	"github.com/suchi-dms/suchi/core/jobs"
 )
 
 // Server bundles the state every /api handler needs. Constructed once
 // at boot; safe for concurrent use.
+//
+// Jobs is optional — when set, the upload handler nudges the
+// dispatcher after enqueuing post-ingest work. Tests can leave it nil.
 type Server struct {
-	DB  *db.DB
-	CAS *blob.CAS
-	Log *slog.Logger
+	DB   *db.DB
+	CAS  *blob.CAS
+	Log  *slog.Logger
+	Jobs *jobs.Dispatcher
 }
 
-// New returns a Server. The zero value isn't runnable — every field is
-// required.
+// New returns a Server. The zero value isn't runnable — DB, CAS, Log
+// are required. Jobs stays nil until wired via WithJobs.
 func New(d *db.DB, cas *blob.CAS, log *slog.Logger) (*Server, error) {
 	if d == nil || cas == nil || log == nil {
 		return nil, errors.New("api.New: DB, CAS, and Log are required")
 	}
 	return &Server{DB: d, CAS: cas, Log: log.With("component", "api")}, nil
+}
+
+// WithJobs attaches a Dispatcher so the upload handler can nudge it
+// when a fresh doc row lands. Returns s for chaining.
+func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
+	s.Jobs = disp
+	return s
 }
 
 // Register attaches every /api route this package owns to mux. Called
@@ -45,6 +57,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
 	mux.HandleFunc("POST /api/documents/{id}/restore", s.RestoreDocument)
+
+	// Jobs (Paperless-mobile compat surface uses this shape too).
+	mux.HandleFunc("GET /api/tasks/", s.ListTasks)
 }
 
 // ---------- shared helpers ----------
