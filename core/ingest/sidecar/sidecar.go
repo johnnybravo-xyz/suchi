@@ -37,14 +37,31 @@ const Version = 1
 // V1 is the parsed shape. Zero-value fields mean "producer didn't
 // specify" — the ingest caller decides the default.
 type V1 struct {
-	Version       int            `json:"suchi_sidecar"`
-	Title         string         `json:"title,omitempty"`
-	Correspondent string         `json:"correspondent,omitempty"`
-	Tags          []string       `json:"tags,omitempty"`
-	Created       string         `json:"created,omitempty"` // ISO8601
-	Notes         string         `json:"notes,omitempty"`
-	JDCategory    int            `json:"jd_category,omitempty"`
-	CustomFields  map[string]any `json:"custom_fields,omitempty"`
+	Version int    `json:"suchi_sidecar"`
+	Title   string `json:"title,omitempty"`
+
+	// Correspondent is the primary/sender-role name. Kept singular for
+	// backwards compat with pre-Phase-2 producers. When Correspondents
+	// is also set, the array wins and this field is treated as
+	// redundant with the first sender entry.
+	Correspondent string `json:"correspondent,omitempty"`
+
+	// Correspondents is the multi-party form. Each entry pairs a
+	// correspondent name with a role (sender|recipient|cc|other).
+	// Applied via document_correspondents.
+	Correspondents []Correspondent `json:"correspondents,omitempty"`
+
+	Tags         []string       `json:"tags,omitempty"`
+	Created      string         `json:"created,omitempty"` // ISO8601
+	Notes        string         `json:"notes,omitempty"`
+	JDCategory   int            `json:"jd_category,omitempty"`
+	CustomFields map[string]any `json:"custom_fields,omitempty"`
+}
+
+// Correspondent is one entry in the sidecar's Correspondents array.
+type Correspondent struct {
+	Name string `json:"name"`
+	Role string `json:"role,omitempty"` // defaults to "sender" if empty
 }
 
 // Parse decodes a sidecar payload. Returns an error only on bad JSON
