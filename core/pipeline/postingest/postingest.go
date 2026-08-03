@@ -1,54 +1,197 @@
 // Package postingest owns the post-ingest job kind — the first
-// dispatcher step that runs after a document row lands, before OCR
-// and classification.
+// dispatcher step that runs after a document row lands.
 //
-// Phase 2 ships a placeholder Subscriber that just marks the job done
-// and logs. The upcoming pdf-inspector / OCRmyPDF / rules-engine
-// commits swap in the real routing: sniff → text-native shortcut OR
-// OCR fanout → classify.
+// The chain, in order:
 //
-// Why the placeholder ships now: registering the kind at all makes
-// the dispatcher recognize post-ingest jobs. Without a subscriber, a
-// post-ingest job would land in `state=dead` immediately with "no
-// subscriber registered" — noisy in the outbox and misleading to
-// operators.
+//  1. qpdf --remove-restrictions --decrypt   (normalization)
+//  2. pdf-inspector / pdftotext              (text-native decision)
+//     3a. If text-native → write content into documents.content.
+//     3b. If scanned → OCRmyPDF, store archive PDF in CAS, write text.
+//
+// Every step degrades gracefully — a missing binary or an
+// unrecognized input skips that step and lets the pipeline continue.
+// The design principle: ingest completes even when some tools aren't
+// installed. Missing OCR just means documents.content stays empty
+// until a real ocrmypdf lands.
+//
+// Non-PDF mime types are a no-op today. Office docs / images grow a
+// converter step in a follow-up.
 package postingest
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"strings"
+	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pdfinspector"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-// Kind is the job.kind value used by ingest producers (upload API,
-// fs-watch, email-ingest) when they enqueue post-ingest work. Exported
-// so producers don't have to hard-code the string.
+// Kind is the job.kind value the outbox uses.
 const Kind = "post-ingest"
 
-// Handler is the Subscriber. Configuring it is a no-op today — later
-// commits add fields for the pdf-inspector / OCRmyPDF wiring.
+// Handler chains qpdf → pdf-inspector → ocrmypdf and updates the
+// documents row with content + optional archive_blob.
 type Handler struct {
-	log *slog.Logger
+	db    *db.DB
+	cas   *blob.CAS
+	log   *slog.Logger
+	langs []string
 }
 
-// New returns a ready-to-register Subscriber. Zero-config on purpose;
-// the plumbing is what matters this commit.
-func New(log *slog.Logger) *Handler {
-	return &Handler{log: log.With("component", "post-ingest")}
+// New builds a Handler ready to register with a Dispatcher.
+//
+// langs is the list of tesseract languages passed to ocrmypdf when
+// OCR fires. Empty defaults to ["eng"].
+func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string) *Handler {
+	if len(langs) == 0 {
+		langs = []string{"eng"}
+	}
+	return &Handler{
+		db:    d,
+		cas:   cas,
+		log:   log.With("component", "post-ingest"),
+		langs: langs,
+	}
 }
 
 // Kinds implements pluginapi.Subscriber.
 func (h *Handler) Kinds() []string { return []string{Kind} }
 
-// Handle acknowledges the job and returns nil so the dispatcher marks
-// it done. Once pdf-inspector lands (task #26), this method fetches
-// the doc, runs qpdf + inspector, and either shortcut-writes the
-// text-native content or enqueues a post-ocr job.
+// Handle runs the pipeline. Errors bubble up to the dispatcher's
+// backoff/retry loop; a persistent error (5 attempts) parks the job
+// in state=dead and shows up in /api/tasks/.
 func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
-	h.log.Info("post-ingest.placeholder",
-		"doc_id", e.DocID,
-		"msg", "TODO: pdf-inspector routing not yet wired — marking done",
+	log := h.log.With("doc_id", e.DocID)
+
+	origBlob, mime, err := h.loadDoc(ctx, e.DocID)
+	if err != nil {
+		return fmt.Errorf("load doc: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
+		log.Info("post-ingest.skip.non_pdf", "mime", mime)
+		return nil
+	}
+
+	origBytes, err := h.readBlob(origBlob)
+	if err != nil {
+		return fmt.Errorf("cas get %s: %w", origBlob, err)
+	}
+
+	// 1. qpdf normalize
+	normalized, err := qpdf.Normalize(ctx, bytes.NewReader(origBytes), log, qpdf.Options{})
+	if err != nil {
+		return fmt.Errorf("qpdf: %w", err)
+	}
+	pdfBytes := normalized.Data
+
+	// 2. pdf-inspector
+	ins, err := pdfinspector.Extract(ctx, bytes.NewReader(pdfBytes), log, pdfinspector.Options{})
+	if err != nil {
+		return fmt.Errorf("pdf-inspector: %w", err)
+	}
+
+	var (
+		content     string
+		archiveBlob string
+		archiveSize int64
 	)
-	return nil
+
+	if ins.HasText {
+		// Text-native shortcut — no OCR needed.
+		content = ins.Text
+		log.Info("post-ingest.route.text_native", "chars", ins.NonBlank)
+	} else {
+		// 3b. OCR path.
+		ocr, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
+			Languages: h.langs,
+		})
+		if err != nil {
+			return fmt.Errorf("ocrmypdf: %w", err)
+		}
+		content = ocr.Text
+		if !ocr.Skipped && len(ocr.ArchivePDF) > 0 {
+			ref, err := h.cas.Put(bytes.NewReader(ocr.ArchivePDF))
+			if err != nil {
+				return fmt.Errorf("cas put archive: %w", err)
+			}
+			archiveBlob = ref.SHA256
+			archiveSize = ref.Size
+			log.Info("post-ingest.route.ocr", "archive_sha", ref.SHA256, "text_chars", len(content))
+		} else {
+			log.Info("post-ingest.route.ocr.skipped",
+				"reason", firstNonEmpty(ocr.StderrTail, "ocrmypdf skipped"))
+		}
+	}
+
+	return h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize)
+}
+
+// loadDoc reads original_blob + mime_type. The trashed_at guard means
+// a race between soft-delete and post-ingest gets us "not found" and
+// the retry loop eventually parks the job dead — better than doing OCR
+// on a document the user already trashed.
+func (h *Handler) loadDoc(ctx context.Context, id int64) (origBlob, mime string, err error) {
+	var mimeNull sql.NullString
+	err = h.db.Read.QueryRowContext(ctx, `
+		SELECT original_blob, COALESCE(mime_type, '')
+		FROM documents
+		WHERE id = ? AND trashed_at IS NULL
+	`, id).Scan(&origBlob, &mimeNull)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("doc %d not found or trashed", id)
+	}
+	if mimeNull.Valid {
+		mime = mimeNull.String
+	}
+	return
+}
+
+// readBlob pulls a blob into memory. For Phase-2 sizes (few MB PDFs)
+// this is fine; larger inputs get a streaming refactor when we hit them.
+func (h *Handler) readBlob(sha string) ([]byte, error) {
+	rc, err := h.cas.Get(sha)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+// updateDoc writes the pipeline output back. Empty content is a valid
+// state — happens when both extraction and OCR are skipped (neither
+// tool installed). The FTS5 trigger picks up the content column
+// change automatically.
+func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob string, archSize int64) error {
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var archBlobArg any
+		var archSizeArg any
+		if archBlob != "" {
+			archBlobArg = archBlob
+			archSizeArg = archSize
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET content = ?, archive_blob = ?, archive_size = ?, updated_at = ?
+			WHERE id = ?
+		`, content, archBlobArg, archSizeArg, time.Now().Unix(), id)
+		return err
+	})
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
