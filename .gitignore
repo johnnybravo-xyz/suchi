@@ -1,0 +1,28 @@
+# build artifacts
+/dist/
+/bin/
+*.exe
+*.test
+*.out
+*.prof
+
+# local dev data
+/data/
+/tmp/
+*.db
+*.db-wal
+*.db-shm
+.session-key
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# secrets — belt and suspenders
+*.pem
+*.key
+.env
+.env.*
+!.env.example
