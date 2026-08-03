@@ -35,34 +35,40 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pdfinspector"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // Kind is the job.kind value the outbox uses.
 const Kind = "post-ingest"
 
-// Handler chains qpdf → pdf-inspector → ocrmypdf and updates the
-// documents row with content + optional archive_blob.
+// Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
+// documents row with content + optional archive_blob, runs the
+// rules-engine classifier, and refreshes the rendered-view symlink.
 type Handler struct {
-	db    *db.DB
-	cas   *blob.CAS
-	log   *slog.Logger
-	langs []string
+	db     *db.DB
+	cas    *blob.CAS
+	log    *slog.Logger
+	langs  []string
+	render *view.Renderer // optional — nil disables rendered-view
 }
 
 // New builds a Handler ready to register with a Dispatcher.
 //
 // langs is the list of tesseract languages passed to ocrmypdf when
-// OCR fires. Empty defaults to ["eng"].
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string) *Handler {
+// OCR fires. Empty defaults to ["eng"]. render is optional; nil
+// disables the rendered-view projection (bare-metal deployments or
+// tests that don't care about the symlink tree).
+func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer) *Handler {
 	if len(langs) == 0 {
 		langs = []string{"eng"}
 	}
 	return &Handler{
-		db:    d,
-		cas:   cas,
-		log:   log.With("component", "post-ingest"),
-		langs: langs,
+		db:     d,
+		cas:    cas,
+		log:    log.With("component", "post-ingest"),
+		langs:  langs,
+		render: r,
 	}
 }
 
@@ -146,6 +152,14 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Warn("post-ingest.rules.error", "err", err.Error())
 	} else if len(applied) > 0 {
 		log.Info("post-ingest.rules.applied", "count", len(applied))
+	}
+
+	// Rendered-view projection — best-effort. A failed render logs
+	// a warning; the doc row is already the source of truth.
+	if h.render != nil {
+		if _, err := h.render.Render(ctx, e.DocID); err != nil {
+			log.Warn("post-ingest.render.error", "err", err.Error())
+		}
 	}
 	return nil
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
@@ -219,13 +220,26 @@ func runServe() int {
 		return 1
 	}
 
+	// Rendered-view projection. Reads the taxonomy mode from settings
+	// to pick the default template; falls through to JD when unset.
+	mode2 := "jd"
+	if mode == "flat" {
+		mode2 = "flat"
+	}
+	renderer, err := view.New(d, cas, cfg.DataDir, cfg.DataDir+"/rendered", mode2, log)
+	if err != nil {
+		log.Error("main.view.new", "err", err.Error())
+		return 1
+	}
+
 	// Jobs — the durable outbox dispatcher. Every ingest producer
 	// enqueues a post-ingest job in the same tx as its doc row insert;
 	// this dispatcher hands the row off to a Subscriber. The
 	// post-ingest handler runs the qpdf → pdf-inspector → ocrmypdf
-	// chain and updates the doc row with content + archive_blob.
+	// chain, updates the doc row with content + archive_blob, applies
+	// rules, and refreshes the rendered-view symlink.
 	disp := jobs.New(d, log)
-	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages))
+	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages, renderer))
 	go disp.Run(ctx)
 	defer disp.Stop()
 
