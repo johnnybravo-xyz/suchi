@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
 // UploadResponse is what POST /api/documents/ returns on success.
@@ -147,7 +150,16 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		outID = id
-		return nil
+
+		// Durable outbox: the post-ingest job lands in the same tx as
+		// the doc row. There is no window where a doc exists but its
+		// work is lost — the whole point of the outbox pattern.
+		payload := postIngestPayload{SHA256: ref.SHA256, Size: ref.Size, MIME: sniffed}
+		payloadJSON, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return mErr
+		}
+		return jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON))
 	})
 	if err != nil {
 		s.Log.Error("api.upload.db", "err", err.Error(), "sha", ref.SHA256)
@@ -156,6 +168,13 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := logx.WithDocID(r.Context(), outID)
+
+	// Nudge the dispatcher: the post-ingest job we just enqueued is
+	// ready to run without waiting for the next tick. Best-effort — a
+	// missed nudge just delays the job by one poll interval.
+	if s.Jobs != nil && !conflict && !restored {
+		s.Jobs.Nudge()
+	}
 
 	if conflict {
 		audit.Log(ctx, s.DB, s.Log, audit.Event{

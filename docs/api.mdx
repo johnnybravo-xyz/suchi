@@ -108,6 +108,39 @@ later. `204 No Content` on success, `404` if the doc isn't live.
 Clears `trashed_at`. Idempotent — restoring a live doc returns
 `200 OK` with `{"affected": 0}`.
 
+### `GET /api/tasks/`
+
+Read the durable-outbox queue: what suchi is doing right now, what
+crashed, what's queued. The same table the Phase-4 mobile-compat
+tasks endpoint reads.
+
+Query parameters:
+
+| Param | Default | Purpose |
+|-------|---------|---------|
+| `state` | (unset) | Filter to one state: `pending`, `running`, `done`, `dead`. Default hides `done` because a healthy instance drowns the response in completions. |
+| `limit` | `50` | Max rows to return. Capped at `200`. |
+| `doc_id` | (unset) | Filter to the jobs for one document. |
+
+Response shape:
+
+```json
+{
+  "counts": { "pending": 0, "running": 0, "done": 12, "dead": 1 },
+  "results": [
+    { "id": 42, "kind": "post-ingest", "state": "dead",
+      "attempts": 5, "doc_id": 17,
+      "last_error": "ocrmypdf: page 3 timeout",
+      "created_at": 1785779486, "updated_at": 1785779523,
+      "next_run_at": 1785779486 }
+  ]
+}
+```
+
+Timestamps are unix seconds. The Phase-4 mobile-compat shim
+converts to ISO8601 there — this endpoint keeps the suchi
+convention.
+
 ### `GET /oidc/login` / `GET /oidc/callback`
 
 OIDC login flow. Only registered when OIDC is configured. State token
