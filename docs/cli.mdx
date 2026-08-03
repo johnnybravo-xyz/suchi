@@ -47,6 +47,30 @@ Category-resolution flags (`--flat`, `--map-jd`, `--auto-jd`) are
 mutually exclusive.
 </Info>
 
+## `suchi gc [flags]`
+
+Mark-and-sweep the CAS: walks every blob under `$DATA_DIR/blobs/`
+and deletes anything **not referenced** by any `documents` row
+(including trashed rows). The blob's on-disk mtime gates a grace
+window — a fresh-uploaded blob whose `documents` row is still in a
+pending write won't be reclaimed.
+
+Dry-run by default. Nothing is deleted until you pass `--apply`.
+
+### Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this. Longer is safer. |
+| `--apply` | off | Actually delete candidate blobs. Otherwise dry-run. |
+| `--verbose` | off | Log every kept and every candidate blob. |
+
+<Info>
+Recommended cadence: nightly `suchi gc --apply` via cron once the
+instance is a few weeks old. The design doc keeps this deliberately
+manual — automatic gc on hostile data is how you lose files.
+</Info>
+
 ## `suchi version`
 
 Prints the binary version, build revision, and the Go version it
