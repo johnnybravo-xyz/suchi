@@ -56,6 +56,8 @@ func main() {
 		os.Exit(runHealthcheck())
 	case "import":
 		os.Exit(runImport(os.Args[2:]))
+	case "gc":
+		os.Exit(runGC(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -74,6 +76,7 @@ Usage:
   suchi serve                     run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import paperless [flags]  import a Paperless-ngx export bundle
+  suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
