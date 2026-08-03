@@ -146,6 +146,95 @@ Timestamps are unix seconds. The Phase-4 mobile-compat shim
 converts to ISO8601 there — this endpoint keeps the suchi
 convention.
 
+### `GET /api/documents/{id}/correspondents/`
+
+List the correspondents attached to a document, grouped by role.
+Bank statement = `{sender: HDFC, recipient: account holder}`;
+invoice = `{sender: vendor, recipient: customer}`. Roles are
+`sender`, `recipient`, `cc`, `other`.
+
+Response:
+
+```json
+{
+  "results": [
+    { "id": 42, "name": "HDFC Bank",    "role": "sender" },
+    { "id": 87, "name": "Alice Sharma", "role": "recipient" }
+  ]
+}
+```
+
+### `POST /api/documents/{id}/correspondents/`
+
+Add a correspondent. Body: `{"name": "...", "role": "sender|recipient|cc|other"}`.
+Upserts the correspondent by name. `role=sender` also mirrors to
+`documents.correspondent_id` when no primary is set — the single-
+correspondent code paths (list column, existing rules) still find
+the sender.
+
+### `DELETE /api/documents/{id}/correspondents/{cid}/{role}`
+
+Remove one junction row. `204` on success.
+
+### `GET /api/documents/{id}/versions/`
+
+Every version in the chain that {id} belongs to, oldest → newest.
+{id} can be any node — root, middle, head. `is_head=true` marks the
+latest non-trashed version.
+
+```json
+{
+  "results": [
+    { "id": 5, "title": "Lease 2024",
+      "sha256": "...", "size": 12345, "mime_type": "application/pdf",
+      "created_at": 1785783054, "is_head": false },
+    { "id": 8, "title": "Lease 2026",
+      "sha256": "...", "size": 12890, "mime_type": "application/pdf",
+      "created_at": 1785783100,
+      "previous_version_id": 5, "is_head": true }
+  ]
+}
+```
+
+### `POST /api/documents/{id}/versions/`
+
+Upload a new version of {id}. Multipart, same shape as
+`POST /api/documents/`. Result row's `previous_version_id` = {id}.
+Default carry-forward: title (if uploader gave a bland filename)
+and JD category (a filed doc's version stays filed).
+
+### `GET /api/tags/`
+
+Read tags with optional parent-filter. Query params:
+
+| Param | Purpose |
+|-------|---------|
+| `parent_id=<int>` | Only children of this tag |
+| `parent_id=null` | Only roots (tags with no parent) |
+| (none) | Every tag |
+
+Each `TagView` carries `parent_id` (nullable) and `child_count` so
+the UI renders the shallow tree without extra round-trips.
+
+### `PATCH /api/tags/{id}/parent`
+
+Admin-only. Body: `{"parent_id": <int-or-null>}`. Rejects
+self-parent (`400 self_parent`) and cycles (`400 cycle`). See
+architecture doc for the "no inheritance in search" call.
+
+### `GET /api/rules/`
+
+The deterministic classifier's rulebook. See [config](/config) for
+env-vars that seed rules at import time; rules can also be authored
+via this API.
+
+- Body shape: `{if_kind, if_value, then_kind, then_value, priority, enabled}`
+- `if_kind` ∈ `tag | correspondent | document_type | title_contains | content_contains`
+- `then_kind` ∈ `add_tag | set_correspondent | set_document_type | set_jd_category`
+
+`POST /api/rules/`, `PATCH /api/rules/{id}`, `DELETE /api/rules/{id}` —
+all admin-only.
+
 ### `GET /oidc/login` / `GET /oidc/callback`
 
 OIDC login flow. Only registered when OIDC is configured. State token
