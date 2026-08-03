@@ -50,6 +50,8 @@ func main() {
 		os.Exit(runServe())
 	case "healthcheck":
 		os.Exit(runHealthcheck())
+	case "import":
+		os.Exit(runImport(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -65,9 +67,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `suchi — document management, one binary
 
 Usage:
-  suchi serve         run the HTTP server
-  suchi healthcheck   probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
-  suchi version       print version + build info
+  suchi serve                     run the HTTP server
+  suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
+  suchi import bundle [flags]  import a an existing DMS export bundle
+  suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
 }
