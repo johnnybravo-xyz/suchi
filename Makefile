@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt tidy run clean smoke
+.PHONY: build test vet lint fmt tidy run clean smoke install-hooks
 
 BIN := $(PWD)/dist/suchi
 MODULES := plugin-api core plugins/local-auth plugins/oidc distro
@@ -39,3 +39,13 @@ run: build
 
 clean:
 	rm -rf dist
+
+# Copy tracked hooks into .git/hooks. Idempotent; re-run after adding a
+# new script under hooks/. Uses install -D so a fresh clone that
+# doesn't yet have .git/hooks/ still works.
+install-hooks:
+	@set -e; for f in hooks/*; do \
+	  case "$$f" in hooks/README.md) continue;; esac; \
+	  install -D -m 0755 "$$f" .git/hooks/"$$(basename $$f)"; \
+	  echo "installed .git/hooks/$$(basename $$f)"; \
+	done
