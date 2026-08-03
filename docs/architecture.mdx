@@ -122,6 +122,46 @@ Migrations are one-way and gated by `PRAGMA user_version`. Down
 migrations aren't supported — production rollbacks restore from the
 pre-migration snapshot backups take before each schema change.
 
+## Post-ingest pipeline
+
+Every uploaded PDF flows through a fixed chain, hosted by the
+`core/pipeline/postingest` Handler and dispatched via the durable
+outbox:
+
+```mermaid
+flowchart LR
+    UP[Upload API] -->|doc row + post-ingest job, one tx| DB[(SQLite)]
+    DB --> DISP[Dispatcher]
+    DISP --> H{post-ingest handler}
+    H --> Q[qpdf normalize]
+    Q --> I[pdf-inspector]
+    I -->|HasText=true| WRITE[content ← extracted text]
+    I -->|HasText=false| O[ocrmypdf]
+    O --> CAS[(archive blob → CAS)]
+    O --> WRITE
+    WRITE --> DB
+```
+
+Every subprocess in the chain runs via `core/sandbox` — empty env,
+no network, hard timeout, bounded output, fresh workdir removed on
+return. Every step **degrades gracefully**: if a binary isn't
+installed (or the input is unrecognized), the step logs a `skip`
+and the pipeline continues with the previous state. The design
+principle: ingest completes even when some tools aren't installed.
+
+- **qpdf** strips restrictions + decrypts empty-user-password PDFs
+  before ocrmypdf sees them. Absorbs decompression bombs.
+- **pdf-inspector / pdftotext** decides whether the PDF has enough
+  embedded text to skip OCR entirely (threshold: 32 non-whitespace
+  chars). If yes → shortcut writes text into `documents.content`.
+- **ocrmypdf** runs only when the shortcut fails. Emits a
+  searchable-PDF archive (stored in the CAS as `archive_blob`) and
+  a plain-text sidecar (stored in `documents.content`). The FTS5
+  trigger picks up the content change automatically.
+
+Rules-engine classification runs after this (Phase 2 later); LLM /
+agent classification is Phase 3.
+
 ## Content-addressed storage
 
 Blobs live at `$DATA_DIR/blobs/sha256/{aa}/{bb}/{full-hash}`. Puts

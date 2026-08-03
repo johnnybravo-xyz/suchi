@@ -207,11 +207,21 @@ func runServe() int {
 	}
 	authChain.Authenticators = append(authChain.Authenticators, la)
 
+	// CAS is needed by both the post-ingest handler and the read-only
+	// UI. Constructed once, shared everywhere.
+	cas, err := blob.New(cfg.DataDir)
+	if err != nil {
+		log.Error("main.cas", "err", err.Error())
+		return 1
+	}
+
 	// Jobs — the durable outbox dispatcher. Every ingest producer
 	// enqueues a post-ingest job in the same tx as its doc row insert;
-	// this dispatcher hands the row off to a Subscriber.
+	// this dispatcher hands the row off to a Subscriber. The
+	// post-ingest handler runs the qpdf → pdf-inspector → ocrmypdf
+	// chain and updates the doc row with content + archive_blob.
 	disp := jobs.New(d, log)
-	disp.Register(postingest.New(log))
+	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages))
 	go disp.Run(ctx)
 	defer disp.Stop()
 
@@ -235,12 +245,7 @@ func runServe() int {
 	// without needing any Phase-1 code.
 	mux.Handle("GET /api/whoami", httpx.RequireAuth(http.HandlerFunc(whoamiHandler)))
 
-	// CAS + i18n + read-only UI.
-	cas, err := blob.New(cfg.DataDir)
-	if err != nil {
-		log.Error("main.cas", "err", err.Error())
-		return 1
-	}
+	// i18n + read-only UI (CAS constructed above with the dispatcher).
 	cat, err := i18n.Load("en", log)
 	if err != nil {
 		log.Error("main.i18n", "err", err.Error())
