@@ -1,0 +1,64 @@
+{{define "detail"}}{{ template "base" . }}{{end}}
+
+{{define "title"}}{{ .Doc.Title }}{{end}}
+
+{{define "content"}}
+<section class="doc-detail">
+  <header>
+    {{ with .Doc.JDLabel }}
+      <div class="crumb">
+        <a href="/">{{ msg "nav.documents" }}</a> ›
+        <span>{{ . }}</span>
+      </div>
+    {{ end }}
+    <h1>{{ .Doc.Title }}</h1>
+  </header>
+
+  <div class="two-col">
+    <aside class="meta">
+      <h2>{{ msg "doc.detail.section.metadata" }}</h2>
+      <dl>
+        <dt>{{ msg "doc.detail.field.created" }}</dt><dd>{{ .Doc.CreatedFmt }}</dd>
+        <dt>{{ msg "doc.detail.field.added" }}</dt><dd>{{ .Doc.AddedFmt }}</dd>
+        <dt>{{ msg "doc.detail.field.correspondent" }}</dt><dd>{{ or .Doc.Correspondent (msg "none") }}</dd>
+        <dt>{{ msg "doc.detail.field.type" }}</dt><dd>{{ or .Doc.DocType (msg "none") }}</dd>
+        <dt>{{ msg "doc.detail.field.category" }}</dt><dd>{{ or .Doc.JDLabel (msg "unclassified") }}</dd>
+        <dt>{{ msg "doc.detail.field.tags" }}</dt>
+        <dd>
+          {{ if .Doc.Tags }}
+            {{ range .Doc.Tags }}<span class="tag">{{ . }}</span> {{ end }}
+          {{ else }}{{ msg "none" }}{{ end }}
+        </dd>
+        {{ if .Doc.ASN }}
+          <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN }}</dd>
+        {{ end }}
+        {{ if .Doc.BundleID }}
+          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.BundleID }}</dd>
+        {{ end }}
+        <dt>{{ msg "doc.detail.field.original" }}</dt>
+        <dd><a href="/download/{{ .Doc.ID }}?original=1">{{ msg "doc.detail.download.original" }}</a></dd>
+        {{ if .Doc.HasArchive }}
+          <dt>{{ msg "doc.detail.field.archive" }}</dt>
+          <dd><a href="/download/{{ .Doc.ID }}">{{ msg "doc.detail.download.archive" }}</a></dd>
+        {{ end }}
+      </dl>
+    </aside>
+
+    <div class="viewer">
+      <object data="/preview/{{ .Doc.ID }}" type="application/pdf" width="100%" height="800px">
+        <p>Your browser can't display PDFs inline —
+          <a href="/download/{{ .Doc.ID }}?original=1">download the original</a>.</p>
+      </object>
+    </div>
+  </div>
+
+  {{ if .Notes }}
+  <section class="notes">
+    <h2>{{ msg "doc.detail.section.notes" }}</h2>
+    <ul>
+      {{ range .Notes }}<li><time>{{ .CreatedFmt }}</time> {{ .Note }}</li>{{ end }}
+    </ul>
+  </section>
+  {{ end }}
+</section>
+{{end}}
