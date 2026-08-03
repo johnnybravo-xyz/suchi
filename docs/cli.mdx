@@ -71,6 +71,37 @@ instance is a few weeks old. The design doc keeps this deliberately
 manual — automatic gc on hostile data is how you lose files.
 </Info>
 
+## `suchi taxonomy merge [flags]`
+
+Admin operation for the paperless-import cleanup: after years of
+use (or a big import), taxonomy tables accumulate near-duplicates
+("BESCOM" and "Bescom", "Tax" and "TAX"). Merge picks one, moves
+every reference from the other, deletes the source, and rewrites
+any classifier rules that referenced the source name.
+
+Dry-run by default. Reports how many docs would move before you
+commit.
+
+### Flags
+
+| Flag | Required | Purpose |
+|------|----------|---------|
+| `--kind <k>` | yes | One of `tag`, `correspondent`, `document_type`. |
+| `--from-name <name>` | yes | The row to delete. Every reference moves to `--into`. |
+| `--into-name <name>` | yes | The row that absorbs the references. |
+| `--apply` | no | Actually merge. Default is dry-run. |
+
+Example:
+
+```bash
+suchi taxonomy merge --kind tag \
+    --from-name "BESCOM" --into-name "Bescom"
+
+# Ready to commit?
+suchi taxonomy merge --kind tag \
+    --from-name "BESCOM" --into-name "Bescom" --apply
+```
+
 ## `suchi version`
 
 Prints the binary version, build revision, and the Go version it
