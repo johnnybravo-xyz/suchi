@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# pre-commit hook: refuse commits that would fail CI's gofmt gate.
+#
+# CI runs `gofmt -d $(find ... -name '*.go')` against the whole tree
+# and hard-fails on any drift. Matching that check here saves a bounce.
+#
+# Install per-clone with:  make install-hooks
+
+set -eu
+
+# Only .go files that git actually tracks. Skips vendor/, generated
+# files under .git, and anything ignored.
+files=$(git ls-files '*.go')
+[ -z "$files" ] && exit 0
+
+# gofmt -l lists files that would change if -w were passed. Empty
+# output = nothing to do; non-empty = commit refused.
+drift=$(gofmt -l $files)
+if [ -n "$drift" ]; then
+    printf 'pre-commit: gofmt drift in these files:\n' >&2
+    printf '  %s\n' $drift >&2
+    printf '\nFix:  make fmt\n' >&2
+    printf 'Or:   gofmt -w $(git ls-files "*.go")\n' >&2
+    exit 1
+fi
