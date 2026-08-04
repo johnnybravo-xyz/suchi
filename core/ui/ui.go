@@ -234,6 +234,10 @@ type detailDoc struct {
 	// password, "decrypted" once operator-supplied credentials unlocked
 	// it, or "" for normal (unencrypted) docs.
 	EncryptionState string
+	// EmailParentID points at the parent .eml row when this document
+	// is an attachment. When it's the parent (or a non-email doc)
+	// EmailParentID is invalid.
+	EmailParentID sql.NullInt64
 }
 
 // Detail renders a single document with its metadata + PDF viewer.
@@ -259,7 +263,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			d.created_at, d.added_at, d.archive_blob,
 			d.archive_serial_number, d.bundle_id_legacy,
 			d.split_parent_id, d.split_index,
-			d.encryption_state
+			d.encryption_state, d.email_parent_id
 		FROM documents d
 		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
 		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
@@ -269,7 +273,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
 		&created, &added, &archiveBlob, &doc.ASN, &doc.BundleID,
 		&doc.SplitParentID, &doc.SplitIndex,
-		&encState,
+		&encState, &doc.EmailParentID,
 	)
 	if encState.Valid {
 		doc.EncryptionState = encState.String

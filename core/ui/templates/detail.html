@@ -42,6 +42,10 @@
             {{ if .Doc.SplitIndex.Valid }}(part {{ .Doc.SplitIndex.Int64 }}){{ end }}
           </dd>
         {{ end }}
+        {{ if .Doc.EmailParentID.Valid }}
+          <dt>{{ msg "doc.detail.field.email_from" }}</dt>
+          <dd><a href="/docs/{{ .Doc.EmailParentID.Int64 }}">#{{ .Doc.EmailParentID.Int64 }}</a></dd>
+        {{ end }}
         <dt>{{ msg "doc.detail.field.original" }}</dt>
         <dd><a href="/download/{{ .Doc.ID }}?original=1">{{ msg "doc.detail.download.original" }}</a></dd>
         {{ if .Doc.HasArchive }}
