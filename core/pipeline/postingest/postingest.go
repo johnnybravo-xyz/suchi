@@ -42,6 +42,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/heic"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pageanalyze"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pdfinspector"
@@ -291,6 +292,48 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			// The doc was soft-deleted as a Message-ID duplicate.
 			// Skip render/classify — there's no live row to render.
 			return nil
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	// HEIC / HEIF path: iPhones photograph documents in this format by
+	// default. ImageMagick converts to a single-page PDF; that PDF then
+	// flows through the standard OCR engine so a photograph of a
+	// receipt becomes full-text searchable. Original HEIC bytes stay
+	// in the CAS via original_blob; archive_blob holds the OCR-searchable
+	// PDF. Must come BEFORE the barcode route because barcode.Recognized
+	// accepts every image/* type.
+	if heic.Recognized(mime) {
+		res, herr := heic.Convert(ctx, bytes.NewReader(origBytes), log, heic.Options{})
+		if herr != nil {
+			return fmt.Errorf("heic: %w", herr)
+		}
+		if res.Skipped || len(res.PDF) == 0 {
+			log.Info("post-ingest.route.heic.skipped", "reason", res.StderrTail)
+			return h.postContentSteps(ctx, log, e.DocID)
+		}
+		log.Info("post-ingest.route.heic", "pdf_bytes", len(res.PDF), "took", res.Duration.String())
+
+		// Run OCR against the converted PDF. Falls back gracefully if
+		// neither engine is available — the doc still lands with an
+		// archive_blob PDF for preview, just without text search.
+		content, archiveBlob, archiveSize, err := h.runOCR(ctx, log, res.PDF)
+		if err != nil {
+			return fmt.Errorf("heic.ocr: %w", err)
+		}
+		// When OCR skipped (no engine on PATH), the converted PDF still
+		// deserves to be the archive — otherwise the detail page's PDF
+		// preview has nothing to render.
+		if archiveBlob == "" {
+			ref, cerr := h.cas.Put(bytes.NewReader(res.PDF))
+			if cerr != nil {
+				return fmt.Errorf("heic.cas: %w", cerr)
+			}
+			archiveBlob = ref.SHA256
+			archiveSize = ref.Size
+		}
+		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
+			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
 	}

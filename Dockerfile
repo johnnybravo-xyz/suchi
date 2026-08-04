@@ -37,7 +37,9 @@ RUN apk add --no-cache \
       qpdf \
       poppler-utils \
       tesseract-ocr \
-      tesseract-ocr-data-eng
+      tesseract-ocr-data-eng \
+      imagemagick \
+      imagemagick-heic
 RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 COPY --from=build /out/suchi /usr/local/bin/suchi
@@ -59,8 +61,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       poppler-utils \
       djvulibre-bin \
       libreoffice-core \
+      imagemagick \
+      libheif1 \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# Debian's ImageMagick policy.xml blocks HEIC by default. Enable it —
+# we only need HEIC decode for photograph-of-document ingestion.
+RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<policy domain="coder" rights="none" pattern="HEIF" />||g' /etc/ImageMagick-6/policy.xml || true
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi
 COPY --from=build /out/suchi /usr/local/bin/suchi
 RUN mkdir -p /data && chown 65532:65532 /data
