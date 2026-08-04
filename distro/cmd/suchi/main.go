@@ -69,6 +69,8 @@ func main() {
 		os.Exit(runGC(os.Args[2:]))
 	case "taxonomy":
 		os.Exit(runTaxonomy(os.Args[2:]))
+	case "doctor":
+		os.Exit(runDoctor(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -89,6 +91,7 @@ Usage:
   suchi import paperless [flags]  import a Paperless-ngx export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
+  suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
