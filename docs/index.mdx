@@ -1,12 +1,12 @@
 ---
 title: "suchi"
-description: "Document management as one Go binary. SQLite-first, plugin seams, an existing DMS mobile-compat."
+description: "Document management as one Go binary. SQLite-first, plugin seams, drop-in for existing mobile clients."
 ---
 
 **suchi** (Sanskrit *सूची*, "an index, a catalog, a list") is a document
 management system: one Go binary, SQLite by default, content-addressed
-storage, plugin seams at every layer, wire-compatible with the
-an existing DMS mobile ecosystem.
+storage, plugin seams at every layer, wire-compatible with existing
+mobile clients so no bespoke app is needed.
 
 <Warning>
 suchi is under active development. **Not for production use yet.** The
@@ -48,7 +48,7 @@ is the stability signal.
     What ingests, what binary it needs, slim vs full image matrix.
   </Card>
   <Card title="HTTP API" icon="terminal" href="/api">
-    Endpoints today + planned Bundle-mobile compat surface.
+    Endpoints today + planned mobile-client compat surface.
   </Card>
   <Card title="Architecture" icon="layer-group" href="/architecture">
     Data flow, design principles, SQLite discipline, CAS.
