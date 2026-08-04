@@ -17,6 +17,7 @@ shows up.
 | `image/*` (PNG, JPEG, GIF, TIFF, WebP) | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens | none (pure-Go via gozxing) | ✅ | ✅ |
 | `application/epub+zip`, `application/epub` | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs. | none | ✅ | ✅ |
 | `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
+| `image/heic`, `image/heif` (`.heic`, `.heif`) | ImageMagick converts to single-page PDF; the standard OCR path then produces a searchable archive — a photograph of a receipt becomes full-text searchable | `magick` (ImageMagick) with HEIF delegate | ✅ | ✅ |
 | `message/rfc822` (`.eml` files) | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id` | none (pure Go) | ✅ | ✅ |
 
 Anything else lands as a doc with empty content — the original bytes
@@ -264,7 +265,6 @@ Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
 
 ## Not yet supported
 
-- **HEIC / HEIF** — needs a `libheif`-backed converter (heif-convert → JPEG → image path). Planned.
 - **`.msg` (Outlook)** — parked. The binary format is heavy; forward to your `INGEST_IMAP_URL` inbox instead as a workaround.
 - **Office docs (`.docx`, `.odt`, etc.)** — `libreoffice-core` is in the full image but the conversion step isn't wired yet. Planned.
 - **`.zip` / `.tar` bundles** — no auto-explode. Ingest the individual documents.

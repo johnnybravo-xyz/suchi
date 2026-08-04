@@ -295,6 +295,16 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		emlLooksLikeEmail(w.cas, ref.SHA256) {
 		mime = "message/rfc822"
 	}
+	// http.DetectContentType doesn't know about HEIC/HEIF (limited
+	// stdlib signature set). Nudge via the extension so post-ingest
+	// routes into core/pipeline/heic/ instead of falling through as
+	// application/octet-stream.
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".heic":
+		mime = "image/heic"
+	case ".heif":
+		mime = "image/heif"
+	}
 
 	title := deriveTitle(path, side)
 
