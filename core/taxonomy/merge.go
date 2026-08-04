@@ -15,7 +15,39 @@ import (
 	"fmt"
 
 	"github.com/suchi-dms/suchi/core/db"
+	"github.com/suchi-dms/suchi/core/render/view"
 )
+
+// affectedDocs returns every document id whose reference to the source
+// row will be rewritten by the pending merge. For tags this is the
+// junction table; for the FK kinds it's documents.<fkcol>.
+func affectedDocs(ctx context.Context, tx *sql.Tx, kind string, fromID int64) ([]int64, error) {
+	var q string
+	switch kind {
+	case KindTag:
+		q = `SELECT document_id FROM document_tags WHERE tag_id = ?`
+	case KindCorrespondent:
+		q = `SELECT id FROM documents WHERE correspondent_id = ?`
+	case KindDocumentType:
+		q = `SELECT id FROM documents WHERE document_type_id = ?`
+	default:
+		return nil, fmt.Errorf("taxonomy: affectedDocs kind %q", kind)
+	}
+	rows, err := tx.QueryContext(ctx, q, fromID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
 
 // Kind is what to merge. Exported constants because the CLI and tests
 // share the vocabulary.
@@ -97,6 +129,14 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 	}
 
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+		// Snapshot the affected doc IDs BEFORE mutating so we can enqueue
+		// render jobs afterward. For tag merges the source is the
+		// junction; for FK merges the source is documents.<fkcol>.
+		affected, err := affectedDocs(ctx, tx, opts.Kind, fromID)
+		if err != nil {
+			return err
+		}
+
 		if opts.Kind == KindTag {
 			// Junction rewrite. INSERT OR IGNORE handles the case where
 			// a doc already carries BOTH tags (junction is UNIQUE on
@@ -119,6 +159,14 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE documents SET `+col+` = ? WHERE `+col+` = ?`,
 				intoID, fromID); err != nil {
+				return err
+			}
+		}
+
+		// Storage-path re-render for every affected doc. Same tx, so a
+		// crash between the merge write and the enqueue is impossible.
+		for _, docID := range affected {
+			if err := view.EnqueueMove(ctx, tx, docID); err != nil {
 				return err
 			}
 		}

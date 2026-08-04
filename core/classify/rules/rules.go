@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/suchi-dms/suchi/core/db"
+	"github.com/suchi-dms/suchi/core/render/view"
 )
 
 // Rule mirrors the table row.
@@ -103,6 +104,13 @@ func Apply(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) ([]Appl
 			now := time.Now().Unix()
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE documents SET updated_at = ? WHERE id = ?`, now, docID); err != nil {
+				return err
+			}
+			// Storage-path re-render: rules may have flipped correspondent,
+			// document_type, JD category, or tags — any of which the
+			// template reads. Enqueue in the same tx so the render is
+			// crash-consistent with the metadata change.
+			if err := view.EnqueueMove(ctx, tx, docID); err != nil {
 				return err
 			}
 		}
