@@ -90,6 +90,29 @@ surface. That's exactly why the ladder starts at volume encryption.
 Status: `PARK: post-Phase 4; interface reserved in the storage
 plugin kind now so it wraps, not rewrites.`
 
+### 4b. Operator-supplied PDF passwords (at rest)
+
+Passwords the operator provides to unlock encrypted PDFs (via `POST
+/api/documents/{id}/decrypt` with `remember=true`) are sealed with
+AES-256-GCM before hitting the `decryption_passwords` table. Key
+material lives at `$DATA_DIR/.decrypt-key` (auto-generated 0600 on
+first boot).
+
+**Threat model coverage:**
+
+- DB dump alone (backup leak, SQL injection dump) → ciphertext-only,
+  can't recover plaintext.
+- DB + `.decrypt-key` both compromised → plaintext recoverable.
+  Attackers with `$DATA_DIR` root access don't need this anyway; they
+  can read the original blobs.
+
+Loss of `.decrypt-key` loses ALL stored passwords. Back up
+`$DATA_DIR` wholesale, not just `dms.db`.
+
+Passwords loaded from `INGEST_PASSWORDS_FILE` are read cleartext at
+ingest time and never persisted by suchi — the file is a candidate
+list, not a store. Chmod 600 recommended.
+
 ### 5. KMS-backed keys (enterprise)
 
 KMS plugins, per-tenant keys, and WORM/Object-Lock live in the E3

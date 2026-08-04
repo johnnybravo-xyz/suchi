@@ -205,6 +205,73 @@ the sender.
 
 Remove one junction row. `204` on success.
 
+### `POST /api/documents/{id}/decrypt`
+
+Attempt to decrypt a document currently in `encryption_state='encrypted'`.
+
+**Body:** `{"password": "...", "remember": true, "label": "opt"}`
+
+- `password` — required. The user password for the PDF.
+- `remember` — optional. When `true`, the password is AEAD-sealed with the
+  server's `.decrypt-key` and stored in `decryption_passwords` for the
+  doc's owner. Future encrypted uploads by the same owner auto-try it.
+- `label` — optional operator-visible tag ("BofA 2024") attached to
+  the stored password.
+
+On success: writes the decrypted bytes into the CAS as
+`decrypted_blob`, flips state to `'decrypted'`, re-enqueues post-ingest.
+Returns `204 No Content`.
+
+Failure modes:
+- `400 bad_password` — qpdf rejected the password
+- `400 empty_password` — body missing the field
+- `404 not_found` — no encrypted doc with that id, or not yours
+- `503 decrypt_disabled` — server started without `.decrypt-key`
+
+### `POST /api/documents/decrypt-batch`
+
+Apply one password to N docs. Useful for monthly bank statements where
+every account shares a password.
+
+**Body:**
+```json
+{
+  "doc_ids": [42, 43, 44],
+  "password": "hunter2",
+  "remember": true,
+  "label": "Bank X 2026"
+}
+```
+
+**200 OK**
+```json
+{
+  "results": [
+    {"doc_id": 42, "ok": true},
+    {"doc_id": 43, "ok": true},
+    {"doc_id": 44, "ok": false, "reason": "bad_password"}
+  ]
+}
+```
+
+`remember=true` fires ONCE per batch and only when at least one doc
+succeeded — no point sealing a password that unlocked nothing.
+
+### `GET /api/documents/pending-decryption`
+
+List of docs awaiting a password. Owner-scoped for non-admins.
+
+**200 OK**
+```json
+{
+  "results": [
+    { "id": 42, "title": "statement.pdf",
+      "original_blob": "sha256hex...", "original_size": 65432,
+      "created_at": 1785783054, "mime_type": "application/pdf" }
+  ]
+}
+```
+
 ### `PUT /api/documents/{id}/custom_fields/{field}`
 
 Write a typed custom-field value. `{field}` accepts either the numeric
