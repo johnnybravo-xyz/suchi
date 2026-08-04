@@ -108,7 +108,7 @@ jobs:
           for i in $(seq 1 60); do
               CNT=$(curl -sf "http://127.0.0.1:8000/api/tasks/?state=done&doc_id=1" \
                   -H "Authorization: Token $API_TOKEN" \
-                  | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('results',[])))")
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('results') or []; print(len(r))")
               if [ "$CNT" -ge 1 ]; then
                   echo "post-ingest job done on attempt $i"
                   break
