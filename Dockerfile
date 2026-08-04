@@ -63,6 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-core \
       imagemagick \
       libheif1 \
+      libemail-outlook-message-perl \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # Debian's ImageMagick policy.xml blocks HEIC by default. Enable it —
