@@ -90,6 +90,20 @@ type Config struct {
 	ScanSplitEnabled bool
 	ScanSplitToken   string // default "SUCHI-SPLIT"
 	ScanSplitDPI     int    // default 150
+
+	// Password-protected PDF handling.
+	//
+	//   IngestPasswordsFile — newline-separated candidate passwords,
+	//     tried in order on every encrypted PDF ingest. Blank lines
+	//     and lines starting with '#' are skipped so operators can
+	//     annotate the file.
+	//   DecryptKeyPath — AES-256-GCM key file for sealing operator-
+	//     supplied passwords in the decryption_passwords table. Auto-
+	//     generated 0600 on first boot (like the session key). Losing
+	//     this file loses ALL stored passwords — operators back up
+	//     DATA_DIR wholesale.
+	IngestPasswordsFile string
+	DecryptKeyPath      string
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -160,6 +174,9 @@ func Load() (*Config, error) {
 		}
 		c.ScanSplitDPI = n
 	}
+
+	c.IngestPasswordsFile = env("INGEST_PASSWORDS_FILE", "")
+	c.DecryptKeyPath = env("DECRYPT_KEY_FILE", filepath.Join(c.DataDir, ".decrypt-key"))
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.
 	if c.OIDCClientSecret, err = readSecret("OIDC_CLIENT_SECRET"); err != nil {

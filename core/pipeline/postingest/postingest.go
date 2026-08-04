@@ -27,11 +27,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/classify/rules"
+	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
@@ -98,6 +100,23 @@ type Handler struct {
 	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
 	scanBlank       ScanBlank
 	scanSplit       ScanSplit
+	decrypt         Decrypt
+}
+
+// Decrypt carries the per-Handler configuration for password-protected
+// document handling. Zero-value = decrypt attempts still happen with
+// the empty password (the common owner-restrictions case) but no
+// operator-supplied candidates are consulted.
+type Decrypt struct {
+	// Key is the AEAD key used to open sealed passwords from the
+	// decryption_passwords table. When nil, learned passwords are
+	// skipped and only PasswordsFile candidates are tried.
+	Key *suchicrypto.AEADKey
+	// PasswordsFile is an optional path to a newline-separated list
+	// of candidate passwords. Blank lines and lines starting with '#'
+	// are skipped. Loaded lazily per-ingest so operators can update
+	// the file without restarting suchi.
+	PasswordsFile string
 }
 
 // ScanBlank carries the per-Handler configuration for blank-page
@@ -166,6 +185,16 @@ func WithOCREngine(engine string) Option {
 // original is never touched.
 func WithScanBlank(cfg ScanBlank) Option {
 	return func(h *Handler) { h.scanBlank = cfg }
+}
+
+// WithDecrypt wires in the AEAD key + passwords-file location that
+// post-ingest uses when a PDF returns qpdf.NeedsPassword. Absent → the
+// empty-password path still runs (owner-restrictions unlock) but no
+// candidate passwords are tried, and encrypted-with-real-password
+// PDFs land in encryption_state='encrypted' with the operator asked
+// to supply the password via the API/UI.
+func WithDecrypt(cfg Decrypt) Option {
+	return func(h *Handler) { h.decrypt = cfg }
 }
 
 // WithScanSplit enables multi-doc splitting on QR separator sheets.
@@ -273,12 +302,36 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return nil
 	}
 
-	// 1. qpdf normalize
-	normalized, err := qpdf.Normalize(ctx, bytes.NewReader(origBytes), log, qpdf.Options{})
+	// 1. qpdf normalize (with password candidates). Gathers candidates
+	// from the operator's passwords file + the learned-passwords table
+	// scoped to this doc's owner. First success wins; if all attempts
+	// fail with a password error, the doc lands in state='encrypted'
+	// and post-ingest bails out until the operator supplies one via
+	// POST /api/documents/{id}/decrypt.
+	candidates, pwdSources, err := h.gatherDecryptCandidates(ctx, log, e.DocID)
+	if err != nil {
+		log.Warn("post-ingest.decrypt.candidates_load_failed", "err", err.Error())
+	}
+	normalized, err := qpdf.Normalize(ctx, bytes.NewReader(origBytes), log,
+		qpdf.Options{Passwords: candidates})
 	if err != nil {
 		return fmt.Errorf("qpdf: %w", err)
 	}
+	if normalized.NeedsPassword {
+		log.Warn("post-ingest.decrypt.needs_password",
+			"doc_id", e.DocID, "tried_candidates", len(candidates))
+		return h.markEncrypted(ctx, e.DocID, normalized.StderrTail)
+	}
 	pdfBytes := normalized.Data
+	// If a candidate password worked, promote the doc to decrypted
+	// state, snapshot the decrypted bytes into the CAS as a second
+	// blob (original is preserved verbatim), and bump last_used_at on
+	// the winning learned-password row so hot passwords stay hot.
+	if normalized.PasswordIndex >= 0 {
+		if err := h.recordDecrypted(ctx, log, e.DocID, pdfBytes, pwdSources, normalized.PasswordIndex); err != nil {
+			log.Warn("post-ingest.decrypt.record_failed", "err", err.Error())
+		}
+	}
 
 	// 1a. Multi-doc split on QR separator sheets (opt-in). Runs
 	// BEFORE blank removal so page-number references stay valid.
@@ -547,6 +600,164 @@ func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes
 		return nil, nil
 	}
 	return res.Data, nil
+}
+
+// pwdSource labels where a candidate came from so recordDecrypted can
+// update the right row (or nothing, for file-only candidates).
+type pwdSource struct {
+	// LearnedID is the decryption_passwords row id when this candidate
+	// came from the learned table; zero when the candidate came from
+	// the passwords file (in which case there's no last_used_at bump).
+	LearnedID int64
+}
+
+// gatherDecryptCandidates returns the ordered list of candidate
+// passwords qpdf should try, plus a parallel slice of pwdSource for
+// the "which row won?" post-decrypt bookkeeping. Order:
+//
+//  1. Learned passwords for this doc's owner, hottest first.
+//  2. Passwords from the operator's PasswordsFile, top-of-file first.
+//
+// The empty password is NOT in this list — qpdf tries it unconditionally
+// before iterating candidates.
+func (h *Handler) gatherDecryptCandidates(ctx context.Context, log *slog.Logger, docID int64) ([]string, []pwdSource, error) {
+	var candidates []string
+	var sources []pwdSource
+
+	// Learned passwords for this doc's owner.
+	if h.decrypt.Key != nil {
+		ownerID, err := h.loadOwnerID(ctx, docID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load owner: %w", err)
+		}
+		rows, err := h.db.Read.QueryContext(ctx, `
+			SELECT id, ciphertext FROM decryption_passwords
+			WHERE owner_id = ?
+			ORDER BY last_used_at DESC NULLS LAST, id
+		`, ownerID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("query learned: %w", err)
+		}
+		for rows.Next() {
+			var (
+				id     int64
+				sealed []byte
+			)
+			if err := rows.Scan(&id, &sealed); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			pt, err := h.decrypt.Key.Open(sealed)
+			if err != nil {
+				log.Warn("post-ingest.decrypt.stale_password",
+					"id", id, "err", err.Error())
+				continue
+			}
+			candidates = append(candidates, string(pt))
+			sources = append(sources, pwdSource{LearnedID: id})
+		}
+		rows.Close()
+	}
+
+	// Operator's passwords file. Cheap re-read each time — the file
+	// is small and this lets operators add passwords without restart.
+	if h.decrypt.PasswordsFile != "" {
+		fileWords, err := loadPasswordsFile(h.decrypt.PasswordsFile)
+		if err != nil {
+			log.Warn("post-ingest.decrypt.passwords_file_read",
+				"path", h.decrypt.PasswordsFile, "err", err.Error())
+		}
+		for _, w := range fileWords {
+			candidates = append(candidates, w)
+			sources = append(sources, pwdSource{}) // file-source, no ID
+		}
+	}
+	return candidates, sources, nil
+}
+
+// loadOwnerID pulls owner_id for a docID. Kept separate from loadDoc
+// so the decrypt candidate lookup doesn't force a schema change to
+// loadDoc's shape.
+func (h *Handler) loadOwnerID(ctx context.Context, docID int64) (int64, error) {
+	var owner int64
+	err := h.db.Read.QueryRowContext(ctx,
+		`SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&owner)
+	return owner, err
+}
+
+// loadPasswordsFile reads a newline-separated password list. Blank
+// lines and lines starting with '#' are skipped so operators can
+// annotate the file. Trims trailing whitespace on each candidate.
+func loadPasswordsFile(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out, nil
+}
+
+// markEncrypted transitions a doc to encryption_state='encrypted' and
+// stops the post-ingest chain. Called when every decrypt candidate
+// (empty + file + learned) fails on password error.
+func (h *Handler) markEncrypted(ctx context.Context, docID int64, stderr string) error {
+	err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET encryption_state = 'encrypted', updated_at = ?
+			WHERE id = ?
+		`, time.Now().Unix(), docID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("mark encrypted: %w", err)
+	}
+	h.log.Info("post-ingest.decrypt.awaiting_password",
+		"doc_id", docID, "qpdf_stderr_tail", stderr)
+	return nil
+}
+
+// recordDecrypted writes the decrypted bytes into the CAS as a second
+// blob, populates documents.decrypted_blob + decrypted_size + state,
+// and bumps last_used_at on the winning learned password (if any).
+func (h *Handler) recordDecrypted(ctx context.Context, log *slog.Logger, docID int64, pdfBytes []byte, sources []pwdSource, index int) error {
+	ref, err := h.cas.Put(bytes.NewReader(pdfBytes))
+	if err != nil {
+		return fmt.Errorf("cas put decrypted: %w", err)
+	}
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET encryption_state = 'decrypted',
+			    decrypted_blob = ?, decrypted_size = ?, updated_at = ?
+			WHERE id = ?
+		`, ref.SHA256, ref.Size, time.Now().Unix(), docID); err != nil {
+			return err
+		}
+		if index >= 0 && index < len(sources) {
+			src := sources[index]
+			if src.LearnedID != 0 {
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE decryption_passwords SET last_used_at = ? WHERE id = ?
+				`, time.Now().Unix(), src.LearnedID); err != nil {
+					return err
+				}
+				log.Info("post-ingest.decrypt.learned_hit",
+					"doc_id", docID, "pwd_id", src.LearnedID)
+			} else {
+				log.Info("post-ingest.decrypt.file_hit",
+					"doc_id", docID, "file_index", index)
+			}
+		}
+		return nil
+	})
 }
 
 // runOCR dispatches to the configured OCR engine. Returns (content,

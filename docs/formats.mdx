@@ -28,7 +28,12 @@ index. Add a converter (or wait for a future ingester) to fill in
 The PDF path is the most involved because it fans out based on content:
 
 ```
-upload → qpdf (normalize, strip restrictions, decrypt empty-password)
+upload → qpdf (normalize, strip restrictions, decrypt using
+                empty password + candidates from passwords file
+                + learned passwords for this owner)
+          → if all decrypt attempts fail: mark encryption_state='encrypted',
+             bail out. Operator supplies password via
+             POST /api/documents/{id}/decrypt to resume the pipeline.
       → docsplit (opt-in; pdftoppm+QR scan → separator pages)
           → if separators found: fan out one child doc per segment,
              soft-delete parent, exit (children carry the chain)
@@ -69,6 +74,47 @@ search still work over `documents.content`. Pick `ocrmypdf` when you
 want the archive PDF (e.g. long-term retention where the searchable
 PDF matters more than image size), or set to `auto` and let the image
 you deployed decide.
+
+### Password-protected PDFs
+
+Encrypted PDFs go through a candidate-passwords loop before being
+parked as `pending-decryption`. The loop tries, in order:
+
+1. **Empty password** — the "owner restrictions only" case (very common
+   for bank statements, invoices). `qpdf --decrypt=` with no password.
+2. **Passwords file** (optional) — `INGEST_PASSWORDS_FILE` points at
+   a newline-separated list of candidates; blank lines and `#` comments
+   are skipped. Chmod 600 recommended.
+3. **Learned passwords** — every password an operator supplies via
+   `POST /api/documents/{id}/decrypt` with `remember=true` gets sealed
+   with AES-256-GCM (`.decrypt-key` file) and stored owner-scoped in
+   the `decryption_passwords` table. Hot passwords hit first.
+
+If every candidate fails, the doc lands in
+`encryption_state='encrypted'` with the pipeline halted. Surface it via
+`GET /api/documents/pending-decryption`. The operator supplies a
+password:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/documents/42/decrypt \
+     -H "Authorization: Token $TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"password":"hunter2","remember":true,"label":"BofA 2024"}'
+```
+
+On success suchi writes a decrypted CAS blob (originals are always
+preserved verbatim in `original_blob`), flips the state, and re-enqueues
+`post-ingest` — the doc flows through the rest of the pipeline (OCR,
+ZUGFeRD, rules, render) as if it had arrived unencrypted.
+
+**Batch decrypt** — for monthly statements where multiple accounts share
+a password, `POST /api/documents/decrypt-batch` accepts a doc-id array
+and one password; `remember=true` fires once per batch on first hit.
+
+**qpdf warnings-are-fine gotcha.** Some bank PDFs ship spec-nonconformant
+`/Perms` and produce qpdf exit code 3 (warnings). suchi treats exit 3
+with non-empty output as success — matching the an existing DMS
+pre-consume convention.
 
 ### Multi-doc splitting on QR separator sheets
 
