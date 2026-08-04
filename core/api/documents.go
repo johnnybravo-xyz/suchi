@@ -45,11 +45,10 @@ type UploadResponse struct {
 // files are how you smuggle malware, and we do not trust upload
 // headers.
 func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 
 	file, header, err := r.FormFile("document")
 	if err != nil {
@@ -225,11 +224,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 // either on hash-collision re-upload (UploadDocument) or via the
 // Restore endpoint.
 func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -268,11 +266,10 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 // RestoreDocument clears trashed_at. Idempotent — restoring an
 // already-live doc returns 200 with a no-op.
 func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())

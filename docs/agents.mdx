@@ -96,19 +96,32 @@ Returns `201 Created` with the new job id.
 ## Auth + scopes
 
 Every endpoint uses the standard auth middleware — a browser session
-cookie OR a `Authorization: Token <hex>` API token works. Best
-practice: issue a **dedicated token per agent**, with a small scope
-label so audit trails cleanly separate "agent-1 changed this doc"
-from "the operator did it manually."
+cookie OR a `Authorization: Token <hex>` API token works.
 
-Today (v1) scopes are stored (`api_tokens.scopes`) but not enforced —
-enforcement is a Phase-6 permissions story. Adopt the scope
-convention now so the enforcement upgrade lands transparently:
+**Scopes are enforced** on the write + agent surfaces:
+
+| Endpoint family | Required scope |
+|---|---|
+| Agent verbs (`POST /api/tasks/…`) | `agent:tasks` |
+| Document writes (upload, delete, restore, custom_fields, correspondents, decrypt, versions) | `documents:write` |
+| Webhook management (`/api/agent/webhooks…`) | `admin:webhooks` |
+| Everything else (reads) | any authenticated principal |
+
+Browser-session principals bypass scope checks — an operator logged
+into the UI can do anything the role allows. Tokens are held to the
+`scopes` column they were issued with. Legacy tokens with the coarse
+`read` / `write` labels (Phase 0/1/2) are treated as wildcards so
+they keep working; new integrations should adopt the granular set.
+
+Issue a dedicated scoped token per agent:
 
 ```sql
 INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at)
-VALUES (?, 'classifier-agent', ?, 'documents:write', unixepoch());
+VALUES (?, 'classifier-agent', ?, 'agent:tasks,documents:write', unixepoch());
 ```
+
+A token missing the required scope gets `403 Forbidden` with
+`{"error": "token missing required scope <name>", "code": "insufficient_scope"}`.
 
 ## Reference agent (Python)
 
@@ -189,11 +202,101 @@ A future release will wire common producers into `postingest`
 (low-confidence LLM output automatically enqueues `agent:review`,
 etc.).
 
+## Webhook variant (push mode)
+
+For agents that don't want to poll, register a webhook. On every
+matching `agent:*` enqueue, suchi POSTs a signed envelope to the
+receiver.
+
+### `POST /api/agent/webhooks`
+
+Requires `admin:webhooks`.
+
+**Body:**
+```json
+{
+  "url": "https://my-agent.example/hooks/suchi",
+  "kind_prefix": "agent:classify",
+  "label": "prod classifier"
+}
+```
+
+`kind_prefix` defaults to `agent:` (all). Must start with `agent:`.
+
+**Response 201:**
+```json
+{
+  "id": 42,
+  "url": "https://my-agent.example/hooks/suchi",
+  "kind_prefix": "agent:classify",
+  "label": "prod classifier",
+  "secret": "1c9b…5e2f",
+  "created_at": 1785783054
+}
+```
+
+`secret` is a hex-encoded 32-byte HMAC key returned **once** — copy it
+into the receiver's config immediately. Future `GET`s never expose it.
+On the server, secrets are AEAD-sealed with the same `.decrypt-key`
+used for PDF passwords.
+
+### `GET /api/agent/webhooks`
+
+Requires `admin:webhooks`. Lists webhooks scoped to the caller
+(admins see all). Secret omitted; `last_delivery_at`, `last_status`,
+`last_error` surface receiver health.
+
+### `DELETE /api/agent/webhooks/{id}`
+
+Requires `admin:webhooks`. Owner-scoped for non-admins.
+
+### Signature verification
+
+Every delivery carries two headers:
+
+- `X-Suchi-Event: agent.task.enqueued`
+- `X-Suchi-Signature: <hex hmac-sha256>` — HMAC of the raw body,
+  keyed with your webhook's secret.
+
+**Receiver MUST**:
+
+1. Read the raw request body (do not re-JSON-encode).
+2. Compute `hmac_sha256(secret, body).hex()`.
+3. Constant-time compare with the header value.
+4. Reject any request without both headers or with a mismatched sig.
+5. Reject if `sent_at` (in the body) is too far from now — 300s is a
+   safe window.
+
+Example event body:
+
+```json
+{
+  "event": "agent.task.enqueued",
+  "webhook_id": 42,
+  "source_job": 917,
+  "source_kind": "agent:classify",
+  "enqueued_at": 1785783054,
+  "sent_at": 1785783055
+}
+```
+
+The event tells the receiver **a job exists**; the receiver then
+claims it via the normal poll-loop verbs (`POST /api/tasks/917/claim`
+etc.). The webhook is a notification, not a delivery of doc content.
+
+### Delivery guarantees
+
+Every delivery goes through the durable outbox as a `webhook:deliver`
+job. On failure (non-2xx response or network error) the outbox
+retries with backoff up to the standard attempts cap; after 5
+failed attempts the job lands in `state='dead'` on `/api/tasks/` and
+`last_error` on `agent_webhooks`. A `webhook:deliver` job whose
+receiver returns a stale-secret error (AEAD open fails) deactivates
+the webhook to prevent retry storms.
+
 ## Not yet
 
-- **Scope enforcement** — Phase 6.
-- **Webhook variant** — instead of polling, suchi POSTs to a
-  registered URL when a matching job lands. Planned; comment on
-  design in the tracker.
 - **Per-agent identity separate from api_tokens** — v1 uses whatever
   token you present; the `agent_id` in the body is bookkeeping.
+- **Bulk claim** — claim N tasks in one request. Poll-and-claim-one
+  works for most agent loads today.

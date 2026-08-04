@@ -36,6 +36,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/webhookdispatch"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -306,6 +307,12 @@ func runServe() int {
 	// a "render" job in its own tx; this dispatcher fires the move
 	// after commit.
 	disp.Register(view.NewHandler(renderer))
+	// Webhook delivery subscriber — nil when no AEAD key (can't happen
+	// today because main aborts on decrypt key load failure, but the
+	// NewHandler nil-guard keeps the wiring composable).
+	if h := webhookdispatch.New(d, log, decryptKey); h != nil {
+		disp.Register(h)
+	}
 	go disp.Run(ctx)
 	defer disp.Stop()
 
@@ -379,6 +386,7 @@ func runServe() int {
 	}
 	apiSrv.WithJobs(disp).Register(mux)
 	apiSrv.AttachDecrypt(mux, api.DecryptDeps{Key: decryptKey, CAS: cas})
+	apiSrv.AttachWebhooks(mux, api.WebhookDeps{Key: decryptKey})
 
 	// Baseline audit ping — proves audit_events writes work.
 	audit.Log(ctx, d, log, audit.Event{

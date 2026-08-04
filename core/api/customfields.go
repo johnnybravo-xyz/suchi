@@ -36,11 +36,10 @@ type setCustomFieldRequest struct {
 // caller's perspective (the DB writes a fresh row but the render job
 // dedupes to a no-op move).
 func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -115,11 +114,10 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 
 // DeleteCustomField removes the value row for a (doc, field) pair.
 func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
