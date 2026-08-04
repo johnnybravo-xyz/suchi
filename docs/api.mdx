@@ -1,10 +1,10 @@
 ---
 title: "HTTP API"
-description: "JSON endpoints under /api/ — current + planned Paperless-mobile compat."
+description: "JSON endpoints under /api/ — current + planned mobile-client compat."
 ---
 
 Phase 0/1 surface — grows through Phase 2 (ingest endpoints) and
-Phase 4 (Paperless-mobile compat surface).
+Phase 4 (mobile-client compat surface).
 
 All endpoints under `/api/` return JSON. Everything else is either a
 UI page (HTML), a static asset, or a blob stream. Every request gets
@@ -372,11 +372,11 @@ OIDC login flow. Only registered when OIDC is configured. State token
 is a signed cookie; the callback plants a session cookie via
 `local-auth`'s `IssueSession` (one code path mints all cookies).
 
-## Paperless-mobile compat (Phase 4)
+## Mobile-client compat (Phase 4)
 
-The endpoints below are planned for Phase 4. They match Paperless-ngx
-byte-for-byte on request/response shape so `swift-paperless` and
-`Paperless Mobile` work against suchi unchanged.
+The endpoints below are planned for Phase 4. Wire-compatible with
+existing document-management mobile apps (`swift-paperless` on iOS,
+`Paperless Mobile` on Android) so no bespoke app is needed.
 
 - `POST /api/token/`
 - `GET/POST /api/documents/`, `GET /api/documents/{id}/`
