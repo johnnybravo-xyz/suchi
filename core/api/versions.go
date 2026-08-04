@@ -46,11 +46,10 @@ type VersionView struct {
 // The write is one tx: CAS put + dedup + doc row + post-ingest job.
 // Auth: only the owner of {id} (or admin) can add a version.
 func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	prevID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
