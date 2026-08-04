@@ -21,9 +21,18 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     cd distro && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/suchi ./cmd/suchi
 
+# ---------- data-dir prep ----------
+# Bootstrapper stage: create /data owned by UID 65532 so the distroless
+# slim image can inherit it. Named-volume mounts (and empty bind mounts)
+# preserve directory ownership from the image, so the non-root process
+# can create dms.db on first boot without an entrypoint chown dance.
+FROM debian:bookworm-slim AS data-prep
+RUN mkdir -p /data && chown 65532:65532 /data
+
 # ---------- slim stage ----------
 FROM gcr.io/distroless/static-debian12:nonroot AS slim
 COPY --from=build /out/suchi /suchi
+COPY --from=data-prep --chown=65532:65532 /data /data
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
@@ -44,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi
 COPY --from=build /out/suchi /usr/local/bin/suchi
+RUN mkdir -p /data && chown 65532:65532 /data
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
