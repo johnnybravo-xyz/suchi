@@ -70,16 +70,20 @@ in the repo (arrives in Phase 4.5).
 ## Picking an image: slim vs full
 
 The `ghcr.io/suchi-dms/suchi:latest` tag is the **slim** image
-(~30 MB, distroless). It handles image uploads (barcode decode) and
-EPUB out of the box, but PDFs land with empty content unless the
-document already has a text layer that pdf-inspector can extract —
-which, since `pdftotext` isn't in the slim image, it can't.
+(~70 MB, Alpine + qpdf + pdftotext + tesseract). It covers the whole
+PDF pipeline including OCR of scanned pages via the in-process
+`tessocr` engine (pdftoppm → tesseract). Image barcodes and EPUBs
+work out of the box. **What it doesn't ship:** the ocrmypdf wrapper
+(so no searchable-PDF archive for scanned docs — the extracted text
+still lands in `documents.content` and FTS indexes it), DjVu, and
+the planned Office-doc converter.
 
-For the full ingest chain (real qpdf, pdftotext, ocrmypdf, djvutxt,
-ghostscript) pull the **full** image: `ghcr.io/suchi-dms/suchi:latest-full`
-(~1 GB). It's the same binary; only the runtime dependencies differ.
+For those, pull the **full** image (~1 GB):
+`ghcr.io/suchi-dms/suchi:latest-full`. Same binary, extra runtime deps.
 
-See [supported file types](/formats) for the per-format matrix.
+Both images can be forced to a specific OCR engine via `OCR_ENGINE`
+(`auto` | `tesseract` | `ocrmypdf`). See [supported file types](/formats)
+for the per-format matrix.
 
 ## Next steps
 

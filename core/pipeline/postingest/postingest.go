@@ -39,6 +39,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
 	"github.com/suchi-dms/suchi/core/pipeline/qpdf"
+	"github.com/suchi-dms/suchi/core/pipeline/tessocr"
 	"github.com/suchi-dms/suchi/core/pipeline/zugferd"
 	"github.com/suchi-dms/suchi/core/render/view"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
@@ -61,6 +62,14 @@ type ContentLimits struct {
 	DjVu int64
 }
 
+// OCR engine selectors. "auto" prefers tessocr (~300 MB smaller image)
+// when its binaries are on PATH, else falls back to ocrmypdf.
+const (
+	OCREngineAuto      = "auto"
+	OCREngineTesseract = "tesseract"
+	OCREngineOCRmyPDF  = "ocrmypdf"
+)
+
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
 // documents row with content + optional archive_blob, runs the
 // rules-engine classifier, refreshes the rendered-view symlink, and
@@ -74,29 +83,69 @@ type Handler struct {
 	render          *view.Renderer // optional — nil disables rendered-view
 	enqueueClassify bool           // true when an LLM classifier is registered
 	limits          ContentLimits
+	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
 }
 
-// New builds a Handler ready to register with a Dispatcher.
-//
-// langs is the list of tesseract languages passed to ocrmypdf when
-// OCR fires. Empty defaults to ["eng"]. render is optional; nil
-// disables the rendered-view projection (bare-metal deployments or
-// tests that don't care about the symlink tree). limits.PDF/EPUB/DjVu
-// override the extractor package defaults when non-zero — main wires
-// them from config.
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer, enqueueClassify bool, limits ContentLimits) *Handler {
-	if len(langs) == 0 {
-		langs = []string{"eng"}
+// Option configures a Handler. Zero-arg New() → sane defaults;
+// caller layers overrides via With*() helpers.
+type Option func(*Handler)
+
+// WithLanguages sets the tesseract language codes for the OCR path.
+// Empty or nil is a no-op (keeps the default ["eng"]).
+func WithLanguages(langs []string) Option {
+	return func(h *Handler) {
+		if len(langs) > 0 {
+			h.langs = langs
+		}
 	}
-	return &Handler{
-		db:              d,
-		cas:             cas,
-		log:             log.With("component", "post-ingest"),
-		langs:           langs,
-		render:          r,
-		enqueueClassify: enqueueClassify,
-		limits:          limits,
+}
+
+// WithRenderer wires in a rendered-view projection. Absent (nil) →
+// no symlink tree is refreshed; useful for bare-metal or test setups.
+func WithRenderer(r *view.Renderer) Option {
+	return func(h *Handler) { h.render = r }
+}
+
+// WithLLMClassifier tells post-ingest to enqueue a post-classify job
+// after content lands. Pass true only when an llm-classifier plugin
+// is actually registered on the dispatcher — otherwise the job goes
+// dead.
+func WithLLMClassifier(enabled bool) Option {
+	return func(h *Handler) { h.enqueueClassify = enabled }
+}
+
+// WithContentLimits pins the per-format extraction caps. Zero-valued
+// entries fall through to each extractor's package default.
+func WithContentLimits(l ContentLimits) Option {
+	return func(h *Handler) { h.limits = l }
+}
+
+// WithOCREngine chooses between "auto" (default), "tesseract" and
+// "ocrmypdf". Empty string is a no-op — the New() default wins.
+func WithOCREngine(engine string) Option {
+	return func(h *Handler) {
+		if engine != "" {
+			h.ocrEngine = engine
+		}
 	}
+}
+
+// New builds a Handler ready to register with a Dispatcher. The
+// mandatory triple (db, cas, log) covers what every branch needs; every
+// other knob is an Option. Zero options → English OCR, no renderer,
+// no LLM handoff, extractor defaults, OCR engine "auto".
+func New(d *db.DB, cas *blob.CAS, log *slog.Logger, opts ...Option) *Handler {
+	h := &Handler{
+		db:        d,
+		cas:       cas,
+		log:       log.With("component", "post-ingest"),
+		langs:     []string{"eng"},
+		ocrEngine: OCREngineAuto,
+	}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 // Kinds implements pluginapi.Subscriber.
@@ -202,26 +251,12 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		content = ins.Text
 		log.Info("post-ingest.route.text_native", "chars", ins.NonBlank)
 	} else {
-		// 3b. OCR path.
-		ocr, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
-			Languages: h.langs,
-		})
+		// 3b. OCR path — engine dispatch.
+		c, ab, as, err := h.runOCR(ctx, log, pdfBytes)
 		if err != nil {
-			return fmt.Errorf("ocrmypdf: %w", err)
+			return err
 		}
-		content = ocr.Text
-		if !ocr.Skipped && len(ocr.ArchivePDF) > 0 {
-			ref, err := h.cas.Put(bytes.NewReader(ocr.ArchivePDF))
-			if err != nil {
-				return fmt.Errorf("cas put archive: %w", err)
-			}
-			archiveBlob = ref.SHA256
-			archiveSize = ref.Size
-			log.Info("post-ingest.route.ocr", "archive_sha", ref.SHA256, "text_chars", len(content))
-		} else {
-			log.Info("post-ingest.route.ocr.skipped",
-				"reason", firstNonEmpty(ocr.StderrTail, "ocrmypdf skipped"))
-		}
+		content, archiveBlob, archiveSize = c, ab, as
 	}
 
 	if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
@@ -240,6 +275,73 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 
 	return h.postContentSteps(ctx, log, e.DocID)
+}
+
+// runOCR dispatches to the configured OCR engine. Returns (content,
+// archiveBlobSHA, archiveBlobSize). archiveBlob is empty when the
+// engine doesn't produce a searchable-PDF archive (tessocr) or when
+// OCR was skipped.
+//
+// Engine selection:
+//   - "tesseract": run tessocr; fall through with empty content if its
+//     binaries are missing.
+//   - "ocrmypdf": run ocrmypdf; skip if the binary is missing.
+//   - "auto": prefer tessocr when both binaries are available, else fall
+//     back to ocrmypdf. Zero-config on any image that ships either.
+//
+// The engine decision is logged once per invocation so operators can
+// verify which path fired without turning on Debug.
+func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte) (content, archiveBlob string, archiveSize int64, err error) {
+	engine := h.ocrEngine
+	if engine == OCREngineAuto {
+		if tessocr.Available() {
+			engine = OCREngineTesseract
+		} else {
+			engine = OCREngineOCRmyPDF
+		}
+	}
+
+	switch engine {
+	case OCREngineTesseract:
+		res, err := tessocr.OCR(ctx, bytes.NewReader(pdfBytes), log, tessocr.Options{
+			Languages:    h.langs,
+			MaxTextBytes: h.limits.PDF,
+		})
+		if err != nil {
+			return "", "", 0, fmt.Errorf("tessocr: %w", err)
+		}
+		if res.Skipped {
+			log.Info("post-ingest.route.ocr.skipped",
+				"engine", "tesseract",
+				"reason", firstNonEmpty(res.StderrTail, "tessocr skipped"))
+			return "", "", 0, nil
+		}
+		log.Info("post-ingest.route.ocr",
+			"engine", "tesseract", "pages", res.Pages, "text_chars", len(res.Text))
+		return res.Text, "", 0, nil
+
+	case OCREngineOCRmyPDF:
+		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
+			Languages: h.langs,
+		})
+		if err != nil {
+			return "", "", 0, fmt.Errorf("ocrmypdf: %w", err)
+		}
+		if res.Skipped || len(res.ArchivePDF) == 0 {
+			log.Info("post-ingest.route.ocr.skipped",
+				"engine", "ocrmypdf",
+				"reason", firstNonEmpty(res.StderrTail, "ocrmypdf skipped"))
+			return res.Text, "", 0, nil
+		}
+		ref, err := h.cas.Put(bytes.NewReader(res.ArchivePDF))
+		if err != nil {
+			return "", "", 0, fmt.Errorf("cas put archive: %w", err)
+		}
+		log.Info("post-ingest.route.ocr",
+			"engine", "ocrmypdf", "archive_sha", ref.SHA256, "text_chars", len(res.Text))
+		return res.Text, ref.SHA256, ref.Size, nil
+	}
+	return "", "", 0, fmt.Errorf("post-ingest: unknown OCR engine %q", engine)
 }
 
 // postContentSteps runs the after-content-lands steps common to both

@@ -1,12 +1,13 @@
 # suchi — two-stage build with -slim and full targets.
 #
-# slim: distroless-static, binary only. Text-native archives (post-Phase-2
-#   pdf-inspector routing) work fully; scanned-PDF ingest needs a
-#   sidecar OCR plugin bound over UDS.
+# slim: alpine + qpdf + poppler-utils + tesseract. Covers the entire
+#   PDF ingest path (text-native shortcut, tessocr scanned path, qpdf
+#   normalization, ZUGFeRD invoice extraction). No searchable-PDF
+#   archive on scanned PDFs — that comes with ocrmypdf, which lives in
+#   the full image. Approx ~70 MB.
 #
-# full: adds tesseract + ocrmypdf + qpdf + libreoffice-core so a single
-#   image covers 100% of ingest cases. Bigger, still one process, no
-#   external services.
+# full: adds ocrmypdf (searchable-PDF archives) + djvulibre-bin (DjVu)
+#   + libreoffice-core (planned office-doc converter). Approx ~1 GB.
 
 # ---------- build stage ----------
 FROM golang:1.26-alpine AS build
@@ -21,25 +22,28 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     cd distro && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/suchi ./cmd/suchi
 
-# ---------- data-dir prep ----------
-# Bootstrapper stage: create /data owned by UID 65532 so the distroless
-# slim image can inherit it. Named-volume mounts (and empty bind mounts)
-# preserve directory ownership from the image, so the non-root process
-# can create dms.db on first boot without an entrypoint chown dance.
-FROM debian:bookworm-slim AS data-prep
-RUN mkdir -p /data && chown 65532:65532 /data
-
-# ---------- slim stage ----------
-FROM gcr.io/distroless/static-debian12:nonroot AS slim
-COPY --from=build /out/suchi /suchi
-COPY --from=data-prep --chown=65532:65532 /data /data
+# ---------- slim stage (PDF pipeline: tessocr, not ocrmypdf) ----------
+# Alpine so we can apt-install the four binaries the PDF chain needs
+# (qpdf, pdftotext, pdftoppm, tesseract) at ~70 MB total. musl-safe:
+# the Go binary is built CGO_ENABLED=0 so it runs identically under
+# musl and glibc.
+FROM alpine:3 AS slim
+RUN apk add --no-cache \
+      ca-certificates \
+      qpdf \
+      poppler-utils \
+      tesseract-ocr \
+      tesseract-ocr-data-eng
+RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
+    mkdir -p /data && chown 65532:65532 /data
+COPY --from=build /out/suchi /usr/local/bin/suchi
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
-ENV DATA_DIR=/data LISTEN_ADDR=:8000
-ENTRYPOINT ["/suchi"]
+ENV DATA_DIR=/data LISTEN_ADDR=:8000 OCR_ENGINE=tesseract
+ENTRYPOINT ["/usr/local/bin/suchi"]
 CMD ["serve"]
-HEALTHCHECK --interval=30s --retries=3 CMD ["/suchi", "healthcheck"]
+HEALTHCHECK --interval=30s --retries=3 CMD ["/usr/local/bin/suchi", "healthcheck"]
 
 # ---------- full stage (adds OCR + office deps) ----------
 # Debian slim so we can apt-install tesseract/qpdf/etc. Still one process.
@@ -59,7 +63,7 @@ RUN mkdir -p /data && chown 65532:65532 /data
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
-ENV DATA_DIR=/data LISTEN_ADDR=:8000
+ENV DATA_DIR=/data LISTEN_ADDR=:8000 OCR_ENGINE=ocrmypdf
 ENTRYPOINT ["/usr/local/bin/suchi"]
 CMD ["serve"]
 HEALTHCHECK --interval=30s --retries=3 CMD ["/usr/local/bin/suchi", "healthcheck"]
