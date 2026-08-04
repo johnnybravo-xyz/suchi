@@ -273,6 +273,10 @@ func runServe() int {
 			DjVu: cfg.DjvuMaxContentBytes,
 		}),
 		postingest.WithOCREngine(cfg.OCREngine),
+		postingest.WithScanBlank(postingest.ScanBlank{
+			Enabled:            cfg.ScanBlankRemoval,
+			WhitenessThreshold: cfg.ScanBlankWhitenessThreshold,
+		}),
 	))
 	if llm != nil {
 		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))

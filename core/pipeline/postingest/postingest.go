@@ -37,6 +37,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pageanalyze"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pdfinspector"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/tessocr"
@@ -84,6 +85,15 @@ type Handler struct {
 	enqueueClassify bool           // true when an LLM classifier is registered
 	limits          ContentLimits
 	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
+	scanBlank       ScanBlank
+}
+
+// ScanBlank carries the per-Handler configuration for blank-page
+// detection + removal. Zero WhitenessThreshold falls through to
+// pageanalyze's default (0.995).
+type ScanBlank struct {
+	Enabled            bool
+	WhitenessThreshold float64
 }
 
 // Option configures a Handler. Zero-arg New() → sane defaults;
@@ -128,6 +138,14 @@ func WithOCREngine(engine string) Option {
 			h.ocrEngine = engine
 		}
 	}
+}
+
+// WithScanBlank enables/tunes blank-page detection. When Enabled=true,
+// post-ingest runs pageanalyze after qpdf normalize and trims blank
+// pages from the working copy before pdf-inspector + OCR. The CAS
+// original is never touched.
+func WithScanBlank(cfg ScanBlank) Option {
+	return func(h *Handler) { h.scanBlank = cfg }
 }
 
 // New builds a Handler ready to register with a Dispatcher. The
@@ -233,6 +251,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 	pdfBytes := normalized.Data
 
+	// 1b. Blank-page removal (opt-in via config). Rasterizes each
+	// page at low DPI and drops those above the whiteness threshold.
+	// Operates on the working copy only — the CAS original stays
+	// verbatim.
+	if h.scanBlank.Enabled {
+		trimmed, err := h.trimBlankPages(ctx, log, pdfBytes)
+		if err != nil {
+			log.Warn("post-ingest.scan_blank.error", "err", err.Error())
+		} else if trimmed != nil {
+			pdfBytes = trimmed
+		}
+	}
+
 	// 2. pdf-inspector
 	ins, err := pdfinspector.Extract(ctx, bytes.NewReader(pdfBytes), log,
 		pdfinspector.Options{MaxTextBytes: h.limits.PDF})
@@ -275,6 +306,47 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 
 	return h.postContentSteps(ctx, log, e.DocID)
+}
+
+// trimBlankPages analyses pdfBytes with pageanalyze and, if any pages
+// are blank, returns the qpdf-trimmed working copy. Returns (nil, nil)
+// when there's nothing to trim so the caller can keep the input.
+//
+// Never destroys data — the CAS holds the original; this only shapes
+// what feeds pdf-inspector + the OCR engine + archive_blob.
+func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes []byte) ([]byte, error) {
+	pa, err := pageanalyze.Analyze(ctx, pdfBytes, log, pageanalyze.Options{
+		WhitenessThreshold: h.scanBlank.WhitenessThreshold,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pa.Skipped {
+		log.Info("post-ingest.scan_blank.skip.no_binary")
+		return nil, nil
+	}
+	blanks := len(pa.Pages) - len(pa.NonBlank)
+	if blanks == 0 {
+		return nil, nil
+	}
+	if len(pa.NonBlank) == 0 {
+		// Every page tripped the whiteness check — either a
+		// pathologically empty scan or the threshold is off. Keep the
+		// original so we don't produce an empty archive.
+		log.Warn("post-ingest.scan_blank.all_blank",
+			"pages", len(pa.Pages), "threshold", h.scanBlank.WhitenessThreshold)
+		return nil, nil
+	}
+	log.Info("post-ingest.scan_blank.trim",
+		"total", len(pa.Pages), "blanks", blanks, "keep", len(pa.NonBlank))
+	res, err := qpdf.SelectPages(ctx, pdfBytes, pa.NonBlank, log, qpdf.Options{})
+	if err != nil {
+		return nil, err
+	}
+	if res.Skipped {
+		return nil, nil
+	}
+	return res.Data, nil
 }
 
 // runOCR dispatches to the configured OCR engine. Returns (content,

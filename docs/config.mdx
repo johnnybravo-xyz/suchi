@@ -29,6 +29,8 @@ around").
 | `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on the concatenated XHTML text of an EPUB. Bigger than the PDF default because ebooks routinely exceed it (novels are fine, textbooks may still truncate). |
 | `DJVU_MAX_CONTENT_BYTES` | `32M` | Cap on `djvutxt` output length. Same reasoning as EPUB. |
 | `OCR_ENGINE` | `auto` | Scanned-PDF OCR engine. `auto` picks `tesseract` when the tessocr binaries (`pdftoppm` + `tesseract`) are on PATH, else `ocrmypdf`. Explicit values force one engine. `tesseract` is ~4× smaller in the image but produces no searchable-PDF archive. |
+| `SCAN_BLANK_REMOVAL` | `auto` | `auto` (default) → detect and strip blank pages from the working copy before OCR. `off` → skip. The CAS original is untouched either way. |
+| `SCAN_BLANK_WHITENESS_THRESHOLD` | `0.995` | Fraction of mean pixel intensity above which a page is considered blank. Range `(0.0, 1.0]`. Lower it (e.g. `0.98`) if your scanner leaves grey background; raise it (`0.999`) to only strip truly white pages. |
 
 ## TLS
 
