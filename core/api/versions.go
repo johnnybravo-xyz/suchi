@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -253,6 +252,8 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		v.IsHead = isHead == 1
 		out = append(out, v)
 	}
+	if out == nil {
+		out = []VersionView{}
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
-	_ = io.EOF
 }

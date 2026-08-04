@@ -173,6 +173,9 @@ func (s *Server) ListDocCorrespondents(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, c)
 	}
+	if out == nil {
+		out = []DocCorrespondent{}
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
 
