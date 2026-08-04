@@ -1,0 +1,74 @@
+{{define "mail_setup"}}{{ template "base" . }}{{end}}
+
+{{define "title"}}{{ msg "mailsetup.title" }}{{end}}
+
+{{define "content"}}
+<section class="panel mailsetup-panel">
+  <h1>{{ msg "mailsetup.title" }}</h1>
+  <p class="muted">{{ msg "mailsetup.subtitle" }}</p>
+
+  {{ if not .Enabled }}
+    <p class="notice notice-warn">{{ msg "mailsetup.disabled" }}</p>
+  {{ else }}
+    <form id="mailsetup-form"
+          data-msg-saving="{{ msg "mailsetup.saving" }}"
+          data-msg-wrote="{{ msg "mailsetup.done.wrote" }}"
+          data-msg-restarted="{{ msg "mailsetup.done.restarted" }}"
+          data-msg-no-restart="{{ msg "mailsetup.done.no_restart" }}"
+          data-hint-proton="{{ msg "mailsetup.help.proton" }}"
+          data-hint-gmail="{{ msg "mailsetup.help.gmail" }}"
+          data-hint-fastmail="{{ msg "mailsetup.help.fastmail" }}">
+      <fieldset>
+        <legend>{{ msg "mailsetup.section.provider" }}</legend>
+        <div class="provider-picker">
+          <label><input type="radio" name="provider" value="proton" checked> {{ msg "mailsetup.provider.proton" }}</label>
+          <label><input type="radio" name="provider" value="gmail"> {{ msg "mailsetup.provider.gmail" }}</label>
+          <label><input type="radio" name="provider" value="fastmail"> {{ msg "mailsetup.provider.fastmail" }}</label>
+          <label><input type="radio" name="provider" value="generic"> {{ msg "mailsetup.provider.generic" }}</label>
+        </div>
+        <p class="hint" id="provider-hint">{{ msg "mailsetup.help.proton" }}</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>{{ msg "mailsetup.section.endpoint" }}</legend>
+        <div class="grid-2">
+          <label>{{ msg "mailsetup.field.host" }}<input name="mail_host" value="protonmail-bridge" required></label>
+          <label>{{ msg "mailsetup.field.port" }}<input name="mail_port" type="number" min="1" max="65535" value="143" required></label>
+          <label>{{ msg "mailsetup.field.ssl" }}
+            <select name="mail_ssl">
+              <option value="None" selected>None</option>
+              <option value="IMAPS">IMAPS</option>
+              <option value="STARTTLS">STARTTLS</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>{{ msg "mailsetup.section.credentials" }}</legend>
+        <div class="grid-2">
+          <label>{{ msg "mailsetup.field.user" }}<input name="mail_user" required autocomplete="username"></label>
+          <label>{{ msg "mailsetup.field.password" }}<input name="mail_password" type="password" required autocomplete="new-password"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>{{ msg "mailsetup.section.what" }}</legend>
+        <div class="grid-2">
+          <label>{{ msg "mailsetup.field.folders" }}<input name="mail_folders" value="INBOX"></label>
+          <label>{{ msg "mailsetup.field.max_messages" }}<input name="max_messages" type="number" min="1" max="100000" value="200"></label>
+          <label>{{ msg "mailsetup.field.max_size" }}<input name="max_size" value="25m" pattern="[0-9]+[KMGkmg]?"></label>
+          <label>{{ msg "mailsetup.field.sync_interval" }}<input name="sync_interval" type="number" min="60" max="86400" value="300"></label>
+        </div>
+      </fieldset>
+
+      <div class="upload-actions">
+        <button type="submit" class="btn btn-primary" id="mailsetup-submit">{{ msg "mailsetup.submit" }}</button>
+        <span class="status muted" id="mailsetup-status"></span>
+      </div>
+    </form>
+
+    <script src="/assets/mail-setup.js" defer></script>
+  {{ end }}
+</section>
+{{end}}

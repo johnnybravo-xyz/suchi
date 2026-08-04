@@ -72,6 +72,53 @@ a:hover { text-decoration: underline; }
 }
 .upload-actions { display: flex; align-items: center; gap: 12px; }
 .upload-actions .status { flex: 1; font-size: 13px; }
+.upload-actions .status.is-ok { color: var(--accent); }
+.upload-actions .status.is-error { color: var(--danger); }
+
+/* Mail setup wizard */
+.mailsetup-panel { max-width: 720px; margin: 0 auto; }
+.mailsetup-panel fieldset {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 20px 18px; margin: 20px 0;
+}
+.mailsetup-panel legend {
+  padding: 0 8px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); font-weight: 600;
+}
+.mailsetup-panel .provider-picker { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+.mailsetup-panel .provider-picker label {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer;
+}
+.mailsetup-panel .hint {
+  margin: 12px 0 0; padding: 8px 12px; background: var(--accent-soft);
+  color: var(--accent); border-radius: var(--radius); font-size: 12.5px;
+  min-height: 20px;
+}
+.mailsetup-panel .grid-2 {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
+}
+.mailsetup-panel .grid-2 label {
+  display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+}
+.mailsetup-panel .grid-2 input,
+.mailsetup-panel .grid-2 select {
+  padding: 8px 10px; font: inherit; font-size: 14px; color: var(--ink);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: #fff; text-transform: none; letter-spacing: normal; font-weight: 400;
+}
+.mailsetup-panel .grid-2 input:focus,
+.mailsetup-panel .grid-2 select:focus {
+  outline: 2px solid var(--accent); outline-offset: -1px;
+}
+.mailsetup-panel .notice {
+  padding: 12px 16px; border-radius: var(--radius); font-size: 14px; margin: 16px 0;
+}
+.mailsetup-panel .notice-warn { background: #fff7e0; color: #8a6d1c; border: 1px solid #f2df9f; }
+
+@media (max-width: 640px) {
+  .mailsetup-panel .grid-2 { grid-template-columns: 1fr; }
+}
 
 main { padding: var(--pad-lg); max-width: 1200px; margin: 0 auto; }
 

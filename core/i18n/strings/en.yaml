@@ -49,6 +49,37 @@ doc.detail.decrypt.desc: This document is password-protected. Supply the user pa
 # Pending-decryption view
 nav.pending_decryption: Pending decryption
 nav.upload: Upload
+nav.mail_setup: Mail
+
+# Mail setup wizard (admin-only)
+mailsetup.title: Mail ingest
+mailsetup.subtitle: Point suchi at an IMAP mailbox. Attachments arrive as documents; the raw message is indexed too.
+mailsetup.disabled: Mail wizard is disabled — set MAIL_SETUP_ENV_PATH to enable.
+mailsetup.section.provider: Provider
+mailsetup.section.endpoint: IMAP endpoint
+mailsetup.section.credentials: Credentials
+mailsetup.section.what: What to sync
+mailsetup.provider.proton: Proton Mail (via Bridge)
+mailsetup.provider.gmail: Gmail
+mailsetup.provider.fastmail: Fastmail
+mailsetup.provider.generic: Other IMAP/IMAPS
+mailsetup.field.host: Host
+mailsetup.field.port: Port
+mailsetup.field.ssl: SSL
+mailsetup.field.user: IMAP username
+mailsetup.field.password: IMAP password
+mailsetup.field.folders: Folders
+mailsetup.field.max_messages: Max messages per folder
+mailsetup.field.max_size: Max attachment size
+mailsetup.field.sync_interval: Sync interval (seconds)
+mailsetup.submit: Save and restart mbsync
+mailsetup.saving: Saving…
+mailsetup.done.wrote: Wrote config to disk.
+mailsetup.done.restarted: mbsync container restarted.
+mailsetup.done.no_restart: File written. Run `docker compose restart mbsync` to apply.
+mailsetup.help.proton: For Proton, use the Bridge IMAP password from `bridge --cli` → `info` — NOT your Proton account password.
+mailsetup.help.gmail: Gmail needs an app password (Google account → Security → 2-step verification → App passwords) with IMAP enabled.
+mailsetup.help.fastmail: Fastmail needs an app password with IMAP scope (Settings → Password & Security → App passwords).
 
 # Upload page
 upload.title: Upload a document

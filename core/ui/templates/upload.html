@@ -7,7 +7,16 @@
   <h1>{{ msg "upload.title" }}</h1>
   <p class="muted">{{ msg "upload.subtitle" }}</p>
 
-  <form id="upload-form" method="post" action="/upload" enctype="multipart/form-data">
+  {{ if .Error }}
+    <p class="notice notice-warn">{{ .Error }}</p>
+  {{ end }}
+
+  <form id="upload-form"
+        method="post" action="/api/documents/" enctype="multipart/form-data"
+        data-msg-uploading="{{ msg "upload.uploading" }}"
+        data-msg-err-no-file="{{ msg "upload.err.no_file" }}"
+        data-msg-err-generic="{{ msg "upload.err.generic" }}"
+        data-msg-err-conflict="{{ msg "upload.err.conflict" }}">
     <label class="dropzone" id="dropzone">
       <input type="file" name="document" id="file-input" required>
       <div class="dropzone-inner">
@@ -28,63 +37,5 @@
   </form>
 </section>
 
-<script>
-(function () {
-  const form = document.getElementById('upload-form');
-  const input = document.getElementById('file-input');
-  const filename = document.getElementById('filename');
-  const status = document.getElementById('status');
-  const btn = document.getElementById('submit-btn');
-  const dz = document.getElementById('dropzone');
-
-  input.addEventListener('change', () => {
-    filename.textContent = input.files[0] ? input.files[0].name : '';
-  });
-
-  // Drag-drop UX.
-  ['dragenter', 'dragover'].forEach(evt =>
-    dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add('is-drag'); }));
-  ['dragleave', 'drop'].forEach(evt =>
-    dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove('is-drag'); }));
-  dz.addEventListener('drop', e => {
-    if (e.dataTransfer.files.length > 0) {
-      input.files = e.dataTransfer.files;
-      filename.textContent = input.files[0].name;
-    }
-  });
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!input.files[0]) { status.textContent = {{ msg "upload.err.no_file" | printf "%q" }}; return; }
-    btn.disabled = true;
-    status.textContent = {{ msg "upload.uploading" | printf "%q" }};
-
-    const fd = new FormData();
-    fd.append('document', input.files[0]);
-    try {
-      const resp = await fetch('/api/documents/', {
-        method: 'POST',
-        body: fd,
-        headers: { 'Accept': 'application/json' },
-        credentials: 'same-origin',
-      });
-      if (resp.status === 201 || resp.status === 200) {
-        const body = await resp.json();
-        window.location = '/docs/' + body.id;
-        return;
-      }
-      if (resp.status === 409) {
-        status.textContent = {{ msg "upload.err.conflict" | printf "%q" }};
-      } else {
-        const text = await resp.text();
-        status.textContent = {{ msg "upload.err.generic" | printf "%q" }}.replace('%s', resp.status + ' ' + text);
-      }
-    } catch (err) {
-      status.textContent = {{ msg "upload.err.generic" | printf "%q" }}.replace('%s', err.message);
-    } finally {
-      btn.disabled = false;
-    }
-  });
-})();
-</script>
+<script src="/assets/upload.js" defer></script>
 {{end}}
