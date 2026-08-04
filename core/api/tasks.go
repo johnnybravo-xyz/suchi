@@ -2,6 +2,8 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -26,12 +28,36 @@ type Task struct {
 	NextRunAt int64  `json:"next_run_at,omitempty"`
 }
 
+// WorkflowTask is one human-in-the-loop approval row projected onto the
+// tasks surface. Shape is deliberately different from Task (jobs are
+// machine work; workflow tasks require a human choice), so the two live
+// side-by-side rather than being coerced into one struct.
+//
+// Mobile clients that only understand paperless-style jobs can ignore
+// the workflow_tasks field entirely; the classic Results array is
+// unchanged. suchi-native clients read both.
+type WorkflowTask struct {
+	ID         int64    `json:"id"`
+	RunID      int64    `json:"run_id"`
+	WorkflowID int64    `json:"workflow_id"`
+	StateKey   string   `json:"state_key"`
+	Assignee   string   `json:"assignee"`
+	Prompt     string   `json:"prompt"`
+	Choices    []string `json:"choices"`
+	Status     string   `json:"status"`
+	DeadlineAt int64    `json:"deadline_at,omitempty"`
+	CreatedAt  int64    `json:"created_at"`
+}
+
 // TasksResponse is the /api/tasks/ envelope. Counts is a per-state
 // summary so the UI can render "3 dead" without a second round-trip;
-// Results is the requested slice, bounded by limit.
+// Results is the requested slice, bounded by limit. WorkflowTasks
+// carries pending human approvals so a mobile client polls one endpoint
+// for both machine work and its own inbox.
 type TasksResponse struct {
-	Counts  map[string]int `json:"counts"`
-	Results []Task         `json:"results"`
+	Counts        map[string]int `json:"counts"`
+	Results       []Task         `json:"results"`
+	WorkflowTasks []WorkflowTask `json:"workflow_tasks,omitempty"`
 }
 
 // ListTasks serves GET /api/tasks/. Query params:
@@ -39,12 +65,21 @@ type TasksResponse struct {
 //	?state=pending|running|done|dead   (default: pending+running+dead)
 //	?limit=<int>                       (default 50, max 200)
 //	?doc_id=<int>                      (filter to one document)
+//	?kind=<prefix>                     (jobs.kind LIKE prefix%)
+//	?include=workflow|jobs             (default: both)
 //
 // Any authenticated user can read the queue for now — Phase 6
 // permissions will scope this per-owner. Dead jobs matter for the
 // mobile "tasks" screen and for `suchi doctor` triage.
+//
+// Workflow tasks are filtered to the caller's own assignee identity
+// ("user:<id>") — no cross-user visibility. Role-based dispatch is
+// resolved at workflow-advance time (see core/workflow's
+// AssigneeResolver), so an approver already sees their own tasks under
+// "user:<id>" here.
 func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
@@ -56,6 +91,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	docID, _ := strconv.ParseInt(q.Get("doc_id"), 10, 64)
 	kindPrefix := q.Get("kind")
+	include := q.Get("include") // "", "jobs", "workflow"
 
 	counts, err := s.taskCounts(r)
 	if err != nil {
@@ -64,16 +100,32 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.taskRows(r, state, docID, kindPrefix, limit)
-	if err != nil {
-		s.Log.Error("api.tasks.query", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read tasks")
-		return
+	resp := TasksResponse{Counts: counts, Results: []Task{}}
+
+	if include != "workflow" {
+		rows, err := s.taskRows(r, state, docID, kindPrefix, limit)
+		if err != nil {
+			s.Log.Error("api.tasks.query", "err", err.Error())
+			s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read tasks")
+			return
+		}
+		if rows != nil {
+			resp.Results = rows
+		}
 	}
-	if rows == nil {
-		rows = []Task{}
+
+	if include != "jobs" && principal.UserID > 0 {
+		wtasks, open, err := s.workflowTasksForUser(r, principal.UserID, limit)
+		if err != nil {
+			s.Log.Error("api.tasks.workflow_query", "err", err.Error())
+			// Non-fatal: jobs already loaded, degrade to jobs-only.
+		} else {
+			resp.WorkflowTasks = wtasks
+			resp.Counts["workflow_open"] = open
+		}
 	}
-	s.writeJSON(w, http.StatusOK, TasksResponse{Counts: counts, Results: rows})
+
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // taskCounts returns pending/running/done/dead counts across the
@@ -155,4 +207,69 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// workflowTasksForUser returns open+claimed workflow_tasks whose
+// assignee is the current user, plus the total open count for
+// "workflow_open" in Counts. The joined workflow_defs id is exposed as
+// WorkflowID so a client can render "Invoice approval" without a second
+// round-trip to /api/workflows/{slug}.
+//
+// Assignee filter is exact: "user:<id>". Role-based assignees are
+// resolved to user rows at workflow-advance time (see
+// core/workflow.AssigneeResolver), so a role-scoped enterprise build
+// still surfaces the right rows here.
+func (s *Server) workflowTasksForUser(r *http.Request, userID int64, limit int) ([]WorkflowTask, int, error) {
+	me := fmt.Sprintf("user:%d", userID)
+
+	q := `
+		SELECT t.id, t.run_id, r.def_id, t.state_key, t.assignee, t.prompt,
+		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at
+		FROM workflow_tasks t
+		JOIN workflow_runs r ON r.id = t.run_id
+		WHERE t.assignee = ? AND t.status IN ('open','claimed')
+		ORDER BY t.created_at DESC, t.id DESC
+		LIMIT ?
+	`
+	rows, err := s.DB.Read.QueryContext(r.Context(), q, me, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []WorkflowTask
+	for rows.Next() {
+		var (
+			t          WorkflowTask
+			choicesRaw string
+			deadline   int64
+		)
+		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &t.StateKey,
+			&t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
+			&t.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		if deadline > 0 {
+			t.DeadlineAt = deadline
+		}
+		if choicesRaw != "" {
+			_ = json.Unmarshal([]byte(choicesRaw), &t.Choices)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Separate count query so the "open inbox" number is honest even
+	// when limit truncates the list.
+	var open int
+	err = s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT COUNT(*) FROM workflow_tasks
+		WHERE assignee = ? AND status = 'open'
+	`, me).Scan(&open)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, open, nil
 }
