@@ -3,6 +3,7 @@ module github.com/suchi-dms/suchi/core
 go 1.25.0
 
 require (
+	github.com/emersion/go-imap v1.2.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/nikolalohinski/gonja/v2 v2.9.0
@@ -16,6 +17,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect

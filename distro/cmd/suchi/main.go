@@ -328,14 +328,18 @@ func runServe() int {
 		go watcher.Run(ctx)
 	}
 
-	// email-watch: IMAP producer. Same "opt-in" posture. Ships a stub
-	// polling loop today — real IMAP client wiring lands in a
-	// follow-up commit once we have a mailbox to integration-test
-	// against.
+	// email-watch: IMAP producer. Opt-in via INGEST_IMAP_URL +
+	// INGEST_IMAP_PASSWORD. Every unseen message becomes a
+	// message/rfc822 doc; post-ingest's eml path fans out attachments
+	// as child docs (see core/pipeline/eml).
+	imapOwner := cfg.IngestIMAPOwnerEmail
+	if imapOwner == "" {
+		imapOwner = cfg.IngestFSOwnerEmail // fall back to shared owner
+	}
 	if watcher, err := emailwatch.New(ctx, emailwatch.Config{
 		URL:        cfg.IngestIMAPURL,
 		Password:   cfg.IngestIMAPPassword,
-		OwnerEmail: cfg.IngestFSOwnerEmail, // reuse the fs-watch owner for now
+		OwnerEmail: imapOwner,
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.emailwatch.new", "err", err.Error())
 		return 1
