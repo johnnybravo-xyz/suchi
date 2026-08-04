@@ -42,6 +42,7 @@ doc.detail.field.archive: Archive (OCR)
 doc.detail.field.asn: Archive serial
 doc.detail.field.legacy: Imported from Bundle (id)
 doc.detail.field.split_from: Split from
+doc.detail.field.email_from: Attachment of email
 doc.detail.section.decrypt: Password required
 doc.detail.decrypt.desc: This document is password-protected. Supply the user password to unlock it — suchi will then run OCR + rules + render as usual.
 

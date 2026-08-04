@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pageanalyze"
@@ -276,6 +277,16 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				}
 			}
 		}
+	}
+
+	// Email path: parse the .eml, set title/correspondent/date on the
+	// parent doc, fan out one child doc per attachment. See
+	// core/pipeline/eml/ for the parser + docs/formats.mdx#email.
+	if eml.Recognized(mime) {
+		if err := h.handleEmail(ctx, log, e.DocID, origBytes); err != nil {
+			return fmt.Errorf("email: %w", err)
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
 	// Image path: skip qpdf/pdf-inspector/ocrmypdf (they'd fail on
@@ -677,6 +688,206 @@ func slugify(name string) string {
 		}
 	}
 	return b.String()
+}
+
+// handleEmail parses an RFC-822 message, updates the parent doc's
+// title / content / correspondent / created_at from the headers, and
+// creates one child document per attachment. Each attachment gets its
+// own CAS put + post-ingest job so the downstream chain (OCR,
+// ZUGFeRD, rules, render) treats it like any other upload — while the
+// parent's search index carries the email body text.
+//
+// Owner + jd_category for children inherit from the parent. Children
+// point back via email_parent_id (migration 0014).
+func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID int64, raw []byte) error {
+	parsed, err := eml.Parse(raw)
+	if err != nil {
+		log.Warn("post-ingest.email.parse_failed", "err", err.Error())
+		return nil // keep the doc as a plain file
+	}
+	log.Info("post-ingest.email.parsed",
+		"parent_id", parentID,
+		"subject", parsed.Subject,
+		"from", parsed.FromEmail,
+		"attachments", len(parsed.Attachments))
+
+	// Parent doc: title + content + created_at + Message-Id.
+	body := parsed.TextBody
+	if body == "" {
+		body = parsed.HTMLBody
+	}
+	// Prepend structured "header" lines so a search for "from:<x>"
+	// or "subject:<x>" tokens still lands hits even when the body
+	// itself doesn't repeat them.
+	var head strings.Builder
+	if parsed.Subject != "" {
+		fmt.Fprintf(&head, "subject: %s\n", parsed.Subject)
+	}
+	if parsed.FromEmail != "" {
+		fmt.Fprintf(&head, "from: %s\n", parsed.FromEmail)
+	}
+	for _, a := range parsed.ToList {
+		fmt.Fprintf(&head, "to: %s\n", a)
+	}
+	if head.Len() > 0 {
+		body = head.String() + "\n" + body
+	}
+
+	if err := h.updateEmailParent(ctx, parentID, parsed, body); err != nil {
+		return fmt.Errorf("update parent: %w", err)
+	}
+
+	// Load owner + jd_category once for children.
+	var (
+		ownerID      int64
+		jdCategoryID int64
+	)
+	if err := h.db.Read.QueryRowContext(ctx,
+		`SELECT owner_id, jd_category_id FROM documents WHERE id = ?`, parentID,
+	).Scan(&ownerID, &jdCategoryID); err != nil {
+		return fmt.Errorf("load parent owner: %w", err)
+	}
+
+	// Upsert the From address as a correspondent + attach to parent
+	// under role=sender. Best-effort — a failure here doesn't kill
+	// the fanout.
+	if parsed.FromEmail != "" || parsed.FromName != "" {
+		if err := h.attachEmailCorrespondent(ctx, parentID, parsed); err != nil {
+			log.Warn("post-ingest.email.correspondent", "err", err.Error())
+		}
+	}
+
+	for i, att := range parsed.Attachments {
+		if att.Inline {
+			// Inline images referenced from HTML bodies aren't docs
+			// — skip. Real attachments carry a Content-Disposition:
+			// attachment or a filename+non-inline disposition.
+			continue
+		}
+		if err := h.createEmailAttachmentChild(ctx, log, parentID, ownerID, jdCategoryID, i+1, att); err != nil {
+			log.Warn("post-ingest.email.attachment_failed",
+				"index", i+1, "filename", att.Filename, "err", err.Error())
+			continue
+		}
+	}
+	return nil
+}
+
+// updateEmailParent writes the parsed header fields back onto the
+// documents row. created_at flips to the email's Date when present so
+// the timeline UI shows the message date, not the ingest time.
+func (h *Handler) updateEmailParent(ctx context.Context, docID int64, e *eml.Email, body string) error {
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		created := now
+		if !e.Date.IsZero() {
+			created = e.Date.Unix()
+		}
+		var titleArg any
+		if e.Subject != "" {
+			titleArg = e.Subject
+		}
+		var msgIDArg any
+		if e.MessageID != "" {
+			msgIDArg = e.MessageID
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET content = ?,
+			    title = COALESCE(?, title),
+			    created_at = ?,
+			    email_message_id = COALESCE(?, email_message_id),
+			    updated_at = ?
+			WHERE id = ?
+		`, body, titleArg, created, msgIDArg, now, docID)
+		return err
+	})
+}
+
+// attachEmailCorrespondent upserts the From address as a correspondent
+// and attaches it under role=sender via the multi-correspondent
+// junction. Mirrors the LLM classifier's semantics — one canonical
+// path for "who sent this."
+func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *eml.Email) error {
+	name := e.FromName
+	if name == "" {
+		name = e.FromEmail
+	}
+	if name == "" {
+		return nil
+	}
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO correspondents(name, slug, created_at, updated_at)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
+		`, name, slugify(name), now, now); err != nil {
+			return err
+		}
+		var corID int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id FROM correspondents WHERE name = ?`, name).Scan(&corID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role)
+			VALUES (?, ?, 'sender')
+		`, docID, corID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE documents SET correspondent_id = COALESCE(correspondent_id, ?) WHERE id = ?
+		`, corID, docID)
+		return err
+	})
+}
+
+// createEmailAttachmentChild does the (blob put + document row +
+// post-ingest job) triple for one attachment. Uses the parent's
+// owner + JD category as defaults; the pipeline (rules, LLM) can
+// reclassify later.
+func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logger, parentID, ownerID, jdCategoryID int64, index int, att eml.Attachment) error {
+	ref, err := h.cas.Put(bytes.NewReader(att.Bytes))
+	if err != nil {
+		return fmt.Errorf("cas put: %w", err)
+	}
+	title := att.Filename
+	if title == "" {
+		title = fmt.Sprintf("attachment-%d", index)
+	}
+	mime := att.ContentType
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO documents(
+				owner_id, original_blob, original_size, title, mime_type,
+				jd_category_id, added_at, created_at, updated_at,
+				email_parent_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, ownerID, ref.SHA256, ref.Size, title, mime,
+			jdCategoryID, now, now, now, parentID)
+		if err != nil {
+			return err
+		}
+		childID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(postIngestPayload{
+			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
+		})
+		if err := jobs.Enqueue(ctx, tx, Kind, childID, string(payload)); err != nil {
+			return err
+		}
+		log.Info("post-ingest.email.attachment_created",
+			"parent_id", parentID, "child_id", childID,
+			"filename", att.Filename, "mime", mime, "bytes", len(att.Bytes))
+		return nil
+	})
 }
 
 // trimBlankPages analyses pdfBytes with pageanalyze and, if any pages
