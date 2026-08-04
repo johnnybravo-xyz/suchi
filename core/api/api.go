@@ -55,6 +55,7 @@ func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
+	mux.HandleFunc("GET /api/documents/{id}", s.GetDocument)
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
 	mux.HandleFunc("POST /api/documents/{id}/restore", s.RestoreDocument)
 
