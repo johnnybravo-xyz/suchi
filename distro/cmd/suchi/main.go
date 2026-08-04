@@ -233,6 +233,12 @@ func runServe() int {
 		log.Error("main.view.new", "err", err.Error())
 		return 1
 	}
+	// Boot-time recovery: finish or park any render_moves left in
+	// state='pending' from a crashed process. Best-effort — a probe
+	// failure logs but doesn't stop startup.
+	if err := renderer.Reconcile(ctx); err != nil {
+		log.Warn("main.view.reconcile", "err", err.Error())
+	}
 
 	// LLM classifier plugin (opt-in via LLM_ENDPOINT_URL). New() returns
 	// nil when disabled OR when a non-local endpoint lacks
@@ -271,6 +277,10 @@ func runServe() int {
 	if llm != nil {
 		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
 	}
+	// Render subscriber — every mutator that changes metadata enqueues
+	// a "render" job in its own tx; this dispatcher fires the move
+	// after commit.
+	disp.Register(view.NewHandler(renderer))
 	go disp.Run(ctx)
 	defer disp.Stop()
 
