@@ -62,11 +62,10 @@ type PendingDecryptionDoc struct {
 }
 
 func (s *Server) ListPendingDecryption(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, title, original_blob, original_size, created_at,
 		       COALESCE(mime_type, '')
@@ -103,11 +102,10 @@ type DecryptRequest struct {
 }
 
 func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	if s.decrypt.Key == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "decrypt_disabled",
 			"decrypt subsystem not initialized")
@@ -176,11 +174,10 @@ type DecryptBatchResult struct {
 }
 
 func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	if s.decrypt.Key == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "decrypt_disabled",
 			"decrypt subsystem not initialized")

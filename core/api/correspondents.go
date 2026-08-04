@@ -36,11 +36,10 @@ type DocCorrespondent struct {
 // primary FK when role=sender is the first sender for the doc, so
 // existing code paths still see something reasonable).
 func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -187,11 +186,10 @@ func (s *Server) ListDocCorrespondents(w http.ResponseWriter, r *http.Request) {
 // documents.correspondent_id — if you remove the sender, the primary
 // FK stays as a historical reference until a new sender is added.
 func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())

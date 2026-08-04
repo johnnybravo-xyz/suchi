@@ -68,11 +68,10 @@ type EnqueueAgentRequest struct {
 // EnqueueAgentTask lets operators (and, later, other agents) hand-craft
 // an agent-visible job. Rejects internal kinds.
 func (s *Server) EnqueueAgentTask(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeAgentTasks) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	var req EnqueueAgentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
@@ -92,9 +91,14 @@ func (s *Server) EnqueueAgentTask(w http.ResponseWriter, r *http.Request) {
 		if err := jobs.Enqueue(r.Context(), tx, req.Kind, req.DocID, payload); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(r.Context(),
+		if err := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM jobs WHERE kind = ? AND doc_id = ? AND state = 'pending'
-			 ORDER BY id DESC LIMIT 1`, req.Kind, req.DocID).Scan(&newID)
+			 ORDER BY id DESC LIMIT 1`, req.Kind, req.DocID).Scan(&newID); err != nil {
+			return err
+		}
+		// Push variant: for every active webhook whose kind_prefix
+		// matches, enqueue a delivery job in the same tx.
+		return fanoutWebhooks(r.Context(), tx, req.Kind, newID)
 	})
 	if err != nil {
 		s.Log.Error("api.agent.enqueue", "err", err.Error())
@@ -128,11 +132,10 @@ type ClaimResponse struct {
 // to state='running' with the caller's worker_id + deadline. Only
 // agent-prefixed kinds are claimable.
 func (s *Server) ClaimTask(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeAgentTasks) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -225,11 +228,10 @@ type CompleteRequest struct {
 // caller's agent_id doesn't match the claim, which prevents an agent
 // from marking someone else's work done.
 func (s *Server) CompleteTask(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeAgentTasks) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -298,11 +300,10 @@ type ReleaseRequest struct {
 // ReleaseTask returns a claimed job to state='pending' so another
 // worker can pick it up immediately.
 func (s *Server) ReleaseTask(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeAgentTasks) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())

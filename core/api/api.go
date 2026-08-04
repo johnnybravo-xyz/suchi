@@ -27,11 +27,12 @@ import (
 // Jobs is optional — when set, the upload handler nudges the
 // dispatcher after enqueuing post-ingest work. Tests can leave it nil.
 type Server struct {
-	DB      *db.DB
-	CAS     *blob.CAS
-	Log     *slog.Logger
-	Jobs    *jobs.Dispatcher
-	decrypt DecryptDeps
+	DB       *db.DB
+	CAS      *blob.CAS
+	Log      *slog.Logger
+	Jobs     *jobs.Dispatcher
+	decrypt  DecryptDeps
+	webhooks WebhookDeps
 }
 
 // New returns a Server. The zero value isn't runnable — DB, CAS, Log
