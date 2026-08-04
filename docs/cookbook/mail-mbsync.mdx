@@ -90,6 +90,13 @@ docker compose logs -f mbsync suchi
 Re-run `./setup.sh` — it's idempotent. Or edit `config/.env` directly
 and `docker compose restart mbsync`.
 
+## Smoke test
+
+`./smoke-test.sh` drives the whole recipe end-to-end with the `generic`
+provider + dummy creds and asserts fs-watch → post-ingest → attachment
+fanout produces the expected doc counts. Run it before shipping any
+change to the recipe. Needs Docker; takes ~90s; cleans up after itself.
+
 ## Teardown
 
 ```sh
