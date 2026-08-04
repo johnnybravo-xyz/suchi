@@ -104,6 +104,11 @@ type Config struct {
 	//     DATA_DIR wholesale.
 	IngestPasswordsFile string
 	DecryptKeyPath      string
+
+	// PreConsumeScript is an optional operator-defined script that runs
+	// before any built-in format-specific ingest logic. See
+	// docs/preconsume.mdx and core/pipeline/preconsume for the contract.
+	PreConsumeScript string
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -177,6 +182,7 @@ func Load() (*Config, error) {
 
 	c.IngestPasswordsFile = env("INGEST_PASSWORDS_FILE", "")
 	c.DecryptKeyPath = env("DECRYPT_KEY_FILE", filepath.Join(c.DataDir, ".decrypt-key"))
+	c.PreConsumeScript = env("PRE_CONSUME_SCRIPT", "")
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.
 	if c.OIDCClientSecret, err = readSecret("OIDC_CLIENT_SECRET"); err != nil {

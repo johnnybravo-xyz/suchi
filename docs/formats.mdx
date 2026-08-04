@@ -28,7 +28,8 @@ index. Add a converter (or wait for a future ingester) to fill in
 The PDF path is the most involved because it fans out based on content:
 
 ```
-upload → qpdf (normalize, strip restrictions, decrypt using
+upload → preconsume (optional; operator script — see /preconsume)
+      → qpdf (normalize, strip restrictions, decrypt using
                 empty password + candidates from passwords file
                 + learned passwords for this owner)
           → if all decrypt attempts fail: mark encryption_state='encrypted',
