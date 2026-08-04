@@ -34,6 +34,7 @@ import (
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/classify/rules"
 	suchicrypto "github.com/suchi-dms/suchi/core/crypto"
+	"github.com/suchi-dms/suchi/core/customfield"
 	"github.com/suchi-dms/suchi/core/db"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/pipeline/barcode"
@@ -43,6 +44,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pageanalyze"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
+	"github.com/suchi-dms/suchi/core/pipeline/preconsume"
 	"github.com/suchi-dms/suchi/core/pipeline/qpdf"
 	"github.com/suchi-dms/suchi/core/pipeline/tessocr"
 	"github.com/suchi-dms/suchi/core/pipeline/zugferd"
@@ -101,6 +103,7 @@ type Handler struct {
 	scanBlank       ScanBlank
 	scanSplit       ScanSplit
 	decrypt         Decrypt
+	preConsume      string // path to optional user script; empty → skip
 }
 
 // Decrypt carries the per-Handler configuration for password-protected
@@ -187,6 +190,15 @@ func WithScanBlank(cfg ScanBlank) Option {
 	return func(h *Handler) { h.scanBlank = cfg }
 }
 
+// WithPreConsume enables the optional operator-defined pre-consume
+// script. Empty path disables the feature entirely. When set,
+// post-ingest hands the doc's bytes to the script BEFORE any built-in
+// format-specific logic runs; the script can rewrite bytes and/or
+// emit tags/custom-fields via a stdout JSON envelope.
+func WithPreConsume(path string) Option {
+	return func(h *Handler) { h.preConsume = path }
+}
+
 // WithDecrypt wires in the AEAD key + passwords-file location that
 // post-ingest uses when a PDF returns qpdf.NeedsPassword. Absent → the
 // empty-password path still runs (owner-restrictions unlock) but no
@@ -241,6 +253,29 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	origBytes, err := h.readBlob(origBlob)
 	if err != nil {
 		return fmt.Errorf("cas get %s: %w", origBlob, err)
+	}
+
+	// Optional operator pre-consume hook. Runs BEFORE any built-in
+	// format-specific logic — the script sees the raw bytes and can
+	// rewrite them (SUCHI_OUTPUT) and/or emit tags + custom-fields
+	// via a stdout JSON envelope. See docs/preconsume.mdx.
+	if h.preConsume != "" {
+		pc, err := preconsume.Run(ctx, origBytes, e.DocID, mime, "", log,
+			preconsume.Options{Script: h.preConsume})
+		if err != nil {
+			log.Warn("post-ingest.preconsume.error", "err", err.Error())
+		} else if !pc.Skipped {
+			if len(pc.WorkingBytes) > 0 {
+				log.Info("post-ingest.preconsume.body_rewritten",
+					"input_bytes", len(origBytes), "output_bytes", len(pc.WorkingBytes))
+				origBytes = pc.WorkingBytes
+			}
+			if len(pc.Tags) > 0 || len(pc.CustomFields) > 0 {
+				if err := h.applyPreConsumeMetadata(ctx, e.DocID, pc.Tags, pc.CustomFields); err != nil {
+					log.Warn("post-ingest.preconsume.apply_metadata", "err", err.Error())
+				}
+			}
+		}
 	}
 
 	// Image path: skip qpdf/pdf-inspector/ocrmypdf (they'd fail on
@@ -559,6 +594,89 @@ func (h *Handler) softDeleteParent(ctx context.Context, docID int64) error {
 		`, time.Now().Unix(), time.Now().Unix(), docID)
 		return err
 	})
+}
+
+// applyPreConsumeMetadata writes the tags + custom_fields produced by
+// the pre-consume script. All-or-nothing per doc: one tx wraps every
+// insert. Best-effort per row inside the tx — an unknown tag/field
+// logs a Warn but doesn't fail the whole application.
+func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags []string, fields map[string]any) error {
+	if len(tags) == 0 && len(fields) == 0 {
+		return nil
+	}
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		for _, name := range tags {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			// Upsert the tag by slugified name (matches rules-engine
+			// convention). Then attach.
+			slug := slugify(name)
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO tags(name, slug, created_at, updated_at)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
+			`, name, slug, now, now); err != nil {
+				return err
+			}
+			var tagID int64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT id FROM tags WHERE name = ?`, name).Scan(&tagID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+				docID, tagID); err != nil {
+				return err
+			}
+		}
+		for name, raw := range fields {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			var (
+				fieldID  int64
+				dataType string
+				extra    string
+			)
+			err := tx.QueryRowContext(ctx,
+				`SELECT id, data_type, extra_data FROM custom_fields WHERE name = ?`, name).Scan(&fieldID, &dataType, &extra)
+			if err != nil {
+				h.log.Warn("post-ingest.preconsume.unknown_field", "name", name)
+				continue
+			}
+			handler := customfield.Lookup(dataType)
+			typed, err := handler.Validate(json.RawMessage(extra), raw)
+			if err != nil {
+				h.log.Warn("post-ingest.preconsume.bad_value",
+					"field", name, "err", err.Error())
+				continue
+			}
+			if err := handler.Write(ctx, tx, docID, fieldID, typed); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// slugify is the same lowercase/dash-only rule used by the rules-engine
+// and the paperless importer. Keeping it inline avoids a cross-package
+// dependency for one 6-line function.
+func slugify(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '_' || r == '-':
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // trimBlankPages analyses pdfBytes with pageanalyze and, if any pages

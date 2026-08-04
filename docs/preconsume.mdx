@@ -1,0 +1,129 @@
+---
+title: "Pre-consume script hook"
+description: "Operator-defined escape hatch that runs before any built-in ingest logic."
+---
+
+Set `PRE_CONSUME_SCRIPT=/path/to/your-script.sh` and suchi runs it on
+every ingested document before any format-specific processing kicks in
+(qpdf, docsplit, blank removal, OCR, ZUGFeRD, ...). The script can:
+
+- **Rewrite bytes** — decrypt with a proprietary tool, unpack a wrapper
+  format, run a custom deskewer, whatever.
+- **Emit metadata** — attach tags or set custom fields via a JSON
+  envelope on stdout.
+- **Do nothing** — a script that fails or produces no output is a
+  no-op; ingest continues with the original bytes.
+
+The CAS original is **never** handed to the script and never touched
+by it — you can't accidentally destroy the upload from within a
+pre-consume hook.
+
+## Contract
+
+The script is invoked as:
+
+```
+$PRE_CONSUME_SCRIPT <input_path>
+```
+
+**Environment** (nothing else — the sandbox strips the parent's env):
+
+| Var | Meaning |
+|-----|---------|
+| `DOC_ID` | Numeric document id in the SQLite `documents` table. |
+| `MIME_TYPE` | Server-sniffed MIME (e.g. `application/pdf`). |
+| `OWNER_EMAIL` | Uploader's email, or empty when unknown. |
+| `SUCHI_OUTPUT` | A pre-touched scratch path. Write your modified bytes here to replace the working copy. |
+| `PATH` | `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` |
+
+**Exit codes:**
+
+- `0` — success. `$SUCHI_OUTPUT` is read (only if non-empty). Stdout is parsed as JSON.
+- non-zero — log at `Warn`, treat as "no changes". Ingest keeps flowing; a failing pre-consume never aborts a doc.
+
+**Stdout JSON envelope (optional):**
+
+```json
+{
+  "tags": ["from-hook", "custom-tag"],
+  "custom_fields": {
+    "invoice_number": "INV-2026-0042",
+    "invoice_date": "2026-08-04"
+  }
+}
+```
+
+Unknown tags are auto-created. Unknown custom-field names are logged
+and skipped — create the field first via SQL / the admin surface.
+
+**Limits (all configurable via env, defaults shown):**
+
+- Timeout: 5 minutes (`sandbox.Opts.Timeout`)
+- Stdout ceiling: 1 MiB (parsed as JSON envelope)
+- SUCHI_OUTPUT ceiling: 200 MiB
+
+## Example: try candidate passwords from a file
+
+Duplicates the Paperless-ngx pre-consume-decrypt pattern for the case
+where suchi's native decrypt path isn't enough (e.g. a non-PDF
+encrypted format we don't handle yet):
+
+```bash
+#!/bin/bash
+# ~/suchi/hooks/decrypt.sh
+set -uo pipefail
+SRC="$1"
+case "${MIME_TYPE,,}" in
+  application/pdf) ;;
+  *) exit 0 ;;   # only touch PDFs
+esac
+qpdf --requires-password "$SRC" 2>/dev/null || exit 0
+
+while IFS= read -r pw || [ -n "$pw" ]; do
+  [ -z "$pw" ] && continue
+  case "$pw" in \#*) continue ;; esac
+  qpdf --password="$pw" --decrypt "$SRC" "$SUCHI_OUTPUT" 2>/dev/null
+  rc=$?
+  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; } && [ -s "$SUCHI_OUTPUT" ]; then
+    echo "{\"tags\":[\"auto-decrypted\"]}"
+    exit 0
+  fi
+done < /run/secrets/pdf-passwords.txt
+
+exit 0
+```
+
+`chmod 700`, `chown` to the suchi user, then:
+
+```sh
+export PRE_CONSUME_SCRIPT=/home/suchi/hooks/decrypt.sh
+```
+
+## Example: attach a tag by filename pattern
+
+```bash
+#!/bin/bash
+if [[ "$1" == *bescom* ]]; then
+  echo '{"tags":["utilities","bescom"]}'
+fi
+exit 0
+```
+
+## Security
+
+- Runs under the same UID as suchi. Filesystem access is whatever that
+  UID has — set `chown` on secret files defensively.
+- Runs in `core/sandbox`: empty env (beyond the vars above), hard
+  timeout, bounded output, process-group kill on timeout.
+- **No network** by default — the sandbox doesn't drop egress but
+  suchi's principle-8 posture assumes your reverse proxy / firewall
+  blocks per-container outbound. If you need outbound (webhook, remote
+  KMS), route it via a sidecar service the script `curl`s to on
+  localhost.
+
+## Why not just use plugins?
+
+The plugin surface (`plugin-api/`) is Go interfaces + Go builds — great
+for suchi maintainers, painful for operators. `PRE_CONSUME_SCRIPT` is
+the same escape hatch Paperless-ngx has offered for years:
+"here's a shell script, run it." Meets operators where they are.
