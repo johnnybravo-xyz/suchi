@@ -13,9 +13,12 @@
       <a href="/">{{ msg "nav.documents" }}</a>
       <a href="/pending-decryption">{{ msg "nav.pending_decryption" }}</a>
     </nav>
-    {{ if .Principal }}
-      <div class="me">{{ .Principal.Email }}</div>
-    {{ end }}
+    <div class="topbar-actions">
+      <a class="btn btn-primary" href="/upload">+ {{ msg "nav.upload" }}</a>
+      {{ if .Principal }}
+        <div class="me">{{ .Principal.Email }}</div>
+      {{ end }}
+    </div>
   </header>
   <main>
     {{ block "content" . }}{{ end }}

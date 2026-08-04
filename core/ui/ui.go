@@ -73,7 +73,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload"}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
 		files := []string{"templates/" + name + ".html"}
@@ -110,6 +110,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /preview/{id}", s.RequireUI(http.HandlerFunc(s.Preview)))
 	mux.Handle("GET /download/{id}", s.RequireUI(http.HandlerFunc(s.Download)))
 	mux.Handle("GET /pending-decryption", s.RequireUI(http.HandlerFunc(s.PendingDecryption)))
+	mux.Handle("GET /upload", s.RequireUI(http.HandlerFunc(s.UploadPage)))
 }
 
 // RequireUI redirects anonymous browsers to the login page. API tokens
@@ -538,6 +539,16 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 func (s *Server) LoginPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "login", map[string]any{
 		"Error": r.URL.Query().Get("error"),
+	})
+}
+
+// UploadPage renders the drop-and-pick upload UI. The form POSTs to
+// /api/documents/ via a small inline script and redirects to the
+// created doc's detail page on 201/200.
+func (s *Server) UploadPage(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	s.render(w, r, "upload", map[string]any{
+		"Principal": p,
 	})
 }
 
