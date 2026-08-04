@@ -52,6 +52,18 @@
     </div>
   </div>
 
+  {{ if .CustomFields }}
+  <section class="custom-fields">
+    <h2>{{ msg "doc.detail.section.custom_fields" }}</h2>
+    <dl>
+      {{ range .CustomFields }}
+        <dt>{{ .Name }}</dt>
+        <dd class="cf-{{ .DataType }}">{{ .Value }}</dd>
+      {{ end }}
+    </dl>
+  </section>
+  {{ end }}
+
   {{ if .Notes }}
   <section class="notes">
     <h2>{{ msg "doc.detail.section.notes" }}</h2>

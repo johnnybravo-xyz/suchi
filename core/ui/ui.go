@@ -202,6 +202,15 @@ type detailNote struct {
 	Note       string
 }
 
+// detailField is one row in the doc-detail Custom Fields section.
+// Value is already formatted for display; DataType lets the template
+// pick a monetary/date badge if we grow one later.
+type detailField struct {
+	Name     string
+	DataType string
+	Value    string
+}
+
 type detailDoc struct {
 	ID            int64
 	Title         string
@@ -302,11 +311,92 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 	noteRows.Close()
 
+	// Custom-field values for this doc. Empty rows (all NULLs) skipped
+	// so a monetary field written by ZUGFeRD with total=0 doesn't clutter
+	// the panel. Ordered by field name so operators can rely on a
+	// consistent layout across docs.
+	fieldRows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT cf.name, cf.data_type,
+		       v.value_text, v.value_number, v.value_int,
+		       v.value_bool, v.value_date
+		FROM document_custom_field_values v
+		JOIN custom_fields cf ON cf.id = v.field_id
+		WHERE v.document_id = ?
+		ORDER BY cf.name
+	`, id)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	var fields []detailField
+	for fieldRows.Next() {
+		var (
+			f     detailField
+			vText sql.NullString
+			vNum  sql.NullFloat64
+			vInt  sql.NullInt64
+			vBool sql.NullInt64
+			vDate sql.NullInt64
+		)
+		if err := fieldRows.Scan(&f.Name, &f.DataType,
+			&vText, &vNum, &vInt, &vBool, &vDate); err != nil {
+			fieldRows.Close()
+			s.serverError(w, r, err)
+			return
+		}
+		f.Value = formatFieldValue(f.DataType, vText, vNum, vInt, vBool, vDate)
+		if f.Value == "" {
+			continue
+		}
+		fields = append(fields, f)
+	}
+	fieldRows.Close()
+
 	s.render(w, r, "detail", map[string]any{
-		"Principal": auth.FromContext(r.Context()),
-		"Doc":       doc,
-		"Notes":     notes,
+		"Principal":    auth.FromContext(r.Context()),
+		"Doc":          doc,
+		"Notes":        notes,
+		"CustomFields": fields,
 	})
+}
+
+// formatFieldValue turns one custom-field-value row into a display
+// string. Returns "" when the row has nothing to show — callers skip
+// empty entries so the panel stays tight.
+func formatFieldValue(dataType string,
+	vText sql.NullString, vNum sql.NullFloat64, vInt, vBool, vDate sql.NullInt64) string {
+	switch dataType {
+	case "date":
+		if vDate.Valid {
+			return time.Unix(vDate.Int64, 0).UTC().Format("2006-01-02")
+		}
+	case "bool":
+		if vBool.Valid {
+			if vBool.Int64 == 1 {
+				return "Yes"
+			}
+			return "No"
+		}
+	case "number", "monetary":
+		if vNum.Valid {
+			// Keep two decimals for monetary; drop trailing zeros for
+			// generic numbers. Good enough for read-only display.
+			if dataType == "monetary" {
+				return fmt.Sprintf("%.2f", vNum.Float64)
+			}
+			return strings.TrimRight(strings.TrimRight(
+				fmt.Sprintf("%.6f", vNum.Float64), "0"), ".")
+		}
+	}
+	// Fallback ladder — a text field can also carry ints or bools from
+	// the bundle importer, so try each.
+	switch {
+	case vText.Valid && vText.String != "":
+		return vText.String
+	case vInt.Valid:
+		return strconv.FormatInt(vInt.Int64, 10)
+	}
+	return ""
 }
 
 // Preview streams the archive blob (or original if no archive) inline
