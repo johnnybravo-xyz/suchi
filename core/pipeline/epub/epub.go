@@ -30,7 +30,11 @@ import (
 )
 
 const (
-	DefaultMaxTextBytes = 8 * 1024 * 1024 // 8 MiB — same cap as pdf-inspector
+	// DefaultMaxTextBytes is the cap when Options.MaxTextBytes == 0.
+	// Ebooks routinely run bigger than a business PDF, so this is
+	// higher than pdf-inspector's default. Callers pin it via
+	// config.EpubMaxContentBytes.
+	DefaultMaxTextBytes = 32 * 1024 * 1024 // 32 MiB
 	HasTextThreshold    = 32
 )
 
@@ -41,13 +45,14 @@ type Options struct {
 
 // Result is what Extract returns.
 type Result struct {
-	Text     string
-	HasText  bool
-	Skipped  bool
-	NonBlank int
-	SpineLen int // number of XHTML documents concatenated (for debugging)
-	Title    string
-	Authors  []string
+	Text      string
+	HasText   bool
+	Skipped   bool
+	Truncated bool // hit the byte cap before the spine was exhausted
+	NonBlank  int
+	SpineLen  int // XHTML docs concatenated (fewer than the total when Truncated=true)
+	Title     string
+	Authors   []string
 }
 
 // Recognized reports whether mime looks like an EPUB.
@@ -88,16 +93,27 @@ func Extract(src []byte, log *slog.Logger, opts Options) (*Result, error) {
 	base := path.Dir(opfPath)
 
 	var (
-		buf      bytes.Buffer
-		spineLen int
+		buf       bytes.Buffer
+		spineLen  int
+		truncated bool
 	)
-	for _, ref := range pkg.Spine.ItemRefs {
+	for i, ref := range pkg.Spine.ItemRefs {
+		remaining := maxBytes - int64(buf.Len())
+		if remaining <= 0 {
+			truncated = true
+			log.Warn("epub.truncated",
+				"cap_bytes", maxBytes,
+				"spine_read", spineLen,
+				"spine_total", len(pkg.Spine.ItemRefs),
+				"unread_index", i)
+			break
+		}
 		href := manifest[ref.IDRef]
 		if href == "" {
 			continue
 		}
 		full := path.Join(base, href)
-		body, err := readZipFile(zr, full, maxBytes-int64(buf.Len()))
+		body, err := readZipFile(zr, full, remaining)
 		if err != nil {
 			continue // one broken spine item shouldn't fail the whole book
 		}
@@ -106,22 +122,20 @@ func Extract(src []byte, log *slog.Logger, opts Options) (*Result, error) {
 		}
 		stripHTMLInto(&buf, body)
 		spineLen++
-		if int64(buf.Len()) >= maxBytes {
-			break
-		}
 	}
 
 	text := strings.TrimSpace(buf.String())
 	nonBlank := countNonWhitespace(text)
 	r := &Result{
-		Text:     text,
-		NonBlank: nonBlank,
-		HasText:  nonBlank >= HasTextThreshold,
-		SpineLen: spineLen,
-		Title:    strings.TrimSpace(pkg.Metadata.Title),
-		Authors:  trimAll(pkg.Metadata.Creators),
+		Text:      text,
+		NonBlank:  nonBlank,
+		HasText:   nonBlank >= HasTextThreshold,
+		SpineLen:  spineLen,
+		Truncated: truncated,
+		Title:     strings.TrimSpace(pkg.Metadata.Title),
+		Authors:   trimAll(pkg.Metadata.Creators),
 	}
-	log.Debug("epub.done", "spine", spineLen, "non_blank", nonBlank)
+	log.Debug("epub.done", "spine", spineLen, "non_blank", nonBlank, "truncated", truncated)
 	return r, nil
 }
 
@@ -190,6 +204,11 @@ func readPackage(zr *zip.Reader, opfPath string) (*opfPackage, error) {
 
 // ---------- zip + text helpers ----------
 
+// readZipFile reads at most maxBytes+1 bytes from the named archive
+// entry. maxBytes ≤ 0 means "use the small default" — appropriate only
+// for control files (container.xml, OPF) whose caller doesn't need to
+// bound them from a running budget. Spine reads MUST pass a positive
+// remaining-budget so they never over-read into a shared cap.
 func readZipFile(zr *zip.Reader, name string, maxBytes int64) ([]byte, error) {
 	for _, f := range zr.File {
 		if f.Name != name {
