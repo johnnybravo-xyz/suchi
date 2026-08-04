@@ -1,0 +1,199 @@
+---
+title: "Agent surface"
+description: "Task-claim/act loop for external processes: LLM runtimes, third-party classifiers, human-in-the-loop workflows."
+---
+
+The agent surface is how you plug arbitrary external work into suchi's
+ingest pipeline. Native plugins (Go interfaces, compiled in) are for
+maintainers; agents are for **operators** — anything that speaks HTTP
+can drive a claim/act/complete loop over `/api/tasks/`.
+
+Typical use cases:
+
+- LLM classifier hosted outside suchi (say, on a workstation with a
+  bigger GPU than your NAS).
+- Human review queue — an operator visits a UI, tags docs, marks each
+  done.
+- Third-party enrichment — resolve invoice numbers against your ERP,
+  hit your VAT-validation service, etc.
+- Rules that need side effects the built-in engine can't do.
+
+## The loop
+
+Six calls in total:
+
+```
+1. GET  /api/tasks/?kind=agent:&state=pending   → list candidate jobs
+2. POST /api/tasks/{id}/claim                    → atomic lease
+3. GET  /api/documents/{doc_id}                  → the doc's projection
+4. PUT/POST /api/documents/{doc_id}/…            → do the work
+5. POST /api/tasks/{id}/complete                 → mark done
+   (or POST /api/tasks/{id}/release              → give it up)
+```
+
+Only jobs whose `kind` starts with `agent:` are claimable from
+outside. Internal chains (`post-ingest`, `post-classify`, `render`)
+stay off-limits. Operators enqueue agent work either by
+`POST /api/tasks/` themselves or by wiring a producer into
+`postingest` that creates `agent:<name>` jobs on the docs it wants
+external attention on.
+
+## Endpoints
+
+### `GET /api/tasks/?kind=agent:&state=pending`
+
+Returns pending agent-visible jobs. The `kind` filter is a **prefix**
+match — `agent:` returns everything under that namespace,
+`agent:classify` returns only that specific kind. `state=pending`
+hides claims currently being worked on.
+
+### `POST /api/tasks/{id}/claim`
+
+**Body:** `{"agent_id": "my-agent-1", "ttl_seconds": 300}`
+
+Atomic lease. Succeeds only when the job is `pending` OR `running`
+with an expired `worker_deadline`. Two agents racing on the same job
+— the second gets `409 Conflict`.
+
+`ttl_seconds` is capped at 3600 (1 hour). Default is 300.
+
+**Response 200:**
+```json
+{
+  "task": { "id": 42, "kind": "agent:classify", "state": "running",
+            "doc_id": 17, "created_at": 1785783054, "updated_at": 1785790000,
+            "next_run_at": 0 },
+  "worker_id": "my-agent-1",
+  "worker_deadline": 1785790300
+}
+```
+
+### `POST /api/tasks/{id}/complete`
+
+**Body:** `{"agent_id": "my-agent-1", "last_note": "classified as invoice"}`
+
+Marks the job `done`. `agent_id` MUST match the current claim — an
+agent can't complete someone else's work. `last_note` is optional and
+lands in the job's `last_error` column (which the tasks list surfaces
+for both success and failure — think of it as "last diagnostic").
+
+Returns `204 No Content`.
+
+### `POST /api/tasks/{id}/release`
+
+Voluntary early release — call this on graceful shutdown so the job
+doesn't wait out its lease. Same `agent_id` check as complete.
+
+### `POST /api/tasks/`
+
+**Body:** `{"kind": "agent:my-hook", "doc_id": 17, "payload": {...}}`
+
+Operator-facing enqueue for hand-crafted work. `kind` must start with
+`agent:`. `payload` is opaque JSON your agent will read.
+
+Returns `201 Created` with the new job id.
+
+## Auth + scopes
+
+Every endpoint uses the standard auth middleware — a browser session
+cookie OR a `Authorization: Token <hex>` API token works. Best
+practice: issue a **dedicated token per agent**, with a small scope
+label so audit trails cleanly separate "agent-1 changed this doc"
+from "the operator did it manually."
+
+Today (v1) scopes are stored (`api_tokens.scopes`) but not enforced —
+enforcement is a Phase-6 permissions story. Adopt the scope
+convention now so the enforcement upgrade lands transparently:
+
+```sql
+INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at)
+VALUES (?, 'classifier-agent', ?, 'documents:write', unixepoch());
+```
+
+## Reference agent (Python)
+
+A ~30-line agent that classifies every `agent:classify` job it can
+grab, adds a tag, and marks it done. Save as `agent.py`, chmod +x,
+run in a loop:
+
+```python
+#!/usr/bin/env python3
+import os, sys, time, requests
+
+BASE  = os.environ["SUCHI_URL"]           # e.g. http://127.0.0.1:8000
+TOKEN = os.environ["SUCHI_TOKEN"]         # from POST /api/login
+NAME  = os.environ.get("AGENT_ID", "classifier-1")
+H     = {"Authorization": f"Token {TOKEN}", "Content-Type": "application/json"}
+
+def poll():
+    r = requests.get(f"{BASE}/api/tasks/",
+                     params={"kind": "agent:classify", "state": "pending", "limit": 10},
+                     headers=H, timeout=30)
+    r.raise_for_status()
+    return r.json()["results"]
+
+def classify(doc):
+    # Do whatever the agent needs to do; here just tag it.
+    r = requests.put(
+        f"{BASE}/api/documents/{doc['doc_id']}/custom_fields/reviewed",
+        headers=H, json={"value": True}, timeout=30)
+    r.raise_for_status()
+
+def loop():
+    while True:
+        for task in poll():
+            claim = requests.post(f"{BASE}/api/tasks/{task['id']}/claim",
+                                  headers=H,
+                                  json={"agent_id": NAME, "ttl_seconds": 300},
+                                  timeout=10)
+            if claim.status_code == 409:
+                continue                    # another agent got there first
+            claim.raise_for_status()
+            try:
+                classify(claim.json()["task"])
+                requests.post(f"{BASE}/api/tasks/{task['id']}/complete",
+                              headers=H, json={"agent_id": NAME}, timeout=10
+                              ).raise_for_status()
+            except Exception as e:
+                requests.post(f"{BASE}/api/tasks/{task['id']}/release",
+                              headers=H, json={"agent_id": NAME}, timeout=10)
+                print(f"agent {NAME}: release doc {task.get('doc_id')} — {e}",
+                      file=sys.stderr)
+        time.sleep(5)
+
+if __name__ == "__main__":
+    loop()
+```
+
+**Failure modes and why the design is safe against them:**
+
+| Failure | Recovery |
+|---------|----------|
+| Agent crashes mid-work | Lease expires; another agent (or a restart of the same one) claims the job. |
+| Agent completes but network drops before the reply | Operator sees the job still `running`; retry `complete` — the WHERE clause matches the still-running row and idempotently flips to `done`. |
+| Two agents race on the same job | Atomic UPDATE ensures exactly one wins the claim. The loser gets `409 Conflict` and moves on. |
+| An agent runs longer than the lease | `complete` fails with `409 not_owner` because the row was re-claimed. Agent must re-claim before completing — extend `ttl_seconds` to match your actual runtime, or make your work idempotent. |
+
+## Suggested job-kind conventions
+
+| Kind | Meaning |
+|------|---------|
+| `agent:classify` | Newly ingested doc needs classification. |
+| `agent:review` | Low-confidence classifier output; needs a human. |
+| `agent:enrich`   | Add data from an external system (VAT lookup, invoice matching). |
+| `agent:route`    | Human-in-the-loop routing (assign to a person, forward, etc.). |
+
+There's no built-in producer for these kinds today — you enqueue them
+via `POST /api/tasks/` (from a shell, a webhook, or another agent).
+A future release will wire common producers into `postingest`
+(low-confidence LLM output automatically enqueues `agent:review`,
+etc.).
+
+## Not yet
+
+- **Scope enforcement** — Phase 6.
+- **Webhook variant** — instead of polling, suchi POSTs to a
+  registered URL when a matching job lands. Planned; comment on
+  design in the tracker.
+- **Per-agent identity separate from api_tokens** — v1 uses whatever
+  token you present; the `agent_id` in the body is bookkeeping.
