@@ -303,6 +303,127 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "affected": affected})
 }
 
+// DocumentDetail is the projection returned by GET /api/documents/{id}.
+// Keeps the shape consistent with the Paperless-mobile compat surface:
+// content lands under `content`, correspondent list mirrors the multi-
+// party junction, tags are slugs. Nil-safe: empty slices, not null.
+type DocumentDetail struct {
+	ID             int64              `json:"id"`
+	Title          string             `json:"title"`
+	Content        string             `json:"content"`
+	OriginalBlob   string             `json:"original_blob"`
+	OriginalSize   int64              `json:"original_size"`
+	ArchiveBlob    string             `json:"archive_blob,omitempty"`
+	ArchiveSize    int64              `json:"archive_size,omitempty"`
+	MIME           string             `json:"mime_type"`
+	JDCategoryID   int64              `json:"jd_category_id"`
+	CreatedAt      int64              `json:"created_at"`
+	UpdatedAt      int64              `json:"updated_at"`
+	TrashedAt      *int64             `json:"trashed_at,omitempty"`
+	Tags           []string           `json:"tags"`
+	Correspondents []DocCorrespondent `json:"correspondents"`
+}
+
+// GetDocument — GET /api/documents/{id}. Returns the full projection
+// including extracted content, tags, correspondents. Trashed docs are
+// visible (with trashed_at set) so mobile clients can render the
+// undelete flow.
+func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+		return
+	}
+	id, err := parseIDPath(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid id")
+		return
+	}
+
+	var (
+		d        DocumentDetail
+		archBlob sql.NullString
+		archSize sql.NullInt64
+		mimeNull sql.NullString
+		content  sql.NullString
+		trashed  sql.NullInt64
+	)
+	err = s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT id, title, COALESCE(content, ''), original_blob, original_size,
+		       archive_blob, archive_size, mime_type,
+		       jd_category_id, created_at, updated_at, trashed_at
+		FROM documents
+		WHERE id = ? AND owner_id = ?
+	`, id, principal.UserID).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+		&archBlob, &archSize, &mimeNull,
+		&d.JDCategoryID, &d.CreatedAt, &d.UpdatedAt, &trashed)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read doc")
+		return
+	}
+	if content.Valid {
+		d.Content = content.String
+	}
+	if archBlob.Valid {
+		d.ArchiveBlob = archBlob.String
+	}
+	if archSize.Valid {
+		d.ArchiveSize = archSize.Int64
+	}
+	if mimeNull.Valid {
+		d.MIME = mimeNull.String
+	}
+	if trashed.Valid {
+		v := trashed.Int64
+		d.TrashedAt = &v
+	}
+
+	tagRows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT t.slug FROM tags t
+		JOIN document_tags dt ON dt.tag_id = t.id
+		WHERE dt.document_id = ?
+		ORDER BY t.slug
+	`, id)
+	if err == nil {
+		defer tagRows.Close()
+		for tagRows.Next() {
+			var slug string
+			if err := tagRows.Scan(&slug); err == nil {
+				d.Tags = append(d.Tags, slug)
+			}
+		}
+	}
+	if d.Tags == nil {
+		d.Tags = []string{}
+	}
+
+	corrRows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT c.id, c.name, dc.role
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id = dc.correspondent_id
+		WHERE dc.document_id = ?
+		ORDER BY dc.position, c.name
+	`, id)
+	if err == nil {
+		defer corrRows.Close()
+		for corrRows.Next() {
+			var c DocCorrespondent
+			if err := corrRows.Scan(&c.ID, &c.Name, &c.Role); err == nil {
+				d.Correspondents = append(d.Correspondents, c)
+			}
+		}
+	}
+	if d.Correspondents == nil {
+		d.Correspondents = []DocCorrespondent{}
+	}
+
+	s.writeJSON(w, http.StatusOK, d)
+}
+
 // ---------- helpers ----------
 
 func parseIDPath(r *http.Request) (int64, error) {
