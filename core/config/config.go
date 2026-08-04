@@ -38,8 +38,9 @@ type Config struct {
 
 	// IMAP email ingest (Phase 2; parsed here so Phase 0 doctor can already
 	// report the egress surface honestly)
-	IngestIMAPURL      string
-	IngestIMAPPassword string
+	IngestIMAPURL        string
+	IngestIMAPPassword   string
+	IngestIMAPOwnerEmail string
 
 	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
@@ -115,22 +116,23 @@ type Config struct {
 // called exactly once at process start.
 func Load() (*Config, error) {
 	c := &Config{
-		PublicURL:          env("PUBLIC_URL", ""),
-		DataDir:            env("DATA_DIR", "/data"),
-		ListenAddr:         env("LISTEN_ADDR", ":8000"),
-		LogLevel:           env("LOG_LEVEL", "info"),
-		OCRLanguages:       splitCSV(env("OCR_LANGUAGES", "eng")),
-		OIDCIssuerURL:      env("OIDC_ISSUER_URL", ""),
-		OIDCClientID:       env("OIDC_CLIENT_ID", ""),
-		AdminEmail:         env("ADMIN_EMAIL", ""),
-		TLSCertFile:        env("TLS_CERT_FILE", ""),
-		TLSKeyFile:         env("TLS_KEY_FILE", ""),
-		IngestIMAPURL:      env("INGEST_IMAP_URL", ""),
-		IngestFSDir:        env("INGEST_FS_DIR", ""),
-		IngestFSOwnerEmail: env("INGEST_FS_OWNER_EMAIL", ""),
-		LLMEndpointURL:     env("LLM_ENDPOINT_URL", ""),
-		LLMModel:           env("LLM_MODEL", ""),
-		LLMEgressAck:       env("LLM_EGRESS_ACK", "") == "true",
+		PublicURL:            env("PUBLIC_URL", ""),
+		DataDir:              env("DATA_DIR", "/data"),
+		ListenAddr:           env("LISTEN_ADDR", ":8000"),
+		LogLevel:             env("LOG_LEVEL", "info"),
+		OCRLanguages:         splitCSV(env("OCR_LANGUAGES", "eng")),
+		OIDCIssuerURL:        env("OIDC_ISSUER_URL", ""),
+		OIDCClientID:         env("OIDC_CLIENT_ID", ""),
+		AdminEmail:           env("ADMIN_EMAIL", ""),
+		TLSCertFile:          env("TLS_CERT_FILE", ""),
+		TLSKeyFile:           env("TLS_KEY_FILE", ""),
+		IngestIMAPURL:        env("INGEST_IMAP_URL", ""),
+		IngestIMAPOwnerEmail: env("INGEST_IMAP_OWNER_EMAIL", ""),
+		IngestFSDir:          env("INGEST_FS_DIR", ""),
+		IngestFSOwnerEmail:   env("INGEST_FS_OWNER_EMAIL", ""),
+		LLMEndpointURL:       env("LLM_ENDPOINT_URL", ""),
+		LLMModel:             env("LLM_MODEL", ""),
+		LLMEgressAck:         env("LLM_EGRESS_ACK", "") == "true",
 	}
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")

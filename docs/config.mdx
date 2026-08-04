@@ -77,23 +77,30 @@ Entra, Google.
 | `INGEST_FS_OWNER_EMAIL` | (unset = idle) | User that owns docs picked up from the staging dir. Setting this activates the watcher. |
 | `INGEST_FS_DIR` | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
 
-## Email ingest (v1 stub, Phase 2)
+## Email ingest (IMAP polling)
 
 | Env var | Purpose |
 |---------|---------|
-| `INGEST_IMAP_URL` | `imaps://user@imap.fastmail.com/INBOX` etc. Unset = email ingest idle. |
-| `INGEST_IMAP_PASSWORD` or `INGEST_IMAP_PASSWORD_FILE` | Mailbox password / app password. |
+| `INGEST_IMAP_URL` | `imaps://user@imap.fastmail.com/INBOX` etc. Unset = email ingest idle. `imap://` for cleartext (LAN / Bridge only), `imaps://` for TLS. Port optional; defaults to 993 (TLS) / 143 (plain). |
+| `INGEST_IMAP_PASSWORD` or `INGEST_IMAP_PASSWORD_FILE` | Mailbox password / app password. `_FILE` variant reads from a mounted secret. |
+| `INGEST_IMAP_OWNER_EMAIL` | Owner user for imported docs. Falls back to `INGEST_FS_OWNER_EMAIL` when unset. |
 
-<Note>
-Phase 2 ships a stub polling loop that logs `emailwatch.stub` and
-does nothing. Real IMAP client wiring lands in a follow-up commit
-when there's a mailbox to integration-test against. URL parsing,
-plus-address routing (`archive+22@…` → JD 22), and sidecar
-synthesis from headers are already implemented + tested.
-</Note>
+**How it works.** Every poll interval (default 5 min), suchi opens
+the folder, `UID SEARCH UNSEEN`, fetches each message's raw body,
+stores it in the CAS as `message/rfc822`, and enqueues a post-ingest
+job. `core/pipeline/eml` then fans out one child document per
+attachment. Successfully imported messages are marked `\Seen` (or
+moved to `ProcessedFolder` when configured).
 
-Full options (fetch cadence, processed-folder, size caps) will land
-in `config.yaml` when the polling loop lands.
+**Dedup** is by `Message-ID` — a doc with the same Message-ID under
+the same owner is skipped on re-polls. Safe across restarts + across
+transports (the same email that also arrived via mbsync + fs-watch
+won't double-ingest).
+
+**Bridge tip.** If you're pointing at Proton Bridge, use
+`imap://protonmail-bridge:143` (Bridge doesn't do TLS internally —
+docker network isolates it) and provide the Bridge-generated app
+password via `INGEST_IMAP_PASSWORD_FILE=/run/secrets/imap-password`.
 
 ## Secrets convention
 
