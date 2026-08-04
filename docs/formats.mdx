@@ -19,6 +19,7 @@ shows up.
 | `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
 | `image/heic`, `image/heif` (`.heic`, `.heif`) | ImageMagick converts to single-page PDF; the standard OCR path then produces a searchable archive — a photograph of a receipt becomes full-text searchable | `magick` (ImageMagick) with HEIF delegate | ✅ | ✅ |
 | `message/rfc822` (`.eml` files) | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id` | none (pure Go) | ✅ | ✅ |
+| `application/vnd.ms-outlook` (`.msg` files) | `msgconvert` transforms the CFB binary into RFC 822; falls through to the `.eml` path so Message-Id dedup + attachment fanout + correspondent inheritance work unchanged | `msgconvert` (libemail-outlook-message-perl) | ❌ (no binary) | ✅ |
 
 Anything else lands as a doc with empty content — the original bytes
 are safe in the CAS, dedup + metadata still work, but there's no text
@@ -265,7 +266,6 @@ Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
 
 ## Not yet supported
 
-- **`.msg` (Outlook)** — parked. The binary format is heavy; forward to your `INGEST_IMAP_URL` inbox instead as a workaround.
 - **Office docs (`.docx`, `.odt`, etc.)** — `libreoffice-core` is in the full image but the conversion step isn't wired yet. Planned.
 - **`.zip` / `.tar` bundles** — no auto-explode. Ingest the individual documents.
 

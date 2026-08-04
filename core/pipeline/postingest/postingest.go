@@ -43,6 +43,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/eml"
 	"github.com/suchi-dms/suchi/core/pipeline/epub"
 	"github.com/suchi-dms/suchi/core/pipeline/heic"
+	"github.com/suchi-dms/suchi/core/pipeline/msg"
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pageanalyze"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
@@ -278,6 +279,35 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				}
 			}
 		}
+	}
+
+	// Outlook .msg path: convert to RFC 822 via msgconvert, then fall
+	// through to the same handleEmail() as .eml so Message-Id dedup,
+	// attachment fanout, and correspondent inheritance work identically.
+	// When msgconvert isn't installed (slim image), Skipped=true and
+	// the doc stays as an opaque blob — same fallback shape as djvu.
+	if msg.Recognized(mime) {
+		res, mErr := msg.Convert(ctx, bytes.NewReader(origBytes), log, msg.Options{})
+		if mErr != nil {
+			return fmt.Errorf("msg: %w", mErr)
+		}
+		if res.Skipped || len(res.EML) == 0 {
+			log.Info("post-ingest.route.msg.skipped", "reason", res.StderrTail)
+			return h.postContentSteps(ctx, log, e.DocID)
+		}
+		log.Info("post-ingest.route.msg", "eml_bytes", len(res.EML),
+			"took", res.Duration.String())
+		// Overwrite mime so downstream detail views see message/rfc822
+		// and any log line honestly reflects the format we're feeding.
+		mime = "message/rfc822"
+		origBytes = res.EML
+		if _, err := h.db.Write.ExecContext(ctx,
+			`UPDATE documents SET mime_type = ? WHERE id = ?`,
+			"message/rfc822", e.DocID); err != nil {
+			log.Warn("post-ingest.msg.mime_update", "err", err.Error())
+		}
+		// Fall through — the eml.Recognized() block below picks up the
+		// new mime + bytes.
 	}
 
 	// Email path: parse the .eml, set title/correspondent/date on the

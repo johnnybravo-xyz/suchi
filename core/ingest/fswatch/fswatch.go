@@ -304,6 +304,11 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		mime = "image/heic"
 	case ".heif":
 		mime = "image/heif"
+	case ".msg":
+		// Outlook Compound File binary. http.DetectContentType returns
+		// application/x-ole-storage; nudge to the IANA-registered type
+		// so post-ingest routes into core/pipeline/msg/.
+		mime = "application/vnd.ms-outlook"
 	}
 
 	title := deriveTitle(path, side)
