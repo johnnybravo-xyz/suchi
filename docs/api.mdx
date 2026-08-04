@@ -156,18 +156,25 @@ Query parameters:
 | `limit` | `50` | Max rows to return. Capped at `200`. |
 | `doc_id` | (unset) | Filter to the jobs for one document. |
 | `kind` | (unset) | Prefix filter on `kind`. `agent:` returns everything under the agent surface; specific kinds match exact-prefix. |
+| `include` | (both) | `jobs` returns only the durable outbox; `workflow` returns only human approvals. Default returns both. |
 
 Response shape:
 
 ```json
 {
-  "counts": { "pending": 0, "running": 0, "done": 12, "dead": 1 },
+  "counts": { "pending": 0, "running": 0, "done": 12, "dead": 1, "workflow_open": 2 },
   "results": [
     { "id": 42, "kind": "post-ingest", "state": "dead",
       "attempts": 5, "doc_id": 17,
       "last_error": "ocrmypdf: page 3 timeout",
       "created_at": 1785779486, "updated_at": 1785779523,
       "next_run_at": 1785779486 }
+  ],
+  "workflow_tasks": [
+    { "id": 9, "run_id": 3, "workflow_id": 1, "state_key": "review",
+      "assignee": "user:5", "prompt": "Approve invoice?",
+      "choices": ["approve","reject"], "status": "open",
+      "deadline_at": 1785782400, "created_at": 1785779486 }
   ]
 }
 ```
@@ -175,6 +182,16 @@ Response shape:
 Timestamps are unix seconds. The Phase-4 mobile-compat shim
 converts to ISO8601 there — this endpoint keeps the suchi
 convention.
+
+`workflow_tasks` are scoped to the caller: an entry appears only if the
+task's `assignee` resolves to the current user. Terminal statuses
+(`resolved`, `expired`) are omitted. Resolve one via
+`POST /api/workflows/tasks/{task_id}/resolve`. `workflow_open` in
+`counts` is the true open-inbox size, unaffected by `limit`.
+
+Bundle-compatible mobile clients that ignore unknown JSON fields see
+the classic `counts` + `results` shape unchanged. suchi-native clients
+read both arrays.
 
 ### Agent surface: `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`
 
