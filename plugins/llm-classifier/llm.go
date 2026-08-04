@@ -51,7 +51,8 @@ import (
 
 // Kind is the job kind the classifier subscribes to. Post-ingest
 // handler enqueues post-classify after content lands so the LLM sees
-// the OCR text.
+// the OCR text. Kept as a literal string equal to
+// postingest.PostClassifyKind to avoid a circular import.
 const Kind = "post-classify"
 
 // Config carries per-instance knobs. Zero-value = disabled.
