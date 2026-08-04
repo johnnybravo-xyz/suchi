@@ -13,7 +13,7 @@ shows up.
 
 | MIME | What happens | Binary needed | Slim image | Full image |
 |------|--------------|---------------|:----------:|:----------:|
-| `application/pdf` | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction | `qpdf`, `pdftotext`, `ocrmypdf` + `tesseract` | text-native only | ✅ full chain |
+| `application/pdf` | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction | `qpdf`, `pdftotext`, tessocr (`pdftoppm`+`tesseract`) OR `ocrmypdf` | ✅ full PDF chain (no OCR'd archive) | ✅ full PDF chain (with OCR'd archive) |
 | `image/*` (PNG, JPEG, GIF, TIFF, WebP) | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens | none (pure-Go via gozxing) | ✅ | ✅ |
 | `application/epub+zip`, `application/epub` | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs. | none | ✅ | ✅ |
 | `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
@@ -32,8 +32,10 @@ upload → qpdf (normalize, strip restrictions, decrypt empty-password)
       → pdf-inspector (pdftotext -layout)
           ├─ ≥32 non-whitespace chars → text-native shortcut
           │      → write content directly
-          └─ otherwise → ocrmypdf
-                 → text sidecar + searchable-PDF archive → CAS
+          └─ otherwise → OCR path (see engine dispatch below)
+                 → text sidecar (documents.content)
+                 → optional searchable-PDF archive (documents.archive_blob),
+                    when the engine is ocrmypdf
       → zugferd (qpdf --list-attachments → --show-attachment → CII XML parse)
              → invoice_* custom fields (when a Factur-X / XRechnung
                 attachment is present)
@@ -41,9 +43,27 @@ upload → qpdf (normalize, strip restrictions, decrypt empty-password)
 ```
 
 Each step degrades independently. Missing `pdftotext` sends every PDF
-to the OCR path (slower but correct). Missing `ocrmypdf` leaves the
+to the OCR path (slower but correct). Missing OCR engine leaves the
 content empty for scanned PDFs. Missing `qpdf` keeps the original
 bytes as-is (encrypted PDFs will then fail downstream).
+
+### OCR engine dispatch
+
+Two engines are supported and picked at boot via `OCR_ENGINE`:
+
+| `OCR_ENGINE` | Engine | Binaries | Extras |
+|--------------|--------|----------|--------|
+| `auto` (default) | prefers **tesseract**, falls back to **ocrmypdf** | pdftoppm + tesseract, OR ocrmypdf | zero-config |
+| `tesseract` | in-process pdftoppm → tesseract chain (`core/pipeline/tessocr`) | pdftoppm (poppler-utils) + tesseract | slim image default |
+| `ocrmypdf` | ocrmypdf CLI wrapper (`core/pipeline/ocrmypdf`) | ocrmypdf + tesseract | full image default |
+
+`tesseract` is the smaller path (~4× less Docker image size vs ocrmypdf's
+Python stack) but does not produce a searchable-PDF archive —
+`documents.archive_blob` stays NULL for scanned docs. FTS + full-text
+search still work over `documents.content`. Pick `ocrmypdf` when you
+want the archive PDF (e.g. long-term retention where the searchable
+PDF matters more than image size), or set to `auto` and let the image
+you deployed decide.
 
 ### ZUGFeRD / Factur-X / XRechnung
 
@@ -137,15 +157,18 @@ fit.
 
 | Feature | Slim image | Full image |
 |---------|:----------:|:----------:|
-| Text-native PDF via `pdftotext` | ❌ | ✅ |
-| Scanned PDF via `ocrmypdf` + `tesseract` | ❌ | ✅ |
-| PDF normalization via `qpdf` | ❌ | ✅ |
-| ZUGFeRD attachment extraction | ❌ (needs qpdf) | ✅ |
+| Text-native PDF via `pdftotext` | ✅ | ✅ |
+| Scanned PDF via **tessocr** (pdftoppm + tesseract) | ✅ | ✅ |
+| Scanned PDF via **ocrmypdf** (adds searchable-PDF archive) | ❌ | ✅ |
+| PDF normalization via `qpdf` | ✅ | ✅ |
+| ZUGFeRD attachment extraction | ✅ | ✅ |
 | Image barcode decoding | ✅ | ✅ |
 | EPUB extraction | ✅ | ✅ |
 | DjVu extraction | ❌ | ✅ |
-| Image size (approx) | ~30 MB | ~1 GB |
+| Image size (approx) | ~70 MB | ~1 GB |
+| Default `OCR_ENGINE` | `tesseract` | `ocrmypdf` |
 
-Pick slim for lightweight deployments where you're only ingesting
-already-text-native content (bank PDFs, EPUBs, invoice images).
-Everything else needs full.
+The slim image is the recommended default — it covers PDF end-to-end
+including OCR of scanned pages, just without the searchable-PDF
+archive. Pick full when you need the archive PDF, DjVu ingest, or the
+Office-doc converter (planned).
