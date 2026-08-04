@@ -17,6 +17,7 @@ shows up.
 | `image/*` (PNG, JPEG, GIF, TIFF, WebP) | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens | none (pure-Go via gozxing) | ✅ | ✅ |
 | `application/epub+zip`, `application/epub` | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs. | none | ✅ | ✅ |
 | `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
+| `message/rfc822` (`.eml` files) | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id` | none (pure Go) | ✅ | ✅ |
 
 Anything else lands as a doc with empty content — the original bytes
 are safe in the CAS, dedup + metadata still work, but there's no text
@@ -116,6 +117,43 @@ and one password; `remember=true` fires once per batch on first hit.
 `/Perms` and produce qpdf exit code 3 (warnings). suchi treats exit 3
 with non-empty output as success — matching the Paperless-ngx
 pre-consume convention.
+
+### Email (message/rfc822)
+
+`.eml` files land as documents with the email body text as
+`documents.content` and headers projected onto standard fields:
+
+- `title` ← Subject (RFC 2047 encoded-word decoded)
+- `created_at` ← Date header (unix epoch)
+- `email_message_id` ← Message-Id (for future dedup on re-syncs)
+- Sender (`From: Name <email>`) upserts into the `correspondents`
+  table and attaches to the doc under `role=sender`.
+
+**Attachments fan out into sibling docs.** Each attachment gets its
+own `documents` row with `email_parent_id` pointing back at the
+`.eml`, its own CAS blob, and its own `post-ingest` job — so an
+attached PDF flows through the entire pipeline (qpdf, OCR, ZUGFeRD,
+rules, render) as if it had arrived directly. `multipart/related`
+inline images (referenced from an HTML body) are NOT ingested as
+separate docs — they're kept inside the parent .eml's CAS blob only.
+
+**How to feed it in.** Any of the three canonical ingest paths works;
+suchi doesn't care what put the `.eml` on the disk:
+
+- **`INGEST_FS_DIR`** — a fs-watch on a Maildir or archive folder.
+  Pair with [mbsync/isync](https://isync.sourceforge.io/) against your
+  IMAP server (or a Bridge like Proton's) to keep the folder fresh.
+  Recommended for setups that already have a mail sync toolchain.
+- **`INGEST_IMAP_URL`** — direct IMAP polling. No external mail sync
+  needed; suchi holds the credentials and pulls new messages on an
+  interval.
+- **Upload API** — POST a `.eml` file to `/api/documents/` for one-off
+  imports.
+
+The parser is pure Go stdlib (`net/mail` + `mime/multipart` +
+`mime/quotedprintable`) — it works in both slim and full images with
+no external tools. RFC 2047 encoded-word subjects, quoted-printable +
+base64 bodies, and nested multipart trees all decode correctly.
 
 ### Multi-doc splitting on QR separator sheets
 

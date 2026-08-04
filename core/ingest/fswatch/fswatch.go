@@ -53,6 +53,7 @@ import (
 	"github.com/suchi-dms/suchi/core/ingest/sidecar"
 	"github.com/suchi-dms/suchi/core/jd"
 	"github.com/suchi-dms/suchi/core/jobs"
+	"github.com/suchi-dms/suchi/core/pipeline/eml"
 	"github.com/suchi-dms/suchi/core/pipeline/postingest"
 )
 
@@ -285,6 +286,15 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		w.log.Warn("fswatch.mime_sniff", "err", err.Error())
 		mime = "application/octet-stream"
 	}
+	// net/http.DetectContentType returns "text/plain" for .eml files
+	// because the header block is ASCII text. Bump to message/rfc822
+	// when the extension OR content heuristic says email — post-ingest
+	// then routes into core/pipeline/eml/ instead of treating it as
+	// generic text.
+	if strings.HasSuffix(strings.ToLower(path), ".eml") ||
+		emlLooksLikeEmail(w.cas, ref.SHA256) {
+		mime = "message/rfc822"
+	}
 
 	title := deriveTitle(path, side)
 
@@ -491,6 +501,27 @@ func (w *Watcher) moveToErrors(path, sidecarPath string, ingestErr error) {
 	errFile := filepath.Join(w.cfg.Dir, "errors", base+".err")
 	_ = os.WriteFile(errFile, []byte(ingestErr.Error()+"\n"), 0o640)
 	w.log.Warn("fswatch.ingest_failed", "path", base, "err", ingestErr.Error())
+}
+
+// emlLooksLikeEmail is the fallback for files without a .eml
+// extension (Maildir names are cryptic hash strings). Reads the
+// first 4 KiB of the CAS blob and asks the eml package whether the
+// header block has RFC-822 shape.
+func emlLooksLikeEmail(cas casReader, sha string) bool {
+	rc, err := cas.Get(sha)
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+	head := make([]byte, 4096)
+	n, _ := rc.Read(head)
+	return eml.SniffLooksLikeEmail(head[:n])
+}
+
+// casReader is the tiny surface emlLooksLikeEmail needs — avoids a
+// hard dependency on the concrete *blob.CAS type in this file.
+type casReader interface {
+	Get(sha string) (io.ReadCloser, error)
 }
 
 // sniffMIME reads up to 512 bytes from the stored blob and runs
