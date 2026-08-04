@@ -36,6 +36,7 @@ around").
 | `SCAN_SPLIT_DPI` | `150` | Rasterization DPI for QR detection. Range `[72, 600]`. Bump if your separator QRs are small or your scans are low-res. |
 | `INGEST_PASSWORDS_FILE` | (unset) | Optional path to a newline-separated list of candidate PDF passwords tried before an encrypted PDF is parked in `encryption_state='encrypted'`. Blank lines and `#` comments are skipped. Reloaded per-doc so operators can append passwords without restart. Chmod 600 recommended — the file holds secrets. |
 | `DECRYPT_KEY_FILE` | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals operator-supplied passwords in the `decryption_passwords` table. Auto-generated 0600 on first boot. **Losing this file loses ALL stored passwords** — back up `$DATA_DIR` wholesale, not just `dms.db`. |
+| `PRE_CONSUME_SCRIPT` | (unset) | Optional path to an operator-defined executable that runs on every doc before any built-in ingest logic. See [preconsume](/preconsume) for the contract (argv, env vars, stdout JSON envelope). |
 
 ## TLS
 

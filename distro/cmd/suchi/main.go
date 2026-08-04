@@ -297,6 +297,7 @@ func runServe() int {
 			Key:           decryptKey,
 			PasswordsFile: cfg.IngestPasswordsFile,
 		}),
+		postingest.WithPreConsume(cfg.PreConsumeScript),
 	))
 	if llm != nil {
 		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
