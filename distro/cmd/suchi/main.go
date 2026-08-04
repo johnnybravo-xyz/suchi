@@ -41,6 +41,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
+	"github.com/johnnybravo-xyz/suchi/core/workflow"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
 
@@ -325,6 +326,18 @@ func runServe() int {
 	// NewHandler nil-guard keeps the wiring composable).
 	if h := webhookdispatch.New(d, log, decryptKey); h != nil {
 		disp.Register(h)
+	}
+	// Workflow engine — state-machine core over the durable outbox. The
+	// engine itself is a small runtime object; the subscriber wraps it
+	// so workflow:advance / workflow:resume / workflow:timeout-sweep
+	// jobs route to Engine.Advance / Engine.TimeoutSweep. SetDefault
+	// hands the API layer a package-level handle so /api/workflows/*
+	// works without threading the engine through every handler.
+	wfEngine := workflow.New(d, log)
+	workflow.SetDefault(wfEngine)
+	disp.Register(workflow.NewSubscriber(wfEngine))
+	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
+		log.Warn("workflow.sweep.schedule_failed", "err", err.Error())
 	}
 	go disp.Run(ctx)
 	defer disp.Stop()

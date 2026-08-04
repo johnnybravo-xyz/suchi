@@ -109,6 +109,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Setup wizard surface (admin-only).
 	s.registerSetup(mux)
+
+	// Workflow engine surface — routing/approval/sign-off.
+	s.registerWorkflow(mux)
 }
 
 // ---------- shared helpers ----------
