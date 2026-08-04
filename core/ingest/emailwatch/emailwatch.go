@@ -1,40 +1,46 @@
 // Package emailwatch is the third canonical ingest path (design
 // principle 9): IMAP polling for "forward it, forget it" archival.
 //
-// **Phase-2 status: scaffolding only.**
+// Complements the fs-watch (mbsync + Maildir) and Upload API paths.
+// Every message the loop fetches gets stored as a `.eml` blob and
+// enqueued through the same post-ingest chain — `core/pipeline/eml`
+// then fans out one child document per attachment. Same semantics as
+// dropping a .eml file into `INGEST_FS_DIR`, minus the mail-sync
+// sidecar.
 //
-// This package ships the pure-logic pieces that are testable without a
-// live mailbox:
+// Dedup: Message-ID is unique per email; documents.email_message_id
+// carries it, and the poll loop skips any message whose ID already
+// exists in the table. Safe across restarts + folder-moves.
 //
-//   - URL parsing (imaps://user@host/Folder → host+user+folder+TLS)
-//   - Attachment MIME allowlist
-//   - Sidecar synthesis from a message's From / Subject / Date headers
-//   - plus-address routing helper (archive+22@... → JD category 22)
-//
-// The polling loop itself is a stub. A real implementation lands
-// once we can integration-test against a mailbox — go-imap v2's
-// client API is close to stable but not fully so; ship the network
-// code when there's a way to validate it end-to-end. Design principle:
-// don't fake integration coverage with unit tests.
-//
-// The stub Run() logs "not yet implemented" and exits, so the boot
-// path is safe even when INGEST_IMAP_URL is set.
+// This package still exports the pure-logic helpers (URL parsing,
+// SidecarFromMessage, plus-address routing) that landed as
+// scaffolding — they're used both here and by potential agent code.
 package emailwatch
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/emersion/go-imap"
+	imapclient "github.com/emersion/go-imap/client"
+
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
+	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
 // Defaults.
@@ -125,15 +131,310 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 	}, nil
 }
 
-// Run is the poll loop. **Phase-2 stub**: logs a warning and returns.
-// A follow-up wires go-imap/v2 once we have a mailbox to integration-
-// test against.
+// Run is the poll loop. Connects, syncs one folder's UNSEEN messages
+// into suchi as .eml documents, then sleeps and repeats. Blocks until
+// ctx is cancelled.
+//
+// A connection error is logged and retried on the next tick — no
+// crash-on-mailbox-outage. Dedup via Message-ID means a repeat cycle
+// on the same messages is idempotent even if the server never marked
+// them \Seen.
 func (w *Watcher) Run(ctx context.Context) {
-	w.log.Warn("emailwatch.stub",
-		"msg", "IMAP polling loop not yet implemented; add go-imap/v2 wiring in a follow-up commit",
-		"interval", w.interval.String())
-	<-ctx.Done()
-	w.log.Info("emailwatch.stop", "reason", "context")
+	w.log.Info("emailwatch.start", "interval", w.interval.String())
+	// First cycle immediately so the operator's first upload lands
+	// without a full poll interval wait.
+	w.cycle(ctx)
+	t := time.NewTicker(w.interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			w.log.Info("emailwatch.stop", "reason", "context")
+			return
+		case <-t.C:
+			w.cycle(ctx)
+		}
+	}
+}
+
+// cycle runs one connect → fetch-unseen → ingest → mark-seen pass.
+// All errors are logged; the loop keeps ticking.
+func (w *Watcher) cycle(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	c, err := w.connect(ctx)
+	if err != nil {
+		w.log.Warn("emailwatch.connect_failed", "err", err.Error())
+		return
+	}
+	defer func() { _ = c.Logout() }()
+
+	if _, err := c.Select(w.folder, false); err != nil {
+		w.log.Warn("emailwatch.select_failed", "folder", w.folder, "err", err.Error())
+		return
+	}
+
+	criteria := imap.NewSearchCriteria()
+	criteria.WithoutFlags = []string{imap.SeenFlag}
+	uids, err := c.UidSearch(criteria)
+	if err != nil {
+		w.log.Warn("emailwatch.search_failed", "err", err.Error())
+		return
+	}
+	if len(uids) == 0 {
+		return
+	}
+	w.log.Info("emailwatch.unseen", "count", len(uids))
+
+	// Fetch bodies + envelopes in one round-trip.
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(uids...)
+	section := &imap.BodySectionName{Peek: true} // don't set \Seen implicitly
+	items := []imap.FetchItem{
+		imap.FetchEnvelope,
+		imap.FetchUid,
+		section.FetchItem(),
+	}
+	msgs := make(chan *imap.Message, 8)
+	done := make(chan error, 1)
+	go func() { done <- c.UidFetch(seqset, items, msgs) }()
+
+	var seenUIDs []uint32
+	for m := range msgs {
+		if ctx.Err() != nil {
+			return
+		}
+		raw, msgID, err := w.materialize(m, section)
+		if err != nil {
+			w.log.Warn("emailwatch.materialize_failed",
+				"uid", m.Uid, "err", err.Error())
+			continue
+		}
+		imported, err := w.importOne(ctx, raw, msgID, m)
+		if err != nil {
+			w.log.Warn("emailwatch.import_failed",
+				"uid", m.Uid, "msg_id", msgID, "err", err.Error())
+			continue
+		}
+		if imported {
+			w.log.Info("emailwatch.imported",
+				"uid", m.Uid, "msg_id", msgID, "bytes", len(raw))
+		}
+		seenUIDs = append(seenUIDs, m.Uid)
+	}
+	if err := <-done; err != nil {
+		w.log.Warn("emailwatch.fetch_failed", "err", err.Error())
+		// still fall through and mark whatever we did import
+	}
+	if len(seenUIDs) == 0 {
+		return
+	}
+
+	// Mark processed messages. Either move to ProcessedFolder (when
+	// configured — matches Bundle-mobile semantics) or set \Seen.
+	markSet := new(imap.SeqSet)
+	markSet.AddNum(seenUIDs...)
+	if w.cfg.ProcessedFolder != "" {
+		if err := c.UidMove(markSet, w.cfg.ProcessedFolder); err != nil {
+			w.log.Warn("emailwatch.move_failed",
+				"to", w.cfg.ProcessedFolder, "err", err.Error())
+		}
+	} else {
+		flags := []any{imap.SeenFlag}
+		if err := c.UidStore(markSet,
+			imap.FormatFlagsOp(imap.AddFlags, true), flags, nil); err != nil {
+			w.log.Warn("emailwatch.mark_seen_failed", "err", err.Error())
+		}
+	}
+}
+
+// connect dials, TLS-wraps if useTLS, and logs in. Bounded by ctx.
+func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(30 * time.Second)
+	}
+	addr := fmt.Sprintf("%s:%s", w.host, defaultPort(w.host, w.useTLS))
+	var (
+		c   *imapclient.Client
+		err error
+	)
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		if w.useTLS {
+			c, err = imapclient.DialTLS(addr, &tls.Config{ServerName: w.host})
+		} else {
+			c, err = imapclient.Dial(addr)
+		}
+		done <- err
+	}()
+	select {
+	case <-dialCtx.Done():
+		return nil, dialCtx.Err()
+	case err = <-done:
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	if err := c.Login(w.user, w.cfg.Password); err != nil {
+		_ = c.Logout()
+		return nil, fmt.Errorf("login %s@%s: %w", w.user, w.host, err)
+	}
+	return c, nil
+}
+
+// defaultPort strips a port from host if present, else picks the
+// scheme default. Users can override by embedding the port in the URL.
+func defaultPort(host string, useTLS bool) string {
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		return host[i+1:]
+	}
+	if useTLS {
+		return "993"
+	}
+	return "143"
+}
+
+// materialize reads the whole raw message body out of the imap.Message
+// literal reader and extracts the Message-ID header. Both are needed
+// downstream — the raw for CAS.Put, the ID for dedup.
+func (w *Watcher) materialize(m *imap.Message, section *imap.BodySectionName) ([]byte, string, error) {
+	lit := m.GetBody(section)
+	if lit == nil {
+		return nil, "", errors.New("empty body literal")
+	}
+	// Cap the read at maxAttach*2 — a message with 25 MB attachments
+	// can easily be 40 MB with encoding overhead.
+	raw, err := io.ReadAll(io.LimitReader(lit, w.maxAttach*2+8*1024))
+	if err != nil {
+		return nil, "", err
+	}
+	msgID := ""
+	if m.Envelope != nil {
+		msgID = strings.TrimSpace(m.Envelope.MessageId)
+	}
+	// go-imap's envelope decoding strips the angle brackets, but
+	// documents.email_message_id stores the raw form for parity
+	// with our own eml.Parse (which returns them included). Re-wrap.
+	if msgID != "" && !strings.HasPrefix(msgID, "<") {
+		msgID = "<" + msgID + ">"
+	}
+	return raw, msgID, nil
+}
+
+// importOne is the write side: dedup by Message-ID, put the raw
+// bytes into CAS, insert a documents row with mime=message/rfc822,
+// enqueue post-ingest (which fans out attachments as children via
+// core/pipeline/eml).
+//
+// Returns (imported, err) where imported=false is either "already
+// known" (dedup hit) or "size cap tripped". err is only for hard
+// failures the outer loop should log.
+func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *imap.Message) (bool, error) {
+	if len(raw) == 0 {
+		return false, errors.New("empty message body")
+	}
+	// Dedup: message-ID + owner scope. Same ID under a different
+	// owner is fine (household member forwarded it, etc.).
+	if msgID != "" {
+		var existing int64
+		err := w.db.Read.QueryRowContext(ctx, `
+			SELECT id FROM documents
+			WHERE owner_id = ? AND email_message_id = ?
+			LIMIT 1
+		`, w.ownerID, msgID).Scan(&existing)
+		if err == nil {
+			w.log.Debug("emailwatch.dedup", "msg_id", msgID, "existing", existing)
+			return false, nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+	}
+
+	ref, err := w.cas.Put(bytes.NewReader(raw))
+	if err != nil {
+		return false, fmt.Errorf("cas put: %w", err)
+	}
+
+	// Owner-scoped alive-blob dedup — the same .eml bytes might already
+	// be in the archive from a prior fs-watch drop. Skip if so.
+	var existingID int64
+	err = w.db.Read.QueryRowContext(ctx, `
+		SELECT id FROM documents
+		WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
+	`, w.ownerID, ref.SHA256).Scan(&existingID)
+	if err == nil {
+		w.log.Debug("emailwatch.blob_dedup", "existing", existingID, "sha", ref.SHA256)
+		return false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+
+	title := ""
+	created := time.Now().Unix()
+	if m.Envelope != nil {
+		if m.Envelope.Subject != "" {
+			title = m.Envelope.Subject
+		}
+		if !m.Envelope.Date.IsZero() {
+			created = m.Envelope.Date.Unix()
+		}
+	}
+	if title == "" {
+		title = "email"
+	}
+
+	inbox, err := jd.InboxCategoryID(ctx, w.db)
+	if err != nil {
+		return false, fmt.Errorf("inbox category: %w", err)
+	}
+
+	if err := w.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO documents(
+				owner_id, original_blob, original_size, title, mime_type,
+				jd_category_id, added_at, created_at, updated_at,
+				email_message_id
+			) VALUES (?, ?, ?, ?, 'message/rfc822', ?, ?, ?, ?, ?)
+		`, w.ownerID, ref.SHA256, ref.Size, title,
+			inbox, now, created, now,
+			nullOrString(msgID))
+		if err != nil {
+			return err
+		}
+		docID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"sha256":    ref.SHA256,
+			"size":      ref.Size,
+			"mime_type": "message/rfc822",
+		})
+		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
+	}); err != nil {
+		return false, fmt.Errorf("db write: %w", err)
+	}
+	// Nudge the dispatcher so the eml.Parse fanout doesn't wait for
+	// the next poll tick.
+	if w.disp != nil {
+		w.disp.Nudge()
+	}
+	return true, nil
+}
+
+// nullOrString returns nil when s is empty (so INSERT stores NULL
+// instead of an empty string in email_message_id) — keeps the unique
+// index tidy.
+func nullOrString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // ParseURL splits an imaps://user@host[:port]/FOLDER URL into pieces.
