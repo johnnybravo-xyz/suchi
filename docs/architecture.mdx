@@ -164,6 +164,10 @@ principle: ingest completes even when some tools aren't installed.
   `invoice_total_gross`, `invoice_total_net`, `invoice_seller`,
   `invoice_seller_vat`, `invoice_buyer` custom fields. The
   `custom_fields` rows are created lazily on the first extraction.
+- **epub** ingest is a pure-Go zip walker: reads `META-INF/container.xml`
+  → OPF → spine, concatenates the visible text from each XHTML in
+  reading order into `documents.content`. No qpdf, no ocrmypdf, no
+  external binary — works in the slim image too.
 
 Rules-engine classification runs after this (Phase 2 later); LLM /
 agent classification is Phase 3.

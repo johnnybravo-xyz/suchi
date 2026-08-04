@@ -34,6 +34,7 @@ import (
 	"github.com/suchi-dms/suchi/core/db"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/pipeline/barcode"
+	"github.com/suchi-dms/suchi/core/pipeline/epub"
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
 	"github.com/suchi-dms/suchi/core/pipeline/qpdf"
@@ -115,6 +116,27 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		content := barcode.TokensFor(bcs)
 		if err := h.updateDoc(ctx, e.DocID, content, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	// EPUB path: pure-Go zip walker → concatenated XHTML text. No qpdf,
+	// no OCR, no external binary. Metadata (title, authors) is logged
+	// today; hooking it into custom fields lives with the other exotic
+	// formats when they land.
+	if epub.Recognized(mime) {
+		res, err := epub.Extract(origBytes, log, epub.Options{})
+		if err != nil {
+			log.Warn("post-ingest.epub.error", "err", err.Error())
+		}
+		if res == nil {
+			res = &epub.Result{Skipped: true}
+		}
+		log.Info("post-ingest.route.epub",
+			"spine", res.SpineLen, "non_blank", res.NonBlank,
+			"title", res.Title, "authors", res.Authors)
+		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
