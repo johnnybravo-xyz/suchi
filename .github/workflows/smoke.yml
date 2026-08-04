@@ -123,15 +123,13 @@ jobs:
 
       - name: Assert the pipeline ran the real binaries
         run: |
-          # documents.content should contain the extracted text.
-          docker exec suchi-smoke sqlite3 /data/dms.db \
-              "SELECT id, length(content), substr(content, 1, 200) FROM documents" \
-              | tee /tmp/doc.txt
-          # If pdftotext + qpdf ran, we expect a non-trivial content
-          # length (>50 chars — enough to prove text extraction wasn't
-          # skipped).
-          LEN=$(docker exec suchi-smoke sqlite3 /data/dms.db \
-              "SELECT length(COALESCE(content, '')) FROM documents WHERE id = 1")
+          # Full-image is distro-minimal — no sqlite3 CLI, no shell. Ask
+          # the running server through its own HTTP surface instead.
+          curl -sf "http://127.0.0.1:8000/api/documents/1" \
+              -H "Authorization: Token $API_TOKEN" \
+              -o /tmp/doc.json
+          cat /tmp/doc.json
+          LEN=$(python3 -c "import json; d=json.load(open('/tmp/doc.json')); print(len(d.get('content') or ''))")
           if [ "$LEN" -lt 20 ]; then
               echo "content too short ($LEN chars) — pipeline didn't run against real binaries"
               docker logs suchi-smoke | tail -50
@@ -139,17 +137,25 @@ jobs:
           fi
           echo "content length = $LEN — pipeline OK"
 
-          # FTS trigger should have picked it up.
-          HITS=$(docker exec suchi-smoke sqlite3 /data/dms.db \
-              "SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'electricity'")
-          if [ "$HITS" -lt 1 ]; then
-              echo "FTS didn't index 'electricity' — trigger regressed"
+          # Content must actually include the seed word so we know
+          # pdftotext parsed the text-native PDF (not a spurious blob).
+          if ! python3 -c "import json,sys; c=(json.load(open('/tmp/doc.json')).get('content') or '').lower(); sys.exit(0 if 'electricity' in c else 1)"; then
+              echo "'electricity' missing from content — extraction regressed"
               exit 1
           fi
-          echo "FTS hits for 'electricity' = $HITS — trigger OK"
+          echo "content contains 'electricity' — extraction OK"
 
-          # Rendered-view symlink should exist for doc 1.
-          docker exec suchi-smoke find /data/rendered -type l | head -5
+      - name: Sanity-check the tasks + tags list endpoints return arrays
+        run: |
+          # Regression guard for the empty-list-null bug we hit on this
+          # smoke workflow's first run — mobile clients depend on [].
+          for path in "/api/tasks/?state=done&doc_id=1" "/api/tags/" "/api/rules/"; do
+              curl -sf "http://127.0.0.1:8000$path" \
+                  -H "Authorization: Token $API_TOKEN" \
+                  | python3 -c "import json,sys; r=json.load(sys.stdin).get('results'); sys.exit(0 if isinstance(r, list) else 1)" \
+                || (echo "$path did not return results:list"; exit 1)
+              echo "$path OK"
+          done
 
       - name: Grep the pipeline log for the routing decision
         run: |
