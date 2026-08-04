@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pageanalyze"
@@ -45,6 +47,15 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
+
+// postIngestPayload mirrors the api-side struct — kept as a value-type
+// duplicate rather than a shared package because the shape is tiny
+// and the API is the only other producer today.
+type postIngestPayload struct {
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	MIME   string `json:"mime_type"`
+}
 
 // PostClassifyKind is the job kind the LLM classifier plugin's
 // Subscriber picks up. Post-ingest enqueues one at the tail of Handle
@@ -86,6 +97,7 @@ type Handler struct {
 	limits          ContentLimits
 	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
 	scanBlank       ScanBlank
+	scanSplit       ScanSplit
 }
 
 // ScanBlank carries the per-Handler configuration for blank-page
@@ -94,6 +106,14 @@ type Handler struct {
 type ScanBlank struct {
 	Enabled            bool
 	WhitenessThreshold float64
+}
+
+// ScanSplit carries the per-Handler configuration for multi-doc
+// splitting on QR separator sheets. Zero Token → docsplit's default.
+type ScanSplit struct {
+	Enabled bool
+	Token   string
+	DPI     int
 }
 
 // Option configures a Handler. Zero-arg New() → sane defaults;
@@ -146,6 +166,15 @@ func WithOCREngine(engine string) Option {
 // original is never touched.
 func WithScanBlank(cfg ScanBlank) Option {
 	return func(h *Handler) { h.scanBlank = cfg }
+}
+
+// WithScanSplit enables multi-doc splitting on QR separator sheets.
+// When Enabled=true and the input PDF has separator pages (QR pages
+// carrying Token), post-ingest fans out one sibling document per
+// segment, soft-deletes the parent, and returns without running the
+// downstream chain on the parent.
+func WithScanSplit(cfg ScanSplit) Option {
+	return func(h *Handler) { h.scanSplit = cfg }
 }
 
 // New builds a Handler ready to register with a Dispatcher. The
@@ -251,6 +280,22 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 	pdfBytes := normalized.Data
 
+	// 1a. Multi-doc split on QR separator sheets (opt-in). Runs
+	// BEFORE blank removal so page-number references stay valid.
+	// When separators are found, splitAndFanOut creates one sibling
+	// document per segment (each with its own post-ingest job), soft-
+	// deletes the parent, and returns fanOut=true — we short-circuit
+	// the downstream chain because the children carry it forward.
+	if h.scanSplit.Enabled {
+		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes)
+		if err != nil {
+			log.Warn("post-ingest.scan_split.error", "err", err.Error())
+		}
+		if fanOut {
+			return nil
+		}
+	}
+
 	// 1b. Blank-page removal (opt-in via config). Rasterizes each
 	// page at low DPI and drops those above the whiteness threshold.
 	// Operates on the working copy only — the CAS original stays
@@ -306,6 +351,161 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 
 	return h.postContentSteps(ctx, log, e.DocID)
+}
+
+// splitAndFanOut looks for QR separator sheets in pdfBytes and, if
+// any are found, creates one sibling document per non-separator
+// segment. Each child gets its own qpdf-trimmed PDF (via
+// qpdf.SelectPages), its own CAS put, its own documents row (with
+// split_parent_id back-pointer), and its own fresh post-ingest job.
+// The parent document is soft-deleted after fanout — the CAS blob is
+// untouched, so undelete restores the original if the split was
+// wrong.
+//
+// Returns fanOut=true only when at least one child was created. When
+// no separators are found (or docsplit is skipped for missing
+// binary), returns fanOut=false and the caller continues with the
+// original as a single doc.
+func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte) (bool, error) {
+	plan, err := docsplit.Analyze(ctx, pdfBytes, log, docsplit.Options{
+		Token: h.scanSplit.Token,
+		DPI:   h.scanSplit.DPI,
+	})
+	if err != nil {
+		return false, err
+	}
+	if plan.Skipped || len(plan.SeparatorPages) == 0 {
+		return false, nil
+	}
+	// A separator on every page (edge case) leaves no segments —
+	// keep the original as a single doc rather than trashing it.
+	if len(plan.Segments) == 0 {
+		log.Warn("post-ingest.scan_split.no_segments",
+			"pages", plan.TotalPages, "separators", len(plan.SeparatorPages))
+		return false, nil
+	}
+	log.Info("post-ingest.scan_split.detected",
+		"parent_id", parentID,
+		"pages", plan.TotalPages,
+		"separators", len(plan.SeparatorPages),
+		"segments", len(plan.Segments))
+
+	// Load enough of the parent's row to seed the children — owner,
+	// title, mime, jd_category all copy through.
+	parent, err := h.loadParentForSplit(ctx, parentID)
+	if err != nil {
+		return false, fmt.Errorf("load parent for split: %w", err)
+	}
+
+	for i, seg := range plan.Segments {
+		segBytes, err := h.extractSegment(ctx, log, pdfBytes, seg)
+		if err != nil {
+			log.Warn("post-ingest.scan_split.extract_failed",
+				"segment", i+1, "err", err.Error())
+			continue
+		}
+		if err := h.createSplitChild(ctx, log, parent, parentID, i+1, seg, segBytes); err != nil {
+			log.Warn("post-ingest.scan_split.child_failed",
+				"segment", i+1, "err", err.Error())
+			continue
+		}
+	}
+	// Soft-delete the parent so the workspace only shows children.
+	// CAS blob is still referenced by the trashed row, so gc leaves it.
+	if err := h.softDeleteParent(ctx, parentID); err != nil {
+		return true, fmt.Errorf("soft-delete parent: %w", err)
+	}
+	return true, nil
+}
+
+// splitParent is the projection of the parent doc row needed to seed
+// its split children.
+type splitParent struct {
+	OwnerID      int64
+	Title        string
+	MIME         string
+	JDCategoryID int64
+}
+
+func (h *Handler) loadParentForSplit(ctx context.Context, docID int64) (*splitParent, error) {
+	p := &splitParent{}
+	var mimeNull sql.NullString
+	err := h.db.Read.QueryRowContext(ctx, `
+		SELECT owner_id, title, COALESCE(mime_type, ''), jd_category_id
+		FROM documents WHERE id = ?
+	`, docID).Scan(&p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID)
+	if err != nil {
+		return nil, err
+	}
+	if mimeNull.Valid {
+		p.MIME = mimeNull.String
+	}
+	return p, nil
+}
+
+func (h *Handler) extractSegment(ctx context.Context, log *slog.Logger, pdfBytes []byte, seg docsplit.Segment) ([]byte, error) {
+	res, err := qpdf.SelectPages(ctx, pdfBytes, seg.Pages(), log, qpdf.Options{})
+	if err != nil {
+		return nil, err
+	}
+	if res.Skipped {
+		return nil, fmt.Errorf("qpdf select-pages skipped: %s", res.StderrTail)
+	}
+	return res.Data, nil
+}
+
+// createSplitChild does the (blob put + document row + post-ingest
+// job) triple in one tx so a child either fully lands or not at all.
+func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent *splitParent, parentID int64, index int, seg docsplit.Segment, segBytes []byte) error {
+	ref, err := h.cas.Put(bytes.NewReader(segBytes))
+	if err != nil {
+		return fmt.Errorf("cas put: %w", err)
+	}
+	// Title suffix disambiguates children in list views. Trim any
+	// existing " (part N/M)" suffix if we're re-splitting a doc.
+	title := fmt.Sprintf("%s (part %d/%d)", parent.Title, index, seg.PageCount())
+	if parent.Title == "" {
+		title = fmt.Sprintf("Untitled (part %d)", index)
+	}
+
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix()
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO documents(
+				owner_id, original_blob, original_size, title, mime_type,
+				jd_category_id, added_at, created_at, updated_at,
+				split_parent_id, split_index
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
+			parent.JDCategoryID, now, now, now,
+			parentID, index)
+		if err != nil {
+			return err
+		}
+		childID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(postIngestPayload{
+			SHA256: ref.SHA256, Size: ref.Size, MIME: parent.MIME,
+		})
+		if err := jobs.Enqueue(ctx, tx, Kind, childID, string(payload)); err != nil {
+			return err
+		}
+		log.Info("post-ingest.scan_split.child_created",
+			"parent_id", parentID, "child_id", childID,
+			"index", index, "pages", seg.PageCount())
+		return nil
+	})
+}
+
+func (h *Handler) softDeleteParent(ctx context.Context, docID int64) error {
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE documents SET trashed_at = ?, updated_at = ? WHERE id = ?
+		`, time.Now().Unix(), time.Now().Unix(), docID)
+		return err
+	})
 }
 
 // trimBlankPages analyses pdfBytes with pageanalyze and, if any pages
