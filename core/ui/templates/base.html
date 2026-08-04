@@ -19,7 +19,9 @@
       {{ end }}
     </nav>
     <div class="topbar-actions">
-      <a class="btn btn-primary" href="/upload">+ {{ msg "nav.upload" }}</a>
+      <form action="/upload" method="get" style="margin:0">
+        <button type="submit">+ {{ msg "nav.upload" }}</button>
+      </form>
       {{ if .Principal }}
         <div class="me">{{ .Principal.Email }}</div>
       {{ end }}

@@ -50,6 +50,68 @@ doc.detail.decrypt.desc: This document is password-protected. Supply the user pa
 nav.pending_decryption: Pending decryption
 nav.upload: Upload
 nav.mail_setup: Mail
+nav.setup: Setup
+
+# Setup wizard
+setup.title: Setup
+setup.subtitle: One-time onboarding, but come back any time to reconfigure.
+setup.next: Continue
+setup.skip: Skip
+setup.complete_button: Mark setup complete
+setup.complete_hint: Hides this page from the topbar. You can still return via /admin/setup.
+
+setup.welcome.title: Welcome
+setup.welcome.body: This wizard walks you through the pieces most operators tweak on day one. Nothing here is required — every step is skippable and you can revisit later.
+
+setup.users.title: Users
+setup.users.body: Add household members or teammates who should sign in.
+setup.users.field.email: Email
+setup.users.field.password: Password (min 8 chars)
+setup.users.field.display_name: Display name (optional)
+setup.users.field.role: Role
+setup.users.submit: Create user
+
+setup.mail.title: Mail ingest
+setup.mail.body: Pull attachments and message bodies from an IMAP mailbox. Runs alongside filesystem-watch and API uploads.
+setup.mail.open: Open the mail wizard
+setup.mail.disabled: The mail wizard is disabled. Set MAIL_SETUP_ENV_PATH (see the deploy recipe) to enable.
+setup.mail.done: Done with mail
+
+setup.llm.title: LLM classifier
+setup.llm.body: An optional plugin that classifies documents via an OpenAI-compatible endpoint (Ollama, LM Studio, cloud vendors, etc.).
+setup.llm.field.endpoint: Endpoint URL
+setup.llm.field.model: Model
+setup.llm.field.api_key: API key
+setup.llm.field.egress_ack: I understand document text will leave this box.
+setup.llm.note: The classifier reads its config at boot today — a restart applies changes.
+setup.llm.save: Save
+
+setup.jd.title: Taxonomy
+setup.jd.body: Pick a Johnny Decimal preset that matches your use case. The blank slate is opt-in — nearly nobody wants it long-term.
+setup.jd.apply: Apply preset
+setup.jd.confirm_blank: I understand the blank slate leaves only an Inbox category and is harder to migrate away from.
+
+setup.rules.title: Rules
+setup.rules.body: The rules engine tags documents automatically. Skip for now, or wire rules via /api/rules/.
+setup.rules.link: View rules API
+setup.rules.done: Done with rules
+
+setup.sources.title: Ingest sources
+setup.sources.body: Filesystem-watch drops any file into a folder and suchi ingests it — great for scanners.
+setup.sources.field.dir: Watch directory (absolute path)
+setup.sources.field.owner: Owner email
+setup.sources.note: Runtime picks these up on next restart.
+setup.sources.save: Save
+
+setup.preferences.title: Preferences
+setup.preferences.body: Backup schedule + OCR language(s) applied to scanned PDFs.
+setup.preferences.field.backup: Backup interval (hours; 0 = disable)
+setup.preferences.field.ocr_langs: OCR languages (comma-separated ISO codes)
+setup.preferences.save: Save
+
+setup.done.title: Setup complete
+setup.done.body: Nothing else to do. Come back via /admin/setup to reconfigure any step.
+setup.done.home_link: Back to documents
 
 # Mail setup wizard (admin-only)
 mailsetup.title: Mail ingest

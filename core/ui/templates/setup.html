@@ -1,0 +1,184 @@
+{{define "setup"}}{{ template "base" . }}{{end}}
+
+{{define "title"}}{{ msg "setup.title" }}{{end}}
+
+{{define "content"}}
+<article class="card">
+  <h1>{{ msg "setup.title" }}</h1>
+  <p>{{ msg "setup.subtitle" }}</p>
+  <p><small>{{ .DoneCount }} of {{ .TotalSteps }} — no step blocks progress; skip and revisit any time.</small></p>
+</article>
+
+<article class="card">
+  <ol class="steps-recap">
+    {{ range .Steps }}
+      <li>
+        <a href="?step={{ .Name }}">
+          <strong>{{ .Index }}. {{ .Title }}</strong>
+          <span class="badge{{ if eq .Status "done" }} outline{{ end }}" data-variant="{{ if eq .Status "done" }}success{{ else if eq .Status "skipped" }}warning{{ else }}secondary{{ end }}">{{ .StatusLabel }}</span>
+          <br><small>{{ .Hint }}</small>
+        </a>
+      </li>
+    {{ end }}
+  </ol>
+</article>
+
+{{ if eq .CurrentStep "welcome" }}
+  <article class="card">
+    <h2>{{ msg "setup.welcome.title" }}</h2>
+    <p>{{ msg "setup.welcome.body" }}</p>
+    <form class="setup-step-form" data-step="welcome" data-mode="mark-done">
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.next" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "users" }}
+  <article class="card">
+    <h2>{{ msg "setup.users.title" }}</h2>
+    <p>{{ msg "setup.users.body" }}</p>
+    <form class="setup-step-form" data-step="users" data-endpoint="/api/admin/users">
+      <label>{{ msg "setup.users.field.email" }}<input name="email" type="email" required></label>
+      <label>{{ msg "setup.users.field.password" }}<input name="password" type="password" minlength="8" required></label>
+      <label>{{ msg "setup.users.field.display_name" }}<input name="display_name"></label>
+      <label>{{ msg "setup.users.field.role" }}
+        <select name="role">
+          <option value="member">Member</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.users.submit" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+        <span data-status></span>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "mail" }}
+  <article class="card">
+    <h2>{{ msg "setup.mail.title" }}</h2>
+    <p>{{ msg "setup.mail.body" }}</p>
+    {{ if .MailSetupEnabled }}
+      <p><a href="/admin/mail-setup"><button type="button">{{ msg "setup.mail.open" }}</button></a></p>
+    {{ else }}
+      <p><em>{{ msg "setup.mail.disabled" }}</em></p>
+    {{ end }}
+    <form class="setup-step-form" data-step="mail" data-mode="mark-done">
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.mail.done" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "llm" }}
+  <article class="card">
+    <h2>{{ msg "setup.llm.title" }}</h2>
+    <p>{{ msg "setup.llm.body" }}</p>
+    <form class="setup-step-form" data-step="llm" data-endpoint="/api/admin/settings/llm">
+      <label>{{ msg "setup.llm.field.endpoint" }}<input name="endpoint_url" placeholder="http://127.0.0.1:11434/v1"></label>
+      <label>{{ msg "setup.llm.field.model" }}<input name="model" placeholder="llama3.1:8b"></label>
+      <label>{{ msg "setup.llm.field.api_key" }}<input name="api_key" type="password" placeholder="(only for cloud endpoints)"></label>
+      <label><input name="egress_ack" type="checkbox" value="true"> {{ msg "setup.llm.field.egress_ack" }}</label>
+      <p><small>{{ msg "setup.llm.note" }}</small></p>
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.llm.save" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+        <span data-status></span>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "jd" }}
+  <article class="card">
+    <h2>{{ msg "setup.jd.title" }}</h2>
+    <p>{{ msg "setup.jd.body" }}</p>
+    <form class="setup-step-form" data-step="jd" data-endpoint="/api/admin/setup/jd-preset">
+      {{ range .JDPresets }}
+        <label>
+          <input type="radio" name="preset_id" value="{{ .ID }}"{{ if .Blank }} data-confirms="confirm_blank"{{ end }}>
+          <strong>{{ .Label }}</strong> — <small>{{ .Description }}</small>
+        </label>
+      {{ end }}
+      <label id="confirm-blank-wrap" hidden>
+        <input type="checkbox" name="confirm_blank" value="true">
+        {{ msg "setup.jd.confirm_blank" }}
+      </label>
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.jd.apply" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+        <span data-status></span>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "rules" }}
+  <article class="card">
+    <h2>{{ msg "setup.rules.title" }}</h2>
+    <p>{{ msg "setup.rules.body" }}</p>
+    <p><a href="/api/rules/">{{ msg "setup.rules.link" }}</a></p>
+    <form class="setup-step-form" data-step="rules" data-mode="mark-done">
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.rules.done" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "sources" }}
+  <article class="card">
+    <h2>{{ msg "setup.sources.title" }}</h2>
+    <p>{{ msg "setup.sources.body" }}</p>
+    <form class="setup-step-form" data-step="sources" data-endpoint="/api/admin/settings/ingest">
+      <label>{{ msg "setup.sources.field.dir" }}<input name="fs_watch_dir" placeholder="/data/staging"></label>
+      <label>{{ msg "setup.sources.field.owner" }}<input name="fs_watch_owner_email" type="email"></label>
+      <p><small>{{ msg "setup.sources.note" }}</small></p>
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.sources.save" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+        <span data-status></span>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if eq .CurrentStep "preferences" }}
+  <article class="card">
+    <h2>{{ msg "setup.preferences.title" }}</h2>
+    <p>{{ msg "setup.preferences.body" }}</p>
+    <form class="setup-step-form" data-step="preferences" data-endpoint="/api/admin/settings/preferences">
+      <label>{{ msg "setup.preferences.field.backup" }}<input name="backup_interval_hours" type="number" min="0" max="720" value="24"></label>
+      <label>{{ msg "setup.preferences.field.ocr_langs" }}<input name="ocr_languages_csv" value="eng"></label>
+      <div class="hstack">
+        <button type="submit">{{ msg "setup.preferences.save" }}</button>
+        <button type="button" data-variant="secondary" data-skip>{{ msg "setup.skip" }}</button>
+        <span data-status></span>
+      </div>
+    </form>
+  </article>
+{{ end }}
+
+{{ if .Completed }}
+  <div role="alert" data-variant="success">
+    <strong>{{ msg "setup.done.title" }}</strong>
+    <p>{{ msg "setup.done.body" }}</p>
+    <p><a href="/">{{ msg "setup.done.home_link" }}</a></p>
+  </div>
+{{ else }}
+  <form id="setup-complete-form">
+    <button type="submit" data-variant="secondary">{{ msg "setup.complete_button" }}</button>
+    <small>{{ msg "setup.complete_hint" }}</small>
+  </form>
+{{ end }}
+
+<script src="/assets/setup.js" defer></script>
+{{end}}
