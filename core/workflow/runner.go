@@ -151,6 +151,14 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	// Park on task creation.
 	if res.Task != nil {
+		// Validate the assignee before the write. A malformed user:N
+		// or an unwired role:X fails the advance cleanly — the job
+		// retries with backoff, eventually goes state=dead, and the
+		// run stays in state=running so once the operator fixes the
+		// resolver they can re-drive it.
+		if _, err := e.resolver.Resolve(ctx, res.Task.Assignee); err != nil {
+			return err
+		}
 		var deadline *int64
 		secs := res.Task.DeadlineIn
 		if secs == 0 {

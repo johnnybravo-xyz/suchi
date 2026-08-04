@@ -36,4 +36,15 @@ var (
 	// ErrForbidden is returned when the caller isn't allowed to
 	// resolve/cancel (i.e. not the assignee or an admin).
 	ErrForbidden = errors.New("workflow: forbidden")
+
+	// ErrBadAssignee means an approve-kind state used an assignee
+	// string the default resolver doesn't accept — malformed or
+	// referencing a non-positive user id.
+	ErrBadAssignee = errors.New("workflow: bad assignee format")
+
+	// ErrRoleUnresolved is returned when a role:X assignee lands on a
+	// task and no external AssigneeResolver has been wired via
+	// Engine.SetAssigneeResolver. Enterprise deployments plug in the
+	// resolver; without it, role-based assignment cannot be honored.
+	ErrRoleUnresolved = errors.New("workflow: role assignee requires an AssigneeResolver")
 )

@@ -42,18 +42,22 @@ import (
 // Engine is the runtime that holds the DB handle + handler registry.
 // One per process; safe for concurrent use.
 type Engine struct {
-	db  *db.DB
-	log *slog.Logger
-	reg *registry
+	db       *db.DB
+	log      *slog.Logger
+	reg      *registry
+	resolver AssigneeResolver
 }
 
-// New builds an Engine with only the built-in handlers registered.
-// Additional handlers can be added via engine.RegisterHandler.
+// New builds an Engine with only the built-in handlers registered and
+// the default user-only assignee resolver. Additional handlers land
+// via engine.RegisterHandler; role-aware assignee resolution lands via
+// engine.SetAssigneeResolver.
 func New(d *db.DB, log *slog.Logger) *Engine {
 	e := &Engine{
-		db:  d,
-		log: log.With("component", "workflow"),
-		reg: newRegistry(),
+		db:       d,
+		log:      log.With("component", "workflow"),
+		reg:      newRegistry(),
+		resolver: userOnlyResolver{},
 	}
 	// Built-in handlers. Additions are cheap: implement Handler, call
 	// engine.RegisterHandler(h) at boot.
@@ -67,6 +71,17 @@ func New(d *db.DB, log *slog.Logger) *Engine {
 // after Run — call at boot.
 func (e *Engine) RegisterHandler(h Handler) {
 	e.reg.Register(h)
+}
+
+// SetAssigneeResolver swaps in an external resolver — the seam an
+// enterprise RBAC package plugs into to expand "role:X" assignees into
+// concrete users. Passing nil restores the built-in user-only default.
+// Call at boot; not safe to swap while runs are advancing.
+func (e *Engine) SetAssigneeResolver(r AssigneeResolver) {
+	if r == nil {
+		r = userOnlyResolver{}
+	}
+	e.resolver = r
 }
 
 // DB returns the engine's DB handle. Used by API handlers reading

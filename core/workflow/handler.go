@@ -2,6 +2,9 @@ package workflow
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -127,4 +130,43 @@ func (endHandler) Handle(_ context.Context, _ Run, _ State, _ string) (HandlerRe
 	// Runner special-cases "end" — this method exists to keep the
 	// registry lookup honest.
 	return HandlerResult{Event: ""}, nil
+}
+
+// ---------- assignee resolution ----------
+
+// AssigneeResolver validates that a task assignee string is claimable
+// before the runner writes a workflow_tasks row. Called inside the
+// runner's write tx, so a returned error aborts task creation cleanly.
+//
+// The default resolver (built-in, wired by New) accepts "user:N" only.
+// Enterprise deployments override via Engine.SetAssigneeResolver to
+// add "role:X" resolution against their own membership tables.
+//
+// Resolve returns the concrete user id(s) the assignee expands to.
+// The runner doesn't use the list today — the /api/tasks/ listing
+// runs its own query — but the return type is reserved for fair
+// dispatch (round-robin per role) landing later.
+type AssigneeResolver interface {
+	Resolve(ctx context.Context, assignee string) ([]int64, error)
+}
+
+// userOnlyResolver is the built-in default. Accepts "user:N" where N
+// is a positive integer; rejects "role:*" with ErrRoleUnresolved so
+// operators know they need to wire an external resolver.
+type userOnlyResolver struct{}
+
+// Resolve implements AssigneeResolver.
+func (userOnlyResolver) Resolve(_ context.Context, assignee string) ([]int64, error) {
+	switch {
+	case strings.HasPrefix(assignee, "user:"):
+		n, err := strconv.ParseInt(strings.TrimPrefix(assignee, "user:"), 10, 64)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("%w: %q", ErrBadAssignee, assignee)
+		}
+		return []int64{n}, nil
+	case strings.HasPrefix(assignee, "role:"):
+		return nil, fmt.Errorf("%w: %q", ErrRoleUnresolved, assignee)
+	default:
+		return nil, fmt.Errorf("%w: %q (want user:N or role:X)", ErrBadAssignee, assignee)
+	}
 }
