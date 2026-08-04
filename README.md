@@ -105,19 +105,18 @@ For a full end-to-end run against real binaries, see `.github/workflows/smoke.ym
 
 ## Serving the docs
 
-Docs are Mintlify MDX under `docs/`, indexed by `docs.json`. Preview locally:
+Docs are Mintlify MDX under `docs/`, indexed by `docs/docs.json`. Mintlify resolves page paths relative to `docs.json`, so **run the CLI from inside `docs/`**:
 
 ```sh
-npm i -g mintlify        # one-time
-mintlify dev             # from repo root; serves on http://127.0.0.1:3000
+cd docs
+bunx mint dev             # or: npx mint@latest dev (Node) — serves on http://127.0.0.1:3000
 ```
 
-`mintlify dev` watches `docs/` and hot-reloads on save. It reads `docs.json` from the current directory, so run it at the repo root.
-
-To validate before pushing:
+The dev server watches `.mdx` files and hot-reloads on save. To validate before pushing:
 
 ```sh
-mintlify broken-links    # dead-link check
+cd docs
+bunx mint broken-links
 ```
 
 Production docs deploy is Mintlify-hosted (zero config beyond `docs.json` — see the Mintlify dashboard for the deploy pipeline).
