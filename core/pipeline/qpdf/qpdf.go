@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/suchi-dms/suchi/core/sandbox"
@@ -144,6 +145,93 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 		"took", time.Since(start).String(),
 	)
 	return &Result{Data: res.Stdout, StderrTail: tail(res.Stderr), Duration: res.Duration}, nil
+}
+
+// SelectPages returns pdfBytes with only the pages listed in `pages`
+// (1-indexed, ascending) kept. Empty or nil pages is a no-op (returns
+// the input verbatim). Missing binary → Skipped=true, input passed
+// through unchanged so callers never lose data.
+//
+// Uses qpdf's --pages selector: `qpdf --pages in.pdf 1,3-5 -- out.pdf`.
+// The selector is built from `pages` deterministically (contiguous
+// runs collapse into "3-5" ranges) so a re-run against the same input
+// produces identical bytes — Byte-equal, dedup-friendly.
+func SelectPages(ctx context.Context, pdfBytes []byte, pages []int, log *slog.Logger, opts Options) (*Result, error) {
+	log = log.With("component", "qpdf.select-pages")
+	if len(pages) == 0 {
+		return &Result{Data: pdfBytes, Skipped: true, StderrTail: "no pages to select"}, nil
+	}
+
+	binary := opts.Binary
+	if binary == "" {
+		binary = DefaultBinary
+	}
+	if _, err := exec.LookPath(binary); err != nil {
+		log.Info("qpdf.select-pages.skip.no_binary", "binary", binary)
+		return &Result{Data: pdfBytes, Skipped: true, StderrTail: "qpdf binary not on PATH"}, nil
+	}
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = DefaultTimeout
+	}
+	maxSize := opts.MaxSize
+	if maxSize == 0 {
+		maxSize = DefaultMaxSize
+	}
+
+	dir, err := os.MkdirTemp("", "suchi-qpdf-select-")
+	if err != nil {
+		return nil, fmt.Errorf("mkdtemp: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	inputPath := filepath.Join(dir, "in.pdf")
+	if err := os.WriteFile(inputPath, pdfBytes, 0o600); err != nil {
+		return nil, fmt.Errorf("write input: %w", err)
+	}
+
+	selector := buildPageRanges(pages)
+	start := time.Now()
+	res, err := sandbox.Run(ctx, sandbox.Opts{
+		Args:      []string{binary, "in.pdf", "--pages", ".", selector, "--", "-"},
+		Timeout:   timeout,
+		MaxStdout: maxSize,
+		Dir:       dir,
+	})
+	if err != nil {
+		if errors.Is(err, sandbox.ErrTimeout) {
+			return nil, fmt.Errorf("qpdf select-pages timeout after %s", res.Duration)
+		}
+		log.Info("qpdf.select-pages.skip.exit_nonzero",
+			"exit", res.ExitCode, "stderr", tail(res.Stderr))
+		return &Result{Data: pdfBytes, Skipped: true, StderrTail: tail(res.Stderr), Duration: res.Duration}, nil
+	}
+	if res.StdoutTruncated {
+		return nil, fmt.Errorf("qpdf select-pages: output exceeded cap %d bytes", maxSize)
+	}
+	return &Result{Data: res.Stdout, Duration: time.Since(start)}, nil
+}
+
+// buildPageRanges collapses [1,2,3,5,7,8] → "1-3,5,7-8". Assumes input
+// is sorted ascending with no duplicates (caller's contract).
+func buildPageRanges(pages []int) string {
+	var parts []string
+	i := 0
+	for i < len(pages) {
+		start := pages[i]
+		end := start
+		for i+1 < len(pages) && pages[i+1] == end+1 {
+			end++
+			i++
+		}
+		if start == end {
+			parts = append(parts, fmt.Sprintf("%d", start))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", start, end))
+		}
+		i++
+	}
+	return strings.Join(parts, ",")
 }
 
 // writeAll streams r into path. Overwrites on collision.

@@ -1,6 +1,6 @@
 # suchi
 
-**suchi** (Sanskrit *सूची*, "an index, a catalog, a list") — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and wire-compatible with the Paperless-ngx mobile ecosystem.
+**suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and wire-compatible with the Paperless-ngx mobile ecosystem.
 
 Status: **pre-alpha** — Phase 2 shipping. Not for production use. Repo is private until Phase 4.
 
@@ -38,15 +38,16 @@ Every module has its own `go.mod`; `go.work` links them so `go build ./...` at t
 
 **Build**: Go 1.25+.
 
-**Runtime**: none for the slim binary. For the full ingest pipeline install the external tools you want active — each degrades gracefully when absent:
+**Runtime**: for the full ingest pipeline install the external tools you want active — each degrades gracefully when absent:
 
 - `qpdf` — normalization (strip restrictions, decrypt empty-user-password PDFs)
-- `pdftotext` from `poppler-utils` — text-native shortcut in pdf-inspector
-- `ocrmypdf` + `tesseract-ocr` — scanned-PDF path; emits searchable archive + text sidecar
+- `pdftotext` + `pdftoppm` from `poppler-utils` — text-native shortcut in pdf-inspector; also drives the built-in `tessocr` OCR path and blank-page detection
+- `tesseract-ocr` (+ language data) — required by the `tessocr` OCR engine (default in slim) and by `ocrmypdf`
+- `ocrmypdf` — optional; produces a searchable-PDF archive in addition to text (default engine in the full image)
 - `djvutxt` from `djvulibre-bin` — DjVu text extraction
 - `ghostscript` — used by ocrmypdf and (in CI) to build the smoke fixture
 
-The Docker `full` target ships all of them; the `slim` target ships none.
+The Docker `slim` image ships qpdf + poppler-utils + tesseract (full PDF pipeline via `tessocr`, ~70 MB). The `full` image adds ocrmypdf + djvulibre + libreoffice-core (~1 GB) — pick full when you want the searchable-PDF archive or DjVu ingest.
 
 ## Development
 
