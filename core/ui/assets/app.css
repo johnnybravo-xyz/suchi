@@ -68,6 +68,13 @@ table.rows tbody tr:hover { background: #f6f5f1; }
 .doc-detail .notes li { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .doc-detail .notes time { color: var(--muted); font-size: 12px; margin-right: 12px; }
 
+.doc-detail .custom-fields { margin-top: 32px; }
+.doc-detail .custom-fields dl { display: grid; grid-template-columns: 200px 1fr; gap: 6px 12px; font-size: 13px; }
+.doc-detail .custom-fields dt { color: var(--muted); font-family: var(--mono, monospace); }
+.doc-detail .custom-fields dd { margin: 0; }
+.doc-detail .custom-fields dd.cf-monetary { font-variant-numeric: tabular-nums; }
+.doc-detail .custom-fields dd.cf-date { font-variant-numeric: tabular-nums; color: var(--muted); }
+
 body.auth { display: grid; place-items: center; min-height: 100vh; }
 .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 340px; }
 .login-card h1 { text-align: center; margin: 0 0 20px 0; font-size: 28px; }
