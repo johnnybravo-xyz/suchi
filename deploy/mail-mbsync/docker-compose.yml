@@ -56,9 +56,25 @@ services:
     user: "${MAIL_UID:-1000}:${MAIL_GID:-1000}"
     env_file:
       - config/.env
+    environment:
+      # Mail-setup wizard: rewrites ./config/.env from the browser and
+      # kicks the mbsync container via docker.sock. Both are opt-in —
+      # unset either env var to disable the wizard route.
+      MAIL_SETUP_ENV_PATH: /etc/suchi/mail-config/.env
+      MAIL_SETUP_CONTAINER: suchi-mail-mbsync
+      MAIL_SETUP_DOCKER_SOCK: /var/run/docker.sock
     volumes:
       - ./suchi-data:/data
       - ./ingest:/ingest
+      # Wizard's write target. Bind-mount the DIRECTORY (not the file)
+      # so suchi's tempfile+rename atomic write survives — bind-mounting
+      # a single file locks its inode and rename() would silently split
+      # the host + container views.
+      - ./config:/etc/suchi/mail-config
+      # docker.sock so the wizard can POST /containers/<mbsync>/restart
+      # after a successful rewrite. Root-equivalent access — delete the
+      # line if you'd rather restart mbsync manually.
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${SUCHI_PORT:-8000}:8000"
     networks:
