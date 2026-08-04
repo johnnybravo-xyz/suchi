@@ -54,6 +54,14 @@ type Config struct {
 	LLMModel       string
 	LLMAPIKey      string
 	LLMEgressAck   bool
+
+	// Per-format max content byte caps for documents.content extraction.
+	// Ebook formats default higher because a novel/textbook can legitimately
+	// exceed the PDF-oriented default. Truncation is silent + logged at
+	// Warn — the doc is still ingested, FTS still works over what fit.
+	PdfMaxContentBytes  int64 // pdftotext output cap (default 8 MiB)
+	EpubMaxContentBytes int64 // concatenated XHTML text cap (default 32 MiB)
+	DjvuMaxContentBytes int64 // djvutxt stdout cap (default 32 MiB)
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -87,6 +95,15 @@ func Load() (*Config, error) {
 	}
 	if c.BackupInterval, err = time.ParseDuration(env("BACKUP_INTERVAL", "24h")); err != nil {
 		return nil, fmt.Errorf("BACKUP_INTERVAL: %w", err)
+	}
+	if c.PdfMaxContentBytes, err = parseBytes(env("PDF_MAX_CONTENT_BYTES", "8M")); err != nil {
+		return nil, fmt.Errorf("PDF_MAX_CONTENT_BYTES: %w", err)
+	}
+	if c.EpubMaxContentBytes, err = parseBytes(env("EPUB_MAX_CONTENT_BYTES", "32M")); err != nil {
+		return nil, fmt.Errorf("EPUB_MAX_CONTENT_BYTES: %w", err)
+	}
+	if c.DjvuMaxContentBytes, err = parseBytes(env("DJVU_MAX_CONTENT_BYTES", "32M")); err != nil {
+		return nil, fmt.Errorf("DJVU_MAX_CONTENT_BYTES: %w", err)
 	}
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.

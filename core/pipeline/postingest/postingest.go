@@ -52,6 +52,15 @@ const PostClassifyKind = "post-classify"
 // Kind is the job.kind value the outbox uses.
 const Kind = "post-ingest"
 
+// ContentLimits carries the per-format byte caps applied when writing
+// documents.content. Zero-valued entries fall back to the extractor's
+// package-level DefaultMaxTextBytes.
+type ContentLimits struct {
+	PDF  int64
+	EPUB int64
+	DjVu int64
+}
+
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
 // documents row with content + optional archive_blob, runs the
 // rules-engine classifier, refreshes the rendered-view symlink, and
@@ -64,6 +73,7 @@ type Handler struct {
 	langs           []string
 	render          *view.Renderer // optional — nil disables rendered-view
 	enqueueClassify bool           // true when an LLM classifier is registered
+	limits          ContentLimits
 }
 
 // New builds a Handler ready to register with a Dispatcher.
@@ -71,8 +81,10 @@ type Handler struct {
 // langs is the list of tesseract languages passed to ocrmypdf when
 // OCR fires. Empty defaults to ["eng"]. render is optional; nil
 // disables the rendered-view projection (bare-metal deployments or
-// tests that don't care about the symlink tree).
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer, enqueueClassify bool) *Handler {
+// tests that don't care about the symlink tree). limits.PDF/EPUB/DjVu
+// override the extractor package defaults when non-zero — main wires
+// them from config.
+func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer, enqueueClassify bool, limits ContentLimits) *Handler {
 	if len(langs) == 0 {
 		langs = []string{"eng"}
 	}
@@ -83,6 +95,7 @@ func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Rend
 		langs:           langs,
 		render:          r,
 		enqueueClassify: enqueueClassify,
+		limits:          limits,
 	}
 }
 
@@ -124,11 +137,13 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	// DjVu path: djvutxt extracts the embedded text layer.
 	if djvu.Recognized(mime) {
-		res, err := djvu.Extract(ctx, bytes.NewReader(origBytes), log, djvu.Options{})
+		res, err := djvu.Extract(ctx, bytes.NewReader(origBytes), log,
+			djvu.Options{MaxTextBytes: h.limits.DjVu})
 		if err != nil {
 			return fmt.Errorf("djvu: %w", err)
 		}
-		log.Info("post-ingest.route.djvu", "non_blank", res.NonBlank, "skipped", res.Skipped)
+		log.Info("post-ingest.route.djvu",
+			"non_blank", res.NonBlank, "skipped", res.Skipped, "truncated", res.Truncated)
 		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
 		}
@@ -140,7 +155,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// today; hooking it into custom fields lives with the other exotic
 	// formats when they land.
 	if epub.Recognized(mime) {
-		res, err := epub.Extract(origBytes, log, epub.Options{})
+		res, err := epub.Extract(origBytes, log, epub.Options{MaxTextBytes: h.limits.EPUB})
 		if err != nil {
 			log.Warn("post-ingest.epub.error", "err", err.Error())
 		}
@@ -149,6 +164,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		log.Info("post-ingest.route.epub",
 			"spine", res.SpineLen, "non_blank", res.NonBlank,
+			"truncated", res.Truncated,
 			"title", res.Title, "authors", res.Authors)
 		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
@@ -169,7 +185,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	pdfBytes := normalized.Data
 
 	// 2. pdf-inspector
-	ins, err := pdfinspector.Extract(ctx, bytes.NewReader(pdfBytes), log, pdfinspector.Options{})
+	ins, err := pdfinspector.Extract(ctx, bytes.NewReader(pdfBytes), log,
+		pdfinspector.Options{MaxTextBytes: h.limits.PDF})
 	if err != nil {
 		return fmt.Errorf("pdf-inspector: %w", err)
 	}

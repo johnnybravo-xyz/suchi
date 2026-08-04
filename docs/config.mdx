@@ -25,6 +25,9 @@ around").
 | `SESSION_KEY_FILE` | `$DATA_DIR/.session-key` | Signed-cookie key. Auto-generated 0600 on first boot. |
 | `BACKUP_INTERVAL` | `24h` | `VACUUM INTO` snapshot cadence. `0` disables. |
 | `OCR_LANGUAGES` | `eng` | Comma-separated tesseract langs; shortcut for the OCR plugin's config. |
+| `PDF_MAX_CONTENT_BYTES` | `8M` | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit. |
+| `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on the concatenated XHTML text of an EPUB. Bigger than the PDF default because ebooks routinely exceed it (novels are fine, textbooks may still truncate). |
+| `DJVU_MAX_CONTENT_BYTES` | `32M` | Cap on `djvutxt` output length. Same reasoning as EPUB. |
 
 ## TLS
 

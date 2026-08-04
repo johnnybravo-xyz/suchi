@@ -257,7 +257,12 @@ func runServe() int {
 	// classifier is registered — hands off to it via a post-classify
 	// job.
 	disp := jobs.New(d, log)
-	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages, renderer, llm != nil))
+	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages, renderer, llm != nil,
+		postingest.ContentLimits{
+			PDF:  cfg.PdfMaxContentBytes,
+			EPUB: cfg.EpubMaxContentBytes,
+			DjVu: cfg.DjvuMaxContentBytes,
+		}))
 	if llm != nil {
 		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
 	}

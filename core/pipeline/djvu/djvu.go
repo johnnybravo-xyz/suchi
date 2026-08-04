@@ -25,9 +25,12 @@ import (
 )
 
 const (
-	DefaultBinary       = "djvutxt"
-	DefaultTimeout      = 30 * time.Second
-	DefaultMaxTextBytes = 8 * 1024 * 1024
+	DefaultBinary  = "djvutxt"
+	DefaultTimeout = 30 * time.Second
+	// DefaultMaxTextBytes matches EPUB's cap because DjVu is a similar
+	// full-book scan format. Overridden per-instance via
+	// config.DjvuMaxContentBytes.
+	DefaultMaxTextBytes = 32 * 1024 * 1024
 	HasTextThreshold    = 32
 )
 
@@ -43,6 +46,7 @@ type Result struct {
 	Text       string
 	HasText    bool
 	Skipped    bool
+	Truncated  bool // djvutxt output exceeded MaxTextBytes; kept what fit
 	NonBlank   int
 	Duration   time.Duration
 	StderrTail string
@@ -103,7 +107,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		return &Result{Skipped: true, StderrTail: tail(res.Stderr), Duration: dur}, nil
 	}
 	if res.StdoutTruncated {
-		return nil, fmt.Errorf("djvu: extracted text exceeded cap %d bytes", maxText)
+		log.Warn("djvu.truncated", "cap_bytes", maxText)
 	}
 
 	text := string(res.Stdout)
@@ -111,6 +115,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	return &Result{
 		Text:       text,
 		HasText:    nonBlank >= HasTextThreshold,
+		Truncated:  res.StdoutTruncated,
 		NonBlank:   nonBlank,
 		Duration:   dur,
 		StderrTail: tail(res.Stderr),
