@@ -19,6 +19,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/mailsetup"
 )
 
 // Server bundles the state every /api handler needs. Constructed once
@@ -27,12 +28,13 @@ import (
 // Jobs is optional — when set, the upload handler nudges the
 // dispatcher after enqueuing post-ingest work. Tests can leave it nil.
 type Server struct {
-	DB       *db.DB
-	CAS      *blob.CAS
-	Log      *slog.Logger
-	Jobs     *jobs.Dispatcher
-	decrypt  DecryptDeps
-	webhooks WebhookDeps
+	DB        *db.DB
+	CAS       *blob.CAS
+	Log       *slog.Logger
+	Jobs      *jobs.Dispatcher
+	decrypt   DecryptDeps
+	webhooks  WebhookDeps
+	mailSetup mailsetup.Options
 }
 
 // New returns a Server. The zero value isn't runnable — DB, CAS, Log
@@ -90,6 +92,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Agent surface v1 — claim/complete/release + enqueue over the
 	// existing tasks endpoint family. See docs/agents.mdx.
 	s.RegisterAgent(mux)
+
+	// Mail-setup wizard — admin-only. Endpoint 404s when the wizard
+	// isn't configured (MAIL_SETUP_ENV_PATH unset).
+	mux.HandleFunc("POST /api/admin/mail-setup", s.MailSetupApply)
 }
 
 // ---------- shared helpers ----------

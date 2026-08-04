@@ -53,6 +53,10 @@ type Server struct {
 	// LoginSubmit is the sink for the login form POST. Set by main.go so
 	// this package doesn't have to know local-auth's route naming.
 	LoginSubmit func(w http.ResponseWriter, r *http.Request)
+
+	// MailSetupEnabled toggles the /admin/mail-setup page + topbar link.
+	// Populated at boot from config.MailSetupEnvPath being non-empty.
+	MailSetupEnabled bool
 }
 
 // New parses templates and returns a ready Server. Templates are parsed
@@ -73,7 +77,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup"}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
 		files := []string{"templates/" + name + ".html"}
@@ -111,6 +115,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /download/{id}", s.RequireUI(http.HandlerFunc(s.Download)))
 	mux.Handle("GET /pending-decryption", s.RequireUI(http.HandlerFunc(s.PendingDecryption)))
 	mux.Handle("GET /upload", s.RequireUI(http.HandlerFunc(s.UploadPage)))
+	mux.Handle("GET /admin/mail-setup", s.RequireUI(http.HandlerFunc(s.MailSetupPage)))
 }
 
 // RequireUI redirects anonymous browsers to the login page. API tokens
@@ -552,6 +557,24 @@ func (s *Server) UploadPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// MailSetupPage renders the mail-mbsync wizard. Admin-only; non-admins
+// hit 403 rather than a 404, so it's discoverable to auditors even
+// when off-limits. The form POSTs JSON to /api/admin/mail-setup.
+//
+// Enabled=false renders a "disabled" notice when the operator hasn't
+// set MAIL_SETUP_ENV_PATH — same page, honest about the gate.
+func (s *Server) MailSetupPage(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if p == nil || (p.Role != "admin" && !auth.HasScope(p, "admin:mail")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.render(w, r, "mail_setup", map[string]any{
+		"Principal": p,
+		"Enabled":   s.MailSetupEnabled,
+	})
+}
+
 // ---------- render + helpers ----------
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data any) {
@@ -559,6 +582,14 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	if !ok {
 		s.serverError(w, r, fmt.Errorf("unknown template %q", name))
 		return
+	}
+	// Fold in the values every template needs — the topbar honors
+	// MailSetupEnabled for the admin link visibility. Callers that pass
+	// a map[string]any get the keys added; other shapes render as-is.
+	if m, ok := data.(map[string]any); ok {
+		if _, present := m["MailSetupEnabled"]; !present {
+			m["MailSetupEnabled"] = s.MailSetupEnabled
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, name, data); err != nil {

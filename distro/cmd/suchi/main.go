@@ -35,6 +35,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/mailsetup"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/webhookdispatch"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
@@ -379,6 +380,7 @@ func runServe() int {
 		return 1
 	}
 	uiSrv.LoginSubmit = la.LoginFormHandler
+	uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
 	uiSrv.Register(mux)
 
 	// JSON API surface (/api/*). Attach the dispatcher so upload
@@ -388,7 +390,14 @@ func runServe() int {
 		log.Error("main.api.new", "err", err.Error())
 		return 1
 	}
-	apiSrv.WithJobs(disp).Register(mux)
+	apiSrv.WithJobs(disp).
+		WithMailSetup(mailsetup.Options{
+			EnvPath:    cfg.MailSetupEnvPath,
+			Container:  cfg.MailSetupContainer,
+			DockerSock: cfg.MailSetupDockerSock,
+			Log:        log.With("component", "mailsetup"),
+		}).
+		Register(mux)
 	apiSrv.AttachDecrypt(mux, api.DecryptDeps{Key: decryptKey, CAS: cas})
 	apiSrv.AttachWebhooks(mux, api.WebhookDeps{Key: decryptKey})
 
