@@ -390,6 +390,7 @@ func runServe() int {
 		log.Error("main.api.new", "err", err.Error())
 		return 1
 	}
+	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.WithJobs(disp).
 		WithMailSetup(mailsetup.Options{
 			EnvPath:    cfg.MailSetupEnvPath,
