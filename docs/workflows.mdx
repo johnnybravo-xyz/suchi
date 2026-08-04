@@ -1,0 +1,353 @@
+---
+title: "Workflows"
+description: "State-machine engine for review chains, approvals, and timeout-driven escalation — driven by durable-outbox jobs."
+---
+
+Workflows sit next to [agents](/agents). Agents are horizontal work
+injection — anything speaking HTTP claims a job. Workflows are ordered,
+resumable review chains: doc 17 needs manager sign-off, then finance
+sign-off, escalating on timeout.
+
+The design is a hybrid state-machine + job-graph. Each run keeps one
+`current_state` cursor; every step appends to `workflow_transitions`
+as a replay log; advancement is driven by `workflow:advance`,
+`workflow:resume`, and `workflow:timeout-sweep` jobs on the existing
+outbox. Restart-safety, retries, and deadline scheduling are inherited
+from `core/jobs` — no second scheduler.
+
+## 1. Concepts
+
+Four tables (see `core/db/migrations/0016_workflow.sql`) are all you
+need to reason about a run.
+
+- **`workflow_defs`** — one row per slug per version. `spec_json`
+  holds the normalized JSON definition, `active=1` selects the live
+  version. Registering a new version bumps the prior one to inactive
+  in the same tx, so exactly one is current per slug.
+- **`workflow_runs`** — one row per instance. `state` is
+  `running | done | failed | cancelled`; `current_state` is the cursor
+  into `spec_json.states`; `deadline_at` is the epoch the sweeper
+  compares against.
+- **`workflow_transitions`** — append-only audit log. `trigger` is one
+  of `system`, `timeout`, `approve`, `reject`, `cancel`, or a custom
+  event. `actor` is `user:N`, `token:N`, or `system`.
+- **`workflow_tasks`** — human-in-the-loop rows spawned by
+  `approve`-kind states. `status` is
+  `open | claimed | resolved | expired`.
+
+A run parks whenever a handler returns `Event=""` (typically after
+spawning a task). The sweeper fires `trigger="timeout"` when
+`deadline_at <= now`. The runner special-cases `kind: "end"` — it's
+the only terminal marker; other kinds keep advancing as long as their
+handler emits an event mapped in `state.On`.
+
+## 2. Spec shape
+
+The JSON body an admin POSTs. Source of truth is `core/workflow/spec.go`.
+
+```json
+{
+  "start": "manager_review",
+  "states": {
+    "manager_review": {
+      "kind": "approve",
+      "assignee": "user:5",
+      "prompt": "Approve this invoice?",
+      "choices": ["approve", "reject"],
+      "timeout_sec": 86400,
+      "on": {
+        "approve": "finance_review",
+        "reject":  "rejected",
+        "timeout": "rejected"
+      }
+    }
+  }
+}
+```
+
+`Spec.Validate()` runs pre-persist and enforces:
+
+- `start` must exist in `states`.
+- State keys match `^[a-zA-Z][a-zA-Z0-9_]{0,63}$`.
+- Assignees match `user:<positive-int>` or `role:<slug>`. Nothing
+  else reaches SQL.
+- `kind: "approve"` requires a non-empty `assignee` and at least one
+  `choice`; every choice must have a mapping in `on`.
+- `kind: "end"` must not declare any `on` transitions.
+- Every `on[event]` target must be a state that exists.
+- `timeout_sec` must be non-negative.
+
+On top of `Validate`, `Register` cross-checks every state's `kind`
+against the handler registry and refuses unknown kinds with
+`ErrUnknownHandler` (HTTP code `unknown_handler`).
+
+### Built-in state kinds
+
+Three ship in `core/workflow/handler.go`:
+
+- `system` — passthrough. Empty trigger emits `success`; otherwise
+  echoes the trigger. Useful as a routing hub.
+- `approve` — spawns a `workflow_tasks` row on entry and parks. On
+  resume the trigger (the choice string, or `"timeout"`) is emitted
+  as the event. Task `deadline_at` inherits `state.timeout_sec`.
+- `end` — terminal. The runner finalizes the run to `state='done'`
+  and expires open tasks in the same tx.
+
+Plugin authors add new kinds via `Engine.RegisterHandler` — see §6.
+
+## 3. HTTP surface
+
+Six endpoints in `core/api/workflow.go`, mounted under
+`/api/workflows/*`.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST   | `/api/workflows`                        | admin      | Persist a new version of a spec for a slug. |
+| GET    | `/api/workflows/{slug}`                 | authed     | Return the current active spec. |
+| POST   | `/api/workflows/{slug}/start`           | authed     | Kick off a run against `doc_id`. |
+| GET    | `/api/workflows/runs/{id}`              | authed     | Return `{run, transitions, tasks}` for one run. |
+| POST   | `/api/workflows/tasks/{task_id}/resolve` | assignee or admin | Resolve a human task with a choice. |
+| POST   | `/api/workflows/runs/{id}/cancel`       | admin      | Abandon a running run. |
+
+`{slug}` is constrained to `^[a-z][a-z0-9_\-]{0,63}$` — greppable and
+URL-safe.
+
+Error codes worth handling:
+
+| Code | HTTP | When |
+|---|---|---|
+| `workflow_disabled` | 503 | `SetDefault` was never called (engine not wired). |
+| `bad_slug`          | 400 | Slug fails the URL pattern. |
+| `bad_spec_json`     | 400 | Body isn't valid JSON. |
+| `bad_spec`          | 400 | `Spec.Validate()` failed — message names the offending state. |
+| `unknown_handler`   | 400 | A state's `kind` has no registered handler. |
+| `no_def`            | 404 | No active def for the slug. |
+| `no_run`            | 404 | Run id unknown. |
+| `no_task`           | 404 | Task id unknown. |
+| `already_resolved`  | 409 | `Resolve` on a task that is `resolved`/`expired`. |
+| `bad_choice`        | 400 | Choice not in `task.choices`. |
+| `forbidden`         | 403 | Actor isn't the assignee and isn't admin. |
+| `terminal`          | 409 | Cancel on a run already in `done`/`failed`/`cancelled`. |
+
+## 4. Worked example — 3-step invoice approval
+
+Assumes suchi is running on `http://localhost:8000` and `$TOKEN` holds
+an admin API token minted via `POST /api/login`.
+
+### Step 1: Register the spec
+
+```bash
+curl -sS -X POST http://localhost:8000/api/workflows \
+  -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "slug": "invoice-approval",
+    "spec": {
+      "start": "manager_review",
+      "states": {
+        "manager_review": {
+          "kind": "approve",
+          "assignee": "user:5",
+          "prompt": "Manager: approve invoice?",
+          "choices": ["approve", "reject"],
+          "timeout_sec": 86400,
+          "on": {
+            "approve": "finance_review",
+            "reject":  "rejected",
+            "timeout": "rejected"
+          }
+        },
+        "finance_review": {
+          "kind": "approve",
+          "assignee": "user:9",
+          "prompt": "Finance: approve invoice?",
+          "choices": ["approve", "reject"],
+          "timeout_sec": 86400,
+          "on": {
+            "approve": "approved",
+            "reject":  "rejected",
+            "timeout": "rejected"
+          }
+        },
+        "approved": { "kind": "end" },
+        "rejected": { "kind": "end" }
+      }
+    }
+  }'
+```
+
+Response `201`:
+```json
+{ "def_id": 1, "slug": "invoice-approval" }
+```
+
+### Step 2: Start a run against doc 17
+
+```bash
+curl -sS -X POST http://localhost:8000/api/workflows/invoice-approval/start \
+  -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"doc_id": 17}'
+```
+
+Response `201`:
+```json
+{ "run_id": 42 }
+```
+
+The dispatcher is nudged so the first `workflow:advance` job fires
+immediately. The `approve` handler spawns a `workflow_tasks` row
+assigned to `user:5` and parks the run.
+
+### Step 3: Inspect the run
+
+```bash
+curl -sS http://localhost:8000/api/workflows/runs/42 \
+  -H "Authorization: Token $TOKEN"
+```
+
+Returns `{run, transitions: [], tasks: [<task 101 open on user:5>]}`.
+No transitions yet — the first row is written when the state
+_transitions out_, not on entry.
+
+### Step 4: Manager approves
+
+`user:5` (or an admin) resolves task 101:
+
+```bash
+curl -sS -X POST http://localhost:8000/api/workflows/tasks/101/resolve \
+  -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"choice": "approve"}'
+```
+
+Returns `204`. The engine enqueues `workflow:advance` with
+`trigger="approve"`, maps it via `on` to `finance_review`, and spawns
+the next task on `user:9`.
+
+### Step 5: Finance approves
+
+```bash
+curl -sS -X POST http://localhost:8000/api/workflows/tasks/102/resolve \
+  -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"choice": "approve"}'
+```
+
+`GET /api/workflows/runs/42` now shows `Status: "done"`,
+`CurrentState: "approved"`, and the transitions log:
+
+| # | from | to | trigger | actor |
+|---|---|---|---|---|
+| 1 | manager_review | finance_review | approve | user:5 |
+| 2 | finance_review | approved       | approve | user:9 |
+
+The `trigger` on human steps is the choice string itself, not a
+literal `"approve"`. `cancel` transitions carry
+`actor=user:<admin>`.
+
+## 5. Timeouts and the sweeper
+
+`state.timeout_sec` sets `workflow_runs.deadline_at` on entry. Every
+30 seconds (see `SweepInterval` in `core/workflow/sweeper.go`) the
+`workflow:timeout-sweep` job scans:
+
+```sql
+SELECT id FROM workflow_runs
+ WHERE state = 'running'
+   AND deadline_at IS NOT NULL
+   AND deadline_at <= ?
+```
+
+For each due row it enqueues `workflow:advance` with
+`trigger="timeout"` and nulls `deadline_at` in the same tx so the row
+can't be swept twice. The state's handler then emits `"timeout"` as
+the event; if `on.timeout` isn't mapped, the advance job errors and
+the run stalls (the outbox retries with backoff and eventually
+marks the job `dead`).
+
+The sweep loop is self-scheduling: at boot,
+`Engine.EnsureSweepScheduled` inserts a pending sweep row if none
+exists (wired at `distro/cmd/suchi/main.go`). Each sweep run
+re-enqueues the next one, guarded by a `SELECT COUNT(*) ... WHERE
+kind='workflow:timeout-sweep' AND state='pending'` so a double-invoke
+never backlogs the queue.
+
+Task rows inherit their `deadline_at` from `TaskSpec.DeadlineIn`
+(`0` → falls back to `state.timeout_sec`). When a run times out,
+the task flips to `expired` before the run transitions on.
+
+## 6. Extending with a Handler
+
+```go
+type Handler interface {
+    Kind() string
+    Handle(ctx context.Context, run Run, state State, trigger string) (HandlerResult, error)
+}
+
+type HandlerResult struct {
+    Event string          // "" parks; non-empty resolves via state.On
+    Vars  map[string]any  // merged into run.vars in the transition tx
+    Task  *TaskSpec       // non-nil spawns a workflow_tasks row and parks
+}
+```
+
+- Handlers MUST be retry-safe — the outbox delivers at-least-once.
+- Register at boot, before `workflow.SetDefault(engine)`.
+  Last-write-wins by `Kind()`, so built-ins can be overridden.
+- Return `Event=""` with no `Task` to park indefinitely — the run
+  waits for an external `Resolve` / `Cancel` / timeout.
+
+```go
+engine := workflow.New(dbHandle, logger)
+engine.RegisterHandler(myHandler{})   // add before SetDefault
+workflow.SetDefault(engine)
+```
+
+### AssigneeResolver
+
+The second seam. Default resolver accepts `user:N` and rejects
+`role:*` with `ErrRoleUnresolved`. Enterprise RBAC swaps in via
+`engine.SetAssigneeResolver(r)` before boot.
+
+```go
+type AssigneeResolver interface {
+    Resolve(ctx context.Context, assignee string) ([]int64, error)
+}
+```
+
+The runner calls `Resolve` inside the task-creation tx: an error
+aborts the write, the advance job retries, and the run stays
+`running` so the operator can fix wiring and re-drive it.
+
+## 7. Operations
+
+- **Log tag** — every log line carries `component=workflow`. Grep on
+  `workflow.advance.transition`, `workflow.sweep.fired`,
+  `workflow.resolve`, `workflow.advance.park` when a run stalls.
+- **Outbox visibility** — the three job kinds
+  (`workflow:advance`, `workflow:resume`, `workflow:timeout-sweep`)
+  show up on [`/api/tasks/`](/api). Filter with `?kind=workflow:` for
+  the subsystem's queue depth.
+- **Cancel semantics** — writes a `trigger='cancel'` transition with
+  `from == to == current_state`, `reason` in `payload_json`, expires
+  open tasks, finalizes to `state='cancelled'`. Cancelling a terminal
+  run returns `409 terminal`.
+- **Idempotent advance** — `Advance` on a non-`running` run logs
+  `workflow.advance.skip_terminal` and returns nil, so redelivered
+  outbox jobs after finalization are safe.
+
+## Not in scope (deferred)
+
+- **Parallel / fan-out states.** One `current_state` cursor per run;
+  AND-splits are v2.
+- **YAML definition loader.** Specs are JSON in
+  `workflow_defs.spec_json`; a YAML compiler is additive and needs no
+  migration. No watched-directory boot-time loader yet.
+- **`role:X` resolution + fair dispatch.** `AssigneeResolver` is
+  reserved for enterprise; core ships only `user:N`. `Resolve`
+  returns `[]int64` for eventual round-robin, but the runner doesn't
+  consume the list yet.
+- **Merging `workflow_tasks` into `/api/tasks/`.** Today the outbox
+  and `workflow_tasks` are surfaced separately; the mobile-compat
+  single-poll story lands with Phase 4.
