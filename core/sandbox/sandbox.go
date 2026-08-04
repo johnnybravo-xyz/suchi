@@ -146,10 +146,13 @@ func Run(ctx context.Context, opts Opts) (*Result, error) {
 		cmd.Stdin = opts.Stdin
 	}
 
-	// Own process group so a timeout kills the whole tree. exec.Cmd's
-	// default kill-on-context only signals the immediate child; forks
-	// escape unless we group them.
+	// Own process group so a timeout kills the whole tree, and wire
+	// the context-cancel to signal the whole group (not just the
+	// leader). Without setCancel, a child like `sh -c '...; sleep 30'`
+	// would leave `sleep` orphaned to init and the sandbox would
+	// block until sleep's natural exit — the exact bug CI caught.
 	setpgid(cmd)
+	setCancel(cmd)
 
 	stdout := &capBuf{max: maxStdout}
 	stderr := &capBuf{max: maxStderr}
