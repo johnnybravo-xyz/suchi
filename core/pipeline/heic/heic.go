@@ -116,28 +116,45 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	defer os.RemoveAll(dir)
 
 	inputPath := filepath.Join(dir, "in.heic")
+	interPath := filepath.Join(dir, "step.png")
 	outputPath := filepath.Join(dir, "out.pdf")
 	if err := writeAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
-	args := []string{binary, inputPath}
-	if opts.Quality > 0 && opts.Quality <= 100 {
-		args = append(args, "-quality", fmt.Sprintf("%d", opts.Quality))
-	}
-	args = append(args, outputPath)
-
+	// Two-step conversion: HEIC → PNG → PDF. Alpine's ImageMagick
+	// fails the single-call HEIC→PDF with a misleading "no encode
+	// delegate for HEIC" error (it's really the PDF encoder faltering
+	// on a HEIC-derived raster). Splitting through PNG works on both
+	// Alpine and Debian.
 	start := time.Now()
-	res, err := sandbox.Run(ctx, sandbox.Opts{
-		Args:    args,
+	res1, err := sandbox.Run(ctx, sandbox.Opts{
+		Args:    []string{binary, inputPath, interPath},
+		Timeout: timeout,
+		Dir:     dir,
+	})
+	if err != nil {
+		dur := time.Since(start)
+		log.Info("heic.skip.exit_nonzero.decode",
+			"exit", res1.ExitCode, "stderr", tail(res1.Stderr))
+		return &Result{Skipped: true, StderrTail: tail(res1.Stderr), Duration: dur}, nil
+	}
+
+	pdfArgs := []string{binary, interPath}
+	if opts.Quality > 0 && opts.Quality <= 100 {
+		pdfArgs = append(pdfArgs, "-quality", fmt.Sprintf("%d", opts.Quality))
+	}
+	pdfArgs = append(pdfArgs, outputPath)
+	res2, err := sandbox.Run(ctx, sandbox.Opts{
+		Args:    pdfArgs,
 		Timeout: timeout,
 		Dir:     dir,
 	})
 	dur := time.Since(start)
 	if err != nil {
-		log.Info("heic.skip.exit_nonzero",
-			"exit", res.ExitCode, "stderr", tail(res.Stderr))
-		return &Result{Skipped: true, StderrTail: tail(res.Stderr), Duration: dur}, nil
+		log.Info("heic.skip.exit_nonzero.encode",
+			"exit", res2.ExitCode, "stderr", tail(res2.Stderr))
+		return &Result{Skipped: true, StderrTail: tail(res2.Stderr), Duration: dur}, nil
 	}
 
 	pdf, readErr := os.ReadFile(outputPath)
@@ -155,7 +172,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	return &Result{
 		PDF:        pdf,
 		Duration:   dur,
-		StderrTail: tail(res.Stderr),
+		StderrTail: tail(res2.Stderr),
 	}, nil
 }
 
