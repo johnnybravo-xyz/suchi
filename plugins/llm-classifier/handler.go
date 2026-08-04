@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/suchi-dms/suchi/core/render/view"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 )
 
@@ -177,7 +178,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 		}
 
-		return nil
+		// Re-render the storage-path symlink after metadata changes.
+		// Enqueue in the same tx so a crash between metadata write and
+		// enqueue is impossible — the outbox pattern is the whole point.
+		return view.EnqueueMove(ctx, tx, e.DocID)
 	})
 }
 

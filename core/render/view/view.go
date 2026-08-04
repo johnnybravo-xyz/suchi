@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/suchi-dms/suchi/core/blob"
@@ -73,43 +74,257 @@ func New(d *db.DB, cas *blob.CAS, casRoot, renderDir, mode string, log *slog.Log
 	}, nil
 }
 
-// Render projects docID onto the file tree. Best-effort: an error
-// building the target is logged and returned; the caller should
-// treat it as non-fatal for ingest.
+// Render projects docID onto the file tree — used at ingest time when
+// there's no prior symlink yet. Writes an applied render_moves row so
+// subsequent Move() calls have a baseline.
 //
 // Selection order for the template:
 //
 //  1. documents.storage_path → storage_paths.path (per-doc override)
 //  2. Default template for the taxonomy mode
 func (r *Renderer) Render(ctx context.Context, docID int64) (string, error) {
-	tpl, cctx, blobHash, err := r.buildContext(ctx, docID)
+	rendered, src, err := r.resolveTarget(ctx, docID)
 	if err != nil {
-		return "", fmt.Errorf("view.build: %w", err)
-	}
-	if tpl == "" {
-		return "", errors.New("view: no template resolved (empty default and no storage_path)")
-	}
-	rendered, err := paths.Render(tpl, cctx)
-	if err != nil {
-		return "", fmt.Errorf("view.render: %w", err)
-	}
-	rendered = paths.SanitizePath(rendered)
-	if rendered == "" {
-		return "", errors.New("view: rendered path empty after sanitize")
+		return "", err
 	}
 	fullTarget := filepath.Join(r.renderDir, rendered)
+	if !underRoot(r.renderDir, fullTarget) {
+		return "", fmt.Errorf("view: rendered path %q escapes renderDir", rendered)
+	}
 	if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
 		return "", fmt.Errorf("view.mkdir: %w", err)
 	}
-	// Symlink source: absolute path to the CAS blob. Absolute so a
-	// rendered/... entry works when the user browses via a mount that
-	// isn't rooted at DATA_DIR.
-	src := filepath.Join(r.casRoot, "blobs", "sha256", blobHash[0:2], blobHash[2:4], blobHash)
 	if err := replaceSymlink(src, fullTarget); err != nil {
 		return "", fmt.Errorf("view.symlink: %w", err)
 	}
+	if err := r.recordApplied(ctx, docID, "", rendered); err != nil {
+		r.log.Warn("view.record.baseline", "doc_id", docID, "err", err.Error())
+	}
 	r.log.Info("view.rendered", "doc_id", docID, "path", rendered)
 	return rendered, nil
+}
+
+// Move re-renders docID and, if the storage-path target changed since
+// the last applied render, atomically moves the symlink from the
+// previous path to the new one. Called from the "render" job kind so
+// every metadata mutator can enqueue instead of taking a direct
+// Renderer dependency.
+//
+// Semantics:
+//   - No prior render row → falls through to Render (initial baseline).
+//   - Prev == new       → no-op, no filesystem touch, no row written.
+//   - Prev != new       → INSERT pending → mv → UPDATE applied.
+//
+// Crash between INSERT and UPDATE is safe: Reconcile() on next boot
+// probes the filesystem and finishes or fails the pending row.
+func (r *Renderer) Move(ctx context.Context, docID int64) error {
+	rendered, src, err := r.resolveTarget(ctx, docID)
+	if err != nil {
+		return err
+	}
+	prev, err := r.lastAppliedPath(ctx, docID)
+	if err != nil {
+		return err
+	}
+	if prev == "" {
+		// First render — delegate to Render() which writes the
+		// baseline row.
+		_, err := r.Render(ctx, docID)
+		return err
+	}
+	if prev == rendered {
+		return nil
+	}
+
+	fullTarget := filepath.Join(r.renderDir, rendered)
+	if !underRoot(r.renderDir, fullTarget) {
+		return fmt.Errorf("view: rendered path %q escapes renderDir", rendered)
+	}
+	fullPrev := filepath.Join(r.renderDir, prev)
+
+	moveID, err := r.recordPending(ctx, docID, prev, rendered)
+	if err != nil {
+		return fmt.Errorf("view.record.pending: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
+		_ = r.markFailed(ctx, moveID, err.Error())
+		return fmt.Errorf("view.mkdir: %w", err)
+	}
+	if err := replaceSymlink(src, fullTarget); err != nil {
+		_ = r.markFailed(ctx, moveID, err.Error())
+		return fmt.Errorf("view.symlink.new: %w", err)
+	}
+	// Remove old symlink only after the new one is in place — a crash
+	// between the two leaves both paths pointing at the same blob,
+	// which Reconcile can clean up idempotently.
+	if err := os.Remove(fullPrev); err != nil && !errors.Is(err, os.ErrNotExist) {
+		r.log.Warn("view.remove.prev", "doc_id", docID, "prev", prev, "err", err.Error())
+	}
+	if err := r.markApplied(ctx, moveID); err != nil {
+		r.log.Warn("view.record.applied", "doc_id", docID, "err", err.Error())
+	}
+	r.log.Info("view.moved", "doc_id", docID, "prev", prev, "new", rendered)
+	return nil
+}
+
+// Reconcile is the boot-time recovery pass. Every render_moves row in
+// state='pending' represents a move that crashed mid-flight; probe the
+// filesystem and finish or fail it. Runs once per boot from main.
+func (r *Renderer) Reconcile(ctx context.Context) error {
+	rows, err := r.db.Read.QueryContext(ctx, `
+		SELECT id, document_id, prev_path, new_path
+		FROM render_moves
+		WHERE state = 'pending'
+		ORDER BY created_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type pending struct {
+		id, docID  int64
+		prev, newP string
+	}
+	var pendings []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.id, &p.docID, &p.prev, &p.newP); err != nil {
+			return err
+		}
+		pendings = append(pendings, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, p := range pendings {
+		fullNew := filepath.Join(r.renderDir, p.newP)
+		if _, err := os.Lstat(fullNew); err == nil {
+			// New path already exists — the move happened, we just
+			// didn't get to mark it applied. Finish the bookkeeping
+			// and try to remove the old symlink.
+			_ = os.Remove(filepath.Join(r.renderDir, p.prev))
+			if err := r.markApplied(ctx, p.id); err != nil {
+				r.log.Warn("view.reconcile.apply", "id", p.id, "err", err.Error())
+			}
+			r.log.Info("view.reconcile.applied", "doc_id", p.docID, "path", p.newP)
+			continue
+		}
+		// New path not on disk — the move never happened. Mark failed
+		// and let the next metadata mutator retry via a fresh job.
+		if err := r.markFailed(ctx, p.id, "boot reconcile: new_path missing"); err != nil {
+			r.log.Warn("view.reconcile.fail", "id", p.id, "err", err.Error())
+		}
+		r.log.Warn("view.reconcile.failed", "doc_id", p.docID, "new_path", p.newP)
+	}
+	return nil
+}
+
+// resolveTarget builds the render context and returns (relPath, absSymlinkSrc).
+// Shared between Render (initial) and Move (subsequent) so the target
+// computation lives in one place.
+func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, string, error) {
+	tpl, cctx, blobHash, err := r.buildContext(ctx, docID)
+	if err != nil {
+		return "", "", fmt.Errorf("view.build: %w", err)
+	}
+	if tpl == "" {
+		return "", "", errors.New("view: no template resolved (empty default and no storage_path)")
+	}
+	rendered, err := paths.Render(tpl, cctx)
+	if err != nil {
+		return "", "", fmt.Errorf("view.render: %w", err)
+	}
+	rendered = paths.SanitizePath(rendered)
+	if rendered == "" {
+		return "", "", errors.New("view: rendered path empty after sanitize")
+	}
+	src := filepath.Join(r.casRoot, "blobs", "sha256", blobHash[0:2], blobHash[2:4], blobHash)
+	return rendered, src, nil
+}
+
+// lastAppliedPath returns the most-recent applied new_path for a doc,
+// or "" when no baseline exists yet.
+func (r *Renderer) lastAppliedPath(ctx context.Context, docID int64) (string, error) {
+	var p string
+	err := r.db.Read.QueryRowContext(ctx, `
+		SELECT new_path FROM render_moves
+		WHERE document_id = ? AND state = 'applied'
+		ORDER BY applied_at DESC, id DESC LIMIT 1
+	`, docID).Scan(&p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return p, err
+}
+
+func (r *Renderer) recordApplied(ctx context.Context, docID int64, prev, newP string) error {
+	now := time.Now().Unix()
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO render_moves(document_id, prev_path, new_path, state, created_at, applied_at)
+			VALUES (?, ?, ?, 'applied', ?, ?)
+		`, docID, prev, newP, now, now)
+		return err
+	})
+}
+
+func (r *Renderer) recordPending(ctx context.Context, docID int64, prev, newP string) (int64, error) {
+	now := time.Now().Unix()
+	var id int64
+	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO render_moves(document_id, prev_path, new_path, state, created_at)
+			VALUES (?, ?, ?, 'pending', ?)
+		`, docID, prev, newP, now)
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
+	return id, err
+}
+
+func (r *Renderer) markApplied(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE render_moves SET state = 'applied', applied_at = ? WHERE id = ?
+		`, time.Now().Unix(), id)
+		return err
+	})
+}
+
+func (r *Renderer) markFailed(ctx context.Context, id int64, msg string) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE render_moves SET state = 'failed', applied_at = ?, err = ? WHERE id = ?
+		`, time.Now().Unix(), msg, id)
+		return err
+	})
+}
+
+// underRoot rejects target paths that don't sit under renderDir. Guards
+// against a Jinja template producing a "../../etc/passwd" style output;
+// paths.SanitizePath already collapses .. but the belt-and-suspenders
+// check is cheap and catches template surprises. filepath.Rel returns
+// something starting with ".." when target escapes root.
+func underRoot(root, target string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absTarget)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
 }
 
 // buildContext loads the doc + related rows and returns the template
