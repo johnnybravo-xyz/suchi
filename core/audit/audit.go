@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/suchi-dms/suchi/core/db"
@@ -37,10 +38,104 @@ type Event struct {
 	RequestID  string
 }
 
+// ---------- sinks (SIEM export etc.) ----------
+
+// sinkRegistry holds every registered AuditSink. Populated at boot;
+// read on every Log call. Guarded by RWMutex so a late-boot Register
+// can't race with an in-flight Log.
+var (
+	sinkMu sync.RWMutex
+	sinks  []pluginapi.AuditSink
+)
+
+// RegisterSink attaches an external sink that receives every event
+// after the DB write lands. Intended for a private distro's SIEM
+// exporter, syslog forwarder, or tamper-evident chain writer. Sinks
+// are called synchronously; if an implementation is slow it MUST
+// buffer internally. Nil sink is a no-op.
+func RegisterSink(s pluginapi.AuditSink) {
+	if s == nil {
+		return
+	}
+	sinkMu.Lock()
+	sinks = append(sinks, s)
+	sinkMu.Unlock()
+}
+
+// snapshotSinks returns a copy under the read lock so Log can iterate
+// without holding it across per-sink Emit calls (a slow sink shouldn't
+// block Register / other Emits).
+func snapshotSinks() []pluginapi.AuditSink {
+	sinkMu.RLock()
+	defer sinkMu.RUnlock()
+	if len(sinks) == 0 {
+		return nil
+	}
+	out := make([]pluginapi.AuditSink, len(sinks))
+	copy(out, sinks)
+	return out
+}
+
+// fanoutToSinks converts the internal Event to a pluginapi.AuditEvent
+// and fires it at every registered sink. Errors are logged at Warn and
+// dropped — the durable audit record is the audit_events table.
+func fanoutToSinks(ctx context.Context, log *slog.Logger, e Event, ts int64) {
+	list := snapshotSinks()
+	if len(list) == 0 {
+		return
+	}
+	before, _ := toMap(e.Before)
+	after, _ := toMap(e.After)
+	pe := pluginapi.AuditEvent{
+		Timestamp:  time.Unix(ts, 0).UTC(),
+		Action:     e.Action,
+		ObjectKind: e.ObjectKind,
+		ObjectID:   e.ObjectID,
+		Before:     before,
+		After:      after,
+		RequestID:  e.RequestID,
+	}
+	if e.Actor != nil {
+		pe.ActorID = e.Actor.UserID
+		pe.ActorEmail = e.Actor.Email
+	}
+	for _, s := range list {
+		if err := s.Emit(ctx, pe); err != nil {
+			log.Warn("audit.sink.emit_failed", "sink", s.Kind(), "err", err.Error())
+		}
+	}
+}
+
+// toMap converts an arbitrary before/after payload to map[string]any
+// for the AuditEvent shape. Non-map inputs (strings, numbers) get
+// wrapped as {"value": v} rather than dropped.
+func toMap(v any) (map[string]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m, nil
+	}
+	// Round-trip through JSON to normalize any struct shape.
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err == nil {
+		return out, nil
+	}
+	// Not an object — wrap.
+	return map[string]any{"value": v}, nil
+}
+
 // Log persists e. Failures are logged and swallowed on purpose — a failed
 // audit write must not fail the user's action, only be visible in logs
 // and metrics for operator response. The trade-off is documented in
 // docs/audit.md.
+//
+// After the DB write, every registered AuditSink (see RegisterSink) is
+// fired with the same event. Sink failures don't roll back the row.
 func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
 	before, err := marshal(e.Before)
 	if err != nil {
@@ -62,13 +157,14 @@ func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
 			kind, id = ActorToken, sql.NullInt64{Int64: e.Actor.TokenID, Valid: true}
 		}
 	}
+	ts := time.Now().Unix()
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO audit_events
 				(ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-			time.Now().Unix(),
+			ts,
 			kind, id,
 			e.Action, e.ObjectKind, nullInt64(e.ObjectID),
 			nullString(before), nullString(after),
@@ -78,7 +174,12 @@ func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
 	})
 	if err != nil {
 		log.Error("audit.write.failed", "err", err.Error(), "action", e.Action)
+		return
 	}
+	// Only fan out on successful DB write. A sink seeing an event
+	// that isn't in audit_events would corrupt the "durable record"
+	// invariant enterprise verifiers depend on.
+	fanoutToSinks(ctx, log, e, ts)
 }
 
 func marshal(v any) (string, error) {
