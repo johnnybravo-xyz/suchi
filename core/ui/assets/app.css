@@ -89,3 +89,23 @@ body.auth { display: grid; place-items: center; min-height: 100vh; }
 @media (max-width: 720px) {
   .doc-detail .two-col { grid-template-columns: 1fr; }
 }
+
+.doc-detail .decrypt-panel { margin-top: 32px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.doc-detail .decrypt-panel h2 { margin: 0 0 4px 0; }
+.doc-detail .decrypt-panel form { display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin-top: 12px; }
+.doc-detail .decrypt-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.doc-detail .decrypt-panel input[type=password], .doc-detail .decrypt-panel input[type=text] { padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 4px; }
+.doc-detail .decrypt-panel button { padding: 8px 16px; font-size: 14px; align-self: flex-start; }
+.doc-detail .decrypt-panel .status { margin-left: 10px; }
+
+.pending-decryption h1 { margin-bottom: 4px; }
+.pending-decryption .muted { color: var(--muted); font-size: 14px; }
+.pending-decryption form { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+.pending-decryption label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; max-width: 480px; }
+.pending-decryption input[type=password], .pending-decryption input[type=text] { padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 4px; }
+.pending-decryption table.docs { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+.pending-decryption table.docs th, .pending-decryption table.docs td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+.pending-decryption table.docs th { color: var(--muted); font-weight: 600; }
+.pending-decryption .actions { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
+.pending-decryption .actions button { padding: 8px 16px; }
+.pending-decryption .status { color: var(--muted); font-size: 13px; }

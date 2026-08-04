@@ -42,6 +42,22 @@ doc.detail.field.archive: Archive (OCR)
 doc.detail.field.asn: Archive serial
 doc.detail.field.legacy: Imported from Bundle (id)
 doc.detail.field.split_from: Split from
+doc.detail.section.decrypt: Password required
+doc.detail.decrypt.desc: This document is password-protected. Supply the user password to unlock it — suchi will then run OCR + rules + render as usual.
+
+# Pending-decryption view
+nav.pending_decryption: Pending decryption
+decrypt.title: Pending decryption
+decrypt.subtitle: Documents that need a password before suchi can index them. Supply one below; check-off which docs it applies to.
+decrypt.password_label: Password
+decrypt.label_optional: Label (optional)
+decrypt.remember: Remember for future encrypted uploads
+decrypt.submit: Try password on selected docs
+decrypt.submit_one: Unlock
+decrypt.empty: Nothing pending — every uploaded document is either unencrypted or already unlocked.
+decrypt.col.title: Title
+decrypt.col.size: Size
+decrypt.col.created: Uploaded
 doc.detail.download.original: Download original
 doc.detail.download.archive: Download archive
 doc.detail.notes.empty: No notes on this document.

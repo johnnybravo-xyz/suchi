@@ -73,7 +73,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login"}
+	pages := []string{"list", "detail", "login", "pending_decryption"}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
 		files := []string{"templates/" + name + ".html"}
@@ -109,6 +109,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /docs/{id}", s.RequireUI(http.HandlerFunc(s.Detail)))
 	mux.Handle("GET /preview/{id}", s.RequireUI(http.HandlerFunc(s.Preview)))
 	mux.Handle("GET /download/{id}", s.RequireUI(http.HandlerFunc(s.Download)))
+	mux.Handle("GET /pending-decryption", s.RequireUI(http.HandlerFunc(s.PendingDecryption)))
 }
 
 // RequireUI redirects anonymous browsers to the login page. API tokens
@@ -229,6 +230,10 @@ type detailDoc struct {
 	// SplitIndex is its 1-indexed position among the siblings.
 	SplitParentID sql.NullInt64
 	SplitIndex    sql.NullInt64
+	// EncryptionState is "encrypted" when the doc is waiting on a
+	// password, "decrypted" once operator-supplied credentials unlocked
+	// it, or "" for normal (unencrypted) docs.
+	EncryptionState string
 }
 
 // Detail renders a single document with its metadata + PDF viewer.
@@ -244,6 +249,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		added       sql.NullInt64
 		archiveBlob sql.NullString
 	)
+	var encState sql.NullString
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT
 			d.id, d.title,
@@ -252,7 +258,8 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			COALESCE(jc.code || ' ' || jc.name, ''),
 			d.created_at, d.added_at, d.archive_blob,
 			d.archive_serial_number, d.bundle_id_legacy,
-			d.split_parent_id, d.split_index
+			d.split_parent_id, d.split_index,
+			d.encryption_state
 		FROM documents d
 		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
 		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
@@ -262,7 +269,11 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
 		&created, &added, &archiveBlob, &doc.ASN, &doc.BundleID,
 		&doc.SplitParentID, &doc.SplitIndex,
+		&encState,
 	)
+	if encState.Valid {
+		doc.EncryptionState = encState.String
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -375,6 +386,56 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 // invalidate reasonably.
 func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
 	s.serveBlob(w, r, true /* prefer archive */, "inline")
+}
+
+// pendingDocRow is the projection surfaced on the /pending-decryption
+// page. Kept flat so the template doesn't need to reach into a nested
+// struct.
+type pendingDocRow struct {
+	ID           int64
+	Title        string
+	MIME         string
+	OriginalSize int64
+	CreatedFmt   string
+}
+
+// PendingDecryption renders the list of docs awaiting a password.
+// Owner-scoped for non-admin principals; admins see everyone's.
+// Displays a batch-decrypt form: one password field + a checkbox per
+// row, submits multipart to /api/documents/decrypt-batch.
+func (s *Server) PendingDecryption(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if p == nil {
+		http.Redirect(w, r, s.LoginPath, http.StatusFound)
+		return
+	}
+	rows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT id, title, COALESCE(mime_type, ''), original_size, created_at
+		FROM documents
+		WHERE encryption_state = 'encrypted' AND trashed_at IS NULL
+		  AND (owner_id = ? OR ? = 'admin')
+		ORDER BY created_at DESC, id DESC
+	`, p.UserID, p.Role)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	var docs []pendingDocRow
+	for rows.Next() {
+		var d pendingDocRow
+		var ts int64
+		if err := rows.Scan(&d.ID, &d.Title, &d.MIME, &d.OriginalSize, &ts); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		d.CreatedFmt = time.Unix(ts, 0).UTC().Format("2006-01-02")
+		docs = append(docs, d)
+	}
+	s.render(w, r, "pending_decryption", map[string]any{
+		"Principal": p,
+		"Documents": docs,
+	})
 }
 
 // Download streams the original blob (?original=1) or archive blob as
