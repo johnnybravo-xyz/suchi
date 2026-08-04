@@ -67,8 +67,23 @@ in the repo (arrives in Phase 4.5).
 - `/metrics` exposes Prometheus counters (idle counts, HTTP latency
   histogram, job pipeline gauges).
 
+## Picking an image: slim vs full
+
+The `ghcr.io/suchi-dms/suchi:latest` tag is the **slim** image
+(~30 MB, distroless). It handles image uploads (barcode decode) and
+EPUB out of the box, but PDFs land with empty content unless the
+document already has a text layer that pdf-inspector can extract —
+which, since `pdftotext` isn't in the slim image, it can't.
+
+For the full ingest chain (real qpdf, pdftotext, ocrmypdf, djvutxt,
+ghostscript) pull the **full** image: `ghcr.io/suchi-dms/suchi:latest-full`
+(~1 GB). It's the same binary; only the runtime dependencies differ.
+
+See [supported file types](/formats) for the per-format matrix.
+
 ## Next steps
 
+- What suchi actually ingests: [supported file types](/formats)
 - Import an existing Paperless-ngx archive: [importer](/importer)
 - Tune the running instance: [config](/config)
 - Add OIDC for team sign-in: [config#oidc](/config#oidc)
