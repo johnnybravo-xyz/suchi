@@ -10,6 +10,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
 // Roles for document_correspondents. Kept as constants + a small
@@ -112,7 +113,9 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		// Enqueue a storage-path re-render — correspondent is a
+		// template-visible field, so the symlink may need to move.
+		return view.EnqueueMove(r.Context(), tx, docID)
 	})
 	switch {
 	case errors.Is(err, errNotFound):
@@ -214,7 +217,10 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 			return err
 		}
 		affected, err = res.RowsAffected()
-		return err
+		if err != nil || affected == 0 {
+			return err
+		}
+		return view.EnqueueMove(r.Context(), tx, docID)
 	})
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
