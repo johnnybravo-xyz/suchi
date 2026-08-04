@@ -1,0 +1,361 @@
+---
+title: "Writing a plugin"
+description: "The plugin-api surface, worked examples for each interface, and how a private distro registers your plugin at boot."
+---
+
+Suchi's plugin surface is intentionally small: one Go module
+(`github.com/suchi-dms/suchi/plugin-api`) with a handful of value types
+and interfaces. Everything a plugin needs to talk to core lives there.
+Core imports plugin-api; plugins import plugin-api; nobody imports the
+other direction. That's the seam.
+
+<Note>
+Plugins are Go packages compiled into your distro binary — there is no
+runtime plugin loader. A "plugin" is what you get when a private
+distro's `plugins/index.go` blank-imports your package + wires it in
+`main.go`. This keeps the security posture honest (no arbitrary code
+paths at runtime) at the cost of one recompile per plugin swap.
+</Note>
+
+## The surface
+
+`plugin-api` is deliberately tiny — 150-odd lines total. Every plugin
+implements one or more of these interfaces.
+
+| Interface | What it does | Called by |
+|---|---|---|
+| `Subscriber` | Consume durable-outbox jobs by `kind`. The bread and butter — post-ingest, OCR, classify, render, webhook, workflow advance. | `core/jobs` dispatcher |
+| `Authenticator` | One link in the auth chain. Returns a `Principal` or `(nil, nil)` to defer. | Every HTTP request via `httpx.Authenticate` |
+| `AuditSink` | Receives every audit event core writes. SIEM export, syslog forwarders, tamper-evident chains. | `core/audit` on every write path |
+
+Plus these value types:
+
+- `Event` — a job coming off the outbox: `Kind`, `DocID`, `Time`, `Payload`.
+- `Principal` — the authenticated actor: user or scoped token.
+- `BlobRef` — content-addressed blob pointer: `SHA256`, `Size`.
+- `AuditEvent` — flat, JSON-shaped audit record.
+
+Plugin kinds live in `plugin-api/kinds.go` — `KindIngest`, `KindSniff`,
+`KindOCR`, `KindStorage`, `KindSearch`, `KindAuth`, `KindClassify`,
+`KindNotify`, `KindExport`, `KindConvert`, `KindBarcode`. These are
+strings, not types: they're a shared vocabulary for config files and
+manifests, not a runtime dispatch.
+
+## Design rules
+
+**Idempotent Handle.** The outbox retries with backoff on failure. Any
+side effect your handler performs may be applied more than once for the
+same (kind, doc_id, payload). Guard by writing state you can dedup
+against — a hash, a `WHERE NOT EXISTS`, a unique index — before making
+the observable change.
+
+**No hidden state.** Everything a handler needs to survive a restart
+must be either passed in `Event.Payload` or read from the DB by `DocID`.
+Package-level maps that "remember what we've seen" break on process
+kill.
+
+**One tx per write.** If your handler updates multiple tables, wrap them
+in a single `db.WriteTx`. SQLite is a single-writer database — a partial
+update is worse than no update.
+
+**Small dep footprint.** Anything you `import` becomes part of the final
+suchi binary. A plugin that pulls in 40 MB of transitive deps to
+classify a PDF loses to a subprocess that shells out.
+
+**Fail loud, not quiet.** Return errors from `Handle` — the outbox logs
+them, backs off, eventually parks the job as `dead`. Swallowing errors
+"to be resilient" hides real bugs from the operator.
+
+## Worked example — a Subscriber
+
+Say we want to auto-tag every ingested `application/pdf` document with
+`pdf`. The right seam is a Subscriber on `post-ingest`.
+
+### 1. Structure the package
+
+```
+suchi-plugin-pdftag/
+├── go.mod
+├── pdftag.go
+└── pdftag_test.go
+```
+
+`go.mod`:
+
+```
+module github.com/YOUR-ORG/suchi-plugin-pdftag
+
+go 1.26
+
+require github.com/suchi-dms/suchi/plugin-api v0.0.0
+require github.com/suchi-dms/suchi/core v0.0.0
+```
+
+### 2. Implement `Subscriber`
+
+```go
+package pdftag
+
+import (
+    "context"
+    "database/sql"
+    "log/slog"
+    "strings"
+
+    "github.com/suchi-dms/suchi/core/db"
+    pluginapi "github.com/suchi-dms/suchi/plugin-api"
+)
+
+// Handler tags any ingested PDF with the "pdf" tag. Registered by the
+// distro's main.go against core/jobs.Dispatcher.
+type Handler struct {
+    db  *db.DB
+    log *slog.Logger
+}
+
+func New(d *db.DB, log *slog.Logger) *Handler {
+    return &Handler{db: d, log: log.With("component", "pdftag")}
+}
+
+// Kinds implements pluginapi.Subscriber. Post-ingest fires after every
+// upload; we filter on MIME inside Handle.
+func (h *Handler) Kinds() []string {
+    return []string{"post-ingest"}
+}
+
+// Handle implements pluginapi.Subscriber. Idempotent — the INSERT OR
+// IGNORE on document_tags dedupes if we're retried.
+func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
+    mime, _ := e.Payload["mime"].(string)
+    if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
+        return nil // not our concern
+    }
+    return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+        var tagID int64
+        err := tx.QueryRowContext(ctx,
+            `SELECT id FROM tags WHERE name = 'pdf'`).Scan(&tagID)
+        if err == sql.ErrNoRows {
+            res, err := tx.ExecContext(ctx,
+                `INSERT INTO tags(name, color) VALUES ('pdf', '#c44')`)
+            if err != nil { return err }
+            tagID, _ = res.LastInsertId()
+        } else if err != nil {
+            return err
+        }
+        _, err = tx.ExecContext(ctx, `
+            INSERT OR IGNORE INTO document_tags(document_id, tag_id)
+            VALUES (?, ?)
+        `, e.DocID, tagID)
+        return err
+    })
+}
+```
+
+### 3. Test it
+
+Use `core/db.LoadMigrations` to bring up a fresh SQLite. Existing
+plugins (`plugins/llm-classifier/handler_test.go`,
+`core/pipeline/postingest/postingest_test.go`) show the pattern.
+
+### 4. Wire it into a private distro
+
+In your fork of `distro/cmd/suchi/main.go`, alongside the other
+`disp.Register` calls:
+
+```go
+import pdftag "github.com/YOUR-ORG/suchi-plugin-pdftag"
+
+// ... after the dispatcher is constructed:
+disp.Register(pdftag.New(d, log))
+```
+
+Rebuild the binary. That's it.
+
+## Worked example — an Authenticator
+
+Say your org uses signed JWTs from an internal identity broker. Wire
+that as a link in the auth chain:
+
+```go
+package internalauth
+
+import (
+    "context"
+    "net/http"
+    "strings"
+
+    "github.com/suchi-dms/suchi/core/db"
+    pluginapi "github.com/suchi-dms/suchi/plugin-api"
+)
+
+type Plugin struct {
+    db     *db.DB
+    verify func(token string) (email string, err error) // your JWT verifier
+}
+
+func (p *Plugin) Name() string { return "internal-jwt" }
+
+func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
+    h := r.Header.Get("X-Internal-JWT")
+    if h == "" {
+        return nil, nil // not our request, try next authenticator
+    }
+    email, err := p.verify(h)
+    if err != nil {
+        return nil, err // JWT present but bad — abort the chain
+    }
+    var userID int64
+    var role string
+    if err := p.db.Read.QueryRowContext(context.Background(),
+        `SELECT id, role FROM users WHERE email = ? AND trashed_at IS NULL`,
+        strings.ToLower(email),
+    ).Scan(&userID, &role); err != nil {
+        return nil, err
+    }
+    return &pluginapi.Principal{
+        Kind: "user", UserID: userID, Email: email, Role: role,
+        AuthNBy: p.Name(),
+    }, nil
+}
+```
+
+Wire in `main.go` before the local-auth link:
+
+```go
+authChain.Authenticators = append(
+    []pluginapi.Authenticator{internalauth.New(d, verifyJWT)},
+    authChain.Authenticators...,
+)
+```
+
+The chain runs in order. Return `(nil, nil)` when the request isn't
+yours; the next link takes over.
+
+## Worked example — an AuditSink
+
+Say you want to forward every audit event to a syslog daemon:
+
+```go
+package syslogaudit
+
+import (
+    "context"
+    "encoding/json"
+    "log/syslog"
+
+    pluginapi "github.com/suchi-dms/suchi/plugin-api"
+)
+
+type Sink struct {
+    w *syslog.Writer
+}
+
+func New(addr string) (*Sink, error) {
+    w, err := syslog.Dial("tcp", addr, syslog.LOG_INFO|syslog.LOG_LOCAL0, "suchi")
+    if err != nil {
+        return nil, err
+    }
+    return &Sink{w: w}, nil
+}
+
+func (s *Sink) Kind() string { return "syslog" }
+
+func (s *Sink) Emit(_ context.Context, e pluginapi.AuditEvent) error {
+    b, err := json.Marshal(e)
+    if err != nil {
+        return err
+    }
+    return s.w.Info(string(b))
+}
+```
+
+`AuditSink.Emit` is called inline on the write path — keep it fast, or
+buffer + fire-and-forget internally. Returning an error only logs and
+drops; core's `audit_events` table is the durable record.
+
+## Testing patterns
+
+Every existing plugin uses the same fixture recipe. Steal it:
+
+```go
+func setupDB(t *testing.T) *db.DB {
+    t.Helper()
+    ctx := context.Background()
+    path := filepath.Join(t.TempDir(), "test.db")
+    d, err := db.Open(ctx, path)
+    if err != nil { t.Fatal(err) }
+    t.Cleanup(func() { _ = d.Close() })
+    migs, err := db.LoadMigrations(migrations.FS, ".")
+    if err != nil { t.Fatal(err) }
+    log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+    if err := db.Migrate(ctx, d, migs, log); err != nil { t.Fatal(err) }
+    return d
+}
+```
+
+For Subscribers, invoke `Handle` directly — you don't need the
+dispatcher. For Authenticators, construct an `*http.Request` with
+`httptest.NewRequest` and call `Authenticate`.
+
+Guard tests behind `t.Skip` if the plugin shells out to a binary the
+CI host doesn't have (see `core/pipeline/heic/heic_test.go` for the
+pattern — checks `magick` on PATH before running).
+
+## Registration cookbook
+
+Almost every plugin wires the same way in a private distro's
+`main.go`. Copy-paste from an existing block:
+
+- **Subscriber**: `disp.Register(myplugin.New(d, log))`. See
+  `distro/cmd/suchi/main.go` — the block that registers
+  `postingest`, `view`, `webhookdispatch`, `workflow` subscribers is
+  the template.
+- **Authenticator**: append to `authChain.Authenticators` (order
+  matters — first non-nil `Principal` wins).
+- **AuditSink**: no core-side wiring today; the interface is reserved
+  in `plugin-api/audit.go`. A future `audit.RegisterSink(s)` call will
+  slot in the same way; plan for it now by keeping your sink stateless
+  and its constructor pure.
+
+## What NOT to do
+
+- **Don't fork core to add a feature that fits behind an interface.**
+  If your plugin needs a new callback point, extend `plugin-api` first
+  (send a PR upstream). Forks rot.
+- **Don't touch `documents.original_blob`.** The CAS layer owns
+  content-addressed blobs; plugins write metadata + archives, never
+  the raw ingest. Rewriting the original invalidates dedup and audit.
+- **Don't hold DB write locks across network I/O.** SQLite has one
+  writer; a slow LLM call inside a `WriteTx` freezes every other
+  writer. Do the network call outside, buffer the result, then open
+  the tx.
+- **Don't invent new job kinds without a corresponding Subscriber
+  registered at boot.** An orphaned kind just piles up in the outbox
+  as unclaimed rows.
+- **Don't emit personally identifiable information into audit events.**
+  Core's `audit_events` table already carries actor + action + object
+  id; `Before`/`After` maps are for diffable state, not raw document
+  content.
+
+## When to prefer a subprocess
+
+If your plugin shells out to `qpdf`/`tesseract`/`magick`/`msgconvert`
+style tools, use `core/sandbox.Run` rather than `os/exec` directly.
+It caps stdout, kills on timeout, removes network access, and matches
+the deployment convention every other pipeline stage uses. See
+`core/pipeline/heic/heic.go` as the reference.
+
+## Referencing other plugins
+
+| Plugin | Interface | Read for |
+|---|---|---|
+| `plugins/local-auth` | `Authenticator` | Session cookie + argon2id + Token/Bearer header handling |
+| `plugins/oidc` | `Authenticator` | External IdP flow + role-mapping |
+| `plugins/llm-classifier` | `Subscriber` (`post-classify`) | HTTP-backed subscriber with cfg reload |
+| `core/pipeline/postingest` | `Subscriber` (`post-ingest`) | Deep-pipeline dispatch (many format branches in one) |
+| `core/pipeline/webhookdispatch` | `Subscriber` (`webhook:deliver`) | AEAD-sealed secret + retry semantics |
+| `core/render/view` | `Subscriber` (`render`) | Filesystem side-effects with reconcile-on-boot |
+| `core/workflow` | `Subscriber` (`workflow:advance|resume|timeout-sweep`) | State-machine engine with human-in-the-loop parking |
+
+Each is a working example under 500 lines. Read one that matches your
+seam before writing your own.
