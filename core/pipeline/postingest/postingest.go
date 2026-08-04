@@ -34,6 +34,7 @@ import (
 	"github.com/suchi-dms/suchi/core/db"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/pipeline/barcode"
+	"github.com/suchi-dms/suchi/core/pipeline/djvu"
 	"github.com/suchi-dms/suchi/core/pipeline/epub"
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
@@ -116,6 +117,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		content := barcode.TokensFor(bcs)
 		if err := h.updateDoc(ctx, e.DocID, content, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	// DjVu path: djvutxt extracts the embedded text layer.
+	if djvu.Recognized(mime) {
+		res, err := djvu.Extract(ctx, bytes.NewReader(origBytes), log, djvu.Options{})
+		if err != nil {
+			return fmt.Errorf("djvu: %w", err)
+		}
+		log.Info("post-ingest.route.djvu", "non_blank", res.NonBlank, "skipped", res.Skipped)
+		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
