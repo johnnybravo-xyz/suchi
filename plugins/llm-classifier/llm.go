@@ -46,6 +46,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -88,12 +89,20 @@ type Result struct {
 	Reasoning     string   `json:"reasoning,omitempty"`
 }
 
-// Plugin holds the resolved config + an HTTP client.
+// Plugin holds the resolved config + an HTTP client. The config is
+// stored under an atomic pointer so live-reload from the setup
+// wizard (see SetConfig) never races an in-flight Classify.
 type Plugin struct {
-	cfg    Config
+	rt     atomic.Pointer[runtime]
 	log    *slog.Logger
 	client *http.Client
-	local  bool // true when endpoint host is a loopback / private address
+}
+
+// runtime is the swappable snapshot the plugin reads on every call.
+// Kept internal so callers can't mutate a live pointer.
+type runtime struct {
+	cfg   Config
+	local bool // true when endpoint host is loopback / private
 }
 
 // New validates cfg + returns (nil, nil) when disabled OR when a
@@ -136,31 +145,79 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 			"host", u.Hostname(),
 			"msg", "OCR text of every classified document leaves the box")
 	}
-	return &Plugin{
-		cfg:    cfg,
+	p := &Plugin{
 		log:    log,
 		client: &http.Client{Timeout: cfg.Timeout},
-		local:  local,
-	}, nil
+	}
+	p.rt.Store(&runtime{cfg: cfg, local: local})
+	return p, nil
+}
+
+// SetConfig atomically swaps the plugin's runtime config. Same
+// validation as New(); on failure the old config stays live. Called by
+// the setup wizard's /api/admin/settings/llm handler so an operator
+// doesn't have to restart to try a different endpoint.
+//
+// The HTTP client keeps its original Timeout — a timeout swap needs
+// a new client and is rare enough to warrant a restart. Everything
+// else (endpoint URL, model, key, egress ack) hot-swaps.
+func (p *Plugin) SetConfig(cfg Config) error {
+	if cfg.EndpointURL == "" {
+		return errors.New("llm-classifier: endpoint URL required")
+	}
+	if cfg.Model == "" {
+		return errors.New("llm-classifier: model required")
+	}
+	u, err := url.Parse(cfg.EndpointURL)
+	if err != nil {
+		return fmt.Errorf("llm-classifier: parse endpoint: %w", err)
+	}
+	local := isLocalHost(u.Hostname())
+	if !local && !cfg.EgressAck {
+		return errors.New("llm-classifier: non-local endpoint requires EgressAck=true")
+	}
+	if cfg.ConfidenceThreshold == 0 {
+		cfg.ConfidenceThreshold = 0.7
+	}
+	if cfg.MaxContentChars == 0 {
+		cfg.MaxContentChars = 8000
+	}
+	p.rt.Store(&runtime{cfg: cfg, local: local})
+	if !local {
+		p.log.Warn("llm-classifier.reload.egress",
+			"endpoint", cfg.EndpointURL, "host", u.Hostname())
+	} else {
+		p.log.Info("llm-classifier.reload", "endpoint", cfg.EndpointURL, "model", cfg.Model)
+	}
+	return nil
+}
+
+// Config returns a snapshot of the current runtime config. Handy for
+// callers that need to know the resolved endpoint (e.g. status pages).
+func (p *Plugin) Config() Config {
+	return p.rt.Load().cfg
 }
 
 // Classify runs the model against title + content, returns the parsed
 // suggestion. Errors are wrapped with the endpoint host so an
 // operator can grep them across logs.
 func (p *Plugin) Classify(ctx context.Context, title, content string) (*Result, error) {
-	if len(content) > p.cfg.MaxContentChars {
-		content = content[:p.cfg.MaxContentChars] + "\n… [truncated]"
+	// Snapshot the config once at the top so a concurrent SetConfig
+	// doesn't split this call across two configurations.
+	cfg := p.rt.Load().cfg
+	if len(content) > cfg.MaxContentChars {
+		content = content[:cfg.MaxContentChars] + "\n… [truncated]"
 	}
-	body := buildRequestBody(p.cfg.Model, title, content)
+	body := buildRequestBody(cfg.Model, title, content)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(p.cfg.EndpointURL, "/")+"/chat/completions",
+		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("llm-classifier: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if p.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
 
 	resp, err := p.client.Do(req)

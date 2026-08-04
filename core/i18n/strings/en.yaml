@@ -83,7 +83,7 @@ setup.llm.field.endpoint: Endpoint URL
 setup.llm.field.model: Model
 setup.llm.field.api_key: API key
 setup.llm.field.egress_ack: I understand document text will leave this box.
-setup.llm.note: The classifier reads its config at boot today — a restart applies changes.
+setup.llm.note: Changes apply live — the running classifier swaps to the new endpoint on the next classification.
 setup.llm.save: Save
 
 setup.jd.title: Taxonomy

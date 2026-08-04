@@ -8,7 +8,6 @@ package api
 // dispatch on user-supplied names.
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -299,6 +298,21 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Live-reload: signal the running classifier to re-read settings.
+	// Nil hook (tests, disabled classifier) → skip silently. A reload
+	// failure is warn-only: the settings are saved, the operator can
+	// restart to apply.
+	if s.LLMReloader != nil {
+		if err := s.LLMReloader(r.Context()); err != nil {
+			s.Log.Warn("settings.llm.reload_failed", "err", err.Error())
+			s.writeJSON(w, http.StatusOK, map[string]any{
+				"saved":        true,
+				"reload_error": err.Error(),
+				"restart_hint": "settings saved; restart suchi to apply since live-reload failed",
+			})
+			return
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -438,11 +452,17 @@ func isUniqueViolation(err error) bool {
 // models on 127.0.0.1 / 192.168.* / 10.* / *.local so this catches
 // the common case + forces an ack for anything else.
 func isNonLocal(host string) bool {
-	// Strip port if present.
-	if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[i:], "]") {
-		host = host[:i]
+	// Strip port. Bracketed IPv6 → strip up to `]`. Bare host — only
+	// strip when there's exactly one colon (else it's IPv6-shaped and
+	// the whole thing is the host).
+	if strings.HasPrefix(host, "[") {
+		if end := strings.Index(host, "]"); end != -1 {
+			host = host[1:end]
+		}
+	} else if strings.Count(host, ":") == 1 {
+		host = host[:strings.Index(host, ":")]
 	}
-	h := strings.ToLower(strings.Trim(host, "[]"))
+	h := strings.ToLower(host)
 	switch h {
 	case "localhost", "127.0.0.1", "::1", "":
 		return false
@@ -464,6 +484,3 @@ func isNonLocal(host string) bool {
 	}
 	return true
 }
-
-// Force-import for future use — several helpers close over context.
-var _ context.Context
