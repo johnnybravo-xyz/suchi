@@ -29,11 +29,11 @@
             {{ range .Doc.Tags }}<span class="tag">{{ . }}</span> {{ end }}
           {{ else }}{{ msg "none" }}{{ end }}
         </dd>
-        {{ if .Doc.ASN }}
-          <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN }}</dd>
+        {{ if .Doc.ASN.Valid }}
+          <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN.Int64 }}</dd>
         {{ end }}
-        {{ if .Doc.PaperlessID }}
-          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.PaperlessID }}</dd>
+        {{ if .Doc.PaperlessID.Valid }}
+          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.PaperlessID.Int64 }}</dd>
         {{ end }}
         {{ if .Doc.SplitParentID.Valid }}
           <dt>{{ msg "doc.detail.field.split_from" }}</dt>

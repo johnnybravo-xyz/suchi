@@ -155,15 +155,25 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Correspondent comes from the document_correspondents join —
+	// documents.correspondent_id is legacy single-value and no longer
+	// written to by the ingest paths. Prefer sender-role for emails,
+	// else the lowest-position link of any role.
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT
 			d.id, d.title,
-			COALESCE(c.name, ''),
+			COALESCE((
+				SELECT c.name
+				FROM document_correspondents dc
+				JOIN correspondents c ON c.id = dc.correspondent_id
+				WHERE dc.document_id = d.id
+				ORDER BY (dc.role = 'sender') DESC, dc.position ASC
+				LIMIT 1
+			), ''),
 			COALESCE(jc.code || ' ' || jc.name, ''),
 			d.created_at
 		FROM documents d
-		LEFT JOIN correspondents c  ON c.id = d.correspondent_id
-		LEFT JOIN jd_categories  jc ON jc.id = d.jd_category_id
+		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		WHERE d.trashed_at IS NULL
 		ORDER BY d.created_at DESC, d.id DESC
 		LIMIT ? OFFSET ?
@@ -254,10 +264,19 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		archiveBlob sql.NullString
 	)
 	var encState sql.NullString
+	// Correspondent from the document_correspondents join (sender first)
+	// — same reasoning as the list query.
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT
 			d.id, d.title,
-			COALESCE(c.name, ''),
+			COALESCE((
+				SELECT c.name
+				FROM document_correspondents dc
+				JOIN correspondents c ON c.id = dc.correspondent_id
+				WHERE dc.document_id = d.id
+				ORDER BY (dc.role = 'sender') DESC, dc.position ASC
+				LIMIT 1
+			), ''),
 			COALESCE(dt.name, ''),
 			COALESCE(jc.code || ' ' || jc.name, ''),
 			d.created_at, d.added_at, d.archive_blob,
@@ -265,9 +284,8 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			d.split_parent_id, d.split_index,
 			d.encryption_state, d.email_parent_id
 		FROM documents d
-		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
-		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
-		LEFT JOIN jd_categories   jc ON jc.id = d.jd_category_id
+		LEFT JOIN document_types dt ON dt.id = d.document_type_id
+		LEFT JOIN jd_categories  jc ON jc.id = d.jd_category_id
 		WHERE d.id = ? AND d.trashed_at IS NULL
 	`, id).Scan(
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
@@ -388,7 +406,16 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 // Preview streams the archive blob (or original if no archive) inline
 // for browser rendering. Cache-control is short so metadata edits
 // invalidate reasonably.
+//
+// The global SecurityHeaders middleware sets X-Frame-Options: DENY +
+// CSP frame-ancestors 'none', which blocks the detail page's own
+// <object type="application/pdf"> from loading this response. We
+// downgrade those to same-origin here — the detail page needs to
+// embed its own PDF preview, but nothing outside the site should.
 func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
 	s.serveBlob(w, r, true /* prefer archive */, "inline")
 }
 

@@ -283,8 +283,14 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// parent doc, fan out one child doc per attachment. See
 	// core/pipeline/eml/ for the parser + docs/formats.mdx#email.
 	if eml.Recognized(mime) {
-		if err := h.handleEmail(ctx, log, e.DocID, origBytes); err != nil {
+		deduped, err := h.handleEmail(ctx, log, e.DocID, origBytes)
+		if err != nil {
 			return fmt.Errorf("email: %w", err)
+		}
+		if deduped {
+			// The doc was soft-deleted as a Message-ID duplicate.
+			// Skip render/classify — there's no live row to render.
+			return nil
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
@@ -699,11 +705,37 @@ func slugify(name string) string {
 //
 // Owner + jd_category for children inherit from the parent. Children
 // point back via email_parent_id (migration 0014).
-func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID int64, raw []byte) error {
+// handleEmail returns (deduped, err). When deduped=true the caller MUST
+// skip render / classify — the doc row has been soft-deleted because
+// another doc under the same owner already carries this Message-ID.
+func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID int64, raw []byte) (bool, error) {
 	parsed, err := eml.Parse(raw)
 	if err != nil {
 		log.Warn("post-ingest.email.parse_failed", "err", err.Error())
-		return nil // keep the doc as a plain file
+		return false, nil // keep the doc as a plain file
+	}
+	// Message-ID dedup. If ANOTHER doc under the same owner already
+	// carries this Message-ID, this doc is a duplicate — soft-delete
+	// it and stop. Same guarantee the IMAP path enforces at insert;
+	// the fs-watch/upload paths don't know Message-ID until we parse.
+	if parsed.MessageID != "" {
+		var existing int64
+		err := h.db.Read.QueryRowContext(ctx, `
+			SELECT id FROM documents
+			WHERE email_message_id = ?
+			  AND id != ?
+			  AND owner_id = (SELECT owner_id FROM documents WHERE id = ?)
+			  AND trashed_at IS NULL
+			LIMIT 1
+		`, parsed.MessageID, parentID, parentID).Scan(&existing)
+		if err == nil {
+			log.Info("post-ingest.email.dedup",
+				"parent_id", parentID, "existing", existing,
+				"message_id", parsed.MessageID)
+			return true, h.softDeleteParent(ctx, parentID)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			log.Warn("post-ingest.email.dedup_check", "err", err.Error())
+		}
 	}
 	log.Info("post-ingest.email.parsed",
 		"parent_id", parentID,
@@ -734,7 +766,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 	}
 
 	if err := h.updateEmailParent(ctx, parentID, parsed, body); err != nil {
-		return fmt.Errorf("update parent: %w", err)
+		return false, fmt.Errorf("update parent: %w", err)
 	}
 
 	// Load owner + jd_category once for children.
@@ -745,7 +777,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 	if err := h.db.Read.QueryRowContext(ctx,
 		`SELECT owner_id, jd_category_id FROM documents WHERE id = ?`, parentID,
 	).Scan(&ownerID, &jdCategoryID); err != nil {
-		return fmt.Errorf("load parent owner: %w", err)
+		return false, fmt.Errorf("load parent owner: %w", err)
 	}
 
 	// Upsert the From address as a correspondent + attach to parent
@@ -770,7 +802,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 			continue
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // updateEmailParent writes the parsed header fields back onto the
@@ -876,6 +908,17 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		childID, err := res.LastInsertId()
 		if err != nil {
 			return err
+		}
+		// Inherit the parent email's correspondents (sender + any
+		// recipients that got upserted). Without this, every attachment
+		// PDF renders with a blank "From" field even though the email
+		// itself is correctly attributed.
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO document_correspondents (document_id, correspondent_id, role, position)
+			SELECT ?, correspondent_id, role, position
+			FROM document_correspondents WHERE document_id = ?
+		`, childID, parentID); err != nil {
+			return fmt.Errorf("inherit correspondents: %w", err)
 		}
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
