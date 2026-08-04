@@ -48,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr \
       ocrmypdf \
       qpdf \
+      poppler-utils \
       libreoffice-core \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
