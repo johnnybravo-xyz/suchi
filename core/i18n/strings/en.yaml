@@ -48,6 +48,18 @@ doc.detail.decrypt.desc: This document is password-protected. Supply the user pa
 
 # Pending-decryption view
 nav.pending_decryption: Pending decryption
+nav.upload: Upload
+
+# Upload page
+upload.title: Upload a document
+upload.subtitle: Drop a file or pick one — it lands in Inbox, dedups against your existing docs, and runs the full ingest pipeline.
+upload.drop_hint: Drop a file here
+upload.pick: Choose a file
+upload.submit: Upload
+upload.uploading: Uploading…
+upload.err.no_file: Pick a file first.
+upload.err.generic: "Upload failed: %s"
+upload.err.conflict: You already have a document with these bytes.
 decrypt.title: Pending decryption
 decrypt.subtitle: Documents that need a password before suchi can index them. Supply one below; check-off which docs it applies to.
 decrypt.password_label: Password

@@ -35,7 +35,43 @@ a:hover { text-decoration: underline; }
 .topbar .brand { font-weight: 600; font-size: 18px; color: var(--ink); }
 .topbar nav a { color: var(--muted); font-size: 14px; }
 .topbar nav a:hover { color: var(--ink); }
-.topbar .me { margin-left: auto; font-size: 13px; color: var(--muted); }
+.topbar .me { font-size: 13px; color: var(--muted); }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: var(--pad); }
+
+/* Buttons — shared across upload, forms, actions. */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; font: inherit; font-weight: 500; font-size: 14px;
+  line-height: 1; border-radius: var(--radius); border: 1px solid transparent;
+  cursor: pointer; text-decoration: none; user-select: none;
+}
+.btn:hover { text-decoration: none; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; filter: none; }
+.btn-secondary { background: var(--surface); color: var(--ink); border-color: var(--border); }
+.btn-secondary:hover { background: #f6f5f1; }
+
+/* Upload page — dropzone. */
+.upload-panel { max-width: 640px; margin: 0 auto; }
+.dropzone {
+  display: block; margin: 24px 0 16px; padding: 36px 24px;
+  border: 2px dashed var(--border); border-radius: 8px; text-align: center;
+  background: #fafaf7; cursor: pointer; transition: border-color 120ms, background 120ms;
+}
+.dropzone.is-drag { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone input[type=file] { display: none; }
+.dropzone-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.dropzone-icon { font-size: 28px; color: var(--muted); }
+.dropzone-hint { font-size: 15px; color: var(--ink); }
+.dropzone-or { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.dropzone-filename {
+  min-height: 20px; font-size: 13px; color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.upload-actions { display: flex; align-items: center; gap: 12px; }
+.upload-actions .status { flex: 1; font-size: 13px; }
 
 main { padding: var(--pad-lg); max-width: 1200px; margin: 0 auto; }
 
