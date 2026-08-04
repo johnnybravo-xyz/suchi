@@ -103,6 +103,35 @@ Dedup state machine:
   `200 OK` with `"restored": true`.
 - Fresh hash → new row, `201 Created`.
 
+### `GET /api/documents/{id}`
+
+Full projection of one document: title, extracted content (post-OCR),
+MIME, blobs, JD category, tags (slug list), correspondents. Trashed
+docs are visible with `trashed_at` set so mobile clients can render
+the undelete flow.
+
+**200 OK**
+```json
+{
+  "id": 1,
+  "title": "Electricity bill March 2026",
+  "content": "Electricity bill for March 2026...",
+  "original_blob": "sha256hex...",
+  "original_size": 16841,
+  "archive_blob": "sha256hex...",
+  "archive_size": 62114,
+  "mime_type": "application/pdf",
+  "jd_category_id": 17,
+  "created_at": 1793491200,
+  "updated_at": 1793491200,
+  "tags": ["utilities", "electricity"],
+  "correspondents": [{"id": 3, "name": "BESCOM", "role": "sender"}]
+}
+```
+
+Empty lists always serialize as `[]` (never `null`) so mobile clients
+can iterate them safely.
+
 ### `DELETE /api/documents/{id}`
 
 Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it

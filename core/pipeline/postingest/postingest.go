@@ -37,6 +37,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/ocrmypdf"
 	"github.com/suchi-dms/suchi/core/pipeline/pdfinspector"
 	"github.com/suchi-dms/suchi/core/pipeline/qpdf"
+	"github.com/suchi-dms/suchi/core/pipeline/zugferd"
 	"github.com/suchi-dms/suchi/core/render/view"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 )
@@ -173,6 +174,18 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
 		return err
 	}
+
+	// ZUGFeRD / Factur-X / XRechnung: pull structured invoice data from
+	// the embedded XML if present. Best-effort — every non-invoice PDF
+	// short-circuits at attachment discovery.
+	if inv, zerr := zugferd.ExtractBytes(ctx, pdfBytes, log, zugferd.Options{}); zerr != nil {
+		log.Warn("post-ingest.zugferd.error", "err", zerr.Error())
+	} else if inv != nil {
+		if aerr := zugferd.Apply(ctx, h.db, e.DocID, inv); aerr != nil {
+			log.Warn("post-ingest.zugferd.apply", "err", aerr.Error())
+		}
+	}
+
 	return h.postContentSteps(ctx, log, e.DocID)
 }
 
