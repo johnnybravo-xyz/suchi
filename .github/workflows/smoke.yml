@@ -33,24 +33,24 @@ jobs:
               --target full \
               -t suchi:smoke .
 
-      - name: Prepare a sample PDF with real text + a scanned-page sample
+      - name: Prepare a sample text-native PDF
         run: |
-          # Pull two PDFs we KNOW have distinguishing properties so
-          # the assertions can rely on them.
+          # Build via Ghostscript from a hand-written PostScript source.
+          # Deliberately avoids TeX Live (~5min apt install) so the whole
+          # smoke workflow fits inside its 20-minute budget even when the
+          # image build has to rebuild layers.
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-              texlive-latex-base texlive-latex-recommended \
-              poppler-utils imagemagick ghostscript qpdf
+          sudo apt-get install -y --no-install-recommends ghostscript
           mkdir -p /tmp/samples
-          # (a) Text-native PDF — pdftotext should extract "electricity"
-          #     and the pipeline should route text_native.
-          cat > /tmp/samples/text-native.tex <<'EOF'
-          \documentclass{article}
-          \begin{document}
-          Electricity bill for March 2026. Total due 4523 rupees. BESCOM.
-          \end{document}
+          cat > /tmp/samples/text-native.ps <<'EOF'
+          %!PS-Adobe-3.0
+          %%BoundingBox: 0 0 612 792
+          /Helvetica findfont 14 scalefont setfont
+          72 720 moveto (Electricity bill for March 2026.) show
+          72 700 moveto (Total due 4523 rupees. BESCOM.) show
+          showpage
           EOF
-          (cd /tmp/samples && pdflatex -interaction=nonstopmode text-native.tex >/dev/null)
+          ps2pdf /tmp/samples/text-native.ps /tmp/samples/text-native.pdf
           ls -la /tmp/samples/
 
       - name: Boot the container with a throwaway data dir
