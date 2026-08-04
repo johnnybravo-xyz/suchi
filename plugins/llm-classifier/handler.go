@@ -90,10 +90,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Low-confidence path: apply only the needs-review tag so an
 	// operator sees the doc in the review queue. Leaves title,
 	// correspondent, jd_category untouched.
-	lowConfidence := res.Confidence < h.plugin.cfg.ConfidenceThreshold
+	threshold := h.plugin.Config().ConfidenceThreshold
+	lowConfidence := res.Confidence < threshold
 	if lowConfidence {
 		log.Info("llm-classifier.low_confidence",
-			"threshold", h.plugin.cfg.ConfidenceThreshold,
+			"threshold", threshold,
 			"reasoning", res.Reasoning)
 	}
 

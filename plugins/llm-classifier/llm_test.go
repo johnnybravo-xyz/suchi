@@ -65,7 +65,7 @@ func TestNewAcceptsLocalWithoutAck(t *testing.T) {
 	if p == nil {
 		t.Fatal("plugin should be enabled for localhost")
 	}
-	if !p.local {
+	if !p.rt.Load().local {
 		t.Error("local flag not set for localhost endpoint")
 	}
 }
@@ -82,7 +82,7 @@ func TestNewAcceptsNonLocalWithAck(t *testing.T) {
 	if p == nil {
 		t.Fatal("plugin should be enabled when non-local + ack")
 	}
-	if p.local {
+	if p.rt.Load().local {
 		t.Error("api.openai.com should not be local")
 	}
 }

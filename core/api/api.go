@@ -11,6 +11,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -39,6 +40,11 @@ type Server struct {
 	// plugin so /api/admin/users can hash new passwords without this
 	// package importing plugins/*. Nil-check in handlers.
 	PasswordHasher func(pw string) (string, error)
+	// LLMReloader is called after /api/admin/settings/llm writes so the
+	// running classifier picks up the new config without a restart.
+	// Main.go closes over the plugin instance; api/* doesn't import
+	// plugins/*. Nil means the wizard just writes the setting.
+	LLMReloader func(ctx context.Context) error
 }
 
 // New returns a Server. The zero value isn't runnable — DB, CAS, Log

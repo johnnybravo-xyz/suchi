@@ -177,3 +177,65 @@ func SetupNeeded(ctx context.Context, database *db.DB) (bool, error) {
 	}
 	return completedAt == 0, nil
 }
+
+// ---------- resolvers — settings-first, env-fallback ----------
+
+// LLMConfig is the shape callers merge into their plugin config. Uses
+// plain scalars so this package doesn't import plugins/*.
+type LLMConfig struct {
+	EndpointURL string
+	Model       string
+	APIKey      string
+	EgressAck   bool
+}
+
+// ResolveLLMConfig returns the effective LLM config: settings override
+// each non-empty env fallback field. String fields prefer settings when
+// set; EgressAck prefers settings when the key exists at all.
+//
+// Callers pass the env-derived config as fb so the merge stays a
+// single-source-of-truth function.
+func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig) LLMConfig {
+	out := fb
+	var s string
+	if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
+		out.EndpointURL = s
+	}
+	s = ""
+	if err := Get(ctx, database, KeyLLMModel, &s); err == nil && s != "" {
+		out.Model = s
+	}
+	s = ""
+	if err := Get(ctx, database, KeyLLMAPIKeySealed, &s); err == nil && s != "" {
+		out.APIKey = s
+	}
+	var b bool
+	if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
+		out.EgressAck = b
+	}
+	return out
+}
+
+// FSWatchConfig mirrors the fs-watch runtime knobs the setup wizard
+// can override.
+type FSWatchConfig struct {
+	Dir        string
+	OwnerEmail string
+}
+
+// ResolveFSWatchConfig merges settings over env fallback for fs-watch
+// boot config. Same shape as ResolveLLMConfig — settings win when set.
+// Live-reload isn't wired for fs-watch (the watcher owns a goroutine
+// bound to a specific path); wizard writes take effect on next boot.
+func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig) FSWatchConfig {
+	out := fb
+	var s string
+	if err := Get(ctx, database, KeyFSWatchDir, &s); err == nil && s != "" {
+		out.Dir = s
+	}
+	s = ""
+	if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
+		out.OwnerEmail = s
+	}
+	return out
+}

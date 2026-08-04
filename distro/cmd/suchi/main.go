@@ -39,6 +39,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/postingest"
 	"github.com/suchi-dms/suchi/core/pipeline/webhookdispatch"
 	"github.com/suchi-dms/suchi/core/render/view"
+	"github.com/suchi-dms/suchi/core/settings"
 	"github.com/suchi-dms/suchi/core/ui"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 	llmclassifier "github.com/suchi-dms/suchi/plugins/llm-classifier"
@@ -253,14 +254,22 @@ func runServe() int {
 		return 1
 	}
 
-	// LLM classifier plugin (opt-in via LLM_ENDPOINT_URL). New() returns
-	// nil when disabled OR when a non-local endpoint lacks
-	// LLM_EGRESS_ACK — server still boots, just without the plugin.
-	llm, err := llmclassifier.New(llmclassifier.Config{
+	// LLM classifier plugin (opt-in via LLM_ENDPOINT_URL or settings
+	// written by the setup wizard). Env is a fallback; settings win when
+	// set. New() returns nil when disabled OR when a non-local endpoint
+	// lacks the ack — server still boots, just without the plugin.
+	envLLM := settings.LLMConfig{
 		EndpointURL: cfg.LLMEndpointURL,
 		Model:       cfg.LLMModel,
 		APIKey:      cfg.LLMAPIKey,
 		EgressAck:   cfg.LLMEgressAck,
+	}
+	resolvedLLM := settings.ResolveLLMConfig(ctx, d, envLLM)
+	llm, err := llmclassifier.New(llmclassifier.Config{
+		EndpointURL: resolvedLLM.EndpointURL,
+		Model:       resolvedLLM.Model,
+		APIKey:      resolvedLLM.APIKey,
+		EgressAck:   resolvedLLM.EgressAck,
 	}, log)
 	if err != nil {
 		log.Error("main.llm.new", "err", err.Error())
@@ -317,11 +326,18 @@ func runServe() int {
 	go disp.Run(ctx)
 	defer disp.Stop()
 
-	// fs-watch: staging-dir producer. Idle unless INGEST_FS_OWNER_EMAIL
-	// is set — matches the design's "opt-in, never surprise" posture.
-	if watcher, err := fswatch.New(ctx, fswatch.Config{
+	// fs-watch: staging-dir producer. Idle unless the resolved owner
+	// email is set (settings written by the setup wizard take precedence
+	// over env). Live-reload of the watch dir isn't wired — a wizard
+	// change requires a restart because the watcher owns a goroutine
+	// bound to the current path.
+	fsw := settings.ResolveFSWatchConfig(ctx, d, settings.FSWatchConfig{
 		Dir:        cfg.IngestFSDir,
 		OwnerEmail: cfg.IngestFSOwnerEmail,
+	})
+	if watcher, err := fswatch.New(ctx, fswatch.Config{
+		Dir:        fsw.Dir,
+		OwnerEmail: fsw.OwnerEmail,
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.fswatch.new", "err", err.Error())
 		return 1
@@ -391,6 +407,20 @@ func runServe() int {
 		return 1
 	}
 	apiSrv.PasswordHasher = localauth.HashPassword
+	// LLM live-reload hook: re-resolve settings + env, swap into the
+	// running plugin. Nil llm (disabled at boot) → the wizard save
+	// succeeds but the operator has to restart to actually enable.
+	if llm != nil {
+		apiSrv.LLMReloader = func(rctx context.Context) error {
+			fresh := settings.ResolveLLMConfig(rctx, d, envLLM)
+			return llm.SetConfig(llmclassifier.Config{
+				EndpointURL: fresh.EndpointURL,
+				Model:       fresh.Model,
+				APIKey:      fresh.APIKey,
+				EgressAck:   fresh.EgressAck,
+			})
+		}
+	}
 	apiSrv.WithJobs(disp).
 		WithMailSetup(mailsetup.Options{
 			EnvPath:    cfg.MailSetupEnvPath,
