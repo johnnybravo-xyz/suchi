@@ -90,6 +90,29 @@ docker compose logs -f mbsync suchi
 Re-run `./setup.sh` — it's idempotent. Or edit `config/.env` directly
 and `docker compose restart mbsync`.
 
+## Mail wizard (in-browser)
+
+The compose recipe wires suchi's admin-only `/admin/mail-setup` page
+to the same `config/.env` file. Log in as an admin, open the wizard,
+pick a provider, save — suchi rewrites the file and restarts mbsync
+in place, no shell needed.
+
+The wizard is opt-in via two mounts already set in `docker-compose.yml`:
+
+- `./config → /etc/suchi/mail-config` (RW) so suchi can rewrite the
+  file. Directory mount, not a single-file bind — atomic rename
+  requires this.
+- `/var/run/docker.sock` so suchi can POST
+  `/containers/suchi-mail-mbsync/restart` to reload mbsync.
+
+<Warning>
+Mounting `docker.sock` grants suchi root-equivalent access to the host
+Docker daemon. Suchi only uses it to restart the sibling mbsync
+container, but the socket permits arbitrary daemon calls. Comment
+out the mount + unset `MAIL_SETUP_DOCKER_SOCK` if you'd rather
+`docker compose restart mbsync` yourself after a wizard save.
+</Warning>
+
 ## Smoke test
 
 `./smoke-test.sh` drives the whole recipe end-to-end with the `generic`
