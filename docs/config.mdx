@@ -28,6 +28,7 @@ around").
 | `PDF_MAX_CONTENT_BYTES` | `8M` | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit. |
 | `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on the concatenated XHTML text of an EPUB. Bigger than the PDF default because ebooks routinely exceed it (novels are fine, textbooks may still truncate). |
 | `DJVU_MAX_CONTENT_BYTES` | `32M` | Cap on `djvutxt` output length. Same reasoning as EPUB. |
+| `OCR_ENGINE` | `auto` | Scanned-PDF OCR engine. `auto` picks `tesseract` when the tessocr binaries (`pdftoppm` + `tesseract`) are on PATH, else `ocrmypdf`. Explicit values force one engine. `tesseract` is ~4× smaller in the image but produces no searchable-PDF archive. |
 
 ## TLS
 

@@ -62,6 +62,15 @@ type Config struct {
 	PdfMaxContentBytes  int64 // pdftotext output cap (default 8 MiB)
 	EpubMaxContentBytes int64 // concatenated XHTML text cap (default 32 MiB)
 	DjvuMaxContentBytes int64 // djvutxt stdout cap (default 32 MiB)
+
+	// OCR engine selector for scanned-PDF ingest. Values:
+	//   "auto"      — prefer tesseract-only (tessocr) when available,
+	//                 fall back to ocrmypdf, else skip OCR.
+	//   "tesseract" — force tessocr; error/skip if binaries missing.
+	//   "ocrmypdf"  — force ocrmypdf; error/skip if the binary is missing.
+	// tessocr is ~4× smaller in the image but produces no
+	// searchable-PDF archive (documents.archive_blob stays NULL).
+	OCREngine string
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -104,6 +113,12 @@ func Load() (*Config, error) {
 	}
 	if c.DjvuMaxContentBytes, err = parseBytes(env("DJVU_MAX_CONTENT_BYTES", "32M")); err != nil {
 		return nil, fmt.Errorf("DJVU_MAX_CONTENT_BYTES: %w", err)
+	}
+	c.OCREngine = strings.ToLower(env("OCR_ENGINE", "auto"))
+	switch c.OCREngine {
+	case "auto", "tesseract", "ocrmypdf":
+	default:
+		return nil, fmt.Errorf("OCR_ENGINE: unknown value %q (want auto|tesseract|ocrmypdf)", c.OCREngine)
 	}
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.

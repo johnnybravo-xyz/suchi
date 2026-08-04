@@ -127,8 +127,10 @@ Production docs deploy is Mintlify-hosted (zero config beyond `docs.json` — se
 
 Two image targets in `Dockerfile`:
 
-- `slim` — distroless-static + the binary only. ~30 MB, works for text-native PDFs (via pdf-inspector shortcut), images, EPUBs. No OCR, no qpdf, no DjVu.
-- `full` — Debian slim + tesseract + ocrmypdf + qpdf + poppler-utils + djvulibre-bin + libreoffice-core. ~1 GB, everything ingests.
+- `slim` — Alpine + qpdf + poppler-utils + tesseract. ~70 MB. Full PDF pipeline including OCR of scanned pages (via the in-process `tessocr` engine — `pdftoppm | tesseract`). No searchable-PDF archive, no DjVu, no LibreOffice.
+- `full` — Debian slim + tesseract + ocrmypdf + qpdf + poppler-utils + djvulibre-bin + libreoffice-core. ~1 GB. Adds ocrmypdf (searchable-PDF archives) and the other converters.
+
+Both images accept `OCR_ENGINE={auto,tesseract,ocrmypdf}`. Slim defaults to `tesseract`; full defaults to `ocrmypdf`.
 
 Build + run:
 
