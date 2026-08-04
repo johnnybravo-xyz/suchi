@@ -31,6 +31,9 @@ around").
 | `OCR_ENGINE` | `auto` | Scanned-PDF OCR engine. `auto` picks `tesseract` when the tessocr binaries (`pdftoppm` + `tesseract`) are on PATH, else `ocrmypdf`. Explicit values force one engine. `tesseract` is ~4× smaller in the image but produces no searchable-PDF archive. |
 | `SCAN_BLANK_REMOVAL` | `auto` | `auto` (default) → detect and strip blank pages from the working copy before OCR. `off` → skip. The CAS original is untouched either way. |
 | `SCAN_BLANK_WHITENESS_THRESHOLD` | `0.995` | Fraction of mean pixel intensity above which a page is considered blank. Range `(0.0, 1.0]`. Lower it (e.g. `0.98`) if your scanner leaves grey background; raise it (`0.999`) to only strip truly white pages. |
+| `SCAN_SPLIT_ENABLED` | `off` | `on` → detect QR separator sheets and fan out one child document per segment. Opt-in only. See [formats#multi-doc-splitting](/formats#multi-doc-splitting-on-qr-separator-sheets). |
+| `SCAN_SPLIT_TOKEN` | `SUCHI-SPLIT` | QR payload that marks a separator page. Case-sensitive; the value your `qrencode` (or equivalent) encodes on the printed separator. |
+| `SCAN_SPLIT_DPI` | `150` | Rasterization DPI for QR detection. Range `[72, 600]`. Bump if your separator QRs are small or your scans are low-res. |
 
 ## TLS
 

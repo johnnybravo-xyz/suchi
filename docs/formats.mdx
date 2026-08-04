@@ -29,6 +29,9 @@ The PDF path is the most involved because it fans out based on content:
 
 ```
 upload → qpdf (normalize, strip restrictions, decrypt empty-password)
+      → docsplit (opt-in; pdftoppm+QR scan → separator pages)
+          → if separators found: fan out one child doc per segment,
+             soft-delete parent, exit (children carry the chain)
       → pageanalyze (optional; pdftoppm at 50 DPI → per-page mean intensity)
           → qpdf --pages … keep only non-blank pages in the working copy
       → pdf-inspector (pdftotext -layout)
@@ -66,6 +69,45 @@ search still work over `documents.content`. Pick `ocrmypdf` when you
 want the archive PDF (e.g. long-term retention where the searchable
 PDF matters more than image size), or set to `auto` and let the image
 you deployed decide.
+
+### Multi-doc splitting on QR separator sheets
+
+Feeder-scanning a stack of unrelated documents produces one large PDF
+that should really be N docs. Opt in with `SCAN_SPLIT_ENABLED=on` and
+suchi will detect **separator sheets** — pages carrying a QR code with
+a specific payload — and fan out one document per segment.
+
+**Setup:**
+
+1. Generate a separator sheet:
+   ```sh
+   qrencode -s 20 -o separator.png SUCHI-SPLIT
+   ```
+   Print several copies. Any QR encoder works; the default token is
+   `SUCHI-SPLIT` (override via `SCAN_SPLIT_TOKEN`).
+2. Enable in the environment:
+   ```sh
+   export SCAN_SPLIT_ENABLED=on
+   ```
+3. Insert a separator between each document in your feeder stack and
+   scan the whole pile as one PDF. Upload as usual.
+
+**What happens on ingest:**
+
+- `docsplit` rasterizes each page at 150 DPI and scans for QR codes.
+- Separator pages are dropped; the ranges between them become segments.
+- Each segment becomes a fresh document (with its own `original_blob`
+  and `post-ingest` job), linked via `split_parent_id`.
+- The parent doc is soft-deleted so the workspace only shows the
+  children. Undelete brings the parent (original combined scan) back
+  if the split was wrong.
+
+**Why QR-only:** blank-page splitting sounds ergonomic but silently
+breaks legit multi-page docs that happen to contain a mostly-empty
+page. QR is explicit — the user prints separator sheets on purpose.
+
+**Config knobs:** see [config](/config) for `SCAN_SPLIT_ENABLED`,
+`SCAN_SPLIT_TOKEN`, `SCAN_SPLIT_DPI`.
 
 ### ZUGFeRD / Factur-X / XRechnung
 

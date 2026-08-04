@@ -35,6 +35,13 @@
         {{ if .Doc.BundleID }}
           <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.BundleID }}</dd>
         {{ end }}
+        {{ if .Doc.SplitParentID.Valid }}
+          <dt>{{ msg "doc.detail.field.split_from" }}</dt>
+          <dd>
+            <a href="/docs/{{ .Doc.SplitParentID.Int64 }}">#{{ .Doc.SplitParentID.Int64 }}</a>
+            {{ if .Doc.SplitIndex.Valid }}(part {{ .Doc.SplitIndex.Int64 }}){{ end }}
+          </dd>
+        {{ end }}
         <dt>{{ msg "doc.detail.field.original" }}</dt>
         <dd><a href="/download/{{ .Doc.ID }}?original=1">{{ msg "doc.detail.download.original" }}</a></dd>
         {{ if .Doc.HasArchive }}
