@@ -1,0 +1,30 @@
+# Generic IMAP/IMAPS. Escape hatch for iCloud, Yahoo, Zoho, Exchange,
+# self-hosted Dovecot, etc. Set MAIL_HOST / MAIL_PORT / MAIL_SSL /
+# MAIL_USER / MAIL_PASSWORD in .env to whatever your provider needs.
+
+IMAPAccount generic
+Host ${MAIL_HOST}
+Port ${MAIL_PORT}
+User ${MAIL_USER}
+PassCmd "echo $MAIL_PASSWORD"
+SSLType ${MAIL_SSL}
+AuthMechs LOGIN
+
+IMAPStore generic-remote
+Account generic
+
+MaildirStore generic-local
+Path /var/mail/
+Inbox /var/mail/INBOX
+SubFolders Verbatim
+
+Channel generic
+Far :generic-remote:
+Near :generic-local:
+Patterns ${MAIL_FOLDERS}
+Create Near
+Sync Pull
+Expunge None
+SyncState *
+MaxMessages ${MAIL_MAX_MESSAGES}
+MaxSize ${MAIL_MAX_SIZE}

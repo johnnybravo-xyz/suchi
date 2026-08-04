@@ -1,0 +1,34 @@
+# Gmail via IMAPS. Requires an app password (Google account → Security
+# → 2-step verification → App passwords) — regular password auth is
+# disabled. IMAP access must be enabled in Gmail settings.
+#
+# Gmail's Maildir mapping treats All Mail / Trash / Spam as "special
+# folders". Patterns above filters to visible folders by default;
+# adjust MAIL_FOLDERS in .env if you want All Mail (`[Gmail]/All Mail`).
+
+IMAPAccount gmail
+Host ${MAIL_HOST}
+Port ${MAIL_PORT}
+User ${MAIL_USER}
+PassCmd "echo $MAIL_PASSWORD"
+SSLType ${MAIL_SSL}
+AuthMechs LOGIN
+
+IMAPStore gmail-remote
+Account gmail
+
+MaildirStore gmail-local
+Path /var/mail/
+Inbox /var/mail/INBOX
+SubFolders Verbatim
+
+Channel gmail
+Far :gmail-remote:
+Near :gmail-local:
+Patterns ${MAIL_FOLDERS}
+Create Near
+Sync Pull
+Expunge None
+SyncState *
+MaxMessages ${MAIL_MAX_MESSAGES}
+MaxSize ${MAIL_MAX_SIZE}

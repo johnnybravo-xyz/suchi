@@ -1,0 +1,69 @@
+# mbsync → suchi wiring. Three services:
+#   - bridge: Proton Mail Bridge (only when COMPOSE_PROFILES=proton).
+#   - mbsync: polls IMAP, writes Maildir, fans new files into ./ingest.
+#   - suchi:  fs-watches ./ingest and runs the full post-ingest pipeline.
+#
+# Booted via ./setup.sh, which writes config/.env with the container-
+# side env vars and .env (compose-level) with COMPOSE_PROFILES + port.
+
+services:
+  bridge:
+    profiles: [proton]
+    build:
+      context: ./bridge
+    image: suchi-mail-bridge:local
+    container_name: protonmail-bridge
+    restart: unless-stopped
+    volumes:
+      - ./bridge-data:/root
+    networks:
+      - mail
+
+  mbsync:
+    build:
+      context: ./mbsync
+    image: suchi-mail-mbsync:local
+    container_name: suchi-mail-mbsync
+    restart: unless-stopped
+    depends_on:
+      # required: false lets non-Proton providers skip Bridge entirely.
+      # When the `proton` profile is active, this waits for Bridge to
+      # start; otherwise it's a no-op.
+      bridge:
+        condition: service_started
+        required: false
+    user: "${MAIL_UID:-1000}:${MAIL_GID:-1000}"
+    env_file:
+      - config/.env
+    volumes:
+      # Provider template — setup.sh symlinks the picked one to
+      # templates/mbsyncrc.tmpl so this mount is stable.
+      - ./templates/mbsyncrc.tmpl:/work/mbsyncrc.tmpl:ro
+      - ./maildir:/var/mail
+      - ./ingest:/ingest
+    networks:
+      - mail
+
+  suchi:
+    build:
+      context: ../..
+      target: slim
+    image: suchi:local-slim
+    container_name: suchi
+    restart: unless-stopped
+    depends_on:
+      - mbsync
+    user: "${MAIL_UID:-1000}:${MAIL_GID:-1000}"
+    env_file:
+      - config/.env
+    volumes:
+      - ./suchi-data:/data
+      - ./ingest:/ingest
+    ports:
+      - "${SUCHI_PORT:-8000}:8000"
+    networks:
+      - mail
+
+networks:
+  mail:
+    driver: bridge

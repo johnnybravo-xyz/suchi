@@ -12,11 +12,15 @@
 # ---------- build stage ----------
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY go.work ./
+COPY go.work go.work.sum* ./
 COPY plugin-api plugin-api
 COPY core core
 COPY plugins plugins
 COPY distro distro
+# hack/ holds local dev tools referenced from go.work (fixture generator,
+# ingest driver). Not built into the binary — just needs to be present so
+# `go build` can load the workspace without complaining about missing modules.
+COPY hack hack
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     cd distro && \

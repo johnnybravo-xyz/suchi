@@ -1,0 +1,29 @@
+# Fastmail via IMAPS. Requires an app password (Fastmail → Settings →
+# Password & Security → App passwords) with IMAP scope.
+
+IMAPAccount fastmail
+Host ${MAIL_HOST}
+Port ${MAIL_PORT}
+User ${MAIL_USER}
+PassCmd "echo $MAIL_PASSWORD"
+SSLType ${MAIL_SSL}
+AuthMechs LOGIN
+
+IMAPStore fastmail-remote
+Account fastmail
+
+MaildirStore fastmail-local
+Path /var/mail/
+Inbox /var/mail/INBOX
+SubFolders Verbatim
+
+Channel fastmail
+Far :fastmail-remote:
+Near :fastmail-local:
+Patterns ${MAIL_FOLDERS}
+Create Near
+Sync Pull
+Expunge None
+SyncState *
+MaxMessages ${MAIL_MAX_MESSAGES}
+MaxSize ${MAIL_MAX_SIZE}
