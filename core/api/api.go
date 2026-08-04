@@ -85,6 +85,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Custom-field values — typed write + delete per (doc, field).
 	mux.HandleFunc("PUT /api/documents/{id}/custom_fields/{field}", s.SetCustomField)
 	mux.HandleFunc("DELETE /api/documents/{id}/custom_fields/{field}", s.DeleteCustomField)
+
+	// Agent surface v1 — claim/complete/release + enqueue over the
+	// existing tasks endpoint family. See docs/agents.mdx.
+	s.RegisterAgent(mux)
 }
 
 // ---------- shared helpers ----------

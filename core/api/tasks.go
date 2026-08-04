@@ -55,6 +55,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	state := q.Get("state")
 	docID, _ := strconv.ParseInt(q.Get("doc_id"), 10, 64)
+	kindPrefix := q.Get("kind")
 
 	counts, err := s.taskCounts(r)
 	if err != nil {
@@ -63,7 +64,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.taskRows(r, state, docID, limit)
+	rows, err := s.taskRows(r, state, docID, kindPrefix, limit)
 	if err != nil {
 		s.Log.Error("api.tasks.query", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read tasks")
@@ -105,7 +106,7 @@ func (s *Server) taskCounts(r *http.Request) (map[string]int, error) {
 // The default filter (empty state) hides state=done because a healthy
 // instance drowns the response in done rows otherwise. Callers who
 // want completed jobs pass ?state=done explicitly.
-func (s *Server) taskRows(r *http.Request, state string, docID int64, limit int) ([]Task, error) {
+func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix string, limit int) ([]Task, error) {
 	args := []any{}
 	where := "WHERE 1=1"
 	if state != "" {
@@ -117,6 +118,12 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, limit int)
 	if docID > 0 {
 		where += " AND doc_id = ?"
 		args = append(args, docID)
+	}
+	if kindPrefix != "" {
+		// LIKE with escaping so an operator filter of "agent:" doesn't
+		// accidentally match a kind like "agent" if we ever ship it.
+		where += " AND kind LIKE ? ESCAPE '\\'"
+		args = append(args, escapeLike(kindPrefix)+"%")
 	}
 	args = append(args, limit)
 

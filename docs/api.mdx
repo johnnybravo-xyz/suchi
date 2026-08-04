@@ -155,6 +155,7 @@ Query parameters:
 | `state` | (unset) | Filter to one state: `pending`, `running`, `done`, `dead`. Default hides `done` because a healthy instance drowns the response in completions. |
 | `limit` | `50` | Max rows to return. Capped at `200`. |
 | `doc_id` | (unset) | Filter to the jobs for one document. |
+| `kind` | (unset) | Prefix filter on `kind`. `agent:` returns everything under the agent surface; specific kinds match exact-prefix. |
 
 Response shape:
 
@@ -174,6 +175,12 @@ Response shape:
 Timestamps are unix seconds. The Phase-4 mobile-compat shim
 converts to ISO8601 there — this endpoint keeps the suchi
 convention.
+
+### Agent surface: `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`
+
+External processes claim + complete `agent:*` jobs via
+task-claim/act. See the [agents guide](/agents) for the full contract,
+the reference Python agent, and the failure-mode table.
 
 ### `GET /api/documents/{id}/correspondents/`
 
