@@ -1,0 +1,7 @@
+.env
+config/.env
+maildir/
+ingest/
+suchi-data/
+bridge-data/
+templates/mbsyncrc.tmpl

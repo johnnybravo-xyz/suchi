@@ -1,0 +1,31 @@
+# Proton Mail via Bridge. Bridge runs as a sibling container on the
+# `mail` network; mbsync reaches it as protonmail-bridge:143.
+# $MAIL_PASSWORD is the Bridge-generated IMAP password (from `info`
+# in the Bridge CLI), NOT your Proton account password.
+
+IMAPAccount proton
+Host ${MAIL_HOST}
+Port ${MAIL_PORT}
+User ${MAIL_USER}
+PassCmd "echo $MAIL_PASSWORD"
+SSLType ${MAIL_SSL}
+AuthMechs LOGIN
+
+IMAPStore proton-remote
+Account proton
+
+MaildirStore proton-local
+Path /var/mail/
+Inbox /var/mail/INBOX
+SubFolders Verbatim
+
+Channel proton
+Far :proton-remote:
+Near :proton-local:
+Patterns ${MAIL_FOLDERS}
+Create Near
+Sync Pull
+Expunge None
+SyncState *
+MaxMessages ${MAIL_MAX_MESSAGES}
+MaxSize ${MAIL_MAX_SIZE}
