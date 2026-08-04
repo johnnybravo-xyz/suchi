@@ -158,6 +158,12 @@ principle: ingest completes even when some tools aren't installed.
   searchable-PDF archive (stored in the CAS as `archive_blob`) and
   a plain-text sidecar (stored in `documents.content`). The FTS5
   trigger picks up the content change automatically.
+- **zugferd** (Factur-X / XRechnung / ZUGFeRD) inspects the PDF for
+  an embedded invoice XML attachment and, if present, populates
+  `invoice_number`, `invoice_date`, `invoice_currency`,
+  `invoice_total_gross`, `invoice_total_net`, `invoice_seller`,
+  `invoice_seller_vat`, `invoice_buyer` custom fields. The
+  `custom_fields` rows are created lazily on the first extraction.
 
 Rules-engine classification runs after this (Phase 2 later); LLM /
 agent classification is Phase 3.
