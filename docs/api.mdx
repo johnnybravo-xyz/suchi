@@ -182,6 +182,22 @@ External processes claim + complete `agent:*` jobs via
 task-claim/act. See the [agents guide](/agents) for the full contract,
 the reference Python agent, and the failure-mode table.
 
+### Workflow surface: `/api/workflows/*`
+
+State-machine engine for review chains and approvals. Six endpoints:
+
+| Method | Path | Auth |
+|---|---|---|
+| POST   | `/api/workflows`                         | admin |
+| GET    | `/api/workflows/{slug}`                  | authed |
+| POST   | `/api/workflows/{slug}/start`            | authed |
+| GET    | `/api/workflows/runs/{id}`               | authed |
+| POST   | `/api/workflows/tasks/{task_id}/resolve` | assignee or admin |
+| POST   | `/api/workflows/runs/{id}/cancel`        | admin |
+
+See the [workflows guide](/workflows) for the spec shape, error codes,
+timeout behavior, and a worked invoice-approval example.
+
 ### `GET /api/documents/{id}/correspondents/`
 
 List the correspondents attached to a document, grouped by role.

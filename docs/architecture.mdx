@@ -176,6 +176,20 @@ principle: ingest completes even when some tools aren't installed.
 Rules-engine classification runs after this (Phase 2 later); LLM /
 agent classification is Phase 3.
 
+## Workflow engine
+
+Post-ingest pushes a document into a consistent state. What happens
+_next_ — the manager sign-off, the finance approval, the escalation
+when nobody answers in 24 h — lives in the workflow engine. Definitions
+are versioned JSON in `workflow_defs`; each run keeps one
+`current_state` cursor in `workflow_runs`; every transition appends to
+`workflow_transitions` (audit log); human steps land in
+`workflow_tasks`. Advancement rides the same durable outbox as
+everything else via `workflow:advance` / `workflow:resume` /
+`workflow:timeout-sweep` — no second scheduler. See
+[workflows](/workflows) for the spec shape, the six HTTP endpoints,
+and a worked invoice-approval example.
+
 ## Content-addressed storage
 
 Blobs live at `$DATA_DIR/blobs/sha256/{aa}/{bb}/{full-hash}`. Puts
