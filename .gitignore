@@ -29,3 +29,4 @@
 
 # stray binary from ad-hoc `go build` calls
 /distro/suchi
+.decrypt-key
