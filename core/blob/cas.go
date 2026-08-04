@@ -112,9 +112,15 @@ func (c *CAS) Put(r io.Reader) (pluginapi.BlobRef, error) {
 	}
 	tmpName = "" // rename consumed the temp
 
-	// Best-effort permission normalization; the umask usually already
-	// gives us 0644 but be explicit.
-	_ = os.Chmod(dst, 0o640)
+	// Normalize permissions to 0640 — owner rw, group r. os.CreateTemp
+	// makes the file 0600; the chmod broadens to group so a sidecar
+	// (rendered-view, etc.) can serve blobs without root. Failure here
+	// is unusual (fs doesn't support chmod, or we're not the owner);
+	// return it so callers see a real diagnosis instead of a downstream
+	// "permission denied" on Get.
+	if err := os.Chmod(dst, 0o640); err != nil {
+		return pluginapi.BlobRef{}, fmt.Errorf("chmod %s: %w", dst, err)
+	}
 
 	return pluginapi.BlobRef{SHA256: sum, Size: n}, nil
 }
