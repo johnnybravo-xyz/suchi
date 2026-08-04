@@ -1,0 +1,151 @@
+---
+title: "Supported file types"
+description: "Every format suchi ingests, the binary it needs, and where it lands."
+---
+
+suchi's ingest pipeline branches by MIME type sniffed server-side from
+the first 512 bytes of the upload. Every branch **degrades gracefully**:
+if the binary a branch needs isn't installed, the doc is still stored
+and searchable, `documents.content` just lands empty until the tool
+shows up.
+
+## Format matrix
+
+| MIME | What happens | Binary needed | Slim image | Full image |
+|------|--------------|---------------|:----------:|:----------:|
+| `application/pdf` | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction | `qpdf`, `pdftotext`, `ocrmypdf` + `tesseract` | text-native only | ✅ full chain |
+| `image/*` (PNG, JPEG, GIF, TIFF, WebP) | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens | none (pure-Go via gozxing) | ✅ | ✅ |
+| `application/epub+zip`, `application/epub` | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs. | none | ✅ | ✅ |
+| `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
+
+Anything else lands as a doc with empty content — the original bytes
+are safe in the CAS, dedup + metadata still work, but there's no text
+index. Add a converter (or wait for a future ingester) to fill in
+`documents.content` later.
+
+## PDF pipeline in detail
+
+The PDF path is the most involved because it fans out based on content:
+
+```
+upload → qpdf (normalize, strip restrictions, decrypt empty-password)
+      → pdf-inspector (pdftotext -layout)
+          ├─ ≥32 non-whitespace chars → text-native shortcut
+          │      → write content directly
+          └─ otherwise → ocrmypdf
+                 → text sidecar + searchable-PDF archive → CAS
+      → zugferd (qpdf --list-attachments → --show-attachment → CII XML parse)
+             → invoice_* custom fields (when a Factur-X / XRechnung
+                attachment is present)
+      → rules engine → rendered-view symlink → optional LLM handoff
+```
+
+Each step degrades independently. Missing `pdftotext` sends every PDF
+to the OCR path (slower but correct). Missing `ocrmypdf` leaves the
+content empty for scanned PDFs. Missing `qpdf` keeps the original
+bytes as-is (encrypted PDFs will then fail downstream).
+
+### ZUGFeRD / Factur-X / XRechnung
+
+PDF/A-3 documents with an embedded Cross-Industry Invoice XML get
+their structured data extracted and written to custom fields:
+
+| Custom field | CII source | Type |
+|--------------|-----------|------|
+| `invoice_number` | `ExchangedDocument/ID` (BT-1) | text |
+| `invoice_date` | `ExchangedDocument/IssueDateTime` (BT-2) | date |
+| `invoice_currency` | `InvoiceCurrencyCode` (BT-5) | text |
+| `invoice_total_gross` | `GrandTotalAmount` (BT-112) | monetary |
+| `invoice_total_net` | `LineTotalAmount` (BT-109) | monetary |
+| `invoice_seller` | `SellerTradeParty/Name` (BT-27) | text |
+| `invoice_seller_vat` | `SellerTradeParty/SpecifiedTaxRegistration[VA]` (BT-31) | text |
+| `invoice_buyer` | `BuyerTradeParty/Name` (BT-44) | text |
+
+The custom field rows are created lazily on the first successful
+extraction — a stock install without any e-invoices doesn't clutter
+the fields table.
+
+Recognised attachment names (case-insensitive): `factur-x.xml`,
+`zugferd-invoice.xml`, `xrechnung.xml`.
+
+## Images (barcodes)
+
+Every image upload runs QR / DataMatrix / Aztec decoding via gozxing
+(pure Go, in-process, no external binary). Any decoded barcode value
+lands in `documents.content` as `barcode:<value>` tokens so the FTS5
+index picks them up — search for `barcode:INV-2026-0042` and the doc
+surfaces.
+
+The image path skips qpdf / pdf-inspector / ocrmypdf entirely because
+those tools would fail on non-PDF input. There is no OCR of image
+uploads today — the design assumes you shot a barcode or a photo of
+a receipt whose barcode carries the useful key.
+
+## EPUB
+
+Pure-Go zip walker under `core/pipeline/epub/`. Reads
+`META-INF/container.xml` → OPF manifest → spine, then concatenates
+the visible text from each XHTML in reading order into
+`documents.content`. Naive tag stripping:
+
+- `<script>` and `<style>` bodies are dropped.
+- All other tags become whitespace so words don't get glued together.
+- Common named entities (`&amp;`, `&nbsp;`, `&lt;` etc.) are decoded.
+
+Title (`dc:title`) and authors (`dc:creator`) are parsed and logged
+today; wiring them into custom fields is a follow-up. The output cap
+is [configurable](/config#storage--runtime) via
+`EPUB_MAX_CONTENT_BYTES` — hitting it truncates silently and logs at
+Warn (`epub.truncated`).
+
+## DjVu
+
+`djvutxt` from `djvulibre-bin` extracts the OCR text layer that
+archive.org and library-scan DjVus normally carry. If the DjVu has no
+text layer (unusual), the extraction returns empty content — suchi
+does not OCR DjVu itself; convert to PDF upstream if needed.
+
+Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
++ Warn behaviour as EPUB.
+
+## Not yet supported
+
+- **HEIC / HEIF** — needs a `libheif`-backed converter (heif-convert → JPEG → image path). Planned.
+- **`.msg` (Outlook)** — parked. The binary format is heavy; forward to your `INGEST_IMAP_URL` inbox instead as a workaround.
+- **Office docs (`.docx`, `.odt`, etc.)** — `libreoffice-core` is in the full image but the conversion step isn't wired yet. Planned.
+- **`.zip` / `.tar` bundles** — no auto-explode. Ingest the individual documents.
+
+Add support by dropping a new package under `core/pipeline/<format>/`
+with an `Extract(...)` that returns `(*Result, error)`, then wire it
+into `core/pipeline/postingest/postingest.go` behind a MIME check.
+Every existing extractor is a template.
+
+## Per-format tuning
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `PDF_MAX_CONTENT_BYTES` | `8M` | Cap on `pdftotext` output length. |
+| `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on concatenated XHTML text. Ebooks routinely exceed the PDF-oriented default. |
+| `DJVU_MAX_CONTENT_BYTES` | `32M` | Cap on `djvutxt` output. |
+| `OCR_LANGUAGES` | `eng` | Comma-separated Tesseract language codes. `eng,deu,hin` etc. |
+
+All accept `K`/`M`/`G` suffixes or raw byte counts. Truncation is
+silent + logged at Warn — the doc still lands, FTS still indexes what
+fit.
+
+## Docker image matrix
+
+| Feature | Slim image | Full image |
+|---------|:----------:|:----------:|
+| Text-native PDF via `pdftotext` | ❌ | ✅ |
+| Scanned PDF via `ocrmypdf` + `tesseract` | ❌ | ✅ |
+| PDF normalization via `qpdf` | ❌ | ✅ |
+| ZUGFeRD attachment extraction | ❌ (needs qpdf) | ✅ |
+| Image barcode decoding | ✅ | ✅ |
+| EPUB extraction | ✅ | ✅ |
+| DjVu extraction | ❌ | ✅ |
+| Image size (approx) | ~30 MB | ~1 GB |
+
+Pick slim for lightweight deployments where you're only ingesting
+already-text-native content (bank PDFs, EPUBs, invoice images).
+Everything else needs full.
