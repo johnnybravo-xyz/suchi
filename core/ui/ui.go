@@ -28,6 +28,8 @@ import (
 	"github.com/suchi-dms/suchi/core/customfield"
 	"github.com/suchi-dms/suchi/core/db"
 	"github.com/suchi-dms/suchi/core/i18n"
+	"github.com/suchi-dms/suchi/core/jd"
+	"github.com/suchi-dms/suchi/core/settings"
 )
 
 //go:embed templates/*.html
@@ -77,7 +79,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup"}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
 		files := []string{"templates/" + name + ".html"}
@@ -116,6 +118,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /pending-decryption", s.RequireUI(http.HandlerFunc(s.PendingDecryption)))
 	mux.Handle("GET /upload", s.RequireUI(http.HandlerFunc(s.UploadPage)))
 	mux.Handle("GET /admin/mail-setup", s.RequireUI(http.HandlerFunc(s.MailSetupPage)))
+	mux.Handle("GET /admin/setup", s.RequireUI(http.HandlerFunc(s.SetupPage)))
 }
 
 // RequireUI redirects anonymous browsers to the login page. API tokens
@@ -148,6 +151,15 @@ type listRow struct {
 
 // List renders the paginated document list.
 func (s *Server) List(w http.ResponseWriter, r *http.Request) {
+	// Auto-redirect first-time admins to the setup wizard so they see
+	// the recap + can pick a step. Non-admins never get bounced.
+	if p := auth.FromContext(r.Context()); p != nil && p.Role == "admin" {
+		if needed, _ := settings.SetupNeeded(r.Context(), s.DB); needed {
+			http.Redirect(w, r, "/admin/setup", http.StatusFound)
+			return
+		}
+	}
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -573,6 +585,95 @@ func (s *Server) MailSetupPage(w http.ResponseWriter, r *http.Request) {
 		"Principal": p,
 		"Enabled":   s.MailSetupEnabled,
 	})
+}
+
+// setupStepMeta is the shape the setup.html template iterates over.
+type setupStepMeta struct {
+	Index       int
+	Name        string
+	Title       string
+	Hint        string
+	Status      string // "done" | "skipped" | "pending"
+	StatusLabel string
+}
+
+// setupOrder is authoritative. Same slugs as core/api/setup.go's
+// StepNames — the recap iterates in this order.
+var setupOrder = []struct {
+	Name  string
+	Title string
+	Hint  string
+}{
+	{"welcome", "Welcome", "Quick intro."},
+	{"users", "Users", "Invite household members or teammates."},
+	{"mail", "Mail ingest", "Point suchi at an IMAP mailbox."},
+	{"llm", "LLM classifier", "Configure Ollama or an OpenAI-compatible endpoint."},
+	{"jd", "Taxonomy", "Pick a JD preset that matches your use case."},
+	{"rules", "Rules", "Seed common classification rules."},
+	{"sources", "Ingest sources", "Enable filesystem-watch drop dirs."},
+	{"preferences", "Preferences", "Backup interval, OCR languages."},
+}
+
+// SetupPage renders the wizard. Admin-only. Query param ?step=<name>
+// selects the visible form; without one, only the recap shows.
+func (s *Server) SetupPage(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if p == nil || p.Role != "admin" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	state, err := settings.LoadSetupState(r.Context(), s.DB)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	steps := make([]setupStepMeta, 0, len(setupOrder))
+	done := 0
+	for i, o := range setupOrder {
+		status := "pending"
+		label := "pending"
+		if v, ok := state.Steps[o.Name]; ok {
+			status = string(v)
+			label = string(v)
+			if v == settings.StepDone {
+				done++
+			}
+		}
+		steps = append(steps, setupStepMeta{
+			Index:       i + 1,
+			Name:        o.Name,
+			Title:       o.Title,
+			Hint:        o.Hint,
+			Status:      status,
+			StatusLabel: label,
+		})
+	}
+	current := r.URL.Query().Get("step")
+	if current != "" {
+		if !isKnownStep(current) {
+			current = ""
+		}
+	}
+	completed := state.CompletedAt != nil && *state.CompletedAt > 0
+	s.render(w, r, "setup", map[string]any{
+		"Principal":        p,
+		"Steps":            steps,
+		"CurrentStep":      current,
+		"DoneCount":        done,
+		"TotalSteps":       len(setupOrder),
+		"Completed":        completed,
+		"MailSetupEnabled": s.MailSetupEnabled,
+		"JDPresets":        jd.Presets(),
+	})
+}
+
+func isKnownStep(name string) bool {
+	for _, o := range setupOrder {
+		if o.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- render + helpers ----------
