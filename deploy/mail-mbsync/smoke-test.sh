@@ -95,11 +95,24 @@ echo
 echo "== drop 9 synthetic fixtures =="
 go run ../../hack/emlfixtures -out ./ingest 2>&1 | tail -1
 
+# Also drop a HEIC fixture when the host has ImageMagick — the slim
+# image ships imagemagick-heic and the HEIC route feeds converted PDFs
+# into OCR, so exercising it here proves that whole path end-to-end.
+# When magick isn't on the host we skip and drop the HEIC assertion.
+heic_expected=0
+if command -v magick >/dev/null 2>&1; then
+    magick -size 240x240 -background white -fill black \
+        -gravity center label:'suchi smoke-test HEIC' \
+        ./ingest/canary.heic 2>/dev/null \
+        && heic_expected=1 \
+        && echo "  + canary.heic dropped"
+fi
+
 echo
 echo "== wait for docs to stabilize =="
 # fs-watch consumes files; post-ingest fans attachments; count peaks
-# at 14 (8 emails + 6 attachments) once done. Poll until doc count
-# stops changing for 5 consecutive samples.
+# at 14 (8 emails + 6 attachments) once done — plus 1 for the HEIC if
+# it was dropped. Poll until doc count stops changing for 5 samples.
 prev=-1
 stable=0
 for i in $(seq 1 60); do
@@ -151,11 +164,17 @@ docker compose logs suchi 2>&1 | grep -q 'post-ingest.email.dedup' && dedup_fire
 
 check "email docs (parents)"            "$email_docs" "8"
 check "attachment child docs"           "$child_docs" "6"
-check "total docs alive"                "$total_docs" "14"
+check "total docs alive"                "$total_docs" "$((14 + heic_expected))"
 check "dedup: one doc for dup msgID"    "$dup_msgid"  "1"
 check "dedup log line fired"            "$dedup_fired" "1"
 check "children inherit sender"         "$inherited"   "6"
 check "encoded subject decoded"         "$enc_title"   "Statement — 2026"
+
+if [ "$heic_expected" = "1" ]; then
+    heic_archived=$(sqlite3 suchi-data/dms.db \
+        "SELECT COUNT(*) FROM documents WHERE mime_type='image/heic' AND archive_blob IS NOT NULL AND trashed_at IS NULL")
+    check "HEIC doc has PDF archive"        "$heic_archived" "1"
+fi
 
 echo
 if [ "$FAIL" -eq 0 ]; then
