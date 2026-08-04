@@ -29,11 +29,11 @@
             {{ range .Doc.Tags }}<span class="tag">{{ . }}</span> {{ end }}
           {{ else }}{{ msg "none" }}{{ end }}
         </dd>
-        {{ if .Doc.ASN }}
-          <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN }}</dd>
+        {{ if .Doc.ASN.Valid }}
+          <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN.Int64 }}</dd>
         {{ end }}
-        {{ if .Doc.BundleID }}
-          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.BundleID }}</dd>
+        {{ if .Doc.BundleID.Valid }}
+          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.BundleID.Int64 }}</dd>
         {{ end }}
         {{ if .Doc.SplitParentID.Valid }}
           <dt>{{ msg "doc.detail.field.split_from" }}</dt>

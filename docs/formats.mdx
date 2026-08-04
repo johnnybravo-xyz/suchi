@@ -137,6 +137,11 @@ rules, render) as if it had arrived directly. `multipart/related`
 inline images (referenced from an HTML body) are NOT ingested as
 separate docs — they're kept inside the parent .eml's CAS blob only.
 
+Attachment children inherit the parent's correspondents (so the
+`From:` sender shows up on every child PDF), owner, and JD category.
+They do NOT inherit tags or document type — the pipeline (rules,
+LLM classifier) reclassifies each child independently.
+
 **How to feed it in.** Any of the three canonical ingest paths works;
 suchi doesn't care what put the `.eml` on the disk:
 
