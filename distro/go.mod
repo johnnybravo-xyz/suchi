@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/suchi-dms/suchi/core v0.0.0-00010101000000-000000000000
 	github.com/suchi-dms/suchi/plugin-api v0.0.0-00010101000000-000000000000
+	github.com/suchi-dms/suchi/plugins/llm-classifier v0.0.0-00010101000000-000000000000
 	github.com/suchi-dms/suchi/plugins/local-auth v0.0.0-00010101000000-000000000000
 	github.com/suchi-dms/suchi/plugins/oidc v0.0.0-00010101000000-000000000000
 )
@@ -41,6 +42,7 @@ require (
 replace (
 	github.com/suchi-dms/suchi/core => ../core
 	github.com/suchi-dms/suchi/plugin-api => ../plugin-api
+	github.com/suchi-dms/suchi/plugins/llm-classifier => ../plugins/llm-classifier
 	github.com/suchi-dms/suchi/plugins/local-auth => ../plugins/local-auth
 	github.com/suchi-dms/suchi/plugins/oidc => ../plugins/oidc
 )

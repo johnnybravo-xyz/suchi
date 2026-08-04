@@ -45,6 +45,15 @@ type Config struct {
 	// set — matches the design principle "opt-in, never surprise".
 	IngestFSDir        string
 	IngestFSOwnerEmail string
+
+	// LLM classifier (Phase 3, opt-in). Empty endpoint = disabled.
+	// Non-local endpoint requires LLMEgressAck=true; the classifier
+	// plugin refuses to enable otherwise. Ollama-on-box is the
+	// zero-egress recommended default.
+	LLMEndpointURL string
+	LLMModel       string
+	LLMAPIKey      string
+	LLMEgressAck   bool
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -64,6 +73,9 @@ func Load() (*Config, error) {
 		IngestIMAPURL:      env("INGEST_IMAP_URL", ""),
 		IngestFSDir:        env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail: env("INGEST_FS_OWNER_EMAIL", ""),
+		LLMEndpointURL:     env("LLM_ENDPOINT_URL", ""),
+		LLMModel:           env("LLM_MODEL", ""),
+		LLMEgressAck:       env("LLM_EGRESS_ACK", "") == "true",
 	}
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")
@@ -82,6 +94,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.IngestIMAPPassword, err = readSecret("INGEST_IMAP_PASSWORD"); err != nil {
+		return nil, err
+	}
+	if c.LLMAPIKey, err = readSecret("LLM_API_KEY"); err != nil {
 		return nil, err
 	}
 

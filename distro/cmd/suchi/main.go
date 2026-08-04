@@ -38,6 +38,7 @@ import (
 	"github.com/suchi-dms/suchi/core/render/view"
 	"github.com/suchi-dms/suchi/core/ui"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
+	llmclassifier "github.com/suchi-dms/suchi/plugins/llm-classifier"
 
 	localauth "github.com/suchi-dms/suchi/plugins/local-auth"
 	oidcauth "github.com/suchi-dms/suchi/plugins/oidc"
@@ -233,14 +234,33 @@ func runServe() int {
 		return 1
 	}
 
+	// LLM classifier plugin (opt-in via LLM_ENDPOINT_URL). New() returns
+	// nil when disabled OR when a non-local endpoint lacks
+	// LLM_EGRESS_ACK — server still boots, just without the plugin.
+	llm, err := llmclassifier.New(llmclassifier.Config{
+		EndpointURL: cfg.LLMEndpointURL,
+		Model:       cfg.LLMModel,
+		APIKey:      cfg.LLMAPIKey,
+		EgressAck:   cfg.LLMEgressAck,
+	}, log)
+	if err != nil {
+		log.Error("main.llm.new", "err", err.Error())
+		return 1
+	}
+
 	// Jobs — the durable outbox dispatcher. Every ingest producer
 	// enqueues a post-ingest job in the same tx as its doc row insert;
 	// this dispatcher hands the row off to a Subscriber. The
 	// post-ingest handler runs the qpdf → pdf-inspector → ocrmypdf
 	// chain, updates the doc row with content + archive_blob, applies
-	// rules, and refreshes the rendered-view symlink.
+	// rules, refreshes the rendered-view symlink, and — when the LLM
+	// classifier is registered — hands off to it via a post-classify
+	// job.
 	disp := jobs.New(d, log)
-	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages, renderer))
+	disp.Register(postingest.New(d, cas, log, cfg.OCRLanguages, renderer, llm != nil))
+	if llm != nil {
+		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
+	}
 	go disp.Run(ctx)
 	defer disp.Stop()
 
