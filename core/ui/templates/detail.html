@@ -59,6 +59,55 @@
     </div>
   </div>
 
+  {{ if eq .Doc.EncryptionState "encrypted" }}
+  <section class="decrypt-panel">
+    <h2>{{ msg "doc.detail.section.decrypt" }}</h2>
+    <p class="muted">{{ msg "doc.detail.decrypt.desc" }}</p>
+    <form onsubmit="return decryptOne(event, {{ .Doc.ID }})">
+      <label>
+        <span>{{ msg "decrypt.password_label" }}</span>
+        <input type="password" name="password" required autocomplete="new-password" />
+      </label>
+      <label>
+        <input type="checkbox" name="remember" checked />
+        {{ msg "decrypt.remember" }}
+      </label>
+      <label>
+        <span>{{ msg "decrypt.label_optional" }}</span>
+        <input type="text" name="label" placeholder="e.g. Bank X 2026" />
+      </label>
+      <button type="submit">{{ msg "decrypt.submit_one" }}</button>
+      <span id="decrypt-one-status" class="status muted"></span>
+    </form>
+    <script>
+    async function decryptOne(ev, id) {
+      ev.preventDefault();
+      const f = ev.target;
+      const s = document.getElementById('decrypt-one-status');
+      s.textContent = 'Decrypting…';
+      const resp = await fetch(`/api/documents/${id}/decrypt`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          password: f.password.value,
+          remember: f.remember.checked,
+          label: f.label.value,
+        }),
+      });
+      if (resp.status === 204) {
+        s.textContent = 'Decrypted. Reloading…';
+        setTimeout(() => location.reload(), 700);
+      } else {
+        const err = await resp.json().catch(() => ({error: resp.statusText}));
+        s.textContent = 'Failed: ' + (err.error || resp.status);
+      }
+      return false;
+    }
+    </script>
+  </section>
+  {{ end }}
+
   {{ if .CustomFields }}
   <section class="custom-fields">
     <h2>{{ msg "doc.detail.section.custom_fields" }}</h2>
