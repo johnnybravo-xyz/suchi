@@ -74,6 +74,9 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 		v.Enabled = en == 1
 		out = append(out, v)
 	}
+	if out == nil {
+		out = []RuleView{}
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
 

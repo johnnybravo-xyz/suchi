@@ -69,6 +69,9 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read tasks")
 		return
 	}
+	if rows == nil {
+		rows = []Task{}
+	}
 	s.writeJSON(w, http.StatusOK, TasksResponse{Counts: counts, Results: rows})
 }
 

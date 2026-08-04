@@ -75,6 +75,9 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	if out == nil {
+		out = []TagView{}
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
 
