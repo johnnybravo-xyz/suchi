@@ -205,6 +205,34 @@ the sender.
 
 Remove one junction row. `204` on success.
 
+### `PUT /api/documents/{id}/custom_fields/{field}`
+
+Write a typed custom-field value. `{field}` accepts either the numeric
+field id OR the field name.
+
+**Body:** `{"value": <T>}` where `<T>` matches the field's `data_type`:
+
+| data_type | Accepted `value` shape |
+|-----------|-------------------------|
+| `text`, `url` | string |
+| `number`, `monetary` | number OR numeric string |
+| `date` | ISO string `"YYYY-MM-DD"` OR unix seconds |
+| `bool` | boolean OR any of `"yes"`/`"no"`/`"1"`/`"0"` |
+| `select` | string; must appear in the field's `extra_data.choices` |
+| `multi` | `["a","b"]` OR comma-separated string; each element must be in choices |
+| `documentlink` | integer document id; refuses trashed/missing targets |
+
+`url` validates as `http`/`https`. Empty value ⇒ row is deleted.
+
+Returns `204 No Content` on success, `400` with a `code` on validation
+failure, `403` if the doc isn't yours, `404` if either the doc or the
+field doesn't exist. A successful write enqueues a storage-path
+re-render if the field is referenced in the template.
+
+### `DELETE /api/documents/{id}/custom_fields/{field}`
+
+Remove the value row for one (doc, field) pair. `204` on success.
+
 ### `GET /api/documents/{id}/versions/`
 
 Every version in the chain that {id} belongs to, oldest → newest.
