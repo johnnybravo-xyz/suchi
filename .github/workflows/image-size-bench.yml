@@ -81,18 +81,49 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/suchi suchi:slim-c version || \
             echo "WARN: variant C binary failed to run — musl mismatch?"
 
+      - name: Variant D — alpine + full PDF chain (qpdf + poppler-utils + ocrmypdf + tesseract)
+        run: |
+          # Everything a PDF-only image needs: qpdf normalization,
+          # pdftotext for the text-native shortcut, ocrmypdf + tesseract
+          # for the scanned-PDF path. NO djvulibre, NO libreoffice.
+          cat > /tmp/Dockerfile.D <<'EOF'
+          FROM alpine:3 AS slim-d
+          RUN apk add --no-cache \
+                ca-certificates \
+                qpdf \
+                poppler-utils \
+                ocrmypdf \
+                tesseract-ocr \
+                tesseract-ocr-data-eng
+          COPY --from=suchi-build:bench /out/suchi /usr/local/bin/suchi
+          RUN adduser -D -u 65532 suchi && mkdir -p /data && chown 65532 /data
+          USER 65532
+          EXPOSE 8000
+          VOLUME ["/data"]
+          ENV DATA_DIR=/data LISTEN_ADDR=:8000
+          ENTRYPOINT ["/usr/local/bin/suchi"]
+          CMD ["serve"]
+          EOF
+          docker build -f /tmp/Dockerfile.D -t suchi:slim-d .
+          docker image inspect suchi:slim-d --format '{{.Size}}' > /tmp/size-D.raw
+          docker run --rm --entrypoint /usr/local/bin/suchi suchi:slim-d version || \
+            echo "WARN: variant D binary failed to run under musl"
+
       - name: Report
         run: |
           human() { awk -v b="$1" 'BEGIN { printf "%.1f MB\n", b/1024/1024 }'; }
           echo "=========================================================="
           echo "variant                                              size"
           echo "----------------------------------------------------------"
-          printf "A  distroless/static  (current, no pdftotext)  %s\n" "$(human $(cat /tmp/size-A.raw))"
-          printf "B  distroless/base-debian12 + poppler-utils    %s\n" "$(human $(cat /tmp/size-B.raw))"
-          printf "C  alpine + poppler-utils (musl)               %s\n" "$(human $(cat /tmp/size-C.raw))"
+          printf "A  distroless/static  (current, no PDF tools)      %s\n" "$(human $(cat /tmp/size-A.raw))"
+          printf "B  distroless/base-debian12 + poppler-utils         %s\n" "$(human $(cat /tmp/size-B.raw))"
+          printf "C  alpine + poppler-utils                           %s\n" "$(human $(cat /tmp/size-C.raw))"
+          printf "D  alpine + qpdf+poppler+ocrmypdf+tesseract (PDF)   %s\n" "$(human $(cat /tmp/size-D.raw))"
           echo "=========================================================="
           delta_b=$(( $(cat /tmp/size-B.raw) - $(cat /tmp/size-A.raw) ))
           delta_c=$(( $(cat /tmp/size-C.raw) - $(cat /tmp/size-A.raw) ))
-          printf "\ncost of adding pdftotext to slim:\n"
-          printf "  via distroless/base-debian12: +%s\n" "$(human $delta_b)"
-          printf "  via alpine:                    +%s\n" "$(human $delta_c)"
+          delta_d=$(( $(cat /tmp/size-D.raw) - $(cat /tmp/size-A.raw) ))
+          printf "\ncost vs current 'slim':\n"
+          printf "  B  +pdftotext (distroless base):    +%s\n" "$(human $delta_b)"
+          printf "  C  +pdftotext (alpine):             +%s\n" "$(human $delta_c)"
+          printf "  D  +full PDF chain (alpine):        +%s\n" "$(human $delta_d)"
