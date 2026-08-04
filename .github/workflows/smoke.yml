@@ -1,16 +1,23 @@
 name: smoke
 
-# End-to-end validation of the full ingest chain against the REAL
-# external binaries (qpdf, ocrmypdf, pdftotext, tesseract). Runs on
-# every push to main + on pull_request so a regression in the wrapper
-# glue is caught before it lands.
+# End-to-end validation of both Docker image targets against real
+# binaries. Two lanes (matrix):
 #
-# We build the Dockerfile "full" stage, boot the container with a
-# throwaway data dir, walk the setup → upload → verify path via the
-# HTTP API, and inspect the resulting documents row for real OCR
-# output. Rationale: unit tests already cover the sandbox contract
-# with fake binaries; this job is the only thing that catches a
-# wrapper-vs-real-binary mismatch.
+#   full  — debian-slim + ocrmypdf; OCR_ENGINE=ocrmypdf.
+#           Tests the classic path + searchable-PDF archive.
+#   slim  — alpine + tessocr (pdftoppm + tesseract); OCR_ENGINE=tesseract.
+#           Tests the lightweight path; no archive_blob expected.
+#
+# Each lane:
+#   1) Builds its Dockerfile target.
+#   2) Boots the container.
+#   3) Uploads a text-native PDF; asserts `pdftotext` extraction worked.
+#   4) Uploads a scanned-PDF (rasterized via ghostscript); asserts the
+#      OCR engine extracted the seed word.
+#
+# Unit tests already cover the sandbox contract with fake binaries;
+# these are the only jobs that catch a wrapper-vs-real-binary mismatch
+# and — for the slim lane — a musl-vs-glibc surprise.
 
 on:
   push:
@@ -21,27 +28,43 @@ permissions:
   contents: read
 
 jobs:
-  full-image-ingest:
+  ingest:
+    name: ${{ matrix.lane }}-image-ingest
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: full
+            target: full
+            port: "8001"
+          - lane: slim
+            target: slim
+            port: "8002"
+    env:
+      # Each lane binds a different host port so the matrix jobs can
+      # coexist even if GitHub ever schedules them on the same runner.
+      HOST_PORT: ${{ matrix.port }}
+      LANE: ${{ matrix.lane }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build the full image
-        run: |
-          docker build \
-              --target full \
-              -t suchi:smoke .
+      - name: Build the ${{ matrix.lane }} image
+        run: docker build --target ${{ matrix.target }} -t suchi:smoke-${{ matrix.lane }} .
 
-      - name: Prepare a sample text-native PDF
+      - name: Prepare sample PDFs (text-native + scanned)
         run: |
-          # Build via Ghostscript from a hand-written PostScript source.
-          # Deliberately avoids TeX Live (~5min apt install) so the whole
-          # smoke workflow fits inside its 20-minute budget even when the
-          # image build has to rebuild layers.
+          # ghostscript builds both fixtures deterministically without
+          # pulling TeX Live (~5min apt install). Small package, present
+          # on GitHub's ubuntu-latest image already but the install line
+          # keeps the workflow self-contained.
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ghostscript
           mkdir -p /tmp/samples
+
+          # (1) Text-native PDF — pdftotext should extract "electricity"
+          #     and pdf-inspector should route text_native.
           cat > /tmp/samples/text-native.ps <<'EOF'
           %!PS-Adobe-3.0
           %%BoundingBox: 0 0 612 792
@@ -51,129 +74,144 @@ jobs:
           showpage
           EOF
           ps2pdf /tmp/samples/text-native.ps /tmp/samples/text-native.pdf
+
+          # (2) Scanned-look PDF — same content, rasterized into image-
+          #     only pages via ghostscript's pdfimage24 device. Any
+          #     downstream text extraction must go through OCR.
+          gs -sDEVICE=pdfimage24 -r150 -o /tmp/samples/scanned.pdf /tmp/samples/text-native.pdf
           ls -la /tmp/samples/
 
-      - name: Boot the container with a throwaway data dir
+      - name: Boot the container
         run: |
-          docker network create suchi-smoke-net
+          docker network create suchi-smoke-net-$LANE
           docker run -d \
-              --name suchi-smoke \
-              --network suchi-smoke-net \
-              -p 8000:8000 \
-              -e PUBLIC_URL=http://127.0.0.1:8000 \
-              -v suchi-smoke-data:/data \
-              suchi:smoke
-          # Wait for /healthz to answer 200. The container's own
-          # HEALTHCHECK is 30s cadence — poll externally for speed.
+              --name suchi-smoke-$LANE \
+              --network suchi-smoke-net-$LANE \
+              -p $HOST_PORT:8000 \
+              -e PUBLIC_URL=http://127.0.0.1:$HOST_PORT \
+              -v suchi-smoke-data-$LANE:/data \
+              suchi:smoke-$LANE
           for i in $(seq 1 30); do
-              if curl -sf http://127.0.0.1:8000/healthz >/dev/null; then
+              if curl -sf http://127.0.0.1:$HOST_PORT/healthz >/dev/null; then
                   echo "server up on attempt $i"
                   break
               fi
               sleep 1
           done
-          curl -sf http://127.0.0.1:8000/readyz | tee /tmp/readyz.json
+          curl -sf http://127.0.0.1:$HOST_PORT/readyz | tee /tmp/readyz.json
 
       - name: Bootstrap admin via /setup
         run: |
-          TOKEN=$(docker logs suchi-smoke 2>&1 | grep 'token_minted' \
+          TOKEN=$(docker logs suchi-smoke-$LANE 2>&1 | grep 'token_minted' \
               | grep -oP '"token":"\K[^"]+' | head -1)
           if [ -z "$TOKEN" ]; then
               echo "setup token not found in logs"
-              docker logs suchi-smoke
+              docker logs suchi-smoke-$LANE
               exit 1
           fi
-          curl -sf -X POST http://127.0.0.1:8000/setup \
+          curl -sf -X POST http://127.0.0.1:$HOST_PORT/setup \
               -H 'Content-Type: application/json' \
               -d "{\"token\":\"$TOKEN\",\"email\":\"smoke@ex.dev\",\"password\":\"pw\"}"
-          echo "setup ok"
 
       - name: Login → API token
         run: |
-          API_TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/login \
+          API_TOKEN=$(curl -s -X POST http://127.0.0.1:$HOST_PORT/api/login \
               -H 'Accept: application/json' \
               -H 'Content-Type: application/json' \
               -d '{"username":"smoke@ex.dev","password":"pw"}' \
               | grep -oP '"token":"\K[^"]+')
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 
-      - name: Upload text-native PDF and wait for pipeline to finish
+      - name: Upload text-native + scanned PDFs
         run: |
-          curl -sf -X POST http://127.0.0.1:8000/api/documents/ \
-              -H "Authorization: Token $API_TOKEN" \
-              -F "document=@/tmp/samples/text-native.pdf" \
-              -o /tmp/upload.json
-          cat /tmp/upload.json
-          # Poll /api/tasks/?state=done for the doc's post-ingest job.
-          for i in $(seq 1 60); do
-              CNT=$(curl -sf "http://127.0.0.1:8000/api/tasks/?state=done&doc_id=1" \
+          for f in text-native scanned; do
+              curl -sf -X POST "http://127.0.0.1:$HOST_PORT/api/documents/" \
                   -H "Authorization: Token $API_TOKEN" \
-                  | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('results') or []; print(len(r))")
-              if [ "$CNT" -ge 1 ]; then
-                  echo "post-ingest job done on attempt $i"
+                  -F "document=@/tmp/samples/$f.pdf" \
+                  -o /tmp/upload-$f.json
+              echo "== upload $f =="; cat /tmp/upload-$f.json; echo
+          done
+
+          # Wait until BOTH docs (id=1, id=2) show up under state=done.
+          for i in $(seq 1 120); do
+              CNT=$(curl -sf "http://127.0.0.1:$HOST_PORT/api/tasks/?state=done" \
+                  -H "Authorization: Token $API_TOKEN" \
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('results') or []; print(len([x for x in r if x.get('kind')=='post-ingest']))")
+              if [ "$CNT" -ge 2 ]; then
+                  echo "both post-ingest jobs done on attempt $i"
                   break
               fi
               sleep 1
           done
-          if [ "$CNT" -lt 1 ]; then
-              echo "post-ingest job never completed"
-              docker logs suchi-smoke
+          if [ "$CNT" -lt 2 ]; then
+              echo "post-ingest jobs incomplete (done=$CNT)"
+              docker logs suchi-smoke-$LANE | tail -80
               exit 1
           fi
 
-      - name: Assert the pipeline ran the real binaries
+      - name: Assert text-native extraction (pdftotext path)
         run: |
-          # Full-image is distro-minimal — no sqlite3 CLI, no shell. Ask
-          # the running server through its own HTTP surface instead.
-          curl -sf "http://127.0.0.1:8000/api/documents/1" \
-              -H "Authorization: Token $API_TOKEN" \
-              -o /tmp/doc.json
-          cat /tmp/doc.json
-          LEN=$(python3 -c "import json; d=json.load(open('/tmp/doc.json')); print(len(d.get('content') or ''))")
-          if [ "$LEN" -lt 20 ]; then
-              echo "content too short ($LEN chars) — pipeline didn't run against real binaries"
-              docker logs suchi-smoke | tail -50
+          curl -sf "http://127.0.0.1:$HOST_PORT/api/documents/1" \
+              -H "Authorization: Token $API_TOKEN" -o /tmp/doc1.json
+          echo "== doc 1 =="; cat /tmp/doc1.json; echo
+          if ! python3 -c "import json,sys; c=(json.load(open('/tmp/doc1.json')).get('content') or '').lower(); sys.exit(0 if 'electricity' in c else 1)"; then
+              echo "text-native extraction failed"
+              docker logs suchi-smoke-$LANE | tail -60
               exit 1
           fi
-          echo "content length = $LEN — pipeline OK"
 
-          # Content must actually include the seed word so we know
-          # pdftotext parsed the text-native PDF (not a spurious blob).
-          if ! python3 -c "import json,sys; c=(json.load(open('/tmp/doc.json')).get('content') or '').lower(); sys.exit(0 if 'electricity' in c else 1)"; then
-              echo "'electricity' missing from content — extraction regressed"
-              exit 1
-          fi
-          echo "content contains 'electricity' — extraction OK"
-
-      - name: Sanity-check the tasks + tags list endpoints return arrays
+      - name: Assert OCR extraction (${{ matrix.lane }} engine)
         run: |
-          # Regression guard for the empty-list-null bug we hit on this
-          # smoke workflow's first run — mobile clients depend on [].
-          for path in "/api/tasks/?state=done&doc_id=1" "/api/tags/" "/api/rules/"; do
-              curl -sf "http://127.0.0.1:8000$path" \
+          curl -sf "http://127.0.0.1:$HOST_PORT/api/documents/2" \
+              -H "Authorization: Token $API_TOKEN" -o /tmp/doc2.json
+          echo "== doc 2 =="; cat /tmp/doc2.json; echo
+          if ! python3 -c "import json,sys; c=(json.load(open('/tmp/doc2.json')).get('content') or '').lower(); sys.exit(0 if 'electricity' in c else 1)"; then
+              echo "OCR extraction failed — engine did not produce 'electricity'"
+              docker logs suchi-smoke-$LANE | tail -80
+              exit 1
+          fi
+          # ocrmypdf lane must produce an archive blob; tessocr lane must not.
+          HAS_ARCHIVE=$(python3 -c "import json; d=json.load(open('/tmp/doc2.json')); print('1' if d.get('archive_blob') else '0')")
+          case "$LANE" in
+            full)
+              if [ "$HAS_ARCHIVE" != "1" ]; then
+                  echo "full lane: expected archive_blob to be present after ocrmypdf"
+                  exit 1
+              fi ;;
+            slim)
+              if [ "$HAS_ARCHIVE" != "0" ]; then
+                  echo "slim lane: tessocr should NOT produce archive_blob"
+                  exit 1
+              fi ;;
+          esac
+
+      - name: Sanity-check list endpoints return arrays
+        run: |
+          for path in "/api/tasks/?state=done" "/api/tags/" "/api/rules/"; do
+              curl -sf "http://127.0.0.1:$HOST_PORT$path" \
                   -H "Authorization: Token $API_TOKEN" \
                   | python3 -c "import json,sys; r=json.load(sys.stdin).get('results'); sys.exit(0 if isinstance(r, list) else 1)" \
                 || (echo "$path did not return results:list"; exit 1)
               echo "$path OK"
           done
 
-      - name: Grep the pipeline log for the routing decision
+      - name: Grep the pipeline log for routing decisions
         run: |
-          docker logs suchi-smoke 2>&1 | \
-              grep -E 'qpdf\.|pdf-inspector\.|ocrmypdf\.|post-ingest\.route\.|view\.rendered' \
-              | tail -20
+          docker logs suchi-smoke-$LANE 2>&1 | \
+              grep -E 'qpdf\.|pdf-inspector\.|ocrmypdf\.|tessocr\.|post-ingest\.route\.|view\.rendered' \
+              | tail -30
 
       - name: Cleanup
         if: always()
         run: |
-          docker logs suchi-smoke > /tmp/suchi.log 2>&1 || true
-          docker rm -f suchi-smoke || true
-          docker volume rm suchi-smoke-data || true
-          docker network rm suchi-smoke-net || true
+          docker logs suchi-smoke-$LANE > /tmp/suchi-$LANE.log 2>&1 || true
+          docker rm -f suchi-smoke-$LANE || true
+          docker volume rm suchi-smoke-data-$LANE || true
+          docker network rm suchi-smoke-net-$LANE || true
 
       - name: Upload container logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-container-logs
-          path: /tmp/suchi.log
+          name: smoke-${{ matrix.lane }}-logs
+          path: /tmp/suchi-${{ matrix.lane }}.log
