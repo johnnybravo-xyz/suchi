@@ -174,41 +174,44 @@ func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMo
 
 func seed(ctx context.Context, d *db.DB, tree Tree, mode TaxonomyMode) error {
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().Unix()
-		for pos, a := range tree.Areas {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO jd_areas(code_start, code_end, name, description, position)
-				VALUES (?, ?, ?, ?, ?)
-			`, a.Start, a.End, a.Name, nullString(a.Description), pos); err != nil {
-				return fmt.Errorf("insert area %s: %w", a.Name, err)
-			}
-			for _, c := range a.Categories {
-				sys := 0
-				if c.System {
-					sys = 1
-				}
-				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO jd_categories(area_start, code, name, description, system)
-					VALUES (?, ?, ?, ?, ?)
-				`, a.Start, c.Code, c.Name, nullString(c.Description), sys); err != nil {
-					return fmt.Errorf("insert category %d: %w", c.Code, err)
-				}
-			}
-		}
-		// Pick the system category as the inbox pointer.
-		var inbox int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&inbox); err != nil {
-			return fmt.Errorf("locate inbox after seed: %w", err)
-		}
-		if err := writeSetting(ctx, tx, SettingInboxCategoryID, inbox, now); err != nil {
-			return err
-		}
-		if err := writeSetting(ctx, tx, SettingTaxonomy, string(mode), now); err != nil {
-			return err
-		}
-		return nil
+		return seedInTx(ctx, tx, tree, mode)
 	})
+}
+
+// seedInTx writes the tree rows + inbox/taxonomy settings inside an
+// existing tx. Used by both first-boot seed and preset-apply, so both
+// paths pin the same invariants.
+func seedInTx(ctx context.Context, tx *sql.Tx, tree Tree, mode TaxonomyMode) error {
+	now := time.Now().Unix()
+	for pos, a := range tree.Areas {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO jd_areas(code_start, code_end, name, description, position)
+			VALUES (?, ?, ?, ?, ?)
+		`, a.Start, a.End, a.Name, nullString(a.Description), pos); err != nil {
+			return fmt.Errorf("insert area %s: %w", a.Name, err)
+		}
+		for _, c := range a.Categories {
+			sys := 0
+			if c.System {
+				sys = 1
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO jd_categories(area_start, code, name, description, system)
+				VALUES (?, ?, ?, ?, ?)
+			`, a.Start, c.Code, c.Name, nullString(c.Description), sys); err != nil {
+				return fmt.Errorf("insert category %d: %w", c.Code, err)
+			}
+		}
+	}
+	var inbox int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&inbox); err != nil {
+		return fmt.Errorf("locate inbox after seed: %w", err)
+	}
+	if err := writeSetting(ctx, tx, SettingInboxCategoryID, inbox, now); err != nil {
+		return err
+	}
+	return writeSetting(ctx, tx, SettingTaxonomy, string(mode), now)
 }
 
 func repairInbox(ctx context.Context, d *db.DB, log *slog.Logger) error {
