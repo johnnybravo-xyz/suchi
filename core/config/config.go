@@ -71,6 +71,15 @@ type Config struct {
 	// tessocr is ~4× smaller in the image but produces no
 	// searchable-PDF archive (documents.archive_blob stays NULL).
 	OCREngine string
+
+	// Scan-intake preprocessing knobs. Blank-page detection runs
+	// after qpdf normalization and before pdf-inspector: if any pages
+	// register as >= whiteness threshold, they're stripped from the
+	// working copy so OCR + FTS don't waste cycles on blanks. The
+	// original blob in the CAS is never touched — only the working
+	// copy used for content extraction + archive_blob.
+	ScanBlankRemoval            bool    // default true when pdftoppm is on PATH
+	ScanBlankWhitenessThreshold float64 // 0.0-1.0; default 0.995 (99.5% white)
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -119,6 +128,16 @@ func Load() (*Config, error) {
 	case "auto", "tesseract", "ocrmypdf":
 	default:
 		return nil, fmt.Errorf("OCR_ENGINE: unknown value %q (want auto|tesseract|ocrmypdf)", c.OCREngine)
+	}
+
+	c.ScanBlankRemoval = strings.ToLower(env("SCAN_BLANK_REMOVAL", "auto")) != "off"
+	c.ScanBlankWhitenessThreshold = 0.995
+	if s := env("SCAN_BLANK_WHITENESS_THRESHOLD", ""); s != "" {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || f <= 0 || f > 1 {
+			return nil, fmt.Errorf("SCAN_BLANK_WHITENESS_THRESHOLD: want float in (0,1], got %q", s)
+		}
+		c.ScanBlankWhitenessThreshold = f
 	}
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.

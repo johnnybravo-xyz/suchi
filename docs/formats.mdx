@@ -29,6 +29,8 @@ The PDF path is the most involved because it fans out based on content:
 
 ```
 upload → qpdf (normalize, strip restrictions, decrypt empty-password)
+      → pageanalyze (optional; pdftoppm at 50 DPI → per-page mean intensity)
+          → qpdf --pages … keep only non-blank pages in the working copy
       → pdf-inspector (pdftotext -layout)
           ├─ ≥32 non-whitespace chars → text-native shortcut
           │      → write content directly
