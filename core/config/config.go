@@ -80,6 +80,16 @@ type Config struct {
 	// copy used for content extraction + archive_blob.
 	ScanBlankRemoval            bool    // default true when pdftoppm is on PATH
 	ScanBlankWhitenessThreshold float64 // 0.0-1.0; default 0.995 (99.5% white)
+
+	// Multi-doc splitting on QR separator sheets. Opt-in — a user
+	// who prints separator sheets carrying ScanSplitToken intends the
+	// split; auto-detecting splits from blank pages would silently
+	// break legit multipage docs. When enabled AND pdftoppm is on
+	// PATH, post-ingest rasterizes each page, checks for the token,
+	// and fans out each segment into its own document.
+	ScanSplitEnabled bool
+	ScanSplitToken   string // default "SUCHI-SPLIT"
+	ScanSplitDPI     int    // default 150
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -138,6 +148,17 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SCAN_BLANK_WHITENESS_THRESHOLD: want float in (0,1], got %q", s)
 		}
 		c.ScanBlankWhitenessThreshold = f
+	}
+
+	c.ScanSplitEnabled = strings.ToLower(env("SCAN_SPLIT_ENABLED", "off")) == "on"
+	c.ScanSplitToken = env("SCAN_SPLIT_TOKEN", "SUCHI-SPLIT")
+	c.ScanSplitDPI = 150
+	if s := env("SCAN_SPLIT_DPI", ""); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 72 || n > 600 {
+			return nil, fmt.Errorf("SCAN_SPLIT_DPI: want integer in [72,600], got %q", s)
+		}
+		c.ScanSplitDPI = n
 	}
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.

@@ -277,6 +277,11 @@ func runServe() int {
 			Enabled:            cfg.ScanBlankRemoval,
 			WhitenessThreshold: cfg.ScanBlankWhitenessThreshold,
 		}),
+		postingest.WithScanSplit(postingest.ScanSplit{
+			Enabled: cfg.ScanSplitEnabled,
+			Token:   cfg.ScanSplitToken,
+			DPI:     cfg.ScanSplitDPI,
+		}),
 	))
 	if llm != nil {
 		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))

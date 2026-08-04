@@ -224,6 +224,11 @@ type detailDoc struct {
 	HasArchive    bool
 	ASN           sql.NullInt64
 	PaperlessID   sql.NullInt64
+	// Multi-doc split lineage. When SplitParentID.Valid, this document
+	// was fanned out from a scan that carried QR separator sheets;
+	// SplitIndex is its 1-indexed position among the siblings.
+	SplitParentID sql.NullInt64
+	SplitIndex    sql.NullInt64
 }
 
 // Detail renders a single document with its metadata + PDF viewer.
@@ -246,7 +251,8 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			COALESCE(dt.name, ''),
 			COALESCE(jc.code || ' ' || jc.name, ''),
 			d.created_at, d.added_at, d.archive_blob,
-			d.archive_serial_number, d.paperless_id_legacy
+			d.archive_serial_number, d.paperless_id_legacy,
+			d.split_parent_id, d.split_index
 		FROM documents d
 		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
 		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
@@ -255,6 +261,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	`, id).Scan(
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
 		&created, &added, &archiveBlob, &doc.ASN, &doc.PaperlessID,
+		&doc.SplitParentID, &doc.SplitIndex,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
