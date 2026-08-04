@@ -32,6 +32,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/classify/rules"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pdfinspector"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
@@ -39,18 +41,26 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
+// PostClassifyKind is the job kind the LLM classifier plugin's
+// Subscriber picks up. Post-ingest enqueues one at the tail of Handle
+// when enqueueClassify=true.
+const PostClassifyKind = "post-classify"
+
 // Kind is the job.kind value the outbox uses.
 const Kind = "post-ingest"
 
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
 // documents row with content + optional archive_blob, runs the
-// rules-engine classifier, and refreshes the rendered-view symlink.
+// rules-engine classifier, refreshes the rendered-view symlink, and
+// (when enqueueClassify=true) hands off to the LLM classifier via a
+// post-classify job.
 type Handler struct {
-	db     *db.DB
-	cas    *blob.CAS
-	log    *slog.Logger
-	langs  []string
-	render *view.Renderer // optional — nil disables rendered-view
+	db              *db.DB
+	cas             *blob.CAS
+	log             *slog.Logger
+	langs           []string
+	render          *view.Renderer // optional — nil disables rendered-view
+	enqueueClassify bool           // true when an LLM classifier is registered
 }
 
 // New builds a Handler ready to register with a Dispatcher.
@@ -59,16 +69,17 @@ type Handler struct {
 // OCR fires. Empty defaults to ["eng"]. render is optional; nil
 // disables the rendered-view projection (bare-metal deployments or
 // tests that don't care about the symlink tree).
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer) *Handler {
+func New(d *db.DB, cas *blob.CAS, log *slog.Logger, langs []string, r *view.Renderer, enqueueClassify bool) *Handler {
 	if len(langs) == 0 {
 		langs = []string{"eng"}
 	}
 	return &Handler{
-		db:     d,
-		cas:    cas,
-		log:    log.With("component", "post-ingest"),
-		langs:  langs,
-		render: r,
+		db:              d,
+		cas:             cas,
+		log:             log.With("component", "post-ingest"),
+		langs:           langs,
+		render:          r,
+		enqueueClassify: enqueueClassify,
 	}
 }
 
@@ -85,14 +96,32 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if err != nil {
 		return fmt.Errorf("load doc: %w", err)
 	}
-	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
-		log.Info("post-ingest.skip.non_pdf", "mime", mime)
-		return nil
-	}
 
 	origBytes, err := h.readBlob(origBlob)
 	if err != nil {
 		return fmt.Errorf("cas get %s: %w", origBlob, err)
+	}
+
+	// Image path: skip qpdf/pdf-inspector/ocrmypdf (they'd fail on
+	// non-PDF input), run barcode decode against the raw bytes, and
+	// hand off to rules + rendered-view + classify like a PDF would.
+	// QR/DataMatrix/Aztec values land in documents.content as
+	// `barcode:<value>` tokens the FTS trigger picks up.
+	if barcode.Recognized(mime) {
+		bcs, berr := barcode.DecodeBytes(origBytes)
+		if berr != nil {
+			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
+		}
+		content := barcode.TokensFor(bcs)
+		if err := h.updateDoc(ctx, e.DocID, content, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
+		log.Info("post-ingest.skip.non_pdf", "mime", mime)
+		return nil
 	}
 
 	// 1. qpdf normalize
@@ -144,11 +173,18 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
 		return err
 	}
+	return h.postContentSteps(ctx, log, e.DocID)
+}
 
+// postContentSteps runs the after-content-lands steps common to both
+// PDF and image paths: rules-engine, rendered-view refresh, and the
+// LLM classify handoff. Extracted so both entry paths share exactly
+// one implementation.
+func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID int64) error {
 	// Rules engine runs after content lands so title/content triggers
 	// see the extracted text. Rules failure is logged, not fatal —
 	// classification is best-effort; the doc is already ingested.
-	if applied, err := rules.Apply(ctx, h.db, log, e.DocID); err != nil {
+	if applied, err := rules.Apply(ctx, h.db, log, docID); err != nil {
 		log.Warn("post-ingest.rules.error", "err", err.Error())
 	} else if len(applied) > 0 {
 		log.Info("post-ingest.rules.applied", "count", len(applied))
@@ -157,8 +193,20 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Rendered-view projection — best-effort. A failed render logs
 	// a warning; the doc row is already the source of truth.
 	if h.render != nil {
-		if _, err := h.render.Render(ctx, e.DocID); err != nil {
+		if _, err := h.render.Render(ctx, docID); err != nil {
 			log.Warn("post-ingest.render.error", "err", err.Error())
+		}
+	}
+
+	// LLM classification handoff: enqueue a post-classify job that
+	// the llm-classifier plugin's Subscriber picks up. Only enqueue
+	// when the plugin is actually registered — otherwise the job
+	// would die as a "no subscriber for kind" dead-letter.
+	if h.enqueueClassify {
+		if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+			return jobs.Enqueue(ctx, tx, PostClassifyKind, docID, "{}")
+		}); err != nil {
+			log.Warn("post-ingest.enqueue_classify", "err", err.Error())
 		}
 	}
 	return nil
