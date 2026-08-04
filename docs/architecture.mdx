@@ -168,6 +168,10 @@ principle: ingest completes even when some tools aren't installed.
   → OPF → spine, concatenates the visible text from each XHTML in
   reading order into `documents.content`. No qpdf, no ocrmypdf, no
   external binary — works in the slim image too.
+- **djvu** ingest routes through `djvutxt` (djvulibre-bin) which pulls
+  the embedded text layer from OCR'd DjVu scans (archive.org / library
+  archive workflows). Missing binary → skipped, doc lands with empty
+  content and can be re-ingested later.
 
 Rules-engine classification runs after this (Phase 2 later); LLM /
 agent classification is Phase 3.

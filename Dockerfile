@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ocrmypdf \
       qpdf \
       poppler-utils \
+      djvulibre-bin \
       libreoffice-core \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
