@@ -35,6 +35,10 @@ type Server struct {
 	decrypt   DecryptDeps
 	webhooks  WebhookDeps
 	mailSetup mailsetup.Options
+	// PasswordHasher is set at boot by main.go from the local-auth
+	// plugin so /api/admin/users can hash new passwords without this
+	// package importing plugins/*. Nil-check in handlers.
+	PasswordHasher func(pw string) (string, error)
 }
 
 // New returns a Server. The zero value isn't runnable — DB, CAS, Log
@@ -96,6 +100,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Mail-setup wizard — admin-only. Endpoint 404s when the wizard
 	// isn't configured (MAIL_SETUP_ENV_PATH unset).
 	mux.HandleFunc("POST /api/admin/mail-setup", s.MailSetupApply)
+
+	// Setup wizard surface (admin-only).
+	s.registerSetup(mux)
 }
 
 // ---------- shared helpers ----------
