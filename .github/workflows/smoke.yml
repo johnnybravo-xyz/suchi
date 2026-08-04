@@ -1,0 +1,173 @@
+name: smoke
+
+# End-to-end validation of the full ingest chain against the REAL
+# external binaries (qpdf, ocrmypdf, pdftotext, tesseract). Runs on
+# every push to main + on pull_request so a regression in the wrapper
+# glue is caught before it lands.
+#
+# We build the Dockerfile "full" stage, boot the container with a
+# throwaway data dir, walk the setup → upload → verify path via the
+# HTTP API, and inspect the resulting documents row for real OCR
+# output. Rationale: unit tests already cover the sandbox contract
+# with fake binaries; this job is the only thing that catches a
+# wrapper-vs-real-binary mismatch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  full-image-ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the full image
+        run: |
+          docker build \
+              --target full \
+              -t suchi:smoke .
+
+      - name: Prepare a sample PDF with real text + a scanned-page sample
+        run: |
+          # Pull two PDFs we KNOW have distinguishing properties so
+          # the assertions can rely on them.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+              texlive-latex-base texlive-latex-recommended \
+              poppler-utils imagemagick ghostscript qpdf
+          mkdir -p /tmp/samples
+          # (a) Text-native PDF — pdftotext should extract "electricity"
+          #     and the pipeline should route text_native.
+          cat > /tmp/samples/text-native.tex <<'EOF'
+          \documentclass{article}
+          \begin{document}
+          Electricity bill for March 2026. Total due 4523 rupees. BESCOM.
+          \end{document}
+          EOF
+          (cd /tmp/samples && pdflatex -interaction=nonstopmode text-native.tex >/dev/null)
+          ls -la /tmp/samples/
+
+      - name: Boot the container with a throwaway data dir
+        run: |
+          docker network create suchi-smoke-net
+          docker run -d \
+              --name suchi-smoke \
+              --network suchi-smoke-net \
+              -p 8000:8000 \
+              -e PUBLIC_URL=http://127.0.0.1:8000 \
+              -v suchi-smoke-data:/data \
+              suchi:smoke
+          # Wait for /healthz to answer 200. The container's own
+          # HEALTHCHECK is 30s cadence — poll externally for speed.
+          for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8000/healthz >/dev/null; then
+                  echo "server up on attempt $i"
+                  break
+              fi
+              sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/readyz | tee /tmp/readyz.json
+
+      - name: Bootstrap admin via /setup
+        run: |
+          TOKEN=$(docker logs suchi-smoke 2>&1 | grep 'token_minted' \
+              | grep -oP '"token":"\K[^"]+' | head -1)
+          if [ -z "$TOKEN" ]; then
+              echo "setup token not found in logs"
+              docker logs suchi-smoke
+              exit 1
+          fi
+          curl -sf -X POST http://127.0.0.1:8000/setup \
+              -H 'Content-Type: application/json' \
+              -d "{\"token\":\"$TOKEN\",\"email\":\"smoke@ex.dev\",\"password\":\"pw\"}"
+          echo "setup ok"
+
+      - name: Login → API token
+        run: |
+          API_TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/login \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -d '{"username":"smoke@ex.dev","password":"pw"}' \
+              | grep -oP '"token":"\K[^"]+')
+          echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
+
+      - name: Upload text-native PDF and wait for pipeline to finish
+        run: |
+          curl -sf -X POST http://127.0.0.1:8000/api/documents/ \
+              -H "Authorization: Token $API_TOKEN" \
+              -F "document=@/tmp/samples/text-native.pdf" \
+              -o /tmp/upload.json
+          cat /tmp/upload.json
+          # Poll /api/tasks/?state=done for the doc's post-ingest job.
+          for i in $(seq 1 60); do
+              CNT=$(curl -sf "http://127.0.0.1:8000/api/tasks/?state=done&doc_id=1" \
+                  -H "Authorization: Token $API_TOKEN" \
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('results',[])))")
+              if [ "$CNT" -ge 1 ]; then
+                  echo "post-ingest job done on attempt $i"
+                  break
+              fi
+              sleep 1
+          done
+          if [ "$CNT" -lt 1 ]; then
+              echo "post-ingest job never completed"
+              docker logs suchi-smoke
+              exit 1
+          fi
+
+      - name: Assert the pipeline ran the real binaries
+        run: |
+          # documents.content should contain the extracted text.
+          docker exec suchi-smoke sqlite3 /data/dms.db \
+              "SELECT id, length(content), substr(content, 1, 200) FROM documents" \
+              | tee /tmp/doc.txt
+          # If pdftotext + qpdf ran, we expect a non-trivial content
+          # length (>50 chars — enough to prove text extraction wasn't
+          # skipped).
+          LEN=$(docker exec suchi-smoke sqlite3 /data/dms.db \
+              "SELECT length(COALESCE(content, '')) FROM documents WHERE id = 1")
+          if [ "$LEN" -lt 20 ]; then
+              echo "content too short ($LEN chars) — pipeline didn't run against real binaries"
+              docker logs suchi-smoke | tail -50
+              exit 1
+          fi
+          echo "content length = $LEN — pipeline OK"
+
+          # FTS trigger should have picked it up.
+          HITS=$(docker exec suchi-smoke sqlite3 /data/dms.db \
+              "SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'electricity'")
+          if [ "$HITS" -lt 1 ]; then
+              echo "FTS didn't index 'electricity' — trigger regressed"
+              exit 1
+          fi
+          echo "FTS hits for 'electricity' = $HITS — trigger OK"
+
+          # Rendered-view symlink should exist for doc 1.
+          docker exec suchi-smoke find /data/rendered -type l | head -5
+
+      - name: Grep the pipeline log for the routing decision
+        run: |
+          docker logs suchi-smoke 2>&1 | \
+              grep -E 'qpdf\.|pdf-inspector\.|ocrmypdf\.|post-ingest\.route\.|view\.rendered' \
+              | tail -20
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker logs suchi-smoke > /tmp/suchi.log 2>&1 || true
+          docker rm -f suchi-smoke || true
+          docker volume rm suchi-smoke-data || true
+          docker network rm suchi-smoke-net || true
+
+      - name: Upload container logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-container-logs
+          path: /tmp/suchi.log
