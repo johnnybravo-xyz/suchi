@@ -1,194 +1,33 @@
-/* suchi — minimal, no framework. ~200 lines total.
-   Design goal: readable at 640px+, decent on mobile, works with JS off.
-   Colors are intentionally close to the Oat palette so a full Oat swap
-   later is a stylesheet-only diff.                                    */
-
-:root {
-  --bg:            #fafaf7;
-  --surface:       #ffffff;
-  --ink:           #1c1c1a;
-  --muted:         #6b6b6b;
-  --border:        #e6e5e0;
-  --accent:        #0c6b58;   /* teal-ish; distinct from bundle orange */
-  --accent-soft:   #e3f2ee;
-  --danger:        #b71c1c;
-  --radius:        4px;
-  --pad:           16px;
-  --pad-lg:        24px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-
-* { box-sizing: border-box; }
-
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
-body { line-height: 1.5; }
-
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* suchi — Oat is the design system (see /assets/vendor/oat.min.css).
+   This file only holds the bits Oat doesn't cover: the topbar layout
+   and one file-input dropzone. Everything else — buttons, panels,
+   inputs, tables, alerts — is Oat's job. Keep it that way. */
 
 .topbar {
-  display: flex; align-items: center; gap: var(--pad-lg);
-  padding: 12px var(--pad-lg); background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 24px;
+  padding: 12px 24px; background: var(--surface, #fff);
+  border-bottom: 1px solid var(--border, #e6e5e0);
   position: sticky; top: 0; z-index: 10;
 }
-.topbar .brand { font-weight: 600; font-size: 18px; color: var(--ink); }
-.topbar nav a { color: var(--muted); font-size: 14px; }
-.topbar nav a:hover { color: var(--ink); }
-.topbar .me { font-size: 13px; color: var(--muted); }
-.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: var(--pad); }
+.topbar .brand { font-weight: 600; font-size: 18px; }
+.topbar nav a { margin-right: 12px; }
+.topbar .me { font-size: 13px; opacity: 0.7; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }
 
-/* Buttons — shared across upload, forms, actions. */
-.btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px; font: inherit; font-weight: 500; font-size: 14px;
-  line-height: 1; border-radius: var(--radius); border: 1px solid transparent;
-  cursor: pointer; text-decoration: none; user-select: none;
-}
-.btn:hover { text-decoration: none; }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover { filter: brightness(1.05); }
-.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; filter: none; }
-.btn-secondary { background: var(--surface); color: var(--ink); border-color: var(--border); }
-.btn-secondary:hover { background: #f6f5f1; }
+main { padding: 24px; max-width: 1200px; margin: 0 auto; }
 
-/* Upload page — dropzone. */
-.upload-panel { max-width: 640px; margin: 0 auto; }
+/* Dropzone — Oat's `<ot-upload>` uses a different UX; this keeps the
+   custom-drop-target we ship on /upload until we decide to swap. */
 .dropzone {
   display: block; margin: 24px 0 16px; padding: 36px 24px;
-  border: 2px dashed var(--border); border-radius: 8px; text-align: center;
-  background: #fafaf7; cursor: pointer; transition: border-color 120ms, background 120ms;
+  border: 2px dashed var(--border, #e6e5e0); border-radius: 8px;
+  text-align: center; cursor: pointer;
+  transition: border-color 120ms, background 120ms;
 }
-.dropzone.is-drag { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone.is-drag { border-color: var(--accent, #0c6b58); background: var(--accent-soft, #e3f2ee); }
 .dropzone input[type=file] { display: none; }
 .dropzone-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.dropzone-icon { font-size: 28px; color: var(--muted); }
-.dropzone-hint { font-size: 15px; color: var(--ink); }
-.dropzone-or { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
-.dropzone-filename {
-  min-height: 20px; font-size: 13px; color: var(--accent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  overflow-wrap: anywhere;
-}
-.upload-actions { display: flex; align-items: center; gap: 12px; }
-.upload-actions .status { flex: 1; font-size: 13px; }
-.upload-actions .status.is-ok { color: var(--accent); }
-.upload-actions .status.is-error { color: var(--danger); }
+.dropzone-icon { font-size: 28px; opacity: 0.5; }
 
-/* Mail setup wizard */
-.mailsetup-panel { max-width: 720px; margin: 0 auto; }
-.mailsetup-panel fieldset {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px 20px 18px; margin: 20px 0;
-}
-.mailsetup-panel legend {
-  padding: 0 8px; font-size: 12px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted); font-weight: 600;
-}
-.mailsetup-panel .provider-picker { display: flex; flex-wrap: wrap; gap: 12px 20px; }
-.mailsetup-panel .provider-picker label {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer;
-}
-.mailsetup-panel .hint {
-  margin: 12px 0 0; padding: 8px 12px; background: var(--accent-soft);
-  color: var(--accent); border-radius: var(--radius); font-size: 12.5px;
-  min-height: 20px;
-}
-.mailsetup-panel .grid-2 {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
-}
-.mailsetup-panel .grid-2 label {
-  display: flex; flex-direction: column; gap: 4px; font-size: 12px;
-  color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
-}
-.mailsetup-panel .grid-2 input,
-.mailsetup-panel .grid-2 select {
-  padding: 8px 10px; font: inherit; font-size: 14px; color: var(--ink);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: #fff; text-transform: none; letter-spacing: normal; font-weight: 400;
-}
-.mailsetup-panel .grid-2 input:focus,
-.mailsetup-panel .grid-2 select:focus {
-  outline: 2px solid var(--accent); outline-offset: -1px;
-}
-.mailsetup-panel .notice {
-  padding: 12px 16px; border-radius: var(--radius); font-size: 14px; margin: 16px 0;
-}
-.mailsetup-panel .notice-warn { background: #fff7e0; color: #8a6d1c; border: 1px solid #f2df9f; }
-
-@media (max-width: 640px) {
-  .mailsetup-panel .grid-2 { grid-template-columns: 1fr; }
-}
-
-main { padding: var(--pad-lg); max-width: 1200px; margin: 0 auto; }
-
-h1 { font-size: 22px; margin: 0 0 16px 0; }
-h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 24px 0 8px 0; }
-
-.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--pad-lg); }
-.muted  { color: var(--muted); font-size: 13px; }
-.empty  { color: var(--muted); font-style: italic; padding: 32px 0; text-align: center; }
-
-table.rows { width: 100%; border-collapse: collapse; }
-table.rows th, table.rows td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
-table.rows th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
-table.rows tbody tr:hover { background: #f6f5f1; }
-
-.jd  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--accent); }
-.tag { display: inline-block; background: var(--accent-soft); color: var(--accent); font-size: 12px; padding: 2px 8px; border-radius: 999px; margin-right: 4px; }
-
-.pager { display: flex; gap: 16px; align-items: center; margin-top: 20px; font-size: 14px; }
-.pager .page { color: var(--muted); }
-
-.doc-detail .crumb { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-.doc-detail .two-col { display: grid; grid-template-columns: 300px 1fr; gap: var(--pad-lg); align-items: flex-start; }
-.doc-detail .meta dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 13px; }
-.doc-detail .meta dt { color: var(--muted); }
-.doc-detail .meta dd { margin: 0; }
-.doc-detail .viewer { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
-.doc-detail .notes { margin-top: 32px; }
-.doc-detail .notes ul { list-style: none; padding: 0; }
-.doc-detail .notes li { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-.doc-detail .notes time { color: var(--muted); font-size: 12px; margin-right: 12px; }
-
-.doc-detail .custom-fields { margin-top: 32px; }
-.doc-detail .custom-fields dl { display: grid; grid-template-columns: 200px 1fr; gap: 6px 12px; font-size: 13px; }
-.doc-detail .custom-fields dt { color: var(--muted); font-family: var(--mono, monospace); }
-.doc-detail .custom-fields dd { margin: 0; }
-.doc-detail .custom-fields dd.cf-monetary { font-variant-numeric: tabular-nums; }
-.doc-detail .custom-fields dd.cf-date { font-variant-numeric: tabular-nums; color: var(--muted); }
-
-body.auth { display: grid; place-items: center; min-height: 100vh; }
-.login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 340px; }
-.login-card h1 { text-align: center; margin: 0 0 20px 0; font-size: 28px; }
-.login-card form { display: flex; flex-direction: column; gap: 12px; }
-.login-card label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
-.login-card input { padding: 8px 10px; font: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
-.login-card input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.login-card button { padding: 10px; font: inherit; font-weight: 500; background: var(--accent); color: #fff; border: 0; border-radius: var(--radius); cursor: pointer; margin-top: 8px; }
-.login-card button:hover { filter: brightness(1.05); }
-.login-card .error { background: #ffecec; color: var(--danger); padding: 8px 12px; border-radius: var(--radius); font-size: 13px; }
-
-@media (max-width: 720px) {
-  .doc-detail .two-col { grid-template-columns: 1fr; }
-}
-
-.doc-detail .decrypt-panel { margin-top: 32px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-.doc-detail .decrypt-panel h2 { margin: 0 0 4px 0; }
-.doc-detail .decrypt-panel form { display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin-top: 12px; }
-.doc-detail .decrypt-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.doc-detail .decrypt-panel input[type=password], .doc-detail .decrypt-panel input[type=text] { padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 4px; }
-.doc-detail .decrypt-panel button { padding: 8px 16px; font-size: 14px; align-self: flex-start; }
-.doc-detail .decrypt-panel .status { margin-left: 10px; }
-
-.pending-decryption h1 { margin-bottom: 4px; }
-.pending-decryption .muted { color: var(--muted); font-size: 14px; }
-.pending-decryption form { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
-.pending-decryption label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; max-width: 480px; }
-.pending-decryption input[type=password], .pending-decryption input[type=text] { padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 4px; }
-.pending-decryption table.docs { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
-.pending-decryption table.docs th, .pending-decryption table.docs td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
-.pending-decryption table.docs th { color: var(--muted); font-weight: 600; }
-.pending-decryption .actions { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
-.pending-decryption .actions button { padding: 8px 16px; }
-.pending-decryption .status { color: var(--muted); font-size: 13px; }
+/* Suchi-specific pills — JD category code + tag chips. */
+.jd  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
