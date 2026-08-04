@@ -34,6 +34,8 @@ around").
 | `SCAN_SPLIT_ENABLED` | `off` | `on` → detect QR separator sheets and fan out one child document per segment. Opt-in only. See [formats#multi-doc-splitting](/formats#multi-doc-splitting-on-qr-separator-sheets). |
 | `SCAN_SPLIT_TOKEN` | `SUCHI-SPLIT` | QR payload that marks a separator page. Case-sensitive; the value your `qrencode` (or equivalent) encodes on the printed separator. |
 | `SCAN_SPLIT_DPI` | `150` | Rasterization DPI for QR detection. Range `[72, 600]`. Bump if your separator QRs are small or your scans are low-res. |
+| `INGEST_PASSWORDS_FILE` | (unset) | Optional path to a newline-separated list of candidate PDF passwords tried before an encrypted PDF is parked in `encryption_state='encrypted'`. Blank lines and `#` comments are skipped. Reloaded per-doc so operators can append passwords without restart. Chmod 600 recommended — the file holds secrets. |
+| `DECRYPT_KEY_FILE` | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals operator-supplied passwords in the `decryption_passwords` table. Auto-generated 0600 on first boot. **Losing this file loses ALL stored passwords** — back up `$DATA_DIR` wholesale, not just `dms.db`. |
 
 ## TLS
 

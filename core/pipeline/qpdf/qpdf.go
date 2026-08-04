@@ -48,6 +48,13 @@ type Options struct {
 	Binary  string // resolved via PATH if not absolute
 	Timeout time.Duration
 	MaxSize int64
+
+	// Passwords carries candidate user passwords to try if the empty
+	// password fails. The empty password is always tried first (it's
+	// the common owner-password-restrictions case), so this list only
+	// covers PDFs with a real user password. Order matters — hot
+	// passwords should come first for the fastest fanout.
+	Passwords []string
 }
 
 // Result carries the normalized bytes plus a diagnostic trail.
@@ -57,11 +64,24 @@ type Options struct {
 // caller should treat Data as identical to the input in that case
 // — pipeline steps downstream still work, they just don't get the
 // normalized form.
+//
+// NeedsPassword=true is a distinct failure mode: the input IS a PDF
+// but qpdf couldn't unlock it with any of Options.Passwords + the
+// empty password. Data holds the original encrypted bytes; the
+// caller should stash the doc in encryption_state='encrypted' and
+// wait for an operator-supplied password.
+//
+// PasswordIndex reports which slot succeeded:
+//
+//	-1 → no decryption needed OR empty password sufficed
+//	 k → Options.Passwords[k] worked
 type Result struct {
-	Data       []byte
-	Skipped    bool
-	StderrTail string
-	Duration   time.Duration
+	Data          []byte
+	Skipped       bool
+	NeedsPassword bool
+	StderrTail    string
+	Duration      time.Duration
+	PasswordIndex int
 }
 
 // Normalize runs qpdf against src. Streams src to a tmpfile inside the
@@ -115,36 +135,113 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 	}
 
 	start := time.Now()
-	res, err := sandbox.Run(ctx, sandbox.Opts{
-		// --replace-input isn't safe with -; we take the more explicit
-		// input + `-` output path.
-		Args:      []string{binary, "--remove-restrictions", "--decrypt=", "--", "in.pdf", "-"},
-		Timeout:   timeout,
-		MaxStdout: maxSize,
-		Dir:       dir,
-	})
+	// Try empty password first (the common owner-restrictions case),
+	// then each candidate in order. First success wins.
+	//
+	// qpdf exit codes we care about:
+	//   0 → clean success
+	//   3 → success with warnings (banks that ship spec-nonconformant
+	//       /Perms are the recurring one — decrypt did work). We
+	//       treat 3 as success as long as stdout is non-empty.
+	//   2 → real error — wrong password OR corrupt PDF OR not-a-PDF.
+	//       Sniff stderr to decide which.
+	tryDecrypt := func(password string) (*sandbox.Result, bool, bool, error) {
+		res, err := sandbox.Run(ctx, sandbox.Opts{
+			Args: []string{
+				binary, "--remove-restrictions", "--password=" + password,
+				"--decrypt", "--", "in.pdf", "-",
+			},
+			Timeout:   timeout,
+			MaxStdout: maxSize,
+			Dir:       dir,
+		})
+		// warnings-with-output is a success shape for us.
+		if err != nil && res != nil && res.ExitCode == 3 && len(res.Stdout) > 0 {
+			return res, false, true, nil
+		}
+		return res, isPasswordError(res.Stderr), false, err
+	}
+
+	res, passwordErr, hadWarnings, err := tryDecrypt("")
+	usedIndex := -1
 	if err != nil {
-		// qpdf exits non-zero on unrecognized input (e.g. someone
-		// uploaded a plain PNG). We treat that as "nothing to do" and
-		// return the original bytes rather than fail ingest.
+		if errors.Is(err, sandbox.ErrTimeout) {
+			return nil, fmt.Errorf("qpdf timeout after %s: %s", res.Duration, tail(res.Stderr))
+		}
+		if passwordErr && len(opts.Passwords) > 0 {
+			for i, pw := range opts.Passwords {
+				res, passwordErr, hadWarnings, err = tryDecrypt(pw)
+				if err == nil {
+					usedIndex = i
+					break
+				}
+				if !passwordErr || errors.Is(err, sandbox.ErrTimeout) {
+					break
+				}
+			}
+		}
+	}
+	if err != nil {
 		if errors.Is(err, sandbox.ErrTimeout) {
 			return nil, fmt.Errorf("qpdf timeout after %s: %s", res.Duration, tail(res.Stderr))
 		}
 		data, _ := os.ReadFile(inputPath)
+		if passwordErr {
+			log.Info("qpdf.needs_password",
+				"tried_candidates", len(opts.Passwords),
+				"stderr", tail(res.Stderr))
+			return &Result{
+				Data:          data,
+				NeedsPassword: true,
+				StderrTail:    tail(res.Stderr),
+				Duration:      res.Duration,
+				PasswordIndex: -1,
+			}, nil
+		}
 		log.Info("qpdf.skip.exit_nonzero",
 			"exit", res.ExitCode, "stderr", tail(res.Stderr))
-		return &Result{Data: data, Skipped: true, StderrTail: tail(res.Stderr), Duration: res.Duration}, nil
+		return &Result{
+			Data: data, Skipped: true,
+			StderrTail: tail(res.Stderr), Duration: res.Duration,
+			PasswordIndex: -1,
+		}, nil
 	}
 
 	if res.StdoutTruncated {
 		return nil, fmt.Errorf("qpdf: output exceeded cap %d bytes", maxSize)
 	}
+	if hadWarnings {
+		log.Info("qpdf.done.with_warnings",
+			"stderr_tail", tail(res.Stderr),
+			"password_index", usedIndex)
+	}
 	log.Debug("qpdf.done",
 		"in_bytes", fileSize(inputPath),
 		"out_bytes", len(res.Stdout),
 		"took", time.Since(start).String(),
+		"password_index", usedIndex,
 	)
-	return &Result{Data: res.Stdout, StderrTail: tail(res.Stderr), Duration: res.Duration}, nil
+	return &Result{
+		Data:          res.Stdout,
+		StderrTail:    tail(res.Stderr),
+		Duration:      res.Duration,
+		PasswordIndex: usedIndex,
+	}, nil
+}
+
+// isPasswordError sniffs qpdf's stderr for markers that specifically
+// mean "the input is encrypted and the provided password (or empty
+// password) is wrong". qpdf writes "invalid password" for a wrong
+// password and mentions "encrypted" / "user password" in various
+// permission contexts. False positives here just make us try more
+// candidates than needed; false negatives leak a would-be-decryptable
+// doc into the "unrecognized input" bucket. Neither is catastrophic.
+func isPasswordError(stderr []byte) bool {
+	s := strings.ToLower(string(stderr))
+	return strings.Contains(s, "invalid password") ||
+		strings.Contains(s, "password is not correct") ||
+		strings.Contains(s, "cannot open encrypted") ||
+		strings.Contains(s, "requires a password")
 }
 
 // SelectPages returns pdfBytes with only the pages listed in `pages`

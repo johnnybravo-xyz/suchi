@@ -25,6 +25,7 @@ import (
 	"github.com/suchi-dms/suchi/core/auth"
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/config"
+	suchicrypto "github.com/suchi-dms/suchi/core/crypto"
 	"github.com/suchi-dms/suchi/core/db"
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
 	"github.com/suchi-dms/suchi/core/httpx"
@@ -240,6 +241,16 @@ func runServe() int {
 		log.Warn("main.view.reconcile", "err", err.Error())
 	}
 
+	// AEAD key for sealing operator-supplied PDF passwords. Auto-
+	// generated 0600 on first boot at DecryptKeyPath (default
+	// $DATA_DIR/.decrypt-key). Loss of this file loses ALL stored
+	// passwords — back up DATA_DIR wholesale.
+	decryptKey, err := suchicrypto.LoadOrCreateKey(cfg.DecryptKeyPath)
+	if err != nil {
+		log.Error("main.decrypt_key.load", "path", cfg.DecryptKeyPath, "err", err.Error())
+		return 1
+	}
+
 	// LLM classifier plugin (opt-in via LLM_ENDPOINT_URL). New() returns
 	// nil when disabled OR when a non-local endpoint lacks
 	// LLM_EGRESS_ACK — server still boots, just without the plugin.
@@ -281,6 +292,10 @@ func runServe() int {
 			Enabled: cfg.ScanSplitEnabled,
 			Token:   cfg.ScanSplitToken,
 			DPI:     cfg.ScanSplitDPI,
+		}),
+		postingest.WithDecrypt(postingest.Decrypt{
+			Key:           decryptKey,
+			PasswordsFile: cfg.IngestPasswordsFile,
 		}),
 	))
 	if llm != nil {
@@ -362,6 +377,7 @@ func runServe() int {
 		return 1
 	}
 	apiSrv.WithJobs(disp).Register(mux)
+	apiSrv.AttachDecrypt(mux, api.DecryptDeps{Key: decryptKey, CAS: cas})
 
 	// Baseline audit ping — proves audit_events writes work.
 	audit.Log(ctx, d, log, audit.Event{
