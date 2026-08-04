@@ -29,6 +29,7 @@ doc.detail.title: Document
 doc.detail.section.metadata: Metadata
 doc.detail.section.content: Content
 doc.detail.section.notes: Notes
+doc.detail.section.custom_fields: Custom fields
 doc.detail.field.title: Title
 doc.detail.field.created: Created
 doc.detail.field.added: Added
