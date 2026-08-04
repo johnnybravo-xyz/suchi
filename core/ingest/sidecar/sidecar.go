@@ -64,22 +64,83 @@ type Correspondent struct {
 	Role string `json:"role,omitempty"` // defaults to "sender" if empty
 }
 
-// Parse decodes a sidecar payload. Returns an error only on bad JSON
-// or a version mismatch. Unknown fields decode into the struct's zero
-// values; producers that need surprise-field visibility should use
-// json.Decoder.DisallowUnknownFields explicitly.
+// Parse decodes a sidecar payload. Handles both the native suchi
+// shape (versioned via `suchi_sidecar: 1`) and the Paperless-native
+// shape emitted by producers like paperless-ngx post-consume scripts
+// and johnnybravo-xyz/mail-intake — flat JSON with `title`, `created`,
+// `correspondent`, `tags`. The compat path lets you drop suchi into
+// an existing Paperless-style ingest chain without patching the
+// upstream producer.
+//
+// Returns an error only on bad JSON or an explicit-but-mismatched
+// suchi_sidecar version. Absence of the version key means "producer
+// isn't announcing v1 explicitly" and drops to the compat parse.
 func Parse(b []byte) (*V1, error) {
 	var s V1
 	if err := json.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("sidecar: decode: %w", err)
 	}
+	// Compat: no version key → assume Paperless-native flat JSON.
+	// Every field the compat producer sets lives at the same key
+	// name, so the initial Unmarshal already populated the shared
+	// fields; just tag the record as version 1 for downstream
+	// consumers.
 	if s.Version == 0 {
-		return nil, errors.New("sidecar: missing suchi_sidecar version")
+		if !looksLikePaperlessSidecar(b) {
+			return nil, errors.New("sidecar: missing suchi_sidecar version and no recognized Paperless-style keys")
+		}
+		s.Version = Version
+		// Paperless-native `correspondent` may be a "Name <email>"
+		// address string. Peel to just the display name so tag
+		// lookups aren't confused by the angle-bracket suffix.
+		s.Correspondent = normalizeCorrespondent(s.Correspondent)
+		return &s, nil
 	}
 	if s.Version != Version {
 		return nil, fmt.Errorf("sidecar: unsupported version %d (this build understands v%d)", s.Version, Version)
 	}
 	return &s, nil
+}
+
+// looksLikePaperlessSidecar is the cheap sniff for "this JSON came
+// from a Paperless-compatible producer, not from a broken suchi one."
+// True when any of the well-known Paperless-native keys is present.
+func looksLikePaperlessSidecar(b []byte) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return false
+	}
+	for _, k := range []string{"title", "created", "correspondent", "tags"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeCorrespondent strips a trailing " <address>" from a
+// "Name <address>" string. Idempotent on plain names.
+func normalizeCorrespondent(s string) string {
+	if i := indexByte(s, '<'); i > 0 {
+		return trimSpaceRight(s[:i])
+	}
+	return s
+}
+
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func trimSpaceRight(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // CreatedUnix returns the created date as unix seconds, or 0 if the

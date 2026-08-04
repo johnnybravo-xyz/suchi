@@ -1,0 +1,136 @@
+---
+title: "Mail ingest via mail-intake"
+description: "Run johnnybravo-xyz/mail-intake alongside suchi to pull IMAP attachments straight into your archive."
+---
+
+You already run an IMAP mailbox (Proton, Fastmail, Gmail with app
+password, etc.) and want its attachments to land in suchi. Two
+transports work today:
+
+1. **This recipe — mail-intake.** A small Go daemon that polls IMAP,
+   extracts attachments matching a MIME allowlist, and drops them
+   into a consume directory with a per-attachment JSON sidecar.
+   suchi's `fs-watch` picks up both. **Clean cred separation:** the
+   mail service never sees suchi; suchi never sees the mailbox.
+2. Direct IMAP polling via `INGEST_IMAP_URL` — no external tools; see
+   [config](/config).
+
+Pick one. This page covers option 1.
+
+## Prerequisites
+
+- Proton Mail Bridge (or any IMAP endpoint) reachable from the
+  mail-intake container.
+- A shared volume both mail-intake and suchi can write / read.
+  Recommended: a bind mount off `/mnt/homelab/mail-intake/consume`.
+
+## docker-compose
+
+```yaml docker-compose.yml
+services:
+  mail-intake:
+    image: ghcr.io/johnnybravo-xyz/mail-intake:latest
+    restart: unless-stopped
+    volumes:
+      - ./mail-intake/config.yaml:/app/config.yaml:ro
+      - /mnt/homelab/mail-intake/consume:/consume
+      - /mnt/homelab/mail-intake/state:/state    # dedup DB
+    env_file: [.env]
+
+  suchi:
+    image: ghcr.io/suchi-dms/suchi:latest
+    restart: unless-stopped
+    depends_on: [mail-intake]
+    volumes:
+      - /mnt/homelab/suchi/data:/data
+      # Mount the SAME consume dir mail-intake writes to.
+      - /mnt/homelab/mail-intake/consume:/ingest:ro
+    environment:
+      PUBLIC_URL: http://127.0.0.1:8000
+      INGEST_FS_DIR: /ingest
+      INGEST_FS_OWNER_EMAIL: you@example.com
+    ports: ["8000:8000"]
+```
+
+## mail-intake config.yaml
+
+```yaml
+imap:
+  host: protonmail-bridge
+  port: 143
+folders:
+  - Inbox
+  - "Archive/Bills"
+mime_allowlist:
+  - application/pdf
+  - image/jpeg
+  - image/png
+target:
+  consume_dir: /consume
+  emit_metadata_sidecar: true
+  extra_tags: ["source:email"]
+```
+
+## Sidecar compatibility
+
+mail-intake emits Paperless-native flat JSON:
+
+```json
+{
+  "title": "Electricity bill March 2026",
+  "created": "2026-03-02T00:00:00Z",
+  "correspondent": "BESCOM Billing <bills@bescom.co.in>",
+  "tags": ["utilities","source:email"]
+}
+```
+
+suchi's sidecar spec normally requires `"suchi_sidecar": 1`, but
+`core/ingest/sidecar` transparently accepts the Paperless-native
+shape — no producer patch needed. `"Name <address>"` correspondent
+strings are peeled to just the display name; `created` accepts
+RFC-3339 or `YYYY-MM-DD`.
+
+If you're writing your own producer, you can EITHER emit the
+Paperless-native shape (portable) OR the versioned suchi-native form
+(access to `jd_category`, `custom_fields`, multi-role correspondents,
+etc. — see [sidecar spec](/architecture#json-sidecar)).
+
+## What you'll see
+
+For each attachment mail-intake extracts, suchi's fs-watch:
+
+1. Sees the file drop into `/ingest/`.
+2. Reads the sidecar (`filename.json`).
+3. Creates a document row owned by `INGEST_FS_OWNER_EMAIL`.
+4. Enqueues `post-ingest` — qpdf → OCR → ZUGFeRD → rules → render.
+5. Applies sidecar-derived title, created, correspondent (as sender),
+   tags.
+
+**What this path DOESN'T give you:** the raw `.eml` as its own suchi
+doc. If you want the email body indexed alongside the attachments
+(so a full-text search hits "hi, please see attached" in the body),
+either:
+
+- Configure mail-intake to also drop the raw message alongside its
+  attachments (upstream feature request, or write a small wrapper),
+  OR
+- Use suchi's direct IMAP polling (`INGEST_IMAP_URL`). That path
+  ingests the `.eml` first, then fans out its attachments as child
+  docs via `email_parent_id`.
+
+## Testing locally
+
+The fastest way to kick the tires without touching your real mailbox:
+
+```sh
+# 1. Start Bridge (see Proton docs) — exposes IMAP on port 143.
+# 2. In the mail-intake repo:
+docker compose run --rm mail-intake --one-shot
+# 3. Verify /consume/ now has attachments + .json sidecars.
+# 4. Boot suchi:
+docker compose up -d suchi
+# 5. In another terminal, tail logs:
+docker compose logs -f suchi | grep -E "fswatch|post-ingest"
+```
+
+Each attachment lands within a few seconds of appearing in `/consume/`.

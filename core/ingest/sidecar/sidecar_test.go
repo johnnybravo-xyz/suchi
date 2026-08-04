@@ -57,9 +57,10 @@ func TestParseMinimal(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"missing-version": `{"title": "x"}`,
-		"wrong-version":   `{"suchi_sidecar": 99}`,
-		"malformed-json":  `{`,
+		"no-version-no-paperless-keys": `{"unrelated": "x"}`,
+		"empty-object":                 `{}`,
+		"wrong-version":                `{"suchi_sidecar": 99}`,
+		"malformed-json":               `{`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -67,6 +68,52 @@ func TestParseRejects(t *testing.T) {
 				t.Fatalf("expected error for %s", name)
 			}
 		})
+	}
+}
+
+// Paperless-native producers (paperless-ngx post-consume scripts,
+// johnnybravo-xyz/mail-intake, etc.) emit flat JSON without a version
+// key. suchi accepts those as v1 so operators can drop suchi into an
+// existing Paperless-shaped ingest chain unmodified.
+func TestParsePaperlessCompat(t *testing.T) {
+	body := []byte(`{
+		"title": "Electricity bill March 2026",
+		"created": "2026-03-02T00:00:00Z",
+		"correspondent": "BESCOM Billing <bills@bescom.co.in>",
+		"tags": ["utilities","source:email"]
+	}`)
+	s, err := sidecar.Parse(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Version != sidecar.Version {
+		t.Errorf("version tagged as %d, want %d", s.Version, sidecar.Version)
+	}
+	if s.Title != "Electricity bill March 2026" {
+		t.Errorf("Title=%q", s.Title)
+	}
+	// "Name <address>" is peeled to the display name.
+	if s.Correspondent != "BESCOM Billing" {
+		t.Errorf("Correspondent=%q want BESCOM Billing", s.Correspondent)
+	}
+	if len(s.Tags) != 2 || s.Tags[0] != "utilities" {
+		t.Errorf("Tags=%v", s.Tags)
+	}
+	if got := s.CreatedUnix(); got == 0 {
+		t.Errorf("CreatedUnix=0 — RFC3339 date should parse")
+	}
+}
+
+// Bare-name correspondent (no angle-bracket address) passes through
+// unchanged.
+func TestParsePaperlessCompat_BareName(t *testing.T) {
+	body := []byte(`{"correspondent":"BESCOM","tags":["x"]}`)
+	s, err := sidecar.Parse(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Correspondent != "BESCOM" {
+		t.Errorf("Correspondent=%q", s.Correspondent)
 	}
 }
 
