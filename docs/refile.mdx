@@ -1,0 +1,173 @@
+---
+title: "Refile"
+description: "The \"come back and change your mind\" primitive — re-run rules + re-render every live doc after a preset, template, or rule change."
+---
+
+Suchi lets you commit to a filing system on day one **without** committing
+forever. Swap the JD preset later. Rewrite the storage-path template. Add
+a rule you wish you'd had at the start. Refile makes that stick across
+the existing corpus.
+
+**The selling point**: you can always come back and change this.
+
+## When to run it
+
+- You changed the [JD preset](/jd) mid-flight — docs park on the new
+  Inbox; refile re-classifies them under the new tree.
+- You edited a [storage-path template](/architecture) — refile
+  enqueues a render/move for every live doc so the rendered-view
+  symlinks converge on the new shape.
+- You added or edited a [classifier rule](/architecture) — refile
+  re-runs the rules engine against every live doc's current metadata.
+- You migrated from an existing DMS and want your JD tree to actually
+  reflect the imported metadata — refile after the import.
+
+## What it does (and doesn't)
+
+### Does
+
+- **Re-runs `rules.Apply`** against every live doc. The classifier is
+  additive (INSERT OR IGNORE on tags; set-if-null on foreign keys),
+  so re-running is cheap and idempotent.
+- **Enqueues a render/move job** for every live doc via the durable
+  outbox. The dispatcher picks them up post-commit; the render
+  subscriber deduplicates on `(doc_id, kind, state='pending')` so
+  overlapping refiles never double-work.
+
+### Doesn't
+
+- **Doesn't re-run OCR.** Content is deterministic given the CAS
+  blob — running OCR again would produce the same text. Text
+  extraction is expensive; refile skips it.
+- **Doesn't re-run the LLM classifier.** Same reason — expensive,
+  and non-deterministic given cloud endpoints. A future
+  `--include-llm` flag can opt in.
+- **Doesn't undo prior rule actions.** If you deleted a rule that
+  previously added tag `X`, tag `X` stays on every doc it touched.
+  The classifier is additive by design; manual cleanup (tag delete +
+  taxonomy merge) is the intended path for removals.
+- **Doesn't touch trashed docs.** Restore first, then refile.
+
+## Concurrency
+
+Refile is safe against a live server. Three invariants worth knowing:
+
+1. **Doc IDs are snapshotted at start.** A sweep processes exactly the
+   docs that were live at start-time. Uploads that arrive mid-sweep
+   are not included in the sweep — but they don't need to be. Every
+   new upload rides its own postingest chain (rules → render), which
+   reads the current preset + current template, so new docs land
+   under the new tree automatically.
+2. **Two concurrent refiles are safe.** The render subscriber
+   deduplicates on `(doc_id, kind, state='pending')`; a doc never
+   gets its symlink swapped twice. Rules are idempotent per (rule,
+   doc) pair.
+3. **Preset changes commit before refile scans.** `ApplyPresetWithRefile`
+   is a single write transaction. Uploads that land after the commit
+   already see the new inbox — no in-between state.
+
+## How to run it
+
+### As part of a preset swap
+
+Add `"refile": true` to the JD-preset apply call. Rejected docs
+(previously blocked with `409 documents_filed`) are accepted and
+parked on the new inbox, then a refile sweep runs synchronously.
+
+```bash
+curl -X POST http://localhost:8000/api/admin/setup/jd-preset \
+  -H "Authorization: Token $ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{"preset_id":"household","refile":true}'
+```
+
+### Standalone (template or rule change)
+
+```bash
+curl -X POST http://localhost:8000/api/admin/refile \
+  -H "Authorization: Token $ADMIN"
+```
+
+Response:
+
+```json
+{
+  "docs_scanned": 4231,
+  "rules_applied": 87,
+  "render_enqueued": 4231,
+  "errors": 0,
+  "elapsed_ms": 5240
+}
+```
+
+Options in the body:
+
+```json
+{
+  "skip_rules":  false,
+  "skip_render": false,
+  "owner_id":    0
+}
+```
+
+- `skip_rules` — don't re-run the classifier (use when only the
+  template changed)
+- `skip_render` — don't enqueue render jobs (use when only rules
+  changed and the template is the same)
+- `owner_id` — restrict to docs owned by this user. Useful for
+  "one household member wants to reflow their own tree" without
+  touching everyone else.
+
+### As a CLI subcommand
+
+For scripting / cron / migration checklists:
+
+```sh
+suchi refile
+suchi refile --skip-render                 # rules only
+suchi refile --skip-rules                  # render only
+suchi refile --owner-id 5                  # single-user reflow
+```
+
+`suchi refile` runs the same primitive as the admin endpoint. It's
+safe against a live server — you don't need to stop `suchi serve`.
+
+## Blast radius
+
+- **Rules pass**: touches every live doc's metadata (tags, FKs).
+  Reversible only via manual cleanup. Time: seconds per thousand
+  docs on a warm SQLite instance.
+- **Render pass**: enqueues one job per doc. The dispatcher works
+  through them at normal cadence; a large sweep on a small
+  concurrency budget takes minutes to hours. Watch `/api/tasks/` to
+  see progress. The rendered-view symlinks are the only filesystem
+  side effect — atomically swapped, safe on crash (Reconcile at
+  next boot finishes any pending moves).
+
+## Audit trail
+
+Every rule action is audit-logged. Every render/move lands in
+`render_moves` with `state='pending' → 'done'` or `'failed'`. A
+completed sweep can be reconstructed from the audit log + the
+`render_moves` table.
+
+## Not covered here (yet)
+
+- **JD preset preview** — "show me the diff before I commit". Sketch
+  in the plan doc; will land alongside the wizard UX polish for
+  Phase 7.
+- **Refile-driven LLM classification** — opt-in flag to enqueue
+  `post-classify` jobs for the LLM path. E3 territory (see the plan
+  doc).
+- **Per-tag refile** — "re-run rules only on docs carrying tag X".
+  Straightforward extension of `Options.OwnerID`; ping if you need
+  it before Phase 7.
+
+## Related
+
+- [JD taxonomy](/jd) — presets + tree structure
+- [Automations](/automations) — trigger→conditions→actions rules
+  (fires on lifecycle events, not on demand)
+- [Approvals](/approvals) — human-in-the-loop chains
+- [Architecture](/architecture) — rendered-view + storage-path
+  template mechanics
