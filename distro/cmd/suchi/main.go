@@ -436,6 +436,7 @@ func runServe() int {
 		return 1
 	}
 	apiSrv.PasswordHasher = localauth.HashPassword
+	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	// LLM live-reload hook: re-resolve settings + env, swap into the
 	// running plugin. Nil llm (disabled at boot) → the wizard save
 	// succeeds but the operator has to restart to actually enable.
