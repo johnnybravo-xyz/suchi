@@ -85,6 +85,8 @@ func main() {
 		os.Exit(runDoctor(os.Args[2:]))
 	case "mcp":
 		os.Exit(runMCP(os.Args[2:]))
+	case "demo":
+		os.Exit(runDemo(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -107,6 +109,7 @@ Usage:
   suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
   suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
   suchi mcp [--http :port]        start an MCP v2 server (stdio by default, HTTP+SSE with --http)
+  suchi demo [--data-dir DIR]     seed DATA_DIR with sample docs, tags, one automation, one share link
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
