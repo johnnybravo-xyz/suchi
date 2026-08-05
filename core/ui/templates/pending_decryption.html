@@ -3,94 +3,56 @@
 {{define "title"}}{{ msg "decrypt.title" }}{{end}}
 
 {{define "content"}}
-<section class="pending-decryption">
-  <header>
-    <h1>{{ msg "decrypt.title" }}</h1>
-    <p class="muted">{{ msg "decrypt.subtitle" }}</p>
-  </header>
+<header class="page-header">
+  <h1>{{ msg "decrypt.title" }}</h1>
+  <p class="subtitle">{{ msg "decrypt.subtitle" }}</p>
+</header>
 
-  {{ if .Documents }}
-    <form id="decrypt-form" onsubmit="return decryptBatch(event)">
-      <label class="pw-input">
-        <span>{{ msg "decrypt.password_label" }}</span>
+{{ if not .Documents }}
+  <div class="empty">
+    <span class="brand-illust" role="img" aria-label=""></span>
+    <p>{{ msg "decrypt.empty" }}</p>
+  </div>
+{{ else }}
+  <form id="decrypt-form" class="form-section">
+    <div class="form-grid">
+      <label><span>{{ msg "decrypt.password_label" }}</span>
         <input type="password" name="password" required autocomplete="new-password" />
       </label>
-      <label class="pw-remember">
-        <input type="checkbox" name="remember" checked />
-        {{ msg "decrypt.remember" }}
-      </label>
-      <label class="pw-label">
-        <span>{{ msg "decrypt.label_optional" }}</span>
+      <label><span>{{ msg "decrypt.label_optional" }}</span>
         <input type="text" name="label" placeholder="e.g. Bank X 2026" />
       </label>
+      <label class="full">
+        <span><input type="checkbox" name="remember" checked /> {{ msg "decrypt.remember" }}</span>
+      </label>
+    </div>
 
-      <table class="docs">
-        <thead>
+    <table class="rows" style="margin-top:16px">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" checked /></th>
+          <th>{{ msg "decrypt.col.title" }}</th>
+          <th>{{ msg "decrypt.col.size" }}</th>
+          <th>{{ msg "decrypt.col.created" }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Documents }}
           <tr>
-            <th><input type="checkbox" id="select-all" checked onchange="toggleAll(this)" /></th>
-            <th>{{ msg "decrypt.col.title" }}</th>
-            <th>{{ msg "decrypt.col.size" }}</th>
-            <th>{{ msg "decrypt.col.created" }}</th>
+            <td><input type="checkbox" name="doc" value="{{ .ID }}" checked /></td>
+            <td><a href="/docs/{{ .ID }}">{{ .Title }}</a></td>
+            <td class="muted">{{ .OriginalSize }}</td>
+            <td class="muted">{{ .CreatedFmt }}</td>
           </tr>
-        </thead>
-        <tbody>
-          {{ range .Documents }}
-            <tr>
-              <td><input type="checkbox" name="doc" value="{{ .ID }}" checked /></td>
-              <td><a href="/docs/{{ .ID }}">{{ .Title }}</a></td>
-              <td>{{ .OriginalSize }}</td>
-              <td>{{ .CreatedFmt }}</td>
-            </tr>
-          {{ end }}
-        </tbody>
-      </table>
+        {{ end }}
+      </tbody>
+    </table>
 
-      <div class="actions">
-        <button type="submit">{{ msg "decrypt.submit" }}</button>
-        <span id="decrypt-status" class="status muted"></span>
-      </div>
-    </form>
-
-    <script>
-    function toggleAll(cb) {
-      document.querySelectorAll('input[name=doc]').forEach(i => { i.checked = cb.checked });
-    }
-    async function decryptBatch(ev) {
-      ev.preventDefault();
-      const form = document.getElementById('decrypt-form');
-      const password = form.querySelector('input[name=password]').value;
-      const remember = form.querySelector('input[name=remember]').checked;
-      const label = form.querySelector('input[name=label]').value;
-      const ids = Array.from(form.querySelectorAll('input[name=doc]:checked'))
-        .map(el => parseInt(el.value, 10));
-      if (ids.length === 0) {
-        document.getElementById('decrypt-status').textContent =
-          'Select at least one document.';
-        return false;
-      }
-      const status = document.getElementById('decrypt-status');
-      status.textContent = 'Decrypting…';
-      const resp = await fetch('/api/documents/decrypt-batch', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify({doc_ids: ids, password, remember, label}),
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({error: 'unknown'}));
-        status.textContent = 'Failed: ' + (err.error || resp.status);
-        return false;
-      }
-      const body = await resp.json();
-      const ok = body.results.filter(r => r.ok).length;
-      const bad = body.results.length - ok;
-      status.textContent = `Decrypted ${ok}, failed ${bad}. Reloading…`;
-      setTimeout(() => location.reload(), 900);
-      return false;
-    }
-    </script>
-  {{ else }}
-    <p class="muted">{{ msg "decrypt.empty" }}</p>
-  {{ end }}
-</section>
+    <div class="footer">
+      <button type="submit">{{ msg "decrypt.submit" }}</button>
+      <span id="decrypt-status" class="muted"></span>
+    </div>
+  </form>
+  <script src="/assets/decrypt-batch.js" defer></script>
+{{ end }}
 {{end}}

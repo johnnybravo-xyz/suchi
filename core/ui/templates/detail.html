@@ -4,14 +4,19 @@
 
 {{define "content"}}
 <section class="doc-detail">
-  <header>
+  <header class="page-header">
     {{ with .Doc.JDLabel }}
       <div class="crumb">
         <a href="/">{{ msg "nav.documents" }}</a> ›
         <span>{{ . }}</span>
       </div>
     {{ end }}
-    <h1>{{ .Doc.Title }}</h1>
+    <h1>
+      {{ if .Doc.Sensitivity }}
+        <span class="sens {{ .Doc.Sensitivity }}">{{ .Doc.Sensitivity }}</span>
+      {{ end }}
+      {{ .Doc.Title }}
+    </h1>
   </header>
 
   <div class="two-col">
@@ -67,7 +72,7 @@
   <section class="decrypt-panel">
     <h2>{{ msg "doc.detail.section.decrypt" }}</h2>
     <p class="muted">{{ msg "doc.detail.decrypt.desc" }}</p>
-    <form onsubmit="return decryptOne(event, {{ .Doc.ID }})">
+    <form data-decrypt data-doc-id="{{ .Doc.ID }}">
       <label>
         <span>{{ msg "decrypt.password_label" }}</span>
         <input type="password" name="password" required autocomplete="new-password" />
@@ -83,32 +88,7 @@
       <button type="submit">{{ msg "decrypt.submit_one" }}</button>
       <span id="decrypt-one-status" class="status muted"></span>
     </form>
-    <script>
-    async function decryptOne(ev, id) {
-      ev.preventDefault();
-      const f = ev.target;
-      const s = document.getElementById('decrypt-one-status');
-      s.textContent = 'Decrypting…';
-      const resp = await fetch(`/api/documents/${id}/decrypt`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          password: f.password.value,
-          remember: f.remember.checked,
-          label: f.label.value,
-        }),
-      });
-      if (resp.status === 204) {
-        s.textContent = 'Decrypted. Reloading…';
-        setTimeout(() => location.reload(), 700);
-      } else {
-        const err = await resp.json().catch(() => ({error: resp.statusText}));
-        s.textContent = 'Failed: ' + (err.error || resp.status);
-      }
-      return false;
-    }
-    </script>
+    <script src="/assets/decrypt.js" defer></script>
   </section>
   {{ end }}
 

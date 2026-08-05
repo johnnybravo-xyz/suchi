@@ -34,43 +34,129 @@ func (p *Plugin) SetupHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	if req.Token == "" || req.Email == "" || req.Password == "" {
-		http.Error(w, "token, email, password required", http.StatusBadRequest)
+	if _, err := p.applySetup(r.Context(), req); err != nil {
+		http.Error(w, err.Error(), setupErrStatus(err))
 		return
 	}
-	// Constant-time comparison — a length-difference leak would let attackers
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// SetupFormHandler is the browser sibling of SetupHandler. Accepts a
+// url-encoded form, creates the admin, plants a session cookie, and
+// 302s to /. On any error redirects back to /bootstrap?error=... so the
+// UI can display the failure. Kept separate from SetupHandler so
+// mobile-app JSON contracts and browser flows don't fight over one
+// response shape.
+func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
+	if p.setupToken == "" {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/bootstrap?error=bad+form", http.StatusFound)
+		return
+	}
+	req := SetupRequest{
+		Token:       r.PostForm.Get("token"),
+		Email:       r.PostForm.Get("email"),
+		DisplayName: r.PostForm.Get("display_name"),
+		Password:    r.PostForm.Get("password"),
+	}
+	userID, err := p.applySetup(r.Context(), req)
+	if err != nil {
+		http.Redirect(w, r, "/bootstrap?error="+strings.ReplaceAll(err.Error(), " ", "+"),
+			http.StatusFound)
+		return
+	}
+	// Auto-login: plant a session cookie so the operator lands on / as
+	// the admin they just created, no re-typing.
+	sid, err := p.IssueSession(r.Context(), userID, r)
+	if err != nil {
+		p.log.Error("localauth.setup.session_failed", "err", err.Error())
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     CookieName,
+		Value:    sid,
+		Path:     "/",
+		Expires:  time.Now().Add(SessionTTL),
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// applySetup is the shared core of SetupHandler + SetupFormHandler.
+// Returns the created user id + a friendly error suitable for either
+// JSON or a query-string redirect.
+func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error) {
+	if req.Token == "" || req.Email == "" || req.Password == "" {
+		return 0, errSetupMissing
+	}
+	// Constant-time compare — a length-difference leak would let attackers
 	// binary-search the token length. Cheap defense.
 	if len(req.Token) != len(p.setupToken) ||
 		!constantTimeEq(req.Token, p.setupToken) {
-		http.Error(w, "bad token", http.StatusUnauthorized)
-		return
+		return 0, errSetupBadToken
 	}
 	hash, err := HashPassword(req.Password)
 	if err != nil {
-		http.Error(w, "hash failed", http.StatusInternalServerError)
-		return
+		return 0, errSetupHash
 	}
 	displayName := req.DisplayName
 	if displayName == "" {
 		displayName = req.Email
 	}
-	err = p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+	var userID int64
+	err = p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		_, err := tx.ExecContext(r.Context(), `
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
 			VALUES (?, ?, 'admin', ?, ?, ?)
 		`, req.Email, displayName, hash, now, now)
-		return err
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		userID = id
+		return nil
 	})
 	if err != nil {
 		p.log.Error("localauth.setup.insert_failed", "err", err.Error())
-		http.Error(w, "setup failed", http.StatusInternalServerError)
-		return
+		return 0, errSetupInsert
 	}
 	p.setupToken = "" // burn the token
 	p.log.Info("localauth.setup.completed", "email", req.Email)
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	return userID, nil
+}
+
+// Setup errors — exported strings match the /bootstrap query-param the
+// UI reads.
+var (
+	errSetupMissing  = &setupErr{msg: "token+email+password+required", code: http.StatusBadRequest}
+	errSetupBadToken = &setupErr{msg: "invalid+token", code: http.StatusUnauthorized}
+	errSetupHash     = &setupErr{msg: "hash+failed", code: http.StatusInternalServerError}
+	errSetupInsert   = &setupErr{msg: "insert+failed", code: http.StatusInternalServerError}
+)
+
+type setupErr struct {
+	msg  string
+	code int
+}
+
+func (e *setupErr) Error() string { return e.msg }
+
+func setupErrStatus(err error) int {
+	if se, ok := err.(*setupErr); ok {
+		return se.code
+	}
+	return http.StatusInternalServerError
 }
 
 // LoginRequest is the payload for POST /api/login (also used by the

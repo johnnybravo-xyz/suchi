@@ -3,39 +3,37 @@
 {{define "title"}}{{ msg "upload.title" }}{{end}}
 
 {{define "content"}}
-<section class="panel upload-panel">
+<header class="page-header">
   <h1>{{ msg "upload.title" }}</h1>
-  <p class="muted">{{ msg "upload.subtitle" }}</p>
+  <p class="subtitle">{{ msg "upload.subtitle" }}</p>
+</header>
 
-  {{ if .Error }}
-    <p class="notice notice-warn">{{ .Error }}</p>
-  {{ end }}
+{{ if .Error }}
+  <div class="notice warn">{{ .Error }}</div>
+{{ end }}
 
-  <form id="upload-form"
-        method="post" action="/api/documents/" enctype="multipart/form-data"
-        data-msg-uploading="{{ msg "upload.uploading" }}"
-        data-msg-err-no-file="{{ msg "upload.err.no_file" }}"
-        data-msg-err-generic="{{ msg "upload.err.generic" }}"
-        data-msg-err-conflict="{{ msg "upload.err.conflict" }}">
-    <label class="dropzone" id="dropzone">
-      <input type="file" name="document" id="file-input" required>
-      <div class="dropzone-inner">
-        <div class="dropzone-icon" aria-hidden="true">⇧</div>
-        <div class="dropzone-hint">{{ msg "upload.drop_hint" }}</div>
-        <div class="dropzone-or muted">— or —</div>
-        <span class="btn btn-secondary">{{ msg "upload.pick" }}</span>
-        <div class="dropzone-filename" id="filename"></div>
-      </div>
-    </label>
-
-    <div class="upload-actions">
-      <button type="submit"  id="submit-btn">
-        {{ msg "upload.submit" }}
-      </button>
-      <span class="status muted" id="status"></span>
+<form id="upload-form"
+      method="post" action="/api/documents/" enctype="multipart/form-data"
+      data-msg-uploading="{{ msg "upload.uploading" }}"
+      data-msg-err-no-file="{{ msg "upload.err.no_file" }}"
+      data-msg-err-generic="{{ msg "upload.err.generic" }}"
+      data-msg-err-conflict="{{ msg "upload.err.conflict" }}">
+  <label class="dropzone" id="dropzone">
+    <input type="file" name="document" id="file-input" required>
+    <div class="dropzone-inner">
+      <div class="dropzone-icon" aria-hidden="true">⇧</div>
+      <div class="dropzone-hint">{{ msg "upload.drop_hint" }}</div>
+      <div class="dropzone-or">— or —</div>
+      <span class="button ghost">{{ msg "upload.pick" }}</span>
+      <div class="dropzone-filename" id="filename"></div>
     </div>
-  </form>
-</section>
+  </label>
+
+  <div class="hstack" style="margin-top:8px">
+    <button type="submit" id="submit-btn">{{ msg "upload.submit" }}</button>
+    <span class="muted" id="status"></span>
+  </div>
+</form>
 
 <script src="/assets/upload.js" defer></script>
 {{end}}
