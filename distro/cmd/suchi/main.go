@@ -392,6 +392,10 @@ func runServe() int {
 	mux.HandleFunc("POST /setup", la.SetupHandler)
 	mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
 	mux.HandleFunc("POST /api/login", la.LoginHandler)
+	// Mobile wire-compat alias — third-party mobile clients POST to
+	// /api/token/ following the trailing-slash convention. Same
+	// handler as /api/login, same response shape ({"token": "<hex>"}).
+	mux.HandleFunc("POST /api/token/", la.LoginHandler)
 	if oa != nil {
 		mux.HandleFunc("GET /oidc/login", oa.LoginHandler)
 		mux.HandleFunc("GET /oidc/callback", oa.CallbackHandler)
@@ -456,11 +460,11 @@ func runServe() int {
 		ObjectKind: "server",
 	})
 
-	// Wrap the mux with trailing-slash tolerance so Django-REST-style
-	// clients (swift-paperless, Paperless Mobile, curl scripts written
-	// against paperless docs) work against /api/ without caring about
-	// the slash. Applied before Chain so all middlewares see the
-	// canonical (slash-stripped) path in r.URL.Path.
+	// Wrap the mux with trailing-slash tolerance so third-party
+	// clients that follow the trailing-slash convention work against
+	// /api/ without caring about the slash. Applied before Chain so
+	// all middlewares see the canonical (slash-stripped) path in
+	// r.URL.Path.
 	router := httpx.NormalizeAPITrailingSlash(mux)
 
 	// Middleware stack: outer-to-inner.
@@ -479,6 +483,7 @@ func runServe() int {
 	authRoutes.Handle("POST /setup", rl.Middleware(handler))
 	authRoutes.Handle("POST /bootstrap", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/login", rl.Middleware(handler))
+	authRoutes.Handle("POST /api/token/", rl.Middleware(handler))
 	// Anything else falls through to the un-limited handler.
 	authRoutes.Handle("/", handler)
 

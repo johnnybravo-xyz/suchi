@@ -78,8 +78,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/documents/{id}/correspondents/", s.AddDocCorrespondent)
 	mux.HandleFunc("DELETE /api/documents/{id}/correspondents/{cid}/{role}", s.RemoveDocCorrespondent)
 
-	// Jobs (Paperless-mobile compat surface uses this shape too).
+	// Jobs (the mobile wire-compat surface uses this shape too).
 	mux.HandleFunc("GET /api/tasks/", s.ListTasks)
+
+	// Mobile wire-compat handshake — apps hit these on connect.
+	mux.HandleFunc("GET /api/remote_version/", s.RemoteVersion)
+	mux.HandleFunc("GET /api/next_asn/", s.NextASN)
 
 	// Rules — deterministic classifier config surface.
 	mux.HandleFunc("GET /api/rules/", s.ListRules)
