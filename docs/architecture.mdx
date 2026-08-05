@@ -222,6 +222,25 @@ everything else via `workflow:advance` / `workflow:resume` /
 [workflows](/workflows) for the spec shape, the six HTTP endpoints,
 and a worked invoice-approval example.
 
+## Headless mode
+
+`SUCHI_UI_DISABLED=1` skips registration of every browser-facing
+route at boot: `/`, `/docs/{id}`, `/preview/{id}`, `/download/{id}`,
+`/pending-decryption`, `/upload`, `/inbox`, `/login`, `/bootstrap`,
+`/admin/*`. What stays: `/api/*` (the JSON surface),
+`/healthz`, `/readyz`, `/metrics`, and `/assets/*` (kept so an
+external SPA can still fetch the favicon + manifest if it wants).
+
+Intended for deployments where a separate frontend — an SPA built
+against `/api/`, an internal-tools dashboard, a mobile app — is
+the primary UX. suchi runs as an API server; the frontend is
+whatever the operator hosts.
+
+The three auth chains (Token, Bearer, OIDC) are unaffected. The
+first-boot bootstrap flow (`POST /setup`) is unaffected — it's an
+API endpoint, not a UI page — but you'll need to POST the token
+manually since the `/bootstrap` browser wizard is gone.
+
 ## Content-addressed storage
 
 Blobs live at `$DATA_DIR/blobs/sha256/{aa}/{bb}/{full-hash}`. Puts

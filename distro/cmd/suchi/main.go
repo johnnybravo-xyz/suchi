@@ -406,20 +406,27 @@ func runServe() int {
 	mux.Handle("GET /api/whoami", httpx.RequireAuth(http.HandlerFunc(whoamiHandler)))
 
 	// i18n + read-only UI (CAS constructed above with the dispatcher).
-	cat, err := i18n.Load("en", log)
-	if err != nil {
-		log.Error("main.i18n", "err", err.Error())
-		return 1
+	// UIDisabled=true (env SUCHI_UI_DISABLED=1) skips both — headless
+	// deployments front /api/ with a custom SPA hosted elsewhere.
+	if !cfg.UIDisabled {
+		cat, err := i18n.Load("en", log)
+		if err != nil {
+			log.Error("main.i18n", "err", err.Error())
+			return 1
+		}
+		uiSrv, err := ui.New(d, cas, cat, log)
+		if err != nil {
+			log.Error("main.ui.new", "err", err.Error())
+			return 1
+		}
+		uiSrv.LoginSubmit = la.LoginFormHandler
+		uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
+		uiSrv.SetupPendingFn = func() bool { return la.SetupToken() != "" }
+		uiSrv.Register(mux)
+	} else {
+		log.Info("main.ui.disabled",
+			"reason", "SUCHI_UI_DISABLED — headless mode, /api/ only")
 	}
-	uiSrv, err := ui.New(d, cas, cat, log)
-	if err != nil {
-		log.Error("main.ui.new", "err", err.Error())
-		return 1
-	}
-	uiSrv.LoginSubmit = la.LoginFormHandler
-	uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
-	uiSrv.SetupPendingFn = func() bool { return la.SetupToken() != "" }
-	uiSrv.Register(mux)
 
 	// JSON API surface (/api/*). Attach the dispatcher so upload
 	// handlers can nudge it when a fresh doc's post-ingest job lands.

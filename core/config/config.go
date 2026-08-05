@@ -131,6 +131,16 @@ type Config struct {
 	MailSetupEnvPath    string
 	MailSetupContainer  string
 	MailSetupDockerSock string
+
+	// UIDisabled turns off the built-in server-rendered UI at boot.
+	// Set SUCHI_UI_DISABLED=1 for headless deployments where an
+	// external SPA (React/Svelte/whatever) fronts /api/. When true,
+	// none of /, /docs/{id}, /inbox, /upload, /admin/*, /pending-
+	// decryption, /login, /bootstrap register — the mux only serves
+	// /api/*, /healthz, /readyz, /metrics, /assets/* (kept so /api/
+	// consumers can still reach the manifest + favicon if they want).
+	// Existing /api/ auth (Token/Bearer/OIDC) applies unchanged.
+	UIDisabled bool
 }
 
 // Load reads env vars and returns a validated Config. It is intended to be
@@ -210,6 +220,9 @@ func Load() (*Config, error) {
 	c.MailSetupEnvPath = env("MAIL_SETUP_ENV_PATH", "")
 	c.MailSetupContainer = env("MAIL_SETUP_CONTAINER", "suchi-mail-mbsync")
 	c.MailSetupDockerSock = env("MAIL_SETUP_DOCKER_SOCK", "/var/run/docker.sock")
+
+	c.UIDisabled = env("SUCHI_UI_DISABLED", "") == "true" ||
+		env("SUCHI_UI_DISABLED", "") == "1"
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.
 	if c.OIDCClientSecret, err = readSecret("OIDC_CLIENT_SECRET"); err != nil {

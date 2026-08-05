@@ -37,6 +37,7 @@ around").
 | `INGEST_PASSWORDS_FILE` | (unset) | Optional path to a newline-separated list of candidate PDF passwords tried before an encrypted PDF is parked in `encryption_state='encrypted'`. Blank lines and `#` comments are skipped. Reloaded per-doc so operators can append passwords without restart. Chmod 600 recommended — the file holds secrets. |
 | `DECRYPT_KEY_FILE` | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals operator-supplied passwords in the `decryption_passwords` table. Auto-generated 0600 on first boot. **Losing this file loses ALL stored passwords** — back up `$DATA_DIR` wholesale, not just `dms.db`. |
 | `PRE_CONSUME_SCRIPT` | (unset) | Optional path to an operator-defined executable that runs on every doc before any built-in ingest logic. See [preconsume](/preconsume) for the contract (argv, env vars, stdout JSON envelope). |
+| `SUCHI_UI_DISABLED` | (unset) | Set to `1` or `true` to turn off the built-in server-rendered UI at boot. When enabled, `/`, `/docs/{id}`, `/inbox`, `/upload`, `/login`, `/bootstrap`, `/admin/*`, `/pending-decryption` don't register — only `/api/*`, `/healthz`, `/readyz`, `/metrics`, `/assets/*` are served. For deployments where an external SPA (React/Svelte/whatever) fronts `/api/`. Auth (Token/Bearer/OIDC) is unchanged. See [architecture#headless-mode](/architecture#headless-mode). |
 
 ## TLS
 

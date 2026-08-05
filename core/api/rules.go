@@ -47,13 +47,30 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
+	var total int
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT COUNT(*) FROM rules").Scan(&total); err != nil {
+		s.Log.Error("api.rules.count", "err", err.Error())
+		s.writeError(w, http.StatusInternalServerError, "db_read", "count failed")
+		return
+	}
+	p := ParsePageParams(r, 100, 500)
+	order := OrderingToSQL(p.Ordering, map[string]string{
+		"priority":   "priority",
+		"name":       "name",
+		"created_at": "created_at",
+	})
+	if order == "" {
+		order = "priority ASC, id ASC"
+	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, name, COALESCE(description, ''),
 		       if_kind, if_value, then_kind, then_value,
 		       priority, enabled, created_at, updated_at
 		FROM rules
-		ORDER BY priority ASC, id ASC
-	`)
+		ORDER BY `+order+`
+		LIMIT ? OFFSET ?
+	`, p.PageSize, p.Offset())
 	if err != nil {
 		s.Log.Error("api.rules.list", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to list rules")
@@ -77,7 +94,7 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []RuleView{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
+	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
 }
 
 // CreateRule — POST /api/rules/. Requires admin.
