@@ -31,7 +31,7 @@
           },
           {
             "group": "Operations",
-            "pages": ["backup-restore", "refile"]
+            "pages": ["backup-restore", "refile", "release-process"]
           },
           {
             "group": "Development",

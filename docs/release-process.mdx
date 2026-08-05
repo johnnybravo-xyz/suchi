@@ -1,0 +1,187 @@
+---
+title: "Release process"
+description: "How suchi versions ship — commit conventions, changelog, tagging, publishing."
+---
+
+Suchi releases follow the "boring underneath, easy to get around"
+principle at the ops layer too. No custom versioning scheme, no
+hand-crafted release notes — just conventional commits + Keep-a-
+Changelog + SemVer tags.
+
+## Commit convention
+
+Every commit message MUST follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```
+<type>(<scope>)!?: <short summary>
+
+<optional body>
+
+<optional footer>
+```
+
+**Types** (all lowercase):
+
+| Type | When |
+| ---- | ---- |
+| `feat` | Adds a user-visible feature |
+| `fix` | Fixes a user-visible bug |
+| `perf` | User-visible speedup with no behavior change |
+| `refactor` | Internal restructure, zero user-visible change |
+| `docs` | Documentation only — README, `docs/*.mdx`, code comments |
+| `test` | Adds or fixes tests |
+| `build` | Build/CI/toolchain changes (Dockerfile, workflow files) |
+| `chore` | Everything else — bump deps, tidy, housekeeping |
+
+**Scopes** are packages (`authz`, `automations`, `ui`, `api`, `db`,
+`refile`, `mcp`, `deploy`, `docs`) — greppable, not fancy.
+
+**Breaking change** — append `!` after the scope AND include a
+`BREAKING CHANGE:` footer:
+
+```
+feat(api)!: rename /api/workflows to /api/approvals
+
+BREAKING CHANGE: state-machine URLs moved. Update every script that
+hits /api/workflows/* to /api/approvals/*.
+```
+
+Concrete examples from the log:
+
+```
+feat(refile): "come back and change your mind" — bulk re-run rules + re-render across the corpus
+feat(authz): Phase 6 batch 2 — enforce document ACLs
+feat(automations): wire consumption trigger from upload + intake paths
+docs: full-codebase sweep covering Phase 4–6 delivery
+```
+
+## Changelog
+
+Every user-visible change lands in [`CHANGELOG.md`](https://github.com/johnnybravo-xyz/suchi/blob/main/CHANGELOG.md).
+Format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+Rules:
+
+- Every PR that touches user-visible behavior updates the
+  `[Unreleased]` section as part of the diff. Not a follow-up
+  chore — same PR, same review.
+- Sections: **Added**, **Changed**, **Removed**, **Fixed**,
+  **Security**. Migration notes go inline as callouts.
+- Write for the operator, not the maintainer. "URL rename" beats
+  "refactor endpoint" every time.
+
+At release time, the `[Unreleased]` contents shift under the new
+version header. Fresh `[Unreleased]` opens.
+
+## SemVer
+
+Suchi follows [SemVer 2.0](https://semver.org/spec/v2.0.0.html):
+
+- **MAJOR** — breaking changes to any documented public interface.
+  URLs, request/response shapes, config knob names, CLI flags, DB
+  schema in ways that block downgrade.
+- **MINOR** — new features, additive-only changes. Adding an
+  endpoint is minor; renaming an existing one is major.
+- **PATCH** — bug fixes, docs, internal changes with zero
+  operator-visible effect.
+
+Pre-1.0 (which is where suchi is today): both minor and patch bumps
+can carry breaking changes, but every breaking change still gets a
+`BREAKING CHANGE:` footer + a **⚠ Migration** callout in the
+changelog. `0.x → 0.(x+1)` is the "we changed something you'll
+notice" signal.
+
+## Cutting a release
+
+Once the `[Unreleased]` block has enough shipped to justify a tag
+(usually 2–4 weeks of merged changes, driven by feel — no calendar):
+
+1. **Freeze `main`.** Merge nothing but doc-only PRs while cutting.
+2. **Verify green CI.** `.github/workflows/ci.yml` and
+   `.github/workflows/smoke.yml` must both be passing on the tip of
+   `main`.
+3. **Roll the changelog.** Move `[Unreleased]` contents under the
+   new version header:
+
+   ```markdown
+   ## [0.5.0] - 2026-08-10
+
+   ### Added
+   ...
+   ```
+
+   Reset `[Unreleased]` to an empty stub. Commit as `chore: release
+   0.5.0` (no `!` — the tag is the artifact, the commit isn't
+   breaking).
+
+4. **Tag.** Signed and annotated:
+
+   ```sh
+   git tag -s v0.5.0 -m "suchi 0.5.0"
+   git push origin v0.5.0
+   ```
+
+5. **Publish the release notes.** Copy the new CHANGELOG section
+   into a GitHub release attached to the tag. Attach:
+   - The two Docker images (`suchi:0.5.0` and `suchi:0.5.0-full`
+     — built and pushed by the release workflow)
+   - Linux amd64 + arm64 binaries (from the release workflow)
+   - macOS + Windows binaries
+   - `sbom.spdx.json` + `sbom.cyclonedx.json` for each artifact
+   - Cosign signatures alongside every image tag
+
+6. **Announce.** Once we're public: a short GitHub Discussions post
+   with the changelog highlights. Nothing more.
+
+## Automation
+
+- **`.github/workflows/ci.yml`** — per-module test/vet/gofmt gate
+  on every push and PR.
+- **`.github/workflows/smoke.yml`** — full-image ingest smoke on
+  every push and PR.
+- **`.github/workflows/release.yml`** (arrives with the repo flip)
+  — triggered on `v*` tag: builds both Docker images, pushes to
+  ghcr, builds cross-platform binaries, generates SBOM + cosign
+  signatures, attaches everything to the GitHub release.
+
+## Deprecation policy
+
+- Deprecated features stay for **at least one MINOR release** with
+  a warning in logs + docs.
+- Removals only in MAJOR releases (pre-1.0: any MINOR, but always
+  called out).
+- Config-key renames ship both names for at least one MINOR; the
+  old name logs a deprecation warning per-boot.
+
+## Support policy
+
+Pre-1.0: support is the current tag only. Once we hit 1.0, we
+commit to at least the current + one previous major with
+security-only backports. Regular patch releases target only the
+current major.
+
+## Hotfixes
+
+For a security fix on the current release:
+
+1. Branch from the tag: `git switch -c hotfix/0.5.1 v0.5.0`
+2. Land the fix (usually a single `fix` commit).
+3. Update CHANGELOG: `[0.5.1] - 2026-08-11` under **Security**.
+4. Tag + release as usual.
+5. Merge the hotfix back into `main` via a PR so the fix isn't lost.
+
+## Not covered here
+
+- **Automated changelog generation** (git-cliff / release-please)
+  is an option but not wired yet. Manual authorship keeps the
+  quality up and the reader's-first framing consistent. If it
+  becomes a bottleneck, revisit.
+- **Signed commits** are encouraged but not enforced. DCO sign-off
+  (`git commit -s`) is required on all merged PRs from the repo-
+  public flip forward.
+
+Related:
+
+- [`CHANGELOG.md`](https://github.com/johnnybravo-xyz/suchi/blob/main/CHANGELOG.md)
+- [`docs/backup-restore.mdx`](/backup-restore) — upgrade + rollback
+  procedure
