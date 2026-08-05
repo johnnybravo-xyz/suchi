@@ -8,6 +8,15 @@
 #
 # full: adds ocrmypdf (searchable-PDF archives) + djvulibre-bin (DjVu)
 #   + libreoffice-core (planned office-doc converter). Approx ~1 GB.
+#
+# TODO(phase-3.5): office document coverage via anydoc.
+#   Plan is to add a Rust build stage `anydoc-build` that compiles
+#   github.com/firecrawl/anydoc @ pinned tag as a static musl binary,
+#   then COPY --from=anydoc-build /out /usr/local/bin/anydoc into both
+#   slim and full. Slim goes 70 → 80 MB. See plugins/anydoc-convert/
+#   for the plugin scaffold + supported-MIME allowlist. Runtime
+#   Dockerfile changes land in the follow-up PR once the plugin
+#   dispatcher is wired.
 
 # ---------- build stage ----------
 FROM golang:1.26-alpine AS build
