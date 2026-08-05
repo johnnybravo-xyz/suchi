@@ -1,0 +1,29 @@
+# Caddy reverse-proxy snippet for suchi.
+#
+# Caddy auto-provisions TLS from Let's Encrypt when the site block
+# uses a real hostname — no cert flag needed. For a self-hosted
+# LAN-only setup, replace `suchi.example.com` with `:443` and add
+# `tls internal` inside the block.
+#
+# Adjust `reverse_proxy` if suchi listens somewhere other than the
+# default LISTEN_ADDR (127.0.0.1:8000).
+
+suchi.example.com {
+	encode zstd gzip
+
+	# Uploads can be large — bump the request body cap.
+	request_body {
+		max_size 200MB
+	}
+
+	# Suchi emits its own security headers; Caddy adds transport-level
+	# hardening. HSTS is a commit — do NOT enable it while testing
+	# under a hostname you might switch off.
+	header {
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy 127.0.0.1:8000
+}

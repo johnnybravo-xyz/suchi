@@ -1,0 +1,36 @@
+# Traefik dynamic-config snippet for suchi. Drop into
+# /etc/traefik/dynamic/ (or your equivalent) and reload — Traefik
+# picks up file changes without a restart.
+#
+# Assumes:
+#   - Traefik is running with an entrypoint named "websecure" on :443
+#     and a cert resolver named "le" (Let's Encrypt via DNS/HTTP-01)
+#   - Suchi listens on 127.0.0.1:8000 on the Traefik host, or on the
+#     "suchi" hostname inside a shared Docker network
+
+http:
+  routers:
+    suchi:
+      entryPoints: [websecure]
+      rule: "Host(`suchi.example.com`)"
+      service: suchi
+      tls:
+        certResolver: le
+      middlewares: [suchi-security]
+
+  services:
+    suchi:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"
+        # If you're behind Docker network, swap to:
+        # - url: "http://suchi:8000"
+
+  middlewares:
+    suchi-security:
+      headers:
+        # HSTS off by default — flip on when you're committed.
+        # stsSeconds: 31536000
+        # stsIncludeSubdomains: true
+        frameDeny: true
+        referrerPolicy: strict-origin-when-cross-origin
