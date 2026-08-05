@@ -162,6 +162,24 @@ credentials), four correspondents, four document types, four tags,
 three sample documents (metadata only — no CAS blobs), one classifier
 rule, one automation. Idempotent — re-run without duplicates.
 
+## `suchi refile [flags]`
+
+The "come back and change your mind" primitive — re-run the rules
+classifier + enqueue a render/move job for every live doc so a
+preset swap, template edit, or new rule actually takes effect across
+the existing corpus. Full walkthrough at [refile](/refile).
+
+### Flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--skip-rules` | Don't re-run the classifier — enqueue render only. Use when only the storage-path template changed. |
+| `--skip-render` | Don't enqueue render jobs — re-run classifier only. Use when only rules changed. |
+| `--owner-id <id>` | Restrict to docs owned by this user. `0` (default) = every owner. |
+
+Safe against a live server — uploads that arrive mid-sweep use the
+normal postingest chain and land under the new tree automatically.
+
 ## `suchi version`
 
 Prints the binary version, build revision, and the Go version it

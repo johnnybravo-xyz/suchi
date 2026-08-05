@@ -52,27 +52,49 @@ func PresetByID(id string) (Preset, bool) {
 // when any doc is filed under a non-inbox category — the caller must
 // move those first. Wrapped in one write tx so a partial failure
 // leaves the previous tree intact.
+//
+// For the "I want to switch presets mid-flight, refile everything"
+// case, use ApplyPresetWithRefile — it accepts stray docs and returns
+// them all to the new inbox.
 func ApplyPreset(ctx context.Context, d *db.DB, log *slog.Logger, id string) error {
+	return applyPreset(ctx, d, log, id, false)
+}
+
+// ApplyPresetWithRefile is the lifted variant of ApplyPreset. Docs
+// filed outside the inbox are NOT refused — they get parked on the
+// new inbox and the caller is expected to trigger a refile sweep
+// (re-run rules, re-render symlinks) afterwards. This is the
+// "operator committed to changing presets and knows what they're
+// doing" path — the selling point is "you can always come back to
+// change this".
+func ApplyPresetWithRefile(ctx context.Context, d *db.DB, log *slog.Logger, id string) error {
+	return applyPreset(ctx, d, log, id, true)
+}
+
+func applyPreset(ctx context.Context, d *db.DB, log *slog.Logger, id string, allowRefile bool) error {
 	p, ok := PresetByID(id)
 	if !ok {
 		return fmt.Errorf("unknown preset %q", id)
 	}
-	log = log.With("component", "jd.preset", "preset", id)
+	log = log.With("component", "jd.preset", "preset", id, "refile", allowRefile)
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		var stray int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM documents d
-			JOIN jd_categories c ON c.id = d.jd_category_id
-			WHERE d.trashed_at IS NULL AND c.system = 0
-		`).Scan(&stray); err != nil {
-			return fmt.Errorf("count non-inbox docs: %w", err)
-		}
-		if stray > 0 {
-			return fmt.Errorf("%w: %d document(s) filed", ErrDocumentsExist, stray)
+		if !allowRefile {
+			var stray int
+			if err := tx.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM documents d
+				JOIN jd_categories c ON c.id = d.jd_category_id
+				WHERE d.trashed_at IS NULL AND c.system = 0
+			`).Scan(&stray); err != nil {
+				return fmt.Errorf("count non-inbox docs: %w", err)
+			}
+			if stray > 0 {
+				return fmt.Errorf("%w: %d document(s) filed", ErrDocumentsExist, stray)
+			}
 		}
 
-		// Park inbox-only docs on the existing system category so the
-		// FK stays intact while we swap tables.
+		// Park every live doc on the existing system category so the
+		// FK stays intact while we swap tables. Under refile mode this
+		// also collapses previously-classified docs back to inbox.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE documents SET jd_category_id = (
 				SELECT id FROM jd_categories WHERE system = 1 LIMIT 1

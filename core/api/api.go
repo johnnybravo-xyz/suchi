@@ -221,6 +221,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/acls/{kind}/{id}", s.ListGrants)
 	mux.HandleFunc("PUT /api/acls/{kind}/{id}", s.PutGrant)
 	mux.HandleFunc("DELETE /api/acls/{kind}/{id}", s.DeleteGrant)
+
+	// Refile — one-shot admin action to re-run rules + re-render every
+	// live doc after a preset/template/rule change. See docs/refile.mdx.
+	mux.HandleFunc("POST /api/admin/refile", s.Refile)
 }
 
 // ---------- shared helpers ----------

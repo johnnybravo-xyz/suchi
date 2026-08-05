@@ -22,6 +22,12 @@ second code path: the internal representation is always
 and collapses everything to a single inbox category. One code path,
 one opinion, a respectful escape hatch.
 
+**You can always come back to change this.** Swap presets after
+ingesting docs by adding `"refile": true` to the preset-apply call —
+existing docs park on the new inbox and a [refile sweep](/refile)
+re-runs rules and re-renders the symlinks under the new tree. Without
+`refile`, the swap is refused (with a 409) as a safety.
+
 ## The starter tree
 
 Auto-loaded on first boot. Delete and replace freely — `suchi jd

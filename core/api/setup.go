@@ -20,6 +20,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/auth"
 	"github.com/suchi-dms/suchi/core/jd"
+	"github.com/suchi-dms/suchi/core/refile"
 	"github.com/suchi-dms/suchi/core/settings"
 )
 
@@ -200,6 +201,11 @@ func (s *Server) ApplyJDPreset(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PresetID     string `json:"preset_id"`
 		ConfirmBlank bool   `json:"confirm_blank"`
+		// Refile=true accepts existing docs filed outside the inbox —
+		// they get parked on the new inbox and a refile sweep is
+		// triggered afterwards (re-run rules + enqueue re-render).
+		// Selling point: "you can always come back to change this."
+		Refile bool `json:"refile"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -216,13 +222,31 @@ func (s *Server) ApplyJDPreset(w http.ResponseWriter, r *http.Request) {
 			"blank preset requires confirm_blank=true; it's harder to migrate away from")
 		return
 	}
-	if err := jd.ApplyPreset(r.Context(), s.DB, s.Log, body.PresetID); err != nil {
+	applyFn := jd.ApplyPreset
+	if body.Refile {
+		applyFn = jd.ApplyPresetWithRefile
+	}
+	if err := applyFn(r.Context(), s.DB, s.Log, body.PresetID); err != nil {
 		if errors.Is(err, jd.ErrDocumentsExist) {
-			s.writeError(w, http.StatusConflict, "documents_filed", err.Error())
+			s.writeError(w, http.StatusConflict, "documents_filed",
+				err.Error()+` (re-post with "refile": true to accept the refile)`)
 			return
 		}
 		s.serverErr(w, "jdpreset.apply", err)
 		return
+	}
+	if body.Refile {
+		// Kick off the sweep synchronously so operators see the counters
+		// in the response. Long-running installs can hit the dedicated
+		// /api/admin/refile endpoint instead for the background flavor.
+		stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{})
+		if err != nil {
+			s.Log.Warn("jdpreset.refile.err", "err", err.Error())
+		}
+		if s.Jobs != nil {
+			s.Jobs.Nudge()
+		}
+		_ = stats // captured in the log; response stays minimal for now
 	}
 	if err := settings.Set(r.Context(), s.DB, settings.KeyJDPreset, body.PresetID); err != nil {
 		// Non-fatal: the tree is applied; the preset-name record is a

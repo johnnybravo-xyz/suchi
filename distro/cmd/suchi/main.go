@@ -87,6 +87,8 @@ func main() {
 		os.Exit(runMCP(os.Args[2:]))
 	case "demo":
 		os.Exit(runDemo(os.Args[2:]))
+	case "refile":
+		os.Exit(runRefile(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -110,6 +112,7 @@ Usage:
   suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
   suchi mcp [--http :port]        start an MCP v2 server (stdio by default, HTTP+SSE with --http)
   suchi demo [--data-dir DIR]     seed DATA_DIR with sample docs, tags, one automation, one share link
+  suchi refile [flags]            re-run rules + enqueue re-render on every live doc after preset/template/rule changes
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
