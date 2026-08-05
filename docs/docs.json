@@ -34,8 +34,12 @@
             "pages": ["backup-restore", "refile", "release-process"]
           },
           {
+            "group": "Guides",
+            "pages": ["guides", "guides/mcp-connect", "guides/external-app", "guides/mail-intake", "guides/mail-mbsync"]
+          },
+          {
             "group": "Development",
-            "pages": ["cookbook", "cookbook/mail-intake", "cookbook/mail-mbsync", "preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
+            "pages": ["preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
           },
           {
             "group": "Alternatives",

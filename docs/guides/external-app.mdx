@@ -1,0 +1,222 @@
+---
+title: "Connect an external app via API token"
+description: "Mint a scoped API token from the UI (or /api/tokens/), attach it to your app, and drive the REST surface end-to-end."
+---
+
+Every non-browser integration talks to suchi over the same REST
+surface via a scoped API token. Mobile apps, cron scripts, IFTTT-
+style webhook consumers, agent runtimes, custom shell tools — same
+pattern.
+
+This guide walks a fresh integration through the token dance:
+mint → attach → verify → rotate → revoke.
+
+## Prerequisites
+
+- A running suchi instance.
+- A user account (yours, or a dedicated service account — see
+  §5). Local login or OIDC — either works.
+- `curl` and `jq` for the walkthrough; whatever your app uses in
+  production.
+
+## 1. Mint a token
+
+Three ways. Pick the one that fits your workflow.
+
+### From the browser session
+
+If you're logged in as a normal user, mint via `/api/tokens/`:
+
+```bash
+# Using the browser's session cookie (grab it from devtools).
+curl -sS -X POST http://127.0.0.1:8000/api/tokens/ \
+  -H 'Content-Type: application/json' \
+  -H "Cookie: suchi_session=…" \
+  -d '{
+    "name":   "backup-cron",
+    "scopes": "documents:read"
+  }'
+# → {"token":"aa11bb22…","name":"backup-cron","scopes":"documents:read"}
+```
+
+**Copy the `token` value now.** It is returned exactly once and
+never persisted in plaintext — only `sha256(token)` hits the DB.
+
+### From the CLI (username + password)
+
+The mobile-compat endpoint. Same shape mobile apps use on first
+connect.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/token/ \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "you@example.com",
+    "password": "…"
+  }'
+# → {"token":"aa11bb22…"}
+```
+
+This mints a token with the default `documents:read,documents:write`
+scopes. Use `/api/tokens/` if you need narrower scopes.
+
+### From OIDC
+
+If OIDC is enabled, complete the OIDC login flow in a browser first
+(cookies get set). Then use the "browser session" recipe above —
+`/api/tokens/` accepts any authenticated principal, cookie or token
+alike.
+
+## 2. Attach the token to requests
+
+Two accepted headers:
+
+```
+Authorization: Token aa11bb22…
+Authorization: Bearer aa11bb22…
+```
+
+`Token` is suchi's canonical scheme. `Bearer` is accepted for
+convenience since many HTTP clients default to it. When OIDC is
+also enabled, disambiguation is by shape: suchi tokens are exactly
+64 lowercase hex chars; anything else with `Bearer` falls through
+to the OIDC authenticator.
+
+Every response carries an `X-Request-Id` header — capture it in
+your app's error logs. When you file a bug, that's the string that
+lets us grep the server side.
+
+## 3. Verify
+
+Quick sanity check:
+
+```bash
+export SUCHI_URL=http://127.0.0.1:8000
+export SUCHI_TOKEN=aa11bb22…
+
+curl -sS "$SUCHI_URL/api/whoami" \
+  -H "Authorization: Token $SUCHI_TOKEN" | jq
+# → {"kind":"token","user_id":5,"email":"you@example.com",
+#     "role":"member","authn_by":"local"}
+```
+
+`kind=token` confirms the auth chain resolved via the API token.
+`role=member` reflects the underlying user's role.
+
+Now exercise a real endpoint:
+
+```bash
+curl -sS "$SUCHI_URL/api/documents/?ordering=-created_at&page_size=5" \
+  -H "Authorization: Token $SUCHI_TOKEN" | jq '.results[] | {id,title}'
+```
+
+If you get `401 unauthorized` — token is wrong or has been revoked.
+If you get `403 forbidden` — token's scopes don't cover this action;
+mint a wider token.
+
+## 4. Scope narrowing
+
+The closed scope vocabulary:
+
+| Scope | Grants |
+| ----- | ------ |
+| `documents:read` | `GET /api/documents/*`, `/api/search/`, `/api/autocomplete/`, `/api/tags/`, `/api/correspondents/`, etc. |
+| `documents:write` | Everything in `documents:read` plus upload/patch/delete/restore, custom-field mutation, correspondent add/remove |
+| `agent:tasks` | `/api/tasks/*` — enqueue, claim, complete, release |
+| `admin:webhooks` | `/api/agent/webhooks` CRUD |
+
+Session-authed callers (browser cookie / OIDC) can mint any scope.
+Token-authed callers can only mint tokens whose scopes are a
+**subset** of their own — no privilege escalation via daisy-chain.
+
+Best practice: mint the narrowest possible scope. A backup cron
+that only reads gets `documents:read`. A one-way webhook consumer
+that files new docs gets `documents:write`. An agent claim/act
+worker gets `agent:tasks`.
+
+## 5. Service accounts
+
+For non-human integrations, create a dedicated user rather than
+minting from an admin's personal account. Admin → `/admin` → Users
+→ New; email like `svc-backup@internal`, no password (they'll
+never log in interactively), then mint a token from the browser
+session after impersonation. Rotating an integration's credentials
+now doesn't touch a real human.
+
+## 6. Rotation
+
+Tokens have no built-in expiry. Rotate by minting a new one and
+deleting the old:
+
+```bash
+# Mint the new one.
+NEW=$(curl -sS -X POST "$SUCHI_URL/api/tokens/" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Token $SUCHI_TOKEN" \
+  -d '{"name":"backup-cron-2026-q3","scopes":"documents:read"}' \
+  | jq -r .token)
+
+# Deploy $NEW to the integration.
+# When you're confident it's active, delete the old:
+curl -sS "$SUCHI_URL/api/tokens/" \
+  -H "Authorization: Token $NEW" | jq '.results[] | select(.name=="backup-cron")'
+# copy the id, then:
+curl -sS -X DELETE "$SUCHI_URL/api/tokens/7" \
+  -H "Authorization: Token $NEW"
+```
+
+Recommended cadence:
+
+- **Personal integrations**: rotate yearly.
+- **Service accounts**: rotate on team turnover or every 90 days,
+  whichever comes first.
+- **After a suspected leak**: revoke immediately, mint a new one,
+  investigate.
+
+## 7. Revocation
+
+Two paths:
+
+- **Self-service**: `DELETE /api/tokens/{id}` from any of the
+  token's own future calls, or from the user's browser session.
+- **Admin override**: an admin can revoke any token via the same
+  endpoint.
+
+Revocation is immediate. Any in-flight request carrying the
+revoked token will fail with 401 on the next `auth_tokens` lookup
+(no cache — every request re-checks).
+
+## 8. Audit trail
+
+Every mint + revoke lands in `audit_events` with the actor
+(`user:5` or `token:42`), action (`api_token.create` /
+`api_token.revoke`), and request id.
+
+Every mutation performed by a token is audit-logged with
+`Actor.kind = token`, `Actor.user_id = <the owner>`. When you're
+answering "who did X" a week later, the token's `name` (recorded
+at mint time on the row) makes it obvious which integration was
+responsible.
+
+## Common pitfalls
+
+- **Storing the token in the app's own DB unencrypted.** The token
+  IS a credential. Treat it like a password. Env vars, k8s
+  secrets, macOS keychain, `_FILE` mount — any of those.
+- **Sharing a single token across N integrations.** When one
+  leaks, you rotate everyone. One integration, one token.
+- **Using an admin's token for automation.** Every action becomes
+  attributable to a human who didn't do it. Create a service
+  account.
+
+## Related
+
+- [Connect an MCP client](/guides/mcp-connect) — same token flow,
+  MCP-shaped consumer.
+- [Agent surface](/agents) — for task-claim/act workers with the
+  `agent:tasks` scope.
+- [API reference](/api) — the full endpoint list.
+- [Permissions](/permissions) — ACL layer that sits on top of the
+  auth chain. A token authenticates you; ACLs decide what you can
+  see once you're through.
