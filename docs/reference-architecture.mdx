@@ -729,6 +729,132 @@ future contributor knows to expect a "won't fix" on these:
 
 ---
 
+## 11. Load-bearing invariants (defend these in review)
+
+These are decisions the code already got right — small, easy to
+break by accident, catastrophic if the fix is a "cleanup" PR six
+months from now. When a PR touches any of the code paths below,
+reviewers should push back if the invariant weakens.
+
+### 11.1 SQLite: `Write` pool pinned to one connection, DSN-level pragmas
+
+- **Invariant** — `Write.SetMaxOpenConns(1)`, `ConnMaxLifetime(0)`,
+  every pragma (`journal_mode=WAL`, `synchronous=NORMAL`,
+  `busy_timeout=5000`, `foreign_keys=ON`, `mmap_size=…`) applied
+  via the DSN so no connection ever observes a pre-pragma window.
+- **Why it matters** — SQLite serializes writers at the DB. Letting
+  the Go pool open a second write connection replaces predictable
+  serialization with `SQLITE_BUSY` retry loops. Applying pragmas
+  from application code (rather than DSN) means the first query
+  on a fresh connection sees defaults. Both regressions are
+  silent until traffic patterns change.
+- **Where** — `core/db/db.go` around the pool constructor. Every
+  write goes through `WriteTx`; no direct `Write.ExecContext` from
+  handlers.
+
+### 11.2 CAS write path: per-put temp file, fsync, atomic rename
+
+- **Invariant** — writes stream into a temp file **inside the
+  destination shard directory** (same device → POSIX-atomic
+  rename), `fsync` before rename, and re-put of a corrupt blob
+  self-heals rather than surfacing the corruption as an error.
+- **Why it matters** — power loss during a write must not leave a
+  torn blob under the target hash. Cross-filesystem renames are
+  not atomic; keeping the temp file in the shard subdir preserves
+  atomicity without additional coordination.
+- **Where** — `core/blob/cas.go` — `Put`, the write-then-rename
+  path, and the corruption-recovery branch. Do not "optimize" the
+  temp file into `/tmp` — that breaks the atomicity guarantee.
+
+### 11.3 Subprocess sandbox: empty env, bounded IO, process-group kill
+
+- **Invariant** — every external binary (qpdf, ocrmypdf, tesseract,
+  msgconvert, djvutxt, anydoc, pre-consume scripts) runs through
+  `core/sandbox/` with:
+  - hard `context.WithTimeout` cancellation
+  - bounded stdout (4 MiB) / stderr (512 KiB) capture
+  - **empty environment by default** with explicit `env=`
+    allowlist opt-in
+  - fresh working directory (a per-run temp dir)
+  - process-group kill on Unix so leaking children die too
+- **Why it matters** — the sandbox exists because we treat every
+  subprocess as compromised. Leaking the parent env (PATH aside)
+  undoes the isolation; leaking network is worse. When adding a
+  new pipeline step, do not add a bypass — extend `core/sandbox/`
+  if the sandbox is genuinely in the way.
+- **Where** — `core/sandbox/sandbox.go`.
+
+### 11.4 Ordering + column names never interpolated
+
+- **Invariant** — `?ordering=` (DRF compat) is passed to
+  `OrderingToSQL` per endpoint with an **explicit column
+  allowlist**. Any column name that reaches SQL as a string is a
+  compile-time constant or a lookup against a static map. No user
+  input flows into a SQL identifier.
+- **Why it matters** — SQL injection via ordering / table /
+  column names is the class of injection that survives even when
+  you use parameterized queries for values. The pattern is
+  well-established (`taxonomy_crud.go`, `search.go`); a PR that
+  builds a fragment with `"ORDER BY " + ordering` should never
+  merge.
+- **Where** — `core/api/pagination.go` (`ParsePageParams` +
+  `OrderingToSQL`) and every list handler that consumes ordering.
+
+### 11.5 Auth material at rest: argon2id for passwords, SHA-256 for tokens
+
+- **Invariant** — passwords hashed with argon2id, parameters tuned
+  for a ~2 GB box, encoded with the version + parameter prefix so
+  future re-tuning stays compatible. API tokens stored as
+  `sha256(plaintext)`; comparisons via `crypto/subtle` to defeat
+  timing attacks.
+- **Why it matters** — a plaintext-token or bcrypt-only regression
+  is silent from the outside. Argon2id parameter changes must go
+  through a documented tune-up (see the plan doc), not a
+  hand-edited constant.
+- **Where** — `plugins/local-auth/localauth.go` (`HashPassword`,
+  `VerifyPassword`, `issueAPIToken`).
+
+### 11.6 Preview sensitivity gate returns 202-with-guidance
+
+- **Invariant** — high-sensitivity (`confidential` / `restricted`)
+  documents' `GET /preview/{id}` returns **HTTP 202 with a JSON
+  body describing the gate**, not a 302 or a scrubbed 200. The
+  client-side blur/reveal renders from the 202 body without a
+  second round trip; the inline preview served after the reveal
+  carries its own CSP.
+- **Why it matters** — 302 redirects break offline cache stories
+  and confuse HTTP-level observers. A scrubbed 200 makes the
+  reveal a re-fetch. The 202 shape lets the client stage the UX
+  transition atomically.
+- **Where** — `core/ui/ui.go` (`Preview`) and the SPA / server-
+  rendered detail templates that consume it.
+
+### 11.7 Search visibility filter INSIDE the FTS query
+
+- **Invariant** — `/api/search/` splices `authz.DocVisibilityWhere`
+  into the FTS `MATCH` query. Snippets and hit counts are
+  filtered at the database, not post-fetch in Go.
+- **Why it matters** — post-fetch filtering leaks: the total count
+  reveals doc existence, the snippet may be logged before the
+  filter runs. Doing it inside the query means an unauthorized
+  viewer sees zero results *and* zero snippets.
+- **Where** — `core/api/search.go`, around the MATCH query
+  construction. Any refactor that moves the visibility check out
+  of the SQL is a regression.
+
+### 11.8 Job dead-lettering with capped attempts + visibility
+
+- **Invariant** — jobs increment `attempts` on each failure; hit
+  the cap → `state='dead'` with the last error preserved.
+  `/api/tasks/?state=dead` surfaces them; nothing quietly gives
+  up.
+- **Why it matters** — an OCR job that fails silently is the
+  worst-of-both-worlds: the doc is ingested but has no content,
+  and the operator has no signal. The dead state is the operator's
+  contract that failure is visible.
+- **Where** — `core/jobs/jobs.go` (`markDead`, `pollOnce`) and the
+  `/api/tasks/` handler filter.
+
 ## Change log
 
 This doc travels with the repo. When a load-bearing decision changes,
@@ -737,6 +863,10 @@ decision is worth recording, add a section. Never delete a section
 silently — a "revoked" note preserves the trail.
 
 - **2026-08-05** — initial version.
+- **2026-08-05** — §11 added: "load-bearing invariants" —
+  eight code-level decisions surfaced by the first external code
+  review as worth defending in future PRs. Source:
+  `suchi-review.md`, "What is already right" section.
 
 ## Related
 
