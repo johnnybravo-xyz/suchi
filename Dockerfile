@@ -1,25 +1,47 @@
 # suchi — two-stage build with -slim and full targets.
 #
-# slim: alpine + qpdf + poppler-utils + tesseract. Covers the entire
-#   PDF ingest path (text-native shortcut, tessocr scanned path, qpdf
-#   normalization, ZUGFeRD invoice extraction). No searchable-PDF
+# slim: alpine + qpdf + poppler-utils + tesseract + anydoc. Covers the
+#   entire PDF ingest path (text-native shortcut, tessocr scanned path,
+#   qpdf normalization, ZUGFeRD invoice extraction) plus office document
+#   text extraction (docx, xlsx, pptx, odt, rtf, csv). No searchable-PDF
 #   archive on scanned PDFs — that comes with ocrmypdf, which lives in
-#   the full image. Approx ~70 MB.
+#   the full image. Approx ~80 MB.
 #
 # full: adds ocrmypdf (searchable-PDF archives = text-selectable scanned
 #   PDFs) + djvulibre-bin (DjVu text extraction) + msgconvert (Outlook
-#   .msg → .eml). Approx ~400 MB. Office document coverage (docx, xlsx,
-#   pptx, odt, rtf, csv) rides in slim via anydoc — no longer needs a
-#   LibreOffice fallback here.
+#   .msg → .eml). Approx ~400 MB.
+
+# ---------- anydoc build stage (Phase 3.5) ----------
+# Firecrawl publishes anydoc as a Rust library on crates.io + Node/Python
+# bindings, but not as a standalone CLI binary. The CLI lives in the
+# repo as `examples/convert.rs`. We compile the example as a static musl
+# binary and rename it "anydoc" — same pattern the pin-bumper script
+# understands. Approx ~10 MB output; both slim and full copy it in.
 #
-# TODO(phase-3.5): office document coverage via anydoc.
-#   Plan is to add a Rust build stage `anydoc-build` that compiles
-#   github.com/firecrawl/anydoc @ pinned tag as a static musl binary,
-#   then COPY --from=anydoc-build /out /usr/local/bin/anydoc into both
-#   slim and full. Slim goes 70 → 80 MB. See plugins/anydoc-convert/
-#   for the plugin scaffold + supported-MIME allowlist. Runtime
-#   Dockerfile changes land in the follow-up PR once the plugin
-#   dispatcher is wired.
+# Interface stability CAVEAT: examples/ is not upstream-guaranteed as a
+# stable CLI. Argv shape is `<file> [-f <fmt>] [-o <out>] [--assets dir]`
+# as of v0.1.3; if a future bump changes this shape, the extractor in
+# core/pipeline/anydoc/ needs a matching update. `hack/pin-bumper.sh`
+# calls this out at every bump.
+#
+# Bump procedure:
+#   1. hack/pin-bumper.sh reports "BUMP suggested: vX → vY"
+#   2. Read the upstream compare link it prints; scan for argv changes
+#      in examples/convert.rs
+#   3. Update ANYDOC_TAG below
+#   4. Rebuild slim; sanity-check `docker run --rm suchi:slim doctor`
+#      lists anydoc, and a smoke docx ingests to non-empty content
+FROM rust:1-alpine AS anydoc-build
+ARG ANYDOC_TAG=v0.1.3
+RUN apk add --no-cache git musl-dev pkgconfig
+WORKDIR /src
+RUN git clone --depth 1 --branch "${ANYDOC_TAG}" \
+      https://github.com/firecrawl/anydoc.git .
+# rust:1-alpine's toolchain is musl-native, so the default target is
+# already static musl — no --target flag needed. LTO + strip via the
+# release profile in anydoc's own Cargo.toml.
+RUN cargo build --release --example convert
+RUN cp target/release/examples/convert /out-anydoc && strip /out-anydoc
 
 # ---------- build stage ----------
 FROM golang:1.26-alpine AS build
@@ -55,6 +77,7 @@ RUN apk add --no-cache \
 RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 COPY --from=build /out/suchi /usr/local/bin/suchi
+COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
@@ -82,6 +105,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<policy domain="coder" rights="none" pattern="HEIF" />||g' /etc/ImageMagick-6/policy.xml || true
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi
 COPY --from=build /out/suchi /usr/local/bin/suchi
+COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
 RUN mkdir -p /data && chown 65532:65532 /data
 USER 65532:65532
 EXPOSE 8000
