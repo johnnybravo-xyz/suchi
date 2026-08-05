@@ -469,6 +469,9 @@ func runServe() int {
 	}
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
+	// Session/OIDC callers mint API tokens via /api/tokens/ using this
+	// callback — keeps core/api free of a direct dep on the plugin.
+	apiSrv.TokenIssuer = la.IssueAPIToken
 	// LLM live-reload hook: re-resolve settings + env, swap into the
 	// running plugin. Nil llm (disabled at boot) → the wizard save
 	// succeeds but the operator has to restart to actually enable.

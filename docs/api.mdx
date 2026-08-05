@@ -21,7 +21,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | ----- | ------ |
 | Health / metrics | `/healthz`, `/readyz`, `/metrics` |
 | Auth (browser) | `/login`, `/bootstrap`, `/setup`, `/logout`, OIDC `/oidc/login` `/oidc/callback` `/oidc/debug` |
-| Auth (JSON) | `POST /api/login`, `POST /api/token/`, `GET /api/whoami` |
+| Auth (JSON) | `POST /api/login`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami` |
 | Documents | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET /api/trash/` |
 | Doc extras | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption` |
 | Taxonomy | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/` |

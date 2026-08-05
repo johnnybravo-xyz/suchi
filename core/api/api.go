@@ -50,6 +50,12 @@ type Server struct {
 	// Main.go closes over the plugin instance; api/* doesn't import
 	// plugins/*. Nil means the wizard just writes the setting.
 	LLMReloader func(ctx context.Context) error
+	// TokenIssuer mints a fresh API token for an authenticated user.
+	// Wired at boot from the local-auth plugin so the session-authed
+	// (cookie / OIDC) caller can mint per-device tokens via
+	// /api/tokens/ without password re-entry. Nil disables the
+	// endpoint (returns 501).
+	TokenIssuer func(ctx context.Context, userID int64, name, scopes string) (string, error)
 	// Authz is the permission decision layer. Wired in main.go at
 	// boot — defaults to ACLAuthorizer, which is backward-compatible
 	// (empty object_acls table falls through to owner+admin). Nil
@@ -225,6 +231,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Refile — one-shot admin action to re-run rules + re-render every
 	// live doc after a preset/template/rule change. See docs/refile.mdx.
 	mux.HandleFunc("POST /api/admin/refile", s.Refile)
+
+	// Self-service API-token management for session/OIDC callers.
+	// Sibling to /api/token/ (credential-exchange, mobile-compat).
+	mux.HandleFunc("GET /api/tokens/", s.ListTokens)
+	mux.HandleFunc("POST /api/tokens/", s.CreateToken)
+	mux.HandleFunc("DELETE /api/tokens/{id}", s.DeleteToken)
 }
 
 // ---------- shared helpers ----------
