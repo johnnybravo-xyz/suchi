@@ -1,9 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 64" role="img" aria-label="suchi">
   <rect x="8" y="8" width="48" height="48" rx="8" fill="#F2E8CE" stroke="#26251F" stroke-width="3.5"/>
-  <line x1="16" y1="19" x2="48" y2="19" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
-  <line x1="16" y1="28" x2="48" y2="28" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
-  <rect x="12.5" y="33.5" width="39" height="7.5" rx="3.75" fill="#C13A2C"/>
-  <line x1="16" y1="46" x2="48" y2="46" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="17.5" cy="19" r="2.2" fill="#26251F"/>
+  <line x1="23" y1="19" x2="48" y2="19" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="17.5" cy="28" r="2.2" fill="#26251F"/>
+  <line x1="23" y1="28" x2="48" y2="28" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="16.8" cy="37.25" r="3.2" fill="#0575B6"/>
+  <rect x="22.5" y="33.5" width="29.5" height="7.5" rx="3.75" fill="#0575B6"/>
+  <circle cx="17.5" cy="46" r="2.2" fill="#26251F"/>
+  <line x1="23" y1="46" x2="48" y2="46" stroke="#26251F" stroke-width="3.5" stroke-linecap="round"/>
   <text x="70" y="46" font-family="Schibsted Grotesk, system-ui, sans-serif" font-weight="700"
         font-size="34" letter-spacing="-0.8" fill="#26251F">suchi</text>
 </svg>
