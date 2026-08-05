@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -301,6 +302,18 @@ func (d *Dispatcher) markRetry(ctx context.Context, id int64, attempts int, msg 
 }
 
 func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
+	// Snapshot the row so we can carry kind + doc_id + attempts into
+	// the audit event. Read is cheap; the write follows in the same
+	// tx.
+	var (
+		kind     string
+		docID    sql.NullInt64
+		attempts int64
+	)
+	_ = d.db.Read.QueryRowContext(ctx,
+		`SELECT kind, doc_id, attempts FROM jobs WHERE id = ?`,
+		id).Scan(&kind, &docID, &attempts)
+
 	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE jobs SET state='dead', last_error=?, updated_at=unixepoch() WHERE id=?
@@ -308,7 +321,30 @@ func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
 		return err
 	}); err != nil {
 		d.log.Error("jobs.mark_dead.failed", "job_id", id, "err", err.Error())
+		return
 	}
+
+	// Audit: operator-actionable signal that E-track SIEM exports
+	// consume via audit_events. Truncate the error to keep the row
+	// bounded — SIEMs choke on multi-KB fields. The full string
+	// stays in jobs.last_error.
+	truncated := msg
+	if len(truncated) > 512 {
+		truncated = truncated[:512] + "…(truncated)"
+	}
+	after := map[string]any{
+		"job_id":   id,
+		"kind":     kind,
+		"attempts": attempts,
+		"error":    truncated,
+	}
+	if docID.Valid {
+		after["doc_id"] = docID.Int64
+	}
+	audit.Log(ctx, d.db, d.log, audit.Event{
+		Action: "job.dead", ObjectKind: "job", ObjectID: id,
+		After: after,
+	})
 }
 
 func nullInt64(v int64) any {

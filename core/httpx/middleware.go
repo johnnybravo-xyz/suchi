@@ -154,6 +154,50 @@ func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 	}
 }
 
+// SecFetchSite rejects cross-site state-changing requests where the
+// caller is authenticated by a session cookie. It's the modern
+// browser-shipped CSRF signal — every browser Google can see stamps
+// `Sec-Fetch-Site: same-origin | same-site | cross-site | none` on
+// every request. `SameSite=Lax` on the session cookie already blocks
+// most cross-site forms; this middleware closes the edge cases
+// (older engines with lax defaults, opaque origins, javascript:
+// redirect chains, subdomain takeovers).
+//
+// Token-authenticated calls (`Authorization: Token …` / `Bearer …`)
+// are exempt — a cross-site attacker cannot forge an Authorization
+// header, so the CSRF class of attack doesn't apply.
+//
+// Compose AFTER Authenticate — needs `auth.FromContext` to see the
+// principal kind.
+func SecFetchSite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only state-changing verbs need the check. GET/HEAD/OPTIONS
+		// with a cookie can leak information but not mutate.
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			next.ServeHTTP(w, r)
+			return
+		}
+		p := auth.FromContext(r.Context())
+		// Token / bearer calls exempt: forge-proof.
+		if p != nil && p.Kind == "token" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		site := r.Header.Get("Sec-Fetch-Site")
+		// Older browsers that don't send the header at all get a
+		// pass — turning them into 403 across the board would break
+		// curl + integration scripts that don't set the header. The
+		// SameSite=Lax cookie is the fallback line.
+		if site == "" || site == "same-origin" || site == "same-site" || site == "none" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "cross-site request refused", http.StatusForbidden)
+	})
+}
+
 // RequireAuth is a route-level guard for handlers that must have a
 // Principal. Compose after Authenticate.
 func RequireAuth(next http.Handler) http.Handler {

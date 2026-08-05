@@ -540,6 +540,7 @@ func runServe() int {
 		httpx.BodyLimit(cfg.BodyLimit),
 		httpx.CtxTimeout(30*time.Second),
 		httpx.Authenticate(authChain, log),
+		httpx.SecFetchSite,
 	)
 
 	// Per-route rate limits: setup and login get their own bucket.
