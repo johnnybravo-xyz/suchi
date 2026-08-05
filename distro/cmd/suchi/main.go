@@ -371,6 +371,12 @@ func runServe() int {
 	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
 		log.Warn("workflow.sweep.schedule_failed", "err", err.Error())
 	}
+	// Reap orphaned running-state jobs from a prior crashed process
+	// before starting the loop. See jobs.ReclaimOrphaned; agent:*
+	// kinds keep their lease-deadline model.
+	if _, err := disp.ReclaimOrphaned(ctx); err != nil {
+		log.Warn("jobs.boot_reclaim_failed", "err", err.Error())
+	}
 	go disp.Run(ctx)
 	defer disp.Stop()
 
