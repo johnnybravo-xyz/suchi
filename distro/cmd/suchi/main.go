@@ -136,6 +136,15 @@ func buildVersion(info *debug.BuildInfo) string {
 }
 
 func runServe() int {
+	// Optional overlay: read config file if one exists in the search
+	// path. Its keys become env vars only when the equivalent env var
+	// is not already set (env wins over file). LoadFile returns "" and
+	// nil when no file exists — that's normal, we operate env-only.
+	configFile, err := config.LoadFile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config file: %v\n", err)
+		return 1
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
@@ -143,6 +152,9 @@ func runServe() int {
 	}
 	log := logx.Setup(os.Stdout, cfg.LogLevel)
 	slog.SetDefault(log)
+	if configFile != "" {
+		log.Info("config.file.loaded", "path", configFile)
+	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
 		log.Error("main.datadir.mkdir", "err", err.Error())
