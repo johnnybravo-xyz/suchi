@@ -14,6 +14,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -239,6 +240,9 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermDelete) {
+		return
+	}
 
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -279,6 +283,9 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermChange) {
 		return
 	}
 	var affected int64
@@ -325,6 +332,9 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermChange) {
+		return
+	}
 	var in DocumentUpdate
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -368,7 +378,7 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	sets = append(sets, "updated_at = ?")
 	args = append(args, time.Now().Unix())
-	args = append(args, id, principal.UserID)
+	args = append(args, id)
 
 	// Snapshot the before-values so the audit log carries a diff.
 	var (
@@ -378,8 +388,8 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(),
 		`SELECT title, sensitivity, jd_category_id FROM documents
-		 WHERE id = ? AND owner_id = ?`,
-		id, principal.UserID).Scan(&curTitle, &curSensitivity, &curJDCatID)
+		 WHERE id = ?`,
+		id).Scan(&curTitle, &curSensitivity, &curJDCatID)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -405,7 +415,7 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE documents SET "+strings.Join(sets, ", ")+
-				" WHERE id = ? AND owner_id = ?", args...)
+				" WHERE id = ?", args...)
 		if err != nil {
 			return err
 		}
@@ -517,6 +527,9 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid id")
 		return
 	}
+	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
+		return
+	}
 
 	var (
 		d           DocumentDetail
@@ -532,8 +545,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       archive_blob, archive_size, mime_type,
 		       jd_category_id, sensitivity, created_at, updated_at, trashed_at
 		FROM documents
-		WHERE id = ? AND owner_id = ?
-	`, id, principal.UserID).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+		WHERE id = ?
+	`, id).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.UpdatedAt, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {

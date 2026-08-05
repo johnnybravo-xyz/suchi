@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -49,15 +50,32 @@ type Server struct {
 	// Main.go closes over the plugin instance; api/* doesn't import
 	// plugins/*. Nil means the wizard just writes the setting.
 	LLMReloader func(ctx context.Context) error
+	// Authz is the permission decision layer. Wired in main.go at
+	// boot — defaults to ACLAuthorizer, which is backward-compatible
+	// (empty object_acls table falls through to owner+admin). Nil
+	// means "no decision layer wired" and handlers fall through to
+	// the legacy owner_id check — kept for the test constructor.
+	Authz authz.Authorizer
 }
 
 // New returns a Server. The zero value isn't runnable — DB, CAS, Log
 // are required. Jobs stays nil until wired via WithJobs.
+//
+// Authz defaults to ACLAuthorizer. That is backward-compatible: an
+// empty object_acls table means every non-owner non-admin caller is
+// still denied, matching the legacy owner_id-scoped queries. The only
+// visible change is that inserting a grant now unlocks access — which
+// is the point of Phase 6.
 func New(d *db.DB, cas *blob.CAS, log *slog.Logger) (*Server, error) {
 	if d == nil || cas == nil || log == nil {
 		return nil, errors.New("api.New: DB, CAS, and Log are required")
 	}
-	return &Server{DB: d, CAS: cas, Log: log.With("component", "api")}, nil
+	return &Server{
+		DB:    d,
+		CAS:   cas,
+		Log:   log.With("component", "api"),
+		Authz: authz.ACLAuthorizer{DB: d},
+	}, nil
 }
 
 // WithJobs attaches a Dispatcher so the upload handler can nudge it
@@ -187,6 +205,22 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/automations/{id}", s.GetAutomation)
 	mux.HandleFunc("PATCH /api/automations/{id}", s.UpdateAutomation)
 	mux.HandleFunc("DELETE /api/automations/{id}", s.DeleteAutomation)
+
+	// Groups (Phase 6). Named user collections. Admin-only writes; any
+	// authed user can list/get.
+	mux.HandleFunc("GET /api/groups/", s.ListGroups)
+	mux.HandleFunc("POST /api/groups/", s.CreateGroup)
+	mux.HandleFunc("GET /api/groups/{id}", s.GetGroup)
+	mux.HandleFunc("PATCH /api/groups/{id}", s.UpdateGroup)
+	mux.HandleFunc("DELETE /api/groups/{id}", s.DeleteGroup)
+	mux.HandleFunc("GET /api/groups/{id}/members", s.ListGroupMembers)
+	mux.HandleFunc("POST /api/groups/{id}/members", s.AddGroupMember)
+	mux.HandleFunc("DELETE /api/groups/{id}/members/{uid}", s.RemoveGroupMember)
+
+	// Object ACLs. Per-object permission grants naming a user or group.
+	mux.HandleFunc("GET /api/acls/{kind}/{id}", s.ListGrants)
+	mux.HandleFunc("PUT /api/acls/{kind}/{id}", s.PutGrant)
+	mux.HandleFunc("DELETE /api/acls/{kind}/{id}", s.DeleteGrant)
 }
 
 // ---------- shared helpers ----------
