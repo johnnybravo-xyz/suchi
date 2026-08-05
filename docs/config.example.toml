@@ -1,0 +1,98 @@
+# suchi — example configuration
+#
+# Preferred format: TOML. Explicit typing, no indentation surprises,
+# no parse ambiguity. See docs/config.mdx for the full knob list.
+#
+# Layered precedence (last wins):
+#   1. this file
+#   2. process env vars   ← env values override file values
+#   3. CLI flags (future)
+#
+# Drop this file at one of the following paths and suchi picks it up
+# on next boot:
+#   $SUCHI_CONFIG        (explicit override, any path)
+#   $XDG_CONFIG_HOME/suchi/config.toml
+#   $HOME/.config/suchi/config.toml
+#   /etc/suchi/config.toml
+#   ./suchi.toml         (cwd)
+
+# --------------------------------------------------------------------
+# Required
+# --------------------------------------------------------------------
+
+# The absolute URL clients hit — drives cookie domain, OIDC callbacks,
+# and share-link URLs. Behind a reverse proxy, this is what the proxy
+# exposes.
+public_url = "http://127.0.0.1:8000"
+
+# --------------------------------------------------------------------
+# Storage & runtime
+# --------------------------------------------------------------------
+
+data_dir     = "/data"
+listen_addr  = ":8000"
+log_level    = "info"     # debug | info | warn | error
+body_limit   = "100M"     # multipart cap
+backup_interval = "24h"   # 0 disables
+
+# --------------------------------------------------------------------
+# UI
+# --------------------------------------------------------------------
+
+# Set to "1" or "true" to disable the built-in server-rendered UI.
+# For deployments where an external SPA fronts /api/.
+# suchi_ui_disabled = "true"
+
+# --------------------------------------------------------------------
+# OCR + ingest
+# --------------------------------------------------------------------
+
+ocr_languages     = ["eng"]    # array form; CSV form ("eng,deu") also works
+ocr_engine        = "auto"     # auto | tesseract | ocrmypdf
+pdf_max_content_bytes  = "8M"
+epub_max_content_bytes = "32M"
+djvu_max_content_bytes = "32M"
+
+# --------------------------------------------------------------------
+# TLS (only when suchi terminates TLS itself, not behind a proxy)
+# --------------------------------------------------------------------
+
+# tls_cert_file = "/etc/suchi/cert.pem"
+# tls_key_file  = "/etc/suchi/key.pem"
+
+# --------------------------------------------------------------------
+# OIDC (all-or-nothing group)
+# --------------------------------------------------------------------
+
+# [oidc]
+# issuer         = "https://id.example.com"
+# client_id      = "suchi"
+# client_secret  = "..."        # or use OIDC_CLIENT_SECRET_FILE
+# redirect_url   = "https://suchi.example.com/oidc/callback"
+
+# --------------------------------------------------------------------
+# Filesystem-watch ingest
+# --------------------------------------------------------------------
+
+# [ingest_fs]
+# dir          = "/data/staging"
+# owner_email  = "you@example.com"
+
+# --------------------------------------------------------------------
+# Email ingest (IMAP polling)
+# --------------------------------------------------------------------
+
+# [ingest_imap]
+# url           = "imap://user@mail.example.com/INBOX"
+# owner_email   = "you@example.com"
+# password_file = "/run/secrets/imap-password"
+
+# --------------------------------------------------------------------
+# LLM classifier (Phase 3)
+# --------------------------------------------------------------------
+
+# [llm]
+# endpoint_url  = "http://127.0.0.1:11434/v1"    # Ollama by default
+# model         = "llama3.1:8b"
+# api_key       = ""                              # blank for local Ollama
+# egress_ack    = "true"                          # required for non-local endpoints

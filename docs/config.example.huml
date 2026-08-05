@@ -1,0 +1,59 @@
+# suchi — example configuration in HUML (https://huml.io)
+#
+# See docs/config.example.toml for the canonical example — TOML is
+# suchi's recommended default. This HUML variant exists for operators
+# who prefer HUML's minimal syntax; the value shape is identical.
+#
+# HUML syntax:
+#   scalar values  → key: "value"
+#   lists / tables → key:: <inline or indented>
+#
+# Layered precedence (last wins):
+#   1. this file
+#   2. process env vars   ← env values override file values
+
+# --------------------------------------------------------------------
+# Required
+# --------------------------------------------------------------------
+
+public_url: "http://127.0.0.1:8000"
+
+# --------------------------------------------------------------------
+# Storage & runtime
+# --------------------------------------------------------------------
+
+data_dir: "/data"
+listen_addr: ":8000"
+log_level: "info"
+body_limit: "100M"
+backup_interval: "24h"
+
+# --------------------------------------------------------------------
+# OCR + ingest
+# --------------------------------------------------------------------
+
+ocr_languages:: "eng"
+ocr_engine: "auto"
+pdf_max_content_bytes: "8M"
+epub_max_content_bytes: "32M"
+djvu_max_content_bytes: "32M"
+
+# --------------------------------------------------------------------
+# OIDC (uncomment the whole block to enable)
+# --------------------------------------------------------------------
+
+# oidc::
+#   issuer: "https://id.example.com"
+#   client_id: "suchi"
+#   client_secret: "..."
+#   redirect_url: "https://suchi.example.com/oidc/callback"
+
+# --------------------------------------------------------------------
+# LLM classifier
+# --------------------------------------------------------------------
+
+# llm::
+#   endpoint_url: "http://127.0.0.1:11434/v1"
+#   model: "llama3.1:8b"
+#   api_key: ""
+#   egress_ack: "true"
