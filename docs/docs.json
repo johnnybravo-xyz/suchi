@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
   "name": "suchi",
-  "description": "Document management as one Go binary. SQLite-first, plugin seams, Paperless-ngx mobile-compat.",
+  "description": "Document management as one Go binary. SQLite-first, plugin seams, mobile wire-compat.",
   "colors": {
     "primary": "#0c6b58",
     "light": "#12a488",
@@ -31,7 +31,7 @@
           },
           {
             "group": "Development",
-            "pages": ["cookbook", "cookbook/mail-intake", "preconsume", "agents", "workflows", "plugins"]
+            "pages": ["cookbook", "cookbook/mail-intake", "preconsume", "agents", "workflows", "plugins", "mcp"]
           }
         ]
       }

@@ -1,0 +1,155 @@
+---
+title: "MCP v2 server"
+description: "Drive suchi from any MCP-capable agent runtime. Thin adapter, same auth."
+---
+
+`suchi mcp` starts an MCP v2 server that exposes a subset of the
+`/api/` surface as agent tools. It's a **thin adapter** — every tool
+maps 1:1 to a REST call; no logic that isn't a REST call underneath.
+Agent writes appear in the audit log as any other actor because they
+go through the same auth chain.
+
+## Quick start (Claude Desktop / Cursor / local agent hosts)
+
+Add this to your agent's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "suchi": {
+      "command": "suchi-mcp",
+      "env": {
+        "SUCHI_URL":   "http://localhost:8000",
+        "SUCHI_TOKEN": "<paste from POST /api/token/>"
+      }
+    }
+  }
+}
+```
+
+`suchi-mcp` is a symlink to `suchi` shipped in the Docker image and
+release artifacts; argv[0] dispatch routes it to the subcommand.
+Users installing from source can use `command: "suchi", "args": ["mcp"]`
+instead.
+
+## Auth
+
+The adapter takes a **suchi API token** and forwards it to `/api/*` as
+`Authorization: Token <hex>`. Every operation the agent performs runs
+as whichever user owns that token — same permission model as a mobile
+client.
+
+**Recommendation:** give the agent its own dedicated user with the
+minimum scope it needs. Don't hand it your admin token. Audit-log
+entries carry the user id, so a scoped agent user is trivially
+distinguishable from a human operator in later reviews.
+
+Get a token:
+
+```sh
+curl -X POST http://localhost:8000/api/token/ \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "agent@example.com", "password": "..."}'
+```
+
+## Transports
+
+| Flag | Transport | Use when |
+|---|---|---|
+| (default, no flag) | stdio | Local agent hosts (Claude Desktop, Cursor, OpenCode) |
+| `--http :8100` | HTTP+SSE | Remote agents, browser-hosted UIs, MCP inspectors |
+
+`--url` and `--token` flags override `SUCHI_URL` / `SUCHI_TOKEN` env
+if you'd rather not export them.
+
+## Tools
+
+The adapter exposes these MCP tools today. Each name is what an agent
+sees in tool-discovery.
+
+### `search_documents`
+
+Full-text search over title + content.
+
+Args:
+- `query` (string, required) — the search terms
+- `page_size` (int, optional; default 10, max 25)
+
+Returns: DRF pagination envelope with `SearchHit` entries carrying
+title, snippet (with `<mark>` highlights), BM25 rank, mime type, and
+`created_at`.
+
+Backs `GET /api/search/`.
+
+### `get_document`
+
+Full projection of one document — title, extracted content, tags,
+correspondents, custom fields, MIME, blob refs.
+
+Args:
+- `id` (int, required)
+
+Backs `GET /api/documents/{id}`. Trashed docs are visible with
+`trashed_at` set.
+
+### `list_inbox`
+
+Machine-outbox jobs + workflow tasks assigned to the caller, up to
+50 rows.
+
+No args.
+
+Backs `GET /api/tasks/?limit=50`. `workflow_tasks` in the response is
+what a "review this" agent flow would iterate.
+
+### `resolve_workflow_task`
+
+Resolve a workflow task with the given choice.
+
+Args:
+- `task_id` (int, required)
+- `choice` (string, required) — one of the task's declared choices (e.g. `approve`, `reject`)
+- `note` (string, optional) — operator note attached to the resolution
+
+Backs `POST /api/workflows/tasks/{task_id}/resolve`. Response includes
+the workflow-run advancement outcome.
+
+### `create_share_link`
+
+Create an expiring share link over one or more documents.
+
+Args:
+- `doc_ids` (array of ints, required) — 1..200 docs the caller owns
+- `label` (string, optional)
+- `expires_in_sec` (int, optional; 0 = never)
+- `password` (string, optional)
+
+Returns `{id, token, public_url}`. The public URL is relative (`/s/<token>`) — the client resolves it against `SUCHI_URL`.
+
+Backs `POST /api/share_links/`.
+
+## What's NOT here (yet)
+
+- `file_document` (set JD category / tags / custom-field values in one
+  call) — deferred until the per-doc mutation surface stabilizes as a
+  single endpoint.
+- `list_documents` (paginated browsing) — the search tool covers the
+  agent-relevant case; a raw list adds surface area without agent
+  value.
+- Resource browsing (MCP Resources) — parked. When it lands, it'll
+  expose one doc per resource so an agent can attach doc content to
+  its own context window natively.
+- Long-running operations (streaming re-render, bulk operations) —
+  parked; agents don't drive those today.
+
+## Design notes
+
+- **Adapter, not a second API.** If a tool needs behavior the REST
+  surface doesn't have, add the endpoint first, then wire the tool.
+- **No agent-only surface.** The tool set is a curated subset of the
+  same endpoints a mobile client uses.
+- **One binary.** `suchi mcp` is a subcommand of `suchi`, not a
+  separate binary. Version-skew between the adapter and the API is
+  impossible by construction — they compile from the same source.
+- **Argv[0] dispatch** makes `suchi-mcp` invocation Just Work without
+  the "one binary" story requiring "one command name."
