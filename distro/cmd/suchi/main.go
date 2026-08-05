@@ -455,6 +455,10 @@ func runServe() int {
 		uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
 		uiSrv.SetupPendingFn = func() bool { return la.SetupToken() != "" }
 		uiSrv.Register(mux)
+		// Svelte SPA mounted at /app/ alongside the server-rendered
+		// UI. Both share the auth chain; RequireUI does not apply
+		// to the SPA shell (public by design). See core/ui/spa.go.
+		uiSrv.RegisterSPA(mux)
 	} else {
 		log.Info("main.ui.disabled",
 			"reason", "SUCHI_UI_DISABLED — headless mode, /api/ only")

@@ -80,6 +80,41 @@ doctor port="8000":
     echo "== disk =="
     du -sh {{DATA}} 2>/dev/null || echo "(no data dir)"
 
+# --- svelte SPA (ui/) ---
+
+# Build the Svelte UI and refresh the embedded copy at core/ui/spa/dist.
+# Prefers bun (fast, single binary) and falls back to npm — same output
+# either way, so the committed dist is toolchain-agnostic. Contributors
+# who don't touch the UI never need either.
+ui-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ui
+    if command -v bun >/dev/null 2>&1; then
+        bun install --frozen-lockfile
+        bun run build
+    else
+        npm ci
+        npm run build
+    fi
+    cd ..
+    rm -rf core/ui/spa/dist
+    mkdir -p core/ui/spa
+    cp -r ui/dist core/ui/spa/dist
+    echo "embedded $(du -sh core/ui/spa/dist | cut -f1) — commit core/ui/spa/dist"
+
+# Vite dev server on :5173, proxying /api /preview /download /login to
+# the Go binary on :8000. Run `just serve` in another terminal first.
+ui-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ui
+    if command -v bun >/dev/null 2>&1; then
+        bun run dev
+    else
+        npm run dev
+    fi
+
 # --- docs ---
 
 # Serve the Mintlify docs locally on :3000 with live-reload. Uses bun
