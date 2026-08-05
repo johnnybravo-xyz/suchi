@@ -37,6 +37,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/anydoc"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
@@ -394,6 +395,28 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		log.Info("post-ingest.route.djvu",
 			"non_blank", res.NonBlank, "skipped", res.Skipped, "truncated", res.Truncated)
+		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	// Office documents (docx, xlsx, pptx, odt, rtf, csv, ...) — anydoc
+	// converts to GitHub-flavored Markdown, we drop it into content.
+	// Missing binary = Skipped=true, doc lands with empty content and
+	// operator can re-ingest after installing the CLI.
+	if anydoc.Recognized(mime) {
+		res, err := anydoc.Extract(ctx, bytes.NewReader(origBytes), log,
+			anydoc.Options{
+				MaxTextBytes: h.limits.EPUB, // office docs cap same as EPUB (~32 MiB)
+				Ext:          anydoc.ExtFromMIME(mime),
+			})
+		if err != nil {
+			return fmt.Errorf("anydoc: %w", err)
+		}
+		log.Info("post-ingest.route.anydoc",
+			"mime", mime, "non_blank", res.NonBlank,
+			"skipped", res.Skipped, "truncated", res.Truncated)
 		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
 		}
