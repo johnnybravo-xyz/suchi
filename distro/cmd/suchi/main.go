@@ -24,6 +24,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/api"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/backup"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
@@ -379,6 +380,16 @@ func runServe() int {
 	}
 	go disp.Run(ctx)
 	defer disp.Stop()
+
+	// Periodic VACUUM INTO snapshot loop. Docs have promised this
+	// since Phase 0; implementation was missing until the first
+	// external code review flagged it. Disabled by
+	// BACKUP_INTERVAL=0.
+	go backup.Loop(ctx, backup.Config{
+		DataDir:  cfg.DataDir,
+		Interval: cfg.BackupInterval,
+		Keep:     cfg.BackupKeep,
+	}, d, log)
 
 	// fs-watch: staging-dir producer. Idle unless the resolved owner
 	// email is set (settings written by the setup wizard take precedence

@@ -24,7 +24,11 @@ type Config struct {
 	BodyLimit      int64
 	SessionKeyPath string
 	BackupInterval time.Duration
-	OCRLanguages   []string
+	// BackupKeep — retention window for VACUUM INTO snapshots. After
+	// each successful snapshot, all-but-the-latest N are deleted.
+	// 0 = keep everything (documented; not the default).
+	BackupKeep   int
+	OCRLanguages []string
 
 	// OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 	OIDCIssuerURL    string
@@ -183,6 +187,9 @@ func Load() (*Config, error) {
 	if c.BodyLimit, err = parseBytes(uploadEnv); err != nil {
 		return nil, fmt.Errorf("UPLOAD_MAX_BYTES / BODY_LIMIT: %w", err)
 	}
+	if c.BackupKeep, err = parseIntBounded("BACKUP_KEEP", env("BACKUP_KEEP", "7"), 0, 10_000); err != nil {
+		return nil, err
+	}
 	if c.BackupInterval, err = time.ParseDuration(env("BACKUP_INTERVAL", "24h")); err != nil {
 		return nil, fmt.Errorf("BACKUP_INTERVAL: %w", err)
 	}
@@ -297,6 +304,24 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseIntBounded parses `s` as a base-10 int and enforces `min <=
+// value <= max`. The name is folded into the error so operators see
+// which env var was bad.
+func parseIntBounded(name, s string, min, max int) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("%s: empty", name)
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	if n < min || n > max {
+		return 0, fmt.Errorf("%s: %d out of range [%d, %d]", name, n, min, max)
+	}
+	return n, nil
 }
 
 // parseBytes accepts "100M", "1G", "512K", or a raw byte count.
