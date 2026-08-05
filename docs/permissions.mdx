@@ -1,0 +1,265 @@
+---
+title: "Permissions"
+description: "Groups, per-object ACLs, and the Authorizer interface — Phase 6's answer to \"my spouse shouldn't see my personal folder\"."
+---
+
+Suchi's multi-user data model has been there since Phase 0 — every
+document has an `owner_id`; every mutation is audit-logged. Phase 6
+adds the missing piece: **grant read/change/delete access to
+another user or a group of users, without making them an admin**.
+
+The whole thing runs on three tables and one Go interface. No
+external policy engine, no OPA, no cedar — plain SQL grants keyed on
+(object, principal).
+
+## 1. Model
+
+Three tables (see `core/db/migrations/0021_groups_acls.sql`):
+
+```
+groups                       named collection of users
+  (id, name UNIQUE, description, ...)
+
+group_members                many-to-many
+  (group_id → groups, user_id → users)
+
+object_acls                  polymorphic permission grants
+  (id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_by)
+```
+
+- `object_kind` is one of `document`, `tag`, `correspondent`,
+  `document_type`, `storage_path`. Enforced by a CHECK constraint.
+- `principal_kind` is `user` or `group`.
+- `perm_bits` is a small bitmask (`view=1`, `change=2`, `delete=4`).
+  Powers-of-two so grants OR together.
+- Unique per `(object_kind, object_id, principal_kind, principal_id)`
+  — re-granting overwrites bits rather than accumulating (surprising
+  otherwise).
+
+## 2. Semantics
+
+Every request goes through `authz.Authorizer.Can(principal, kind, id, want)`.
+The decision:
+
+1. **Anonymous** (no principal) → deny.
+2. **Admin** (`role = admin`) → allow. Always. Admins bypass ACLs.
+3. **Owner** (the object has an `owner_id` column and it matches) →
+   allow. Owners always have the full mask on their own objects.
+4. **ACL match**. Union `perm_bits` across every grant that names
+   the caller or any group they belong to. If the union covers
+   `want`, allow. Otherwise deny.
+
+Two important consequences:
+
+- **Empty `object_acls` for an object = legacy behavior**. Only the
+  owner and admins see it. Turning the feature on for the first
+  time changes nothing about docs you haven't explicitly shared.
+- **Grants are additive, never subtractive**. You can't "revoke"
+  the owner's access; you can only add more principals.
+
+## 3. Authorizer implementations
+
+Suchi ships two:
+
+- **`RoleAuthorizer`** — the legacy path. Owner or admin. Zero ACL
+  awareness. Cheap: one query per check. Zero-value ready.
+- **`ACLAuthorizer`** — the ACL-aware path. Owner + admin fast paths;
+  otherwise reads `object_acls` filtered by user and group. Wired as
+  the default at `api.New()` because it is backward-compatible
+  (empty ACLs behave identically to `RoleAuthorizer`).
+
+Custom implementations are expected — enterprise builds swap in a
+SAML/SCIM-aware one without touching handlers. The interface is:
+
+```go
+type Authorizer interface {
+    Can(ctx context.Context, p Principal, kind Kind, id int64, want Perm) error
+}
+```
+
+`Principal` carries pre-loaded group membership so the decision is a
+pure function of its inputs. Handlers use the `s.authorize()` helper
+(in `core/api/authz_helpers.go`), which loads groups once per
+request via a context-scoped cache and maps `ErrDenied` → HTTP 403.
+
+## 4. Enforcement today
+
+Wired for **documents**:
+
+| Endpoint | Requires |
+| -------- | -------- |
+| `GET /api/documents/{id}` | `view` |
+| `PATCH /api/documents/{id}` | `change` |
+| `DELETE /api/documents/{id}` | `delete` |
+| `POST /api/documents/{id}/restore` | `change` |
+| `GET /` (UI list) | filtered — only docs the caller can view |
+| `GET /docs/{id}` (UI detail) | 404 if not visible (avoids info leak) |
+
+Taxonomy objects (`tag`, `correspondent`, `document_type`,
+`storage_path`) have grant CRUD wired but not yet enforced on their
+own handlers. That's a follow-up batch — the schema and API surface
+are stable so scripts can start creating grants today.
+
+## 5. REST surface
+
+### Groups
+
+Admin-only writes; any authed user can list/get.
+
+```
+GET    /api/groups/                     list all groups
+POST   /api/groups/                     create
+GET    /api/groups/{id}                 read one
+PATCH  /api/groups/{id}                 rename / update description
+DELETE /api/groups/{id}                 delete (refuses if grants exist)
+
+GET    /api/groups/{id}/members         list members
+POST   /api/groups/{id}/members         { "user_id": 5 }
+DELETE /api/groups/{id}/members/{uid}   remove member
+```
+
+Delete-with-grants is a **hard refuse** (409). Revoke every grant
+that names the group first, then delete. This is a safety, not a
+bug — silently vanishing grants is exactly the wrong failure mode.
+
+### ACL grants
+
+Admin-only writes.
+
+```
+GET    /api/acls/{kind}/{id}                list grants on one object
+PUT    /api/acls/{kind}/{id}                upsert one grant (idempotent)
+DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
+                                            revoke a specific grant
+```
+
+`{kind}` is one of `document|tag|correspondent|document_type|storage_path`.
+PUT body:
+
+```json
+{
+  "principal_kind": "user",
+  "principal_id":   5,
+  "perm_bits":      7
+}
+```
+
+`perm_bits` is a bitmask — combine the individual bits:
+
+| Bit | Meaning |
+| --- | ------- |
+| `1` | view |
+| `2` | change |
+| `4` | delete |
+| `3` | view + change |
+| `7` | view + change + delete |
+
+Re-PUT with a different `perm_bits` overwrites; PUT with the same
+value is a no-op.
+
+## 6. Worked examples
+
+### Share one document with a household member
+
+```bash
+# Grant view + change to user id 5.
+curl -X PUT http://localhost:8000/api/acls/document/17 \
+  -H "Authorization: Token $ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{"principal_kind":"user","principal_id":5,"perm_bits":3}'
+```
+
+Doc 17 now appears in user 5's list, is editable, but cannot be
+deleted by them.
+
+### Give a "finance" group read access to everything an owner tagged "invoices"
+
+Not yet a first-class one-shot — the taxonomy handlers don't
+enforce grants yet. For now, script it: iterate over documents
+with the tag, PUT a grant per doc. When taxonomy enforcement lands,
+a grant on the tag itself will imply access to documents carrying
+that tag.
+
+### Undo a shared doc
+
+```bash
+curl -X DELETE "http://localhost:8000/api/acls/document/17?principal_kind=user&principal_id=5" \
+  -H "Authorization: Token $ADMIN"
+```
+
+Silently removes the grant. If there was no matching row, the call
+still returns 204 — idempotent revoke.
+
+### Delete a group cleanly
+
+```bash
+# 1. Enumerate everything the group is named in.
+curl -sS http://localhost:8000/api/acls/document/17 \
+  -H "Authorization: Token $ADMIN" \
+  | jq '.results[] | select(.principal_kind=="group" and .principal_id==7)'
+
+# 2. Revoke each grant, then delete the group.
+curl -X DELETE "http://localhost:8000/api/acls/document/17?principal_kind=group&principal_id=7" ...
+curl -X DELETE  http://localhost:8000/api/groups/7 ...
+```
+
+## 7. Admin UI
+
+`/admin/groups` renders a card per group with an inline member
+table + a "new group" affordance. Delete surfaces the 409 message
+when the group still holds grants; every list, add, remove, save
+round-trips to the JSON API above.
+
+Per-object "share with…" affordances on the document detail page
+are planned; today, use the API directly or the eventual admin
+scripts.
+
+## 8. Interaction with other engines
+
+- **Share links** ([`share_links`](/api#share-links)) live one layer
+  above ACLs — they're time-bounded tokens for anonymous recipients.
+  A share link works even for callers who have no ACL grant; it's
+  a distinct axis.
+- **Automations** can add/remove permissions indirectly via
+  `assign_owner`; a dedicated `grant_permission` action is not yet
+  in the batch. Track in the plan doc.
+- **Approvals** don't currently participate in ACLs — anyone with
+  the workflow's slug can start a run. Adding a `workflow` kind
+  to `object_kind` is a follow-up.
+
+## 9. What's not (yet) covered
+
+- **Enforcement on taxonomy objects**. Grant CRUD is live; handlers
+  don't consult them yet.
+- **Row-level filtering on the list handler beyond documents**.
+  `/api/tags/` returns every tag; `/api/correspondents/` returns
+  every correspondent. Enterprise E2 layers row filtering on top of
+  the Phase 6 primitive.
+- **Query-time filter for search**. `/api/search/` doesn't yet
+  respect ACLs; a user who can search but isn't granted read on a
+  document sees its snippet.
+
+Roadmap for these is in the plan doc under Phase 6 tail + E2.
+
+## 10. Migrating from single-user
+
+If you've been running suchi single-user (one owner, everything
+theirs), Phase 6 changes nothing about behavior. The `object_acls`
+table stays empty; the `ACLAuthorizer` falls through to
+owner-or-admin.
+
+To onboard a second user for real sharing:
+
+1. Create the user via the setup wizard or `POST /api/admin/users`.
+2. Decide the sharing model:
+   - **Shared inbox**: create a group, add everyone, grant it view
+     on the docs you want jointly seen.
+   - **Per-doc**: grant the individual user access on each doc.
+   - **Cross-owner**: create a group per household member; grant
+     the "spouse" group on shared docs; individuals stay owners of
+     their private ones.
+3. Adjust as needed — the write path (grants + members) is
+   idempotent; there's no penalty for iterating.
+
+For the maintainer's own reference-deployment story, see the plan
+doc under Phase 8.

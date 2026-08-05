@@ -27,7 +27,7 @@
           },
           {
             "group": "Concepts",
-            "pages": ["architecture", "jd", "privacy"]
+            "pages": ["architecture", "jd", "privacy", "permissions"]
           },
           {
             "group": "Operations",

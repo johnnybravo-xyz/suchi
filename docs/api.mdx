@@ -1,14 +1,41 @@
 ---
 title: "HTTP API"
-description: "JSON endpoints under /api/ — current + planned mobile-client compat."
+description: "JSON endpoints under /api/ — the surface mobile clients + agents + integrations drive."
 ---
 
-Phase 0/1 surface — grows through Phase 2 (ingest endpoints) and
-Phase 4 (mobile-client compat surface).
+Roughly 135 routes across documents, taxonomy, search, share links,
+agents, automations, approvals, groups + ACLs, MCP, and mobile compat.
+The prose below covers everything with non-obvious semantics; the
+authoritative machine-readable list lives at:
+
+- **`GET /api/schema/`** — OpenAPI 3.1 (unauthenticated; documents the
+  surface but every operation still enforces its own auth).
 
 All endpoints under `/api/` return JSON. Everything else is either a
 UI page (HTML), a static asset, or a blob stream. Every request gets
 an `X-Request-Id` header — carry it into bug reports.
+
+## Endpoint index (compact)
+
+| Group | Routes |
+| ----- | ------ |
+| Health / metrics | `/healthz`, `/readyz`, `/metrics` |
+| Auth (browser) | `/login`, `/bootstrap`, `/setup`, `/logout`, OIDC `/oidc/login` `/oidc/callback` `/oidc/debug` |
+| Auth (JSON) | `POST /api/login`, `POST /api/token/`, `GET /api/whoami` |
+| Documents | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET /api/trash/` |
+| Doc extras | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption` |
+| Taxonomy | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/` |
+| Classifier rules | `/api/rules/` CRUD |
+| Search + autocomplete | `/api/search/`, `/api/autocomplete/` |
+| Saved views + UI prefs | `/api/saved_views/`, `/api/ui_settings/` |
+| Mobile compat handshake | `/api/remote_version/`, `/api/next_asn/`, `/api/tasks/` |
+| Agents | `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`; `/api/agent/webhooks` |
+| Automations | `/api/automations/` CRUD ([guide](/automations)) |
+| Approvals | `/api/approvals/…` ([guide](/approvals)) |
+| Groups + ACLs | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions)) |
+| Share links | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download` |
+| Admin | `/api/admin/users`, `/api/admin/setup/*`, `/api/admin/mail-setup`, `/api/admin/settings/{llm,preferences,ingest}` |
+| Schema | `/api/schema/` (OpenAPI 3.1) |
 
 ## Auth
 
@@ -24,7 +51,7 @@ Two credential shapes, both routed through the same auth chain:
   are exactly 64 lowercase hex chars; anything else with `Bearer`
   scheme falls through to the OIDC authenticator.
 
-## Endpoints (as of Phase 1)
+## Endpoints (selected — see index above for the full list)
 
 ### `GET /healthz`
 
@@ -227,6 +254,29 @@ endpoints:
 
 See the [approvals guide](/approvals) for the spec shape, error
 codes, timeout behavior, and a worked invoice-approval example.
+
+### Permissions surface: `/api/groups/*` + `/api/acls/*`
+
+Phase 6. Named user collections plus polymorphic per-object grants.
+Full guide at [permissions](/permissions).
+
+| Method | Path | Auth |
+|---|---|---|
+| GET    | `/api/groups/`                           | authed |
+| POST   | `/api/groups/`                           | admin |
+| GET    | `/api/groups/{id}`                       | authed |
+| PATCH  | `/api/groups/{id}`                       | admin |
+| DELETE | `/api/groups/{id}`                       | admin (refuses while grants exist) |
+| GET    | `/api/groups/{id}/members`               | authed |
+| POST   | `/api/groups/{id}/members`               | admin |
+| DELETE | `/api/groups/{id}/members/{uid}`         | admin |
+| GET    | `/api/acls/{kind}/{id}`                  | authed |
+| PUT    | `/api/acls/{kind}/{id}`                  | admin |
+| DELETE | `/api/acls/{kind}/{id}?principal_kind&principal_id` | admin |
+
+`{kind}` is one of `document|tag|correspondent|document_type|storage_path`.
+Perm bits are `view=1`, `change=2`, `delete=4` — OR them for
+combinations.
 
 ### `GET /api/documents/{id}/correspondents/`
 

@@ -223,6 +223,48 @@ everything else via `workflow:advance` / `workflow:resume` /
 and a worked invoice-approval example. For "when doc lands, do X"
 rules that don't need a human click, see [automations](/automations).
 
+## Permissions
+
+The multi-user data model has been there since Phase 0 — every
+document has an `owner_id`. Phase 6 adds:
+
+- **`groups`** — named collections of users
+- **`group_members`** — user ↔ group junction
+- **`object_acls`** — polymorphic grants keyed on
+  (object_kind, object_id, principal_kind, principal_id, perm_bits)
+
+The `authz.Authorizer` interface owns the decision. Two shipped
+implementations:
+
+- `RoleAuthorizer` — legacy owner+admin gate. Zero ACL awareness.
+- `ACLAuthorizer` — folds ACL grants over the owner/admin fallback.
+  Wired as the default at `api.New()`; empty ACLs behave identically
+  to `RoleAuthorizer`, so this is backward-compatible.
+
+Perm bits are `view=1`, `change=2`, `delete=4`; grants OR together.
+Admin bypasses ACLs entirely; owner has the full mask on their own
+objects. See [permissions](/permissions) for the full model, REST
+surface, and worked examples.
+
+Enterprise builds swap the interface for a SAML/SCIM-aware
+implementation without touching handlers.
+
+## Automations vs Approvals
+
+Two distinct engines with well-separated concerns:
+
+- **Automations** (`core/automations/`) — trigger→conditions→actions
+  rules that fire on document events. No human involvement; matches
+  an existing DMS's "workflows" shape in the mobile-compat plane but
+  named for what it does. See [automations](/automations).
+- **Approvals** (`core/workflow/`) — human-in-the-loop state
+  machines with timeouts. Doc 17 needs finance sign-off before
+  landing in the vault. See [approvals](/approvals).
+
+The rules engine (`core/classify/rules/`) sits below both — it's
+the one-shot deterministic classifier that runs first in
+post-ingest.
+
 ## Headless mode
 
 `SUCHI_UI_DISABLED=1` skips registration of every browser-facing
