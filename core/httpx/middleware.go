@@ -35,20 +35,41 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 
 // SecurityHeaders sets baseline defensive headers on every response.
 //
-// The CSP is intentionally strict for the API surface. The UI (added
-// Phase 1) will loosen it with a nonce for its own inline HTMX handlers;
-// until then, no inline anything.
+// The CSP is intentionally strict for the API surface + server-rendered
+// UI. The Svelte SPA under /app/ needs `style-src 'unsafe-inline'`
+// because Svelte injects styles at runtime; that relaxation is scoped
+// to /app/* only. The rest of the surface stays locked down.
 func SecurityHeaders(next http.Handler) http.Handler {
+	const strict = "default-src 'self'; img-src 'self' data:; " +
+		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	// SPA CSP: same policy plus `style-src 'self' 'unsafe-inline'`.
+	// Every other directive stays; only the runtime-style compromise
+	// is allowed. No `script-src 'unsafe-inline'` — the JS bundle is
+	// external.
+	const spa = "default-src 'self'; img-src 'self' data:; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if isSPAPath(r.URL.Path) {
+			h.Set("Content-Security-Policy", spa)
+		} else {
+			h.Set("Content-Security-Policy", strict)
+		}
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSPAPath reports whether the request targets the Svelte shell or
+// one of its bundled assets. Kept as a plain string check (no route
+// match) so the middleware stays cheap.
+func isSPAPath(p string) bool {
+	return p == "/app" || len(p) >= 5 && p[:5] == "/app/"
 }
 
 // RequestID injects a random request id into the response header and
