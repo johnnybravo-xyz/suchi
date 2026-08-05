@@ -454,6 +454,12 @@ func deriveTitle(filename string) string {
 // net/http.DetectContentType on them. Returns "application/octet-stream"
 // on any error — the caller decides whether that's a soft-fail or a
 // harder one.
+//
+// Refinement step: if the stdlib sniffer returns "application/zip",
+// peek inside the archive to distinguish office documents (docx/xlsx/
+// pptx/odt/ods/odp), EPUB, and other zip-based formats. Without this
+// refinement, docx uploads land as application/zip and skip the
+// anydoc extractor.
 func (s *Server) sniffMIME(sha string) (string, error) {
 	rc, err := s.CAS.Get(sha)
 	if err != nil {
@@ -465,5 +471,33 @@ func (s *Server) sniffMIME(sha string) (string, error) {
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return "", err
 	}
-	return http.DetectContentType(head[:n]), nil
+	mime := http.DetectContentType(head[:n])
+	if mime != "application/zip" {
+		return mime, nil
+	}
+	// Zip refine: re-open, size the blob, hand to refineZipMIME. Any
+	// failure (unreadable zip, format not one we recognize) falls back
+	// to application/zip — safe non-regression.
+	stat, err := s.CAS.Stat(sha)
+	if err != nil {
+		return mime, nil
+	}
+	rc2, err := s.CAS.Get(sha)
+	if err != nil {
+		return mime, nil
+	}
+	defer rc2.Close()
+	// Today's filesystem CAS returns *os.File which is an io.ReaderAt;
+	// future backends (S3, blob-crypt) might not. Fall through if the
+	// assertion fails — no zip refine possible without random access,
+	// keeps application/zip.
+	ra, ok := rc2.(io.ReaderAt)
+	if !ok {
+		return mime, nil
+	}
+	refined, err := refineZipMIME(ra, stat.Size)
+	if err != nil || refined == "" {
+		return mime, nil
+	}
+	return refined, nil
 }
