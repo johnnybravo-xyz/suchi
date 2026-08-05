@@ -40,6 +40,10 @@ type Server struct {
 	// plugin so /api/admin/users can hash new passwords without this
 	// package importing plugins/*. Nil-check in handlers.
 	PasswordHasher func(pw string) (string, error)
+	// PasswordVerifier is set at boot by main.go from the local-auth
+	// plugin so /api/share_links/ can check password-protected shares
+	// without a separate hashing lib.
+	PasswordVerifier func(encoded, pw string) error
 	// LLMReloader is called after /api/admin/settings/llm writes so the
 	// running classifier picks up the new config without a restart.
 	// Main.go closes over the plugin instance; api/* doesn't import
@@ -136,6 +140,16 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Trash listing (soft-deleted docs — owner-scoped for members).
 	mux.HandleFunc("GET /api/trash/", s.ListTrash)
+
+	// Share links (creator-facing CRUD).
+	mux.HandleFunc("GET /api/share_links/", s.ListShareLinks)
+	mux.HandleFunc("POST /api/share_links/", s.CreateShareLink)
+	mux.HandleFunc("DELETE /api/share_links/{id}", s.RevokeShareLink)
+
+	// Public share surface. Unauthenticated — token in URL is the
+	// only credential; optional ?password guards it further.
+	mux.HandleFunc("GET /s/{token}", s.GetSharePublic)
+	mux.HandleFunc("GET /s/{token}/{doc_id}/download", s.GetSharePublicDownload)
 
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
