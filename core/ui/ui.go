@@ -11,6 +11,7 @@ package ui
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -59,6 +60,13 @@ type Server struct {
 	// MailSetupEnabled toggles the /admin/mail-setup page + topbar link.
 	// Populated at boot from config.MailSetupEnvPath being non-empty.
 	MailSetupEnabled bool
+
+	// SetupPendingFn returns true while the first-boot setup token has
+	// not been consumed. Wired from main.go to localauth's SetupToken()
+	// != "". When true, GET /login redirects to /bootstrap so an
+	// operator hitting the app can't get stuck at a form that has no
+	// users to log into.
+	SetupPendingFn func() bool
 }
 
 // New parses templates and returns a ready Server. Templates are parsed
@@ -79,11 +87,12 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap"}
+	standalone := map[string]bool{"login": true, "bootstrap": true}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
 		files := []string{"templates/" + name + ".html"}
-		if name != "login" {
+		if !standalone[name] {
 			files = append(files, "templates/base.html")
 		}
 		t, err := template.New(name).Funcs(funcs).ParseFS(tmplFS, files...)
@@ -107,6 +116,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /assets/", s.Assets)
 	mux.HandleFunc("GET /login", s.LoginPage)
+	mux.HandleFunc("GET /bootstrap", s.BootstrapPage)
 	// The POST /login sink is bound by main to the local-auth handler.
 	if s.LoginSubmit != nil {
 		mux.HandleFunc("POST /login", s.LoginSubmit)
@@ -119,6 +129,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /upload", s.RequireUI(http.HandlerFunc(s.UploadPage)))
 	mux.Handle("GET /admin/mail-setup", s.RequireUI(http.HandlerFunc(s.MailSetupPage)))
 	mux.Handle("GET /admin/setup", s.RequireUI(http.HandlerFunc(s.SetupPage)))
+	mux.Handle("GET /inbox", s.RequireUI(http.HandlerFunc(s.Inbox)))
 }
 
 // RequireUI redirects anonymous browsers to the login page. API tokens
@@ -146,6 +157,7 @@ type listRow struct {
 	Title         string
 	Correspondent string
 	JDLabel       string
+	Sensitivity   string
 	CreatedFmt    string
 }
 
@@ -189,6 +201,7 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 				LIMIT 1
 			), ''),
 			COALESCE(jc.code || ' ' || jc.name, ''),
+			COALESCE(d.sensitivity, ''),
 			d.created_at
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
@@ -206,7 +219,7 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var d listRow
 		var ts int64
-		if err := rows.Scan(&d.ID, &d.Title, &d.Correspondent, &d.JDLabel, &ts); err != nil {
+		if err := rows.Scan(&d.ID, &d.Title, &d.Correspondent, &d.JDLabel, &d.Sensitivity, &ts); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
@@ -266,6 +279,9 @@ type detailDoc struct {
 	// is an attachment. When it's the parent (or a non-email doc)
 	// EmailParentID is invalid.
 	EmailParentID sql.NullInt64
+	// Sensitivity is a free-text label ('confidential', 'internal',
+	// 'public', ...) set by plugins/enterprise DLP. Empty when unset.
+	Sensitivity string
 }
 
 // Detail renders a single document with its metadata + PDF viewer.
@@ -300,7 +316,8 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			d.created_at, d.added_at, d.archive_blob,
 			d.archive_serial_number, d.bundle_id_legacy,
 			d.split_parent_id, d.split_index,
-			d.encryption_state, d.email_parent_id
+			d.encryption_state, d.email_parent_id,
+			COALESCE(d.sensitivity, '')
 		FROM documents d
 		LEFT JOIN document_types dt ON dt.id = d.document_type_id
 		LEFT JOIN jd_categories  jc ON jc.id = d.jd_category_id
@@ -309,7 +326,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
 		&created, &added, &archiveBlob, &doc.ASN, &doc.BundleID,
 		&doc.SplitParentID, &doc.SplitIndex,
-		&encState, &doc.EmailParentID,
+		&encState, &doc.EmailParentID, &doc.Sensitivity,
 	)
 	if encState.Valid {
 		doc.EncryptionState = encState.String
@@ -552,11 +569,29 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	}
 }
 
-// LoginPage renders the login form.
+// LoginPage renders the login form. Redirects to /bootstrap when the
+// first-boot setup token hasn't been consumed yet — otherwise the
+// operator lands on a form with no users to authenticate against.
 func (s *Server) LoginPage(w http.ResponseWriter, r *http.Request) {
+	if s.SetupPendingFn != nil && s.SetupPendingFn() {
+		http.Redirect(w, r, "/bootstrap", http.StatusFound)
+		return
+	}
 	s.render(w, r, "login", map[string]any{
 		"Error": r.URL.Query().Get("error"),
 	})
+}
+
+// BootstrapPage renders the first-boot admin-creation form. Redirects
+// to /login when the setup token has already been consumed — the page
+// is inert once suchi is initialized.
+func (s *Server) BootstrapPage(w http.ResponseWriter, r *http.Request) {
+	if s.SetupPendingFn == nil || !s.SetupPendingFn() {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	msg := strings.ReplaceAll(r.URL.Query().Get("error"), "+", " ")
+	s.render(w, r, "bootstrap", map[string]any{"Error": msg})
 }
 
 // UploadPage renders the drop-and-pick upload UI. The form POSTs to
@@ -674,6 +709,83 @@ func isKnownStep(name string) bool {
 		}
 	}
 	return false
+}
+
+// ---------- inbox (workflow tasks) ----------
+
+// inboxTaskRow projects one workflow_tasks row for the inbox template.
+// Kept flat and pre-formatted so the html/template doesn't reach into
+// time.Time / *string helpers.
+type inboxTaskRow struct {
+	ID           int64
+	WorkflowSlug string
+	StateKey     string
+	Prompt       string
+	Choices      []string
+	Status       string
+	CreatedFmt   string
+}
+
+// Inbox renders the workflow-tasks queue scoped to the current user.
+// Reads directly from workflow_tasks — no /api/tasks/ hop — so a slow
+// jobs table doesn't stall the page. Status filter matches /api/tasks/
+// (open + claimed only; terminal states omitted).
+func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if p == nil {
+		http.Redirect(w, r, s.LoginPath, http.StatusFound)
+		return
+	}
+	me := "user:" + strconv.FormatInt(p.UserID, 10)
+
+	rows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT t.id, d.slug, t.state_key, t.prompt, t.choices_json,
+		       t.status, t.created_at
+		FROM workflow_tasks t
+		JOIN workflow_runs r ON r.id = t.run_id
+		JOIN workflow_defs d ON d.id = r.def_id
+		WHERE t.assignee = ? AND t.status IN ('open','claimed')
+		ORDER BY t.created_at DESC, t.id DESC
+		LIMIT 200
+	`, me)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	defer rows.Close()
+
+	var tasks []inboxTaskRow
+	var openCount int
+	for rows.Next() {
+		var (
+			row     inboxTaskRow
+			choices string
+			ts      int64
+		)
+		if err := rows.Scan(&row.ID, &row.WorkflowSlug, &row.StateKey,
+			&row.Prompt, &choices, &row.Status, &ts); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		if choices != "" {
+			_ = json.Unmarshal([]byte(choices), &row.Choices)
+		}
+		row.CreatedFmt = time.Unix(ts, 0).UTC().Format("2006-01-02 15:04")
+		if row.Status == "open" {
+			openCount++
+		}
+		tasks = append(tasks, row)
+	}
+	if err := rows.Err(); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	s.render(w, r, "inbox", map[string]any{
+		"Principal": p,
+		"Tasks":     tasks,
+		"OpenCount": openCount,
+	})
 }
 
 // ---------- render + helpers ----------

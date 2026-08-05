@@ -390,6 +390,7 @@ func runServe() int {
 	mux.Handle("GET /readyz", readyz)
 	mux.Handle("GET /metrics", m.Handler())
 	mux.HandleFunc("POST /setup", la.SetupHandler)
+	mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
 	mux.HandleFunc("POST /api/login", la.LoginHandler)
 	if oa != nil {
 		mux.HandleFunc("GET /oidc/login", oa.LoginHandler)
@@ -413,6 +414,7 @@ func runServe() int {
 	}
 	uiSrv.LoginSubmit = la.LoginFormHandler
 	uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
+	uiSrv.SetupPendingFn = func() bool { return la.SetupToken() != "" }
 	uiSrv.Register(mux)
 
 	// JSON API surface (/api/*). Attach the dispatcher so upload
@@ -468,6 +470,7 @@ func runServe() int {
 	rl := httpx.NewRateLimit(5, 10)
 	authRoutes := http.NewServeMux()
 	authRoutes.Handle("POST /setup", rl.Middleware(handler))
+	authRoutes.Handle("POST /bootstrap", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/login", rl.Middleware(handler))
 	// Anything else falls through to the un-limited handler.
 	authRoutes.Handle("/", handler)

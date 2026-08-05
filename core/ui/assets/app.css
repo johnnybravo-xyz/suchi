@@ -1,33 +1,692 @@
-/* suchi — Oat is the design system (see /assets/vendor/oat.min.css).
-   This file only holds the bits Oat doesn't cover: the topbar layout
-   and one file-input dropzone. Everything else — buttons, panels,
-   inputs, tables, alerts — is Oat's job. Keep it that way. */
+/* suchi UI polish layer.
+   Oat (loaded first) is the design system — buttons, panels, inputs,
+   tables, alerts. This file adds four things Oat doesn't:
+     1. Topbar layout + inbox pill affordance
+     2. Restrained micro-motion (150-220ms, cubic-bezier easing)
+     3. Dark-mode surface tuning via prefers-color-scheme
+     4. DMS-specific pills (JD code, tag, sensitivity, status)
+
+   Motion budget: every transition is 220ms or less. No spring, no bounce,
+   no scroll-linked or infinite loops. Users on prefers-reduced-motion
+   see zero motion. */
+
+:root {
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.04),
+                 0 4px 12px rgba(15, 23, 42, 0.06);
+  --accent: #0c6b58;
+  --accent-soft: #e3f2ee;
+  --danger-soft: #fdecea;
+
+  /* Brand assets. Swap the SVG URL, not the color — the SVGs bake the
+     brand palette in and ship a `-dark` variant per role. */
+  --brand-mark: url("/assets/brand/suchi-primary.svg");
+  --brand-hero: url("/assets/brand/suchi-hero.svg");
+  --brand-illust: url("/assets/brand/suchi-illustration.svg");
+}
+
+/* Warm both theme variants so a light↔dark toggle doesn't stall while
+   the browser re-decodes the "other" SVG. The pseudo-element has zero
+   size and stays off-screen; the images live rent-free in Chromium's
+   decoded-image cache from first paint on. */
+body::after {
+  content: "";
+  position: fixed; left: -9999px; top: -9999px;
+  width: 1px; height: 1px; opacity: 0; pointer-events: none;
+  background:
+    url("/assets/brand/suchi-primary.svg"),
+    url("/assets/brand/suchi-primary-dark.svg"),
+    url("/assets/brand/suchi-hero.svg"),
+    url("/assets/brand/suchi-hero-dark.svg"),
+    url("/assets/brand/suchi-illustration.svg"),
+    url("/assets/brand/suchi-illustration-dark.svg");
+}
+
+/* Dark mode. Two paths:
+     - :root[data-theme="dark"] — explicit user choice via toggle
+     - @media (prefers-color-scheme: dark) only when data-theme is absent
+       or "auto", so the toggle can override the OS.
+   Suchi doesn't ship its own dark palette for Oat; Oat itself flips on
+   the same media query. What we override here is only the layer on top:
+   accent, soft, shadow. */
+:root[data-theme="dark"] {
+  --accent: #4dd7b6;
+  --accent-soft: rgba(77, 215, 182, 0.12);
+  --danger-soft: rgba(255, 120, 120, 0.15);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4),
+                 0 4px 12px rgba(0, 0, 0, 0.3);
+  --brand-mark: url("/assets/brand/suchi-primary-dark.svg");
+  --brand-hero: url("/assets/brand/suchi-hero-dark.svg");
+  --brand-illust: url("/assets/brand/suchi-illustration-dark.svg");
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #4dd7b6;
+    --accent-soft: rgba(77, 215, 182, 0.12);
+    --danger-soft: rgba(255, 120, 120, 0.15);
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4),
+                   0 4px 12px rgba(0, 0, 0, 0.3);
+    --brand-mark: url("/assets/brand/suchi-primary-dark.svg");
+    --brand-hero: url("/assets/brand/suchi-hero-dark.svg");
+    --brand-illust: url("/assets/brand/suchi-illustration-dark.svg");
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- topbar ---------- */
 
 .topbar {
-  display: flex; align-items: center; gap: 24px;
-  padding: 12px 24px; background: var(--surface, #fff);
+  display: flex; align-items: center; gap: 20px;
+  padding: 12px 24px;
+  background: color-mix(in oklab, var(--background) 92%, transparent);
   border-bottom: 1px solid var(--border, #e6e5e0);
   position: sticky; top: 0; z-index: 10;
+  backdrop-filter: saturate(180%) blur(8px);
+  -webkit-backdrop-filter: saturate(180%) blur(8px);
 }
-.topbar .brand { font-weight: 600; font-size: 18px; }
-.topbar nav a { margin-right: 12px; }
-.topbar .me { font-size: 13px; opacity: 0.7; }
-.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+.topbar .brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 16px; letter-spacing: -0.01em;
+  color: var(--foreground);
+  text-decoration: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.topbar .brand:hover { transform: translateY(-1px); }
+.brand-mark {
+  display: inline-block; width: 22px; height: 22px;
+  background: var(--brand-mark) center / contain no-repeat;
+  flex-shrink: 0;
+}
+/* Hero + illustration blocks reuse the same var-driven pattern. */
+.brand-hero {
+  display: block; width: 96px; height: 96px; margin: 0 auto 20px;
+  background: var(--brand-hero) center / contain no-repeat;
+  animation: fade-up var(--dur-med) var(--ease-out) both;
+}
+.brand-illust {
+  display: block; width: 160px; height: 160px; margin: 24px auto 12px;
+  background: var(--brand-illust) center / contain no-repeat;
+  opacity: 0.9;
+}
+.topbar nav { display: flex; gap: 6px; }
+.topbar nav a {
+  padding: 6px 10px; border-radius: 6px;
+  color: var(--muted-foreground, #57534e);
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.topbar nav a:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.topbar nav a.current {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.topbar .me { font-size: 13px; opacity: 0.72; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.topbar-upload { margin: 0; }
 
-main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+/* Compact chrome buttons (theme toggle, palette opener). Neutral by
+   default, hover reveals accent. */
+.chrome-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 34px; padding: 0 10px;
+  border: 1px solid var(--border, #e6e5e0);
+  border-radius: 8px; background: transparent; cursor: pointer;
+  color: var(--muted-foreground, #57534e);
+  transition: color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
+}
+.chrome-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.chrome-btn .kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; letter-spacing: 0.02em;
+}
 
-/* Dropzone — Oat's `<ot-upload>` uses a different UX; this keeps the
-   custom-drop-target we ship on /upload until we decide to swap. */
+/* Inbox pill: shows workflow_open count. Server renders it hidden when
+   zero; JS polls /api/tasks/ every 60s and toggles visibility. */
+.inbox-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 13px; font-weight: 500; text-decoration: none;
+  transition: transform var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out);
+}
+.inbox-pill:hover { transform: translateY(-1px); }
+.inbox-pill[hidden] { display: none; }
+.inbox-pill .count {
+  min-width: 18px; padding: 0 5px; text-align: center;
+  background: var(--accent); color: white;
+  border-radius: 999px; font-size: 11px; line-height: 18px;
+}
+
+/* ---------- main content ---------- */
+
+.app-shell { display: block; }
+.sidenav { display: none; }
+
+main {
+  padding: 24px; max-width: 1200px; margin: 0 auto;
+  animation: fade-up var(--dur-med) var(--ease-out) both;
+}
+
+/* Wide-viewport sidebar. Below 1200px it stays collapsed and the
+   topbar nav does the routing. Above, the sidebar takes over and the
+   topbar nav hides — one nav visible at a time keeps the mental model
+   clean. */
+@media (min-width: 1200px) {
+  .app-shell {
+    display: grid; grid-template-columns: 220px 1fr;
+    max-width: 1400px; margin: 0 auto;
+  }
+  .sidenav {
+    display: block;
+    padding: 24px 16px;
+    border-right: 1px solid var(--border);
+    position: sticky; top: 57px; align-self: start;
+    height: calc(100vh - 57px);
+  }
+  .sidenav nav { display: flex; flex-direction: column; gap: 2px; }
+  .sidenav nav a {
+    padding: 8px 12px; border-radius: 8px;
+    color: var(--muted-foreground, #57534e);
+    text-decoration: none; font-size: 14px;
+    transition: background var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+  }
+  .sidenav nav a:hover {
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .sidenav-hint {
+    margin-top: 20px; font-size: 12px;
+    color: var(--muted-foreground, #57534e); opacity: 0.7;
+  }
+  .sidenav-hint .kbd {
+    padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  /* Free the topbar of nav duplication on wide screens. */
+  .topbar > nav { display: none; }
+  main { max-width: none; }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- shared page patterns ---------- */
+
+/* Every page's top block: title, subtitle, optional muted count. Kept
+   plain (no card / border) so h1 sits directly under the topbar. */
+.page-header {
+  margin: 0 0 20px;
+  animation: fade-up var(--dur-med) var(--ease-out) both;
+}
+.page-header h1 {
+  margin: 0 0 6px;
+  font-size: 26px; letter-spacing: -0.01em;
+}
+.page-header .subtitle {
+  margin: 0; font-size: 14px;
+  color: var(--muted-foreground, #57534e);
+}
+
+/* A real .muted utility — templates already write this class in many
+   places (list count, wizard hint). Realize it once. */
+.muted { color: var(--muted-foreground, #57534e); }
+
+/* Empty-state block: centered illustration + line under it. Used on
+   inbox and list when the queue has nothing to show. */
+.empty {
+  text-align: center; padding: 24px 12px;
+  color: var(--muted-foreground, #57534e);
+  animation: fade-up var(--dur-med) var(--ease-out) both;
+}
+
+/* ---------- wizard (setup) ---------- */
+
+.wizard {
+  display: grid; grid-template-columns: 260px 1fr;
+  gap: 32px; align-items: start;
+}
+.wizard-nav {
+  display: flex; flex-direction: column; gap: 2px;
+  position: sticky; top: 84px;
+}
+.wizard-step {
+  display: grid; grid-template-columns: 28px 1fr; gap: 12px;
+  padding: 10px 12px; border-radius: 8px;
+  text-decoration: none; color: inherit;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.wizard-step:hover { background: var(--accent-soft); }
+.wizard-step[aria-current="step"] {
+  background: var(--accent-soft);
+}
+.wizard-step .n {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  background: var(--muted, #eef0ec); color: var(--muted-foreground, #57534e);
+  font-size: 13px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.wizard-step[data-status="done"] .n {
+  background: var(--accent); color: white;
+}
+.wizard-step[data-status="skipped"] .n {
+  background: var(--muted, #eef0ec); color: var(--muted-foreground, #57534e);
+  text-decoration: line-through;
+}
+.wizard-step[aria-current="step"] .n {
+  background: var(--accent); color: white;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wizard-step .t { font-size: 14px; font-weight: 500; line-height: 1.3; }
+.wizard-step .h {
+  font-size: 12px; color: var(--muted-foreground, #57534e);
+  margin-top: 2px; line-height: 1.35;
+}
+.wizard-body {
+  padding: 24px 24px 20px;
+  border-radius: 12px; background: var(--card, transparent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  min-height: 360px;
+}
+.wizard-body h2 { margin-top: 0; font-size: 20px; }
+.wizard-body .step-hint { color: var(--muted-foreground, #57534e); margin-top: -4px; }
+.wizard-body form { display: flex; flex-direction: column; gap: 12px; }
+.wizard-body .footer {
+  margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.wizard-progress {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 16px; font-size: 13px;
+  color: var(--muted-foreground, #57534e);
+}
+.wizard-progress .n { color: var(--foreground); font-weight: 500; }
+@media (max-width: 900px) {
+  .wizard { grid-template-columns: 1fr; }
+  .wizard-nav { position: static; }
+}
+
+/* ---------- form-grid (admin forms) ---------- */
+
+.form-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 14px 16px;
+}
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.form-grid label > span:first-child {
+  color: var(--muted-foreground, #57534e);
+}
+.form-grid label input, .form-grid label select, .form-grid label textarea {
+  padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--foreground); font-size: 14px;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.form-grid label input:focus, .form-grid label select:focus, .form-grid label textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.form-grid .full { grid-column: 1 / -1; }
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+
+.form-section {
+  padding: 20px 20px 16px;
+  border-radius: 12px; background: var(--card, transparent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  margin: 0 0 16px;
+}
+.form-section > legend, .form-section > h2 {
+  margin: 0 0 12px; padding: 0;
+  font-size: 15px; font-weight: 600;
+}
+
+/* ---------- provider picker (radio group as segmented buttons) ---------- */
+
+.provider-picker {
+  display: inline-flex; flex-wrap: wrap; gap: 4px;
+  padding: 4px; border-radius: 10px;
+  background: var(--muted, #eef0ec);
+}
+.provider-picker label {
+  cursor: pointer;
+  padding: 6px 12px; border-radius: 6px;
+  font-size: 13px; color: var(--muted-foreground, #57534e);
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.provider-picker label input { position: absolute; opacity: 0; pointer-events: none; }
+.provider-picker label:has(input:checked) {
+  background: var(--card, var(--background));
+  color: var(--accent); font-weight: 500;
+  box-shadow: var(--shadow-soft);
+}
+
+/* ---------- notice (was legacy .notice / .notice-warn) ---------- */
+
+.notice {
+  padding: 12px 14px; border-radius: 8px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 14px; margin: 0 0 12px;
+}
+.notice.warn {
+  border-left-color: #d97706;
+  background: rgba(217, 119, 6, 0.08);
+  color: #92400e;
+}
+:root[data-theme="dark"] .notice.warn { color: #fbbf24; }
+
+/* ---------- list ---------- */
+
+table.rows tbody tr {
+  transition: background var(--dur-fast) var(--ease-out);
+}
+table.rows tbody tr:hover {
+  background: var(--accent-soft);
+}
+table.rows a {
+  color: var(--foreground); text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+table.rows a:hover { color: var(--accent); }
+
+/* Stagger row fade-in on first paint. Cheap: only the first 25 rows
+   (pageSize) actually get animated; anything beyond falls through. */
+table.rows tbody tr {
+  animation: row-in 220ms var(--ease-out) both;
+}
+table.rows tbody tr:nth-child(1)  { animation-delay: 0ms; }
+table.rows tbody tr:nth-child(2)  { animation-delay: 15ms; }
+table.rows tbody tr:nth-child(3)  { animation-delay: 30ms; }
+table.rows tbody tr:nth-child(4)  { animation-delay: 45ms; }
+table.rows tbody tr:nth-child(5)  { animation-delay: 60ms; }
+table.rows tbody tr:nth-child(6)  { animation-delay: 75ms; }
+table.rows tbody tr:nth-child(7)  { animation-delay: 90ms; }
+table.rows tbody tr:nth-child(8)  { animation-delay: 105ms; }
+table.rows tbody tr:nth-child(9)  { animation-delay: 120ms; }
+table.rows tbody tr:nth-child(10) { animation-delay: 135ms; }
+table.rows tbody tr:nth-child(n+11) { animation-delay: 150ms; }
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- detail ---------- */
+
+.two-col {
+  display: grid; grid-template-columns: 300px 1fr; gap: 24px;
+  align-items: start; margin-top: 16px;
+}
+.two-col .meta {
+  position: sticky; top: 72px;
+  padding: 16px; border-radius: 10px;
+  background: var(--card, transparent);
+  box-shadow: var(--shadow-soft);
+}
+.two-col .meta h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+.two-col .meta dl { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.two-col .meta dt {
+  font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.04em;
+  margin-top: 8px;
+}
+.two-col .meta dd { font-size: 14px; margin: 0; word-break: break-word; }
+.two-col .viewer { border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-soft); }
+.two-col .viewer object { display: block; background: #f8f7f4; }
+
+@media (max-width: 900px) {
+  .two-col { grid-template-columns: 1fr; }
+  .two-col .meta { position: static; }
+}
+
+.crumb {
+  font-size: 13px; opacity: 0.6; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.crumb a { color: inherit; text-decoration: none; }
+.crumb a:hover { color: var(--accent); }
+
+/* ---------- dropzone (upload page) ---------- */
+
 .dropzone {
-  display: block; margin: 24px 0 16px; padding: 36px 24px;
-  border: 2px dashed var(--border, #e6e5e0); border-radius: 8px;
+  display: block; margin: 24px 0 16px; padding: 44px 24px;
+  border: 2px dashed var(--border, #e6e5e0); border-radius: 12px;
   text-align: center; cursor: pointer;
-  transition: border-color 120ms, background 120ms;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              background var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
 }
-.dropzone.is-drag { border-color: var(--accent, #0c6b58); background: var(--accent-soft, #e3f2ee); }
+.dropzone:hover { border-color: var(--accent); }
+.dropzone.is-drag {
+  border-color: var(--accent); background: var(--accent-soft);
+  transform: scale(1.01);
+}
 .dropzone input[type=file] { display: none; }
-.dropzone-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.dropzone-icon { font-size: 28px; opacity: 0.5; }
+.dropzone-inner { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.dropzone-icon { font-size: 32px; opacity: 0.45; }
+.dropzone-hint { font-size: 15px; }
+.dropzone-or { font-size: 12px; color: var(--muted-foreground, #57534e); letter-spacing: 0.02em; }
+.dropzone-filename { font-size: 13px; color: var(--muted-foreground, #57534e); margin-top: 4px; }
 
-/* Suchi-specific pills — JD category code + tag chips. */
-.jd  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+/* ---------- chips ---------- */
+
+.jd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; opacity: 0.9;
+}
+.tag {
+  display: inline-flex; padding: 2px 8px; margin: 2px 4px 2px 0;
+  border-radius: 999px; background: var(--muted, #eef0ec);
+  color: var(--foreground); font-size: 12px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.tag:hover { transform: translateY(-1px); }
+
+/* Sensitivity + status pills. Keys map to enterprise-driven states,
+   the base render is neutral so a private distro can override. */
+.sens {
+  display: inline-flex; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.04em; margin-right: 4px;
+}
+.sens.public       { background: #eef0ec; color: #57534e; }
+.sens.internal     { background: #e0e7ff; color: #3730a3; }
+.sens.confidential { background: #fef3c7; color: #92400e; }
+.sens.restricted   { background: #fee2e2; color: #991b1b; }
+
+.status-badge {
+  display: inline-flex; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+}
+.status-badge.pending  { background: var(--muted, #eef0ec); color: var(--muted-foreground, #57534e); }
+.status-badge.running  { background: var(--accent-soft); color: var(--accent); }
+.status-badge.done     { background: #dcfce7; color: #14532d; }
+.status-badge.dead     { background: var(--danger-soft); color: #991b1b; }
+.status-badge.open     { background: var(--accent-soft); color: var(--accent); }
+.status-badge.claimed  { background: #fef3c7; color: #92400e; }
+
+/* ---------- inbox ---------- */
+
+.inbox-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.inbox-item {
+  padding: 14px 16px; border-radius: 10px;
+  background: var(--card, transparent);
+  box-shadow: var(--shadow-soft);
+  animation: row-in 220ms var(--ease-out) both;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.inbox-item:hover { transform: translateY(-1px); }
+.inbox-item-head {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; opacity: 0.75; margin-bottom: 6px;
+}
+.inbox-item-head time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.inbox-prompt { margin: 4px 0 12px; font-size: 15px; line-height: 1.5; }
+.inbox-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.inbox-actions button {
+  padding: 6px 14px; border-radius: 6px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.inbox-actions button:hover:not(:disabled) { transform: translateY(-1px); }
+.inbox-actions button:disabled { opacity: 0.5; cursor: wait; }
+
+/* ---------- login / auth page ---------- */
+
+body.auth {
+  min-height: 100vh; margin: 0;
+  display: grid; place-items: center;
+  background:
+    radial-gradient(circle at 20% 20%, var(--accent-soft), transparent 40%),
+    radial-gradient(circle at 80% 80%, var(--accent-soft), transparent 45%),
+    var(--background);
+}
+.login-card {
+  width: min(400px, 92vw);
+  padding: 32px 28px;
+  background: var(--card, var(--background));
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  animation: fade-up var(--dur-med) var(--ease-out) both;
+}
+.login-card .brand {
+  font-size: 28px; margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+.login-card > .muted { margin: 0 0 20px; opacity: 0.7; font-size: 14px; }
+.login-card form { display: flex; flex-direction: column; gap: 14px; }
+.login-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.login-card label span { opacity: 0.75; }
+.login-card input {
+  padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--foreground); font-size: 14px;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.login-card input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.login-card button {
+  margin-top: 6px; padding: 10px 14px;
+  border-radius: 8px; font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.login-card button:hover { transform: translateY(-1px); }
+.login-card .error {
+  margin: 0 0 12px; padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--danger-soft); color: #991b1b;
+  font-size: 13px;
+}
+
+/* ---------- command palette ---------- */
+
+#palette {
+  border: none; padding: 0; margin: 12vh auto 0;
+  width: min(600px, 92vw); border-radius: 12px;
+  background: transparent;
+}
+#palette::backdrop {
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(4px);
+  animation: fade-in 140ms var(--ease-out) both;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+#palette[open] .palette-box {
+  animation: palette-in 180ms var(--ease-out) both;
+}
+@keyframes palette-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.palette-box {
+  background: var(--card, var(--background));
+  color: var(--foreground);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border);
+}
+#palette-input {
+  width: 100%; padding: 16px 18px; font-size: 16px;
+  border: none; background: transparent; color: inherit;
+  outline: none;
+  border-bottom: 1px solid var(--border);
+}
+#palette-list {
+  list-style: none; margin: 0; padding: 6px 0;
+  max-height: 50vh; overflow-y: auto;
+}
+#palette-list li {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 18px; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+#palette-list li.on,
+#palette-list li:hover { background: var(--accent-soft); color: var(--accent); }
+.palette-label { font-size: 14px; }
+.palette-foot {
+  display: flex; gap: 14px; padding: 8px 18px; font-size: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground, #57534e);
+}
+.palette-foot .kbd {
+  padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+}
+
+/* ---------- focus + accessibility ---------- */
+
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------- View Transitions API (progressive) ---------- */
+
+@view-transition {
+  navigation: auto;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: var(--ease-out);
+}
