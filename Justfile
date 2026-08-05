@@ -90,6 +90,14 @@ smoke-mail:
 smoke-ingest:
     ./hack/local-ingest-test.sh
 
+# Boot the transcript recorder against `target` (a live upstream URL).
+# Point a client at http://127.0.0.1:8443/ and drive it — fixtures
+# land in testdata/paperless-transcripts/. See hack/transcript/README.md.
+transcript target listen=":8443":
+    cd hack/transcript && go run . \
+        --listen {{listen}} --target {{target}} \
+        --out ../../testdata/paperless-transcripts
+
 # --- git helpers ---
 
 # One-shot check before pushing: fmt clean, staticcheck clean, tests pass.
