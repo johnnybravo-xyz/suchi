@@ -145,6 +145,70 @@ func RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// NormalizeAPITrailingSlash accepts both `/api/foo/bar` and
+// `/api/foo/bar/` for any registered API route, so Django-REST-style
+// clients (swift-paperless, Paperless Mobile, curl scripts written
+// against paperless docs) work against suchi without care about
+// trailing slash. Only paths under `/api/` are affected; the browser
+// UI keeps its stricter matching.
+//
+// Strategy: leave the mux registrations untouched. When a request
+// under `/api/` ends in `/` and the mux has no registered pattern for
+// it, look up the same request with the trailing slash stripped; if
+// THAT matches, rewrite r.URL.Path and dispatch. All other paths pass
+// through with zero cost (one mux.Handler call, no ServeHTTP retry).
+//
+// Why not auto-register both forms per route? Go 1.22 ServeMux treats
+// a pattern ending in `/` as a subtree matcher. Registering
+// `/api/documents/{id}/` alongside `/api/documents/{id}` would catch
+// stray tails like `/api/documents/1/garbage/` as `/api/documents/1`,
+// masking real 404s. The check-then-retry middleware avoids that
+// footgun.
+func NormalizeAPITrailingSlash(mux *http.ServeMux) http.Handler {
+	const prefix = "/api/"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if strings.HasPrefix(p, prefix) &&
+			strings.HasSuffix(p, "/") &&
+			len(p) > len(prefix) {
+			// The UI registers `GET /` (and similar bare-root patterns)
+			// as the browser catch-all. mux.Handler() returns these for
+			// anything without a more specific match — including
+			// `/api/foo/N/` — which would let the browser handler
+			// swallow an API request. Treat any match whose registered
+			// path is just "/" as "no API route matched, try strip".
+			_, pat := mux.Handler(r)
+			if isCatchAll(pat) {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = strings.TrimSuffix(p, "/")
+				if _, pat2 := mux.Handler(r2); !isCatchAll(pat2) {
+					mux.ServeHTTP(w, r2)
+					return
+				}
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// isCatchAll returns true when pat is empty (no registration matched)
+// or when pat is a bare root pattern (`/`, `GET /`, ...). Both mean
+// the mux fell through to a wildcard that would happily eat an
+// intended API request.
+func isCatchAll(pat string) bool {
+	if pat == "" {
+		return true
+	}
+	// Patterns can be "/", "GET /", "POST /", "example.com/", etc.
+	// Take the path portion — after the last space if a method prefix
+	// is present — and compare.
+	path := pat
+	if i := strings.LastIndex(pat, " "); i >= 0 {
+		path = pat[i+1:]
+	}
+	return path == "/"
+}
+
 // BodyLimit caps request bodies to n bytes using http.MaxBytesReader.
 // Applied globally; upload endpoints override with a larger cap.
 func BodyLimit(n int64) Middleware {

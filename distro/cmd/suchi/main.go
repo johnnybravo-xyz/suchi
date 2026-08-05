@@ -456,8 +456,15 @@ func runServe() int {
 		ObjectKind: "server",
 	})
 
+	// Wrap the mux with trailing-slash tolerance so Django-REST-style
+	// clients (swift-paperless, Paperless Mobile, curl scripts written
+	// against paperless docs) work against /api/ without caring about
+	// the slash. Applied before Chain so all middlewares see the
+	// canonical (slash-stripped) path in r.URL.Path.
+	router := httpx.NormalizeAPITrailingSlash(mux)
+
 	// Middleware stack: outer-to-inner.
-	handler := httpx.Chain(mux,
+	handler := httpx.Chain(router,
 		httpx.RequestID,
 		httpx.SecurityHeaders,
 		httpx.AccessLog(log),
