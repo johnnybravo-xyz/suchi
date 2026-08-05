@@ -185,7 +185,7 @@ convention.
 `workflow_tasks` are scoped to the caller: an entry appears only if the
 task's `assignee` resolves to the current user. Terminal statuses
 (`resolved`, `expired`) are omitted. Resolve one via
-`POST /api/workflows/tasks/{task_id}/resolve`. `workflow_open` in
+`POST /api/approvals/tasks/{task_id}/resolve`. `workflow_open` in
 `counts` is the true open-inbox size, unaffected by `limit`.
 
 Older mobile clients that ignore unknown JSON fields see the classic
@@ -198,21 +198,35 @@ External processes claim + complete `agent:*` jobs via
 task-claim/act. See the [agents guide](/agents) for the full contract,
 the reference Python agent, and the failure-mode table.
 
-### Workflow surface: `/api/workflows/*`
+### Automations surface: `/api/automations/*`
 
-State-machine engine for review chains and approvals. Six endpoints:
+Trigger→conditions→actions rules that fire on document events. Full
+guide at [automations](/automations).
 
 | Method | Path | Auth |
 |---|---|---|
-| POST   | `/api/workflows`                         | admin |
-| GET    | `/api/workflows/{slug}`                  | authed |
-| POST   | `/api/workflows/{slug}/start`            | authed |
-| GET    | `/api/workflows/runs/{id}`               | authed |
-| POST   | `/api/workflows/tasks/{task_id}/resolve` | assignee or admin |
-| POST   | `/api/workflows/runs/{id}/cancel`        | admin |
+| GET    | `/api/automations/`       | authed |
+| POST   | `/api/automations/`       | admin |
+| GET    | `/api/automations/{id}`   | authed |
+| PATCH  | `/api/automations/{id}`   | admin |
+| DELETE | `/api/automations/{id}`   | admin |
 
-See the [workflows guide](/workflows) for the spec shape, error codes,
-timeout behavior, and a worked invoice-approval example.
+### Approvals surface: `/api/approvals/*`
+
+State-machine engine for human-in-the-loop review chains. Six
+endpoints:
+
+| Method | Path | Auth |
+|---|---|---|
+| POST   | `/api/approvals`                         | admin |
+| GET    | `/api/approvals/{slug}`                  | authed |
+| POST   | `/api/approvals/{slug}/start`            | authed |
+| GET    | `/api/approvals/runs/{id}`               | authed |
+| POST   | `/api/approvals/tasks/{task_id}/resolve` | assignee or admin |
+| POST   | `/api/approvals/runs/{id}/cancel`        | admin |
+
+See the [approvals guide](/approvals) for the spec shape, error
+codes, timeout behavior, and a worked invoice-approval example.
 
 ### `GET /api/documents/{id}/correspondents/`
 

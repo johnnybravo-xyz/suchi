@@ -175,8 +175,18 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Setup wizard surface (admin-only).
 	s.registerSetup(mux)
 
-	// Workflow engine surface — routing/approval/sign-off.
+	// Approvals engine surface — routing/sign-off state machines at
+	// /api/approvals/*. Distinct from automations below.
 	s.registerWorkflow(mux)
+
+	// Automations — trigger→conditions→actions rules. Named for what
+	// they do, not for what any other project called them. See
+	// docs/automations.mdx.
+	mux.HandleFunc("GET /api/automations/", s.ListAutomations)
+	mux.HandleFunc("POST /api/automations/", s.CreateAutomation)
+	mux.HandleFunc("GET /api/automations/{id}", s.GetAutomation)
+	mux.HandleFunc("PATCH /api/automations/{id}", s.UpdateAutomation)
+	mux.HandleFunc("DELETE /api/automations/{id}", s.DeleteAutomation)
 }
 
 // ---------- shared helpers ----------

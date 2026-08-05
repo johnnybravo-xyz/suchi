@@ -1,12 +1,18 @@
 ---
-title: "Workflows"
-description: "State-machine engine for review chains, approvals, and timeout-driven escalation — driven by durable-outbox jobs."
+title: "Approvals"
+description: "State-machine engine for human-in-the-loop review chains, sign-offs, and timeout-driven escalation — driven by durable-outbox jobs."
 ---
 
-Workflows sit next to [agents](/agents). Agents are horizontal work
-injection — anything speaking HTTP claims a job. Workflows are ordered,
-resumable review chains: doc 17 needs manager sign-off, then finance
-sign-off, escalating on timeout.
+Approvals are the human-in-the-loop counterpart to
+[automations](/automations). Automations run "when X, do Y" against
+document metadata with no human involvement. Approvals move a
+document through an ordered chain of people — doc 17 needs the
+finance lead to click Approve before it lands in the vault.
+
+Approvals also sit next to [agents](/agents). Agents are horizontal
+work injection — anything speaking HTTP claims a job. Approvals are
+ordered, resumable review chains: doc 17 needs manager sign-off,
+then finance sign-off, escalating on timeout.
 
 The design is a hybrid state-machine + job-graph. Each run keeps one
 `current_state` cursor; every step appends to `workflow_transitions`
@@ -98,16 +104,16 @@ Plugin authors add new kinds via `Engine.RegisterHandler` — see §6.
 ## 3. HTTP surface
 
 Six endpoints in `core/api/workflow.go`, mounted under
-`/api/workflows/*`.
+`/api/approvals/*`.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST   | `/api/workflows`                        | admin      | Persist a new version of a spec for a slug. |
-| GET    | `/api/workflows/{slug}`                 | authed     | Return the current active spec. |
-| POST   | `/api/workflows/{slug}/start`           | authed     | Kick off a run against `doc_id`. |
-| GET    | `/api/workflows/runs/{id}`              | authed     | Return `{run, transitions, tasks}` for one run. |
-| POST   | `/api/workflows/tasks/{task_id}/resolve` | assignee or admin | Resolve a human task with a choice. |
-| POST   | `/api/workflows/runs/{id}/cancel`       | admin      | Abandon a running run. |
+| POST   | `/api/approvals`                        | admin      | Persist a new version of a spec for a slug. |
+| GET    | `/api/approvals/{slug}`                 | authed     | Return the current active spec. |
+| POST   | `/api/approvals/{slug}/start`           | authed     | Kick off a run against `doc_id`. |
+| GET    | `/api/approvals/runs/{id}`              | authed     | Return `{run, transitions, tasks}` for one run. |
+| POST   | `/api/approvals/tasks/{task_id}/resolve` | assignee or admin | Resolve a human task with a choice. |
+| POST   | `/api/approvals/runs/{id}/cancel`       | admin      | Abandon a running run. |
 
 `{slug}` is constrained to `^[a-z][a-z0-9_\-]{0,63}$` — greppable and
 URL-safe.
@@ -137,7 +143,7 @@ an admin API token minted via `POST /api/login`.
 ### Step 1: Register the spec
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/workflows \
+curl -sS -X POST http://localhost:8000/api/approvals \
   -H "Authorization: Token $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -184,7 +190,7 @@ Response `201`:
 ### Step 2: Start a run against doc 17
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/workflows/invoice-approval/start \
+curl -sS -X POST http://localhost:8000/api/approvals/invoice-approval/start \
   -H "Authorization: Token $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"doc_id": 17}'
@@ -202,7 +208,7 @@ assigned to `user:5` and parks the run.
 ### Step 3: Inspect the run
 
 ```bash
-curl -sS http://localhost:8000/api/workflows/runs/42 \
+curl -sS http://localhost:8000/api/approvals/runs/42 \
   -H "Authorization: Token $TOKEN"
 ```
 
@@ -215,7 +221,7 @@ _transitions out_, not on entry.
 `user:5` (or an admin) resolves task 101:
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/workflows/tasks/101/resolve \
+curl -sS -X POST http://localhost:8000/api/approvals/tasks/101/resolve \
   -H "Authorization: Token $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"choice": "approve"}'
@@ -228,13 +234,13 @@ the next task on `user:9`.
 ### Step 5: Finance approves
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/workflows/tasks/102/resolve \
+curl -sS -X POST http://localhost:8000/api/approvals/tasks/102/resolve \
   -H "Authorization: Token $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"choice": "approve"}'
 ```
 
-`GET /api/workflows/runs/42` now shows `Status: "done"`,
+`GET /api/approvals/runs/42` now shows `Status: "done"`,
 `CurrentState: "approved"`, and the transitions log:
 
 | # | from | to | trigger | actor |

@@ -87,7 +87,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap", "automations"}
 	standalone := map[string]bool{"login": true, "bootstrap": true}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
@@ -129,6 +129,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /upload", s.RequireUI(http.HandlerFunc(s.UploadPage)))
 	mux.Handle("GET /admin/mail-setup", s.RequireUI(http.HandlerFunc(s.MailSetupPage)))
 	mux.Handle("GET /admin/setup", s.RequireUI(http.HandlerFunc(s.SetupPage)))
+	mux.Handle("GET /admin/automations", s.RequireUI(http.HandlerFunc(s.AutomationsPage)))
 	mux.Handle("GET /inbox", s.RequireUI(http.HandlerFunc(s.Inbox)))
 }
 

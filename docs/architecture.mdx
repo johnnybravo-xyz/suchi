@@ -219,8 +219,9 @@ are versioned JSON in `workflow_defs`; each run keeps one
 `workflow_tasks`. Advancement rides the same durable outbox as
 everything else via `workflow:advance` / `workflow:resume` /
 `workflow:timeout-sweep` — no second scheduler. See
-[workflows](/workflows) for the spec shape, the six HTTP endpoints,
-and a worked invoice-approval example.
+[approvals](/approvals) for the spec shape, the six HTTP endpoints,
+and a worked invoice-approval example. For "when doc lands, do X"
+rules that don't need a human click, see [automations](/automations).
 
 ## Headless mode
 

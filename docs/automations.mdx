@@ -1,0 +1,201 @@
+---
+title: "Automations"
+description: "Trigger→conditions→actions rules that fire on document events. When a doc lands, when its metadata changes, or at consumption — one rule, N actions, all data."
+---
+
+Automations are the deterministic "when X, do Y" layer of suchi. They
+are configuration, not code — one row in `workflows`, one or more
+`workflow_triggers`, one or more `workflow_actions`. Every operator
+can add or edit them via `/api/automations/` (or the admin UI in a
+follow-up); no Go change needed.
+
+Automations sit next to two other engines with distinct jobs, and the
+three are easy to mix up if you skim:
+
+| Engine | Package | REST | What it does |
+| ------ | ------- | ---- | ------------ |
+| **Rules** | `core/classify/rules` | `/api/rules/` | Deterministic classifier: match on tag/correspondent/title/content, assign tags/correspondent/document_type/JD. One condition → one action. |
+| **Automations** | `core/automations` | `/api/automations/` | Trigger-driven multi-action orchestration: on `document_added` (etc.), filter, then run N actions in order. |
+| **Approvals** | `core/workflow` | `/api/approvals/` | Human-in-the-loop state machines: doc 17 needs manager sign-off, then finance, escalating on timeout. See [approvals](/approvals). |
+
+If you're just tagging documents by keyword, use **rules** — they
+were built for that and they run on every post-ingest. If you need
+to trigger multiple metadata changes together (assign owner + assign
+tags + set storage_path when a doc with correspondent "Landlord"
+lands), use **automations**. If you need a person to click Approve,
+use **approvals**.
+
+## 1. Concepts
+
+Three tables (see `core/db/migrations/0020_automations.sql`):
+
+- `workflows(id, name, order_index, enabled, ...)` — one row per
+  automation. `enabled=0` skips evaluation entirely.
+- `workflow_triggers(workflow_id, type, filter_*)` — one or more per
+  automation. Every non-null filter must match for the trigger to fire.
+- `workflow_actions(workflow_id, order_index, kind, params_json)` —
+  one or more per automation. Actions run in `order_index` order
+  inside a single write transaction.
+
+An automation is a set of triggers × actions: when **any** matching
+trigger fires, **every** action runs. Actions that fail log a warning
+and are skipped; the rest still run.
+
+## 2. Triggers
+
+Three trigger types. Each has an integer wire code (matches the
+mobile-app shape) and a semantic name:
+
+| Code | `type` | Fires when |
+| ---- | ------ | ---------- |
+| `1`  | `consumption` | A file is picked up (uploaded, mailed, or watched folder) — evaluated **before** ingest. |
+| `2`  | `document_added` | Post-ingest, right after `rules` ran. The doc's content/title/metadata are fully populated. |
+| `3`  | `document_updated` | Any successful `PATCH /api/documents/{id}` write. |
+
+Every trigger row supports these optional filters. Non-null fields
+are AND-combined; a null field means "match anything".
+
+| Filter | Applies to | Semantics |
+| ------ | ---------- | --------- |
+| `filter_path` | `consumption` | Glob against the source path. |
+| `filter_filename` | `consumption` | Glob against the filename portion. |
+| `filter_mailrule` | `consumption` | Only when the doc came from this mail-intake rule id. |
+| `filter_has_tag` | `document_added` / `document_updated` | Doc carries this tag id. |
+| `filter_has_correspondent` | added / updated | Doc's correspondent_id matches. |
+| `filter_has_document_type` | added / updated | Doc's document_type_id matches. |
+| `filter_content_matching` | added / updated | Case-insensitive regex against `documents.content`. |
+
+## 3. Actions
+
+Every action carries a `kind` and a small JSON `params` bag. Actions
+are idempotent — re-running the same automation on the same doc
+converges rather than duplicating.
+
+| `kind` | `params` shape | Effect |
+| ------ | -------------- | ------ |
+| `assign_title` | `{"template": "..."}` | Rewrites `documents.title` after expanding `{{title}}`, `{{correspondent}}`, `{{document_type}}`, `{{date}}`. Unknown placeholders pass through verbatim. |
+| `assign_tags` | `{"tag_ids": [1,2,3]}` | Adds each tag (INSERT OR IGNORE — no duplicates). |
+| `assign_correspondent` | `{"correspondent_id": 5}` | Sets `documents.correspondent_id`. |
+| `assign_document_type` | `{"document_type_id": 7}` | Sets `documents.document_type_id`. |
+| `assign_storage_path` | `{"storage_path_id": 3}` | Sets `documents.storage_path_id`. Rendered view updates on next mutator. |
+| `assign_owner` | `{"owner_id": 2}` | Sets `documents.owner_id`. |
+| `remove_tags` | `{"tag_ids": [1,2]}` | Deletes each `document_tags` row. |
+| `remove_correspondents` | `{"correspondent_ids": [5]}` or `{}` | With ids: unset the primary if it matches + drop those junction rows. Empty: clear primary and every junction row. |
+| `remove_document_type` | `{}` | Clears the FK to null. |
+| `remove_storage_path` | `{}` | Clears the FK to null. |
+| `remove_owner` | `{}` | Clears the FK to null. |
+| `assign_custom_field` | `{"field_id": 4, "value": ...}` | Upserts the (doc, field) row into `document_custom_field_values`. `value` shape must match the field's `data_type` — string for text/select/url/documentlink, number for number/monetary, bool for bool, unix seconds for date, array for multi. |
+| `remove_custom_field` | `{"field_id": 4}` | Deletes the (doc, field) row. |
+
+## 4. REST surface
+
+Admin-only writes; any authed user can list/get.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/api/automations/` | List all with triggers and actions nested. |
+| POST | `/api/automations/` | Create. |
+| GET | `/api/automations/{id}` | Get one. |
+| PATCH | `/api/automations/{id}` | Replace triggers and actions wholesale. |
+| DELETE | `/api/automations/{id}` | Delete; triggers and actions cascade. |
+
+### 4.1 Example — auto-tag Landlord docs and route to a folder
+
+```bash
+curl -sS -X POST http://localhost:8000/api/automations/ \
+  -H "Authorization: Token $SUCHI_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "landlord routing",
+    "order": 10,
+    "enabled": true,
+    "triggers": [
+      { "type": 2, "filter_has_correspondent": 4 }
+    ],
+    "actions": [
+      { "type": "assign_tags", "params": {"tag_ids": [7, 9]} },
+      { "type": "assign_storage_path", "params": {"storage_path_id": 3} },
+      { "type": "assign_title",
+        "params": {"template": "{{date}} — {{correspondent}} — {{title}}"} }
+    ]
+  }'
+```
+
+### 4.2 Example — title template on any invoice from Acme
+
+```json
+{
+  "name": "acme invoices",
+  "triggers": [
+    { "type": 2,
+      "filter_has_correspondent": 12,
+      "filter_content_matching": "invoice|bill" }
+  ],
+  "actions": [
+    { "type": "assign_document_type", "params": {"document_type_id": 3} },
+    { "type": "assign_title",
+      "params": {"template": "Acme invoice {{date}}"} }
+  ]
+}
+```
+
+### 4.3 Trigger type as string
+
+The wire accepts either the integer code (mobile-compat) or the enum
+string form. The following are equivalent:
+
+```json
+{ "type": 2 }
+{ "type": "document_added" }
+```
+
+## 5. Evaluation model
+
+- **`document_added`** — called from `postingest.postContentSteps`
+  after the rules classifier runs and content is loaded. Each matching
+  automation runs its actions in one write tx per automation. A
+  failure in an action logs and moves on.
+- **`document_updated`** — called from `PATCH /api/documents/{id}`
+  after the doc's fields land. `document_updated` triggers only fire
+  on successful writes. Automations do NOT re-trigger on their own
+  writes (see §7).
+- **`consumption`** — fires at the start of `postingest.Handle`,
+  before any content extraction runs. Producers plumb filter context
+  onto the job payload:
+    - `POST /api/documents/` → `filename` (multipart Filename)
+    - fs-watch → `filename` + `source_path` (absolute path)
+    - mail-intake → `filename` (subject line as proxy; `mail_rule_id`
+      stays zero until Phase 6 adds mail-rules)
+
+Automations do not chain. An automation that runs
+`assign_document_type` does **not** re-trigger `document_updated` on
+that same doc — otherwise you'd need a cycle detector. If you need
+one automation to depend on another, put both actions in the same
+automation.
+
+## 6. Interaction with rules
+
+Rules run first inside `postingest`. Automations see the post-rules
+metadata. This ordering is intentional: rules do the light
+classification (add_tag, set_correspondent by name-match), then
+automations run richer multi-step orchestration that can rely on
+those classifications being in place.
+
+## 7. Audit and observability
+
+Every action logs at `INFO` under
+`automations.action.{ok|error}` with the doc_id and action kind.
+Errors surface at `WARN`. See [privacy](/privacy) — automation runs
+are visible in the audit log.
+
+## 8. Not (yet) covered
+
+- No condition DSL / expression language. `filter_content_matching`
+  is a case-insensitive regex; nothing more sophisticated. If you
+  need arbitrary boolean logic, write two automations.
+- No user notifications on match — surface via the audit log or wire
+  through a Subscriber plugin.
+- No scheduled/time-based triggers. Everything is event-driven.
+
+Roadmap is in the plan doc under Phase 5. See
+[approvals](/approvals) for the human-in-the-loop counterpart.

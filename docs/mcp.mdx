@@ -94,25 +94,25 @@ Backs `GET /api/documents/{id}`. Trashed docs are visible with
 
 ### `list_inbox`
 
-Machine-outbox jobs + workflow tasks assigned to the caller, up to
+Machine-outbox jobs + approval tasks assigned to the caller, up to
 50 rows.
 
 No args.
 
-Backs `GET /api/tasks/?limit=50`. `workflow_tasks` in the response is
-what a "review this" agent flow would iterate.
+Backs `GET /api/tasks/?limit=50`. The `workflow_tasks` array in the
+response is what a "review this" agent flow would iterate.
 
-### `resolve_workflow_task`
+### `resolve_approval_task`
 
-Resolve a workflow task with the given choice.
+Resolve an approval task with the given choice.
 
 Args:
 - `task_id` (int, required)
 - `choice` (string, required) — one of the task's declared choices (e.g. `approve`, `reject`)
 - `note` (string, optional) — operator note attached to the resolution
 
-Backs `POST /api/workflows/tasks/{task_id}/resolve`. Response includes
-the workflow-run advancement outcome.
+Backs `POST /api/approvals/tasks/{task_id}/resolve`. Response includes
+the approval-run advancement outcome.
 
 ### `create_share_link`
 

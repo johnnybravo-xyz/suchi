@@ -14,6 +14,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
@@ -158,7 +159,12 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		// Durable outbox: the post-ingest job lands in the same tx as
 		// the doc row. There is no window where a doc exists but its
 		// work is lost — the whole point of the outbox pattern.
-		payload := postIngestPayload{SHA256: ref.SHA256, Size: ref.Size, MIME: sniffed}
+		payload := postIngestPayload{
+			SHA256:   ref.SHA256,
+			Size:     ref.Size,
+			MIME:     sniffed,
+			Filename: header.Filename, // consumption trigger filter
+		}
 		payloadJSON, mErr := json.Marshal(payload)
 		if mErr != nil {
 			return mErr
@@ -426,6 +432,11 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		Before: before, After: after,
 		RequestID: logx.RequestID(r.Context()),
 	})
+	// Fire document_updated automations. Fail-soft: never blocks the
+	// PATCH response.
+	if err := automations.ApplyOnDocumentUpdated(r.Context(), s.DB, s.Log, id); err != nil {
+		s.Log.Warn("api.patch.automations", "err", err.Error(), "doc_id", id)
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 

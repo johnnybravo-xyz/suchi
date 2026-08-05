@@ -357,7 +357,7 @@ func runServe() int {
 	// engine itself is a small runtime object; the subscriber wraps it
 	// so workflow:advance / workflow:resume / workflow:timeout-sweep
 	// jobs route to Engine.Advance / Engine.TimeoutSweep. SetDefault
-	// hands the API layer a package-level handle so /api/workflows/*
+	// hands the API layer a package-level handle so /api/approvals/*
 	// works without threading the engine through every handler.
 	wfEngine := workflow.New(d, log)
 	workflow.SetDefault(wfEngine)
