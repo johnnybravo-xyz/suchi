@@ -1,13 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="suchi logo (file cabinet)">
-  <!-- cabinet body -->
   <rect x="14" y="6" width="36" height="52" rx="6" fill="#38342A" stroke="#ECEAE2" stroke-width="3.5"/>
-  <!-- top drawer pull -->
   <rect x="26" y="12.5" width="12" height="4.5" rx="2.25" fill="#ECEAE2"/>
   <line x1="14" y1="22" x2="50" y2="22" stroke="#ECEAE2" stroke-width="3"/>
-  <!-- middle drawer, pulled out -->
   <rect x="9" y="25.5" width="46" height="15" rx="4" fill="#38342A" stroke="#ECEAE2" stroke-width="3.5"/>
-  <rect x="25" y="30.5" width="14" height="5" rx="2.5" fill="#F0765C"/>
+  <rect x="25" y="30.5" width="14" height="5" rx="2.5" fill="#4FA8DC"/>
   <line x1="14" y1="44" x2="50" y2="44" stroke="#ECEAE2" stroke-width="3"/>
-  <!-- bottom drawer pull -->
   <rect x="26" y="48.5" width="12" height="4.5" rx="2.25" fill="#ECEAE2"/>
 </svg>

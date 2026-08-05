@@ -1,11 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="suchi logo">
-  <!-- hanging tab -->
-  <rect x="12" y="9" width="22" height="11" rx="4" fill="#F0765C"/>
-  <!-- folder body -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="suchi inline mark">
+  <rect x="12" y="9" width="22" height="11" rx="4" fill="#4FA8DC"/>
   <rect x="8" y="23" width="48" height="32" rx="7" fill="#38342A" stroke="#ECEAE2" stroke-width="3.5"/>
-  <!-- the index -->
-  <line x1="17" y1="31.5" x2="47" y2="31.5" stroke="#ECEAE2" stroke-width="4" stroke-linecap="round"/>
-  <rect x="15.5" y="35.5" width="8" height="8" rx="2.2" fill="#F0765C"/>
+  <circle cx="18.5" cy="31.5" r="2" fill="#ECEAE2"/>
+  <line x1="24" y1="31.5" x2="47" y2="31.5" stroke="#ECEAE2" stroke-width="4" stroke-linecap="round"/>
+  <rect x="15.5" y="35.5" width="8" height="8" rx="2.2" fill="#4FA8DC"/>
   <line x1="28.5" y1="39.5" x2="47" y2="39.5" stroke="#ECEAE2" stroke-width="4" stroke-linecap="round"/>
-  <line x1="17" y1="47.5" x2="40" y2="47.5" stroke="#ECEAE2" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="18.5" cy="47.5" r="2" fill="#ECEAE2"/>
+  <line x1="24" y1="47.5" x2="40" y2="47.5" stroke="#ECEAE2" stroke-width="4" stroke-linecap="round"/>
 </svg>
