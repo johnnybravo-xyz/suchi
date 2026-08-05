@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"syscall"
 	"time"
@@ -55,6 +56,16 @@ import (
 var targetSchemaVersion int
 
 func main() {
+	// Argv[0] dispatch — if the binary is invoked as `suchi-mcp` (via a
+	// symlink shipped in the release), rewrite argv so the MCP subcommand
+	// runs without extra args. Lets Claude Desktop configs stay clean
+	// (`command: "suchi-mcp"`) while suchi keeps one binary.
+	if base := filepath.Base(os.Args[0]); base == "suchi-mcp" {
+		newArgs := []string{"suchi", "mcp"}
+		newArgs = append(newArgs, os.Args[1:]...)
+		os.Args = newArgs
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -72,6 +83,8 @@ func main() {
 		os.Exit(runTaxonomy(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
+	case "mcp":
+		os.Exit(runMCP(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -93,6 +106,7 @@ Usage:
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
   suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
+  suchi mcp [--http :port]        start an MCP v2 server (stdio by default, HTTP+SSE with --http)
   suchi version                   print version + build info
 
 All configuration is via env vars — see docs. PUBLIC_URL is required.`)
