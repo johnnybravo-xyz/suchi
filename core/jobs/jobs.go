@@ -57,6 +57,51 @@ func New(d *db.DB, log *slog.Logger) *Dispatcher {
 	}
 }
 
+// ReclaimOrphaned resets any dispatcher jobs left in state='running'
+// from a previous process. Called once at boot, before Run — a
+// process that crashed (or was SIGKILL'd) mid-handler leaves a
+// running row with no worker; without this, that job orphans
+// forever and the doc it belonged to sits with no OCR, no content,
+// no error.
+//
+// Excludes `agent:*` kinds — those use lease-deadline reclaim (see
+// core/api/agent.go) because their workers are external processes,
+// not the in-tree dispatcher.
+//
+// Safe to call at boot: single-process by design, and the write pool
+// pins one connection, so this and Run() never race.
+//
+// Returns the number of rows reset. Log at INFO as
+// `jobs.boot_reclaimed` so operators see a non-zero count after a
+// crash without grepping for it.
+func (d *Dispatcher) ReclaimOrphaned(ctx context.Context) (int64, error) {
+	var affected int64
+	err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE jobs
+			   SET state = 'pending',
+			       next_run_at = ?,
+			       updated_at = ?
+			 WHERE state = 'running'
+			   AND kind NOT LIKE 'agent:%'
+		`, time.Now().Unix(), time.Now().Unix())
+		if err != nil {
+			return err
+		}
+		affected, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if affected > 0 {
+		d.log.Info("jobs.boot_reclaimed",
+			"count", affected,
+			"reason", "prior process crashed mid-handler")
+	}
+	return affected, nil
+}
+
 // Register wires a subscriber to every kind it declares. Safe to call
 // only before Run; the registry is not lock-protected because the
 // dispatcher loop reads it without a lock.
