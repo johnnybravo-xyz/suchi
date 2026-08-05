@@ -78,6 +78,9 @@ RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 COPY --from=build /out/suchi /usr/local/bin/suchi
 COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
+# Argv[0] dispatch: `suchi-mcp` invokes the MCP subcommand. Ships the
+# ergonomic name for local agent configs (`command: "suchi-mcp"`).
+RUN ln -s suchi /usr/local/bin/suchi-mcp
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
@@ -106,6 +109,9 @@ RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<poli
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi
 COPY --from=build /out/suchi /usr/local/bin/suchi
 COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
+# Argv[0] dispatch: `suchi-mcp` invokes the MCP subcommand. Ships the
+# ergonomic name for local agent configs (`command: "suchi-mcp"`).
+RUN ln -s suchi /usr/local/bin/suchi-mcp
 RUN mkdir -p /data && chown 65532:65532 /data
 USER 65532:65532
 EXPOSE 8000
