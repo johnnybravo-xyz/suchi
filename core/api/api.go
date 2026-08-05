@@ -95,6 +95,31 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tags/", s.ListTags)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
 
+	// Taxonomy CRUD (correspondents, document_types, storage_paths).
+	// Shared shape via core/api/taxonomy_crud.go. Admin-only mutation;
+	// any authed user can list/read.
+	mux.HandleFunc("GET /api/correspondents/", s.ListCorrespondents)
+	mux.HandleFunc("POST /api/correspondents/", s.CreateCorrespondent)
+	mux.HandleFunc("PATCH /api/correspondents/{id}", s.UpdateCorrespondent)
+	mux.HandleFunc("DELETE /api/correspondents/{id}", s.DeleteCorrespondent)
+
+	mux.HandleFunc("GET /api/document_types/", s.ListDocumentTypes)
+	mux.HandleFunc("POST /api/document_types/", s.CreateDocumentType)
+	mux.HandleFunc("PATCH /api/document_types/{id}", s.UpdateDocumentType)
+	mux.HandleFunc("DELETE /api/document_types/{id}", s.DeleteDocumentType)
+
+	mux.HandleFunc("GET /api/storage_paths/", s.ListStoragePaths)
+	mux.HandleFunc("POST /api/storage_paths/", s.CreateStoragePath)
+	mux.HandleFunc("PATCH /api/storage_paths/{id}", s.UpdateStoragePath)
+	mux.HandleFunc("DELETE /api/storage_paths/{id}", s.DeleteStoragePath)
+
+	// Custom field DEFINITIONS (schema). Per-doc values stay at
+	// PUT/DELETE /api/documents/{id}/custom_fields/{field} below.
+	mux.HandleFunc("GET /api/custom_fields/", s.ListCustomFieldDefs)
+	mux.HandleFunc("POST /api/custom_fields/", s.CreateCustomFieldDef)
+	mux.HandleFunc("PATCH /api/custom_fields/{id}", s.UpdateCustomFieldDef)
+	mux.HandleFunc("DELETE /api/custom_fields/{id}", s.DeleteCustomFieldDef)
+
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
