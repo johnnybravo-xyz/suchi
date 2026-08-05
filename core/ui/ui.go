@@ -175,9 +175,24 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * pageSize
 
+	// Optional facet filter: ?tag=<slug> narrows to docs carrying that
+	// tag. Kept as an EXISTS subquery so a doc with N tags doesn't
+	// duplicate the row set. Extended shape (?correspondent=..., ?jd=)
+	// would slot in the same way.
+	tagFilter := strings.TrimSpace(r.URL.Query().Get("tag"))
+	where := "d.trashed_at IS NULL"
+	args := []any{}
+	if tagFilter != "" {
+		where += ` AND EXISTS (
+			SELECT 1 FROM document_tags dt
+			JOIN tags t ON t.id = dt.tag_id
+			WHERE dt.document_id = d.id AND t.slug = ?)`
+		args = append(args, tagFilter)
+	}
+
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL`).Scan(&total); err != nil {
+		`SELECT COUNT(*) FROM documents d WHERE `+where, args...).Scan(&total); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
@@ -186,6 +201,8 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 	// documents.correspondent_id is legacy single-value and no longer
 	// written to by the ingest paths. Prefer sender-role for emails,
 	// else the lowest-position link of any role.
+	listArgs := append([]any{}, args...)
+	listArgs = append(listArgs, pageSize, offset)
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT
 			d.id, d.title,
@@ -202,10 +219,10 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 			d.created_at
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
-		WHERE d.trashed_at IS NULL
+		WHERE `+where+`
 		ORDER BY d.created_at DESC, d.id DESC
 		LIMIT ? OFFSET ?
-	`, pageSize, offset)
+	`, listArgs...)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -233,6 +250,7 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 		"Documents": docs,
 		"Total":     total,
 		"Page":      page,
+		"TagFilter": tagFilter,
 		"HasNext":   offset+pageSize < total,
 	})
 }
@@ -279,6 +297,13 @@ type detailDoc struct {
 	// Sensitivity is a free-text label ('confidential', 'internal',
 	// 'public', ...) set by plugins/enterprise DLP. Empty when unset.
 	Sensitivity string
+}
+
+// IsHighSensitivity is exposed to the detail template so it can pick
+// the veil-wrapped preview or the plain one without spelling out the
+// classifier in an html/template `and`/`or` chain.
+func (d detailDoc) IsHighSensitivity() bool {
+	return isHighSensitivity(d.Sensitivity)
 }
 
 // Detail renders a single document with its metadata + PDF viewer.
@@ -428,11 +453,28 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	fieldRows.Close()
 
 	s.render(w, r, "detail", map[string]any{
-		"Principal":    auth.FromContext(r.Context()),
-		"Doc":          doc,
-		"Notes":        notes,
-		"CustomFields": fields,
+		"Principal":          auth.FromContext(r.Context()),
+		"Doc":                doc,
+		"Notes":              notes,
+		"CustomFields":       fields,
+		"SensitivityOptions": sensitivityOptionsOrdered(),
 	})
+}
+
+// sensitivityOptionsOrdered mirrors core/api.SensitivityLevels but as
+// a stable-order slice of {value, label} pairs so the detail template
+// can populate a <select> deterministically. Ranging over a Go map
+// hits random order; the picker needs stable order for humans.
+type sensOption struct{ Value, Label string }
+
+func sensitivityOptionsOrdered() []sensOption {
+	return []sensOption{
+		{"", "— none —"},
+		{"public", "Public"},
+		{"internal", "Internal"},
+		{"confidential", "Confidential"},
+		{"restricted", "Restricted"},
+	}
 }
 
 // Preview streams the archive blob (or original if no archive) inline

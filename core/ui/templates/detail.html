@@ -31,14 +31,23 @@
         <dt>{{ msg "doc.detail.field.tags" }}</dt>
         <dd>
           {{ if .Doc.Tags }}
-            {{ range .Doc.Tags }}<span class="tag">{{ . }}</span> {{ end }}
+            {{ range .Doc.Tags }}<a class="tag" href="/?tag={{ . }}">{{ . }}</a> {{ end }}
           {{ else }}{{ msg "none" }}{{ end }}
+        </dd>
+        <dt>Sensitivity</dt>
+        <dd>
+          <select id="sens-picker" data-doc-id="{{ .Doc.ID }}" class="sens-picker">
+            {{ range .SensitivityOptions }}
+              <option value="{{ .Value }}"{{ if eq .Value $.Doc.Sensitivity }} selected{{ end }}>{{ .Label }}</option>
+            {{ end }}
+          </select>
+          <span id="sens-status" class="muted"></span>
         </dd>
         {{ if .Doc.ASN.Valid }}
           <dt>{{ msg "doc.detail.field.asn" }}</dt><dd>{{ .Doc.ASN.Int64 }}</dd>
         {{ end }}
-        {{ if .Doc.PaperlessID.Valid }}
-          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.PaperlessID.Int64 }}</dd>
+        {{ if .Doc.LegacyID.Valid }}
+          <dt>{{ msg "doc.detail.field.legacy" }}</dt><dd>#{{ .Doc.LegacyID.Int64 }}</dd>
         {{ end }}
         {{ if .Doc.SplitParentID.Valid }}
           <dt>{{ msg "doc.detail.field.split_from" }}</dt>
@@ -61,12 +70,53 @@
     </aside>
 
     <div class="viewer">
-      <object data="/preview/{{ .Doc.ID }}" type="application/pdf" width="100%" height="800px">
-        <p>Your browser can't display PDFs inline —
-          <a href="/download/{{ .Doc.ID }}?original=1">download the original</a>.</p>
-      </object>
+      {{ if .Doc.IsHighSensitivity }}
+        <div class="sens-veil" id="sens-veil" data-doc-id="{{ .Doc.ID }}">
+          <div class="sens-veil-blur">
+            <object data="/preview/{{ .Doc.ID }}?reveal=1" type="application/pdf" width="100%" height="800px">
+              <p>Preview blocked.</p>
+            </object>
+          </div>
+          <div class="sens-veil-overlay">
+            <p><strong>{{ .Doc.Sensitivity }}</strong> — preview hidden by default.</p>
+            <button type="button" id="sens-reveal">Reveal preview</button>
+          </div>
+        </div>
+      {{ else }}
+        <object data="/preview/{{ .Doc.ID }}" type="application/pdf" width="100%" height="800px">
+          <p>Your browser can't display PDFs inline —
+            <a href="/download/{{ .Doc.ID }}?original=1">download the original</a>.</p>
+        </object>
+      {{ end }}
     </div>
   </div>
+
+  <section class="share-card">
+    <h2>Share</h2>
+    <p class="muted">Create an expiring link recipients can open without a suchi login.</p>
+    <form data-share data-doc-id="{{ .Doc.ID }}" class="hstack" style="flex-wrap:wrap; gap:8px">
+      <label>
+        <span class="muted">Label</span>
+        <input type="text" name="label" placeholder="e.g. for CA">
+      </label>
+      <label>
+        <span class="muted">Expires in</span>
+        <select name="expires_in_sec">
+          <option value="0">Never</option>
+          <option value="3600">1 hour</option>
+          <option value="86400" selected>1 day</option>
+          <option value="604800">7 days</option>
+          <option value="2592000">30 days</option>
+        </select>
+      </label>
+      <label>
+        <span class="muted">Password (optional)</span>
+        <input type="text" name="password" autocomplete="off">
+      </label>
+      <button type="submit">Create link</button>
+    </form>
+    <p id="share-status" class="muted"></p>
+  </section>
 
   {{ if eq .Doc.EncryptionState "encrypted" }}
   <section class="decrypt-panel">
@@ -113,4 +163,6 @@
   </section>
   {{ end }}
 </section>
+
+<script src="/assets/detail-actions.js" defer></script>
 {{end}}
