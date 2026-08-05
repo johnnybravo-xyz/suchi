@@ -264,6 +264,35 @@ does not OCR DjVu itself; convert to PDF upstream if needed.
 Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
 + Warn behaviour as EPUB.
 
+## Office documents
+
+`anydoc` from Firecrawl (MIT, Rust) extracts text from Word, PowerPoint,
+Excel, OpenDocument, RTF, and CSV files into GitHub-flavored Markdown.
+The Markdown lands as `documents.content` and FTS5 indexes it just like
+OCR'd PDF text.
+
+Supported MIMEs (routed by `core/pipeline/anydoc.Recognized`):
+
+| Family | Extensions |
+|---|---|
+| Word | `.doc`, `.docx`, `.docm` |
+| PowerPoint | `.ppt`, `.pptx`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot` |
+| Excel | `.xls`, `.xlsx`, `.xlsm`, `.xlsb` |
+| OpenDocument | `.odt`, `.ods`, `.odp` |
+| Rich Text Format | `.rtf` |
+| CSV | `.csv` |
+
+PDF and EPUB are deliberately NOT routed through anydoc — the PDF path
+(qpdf → pdf-inspector → ocrmypdf) and the pure-Go EPUB extractor own
+those MIMEs. anydoc's own coverage of them isn't used.
+
+Missing anydoc binary = documents in these formats still land, they
+just don't get their content indexed. Same posture as missing
+`ocrmypdf`. Install via the appropriate package (see the [Docker
+matrix](#docker-image-matrix) or build from source at
+[github.com/firecrawl/anydoc](https://github.com/firecrawl/anydoc)),
+then re-ingest.
+
 ## Not yet supported
 
 - **`.zip` / `.tar` bundles** — no auto-explode. Ingest the individual documents.

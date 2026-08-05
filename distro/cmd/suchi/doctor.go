@@ -61,6 +61,7 @@ func runDoctor(args []string) int {
 		"tesseract",
 		"ocrmypdf",
 		"djvutxt",
+		"anydoc",
 		"magick",
 		"convert",
 		"msgconvert",
