@@ -1,0 +1,212 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "suchi API",
+    "version": "0.1.0",
+    "description": "Document management as a single Go binary. This document is served live at /api/schema/. Auth: `Authorization: Token <hex>` (canonical) or `Bearer <hex>` (accepted alias) for the API surface; browser sessions use a cookie set by POST /login."
+  },
+  "servers": [
+    { "url": "/", "description": "current instance" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "token": { "type": "apiKey", "in": "header", "name": "Authorization",
+        "description": "Prefix with `Token ` — e.g. `Authorization: Token abc123`." },
+      "bearer": { "type": "http", "scheme": "bearer",
+        "description": "Same 64-hex-char secret as Token." }
+    },
+    "schemas": {
+      "PaginationEnvelope": {
+        "type": "object",
+        "required": ["count", "results"],
+        "properties": {
+          "count": { "type": "integer", "description": "Total matching filter, not the length of results." },
+          "next": { "type": "string", "description": "Relative URL to the next page; empty when none." },
+          "previous": { "type": "string", "description": "Relative URL to the previous page; empty when none." },
+          "results": { "type": "array", "items": {} }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["code", "error"],
+        "properties": {
+          "code": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      },
+      "Document": {
+        "type": "object",
+        "required": ["id", "title", "created_at", "updated_at"],
+        "properties": {
+          "id":            { "type": "integer" },
+          "title":         { "type": "string" },
+          "content":       { "type": "string" },
+          "original_blob": { "type": "string" },
+          "original_size": { "type": "integer" },
+          "archive_blob":  { "type": "string" },
+          "archive_size":  { "type": "integer" },
+          "mime_type":     { "type": "string" },
+          "jd_category_id":{ "type": "integer" },
+          "created_at":    { "type": "integer", "description": "unix epoch" },
+          "updated_at":    { "type": "integer" },
+          "trashed_at":    { "type": "integer" },
+          "tags":          { "type": "array", "items": { "type": "string" } },
+          "correspondents":{ "type": "array", "items": { "$ref": "#/components/schemas/DocCorrespondent" } }
+        }
+      },
+      "DocCorrespondent": {
+        "type": "object",
+        "properties": {
+          "id":   { "type": "integer" },
+          "name": { "type": "string" },
+          "role": { "type": "string", "enum": ["sender", "recipient", "party"] }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "required": ["id", "name", "slug"],
+        "properties": {
+          "id":          { "type": "integer" },
+          "name":        { "type": "string" },
+          "slug":        { "type": "string" },
+          "color":       { "type": "string" },
+          "parent_id":   { "type": "integer" },
+          "child_count": { "type": "integer" }
+        }
+      },
+      "TaxonomyRow": {
+        "type": "object",
+        "required": ["id", "name", "slug"],
+        "properties": {
+          "id":                 { "type": "integer" },
+          "name":               { "type": "string" },
+          "slug":               { "type": "string" },
+          "path":               { "type": "string", "description": "Gonja template; storage_paths only." },
+          "matching_algorithm": { "type": "integer" },
+          "match":              { "type": "string" },
+          "is_insensitive":     { "type": "boolean" },
+          "created_at":         { "type": "integer" },
+          "updated_at":         { "type": "integer" }
+        }
+      },
+      "CustomField": {
+        "type": "object",
+        "required": ["id", "name", "data_type"],
+        "properties": {
+          "id":         { "type": "integer" },
+          "name":       { "type": "string" },
+          "data_type":  { "type": "string",
+            "enum": ["text","number","date","bool","select","multi","url","monetary","documentlink"] },
+          "extra_data": { "type": "string", "description": "Opaque JSON; for select/multi holds `choices`." }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id":          { "type": "integer" },
+          "kind":        { "type": "string" },
+          "state":       { "type": "string", "enum": ["pending","running","done","dead"] },
+          "attempts":    { "type": "integer" },
+          "doc_id":      { "type": "integer" },
+          "last_error":  { "type": "string" },
+          "created_at":  { "type": "integer" },
+          "updated_at":  { "type": "integer" },
+          "next_run_at": { "type": "integer" }
+        }
+      },
+      "SavedView": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "id":          { "type": "integer" },
+          "name":        { "type": "string" },
+          "filter_json": { "type": "string", "description": "Opaque client-owned JSON." },
+          "display":     { "type": "string" },
+          "position":    { "type": "integer" }
+        }
+      },
+      "ShareLink": {
+        "type": "object",
+        "properties": {
+          "id":            { "type": "integer" },
+          "token":         { "type": "string" },
+          "doc_ids":       { "type": "array", "items": { "type": "integer" } },
+          "label":         { "type": "string" },
+          "expires_at":    { "type": "integer" },
+          "has_password":  { "type": "boolean" },
+          "view_count":    { "type": "integer" },
+          "public_url":    { "type": "string" }
+        }
+      },
+      "SearchHit": {
+        "type": "object",
+        "properties": {
+          "id":         { "type": "integer" },
+          "title":      { "type": "string" },
+          "snippet":    { "type": "string", "description": "HTML with <mark>…</mark> highlights." },
+          "rank":       { "type": "number" },
+          "created_at": { "type": "integer" },
+          "mime_type":  { "type": "string" }
+        }
+      }
+    }
+  },
+  "security": [
+    { "token": [] },
+    { "bearer": [] }
+  ],
+  "paths": {
+    "/api/schema/":         { "get": { "summary": "This OpenAPI document.", "security": [], "responses": { "200": { "description": "OpenAPI 3.1 JSON" } } } },
+    "/api/whoami":          { "get": { "summary": "Return the resolved principal.", "responses": { "200": { "description": "Principal shape" }, "401": { "description": "anonymous" } } } },
+    "/api/token/":          { "post": { "summary": "Exchange local credentials for an API token (mobile-compat).", "security": [], "responses": { "200": { "description": "{token}" }, "401": { "description": "bad creds" } } } },
+    "/api/login":           { "post": { "summary": "Same handler as /api/token/ — accepts JSON or form.", "security": [] } },
+    "/api/remote_version/": { "get": { "summary": "Version handshake." } },
+    "/api/next_asn/":       { "get": { "summary": "MAX(archive_serial_number)+1 as a bare integer." } },
+
+    "/api/documents/":                 { "post": { "summary": "Multipart upload." } },
+    "/api/documents/{id}":             { "get": { "summary": "Get document.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }] },
+                                          "delete": { "summary": "Soft-delete (trash)." } },
+    "/api/documents/{id}/restore":     { "post": { "summary": "Un-trash." } },
+
+    "/api/tags/":            { "get":  { "summary": "List tags (paginated)." },
+                                "patch": { "summary": "Not defined at collection." } },
+    "/api/tags/{id}/parent": { "patch": { "summary": "Reparent a tag (admin)." } },
+
+    "/api/correspondents/":         { "get": { "summary": "List." }, "post": { "summary": "Create (admin)." } },
+    "/api/correspondents/{id}":     { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
+    "/api/document_types/":         { "get": { "summary": "List." }, "post": { "summary": "Create (admin)." } },
+    "/api/document_types/{id}":     { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
+    "/api/storage_paths/":          { "get": { "summary": "List." }, "post": { "summary": "Create (admin)." } },
+    "/api/storage_paths/{id}":      { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
+    "/api/custom_fields/":          { "get": { "summary": "List field definitions." }, "post": { "summary": "Create field (admin)." } },
+    "/api/custom_fields/{id}":      { "patch": { "summary": "Update field (admin)." }, "delete": { "summary": "Delete field (admin)." } },
+
+    "/api/rules/":     { "get": { "summary": "List rules (paginated)." }, "post": { "summary": "Create rule (admin)." } },
+    "/api/rules/{id}": { "patch": { "summary": "Update rule (admin)." }, "delete": { "summary": "Delete rule (admin)." } },
+
+    "/api/tasks/":     { "get": { "summary": "Read the outbox + workflow tasks (live-poll, ?limit-based)." },
+                          "post":{ "summary": "Agent enqueue (see /agents)." } },
+
+    "/api/search/":       { "get": { "summary": "FTS5 search over title + content." } },
+    "/api/autocomplete/": { "get": { "summary": "Prefix suggestions across tags/correspondents/document_types." } },
+
+    "/api/saved_views/":       { "get": { "summary": "List caller's saved views." }, "post": { "summary": "Create." } },
+    "/api/saved_views/{id}":   { "patch": { "summary": "Update." }, "delete": { "summary": "Delete." } },
+
+    "/api/ui_settings/":       { "get": { "summary": "Get caller's opaque JSON blob (or {})." },
+                                  "put": { "summary": "Replace caller's blob." } },
+    "/api/trash/":             { "get": { "summary": "List soft-deleted docs (owner-scoped)." } },
+
+    "/api/share_links/":       { "get": { "summary": "List caller's share links." }, "post": { "summary": "Create a share link." } },
+    "/api/share_links/{id}":   { "delete": { "summary": "Revoke." } },
+    "/s/{token}":              { "get": { "summary": "Public share metadata (anonymous).", "security": [] } },
+    "/s/{token}/{doc_id}/download": { "get": { "summary": "Public download (anonymous).", "security": [] } },
+
+    "/api/workflows":                            { "post": { "summary": "Register a workflow definition (admin)." } },
+    "/api/workflows/{slug}":                     { "get":  { "summary": "Get active spec by slug." } },
+    "/api/workflows/{slug}/start":               { "post": { "summary": "Start a run." } },
+    "/api/workflows/runs/{id}":                  { "get":  { "summary": "Get a run's state." } },
+    "/api/workflows/tasks/{task_id}/resolve":    { "post": { "summary": "Resolve a human task." } },
+    "/api/workflows/runs/{id}/cancel":           { "post": { "summary": "Cancel a run (admin)." } }
+  }
+}
