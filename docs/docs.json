@@ -30,8 +30,16 @@
             "pages": ["architecture", "jd", "privacy"]
           },
           {
+            "group": "Operations",
+            "pages": ["backup-restore"]
+          },
+          {
             "group": "Development",
-            "pages": ["cookbook", "cookbook/mail-intake", "preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
+            "pages": ["cookbook", "cookbook/mail-intake", "cookbook/mail-mbsync", "preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
+          },
+          {
+            "group": "Alternatives",
+            "pages": ["comparison"]
           }
         ]
       }

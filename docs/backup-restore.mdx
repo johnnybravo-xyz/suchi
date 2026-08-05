@@ -1,0 +1,197 @@
+---
+title: "Backup and restore"
+description: "What to back up, when it's safe to copy, and how to bring an instance back from bytes."
+---
+
+Suchi stores everything under a single `DATA_DIR`. Back that up and
+you have a full restore. The wrinkle is doing it without corrupting
+the SQLite database mid-copy — this page explains the safe patterns.
+
+## What's under DATA_DIR
+
+```
+$DATA_DIR/
+├── suchi.db            SQLite database (all metadata, users, jobs, audit)
+├── suchi.db-wal        WAL sidecar (active writes; do NOT copy alone)
+├── suchi.db-shm        shared-memory index (do NOT copy alone)
+├── blobs/              CAS — one file per unique original + archive PDF
+│   └── sha256/ab/cd/…
+├── rendered/           storage-path projection (symlinks or copies into
+│                       Gonja-rendered directory structure)
+├── .decrypt-key        AEAD key for stored PDF passwords (0600, sensitive)
+└── mail-*.env          mail-mbsync sidecar credentials (0600, sensitive)
+```
+
+Every persistent piece of state is in this tree. There is no
+external cache, no separate blob store, no shared-nothing state.
+Restore = restore this tree.
+
+## What you MUST back up
+
+- **`suchi.db`** — schema, users, documents, tags, correspondents,
+  audit log, everything.
+- **`blobs/`** — the actual document bytes. Without it the DB
+  points at ghosts.
+- **`.decrypt-key`** — if you ever store encrypted-PDF passwords via
+  the API. Losing this loses ALL stored passwords; the encrypted
+  ciphertexts in the DB become garbage.
+- **`mail-*.env`** — mail-intake credentials. Losing these breaks
+  mail ingestion until you re-authorize.
+
+## What you can regenerate
+
+- **`suchi.db-wal` / `suchi.db-shm`** — SQLite recreates them on
+  open. Never copy these files alone; they only make sense with the
+  main DB file at the same instant.
+- **`rendered/`** — reproduced from the DB + `blobs/` on next
+  ingest of a doc. If you're tight on backup space, exclude it. On
+  restore, `suchi serve` will lazily rebuild links as docs are
+  re-touched, or you can force a full rebuild.
+
+## Safe copy patterns
+
+### 1. Stop suchi first (simplest)
+
+```bash
+systemctl stop suchi
+tar czf suchi-backup-$(date -u +%F).tar.gz -C /var/lib suchi
+systemctl start suchi
+```
+
+Down for the duration of the tar. Two seconds for a small archive,
+minutes for large ones.
+
+### 2. Online — SQLite `.backup` + rsync
+
+Zero downtime. The `.backup` command is the SQLite-blessed way to
+snapshot a live DB, and rsync handles the immutable blob tree.
+
+```bash
+sqlite3 $DATA_DIR/suchi.db ".backup /snap/suchi.db"
+rsync -a --delete $DATA_DIR/blobs/       /snap/blobs/
+rsync -a           $DATA_DIR/.decrypt-key /snap/.decrypt-key
+rsync -a           $DATA_DIR/mail-*.env   /snap/ 2>/dev/null || true
+
+tar czf suchi-backup-$(date -u +%F).tar.gz -C /snap .
+```
+
+`.backup` is safe under concurrent writes; the copy is transactionally
+consistent as of the moment it starts.
+
+### 3. Filesystem snapshot (btrfs / zfs / LVM)
+
+If your host filesystem does snapshots, take one on the volume that
+holds `DATA_DIR` and tar the snapshot. SQLite's WAL guarantees the
+snapshot is recoverable — the DB opens cleanly and the WAL replays
+on next open.
+
+```bash
+btrfs subvolume snapshot -r /var/lib/suchi /snap/suchi-$(date -u +%F)
+tar czf suchi-backup-$(date -u +%F).tar.gz -C /snap suchi-$(date -u +%F)
+btrfs subvolume delete /snap/suchi-$(date -u +%F)
+```
+
+### 4. restic / borg / rustic
+
+Any modern encrypted backup tool works as long as it copies the
+`.db` file as a single unit (all of them do, unless you asked for
+byte-level dedup on that specific file). Combine with pattern (1)
+if you want strict consistency, or (2) if you can't take downtime.
+
+### What NOT to do
+
+- **Don't** `cp suchi.db backup.db` while suchi is running. SQLite
+  in WAL mode is safe for reads under concurrent writes, but a cp
+  can grab a mid-transaction state that the WAL then references. On
+  restore, the DB opens dirty and the recovery is not guaranteed
+  to converge.
+- **Don't** back up just the DB and skip `blobs/`. The DB is metadata;
+  the blobs are the documents.
+- **Don't** try to back up the `-wal` and `-shm` files separately.
+  Either copy the trio atomically (snapshot / stop suchi) or use
+  `.backup`.
+
+## Restore
+
+Restore is a straight file-copy operation. Same shape whichever
+backup pattern you used:
+
+1. Stop the target suchi (if running).
+2. Wipe or move aside the target `DATA_DIR`.
+3. Extract the backup into the empty `DATA_DIR`.
+4. Verify ownership (`chown -R suchi:suchi $DATA_DIR` if the UID
+   doesn't match the destination).
+5. Start suchi. WAL replay is automatic; you'll see
+   `db.migrate.applied` lines in the log only if the backup is from
+   an older schema — suchi runs the missing migrations forward.
+
+```bash
+systemctl stop suchi
+mv /var/lib/suchi /var/lib/suchi.old
+mkdir -p /var/lib/suchi
+tar xzf suchi-backup-2026-08-05.tar.gz -C /var/lib/suchi
+chown -R suchi:suchi /var/lib/suchi
+systemctl start suchi
+```
+
+## Testing your backups
+
+A backup you haven't restored isn't a backup. Once a quarter:
+
+1. Copy the archive to a scratch directory.
+2. Extract it into a fresh `DATA_DIR`.
+3. Run `suchi serve` with `LISTEN_ADDR=127.0.0.1:9999` pointing at
+   that directory.
+4. Hit `http://localhost:9999/readyz`; it should return 200.
+5. Confirm a few known documents render + a search hits.
+6. Stop it.
+
+If any step fails, your backup pipeline has a bug. Fix it before you
+need it.
+
+## Rotation and retention
+
+Suchi doesn't manage backup retention — the tool you pick
+(restic / borg / your rsync script) does. As a starting policy for
+personal / household use:
+
+- Daily snapshot for 14 days
+- Weekly snapshot for 8 weeks
+- Monthly snapshot for 12 months
+
+For anything regulated (see [Enterprise E3 in the plan doc](#)),
+match the jurisdiction pack's retention floor. Legal hold overrides
+retention.
+
+## Blob GC and its interaction with backups
+
+`suchi gc` removes CAS blobs that no live document row references —
+useful after mass deletes. It's dry-run by default; only `--apply`
+actually removes files. If you take a backup **before** GC, you can
+restore the original bytes; after GC, they're gone.
+
+Practical order: back up → `suchi gc --apply` → back up again if
+you want the compacted state. See [the CLI reference](/cli#gc).
+
+## Migrating between hosts
+
+Same shape as a restore, just to a different machine:
+
+1. Take a backup on the source (any of the patterns above).
+2. Scp / rsync it to the destination.
+3. Follow the restore steps.
+4. Update DNS / reverse-proxy config to point at the new host.
+5. If mobile clients had the old hostname pinned, they'll re-sync on
+   next connect.
+
+## Sensitive files
+
+- `.decrypt-key` (0600) — losing it loses all stored PDF passwords.
+  Losing it AND the source PDFs = permanent data loss for those
+  docs. Keep at least one off-host copy encrypted at rest.
+- `mail-*.env` (0600) — contains IMAP credentials. If your backup
+  tool stores backups on shared infrastructure, encrypt them.
+
+Both files ride in the standard `DATA_DIR` backup — no special
+handling required — but their exfiltration risk is higher, so this
+is where the "encrypted backup at rest" hygiene actually matters.
