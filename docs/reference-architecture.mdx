@@ -1,0 +1,752 @@
+---
+title: "Reference architecture"
+description: "Every load-bearing design decision behind suchi, with the reasoning that produced it. Read this before proposing a large refactor."
+---
+
+Suchi is a document-management system as a **single Go binary**.
+The decisions below explain the shape — why `/data/suchi.db` and
+not Postgres, why three ingest paths and not one, why two engines
+for "when X, do Y" instead of one. Each decision is written as
+**Why / How / What / When**:
+
+- **Why** — the reasoning that produced the choice.
+- **How** — the mechanism that implements it.
+- **What** — the specific pick.
+- **When** — when this applies vs when we intentionally don't do it.
+
+If you're proposing a refactor that touches any of these, read the
+matching entry first. If your proposal still stands, the entry is
+wrong and worth fixing — file a PR that amends here alongside the
+code change.
+
+## 1. Foundations
+
+### 1.1 One binary, no external services
+
+- **Why** — self-hosters overwhelmingly run one machine (VPS, NAS,
+  Pi). Every extra service is a monitor, an upgrade, a debug
+  target, a security patch. an existing DMS needs Postgres + Redis
+  + Celery + a Django worker; docspell needs Postgres + Solr + JVM.
+  The plan doc's stated competition is "on the machine underneath",
+  not "on the feature list up top".
+- **How** — Go with `CGO_ENABLED=0`; SQLite via
+  [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) (pure Go);
+  every subprocess is optional and degrade-graceful.
+- **What** — the shipped artifact is `suchi` plus `deploy/` snippets;
+  no `docker-compose.yml` with service links (the mail-mbsync recipe
+  is a bolt-on, not a requirement).
+- **When** — this stops holding above ~50 concurrent writers or
+  when p95 write latency crosses 500ms; at that point the plan
+  doc's E4 Postgres plugin trigger fires. That plugin swaps at
+  the repository layer without touching handlers.
+
+### 1.2 SQLite as the primary store
+
+- **Why** — one file, WAL-mode readers-don't-block-writers, FTS5
+  built in, full-tx semantics, `sqlite3 .backup` for zero-downtime
+  snapshots. Postgres is a better DB for a genuinely different
+  problem: multi-writer contention, real analytical queries,
+  extension ecosystems. suchi is a metadata store for docs; SQLite
+  is over-qualified.
+- **How** — WAL mode, `synchronous=NORMAL`, `mmap_size=256M`, `busy_timeout=5000`;
+  two connection pools — a `Write` pool with `MaxOpenConns(1)` +
+  `BEGIN IMMEDIATE` for serialization, a separate `Read` pool for
+  concurrent readers.
+- **What** — `$DATA_DIR/suchi.db` + WAL sidecar. Every migration
+  applies at boot. See [architecture#sqlite-discipline](/architecture#sqlite-discipline).
+- **When** — the discipline is the whole thing. Never open a
+  second writer connection. Never use raw string concat in SQL —
+  every string that reaches Exec/Query rides `?` placeholders.
+
+### 1.3 Content-addressed blob storage
+
+- **Why** — original bytes never change. Rename a doc, retag a doc,
+  merge a doc's owner — none of that touches the blob. Dedup is
+  free (same bytes → same hash → same file on disk).
+- **How** — SHA-256 over the byte stream; two-level fanout at
+  `$DATA_DIR/blobs/sha256/aa/bb/<full-hash>`; atomic rename from
+  a per-put temp file in the destination shard (same device, POSIX
+  atomic). Duplicate puts return the existing reference without
+  rewriting.
+- **What** — `original_blob` on every document (required);
+  `archive_blob` for the OCR-rewritten PDF when present.
+- **When** — GC (`suchi gc`) walks blobs, reads back-references
+  from `documents`, and reclaims orphans older than a grace window.
+  Dry-run default; `--apply` deletes. Nightly cron cadence
+  recommended.
+
+### 1.4 Zero-egress default
+
+- **Why** — self-hosters chose "not the cloud" for a reason. A
+  stock install that phones home breaks trust before the second
+  boot. Every observability tool that "just adds a metrics
+  endpoint" fails this test.
+- **How** — every outbound connection has a config knob (env or
+  settings key) that gates it; at boot suchi logs
+  `main.egress.surface` listing every configured outbound.
+  `outbound: none` is the honest default line for a stock install.
+- **What** — no telemetry. No update pings. No usage counters. LLM
+  classifier is opt-in AND requires `LLM_EGRESS_ACK=true` for
+  non-loopback endpoints.
+- **When** — every new feature that could dial out gets an
+  egress-list entry AND a mention in [privacy](/privacy).
+  Reviewer: if you can't grep the boot log for the new endpoint,
+  the wire isn't complete.
+
+## 2. Data model
+
+### 2.1 Multi-user from Phase 0
+
+- **Why** — retrofitting `owner_id` onto a document table is
+  brutal. One column added at greenfield time is free; adding it
+  after the first million rows means a migration + reindex + code
+  audit. Single-user remains the zero-config default.
+- **How** — `users(id, email, display_name, role, disabled, ...)`;
+  every mutation-owning table (`documents`, `correspondents`,
+  `storage_paths`, `saved_views`) carries `owner_id`.
+- **What** — role is `admin` or `member`. Multi-user is on from
+  boot 1; the first user is minted via the setup-token flow and
+  becomes admin.
+- **When** — a household with one user still has one row in
+  `users`, `owner_id=1` on every doc, and the ACL system just
+  falls through to "owner or admin".
+
+### 2.2 Per-user deduplication keyspace
+
+- **Why** — a household member uploading the same insurance PDF
+  their spouse already has is two documents, not a collision. The
+  ecosystem-survey pass on Bundle issues flagged this repeatedly
+  as a real user-hostile behavior.
+- **How** — `(owner_id, original_blob)` partial unique index
+  `WHERE trashed_at IS NULL`; the CAS still stores one file (the
+  hash is the same) but the doc row is per-owner.
+- **What** — migration 0004 flipped from global unique to per-user
+  unique. Dedup within a single user still fires; cross-user
+  doesn't.
+- **When** — this only affects the write path. Search + ACLs work
+  on the doc row, not the blob, so the sharing story stays clean.
+
+### 2.3 Johnny.Decimal as the default taxonomy
+
+- **Why** — flat tag soup is what gets Bundle installs into
+  ten-year tag graveyards. JD gives every user a schema-level
+  taxonomy the app can validate, route on, and browse by number.
+  It's opinionated enough to be a spine, generic enough to fit
+  most households and small businesses.
+- **How** — `jd_areas(code_start, code_end, name, position)` +
+  `jd_categories(area_start, code, name, system)`; every document
+  has `jd_category_id` (NOT NULL). Flat mode is a **degenerate
+  tree** (one area, one category) — one code path.
+- **What** — `[jd](/jd)` for the tree structure; `[presets](/jd#presets)`
+  for the shipped starter trees; `[refile](/refile)` for
+  mid-flight preset swaps.
+- **When** — JD is on by default. Flat opt-out via
+  `taxonomy: flat` in settings; still hits the same code path.
+
+### 2.4 Custom fields with type-native columns
+
+- **Why** — encoding every custom-field value as a JSON string is
+  brittle (dates get double-parsed, numbers lose precision, bools
+  stringify inconsistently). Native columns per type is boring
+  and fast.
+- **How** — `document_custom_field_values(document_id, field_id,
+  value_text, value_number, value_int, value_bool, value_date)`;
+  the field's `data_type` picks which column to write. Multi-select
+  uses `value_text` with a JSON-encoded array — the only necessary
+  compromise.
+- **What** — nine data types (text, number, date, bool, select,
+  multi, url, monetary, documentlink); type is immutable after
+  create — a rename to a different type means a new field +
+  migration.
+- **When** — new field types get a new column only if the existing
+  column set doesn't fit. Adding a "geo point" type means a schema
+  migration; adding "phone number" (a text with validation) doesn't.
+
+### 2.5 Document versioning via `previous_version_id`
+
+- **Why** — versions in Bundle are the #1-upvoted FR (360
+  upvotes). Modeling them as a flat blob replacement loses
+  history; a separate "versions" table diverges from the "docs
+  are the same object" mental model.
+- **How** — each version is a full `documents` row with
+  `previous_version_id` pointing at its predecessor. Recursive-CTE
+  walk builds the chain. Head is the row nothing points at.
+- **What** — `POST /api/documents/{id}/versions/` uploads a new
+  head; `GET /api/documents/{id}/versions/` returns the chain
+  oldest→newest.
+- **When** — chains can cycle in theory (self-referential FKs are
+  free-for-all); the walker caps at 1024 hops as a paranoid
+  backstop.
+
+## 3. Concurrency + reliability
+
+### 3.1 Two-pool single-writer discipline
+
+- **Why** — SQLite gives you readers-don't-block-writers under
+  WAL, but concurrent WRITERS still serialize at the DB. Instead
+  of chasing `SQLITE_BUSY` from Go's connection pool, we force
+  the serialization at the pool level.
+- **How** — `WritePool.SetMaxOpenConns(1)` + all writes wrapped in
+  `BEGIN IMMEDIATE` + `busy_timeout=5000` for reader lock
+  interactions. Reads use a separate pool with unlimited connections.
+- **What** — `db.DB.Write` is one writer; `db.DB.Read` is many
+  readers. Every handler either does one write in a `WriteTx` or
+  fans reads through `Read`. No mixing.
+- **When** — E4 scale-out swaps this for Postgres. Until then,
+  the discipline is what keeps single-file SQLite viable up to
+  ~50 concurrent writers.
+
+### 3.2 Durable outbox for post-write work
+
+- **Why** — the failure mode we refuse to accept: "your document
+  uploaded but the OCR didn't run because the process crashed
+  between them". Enqueuing to an external queue makes this the
+  operator's problem; enqueuing to the same DB tx keeps it ours.
+- **How** — `jobs(id, kind, doc_id, payload, state, run_after,
+  attempts, dead_reason, ...)`; every mutator that needs
+  downstream work enqueues in the **same transaction** as its
+  own write. The dispatcher (`core/jobs`) polls, calls the
+  subscribed handler, backs off on failure, parks dead-lettered
+  jobs.
+- **What** — `post-ingest`, `render`, `workflow:advance`,
+  `workflow:resume`, `workflow:timeout-sweep`, `webhook:deliver`,
+  `post-classify`. Kinds are stable strings; adding a kind is
+  additive.
+- **When** — every new step that reads the doc after ingest goes
+  through this. The only exception is the render subscriber which
+  we call synchronously from `postingest.postContentSteps` for
+  latency (renders need to happen right after the metadata
+  settles).
+
+### 3.3 Subprocess sandbox
+
+- **Why** — qpdf, ocrmypdf, tesseract, msgconvert, djvutxt, anydoc
+  all parse untrusted bytes. Bad input can hang, leak memory,
+  fork bombs, network out. We assume every one is potentially
+  compromised.
+- **How** — `core/sandbox/` wraps `exec.Cmd` with a hard timeout,
+  bounded stdout/stderr, empty env (only `PATH` inherited),
+  process-group kill on unix (so a leaking child of a child
+  dies too), no network (default deny; explicit whitelist for
+  the LLM plugin's HTTP client).
+- **What** — every wrapper (`core/pipeline/qpdf/`, `.../ocrmypdf/`,
+  etc.) calls through the sandbox. Missing binary → skipped with
+  a `WARN` log; the pipeline continues.
+- **When** — Docker images pre-install the binaries; bare-binary
+  installs get whatever's on PATH. `suchi doctor` reports the
+  set present.
+
+### 3.4 Migrations auto-apply on boot
+
+- **Why** — Django's manage.py migrate is an extra step operators
+  forget. Auto-applying on boot means "start suchi and the schema
+  is current" is one command. Migrations are immutable once
+  applied — a mistake gets a new migration, not an edit.
+- **How** — `//go:embed *.sql` in `core/db/migrations/`;
+  `db.LoadMigrations` reads them, `db.Migrate` applies each once
+  in a transaction, tracks version in `schema_migrations`.
+- **What** — 21 migrations at time of writing, `0001_baseline.sql`
+  through `0021_groups_acls.sql`. Pre-alpha exception: we amend
+  in place when there are zero deployed DBs; this stops at the
+  first tagged release.
+- **When** — every new schema change goes in a new file. Never
+  edit an existing migration in production. If you need to fix
+  a bug in a shipped migration, land a follow-up that repairs
+  the state.
+
+## 4. Ingest pipeline
+
+### 4.1 Three canonical producers
+
+- **Why** — different intake shapes converge on the same post-ingest
+  chain. Modeling them as three producers behind one job kind
+  means the pipeline stays boring; new producers slot in.
+- **How** — HTTP upload (`POST /api/documents/`); fs-watch
+  (`core/ingest/fswatch/`, staging directory + optional sidecar
+  JSON); email-watch (`core/ingest/emailwatch/`, IMAP polling).
+  All three enqueue a `post-ingest` job with the same payload
+  shape.
+- **What** — three producer packages, one consumer
+  (`core/pipeline/postingest`).
+- **When** — a new producer (drop-off endpoint, WebDAV, S3-notify
+  hook) becomes a new package under `core/ingest/` and reuses
+  the enqueue helper. No changes to `postingest`.
+
+### 4.2 Post-ingest chain, degrade gracefully
+
+- **Why** — sixteen pipeline steps, and the vast majority of docs
+  need only three. Making each mandatory would fail the ingest
+  for missing binaries; making each optional means the operator's
+  installation shapes what runs.
+- **How** — each step lives under `core/pipeline/<name>/`; each
+  exports a small interface (`Recognized(mime)` +
+  `Extract(bytes)`). Handler in `postingest.Handle` walks them in
+  order; missing binary → step logs and skips; error →
+  post-ingest continues with what it has.
+- **What** — order is: preconsume → msg/eml fanout → qpdf →
+  pdf-inspector → OCR (tessocr | ocrmypdf) → anydoc → epub → djvu
+  → heic → zugferd → barcode → pageanalyze → docsplit → rules →
+  render → automations. Rules and render always run.
+- **When** — a new format is a new package. The dispatch is
+  MIME-based: `Recognized(mime)` gates whether the step even
+  tries. Never add MIME dispatch outside the step's own package —
+  the whole point is that the pipeline doesn't need to know about
+  the format details.
+
+### 4.3 Sidecar JSON spec for external ingest
+
+- **Why** — third-party mail fetchers, scanner integrations, cron
+  jobs — the "someone drops a file in a directory" shape needs a
+  wire format for metadata. Ad-hoc conventions get diverse fast;
+  one spec keeps producers portable.
+- **How** — `core/ingest/sidecar` defines the JSON envelope:
+  `{title, correspondent, tags[], notes[], jd_category, custom_fields}`.
+  Producers emit `foo.pdf` + `foo.json`; consumers apply the
+  metadata after CAS put.
+- **What** — versioned spec; v1 today. See
+  [mail-intake guide](/guides/mail-intake).
+- **When** — extending the sidecar means bumping the version and
+  documenting the diff. Never silently accept a new field —
+  producers on the old version won't know about it.
+
+### 4.4 Rendered-view symlink model
+
+- **Why** — flat-blob-directory storage is what users type `ls`
+  into and expect to find their docs organized. Physical
+  reorganization is fragile; a symlink layer over the CAS is
+  cheap.
+- **How** — `core/render/view/`; per-doc storage-path templates
+  (Gonja syntax); atomic INSERT pending → mv → UPDATE applied via
+  the `render_moves` table so a mid-move crash is recoverable at
+  next boot. See [architecture#content-addressed-storage](/architecture#content-addressed-storage).
+- **What** — every mutation that touches storage-path-relevant
+  metadata (title, correspondent, doc_type, JD category, tags,
+  archive_serial) enqueues a `render` job. The subscriber calls
+  `Renderer.Move()`.
+- **When** — the moves table is the audit trail. A row per attempt;
+  `state = pending → done | failed`. Reconcile-at-boot finishes
+  any pending row.
+
+## 5. Classification: three engines, one job
+
+### 5.1 Rules — deterministic classifier
+
+- **Why** — 60% of the classification job is boring string matches:
+  "title contains invoice → doc_type=Invoice". The rules engine
+  ships this without an LLM in the loop; every operator can add
+  rules without touching Go.
+- **How** — `rules(if_kind, if_value, then_kind, then_value,
+  priority, enabled)`; `rules.Apply()` loads enabled rules,
+  evaluates against a doc snapshot, applies matching actions in
+  one write tx.
+- **What** — one condition, one action, per row. Actions are
+  additive (add_tag) or last-priority-wins (set_correspondent).
+- **When** — runs in `postingest.postContentSteps` after content
+  extraction, before automations. Also re-runnable via `suchi
+  refile` when rules or the tree change.
+
+### 5.2 Automations — trigger→conditions→actions
+
+- **Why** — rules can't say "when doc is added by mail rule X, also
+  set owner Y and tag Z" in one row. Automations model the "when
+  X, do Y" story that operators actually want: multiple actions
+  per event, filter layer between event and action, multiple
+  triggers per rule.
+- **How** — three tables (`workflows`, `workflow_triggers`,
+  `workflow_actions`); trigger types are `consumption`,
+  `document_added`, `document_updated`. Filters key on filename
+  glob, path glob, correspondent, tag, doctype, content regex,
+  mail-rule id.
+- **What** — 12+ action kinds (assign_title with template
+  expansion, assign_tags, assign_correspondent,
+  assign_document_type, assign_storage_path, assign_owner,
+  assign_custom_field, remove_*).
+- **When** — hooks live at three points: consumption at
+  `postingest.Handle` entry, document_added in
+  `postingest.postContentSteps` after rules, document_updated on
+  successful PATCH. See [automations](/automations).
+
+### 5.3 Approvals — human-in-the-loop state machines
+
+- **Why** — some flows need a person to click. "Finance must
+  approve invoices > $10k before they land in the vault" is not
+  a rule; it's a routing decision with a human in the middle.
+- **How** — `workflow_defs / workflow_runs / workflow_transitions /
+  workflow_tasks`; state-machine spec in JSON; advance/resume/
+  timeout-sweep jobs on the outbox for restart safety.
+- **What** — `/api/approvals/*` endpoints; state kinds are
+  `approve` (spawns a task and parks), `end` (terminal),
+  developer-defined others.
+- **When** — completely orthogonal to automations. If a step
+  needs a human choice, it's approvals. If a step is deterministic
+  metadata mutation, it's automations. See [approvals](/approvals).
+
+### 5.4 LLM classifier as a plugin
+
+- **Why** — LLMs are the classifier tier that closes the last 30%.
+  But they're slow, cost money, and imply outbound traffic.
+  Baking one into core would break the zero-egress principle.
+- **How** — `plugins/llm-classifier/` implements the Subscriber
+  interface for the `post-classify` kind; enqueued at the tail of
+  post-ingest only when the plugin is registered.
+- **What** — OpenAI-compatible endpoint (works with Ollama +
+  hosted APIs); JSON-schema-constrained output; confidence-gated
+  `needs-review` tag on uncertain calls.
+- **When** — off by default. Turned on via wizard or
+  `LLM_ENDPOINT_URL`. Non-local endpoints require
+  `LLM_EGRESS_ACK=true`. Live-reload wired so the wizard save
+  doesn't require a restart.
+
+### 5.5 Refile as first-class
+
+- **Why** — operators change their mind. Preset swap, template
+  edit, new rule — none of these retroactively rearrange existing
+  docs unless we say so. The selling point "you can always come
+  back to change this" needs an operator-facing knob.
+- **How** — `core/refile/`; snapshots doc IDs at start (so
+  mid-sweep uploads use the normal ingest chain and land under
+  the new tree automatically); iterates, re-runs `rules.Apply`,
+  enqueues a `render` job. Concurrency-safe by construction.
+- **What** — `POST /api/admin/refile`, `suchi refile [flags]`,
+  and `?refile=true` on the JD preset apply endpoint.
+- **When** — refile applies rules but does NOT undo prior rule
+  actions (classifier is additive by design). Does NOT re-run
+  OCR (content is deterministic given the blob). See [refile](/refile).
+
+## 6. Access
+
+### 6.1 Authenticator + Authorizer interfaces
+
+- **Why** — separating "who are you" (authenticate) from "may you
+  do X" (authorize) keeps each layer swap-able. Enterprise builds
+  add SAML at the authenticator layer without touching authz;
+  ACLs land at authz without touching authenticators.
+- **How** — `plugin-api.Authenticator` returns a `Principal` or
+  `(nil, nil)` if not applicable — the auth chain tries each in
+  order. `core/authz.Authorizer.Can(ctx, principal, kind, id,
+  perm)` returns an error or nil.
+- **What** — three shipping Authenticators (Token, Bearer, OIDC);
+  two shipping Authorizers (RoleAuthorizer, ACLAuthorizer). Local
+  auth issues Token; OIDC issues session cookies + accepts Bearer.
+- **When** — every mutation handler routes through
+  `s.authorize()`. Every reader handler that shows a doc calls it
+  too. See [permissions](/permissions).
+
+### 6.2 Multi-scheme auth (Token / Bearer / Cookie / OIDC)
+
+- **Why** — mobile clients default to `Authorization: Token
+  <hex>`. Curl and Postman default to `Authorization: Bearer
+  <hex>`. Browsers use cookies. OIDC providers return JWTs. Any
+  DMS that ships in 2026 needs all four.
+- **How** — the auth chain walks Authenticators in order; each
+  matches on its scheme prefix or shape. `Token` and `Bearer` map
+  to the same `api_tokens` row lookup; JWT is only routed to OIDC
+  when the shape doesn't match suchi's 64-hex-char token format.
+- **What** — same `Principal` regardless of scheme. `Principal.Kind`
+  tells you `"user"` (cookie) vs `"token"` (Token/Bearer).
+- **When** — new schemes add a new Authenticator. Never mix scheme
+  logic into an existing one — the chain is the composition point.
+
+### 6.3 Scope model with legacy wildcards
+
+- **Why** — granular scopes (`documents:read`, `agent:tasks`) are
+  what enterprises want. But shipping only granular scopes breaks
+  every mobile-flow token minted before the split. Legacy
+  wildcards keep pre-existing tokens working while new
+  integrations pick from the closed vocabulary.
+- **How** — `HasScope(p, need)` first checks exact match, then
+  expands legacy wildcards (`"write"` → union over
+  documents:write, agent:tasks, admin:webhooks).
+- **What** — six canonical scopes (`documents:read`,
+  `documents:write`, `agent:tasks`, `admin:webhooks`, plus two
+  legacy wildcards). Session-authed (`Kind=="user"`) callers pass
+  every scope check unconditionally.
+- **When** — new scopes get added to the vocabulary; the legacy
+  wildcard doesn't get new members. A token minted from a
+  session can carry any scope; a token minting from another
+  token can only carry subsets.
+
+### 6.4 Groups + object_acls
+
+- **Why** — the plan doc's household use case: "my spouse
+  shouldn't see my personal folder". Owner+admin is too coarse;
+  per-user grants scale badly for 3+ users. Groups + polymorphic
+  object grants cover both.
+- **How** — three tables (`groups`, `group_members`, `object_acls`);
+  perm bitmask (view=1, change=2, delete=4). The
+  `ACLAuthorizer` unions grants across the caller's user + all
+  groups; owner and admin bypass the ACL check.
+- **What** — grants live on documents, tags, correspondents,
+  document_types, storage_paths. `/api/groups/*` + `/api/acls/{kind}/{id}`
+  as the write surface; `/admin/groups` as the UI.
+- **When** — empty ACL table falls through to legacy owner+admin
+  behavior. Enterprise E2 layers SAML/SCIM group provisioning on
+  top of the primitive. See [permissions](/permissions).
+
+### 6.5 Sensitivity gating
+
+- **Why** — some docs (confidential, restricted) shouldn't render
+  a preview thumbnail in the doc list. The metadata is public,
+  the bytes aren't.
+- **How** — `documents.sensitivity` column with a closed
+  vocabulary (`""`, public, internal, confidential, restricted).
+  Preview + thumbnail endpoints gate on the value; UI shows a
+  blur veil with a click-to-reveal.
+- **What** — sensitivity picker in the detail sidebar; audit-
+  logged on every change; PATCH-able via `/api/documents/{id}`.
+- **When** — orthogonal to ACLs. A caller with `view` on a
+  restricted doc still sees the veil; revealing is an explicit
+  click. Serves as defense-in-depth against shoulder-surfing +
+  screen-share leaks.
+
+## 7. Surface
+
+### 7.1 Mobile compat via DRF envelope
+
+- **Why** — existing mobile apps (bundle-mobile / swift-bundle)
+  are a shipping-day-one channel. They speak Django REST
+  Framework's shape: `{count, next, previous, results}` +
+  trailing-slash routes. Emitting the shape gets us their user
+  base without asking them to modify their apps.
+- **How** — every list endpoint wraps results in
+  `BuildEnvelope`; every mutation route accepts `foo` AND `foo/`
+  via a middleware that normalizes trailing slashes.
+- **What** — Bundle-shaped surface at `/api/documents/`,
+  `/api/tags/`, etc. suchi-native extensions (search filters, MCP)
+  add without breaking compat.
+- **When** — new endpoints follow the same shape unless there's
+  a strong reason not to. The compat contract is what the
+  golden-transcript recorder captures — never break a shape
+  a shipped mobile release depends on.
+
+### 7.2 OpenAPI at `/api/schema/`
+
+- **Why** — mobile clients + integration authors need a
+  machine-readable surface. Runtime-reflection generation
+  (swaggo, etc.) fights the "no code-gen deps" principle. A
+  hand-authored spec is a few hundred lines and stays honest.
+- **How** — `core/api/schema.json` embedded via `//go:embed`;
+  served unauthenticated at `/api/schema/`; auth still enforced
+  per operation.
+- **What** — OpenAPI 3.1; roughly 135 routes documented.
+- **When** — every new endpoint gets an entry. The
+  `docs/api.mdx` endpoint-index table + this file are the two
+  sources of truth.
+
+### 7.3 MCP v2 adapter
+
+- **Why** — MCP is how agents (Claude Desktop, Cursor, LangChain
+  runtimes) discover and call tools. Baking an MCP server into
+  every DMS is unusual; we're doing it because agent workflows
+  are the direction and starting from zero means we set the
+  ergonomics.
+- **How** — `distro/cmd/suchi/mcp.go`; argv[0] dispatch so
+  `suchi-mcp` symlinks work; stdio by default, HTTP+SSE with
+  `--http`.
+- **What** — five tools: search_documents, get_document,
+  list_inbox, resolve_approval_task, create_share_link. Auth via
+  `SUCHI_URL` + `SUCHI_TOKEN` env or `--url` / `--token` flags.
+- **When** — new tools are additive. Every tool is a wrapper over
+  an existing REST endpoint; the adapter should have zero
+  business logic. See [MCP guide](/guides/mcp-connect).
+
+### 7.4 Server-rendered UI
+
+- **Why** — an SPA needs a build step (Node/bun/npm), a bundle,
+  hydration, service workers, and the whole "PWA maybe" question.
+  Server-rendered HTML + Oat CSS + `~500` lines of vanilla JS
+  covers the whole current UI without any of that.
+- **How** — `html/template` under `core/ui/templates/*.html`;
+  Oat as the CSS baseline; `app.css` for the app-specific
+  polish; `data-*` attributes bridge server-rendered state into
+  vanilla JS handlers.
+- **What** — list, detail, upload, inbox, admin (setup, mail,
+  automations, groups, custom-fields) — all HTML with optional
+  JS wiring per page.
+- **When** — the "real UI-complexity trigger" (workflow diagram
+  editor, virtual-scrolling list) is when we revisit the
+  framework choice. Until then, vanilla + Oat. See the
+  `project_suchi_frontend_options` memory for the decision matrix.
+
+## 8. Ops
+
+### 8.1 Config precedence: file → env, env wins
+
+- **Why** — Docker Compose users override via env; TOML/HUML users
+  keep declarative config in a file. Both should work; the tie-
+  breaker matters when both are set.
+- **How** — `core/config/config.go` loads defaults, then the
+  file (TOML/HUML/YAML/JSON via extension), then overlays env
+  vars. Env-set values ALWAYS beat file-set values.
+- **What** — TOML is the recommended format (typed, no Norway
+  problem); HUML/YAML/JSON accepted. Search order:
+  `--config` flag → `SUCHI_CONFIG` env → `$XDG_CONFIG_HOME/suchi/`
+  → `$HOME/.config/suchi/` → `/etc/suchi/` → `./suchi.<ext>`.
+- **When** — Docker-Compose overrides at the env layer without
+  editing the file layer. Bare-binary systemd deployments favor
+  the file; env for secrets via `_FILE` variants.
+
+### 8.2 Deploy templates over CLI knobs
+
+- **Why** — a "run this command" README works for one deployment
+  shape. A DMS lands on Docker + bare binary + k8s + NAS; each
+  needs different scaffolding. Ship the templates, don't teach
+  the operator to write them.
+- **How** — `deploy/` directory: systemd unit, Caddy/nginx/
+  Traefik/k8s snippets, mail-mbsync compose. Each documents its
+  placeholders inline.
+- **What** — five self-host shapes + the mail sidecar; every
+  template links to `docs/config.mdx` for the env vars.
+- **When** — new deployment shape → new template. Never accrete
+  optional CLI knobs to make one setup work for many; different
+  setups get different templates.
+
+### 8.3 Backup + restore as documented patterns
+
+- **Why** — backup is one of the two "you didn't do that until
+  you needed it" ops procedures (the other is restore). Ship the
+  four safe patterns AND the "don't do this" list; anyone who
+  reads the doc has a working recipe.
+- **How** — [`backup-restore`](/backup-restore) doc; patterns for
+  stop-and-tar, SQLite `.backup` + rsync, filesystem snapshot,
+  restic/borg.
+- **What** — the `-wal`/`-shm` files are ignored by the safe
+  patterns; only the atomic snapshot of the trio is safe. Every
+  pattern is testable via "restore into a scratch DATA_DIR, boot
+  suchi, hit /readyz".
+- **When** — quarterly test-your-backups checklist in the doc.
+  A backup you haven't restored isn't a backup.
+
+### 8.4 Release cadence: Conventional Commits + Keep-a-Changelog
+
+- **Why** — strangers need a cadence they can trust before they
+  integrate. "When I feel like it" doesn't work. Conventional
+  Commits + Keep-a-Changelog + SemVer are the boring, adopted,
+  well-tooled trio.
+- **How** — every commit has a type/scope; every PR updates
+  CHANGELOG.md; releases roll `[Unreleased]` under a version
+  header + a signed tag. The release.yml workflow builds images
+  + binaries, signs with cosign, generates SBOM in both formats,
+  attaches to the GitHub release.
+- **What** — types are `feat`/`fix`/`perf`/`refactor`/`docs`/
+  `test`/`build`/`chore`; scopes are package names. Breaking
+  changes get `!` + `BREAKING CHANGE:` footer + ⚠ Migration
+  callout in the changelog.
+- **When** — every user-visible change is in the changelog.
+  Pre-1.0: any minor bump can carry a break, but every break is
+  called out.
+
+## 9. Development discipline
+
+### 9.1 Docs and code ship together
+
+- **Why** — docs written after the fact are always wrong. The
+  reviewer that catches a missing env var reads the diff, not
+  the follow-up PR.
+- **How** — CONTRIBUTING.md's docs-update checklist maps every
+  user-visible change type to the doc file that must move
+  alongside. `feedback_docs_alongside_code` memory codifies it
+  as a rule for future sessions.
+- **What** — new env var → `docs/config.mdx`; new endpoint →
+  `docs/api.mdx` + `schema.json`; new CLI flag → `docs/cli.mdx`;
+  new user-facing feature → the relevant guide.
+- **When** — never a "docs follow-up" PR. If the code diff is
+  huge and the docs diff would double it, land it as a stack.
+
+### 9.2 Naming: URLs = Go packages = files
+
+- **Why** — every layer of indirection is a place a future
+  contributor has to hold context. When `/api/foo` handles are
+  in `bar.go` in package `baz`, greppability collapses.
+- **How** — the URL `/api/automations/*` maps to
+  `core/api/automations.go` in package `api`, backed by
+  `core/automations/` package. Every layer named the same.
+- **What** — see [permissions#the-easy-to-get-around-precedent](/permissions).
+  Compat aliasing exists (the `/api/workflows/` → `/api/approvals/`
+  rename cleaned up an ambiguity); when it's needed it's an
+  alias-plus-canonical, not a rename-in-place.
+- **When** — every rename triggers a docs sweep. `feedback_easy_to_get_around`
+  memory is the enforcement layer.
+
+### 9.3 Test tiers: unit / smoke / full-image
+
+- **Why** — pyramid stays inverted: cheap fast tests catch most
+  regressions; expensive full-stack tests catch the rest. Missing
+  either layer breaks the confidence-per-second-of-CI curve.
+- **How** — unit tests (`_test.go` beside every package);
+  smoke tests (`make smoke`, `just smoke-*`); full-image E2E in
+  `.github/workflows/smoke.yml`.
+- **What** — every handler has a Go integration test. Every
+  pipeline step has a golden-fixture test. The full-image
+  workflow builds the Docker image, boots it, ingests a real PDF,
+  asserts via HTTP.
+- **When** — headless-browser tests (Playwright/Cypress) are
+  **explicitly not on the roadmap**. Brittle, heavy CI, and
+  Go-level template tests cover the class of regression we
+  actually see.
+
+### 9.4 Plugin ABI: compile-linked, not runtime-loaded
+
+- **Why** — Go's runtime plugin (`plugin.Open`) is a versioning
+  nightmare — every plugin needs the exact runtime + build flags
+  of the host. Blank-import from `distro/cmd/suchi` gives us the
+  extension point without any of that.
+- **How** — `plugin-api/` defines three interfaces (Authenticator,
+  Subscriber, AuditSink); each plugin lives in its own module
+  with its own `go.mod`; `distro/cmd/suchi` blank-imports the
+  ones we ship.
+- **What** — reference plugins today: local-auth, oidc, llm-
+  classifier. Downstream users fork `distro/`, edit their own
+  `plugins/index.go`, `go build`.
+- **When** — a plugin needs behavior beyond the interfaces →
+  either the interface grows (thoughtfully, with a version bump)
+  or the plugin belongs in `core/` instead.
+
+## 10. Non-goals (explicit)
+
+Things we've decided suchi will **not** be. Recorded here so a
+future contributor knows to expect a "won't fix" on these:
+
+- **Cloud-native primary store.** No S3 as first-class; S3 CAS is
+  E4 territory, and only as a wrapper over the fs backend.
+- **Multi-tenant single-process.** Tenancy is instance-per-tenant.
+  No `tenant_id` column. Ever.
+- **Runtime plugin loading (`.so`).** Every plugin is compile-
+  linked.
+- **Rich WYSIWYG document editor.** Documents are archival; edits
+  land as new versions.
+- **Real-time collaborative editing.** Same reason.
+- **A mobile app of our own.** bundle-mobile and swift-bundle
+  work against our surface; that's the story.
+- **Headless-browser tests in CI.** See §9.3.
+- **JSON as the default config format.** TOML is recommended; JSON
+  accepted for pipeline-friendliness only.
+- **Custom OAuth resource-server.** OIDC covers the auth story;
+  put an OAuth gateway in front if you need OAuth semantics.
+- **Full-text tokenization for CJK / heavy multilingual.** SQLite
+  FTS5 is good enough for Latin-alphabet corpora. Heavy
+  multilingual is docspell's ground; see [comparison](/comparison).
+
+---
+
+## Change log
+
+This doc travels with the repo. When a load-bearing decision changes,
+amend the section AND link the commit that flipped it. When a new
+decision is worth recording, add a section. Never delete a section
+silently — a "revoked" note preserves the trail.
+
+- **2026-08-05** — initial version.
+
+## Related
+
+- [Architecture](/architecture) — the run-time data flow that
+  implements these decisions.
+- [Plan doc](https://github.com/johnnybravo-xyz/suchi/blob/main/suchi-plan.md)
+  — the design doc that predates the code; some sections cover
+  work-in-flight not yet reflected here.
+- [Comparison](/comparison) — how the decisions compare against
+  an existing DMS / Papra / docspell.
+- [Permissions](/permissions) — the deepest per-feature dive on
+  the Phase 6 layer.
+- [Release process](/release-process) — how these decisions ship.
