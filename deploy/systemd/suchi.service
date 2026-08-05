@@ -1,0 +1,51 @@
+[Unit]
+Description=suchi document management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=suchi
+Group=suchi
+
+# Where the binary lives. Adjust to your install path.
+ExecStart=/usr/local/bin/suchi
+
+# suchi reads config from env. See docs/config.mdx for the full list.
+# The two below are load-bearing.
+Environment=DATA_DIR=/var/lib/suchi
+Environment=LISTEN_ADDR=127.0.0.1:8000
+
+# Optional: point to a TOML/HUML/YAML config file. Env still wins on
+# collisions — see docs/config.mdx.
+#Environment=SUCHI_CONFIG=/etc/suchi/config.toml
+
+# Restart on any failure. Do NOT set a burst limit low — a bad config
+# should surface via `journalctl` rather than get papered over.
+Restart=on-failure
+RestartSec=5s
+
+# suchi listens on a single port; the only file access it needs is
+# DATA_DIR and /tmp for scratch. Everything below is defense in
+# depth — remove them if they conflict with your storage layout.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/suchi
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+# The subprocess sandbox for qpdf / ocrmypdf / etc. shells out; if
+# you tighten SystemCallFilter, whitelist the family below or the
+# ingest chain will 500 on rasterization.
+#SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
