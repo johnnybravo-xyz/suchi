@@ -1,7 +1,27 @@
 ---
-title: "Developer cookbook"
-description: "Copy-paste recipes for testing suchi locally — bootstrap, upload, dedup, fs-watch, gc. Onboarding kit for a new contributor."
+title: "Guides"
+description: "Copy-paste walkthroughs — bootstrap, upload, dedup, fs-watch, gc, MCP wiring, external-app tokens. Onboarding kit for operators and contributors."
 ---
+
+Task-flavored walkthroughs. Each guide starts from a known state
+(usually a fresh dev server) and lands somewhere useful.
+
+**Connecting things:**
+
+- [Connect an MCP client](/guides/mcp-connect) — Claude Desktop,
+  Cursor, or a remote MCP runtime.
+- [Connect an external app via API token](/guides/external-app) —
+  mint a scoped token from the UI and use it from curl / scripts /
+  third-party integrations.
+
+**Mail:**
+
+- [Mail sidecar spec](/guides/mail-intake) — the JSON envelope
+  external mail-fetch processes emit.
+- [Mail-mbsync recipe](/guides/mail-mbsync) — the Docker-compose IMAP
+  → suchi setup.
+
+**Developer recipes** — bootstrap, upload, dedup, fs-watch, gc — below.
 
 Every recipe assumes you've built the binary once:
 

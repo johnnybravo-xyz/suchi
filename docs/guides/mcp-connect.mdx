@@ -1,0 +1,172 @@
+---
+title: "Connect an MCP client"
+description: "Wire Claude Desktop, Cursor, or a remote MCP runtime to a running suchi instance via `suchi mcp` or `suchi-mcp`."
+---
+
+Suchi ships an MCP (Model Context Protocol) adapter that exposes the
+REST surface as tools an LLM agent can call. Five tools total —
+`search_documents`, `get_document`, `list_inbox`,
+`resolve_approval_task`, `create_share_link`. See [MCP reference](/mcp)
+for the tool schemas.
+
+This guide wires the adapter into three common runtimes. The pattern
+is the same everywhere: a subprocess spoken over stdio (or an HTTP+SSE
+endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
+
+## Prerequisites
+
+- A running suchi instance you can reach at some URL. Local dev
+  (`http://127.0.0.1:8000`) works.
+- A scoped API token. **Do NOT use an admin token.** Mint one via:
+
+  ```bash
+  # If you have a session cookie (browser login), curl through the
+  # cookie jar — or use the endpoint from /api/tokens/:
+  curl -sS -X POST http://127.0.0.1:8000/api/tokens/ \
+    -H "Content-Type: application/json" \
+    --cookie-jar /tmp/suchi.jar --cookie /tmp/suchi.jar \
+    -d '{"name":"mcp-desktop","scopes":"documents:read,documents:write"}'
+  # → {"token":"...", "name":"mcp-desktop", "scopes":"..."}
+  ```
+
+  Or mint by username+password (mobile-compat, one-shot):
+
+  ```bash
+  curl -sS -X POST http://127.0.0.1:8000/api/token/ \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"you@example.com","password":"..."}'
+  ```
+
+  Every MCP action is attributed to the token's owner in the audit log.
+
+- The `suchi` binary somewhere on PATH, or the shipped `suchi-mcp`
+  symlink (the binary responds to argv[0] rewrite so
+  `command: "suchi-mcp"` in a config stays clean).
+
+## Claude Desktop
+
+Config lives at:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+Add a `mcpServers` entry:
+
+```json
+{
+  "mcpServers": {
+    "suchi": {
+      "command": "suchi-mcp",
+      "env": {
+        "SUCHI_URL":   "http://127.0.0.1:8000",
+        "SUCHI_TOKEN": "0123abcd…"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. In a new chat, the "🔌" indicator should
+show `suchi` connected. Ask it "search my documents for
+'insurance'" — it will call `search_documents` under the hood.
+
+If `suchi-mcp` isn't on PATH, use the absolute path:
+
+```json
+"command": "/usr/local/bin/suchi",
+"args": ["mcp"]
+```
+
+## Cursor
+
+Cursor's MCP config lives in Settings → Features → MCP or in
+`~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "suchi": {
+      "command": "suchi-mcp",
+      "env": {
+        "SUCHI_URL":   "http://127.0.0.1:8000",
+        "SUCHI_TOKEN": "0123abcd…"
+      }
+    }
+  }
+}
+```
+
+Same shape as Claude Desktop. Restart Cursor; the tools appear in
+the Composer.
+
+## Remote MCP runtimes (HTTP + SSE)
+
+For runtimes that connect over HTTP instead of stdio — an
+agent-framework running on a different host, a shared team-wide
+tool broker — launch the adapter with `--http`:
+
+```sh
+suchi mcp --http :7000 \
+  --url   http://127.0.0.1:8000 \
+  --token 0123abcd…
+```
+
+Point the runtime at `http://<host>:7000`. Two things to know:
+
+- The `--token` flag is baked into the process's memory for the
+  lifetime of the run — every tool call is attributed to that
+  token's owner. To use different tokens per caller, run one
+  adapter per caller.
+- HTTP+SSE has no separate auth of its own. Restrict access to
+  port 7000 with your usual mechanism (VPN, firewall rule,
+  Tailscale, reverse-proxy with basic auth). Suchi's MCP surface
+  is agent-facing, not internet-facing.
+
+## Verifying the connection
+
+The MCP client will call `list_inbox` or `search_documents` on
+first activation. Watch suchi's logs (`journalctl -u suchi` or
+`docker logs -f suchi`):
+
+```
+INFO api.tasks.list  method=GET  status=200  request_id=…  actor=user:5
+INFO api.search      method=GET  status=200  q="insurance"  actor=user:5
+```
+
+If you see `401 unauthorized` — token is wrong, or wasn't set in
+the env. If you see `403 forbidden` — token was minted with
+insufficient scopes; mint a new one with `documents:read` and
+`documents:write`.
+
+## Revoking access
+
+```bash
+# List your tokens.
+curl -sS http://127.0.0.1:8000/api/tokens/ \
+  -H "Authorization: Token $SUCHI_TOKEN" | jq
+
+# Revoke by id.
+curl -sS -X DELETE http://127.0.0.1:8000/api/tokens/7 \
+  -H "Authorization: Token $SUCHI_TOKEN"
+```
+
+Revocation is immediate. In-flight requests carrying the revoked
+token get 401 on their next call.
+
+## Not covered here
+
+- **OAuth-scoped agent flows** — suchi's tokens are bearer tokens,
+  not OAuth. If you need OAuth resource-server semantics, front
+  suchi with an OAuth gateway.
+- **Multi-tenant MCP brokers** — one adapter, one token. For
+  per-user tokens on a shared runtime, run N adapters or wire the
+  runtime to pass the token per-request (a shape not yet supported
+  on the adapter side).
+
+Related:
+
+- [MCP reference](/mcp) — full tool schemas.
+- [External app via API token](/guides/external-app) — same token
+  flow, non-MCP consumer.
