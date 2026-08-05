@@ -374,10 +374,26 @@ Read tags with optional parent-filter. Query params:
 |-------|---------|
 | `parent_id=<int>` | Only children of this tag |
 | `parent_id=null` | Only roots (tags with no parent) |
+| `page=<n>`, `page_size=<n>` | Standard pagination (default 100, max 500) |
+| `ordering=[-]name\|created_at` | Sort key; `-` prefix for descending |
 | (none) | Every tag |
 
-Each `TagView` carries `parent_id` (nullable) and `child_count` so
-the UI renders the shallow tree without extra round-trips.
+Response is the standard **pagination envelope**:
+
+```json
+{
+  "count": 12,
+  "next": "/api/tags/?page=2&ordering=-name",
+  "previous": "",
+  "results": [ /* TagView objects */ ]
+}
+```
+
+`next`/`previous` are omitted (or empty string) when there's no
+neighbor page. `count` is the total matching the current filter,
+not the length of `results`. Each `TagView` carries `parent_id`
+(nullable) and `child_count` so the UI renders the shallow tree
+without extra round-trips.
 
 ### `PATCH /api/tags/{id}/parent`
 
@@ -390,6 +406,10 @@ architecture doc for the "no inheritance in search" call.
 The deterministic classifier's rulebook. See [config](/config) for
 env-vars that seed rules at import time; rules can also be authored
 via this API.
+
+Query params: `page`, `page_size` (default 100, max 500),
+`ordering=[-]priority|name|created_at`. Response is the standard
+pagination envelope (see `/api/tags/` for the shape).
 
 - Body shape: `{if_kind, if_value, then_kind, then_value, priority, enabled}`
 - `if_kind` ∈ `tag | correspondent | document_type | title_contains | content_contains`

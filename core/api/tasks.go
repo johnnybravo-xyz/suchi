@@ -54,6 +54,10 @@ type WorkflowTask struct {
 // Results is the requested slice, bounded by limit. WorkflowTasks
 // carries pending human approvals so a mobile client polls one endpoint
 // for both machine work and its own inbox.
+//
+// /api/tasks/ deliberately does NOT wear the DRF pagination envelope —
+// it's a live-poll queue endpoint, not a paginated list. Callers ask
+// for the top N via ?limit and re-poll; there's no next-page semantics.
 type TasksResponse struct {
 	Counts        map[string]int `json:"counts"`
 	Results       []Task         `json:"results"`

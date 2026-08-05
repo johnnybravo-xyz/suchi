@@ -28,7 +28,11 @@ type TagView struct {
 //
 //	?parent_id=<int>   list only children of a given tag
 //	?parent_id=null    list only roots (tags with no parent)
+//	?page=<n>, ?page_size=<n>, ?ordering=[-]name|created_at
 //	(no param)         list every tag; UI can build the tree from ParentID
+//
+// Response is the DRF pagination envelope so mobile clients paginate
+// naturally.
 func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 	if auth.FromContext(r.Context()) == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
@@ -50,11 +54,31 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 		where = " WHERE parent_id = ?"
 		args = append(args, id)
 	}
+
+	// Total count first — cheap over the tag table.
+	var total int
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT COUNT(*) FROM tags"+where, args...).Scan(&total); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
+
+	p := ParsePageParams(r, 100, 500) // taxonomy lists are small; big default
+	order := OrderingToSQL(p.Ordering, map[string]string{
+		"name":       "t.name",
+		"created_at": "t.created_at",
+	})
+	if order == "" {
+		order = "t.name ASC"
+	}
+
 	q := `
 		SELECT t.id, t.name, t.slug, t.color, t.parent_id,
 		       (SELECT COUNT(*) FROM tags c WHERE c.parent_id = t.id) AS child_count
 		FROM tags t` + where + `
-		ORDER BY t.name`
+		ORDER BY ` + order + `
+		LIMIT ? OFFSET ?`
+	args = append(args, p.PageSize, p.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
@@ -78,7 +102,7 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []TagView{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
+	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
 }
 
 // SetTagParent — PATCH /api/tags/{id}/parent. Body:
