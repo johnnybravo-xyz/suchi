@@ -5,7 +5,12 @@
 {{define "content"}}
 <header class="page-header">
   <h1>{{ msg "doc.list.title" }}</h1>
-  <p class="subtitle">{{ msgf "doc.list.count" .Total }}</p>
+  <p class="subtitle">
+    {{ msgf "doc.list.count" .Total }}
+    {{ if .TagFilter }}
+      · <a class="chip-filter" href="/">tag: <strong>{{ .TagFilter }}</strong> ✕</a>
+    {{ end }}
+  </p>
 </header>
 
 <section>
@@ -48,9 +53,9 @@
     </table>
 
     <nav class="pager">
-      {{ if gt .Page 1 }}<a href="?page={{ dec .Page }}">← {{ msg "doc.list.pager.prev" }}</a>{{ end }}
+      {{ if gt .Page 1 }}<a href="?page={{ dec .Page }}{{ if .TagFilter }}&tag={{ .TagFilter }}{{ end }}">← {{ msg "doc.list.pager.prev" }}</a>{{ end }}
       <span class="page">{{ msgf "doc.list.pager.page" .Page }}</span>
-      {{ if .HasNext }}<a href="?page={{ inc .Page }}">{{ msg "doc.list.pager.next" }} →</a>{{ end }}
+      {{ if .HasNext }}<a href="?page={{ inc .Page }}{{ if .TagFilter }}&tag={{ .TagFilter }}{{ end }}">{{ msg "doc.list.pager.next" }} →</a>{{ end }}
     </nav>
   {{ end }}
 </section>

@@ -702,3 +702,72 @@ body.auth {
   animation-duration: 180ms;
   animation-timing-function: var(--ease-out);
 }
+
+/* ---------- filter chip (list facets) ---------- */
+
+.chip-filter {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  text-decoration: none; font-size: 12px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.chip-filter:hover { background: color-mix(in oklab, var(--accent) 20%, transparent); }
+
+/* ---------- sensitivity veil (high-sens preview gate) ---------- */
+
+.sens-veil { position: relative; border-radius: 10px; overflow: hidden; }
+.sens-veil-blur {
+  filter: blur(14px) saturate(0.7);
+  transition: filter var(--dur-med) var(--ease-out);
+  pointer-events: none;
+}
+.sens-veil-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.35);
+  color: white;
+  text-align: center; padding: 24px;
+  transition: opacity var(--dur-med) var(--ease-out);
+}
+.sens-veil-overlay button {
+  background: var(--accent); color: white;
+  border: none; border-radius: 6px; padding: 8px 16px;
+  cursor: pointer; font-weight: 500;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.sens-veil-overlay button:hover { transform: translateY(-1px); }
+.sens-veil.revealed .sens-veil-blur { filter: none; pointer-events: auto; }
+.sens-veil.revealed .sens-veil-overlay { opacity: 0; pointer-events: none; }
+
+/* ---------- sensitivity picker + share card ---------- */
+
+.sens-picker {
+  padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--foreground); font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.sens-picker:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.share-card {
+  margin-top: 24px; padding: 20px;
+  border-radius: 12px; background: var(--card, transparent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+.share-card h2 { margin: 0 0 6px; font-size: 15px; }
+.share-card > .muted { margin: 0 0 14px; font-size: 13px; }
+.share-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.share-card input, .share-card select {
+  padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--foreground); font-size: 13px;
+}
+#share-status { display: block; margin-top: 12px; font-size: 13px; }
+#share-status a { color: var(--accent); word-break: break-all; }
