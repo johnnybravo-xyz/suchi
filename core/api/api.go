@@ -120,6 +120,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/custom_fields/{id}", s.UpdateCustomFieldDef)
 	mux.HandleFunc("DELETE /api/custom_fields/{id}", s.DeleteCustomFieldDef)
 
+	// Search + autocomplete over FTS5.
+	mux.HandleFunc("GET /api/search/", s.Search)
+	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
+
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
