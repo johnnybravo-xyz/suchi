@@ -1,0 +1,105 @@
+{{define "customfields"}}{{ template "base" . }}{{end}}
+
+{{define "title"}}Custom fields{{end}}
+
+{{define "content"}}
+<header class="page-header">
+  <h1>Custom fields</h1>
+  <p class="subtitle">
+    Operator-defined typed attributes per document. Values are set on
+    each doc from the detail page's Custom fields section.
+  </p>
+</header>
+
+<section class="cf-list">
+  <div class="cf-toolbar">
+    <button type="button" class="btn primary" data-new-field>+ New field</button>
+  </div>
+
+  {{ if not .Fields }}
+    <div class="empty">
+      <p>No custom fields defined. Add one to attach typed data (invoice
+      totals, contract dates, vendor references) to every document that
+      needs it.</p>
+    </div>
+  {{ else }}
+    <table class="rows">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th style="width:150px">Type</th>
+          <th>Choices</th>
+          <th style="width:80px">Docs</th>
+          <th style="width:200px"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {{ range .Fields }}
+        <tr data-field-id="{{ .ID }}"
+            data-name="{{ .Name }}"
+            data-data-type="{{ .DataType }}"
+            data-extra='{{ .ExtraJSON }}'>
+          <td><strong>{{ .Name }}</strong></td>
+          <td><code>{{ .DataType }}</code></td>
+          <td>
+            {{- if .Choices -}}
+              {{ range $i, $c := .Choices }}{{ if $i }}, {{ end }}{{ $c }}{{ end }}
+            {{- else -}}
+              <span class="muted">—</span>
+            {{- end -}}
+          </td>
+          <td>{{ .UsageCount }}</td>
+          <td>
+            <button type="button" class="btn ghost" data-edit>Edit</button>
+            <button type="button" class="btn ghost danger" data-delete>Delete</button>
+          </td>
+        </tr>
+      {{ end }}
+      </tbody>
+    </table>
+  {{ end }}
+</section>
+
+<dialog id="cf-editor">
+  <form method="dialog" class="cf-form">
+    <header>
+      <h2 id="cf-editor-title">New custom field</h2>
+      <button type="button" class="close" data-close>&times;</button>
+    </header>
+    <label>
+      Name
+      <input type="text" name="name" required autocomplete="off">
+    </label>
+    <label>
+      Type
+      <select name="data_type" required>
+        <option value="text">text</option>
+        <option value="number">number</option>
+        <option value="monetary">monetary</option>
+        <option value="date">date</option>
+        <option value="bool">bool</option>
+        <option value="url">url</option>
+        <option value="select">select (single choice)</option>
+        <option value="multi">multi (checkboxes)</option>
+        <option value="documentlink">documentlink</option>
+      </select>
+    </label>
+    <label data-choices-row>
+      Choices (one per line — for <code>select</code> / <code>multi</code>)
+      <textarea name="choices" rows="4" spellcheck="false"
+                placeholder="Choice A&#10;Choice B&#10;Choice C"></textarea>
+    </label>
+    <p class="hint">
+      Types are immutable after creation — a field's <code>data_type</code>
+      determines how values are stored. If you need a different type,
+      create a new field and migrate.
+    </p>
+    <footer>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary" data-save>Save</button>
+    </footer>
+  </form>
+</dialog>
+
+<script src="/assets/customfields-admin.js" defer></script>
+{{end}}

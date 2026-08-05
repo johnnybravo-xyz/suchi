@@ -88,7 +88,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap", "automations", "groups"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap", "automations", "groups", "customfields"}
 	standalone := map[string]bool{"login": true, "bootstrap": true}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
@@ -132,6 +132,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /admin/setup", s.RequireUI(http.HandlerFunc(s.SetupPage)))
 	mux.Handle("GET /admin/automations", s.RequireUI(http.HandlerFunc(s.AutomationsPage)))
 	mux.Handle("GET /admin/groups", s.RequireUI(http.HandlerFunc(s.GroupsPage)))
+	mux.Handle("GET /admin/custom-fields", s.RequireUI(http.HandlerFunc(s.CustomFieldsPage)))
 	mux.Handle("GET /inbox", s.RequireUI(http.HandlerFunc(s.Inbox)))
 }
 
@@ -281,9 +282,19 @@ type detailNote struct {
 // Value is already formatted for display; DataType lets the template
 // pick a monetary/date badge if we grow one later.
 type detailField struct {
+	ID       int64
 	Name     string
 	DataType string
 	Value    string
+	// Raw is the type-native value for the editor to prefill widgets:
+	// string for text/select/url/documentlink, string-of-number for
+	// number/monetary, YYYY-MM-DD for date, "true"/"false" for bool,
+	// JSON-encoded array for multi. Empty when the doc has no value
+	// for this field yet.
+	Raw string
+	// Choices is populated for select + multi from extra_data.choices.
+	// Empty for other types.
+	Choices []string
 }
 
 type detailDoc struct {
@@ -442,17 +453,17 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 	noteRows.Close()
 
-	// Custom-field values for this doc. Empty rows (all NULLs) skipped
-	// so a monetary field written by ZUGFeRD with total=0 doesn't clutter
-	// the panel. Ordered by field name so operators can rely on a
-	// consistent layout across docs.
+	// Custom fields: LEFT JOIN so every field definition is returned
+	// even when the doc has no value yet — the detail-page editor
+	// renders one row per definition. Values pre-fill; empty rows
+	// show empty widgets.
 	fieldRows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT cf.name, cf.data_type,
+		SELECT cf.id, cf.name, cf.data_type, COALESCE(cf.extra_data, '{}'),
 		       v.value_text, v.value_number, v.value_int,
 		       v.value_bool, v.value_date
-		FROM document_custom_field_values v
-		JOIN custom_fields cf ON cf.id = v.field_id
-		WHERE v.document_id = ?
+		FROM custom_fields cf
+		LEFT JOIN document_custom_field_values v
+		       ON v.field_id = cf.id AND v.document_id = ?
 		ORDER BY cf.name
 	`, id)
 	if err != nil {
@@ -463,13 +474,14 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	for fieldRows.Next() {
 		var (
 			f     detailField
+			extra sql.NullString
 			vText sql.NullString
 			vNum  sql.NullFloat64
 			vInt  sql.NullInt64
 			vBool sql.NullInt64
 			vDate sql.NullInt64
 		)
-		if err := fieldRows.Scan(&f.Name, &f.DataType,
+		if err := fieldRows.Scan(&f.ID, &f.Name, &f.DataType, &extra,
 			&vText, &vNum, &vInt, &vBool, &vDate); err != nil {
 			fieldRows.Close()
 			s.serverError(w, r, err)
@@ -478,8 +490,9 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		f.Value = customfield.Lookup(f.DataType).Render(customfield.ValueRow{
 			Text: vText, Number: vNum, Int: vInt, Bool: vBool, Date: vDate,
 		})
-		if f.Value == "" {
-			continue
+		f.Raw = rawFieldValue(f.DataType, vText, vNum, vInt, vBool, vDate)
+		if extra.Valid {
+			f.Choices = extractChoices(extra.String)
 		}
 		fields = append(fields, f)
 	}
