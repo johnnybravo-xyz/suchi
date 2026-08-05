@@ -455,15 +455,23 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
-	ID             int64              `json:"id"`
-	Title          string             `json:"title"`
-	Content        string             `json:"content"`
-	OriginalBlob   string             `json:"original_blob"`
-	OriginalSize   int64              `json:"original_size"`
-	ArchiveBlob    string             `json:"archive_blob,omitempty"`
-	ArchiveSize    int64              `json:"archive_size,omitempty"`
-	MIME           string             `json:"mime_type"`
-	JDCategoryID   int64              `json:"jd_category_id"`
+	ID           int64  `json:"id"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	OriginalBlob string `json:"original_blob"`
+	OriginalSize int64  `json:"original_size"`
+	ArchiveBlob  string `json:"archive_blob,omitempty"`
+	ArchiveSize  int64  `json:"archive_size,omitempty"`
+	MIME         string `json:"mime_type"`
+	JDCategoryID int64  `json:"jd_category_id"`
+	// Denormalized JD fields — saves every JSON consumer a round-
+	// trip to render a filing chip. The UI already does this join
+	// inline; the JSON surface catches up here. jd_area_code is
+	// deliberately omitted: category.code already encodes it (22 →
+	// area 20-29) and duplicating invites divergence.
+	JDCategoryCode int64              `json:"jd_category_code,omitempty"`
+	JDCategoryName string             `json:"jd_category_name,omitempty"`
+	JDAreaName     string             `json:"jd_area_name,omitempty"`
 	Sensitivity    string             `json:"sensitivity,omitempty"`
 	CreatedAt      int64              `json:"created_at"`
 	UpdatedAt      int64              `json:"updated_at"`
@@ -539,16 +547,25 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		content     sql.NullString
 		trashed     sql.NullInt64
 		sensitivity sql.NullString
+		jdCode      sql.NullInt64
+		jdName      sql.NullString
+		jdAreaName  sql.NullString
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT id, title, COALESCE(content, ''), original_blob, original_size,
-		       archive_blob, archive_size, mime_type,
-		       jd_category_id, sensitivity, created_at, updated_at, trashed_at
-		FROM documents
-		WHERE id = ?
+		SELECT d.id, d.title, COALESCE(d.content, ''),
+		       d.original_blob, d.original_size,
+		       d.archive_blob, d.archive_size, d.mime_type,
+		       d.jd_category_id, d.sensitivity,
+		       d.created_at, d.updated_at, d.trashed_at,
+		       jc.code, jc.name, ja.name
+		FROM documents d
+		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
+		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
+		WHERE d.id = ?
 	`, id).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
-		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.UpdatedAt, &trashed)
+		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.UpdatedAt, &trashed,
+		&jdCode, &jdName, &jdAreaName)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -568,6 +585,15 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if mimeNull.Valid {
 		d.MIME = mimeNull.String
+	}
+	if jdCode.Valid {
+		d.JDCategoryCode = jdCode.Int64
+	}
+	if jdName.Valid {
+		d.JDCategoryName = jdName.String
+	}
+	if jdAreaName.Valid {
+		d.JDAreaName = jdAreaName.String
 	}
 	if sensitivity.Valid {
 		d.Sensitivity = sensitivity.String
