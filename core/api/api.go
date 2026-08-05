@@ -124,6 +124,19 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/search/", s.Search)
 	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
 
+	// Saved views (per-user filter+display presets).
+	mux.HandleFunc("GET /api/saved_views/", s.ListSavedViews)
+	mux.HandleFunc("POST /api/saved_views/", s.CreateSavedView)
+	mux.HandleFunc("PATCH /api/saved_views/{id}", s.UpdateSavedView)
+	mux.HandleFunc("DELETE /api/saved_views/{id}", s.DeleteSavedView)
+
+	// UI settings (opaque per-user JSON blob).
+	mux.HandleFunc("GET /api/ui_settings/", s.GetUISettings)
+	mux.HandleFunc("PUT /api/ui_settings/", s.PutUISettings)
+
+	// Trash listing (soft-deleted docs — owner-scoped for members).
+	mux.HandleFunc("GET /api/trash/", s.ListTrash)
+
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
