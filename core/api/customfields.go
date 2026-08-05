@@ -23,6 +23,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/authz"
 	"github.com/suchi-dms/suchi/core/customfield"
 	"github.com/suchi-dms/suchi/core/render/view"
 )
@@ -43,6 +44,9 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if !s.authorize(w, r, p, authz.KindDocument, docID, authz.PermChange) {
 		return
 	}
 	fieldRef := r.PathValue("field")
@@ -77,15 +81,13 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Owner scope: refuse the write if the doc isn't the caller's.
+		// Confirm doc still exists (authz passed above; a race trashed
+		// doc gets us "not found" cleanly).
 		var owner int64
 		if err := tx.QueryRowContext(r.Context(),
 			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
 			docID).Scan(&owner); err != nil {
 			return err
-		}
-		if p.Role != "admin" && owner != p.UserID {
-			return errForbidden
 		}
 		if err := handler.Write(r.Context(), tx, docID, fieldID, typed); err != nil {
 			return err
@@ -123,6 +125,9 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	if !s.authorize(w, r, p, authz.KindDocument, docID, authz.PermChange) {
+		return
+	}
 	fieldRef := r.PathValue("field")
 	fieldID, _, _, err := s.resolveField(r, fieldRef)
 	if err != nil {
@@ -134,14 +139,12 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		// Existence check for the clean 404 on trashed docs.
 		var owner int64
 		if err := tx.QueryRowContext(r.Context(),
 			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
 			docID).Scan(&owner); err != nil {
 			return err
-		}
-		if p.Role != "admin" && owner != p.UserID {
-			return errForbidden
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`DELETE FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`,

@@ -25,7 +25,24 @@ import (
 	"time"
 
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/authz"
 )
+
+// kindForTable maps a taxonomy table name to the authz.Kind used by
+// the Authorizer. Central so every taxonomy handler ACL check reads
+// the same. Tags live in a separate handler (SetTagParent) and use
+// authz.KindTag directly.
+func kindForTable(table string) authz.Kind {
+	switch table {
+	case "correspondents":
+		return authz.KindCorrespondent
+	case "document_types":
+		return authz.KindDocumentType
+	case "storage_paths":
+		return authz.KindStoragePath
+	}
+	return ""
+}
 
 // TaxonomyRow is the JSON projection every matcher-style resource
 // returns. storage_paths includes the extra Path field; the others
@@ -255,7 +272,9 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 }
 
 func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table string, withPath bool) {
-	if !s.requireAdmin(w, r) {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	if !isSafeTable(table) {
@@ -265,6 +284,11 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	// Admin bypasses; owner (for tables that carry owner_id) or a
+	// grantee with change bits can also update. See permissions.mdx.
+	if !s.authorize(w, r, principal, kindForTable(table), id, authz.PermChange) {
 		return
 	}
 	var in TaxonomyUpsert
@@ -345,7 +369,9 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 }
 
 func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table string) {
-	if !s.requireAdmin(w, r) {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	if !isSafeTable(table) {
@@ -355,6 +381,10 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	// Same gate as taxonomyUpdate, but with delete bits.
+	if !s.authorize(w, r, principal, kindForTable(table), id, authz.PermDelete) {
 		return
 	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {

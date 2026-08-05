@@ -10,6 +10,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/authz"
 	"github.com/suchi-dms/suchi/core/jd"
 	"github.com/suchi-dms/suchi/core/jobs"
 	"github.com/suchi-dms/suchi/core/logx"
@@ -55,8 +56,13 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
-	// Load predecessor to (a) confirm it exists, (b) check owner,
-	// (c) copy the metadata that should carry forward by default.
+	// ACL gate. Uploading a version is a change on the predecessor
+	// document — grantees with change bits can add revisions.
+	if !s.authorize(w, r, p, authz.KindDocument, prevID, authz.PermChange) {
+		return
+	}
+	// Load the predecessor's carry-forward metadata (title inherits;
+	// jd_category_id inherits; owner stays the predecessor's).
 	var (
 		prevOwner   int64
 		prevTitle   string
@@ -72,10 +78,6 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
-		return
-	}
-	if p.Role != "admin" && prevOwner != p.UserID {
-		s.writeError(w, http.StatusForbidden, "forbidden", "not this document's owner")
 		return
 	}
 
@@ -176,13 +178,19 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 // The doc id doesn't have to be the head or the root; any node in
 // the chain returns the full chain.
 func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	// Anyone who can view any node in the chain can see the whole
+	// chain (versions are metadata about the same logical doc).
+	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
 		return
 	}
 	// Walk back to the root: while previous_version_id is not null,

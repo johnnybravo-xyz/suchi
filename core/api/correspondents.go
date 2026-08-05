@@ -10,6 +10,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/authz"
 	"github.com/suchi-dms/suchi/core/render/view"
 )
 
@@ -45,6 +46,9 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	if !s.authorize(w, r, p, authz.KindDocument, docID, authz.PermChange) {
+		return
+	}
 	var req struct {
 		Name string `json:"name"`
 		Role string `json:"role"`
@@ -65,7 +69,9 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 
 	var corID int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Confirm doc exists + owner scoping.
+		// Confirm doc still exists (authorize passed already but we
+		// need to fail cleanly if a race trashed the doc between then
+		// and here).
 		var owner int64
 		row := tx.QueryRowContext(r.Context(),
 			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
@@ -75,9 +81,6 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 				return errNotFound
 			}
 			return err
-		}
-		if p.Role != "admin" && owner != p.UserID {
-			return errForbidden
 		}
 
 		now := time.Now().Unix()
@@ -139,13 +142,17 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 
 // ListDocCorrespondents — GET /api/documents/{id}/correspondents/.
 func (s *Server) ListDocCorrespondents(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if !s.authorize(w, r, principal, authz.KindDocument, docID, authz.PermView) {
 		return
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
@@ -193,6 +200,9 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 	docID, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if !s.authorize(w, r, p, authz.KindDocument, docID, authz.PermChange) {
 		return
 	}
 	cid, err := strconv.ParseInt(r.PathValue("cid"), 10, 64)

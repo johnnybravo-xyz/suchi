@@ -10,6 +10,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/authz"
 )
 
 // TagView is the JSON projection of a tags row. ParentID + ChildCount
@@ -106,17 +107,21 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetTagParent — PATCH /api/tags/{id}/parent. Body:
-// {"parent_id": <int-or-null>}. Admin-only. Cycles are rejected
-// (would create an infinite tree).
+// {"parent_id": <int-or-null>}. Admin bypasses; a grantee with change
+// bits on the tag can also reparent. Cycles are rejected (would
+// create an infinite tree).
 func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if p == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if !s.authorize(w, r, p, authz.KindTag, id, authz.PermChange) {
 		return
 	}
 	var req struct {
