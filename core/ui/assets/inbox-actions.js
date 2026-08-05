@@ -1,5 +1,5 @@
 // Inbox resolve buttons. One click → POST to
-// /api/workflows/tasks/{id}/resolve with {choice}. On success the item
+// /api/approvals/tasks/{id}/resolve with {choice}. On success the item
 // fades and is removed; the topbar inbox pill refreshes so the count
 // tracks the visible list.
 
@@ -15,7 +15,7 @@
       const buttons = card.querySelectorAll('button.inbox-choice');
       buttons.forEach(b => b.disabled = true);
       try {
-        const r = await fetch(`/api/workflows/tasks/${id}/resolve`, {
+        const r = await fetch(`/api/approvals/tasks/${id}/resolve`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

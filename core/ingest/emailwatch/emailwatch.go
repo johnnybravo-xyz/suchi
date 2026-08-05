@@ -411,10 +411,14 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		if err != nil {
 			return err
 		}
+		// Consumption-trigger context. mail_rule_id stays 0 until a
+		// mail-rules feature lands (Phase 6); filename mirrors the
+		// subject so filter_filename automations can pattern-match.
 		payload, _ := json.Marshal(map[string]any{
 			"sha256":    ref.SHA256,
 			"size":      ref.Size,
 			"mime_type": "message/rfc822",
+			"filename":  title,
 		})
 		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
 	}); err != nil {

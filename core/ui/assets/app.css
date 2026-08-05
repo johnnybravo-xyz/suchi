@@ -771,3 +771,64 @@ body.auth {
 }
 #share-status { display: block; margin-top: 12px; font-size: 13px; }
 #share-status a { color: var(--accent); word-break: break-all; }
+
+/* ---------- admin automations page ---------- */
+
+.auto-toolbar { margin: 16px 0; display: flex; justify-content: flex-end; }
+.auto-list code { font-size: 12px; }
+.auto-list .muted { color: var(--muted); }
+
+.switch {
+  display: inline-block; position: relative;
+  width: 36px; height: 20px; vertical-align: middle;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span {
+  position: absolute; inset: 0;
+  background: var(--border); border-radius: 999px;
+  transition: background var(--dur-fast) var(--ease-out);
+  cursor: pointer;
+}
+.switch span::before {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 999px;
+  background: white; transition: transform var(--dur-fast) var(--ease-out);
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::before { transform: translateX(16px); }
+
+#auto-editor {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--background); color: var(--foreground);
+  padding: 20px; max-width: 640px; width: 90%;
+}
+#auto-editor::backdrop { background: rgba(0, 0, 0, 0.45); }
+.auto-form header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.auto-form h2 { margin: 0; font-size: 18px; }
+.auto-form .close {
+  background: transparent; border: 0; font-size: 24px;
+  color: var(--muted); cursor: pointer;
+}
+.auto-form label {
+  display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted);
+}
+.auto-form input[type="text"],
+.auto-form input[type="number"],
+.auto-form textarea {
+  width: 100%; margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--background); color: var(--foreground);
+  font: inherit;
+}
+.auto-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.4;
+}
+.auto-form .hint { margin: 8px 0 16px; font-size: 12px; color: var(--muted); }
+.auto-form footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.btn.danger { color: #dc2626; }

@@ -404,11 +404,15 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			}
 		}
 
-		// Post-ingest job, same tx.
+		// Post-ingest job, same tx. Includes consumption-trigger
+		// context so filter_path / filter_filename automations can
+		// route fs-watched docs by directory glob or basename.
 		payload, _ := json.Marshal(map[string]any{
-			"sha256":    ref.SHA256,
-			"size":      ref.Size,
-			"mime_type": mime,
+			"sha256":      ref.SHA256,
+			"size":        ref.Size,
+			"mime_type":   mime,
+			"source_path": path,
+			"filename":    filepath.Base(path),
 		})
 		return jobs.Enqueue(ctx, tx, postingest.Kind, id, string(payload))
 	})

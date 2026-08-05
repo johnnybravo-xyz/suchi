@@ -202,11 +202,14 @@
     "/s/{token}":              { "get": { "summary": "Public share metadata (anonymous).", "security": [] } },
     "/s/{token}/{doc_id}/download": { "get": { "summary": "Public download (anonymous).", "security": [] } },
 
-    "/api/workflows":                            { "post": { "summary": "Register a workflow definition (admin)." } },
-    "/api/workflows/{slug}":                     { "get":  { "summary": "Get active spec by slug." } },
-    "/api/workflows/{slug}/start":               { "post": { "summary": "Start a run." } },
-    "/api/workflows/runs/{id}":                  { "get":  { "summary": "Get a run's state." } },
-    "/api/workflows/tasks/{task_id}/resolve":    { "post": { "summary": "Resolve a human task." } },
-    "/api/workflows/runs/{id}/cancel":           { "post": { "summary": "Cancel a run (admin)." } }
+    "/api/approvals":                            { "post": { "summary": "Register an approval definition (admin)." } },
+    "/api/approvals/{slug}":                     { "get":  { "summary": "Get active spec by slug." } },
+    "/api/approvals/{slug}/start":               { "post": { "summary": "Start a run." } },
+    "/api/approvals/runs/{id}":                  { "get":  { "summary": "Get a run's state." } },
+    "/api/approvals/tasks/{task_id}/resolve":    { "post": { "summary": "Resolve a human task." } },
+    "/api/approvals/runs/{id}/cancel":           { "post": { "summary": "Cancel a run (admin)." } },
+
+    "/api/automations/":                         { "get":  { "summary": "List automations." }, "post": { "summary": "Create an automation (admin)." } },
+    "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace (admin)." }, "delete": { "summary": "Delete (admin)." } }
   }
 }

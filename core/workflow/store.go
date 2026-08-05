@@ -333,7 +333,7 @@ func loadTask(ctx context.Context, d rowQuerier, id int64) (Task, error) {
 }
 
 // listOpenTasksForRun returns non-terminal tasks for a run — used by
-// GetRun for the /api/workflows/runs/{id} response.
+// GetRun for the /api/approvals/runs/{id} response.
 func listOpenTasksForRun(ctx context.Context, d rowQuerier, runID int64) ([]Task, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT id, run_id, state_key, assignee, prompt, choices_json,

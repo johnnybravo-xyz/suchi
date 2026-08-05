@@ -58,6 +58,7 @@
           <a href="/admin/mail-setup">{{ msg "nav.mail_setup" }}</a>
         {{ end }}
         {{ if and .Principal (eq .Principal.Role "admin") }}
+          <a href="/admin/automations">Automations</a>
           <a href="/admin/setup" class="nav-with-badge">
             {{ msg "nav.setup" }}
             {{ if .SetupPendingCount }}

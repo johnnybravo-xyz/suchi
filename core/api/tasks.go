@@ -217,7 +217,7 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix
 // assignee is the current user, plus the total open count for
 // "workflow_open" in Counts. The joined workflow_defs id is exposed as
 // WorkflowID so a client can render "Invoice approval" without a second
-// round-trip to /api/workflows/{slug}.
+// round-trip to /api/approvals/{slug}.
 //
 // Assignee filter is exact: "user:<id>". Role-based assignees are
 // resolved to user rows at workflow-advance time (see
