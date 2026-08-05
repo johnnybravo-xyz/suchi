@@ -57,10 +57,10 @@ func TestParseMinimal(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"no-version-no-bundle-keys": `{"unrelated": "x"}`,
-		"empty-object":                 `{}`,
-		"wrong-version":                `{"suchi_sidecar": 99}`,
-		"malformed-json":               `{`,
+		"no-version-no-flat-keys": `{"unrelated": "x"}`,
+		"empty-object":            `{}`,
+		"wrong-version":           `{"suchi_sidecar": 99}`,
+		"malformed-json":          `{`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -71,11 +71,11 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
-// Bundle-native producers (an-existing-dms post-consume scripts,
-// johnnybravo-xyz/mail-intake, etc.) emit flat JSON without a version
-// key. suchi accepts those as v1 so operators can drop suchi into an
-// existing Bundle-shaped ingest chain unmodified.
-func TestParseBundleCompat(t *testing.T) {
+// Flat-shape producers (post-consume scripts, mail-intake tools,
+// third-party scanners) emit flat JSON without a version key. suchi
+// accepts those as v1 so operators can drop suchi into an existing
+// ingest chain unmodified.
+func TestParseFlatCompat(t *testing.T) {
 	body := []byte(`{
 		"title": "Electricity bill March 2026",
 		"created": "2026-03-02T00:00:00Z",
@@ -106,7 +106,7 @@ func TestParseBundleCompat(t *testing.T) {
 
 // Bare-name correspondent (no angle-bracket address) passes through
 // unchanged.
-func TestParseBundleCompat_BareName(t *testing.T) {
+func TestParseFlatCompat_BareName(t *testing.T) {
 	body := []byte(`{"correspondent":"BESCOM","tags":["x"]}`)
 	s, err := sidecar.Parse(body)
 	if err != nil {

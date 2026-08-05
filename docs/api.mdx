@@ -16,9 +16,8 @@ Two credential shapes, both routed through the same auth chain:
 
 - **Cookie** — set by `POST /login` (form-encoded) or the OIDC
   callback. HttpOnly + SameSite=Lax + Secure when TLS is in use.
-- **Token** — `Authorization: Token <hex>` header. Canonical scheme
-  because it matches an existing DMS wire format so the mobile apps
-  work unchanged.
+- **Token** — `Authorization: Token <hex>` header. suchi's canonical
+  scheme for third-party mobile clients.
 - **Bearer** — `Authorization: Bearer <hex>` also accepted for the
   same API token, because many HTTP clients default to Bearer.
   Ambiguity vs OIDC bearer tokens is resolved by shape: suchi tokens
@@ -189,9 +188,9 @@ task's `assignee` resolves to the current user. Terminal statuses
 `POST /api/workflows/tasks/{task_id}/resolve`. `workflow_open` in
 `counts` is the true open-inbox size, unaffected by `limit`.
 
-Bundle-compatible mobile clients that ignore unknown JSON fields see
-the classic `counts` + `results` shape unchanged. suchi-native clients
-read both arrays.
+Older mobile clients that ignore unknown JSON fields see the classic
+`counts` + `results` shape unchanged. suchi-native clients read both
+arrays.
 
 ### Agent surface: `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`
 
@@ -407,9 +406,9 @@ is a signed cookie; the callback plants a session cookie via
 
 ## Mobile-client compat (Phase 4)
 
-The endpoints below are planned for Phase 4. Wire-compatible with
-existing document-management mobile apps (`swift-bundle` on iOS,
-`Bundle Mobile` on Android) so no bespoke app is needed.
+The endpoints below are planned for Phase 4. suchi ships a stable
+mobile wire surface so existing third-party DMS mobile clients can
+drive it without a bespoke app.
 
 - `POST /api/token/`
 - `GET/POST /api/documents/`, `GET /api/documents/{id}/`

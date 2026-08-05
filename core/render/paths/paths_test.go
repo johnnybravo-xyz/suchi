@@ -30,10 +30,10 @@ func TestRenderJDDefault(t *testing.T) {
 	}
 }
 
-// TestRenderBundleClassic exercises the Bundle-flat default
-// template shape. Byte-equal regression against the shape imported
-// archives use — a migrating operator's folder layout must survive.
-func TestRenderBundleClassic(t *testing.T) {
+// TestRenderFlatClassic exercises the flat-mode default template
+// shape. Byte-equal regression against the shape imported archives
+// use — a migrating operator's folder layout must survive.
+func TestRenderFlatClassic(t *testing.T) {
 	tpl := `{{ correspondent }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
 	ctx := paths.Context{
 		Title:         "Electricity bill Mar 2026",
@@ -52,9 +52,9 @@ func TestRenderBundleClassic(t *testing.T) {
 }
 
 // TestRenderEmptyValuesSilent: missing correspondent should not
-// insert "None" or blow up — the empty-string silent-empty convention
-// matches an-existing-dms. Otherwise an "unfiled/{doc_pk}.pdf" render
-// against a doc with no correspondent breaks unexpectedly.
+// insert "None" or blow up — suchi's empty-string silent-empty
+// convention. Otherwise an "unfiled/{doc_pk}.pdf" render against
+// a doc with no correspondent breaks unexpectedly.
 func TestRenderEmptyValuesSilent(t *testing.T) {
 	tpl := `unfiled/{{ correspondent }}/{{ doc_pk }}.pdf`
 	got, err := paths.Render(tpl, paths.Context{DocPK: 42})

@@ -82,7 +82,7 @@ type Report struct {
 	StoragePaths     int
 	CustomFields     int
 	Documents        int
-	DocumentsSkipped int // bundle_id_legacy already imported
+	DocumentsSkipped int // legacy_id already imported
 	Notes            int
 	Blobs            int // count of Put calls (both original + archive)
 	MappedByRule     int // documents whose JD category came from --map-jd (vs inbox fallback)
@@ -90,7 +90,7 @@ type Report struct {
 }
 
 // Run imports the bundle at opts.BundleRoot. Idempotent: reruns replay
-// reference tables (upsert) and skip documents whose bundle_id_legacy
+// reference tables (upsert) and skip documents whose legacy_id
 // is already present.
 func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Options) (*Report, error) {
 	if err := opts.Validate(); err != nil {
@@ -284,17 +284,17 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			}
 		}
 		res, err := importDoc(ctx, d, cas, log, opts, docInput{
-			BundleID: o.PK,
-			Fields:      f,
-			OwnerID:     ownerID,
-			InboxCat:    catID,
-			TagMap:      tagMap,
-			CorMap:      corMap,
-			DTMap:       dtMap,
-			SPMap:       spMap,
-			CFMap:       cfMap,
-			Instances:   instancesByDoc[o.PK],
-			Notes:       notesByDoc[o.PK],
+			LegacyID:  o.PK,
+			Fields:    f,
+			OwnerID:   ownerID,
+			InboxCat:  catID,
+			TagMap:    tagMap,
+			CorMap:    corMap,
+			DTMap:     dtMap,
+			SPMap:     spMap,
+			CFMap:     cfMap,
+			Instances: instancesByDoc[o.PK],
+			Notes:     notesByDoc[o.PK],
 		})
 		if err != nil {
 			return nil, err
@@ -333,17 +333,17 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 
 // docInput bundles what importDoc needs. Grouping keeps the signature honest.
 type docInput struct {
-	BundleID int64
-	Fields      DocumentFields
-	OwnerID     int64
-	InboxCat    int64
-	TagMap      map[int64]int64
-	CorMap      map[int64]int64
-	DTMap       map[int64]int64
-	SPMap       map[int64]int64
-	CFMap       map[int64]int64
-	Instances   []CustomFieldInstance
-	Notes       []NoteFields
+	LegacyID  int64
+	Fields    DocumentFields
+	OwnerID   int64
+	InboxCat  int64
+	TagMap    map[int64]int64
+	CorMap    map[int64]int64
+	DTMap     map[int64]int64
+	SPMap     map[int64]int64
+	CFMap     map[int64]int64
+	Instances []CustomFieldInstance
+	Notes     []NoteFields
 }
 
 type docStatus int
@@ -361,14 +361,14 @@ type docResult struct {
 }
 
 func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Options, in docInput) (docResult, error) {
-	log = log.With("bundle_pk", in.BundleID)
+	log = log.With("legacy_pk", in.LegacyID)
 
 	// Idempotency: if this Bundle doc has already been imported, skip.
 	if !opts.DryRun {
 		var have int
 		err := d.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM documents WHERE bundle_id_legacy = ?`,
-			in.BundleID).Scan(&have)
+			`SELECT COUNT(*) FROM documents WHERE legacy_id = ?`,
+			in.LegacyID).Scan(&have)
 		if err != nil {
 			return docResult{}, err
 		}
@@ -488,13 +488,13 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 			INSERT INTO documents (
 				owner_id, original_blob, original_size, archive_blob, archive_size,
 				title, content, mime_type, correspondent_id, document_type_id, storage_path_id,
-				jd_category_id, bundle_id_legacy, archive_serial_number,
+				jd_category_id, legacy_id, archive_serial_number,
 				added_at, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			in.OwnerID, origRef.SHA256, origRef.Size, archiveBlob, archiveSize,
 			in.Fields.Title, content, mime, correspondentID, documentTypeID, storagePathID,
-			in.InboxCat, in.BundleID, asn,
+			in.InboxCat, in.LegacyID, asn,
 			added, created, updated,
 		)
 		if err != nil {

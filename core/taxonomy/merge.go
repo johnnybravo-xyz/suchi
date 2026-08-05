@@ -4,8 +4,8 @@
 // The only operation Phase 2 ships is Merge: given two rows of the
 // same kind, rewrite every reference from the source to the target
 // and delete the source. Idempotent when target and source names
-// differ only by case ("BESCOM" vs "Bescom") — the an-existing-dms
-// ecosystem calls this out as recurring admin pain (#9394).
+// differ only by case ("BESCOM" vs "Bescom") — a recurring source of
+// admin pain in DMS deployments.
 package taxonomy
 
 import (

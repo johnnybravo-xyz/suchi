@@ -92,11 +92,11 @@ smoke-ingest:
 
 # Boot the transcript recorder against `target` (a live upstream URL).
 # Point a client at http://127.0.0.1:8443/ and drive it — fixtures
-# land in testdata/bundle-transcripts/. See hack/transcript/README.md.
+# land in testdata/transcripts/. See hack/transcript/README.md.
 transcript target listen=":8443":
     cd hack/transcript && go run . \
         --listen {{listen}} --target {{target}} \
-        --out ../../testdata/bundle-transcripts
+        --out ../../testdata/transcripts
 
 # --- git helpers ---
 

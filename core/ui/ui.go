@@ -262,7 +262,7 @@ type detailDoc struct {
 	AddedFmt      string
 	HasArchive    bool
 	ASN           sql.NullInt64
-	BundleID   sql.NullInt64
+	LegacyID      sql.NullInt64
 	// Multi-doc split lineage. When SplitParentID.Valid, this document
 	// was fanned out from a scan that carried QR separator sheets;
 	// SplitIndex is its 1-indexed position among the siblings.
@@ -311,7 +311,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 			COALESCE(dt.name, ''),
 			COALESCE(jc.code || ' ' || jc.name, ''),
 			d.created_at, d.added_at, d.archive_blob,
-			d.archive_serial_number, d.bundle_id_legacy,
+			d.archive_serial_number, d.legacy_id,
 			d.split_parent_id, d.split_index,
 			d.encryption_state, d.email_parent_id,
 			COALESCE(d.sensitivity, '')
@@ -321,7 +321,7 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		WHERE d.id = ? AND d.trashed_at IS NULL
 	`, id).Scan(
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
-		&created, &added, &archiveBlob, &doc.ASN, &doc.BundleID,
+		&created, &added, &archiveBlob, &doc.ASN, &doc.LegacyID,
 		&doc.SplitParentID, &doc.SplitIndex,
 		&encState, &doc.EmailParentID, &doc.Sensitivity,
 	)

@@ -301,7 +301,7 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 // DocumentDetail is the projection returned by GET /api/documents/{id}.
-// Keeps the shape consistent with the Bundle-mobile compat surface:
+// Keeps the shape consistent with the mobile wire-compat surface:
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {

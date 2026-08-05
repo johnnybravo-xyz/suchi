@@ -51,18 +51,18 @@ func TestImportEndToEnd(t *testing.T) {
 		t.Errorf("notes = %d, want 1", rep.Notes)
 	}
 
-	// The row for pk=100 must carry its bundle_id_legacy AND land in inbox.
+	// The row for pk=100 must carry its legacy_id AND land in inbox.
 	var (
 		haveLegacy int
 		inCat      int64
 	)
 	if err := d.Read.QueryRow(
-		`SELECT COUNT(*), jd_category_id FROM documents WHERE bundle_id_legacy = 100`,
+		`SELECT COUNT(*), jd_category_id FROM documents WHERE legacy_id = 100`,
 	).Scan(&haveLegacy, &inCat); err != nil {
 		t.Fatalf("check legacy id: %v", err)
 	}
 	if haveLegacy != 1 {
-		t.Errorf("bundle_id_legacy row count = %d, want 1", haveLegacy)
+		t.Errorf("legacy_id row count = %d, want 1", haveLegacy)
 	}
 	inbox, _ := jd.InboxCategoryID(ctx, d)
 	if inCat != inbox {
@@ -80,7 +80,7 @@ func TestImportEndToEnd(t *testing.T) {
 		t.Errorf("FTS hits for 'electricity' = %d, want 1", hits)
 	}
 
-	// Second run: everything must be skipped by bundle_id_legacy.
+	// Second run: everything must be skipped by legacy_id.
 	rep2, err := bundle.Run(ctx, d, cas, log, bundle.Options{
 		BundleRoot: bundle,
 		OwnerEmail: ownerEmail,

@@ -12,10 +12,10 @@ import (
 
 // Task is one job-row projection for the /api/tasks/ surface.
 //
-// Field names track the an-existing-dms mobile-app expectations closely
-// enough that Phase 4's compat shim is a trivial rename layer. Timings
-// are unix seconds (suchi convention); the compat shim converts to
-// ISO8601 there.
+// Field names track what mobile clients expect closely enough that
+// Phase 4's compat shim is a trivial rename layer. Timings are unix
+// seconds (suchi convention); the compat shim converts to ISO8601
+// there.
 type Task struct {
 	ID        int64  `json:"id"`
 	Kind      string `json:"kind"`
@@ -33,8 +33,8 @@ type Task struct {
 // machine work; workflow tasks require a human choice), so the two live
 // side-by-side rather than being coerced into one struct.
 //
-// Mobile clients that only understand bundle-style jobs can ignore
-// the workflow_tasks field entirely; the classic Results array is
+// Mobile clients that only understand plain jobs can ignore the
+// workflow_tasks field entirely; the classic Results array is
 // unchanged. suchi-native clients read both.
 type WorkflowTask struct {
 	ID         int64    `json:"id"`

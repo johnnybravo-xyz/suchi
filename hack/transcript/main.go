@@ -1,9 +1,8 @@
 // hack/transcript is a recording reverse proxy: point a client at it
 // with --target set to a live upstream, and every request/response
 // pair lands in --out as a golden fixture. The Phase-4 primary use
-// case is capturing swift-bundle / Bundle Mobile traffic against
-// a real an existing DMS so the compat surface can be replayed as
-// contract tests — but the tool is target-agnostic.
+// case is that the compat surface can be replayed as contract tests —
+// but the tool is target-agnostic.
 //
 // Fixtures land in --out with names like:
 //   0001-GET-api-documents.json
@@ -45,15 +44,15 @@ import (
 func main() {
 	var (
 		listen    = flag.String("listen", ":8443", "listen address")
-		target    = flag.String("target", "", "target an existing DMS URL (required)")
-		outDir    = flag.String("out", "testdata/bundle-transcripts", "where to write fixtures")
+		target    = flag.String("target", "", "target URL (required)")
+		outDir    = flag.String("out", "testdata/transcripts", "where to write fixtures")
 		blobLimit = flag.Int("blob-min", 4096, "bodies larger than N bytes are stored as blobs; smaller are inlined")
 		insecure  = flag.Bool("insecure", false, "log unredacted (debug only; don't commit fixtures made this way)")
 	)
 	flag.Parse()
 
 	if *target == "" {
-		log.Fatalf("--target is required (the real an existing DMS URL)")
+		log.Fatalf("--target is required (the real URL)")
 	}
 	targetURL, err := url.Parse(*target)
 	if err != nil {
@@ -71,14 +70,14 @@ func main() {
 		proxy:     httputil.NewSingleHostReverseProxy(targetURL),
 	}
 	// Wrap the reverse proxy's Director so we can also strip the Host
-	// header rewrite quirk when tunneling to Cloudflare-fronted Bundle.
+	// header rewrite quirk when tunneling to Cloudflare-fronted.
 	origDirector := r.proxy.Director
 	r.proxy.Director = func(req *http.Request) {
 		origDirector(req)
 		req.Host = targetURL.Host
 	}
 
-	log.Printf("bundle-recorder listening on %s → %s (fixtures → %s)",
+	log.Printf("legacy-recorder listening on %s → %s (fixtures → %s)",
 		*listen, targetURL, *outDir)
 	if err := http.ListenAndServe(*listen, r); err != nil {
 		log.Fatal(err)
@@ -203,7 +202,7 @@ func (r *recorder) storeBody(b []byte, contentType string) fixtureBody {
 }
 
 // sanitizeHeaders redacts auth-bearing headers. Kept as a strict
-// allow-list-adjacent denylist because Bundle / mobile apps put
+// allow-list-adjacent denylist because legacy / mobile apps put
 // creds into surprising places (X-Api-Auth, Cookie, plus custom
 // per-fork headers).
 func (r *recorder) sanitizeHeaders(h http.Header) map[string][]string {

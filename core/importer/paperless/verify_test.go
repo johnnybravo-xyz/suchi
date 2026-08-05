@@ -104,7 +104,7 @@ func TestVerifyReport(t *testing.T) {
 	if len(rep.Match) != 1 || rep.Match[0] != 100 {
 		t.Errorf("Match = %v, want [100]", rep.Match)
 	}
-	if len(rep.Differ) != 1 || rep.Differ[0].BundleID != 101 {
+	if len(rep.Differ) != 1 || rep.Differ[0].LegacyID != 101 {
 		t.Errorf("Differ = %+v, want [{101, [title]}]", rep.Differ)
 	} else {
 		if len(rep.Differ[0].Fields) != 1 || rep.Differ[0].Fields[0] != "title" {

@@ -45,7 +45,8 @@ import (
 const DefaultTemplateJD = `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
 
 // DefaultTemplateFlat is the fallback for flat-mode installs — the
-// Bundle-classic shape so migrators keep their folder layout.
+// classic correspondent/year/title shape so migrators keep their
+// folder layout.
 const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
 
 // Renderer is the projection engine. Constructed once at boot;

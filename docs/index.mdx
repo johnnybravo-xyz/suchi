@@ -23,10 +23,10 @@ is the stability signal.
   bytes; backups are `blobs/` + a SQLite snapshot.
 - **Plugin at every layer.** Ingest, OCR, storage, search, auth,
   classification, export — every seam is an interface.
-- **an existing DMS ecosystem inheritance.** `suchi import bundle`
-  brings tags, correspondents, custom fields verbatim. The
-  swift-bundle (iOS) and Bundle Mobile (Android) apps work
-  against suchi via API compat.
+- **Lossless bundle import.** `suchi import bundle` brings tags,
+  correspondents, custom fields verbatim from a compatible export
+  bundle. Existing DMS mobile clients drive suchi's wire surface
+  directly.
 - **Johnny.Decimal as the default taxonomy.** Ships a starter tree
   on first boot; flat mode is available for migrators.
 - **Local-first by default, every egress opt-in.** No telemetry,
@@ -38,7 +38,7 @@ is the stability signal.
   <Card title="Getting started" icon="rocket" href="/getting-started">
     Five-minute quickstart — docker compose or bare binary.
   </Card>
-  <Card title="Importing from Bundle" icon="file-import" href="/importer">
+  <Card title="Importing a bundle" icon="file-import" href="/importer">
     `suchi import bundle` — verbatim metadata, dedup, --verify.
   </Card>
   <Card title="Configuration" icon="sliders" href="/config">

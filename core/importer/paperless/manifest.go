@@ -12,7 +12,7 @@
 //
 // Contract:
 //   - Idempotent + resumable: re-running the same command against the
-//     same bundle re-imports nothing (bundle_id_legacy is UNIQUE).
+//     same bundle re-imports nothing (legacy_id is UNIQUE).
 //   - No partial state: each document import is a single transaction
 //     that writes doc row + junction rows + notes together.
 //   - Verbatim metadata: tags, correspondents, document_types,

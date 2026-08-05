@@ -1,6 +1,6 @@
 ---
 title: "CLI reference"
-description: "suchi subcommands: serve, healthcheck, import bundle, version."
+description: "suchi subcommands: serve, healthcheck, import, version."
 ---
 
 ```
@@ -27,8 +27,8 @@ so the distroless-static image doesn't need `wget`/`curl`.
 
 ## `suchi import bundle [flags]`
 
-Import a an existing DMS export bundle. See [importer](/importer) for
-the full walkthrough.
+Import a compatible export bundle. See [importer](/importer) for the
+full walkthrough.
 
 ### Flags
 
@@ -38,7 +38,7 @@ the full walkthrough.
 | `--owner-email <email>` | yes, unless `--dry-run` | User that will own imported documents. |
 | `--dry-run` | no | Parse + report counts without writing. |
 | `--flat` | no | Every doc → inbox. Skip JD resolution. |
-| `--map-jd <path>` | no | Rules YAML: bundle metadata → JD code. |
+| `--map-jd <path>` | no | Rules YAML: source metadata → JD code. |
 | `--auto-jd` | no | Apply built-in JD heuristics (deterministic keyword matches). Off by default — inbox is the safe fallback. |
 | `--verify` | no | Dry-diff the bundle against the live DB. No writes. |
 
@@ -73,8 +73,8 @@ manual — automatic gc on hostile data is how you lose files.
 
 ## `suchi taxonomy merge [flags]`
 
-Admin operation for the bundle-import cleanup: after years of
-use (or a big import), taxonomy tables accumulate near-duplicates
+Admin operation for post-import cleanup: after years of use (or a
+big import), taxonomy tables accumulate near-duplicates
 ("BESCOM" and "Bescom", "Tax" and "TAX"). Merge picks one, moves
 every reference from the other, deletes the source, and rewrites
 any classifier rules that referenced the source name.

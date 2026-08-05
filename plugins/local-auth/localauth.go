@@ -5,7 +5,7 @@
 //   - Cookie sessions from the browser UI. The cookie carries an opaque
 //     session id whose row lives in the sessions table.
 //   - API tokens sent as "Authorization: Token <hex>". Not Bearer —
-//     matches an existing DMS wire format so the mobile apps just work.
+//     this is suchi's own wire format for third-party mobile clients.
 //
 // First-boot flow: with no admin present and OIDC unconfigured, the
 // process prints a single-use setup token to the log. Hitting
@@ -115,8 +115,8 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	if !ok {
 		return nil, nil
 	}
-	// Token is the canonical scheme (matches an-existing-dms mobile wire
-	// format). Bearer is also accepted for integrator ergonomics — many
+	// Token is suchi's canonical scheme for third-party mobile clients.
+	// Bearer is also accepted for integrator ergonomics — many
 	// HTTP clients default to Bearer. Ambiguity vs OIDC bearer tokens
 	// is resolved by shape: suchi tokens are 64 hex chars; anything
 	// else with Bearer scheme lets the chain continue so OIDC gets a

@@ -777,7 +777,7 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 }
 
 // slugify is the same lowercase/dash-only rule used by the rules-engine
-// and the bundle importer. Keeping it inline avoids a cross-package
+// and the bulk importer. Keeping it inline avoids a cross-package
 // dependency for one 6-line function.
 func slugify(name string) string {
 	var b strings.Builder
