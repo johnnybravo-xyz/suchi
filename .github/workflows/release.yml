@@ -1,33 +1,98 @@
 name: release
 
+# Fires on every v* tag. Cutting a release is a two-command dance:
+#
+#   git tag -s vX.Y.Z -m "suchi X.Y.Z"
+#   git push origin vX.Y.Z
+#
+# See docs/release-process.mdx for the full runbook. Everything below
+# is unattended.
+
 on:
   push:
     tags: [ 'v*' ]
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write   # for keyless cosign signing
+  contents: write   # write to the GitHub release
+  packages: write   # push to ghcr.io
+  id-token: write   # keyless cosign signing via OIDC
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}   # suchi-dms/suchi
 
 jobs:
-  images:
+  # -------------------------------------------------------------------
+  # notes: pull the section for this version out of CHANGELOG.md so
+  # the release page carries the same prose as the file. Prerelease
+  # tags (vX.Y.Z-rc.N, vX.Y.Z-beta.N) also mark the release as
+  # prerelease + skip the `latest` docker tag.
+  # -------------------------------------------------------------------
+  notes:
     runs-on: ubuntu-latest
+    outputs:
+      body:       ${{ steps.extract.outputs.body }}
+      prerelease: ${{ steps.extract.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
+      - id: extract
+        run: |
+          set -euo pipefail
+          ver=${GITHUB_REF_NAME#v}
+          echo "prerelease=$([[ "$ver" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          # Pull the section matching this version from CHANGELOG.md.
+          # Falls through to the [Unreleased] block if a version-named
+          # section isn't there yet (development cadence).
+          awk -v v="$ver" '
+            /^## \['"$ver"'\]/       { flag=1; next }
+            flag && /^## \[/         { exit }
+            flag                     { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            awk '/^## \[Unreleased\]/ { flag=1; next } flag && /^## \[/ { exit } flag { print }' \
+              CHANGELOG.md > /tmp/notes.md
+          fi
+          {
+            echo 'body<<END_NOTES'
+            cat /tmp/notes.md
+            echo 'END_NOTES'
+          } >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------
+  # images: build slim + full for linux/amd64,arm64. Push to ghcr with
+  # both the version tag and the `latest`/`latest-slim` alias (skipped
+  # on prereleases). Sign with cosign (keyless via OIDC). Generate SBOM
+  # in both SPDX and CycloneDX formats.
+  # -------------------------------------------------------------------
+  images:
+    runs-on: ubuntu-latest
+    needs: notes
+    outputs:
+      slim_digest: ${{ steps.slim.outputs.digest }}
+      full_digest: ${{ steps.full.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@v3
       - uses: anchore/sbom-action/download-syft@v0
 
-      - name: build + push -slim image
+      # ---- slim ------------------------------------------------------
+      - id: slim_tags
+        run: |
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-slim"
+          if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-slim"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: build + push slim
         id: slim
         uses: docker/build-push-action@v6
         with:
@@ -36,11 +101,24 @@ jobs:
           target: slim
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/suchi-dms/suchi:${{ github.ref_name }}-slim
-            ghcr.io/suchi-dms/suchi:latest-slim
+          provenance: mode=max      # SLSA provenance attestation
+          sbom: true                # buildx-native SBOM
+          tags: ${{ steps.slim_tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.licenses=AGPL-3.0
 
-      - name: build + push full image
+      # ---- full ------------------------------------------------------
+      - id: full_tags
+        run: |
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: build + push full
         id: full
         uses: docker/build-push-action@v6
         with:
@@ -49,29 +127,47 @@ jobs:
           target: full
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/suchi-dms/suchi:${{ github.ref_name }}
-            ghcr.io/suchi-dms/suchi:latest
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.full_tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.licenses=AGPL-3.0
 
-      # Keyless cosign sig + SBOM for supply-chain hygiene (E1).
-      - name: cosign sign slim
-        run: cosign sign --yes ghcr.io/suchi-dms/suchi@${{ steps.slim.outputs.digest }}
-      - name: cosign sign full
-        run: cosign sign --yes ghcr.io/suchi-dms/suchi@${{ steps.full.outputs.digest }}
-      - name: syft SBOM (slim)
-        run: syft ghcr.io/suchi-dms/suchi:${{ github.ref_name }}-slim -o spdx-json > slim.sbom.json
-      - name: syft SBOM (full)
-        run: syft ghcr.io/suchi-dms/suchi:${{ github.ref_name }} -o spdx-json > full.sbom.json
-      - name: attach SBOMs to release
-        uses: softprops/action-gh-release@v2
+      # ---- sign ------------------------------------------------------
+      - name: cosign sign images (keyless)
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.slim.outputs.digest }}
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.full.outputs.digest }}
+
+      # ---- SBOMs -----------------------------------------------------
+      - name: SBOM (SPDX + CycloneDX)
+        run: |
+          slim=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-slim
+          full=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          syft "$slim" -o spdx-json --file suchi-slim.spdx.json
+          syft "$slim" -o cyclonedx-json --file suchi-slim.cyclonedx.json
+          syft "$full" -o spdx-json --file suchi-full.spdx.json
+          syft "$full" -o cyclonedx-json --file suchi-full.cyclonedx.json
+
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            slim.sbom.json
-            full.sbom.json
+          name: sboms
+          path: suchi-*.json
 
+  # -------------------------------------------------------------------
+  # binaries: cross-compile for the shipping matrix. Static (CGO_ENABLED=0)
+  # so there's zero libc coupling on Linux. Ship a SHA256SUMS file so
+  # downloaders can verify without invoking cosign.
+  # -------------------------------------------------------------------
   binaries:
     runs-on: ubuntu-latest
+    needs: notes
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { goos: linux,   goarch: amd64 }
@@ -84,17 +180,88 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
       - name: build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: '0'
         working-directory: distro
         run: |
-          bin=suchi-${GOOS}-${GOARCH}
+          set -euo pipefail
+          bin=suchi-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}
           [ "$GOOS" = "windows" ] && bin=${bin}.exe
-          go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o /tmp/$bin ./cmd/suchi
-      - name: upload
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o "$RUNNER_TEMP/$bin" ./cmd/suchi
+          # emit a per-binary sha256 line (concatenated later)
+          ( cd "$RUNNER_TEMP" && sha256sum "$bin" > "$bin.sha256" )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ runner.temp }}/suchi-*
+
+  # -------------------------------------------------------------------
+  # collect: aggregate binaries + SBOMs, generate the combined
+  # SHA256SUMS + a cosign blob signature over it, then attach the
+  # whole bundle to the GitHub release.
+  # -------------------------------------------------------------------
+  collect:
+    runs-on: ubuntu-latest
+    needs: [notes, images, binaries]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3
+
+      - name: aggregate SHA256SUMS
+        working-directory: /tmp/artifacts
+        run: |
+          set -euo pipefail
+          # per-binary .sha256 files already carry the "sum  file" line
+          cat suchi-*.sha256 | sort > SHA256SUMS
+          rm -f suchi-*.sha256
+
+      - name: cosign sign the checksums file (blob signature)
+        working-directory: /tmp/artifacts
+        run: |
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS.cosign.bundle \
+            SHA256SUMS
+
+      - name: publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: /tmp/suchi-*
+          name: suchi ${{ github.ref_name }}
+          body: ${{ needs.notes.outputs.body }}
+          prerelease: ${{ needs.notes.outputs.prerelease }}
+          fail_on_unmatched_files: true
+          files: |
+            /tmp/artifacts/suchi-*
+            /tmp/artifacts/SHA256SUMS
+            /tmp/artifacts/SHA256SUMS.cosign.bundle
+            /tmp/artifacts/suchi-slim.spdx.json
+            /tmp/artifacts/suchi-slim.cyclonedx.json
+            /tmp/artifacts/suchi-full.spdx.json
+            /tmp/artifacts/suchi-full.cyclonedx.json
+
+# ---- Verification recipe (copied into the release notes footer by hand
+# when we're happy with the shape; automate once it stabilizes) --------
+#
+# Verify an image was built by this workflow:
+#   cosign verify \
+#     --certificate-identity-regexp 'https://github.com/suchi-dms/suchi/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     ghcr.io/suchi-dms/suchi:v0.1.0
+#
+# Verify a downloaded binary:
+#   sha256sum -c SHA256SUMS
+#   cosign verify-blob \
+#     --bundle SHA256SUMS.cosign.bundle \
+#     --certificate-identity-regexp 'https://github.com/suchi-dms/suchi/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     SHA256SUMS
