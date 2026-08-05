@@ -277,8 +277,8 @@ func runAction(ctx context.Context, tx *sql.Tx, r Rule, docID int64) (Applied, e
 }
 
 // upsertByName is the two reference tables the classifier writes to.
-// Slug is derived from the name — matches the bundle-importer's
-// slug convention.
+// Slug is derived from the name — matches the importer's slug
+// convention.
 func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {
 	if name == "" {
 		return 0, errors.New("empty name")

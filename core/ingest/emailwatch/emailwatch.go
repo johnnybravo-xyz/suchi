@@ -232,7 +232,8 @@ func (w *Watcher) cycle(ctx context.Context) {
 	}
 
 	// Mark processed messages. Either move to ProcessedFolder (when
-	// configured — matches Bundle-mobile semantics) or set \Seen.
+	// configured — the common "archive after ingest" convention) or
+	// set \Seen.
 	markSet := new(imap.SeqSet)
 	markSet.AddNum(seenUIDs...)
 	if w.cfg.ProcessedFolder != "" {

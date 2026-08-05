@@ -1,18 +1,18 @@
--- 0002_phase1_metadata: Bundle-shape metadata tables + document
--- columns the importer needs. FTS5 arrives in a separate migration
--- (0003) so a schema-only diff on this one stays readable.
+-- 0002_phase1_metadata: metadata tables + document columns the
+-- importer needs. FTS5 arrives in a separate migration (0003) so a
+-- schema-only diff on this one stays readable.
 --
--- Design contract: table shapes match an existing DMS well enough that
--- `suchi import bundle` maps columns verbatim (see design doc §Migrating
--- from an existing DMS). Names follow suchi conventions (snake_case, no
--- Django-y `_id_id`), never Bundle internals.
+-- Design contract: table shapes are close enough to the common DMS
+-- shape that `suchi import` maps columns verbatim from popular export
+-- bundles. Names follow suchi conventions (snake_case, no Django-y
+-- `_id_id`).
 
 -- ---------- reference tables ----------
 
--- Tags. matching_algorithm/match/is_insensitive are Bundle workflow
--- inputs; we import them verbatim and let the rules engine (Phase 2) use
--- them if it wants. is_inbox_tag flags tags that should mark docs as
--- needs-review; imported as-is.
+-- Tags. matching_algorithm/match/is_insensitive are legacy classifier
+-- inputs; the importer preserves them verbatim and the rules engine
+-- (Phase 2) uses them if it wants. is_inbox_tag flags tags that mark
+-- docs as needs-review; imported as-is.
 CREATE TABLE tags (
     id                   INTEGER PRIMARY KEY,
     name                 TEXT NOT NULL UNIQUE,
@@ -64,8 +64,9 @@ CREATE TABLE storage_paths (
 
 -- Custom fields: user-defined typed attributes. data_type is the closed
 -- vocabulary the design doc calls out (select, date, text, number, multi).
--- We add 'bool' / 'monetary' / 'url' / 'documentlink' so Bundle imports
--- lose zero data. The dispatcher (Phase 3) fans out by data_type.
+-- We add 'bool' / 'monetary' / 'url' / 'documentlink' so import bundles
+-- from common upstream DMS exports lose zero data. The dispatcher
+-- (Phase 3) fans out by data_type.
 CREATE TABLE custom_fields (
     id           INTEGER PRIMARY KEY,
     name         TEXT NOT NULL UNIQUE,
@@ -102,13 +103,13 @@ ALTER TABLE documents ADD COLUMN correspondent_id     INTEGER REFERENCES corresp
 ALTER TABLE documents ADD COLUMN document_type_id     INTEGER REFERENCES document_types(id) ON DELETE SET NULL;
 ALTER TABLE documents ADD COLUMN storage_path_id      INTEGER REFERENCES storage_paths(id) ON DELETE SET NULL;
 ALTER TABLE documents ADD COLUMN added_at             INTEGER;              -- when the row was created; created_at is doc date
-ALTER TABLE documents ADD COLUMN bundle_id_legacy  INTEGER;              -- one-way pointer back to a an existing DMS import
-ALTER TABLE documents ADD COLUMN archive_serial_number INTEGER;             -- Bundle "ASN"; sparse, user-managed
+ALTER TABLE documents ADD COLUMN legacy_id            INTEGER;              -- one-way pointer back to an imported archive bundle (the importer records the source row's primary key here so a second import skips duplicates)
+ALTER TABLE documents ADD COLUMN archive_serial_number INTEGER;             -- "ASN"; sparse, user-managed
 
 -- Unique when set. Partial-index UNIQUE is how SQLite says "nullable
 -- unique" without breaking on multiple NULLs.
-CREATE UNIQUE INDEX documents_bundle_legacy_uniq
-    ON documents(bundle_id_legacy) WHERE bundle_id_legacy IS NOT NULL;
+CREATE UNIQUE INDEX documents_legacy_id_uniq
+    ON documents(legacy_id) WHERE legacy_id IS NOT NULL;
 CREATE UNIQUE INDEX documents_asn_uniq
     ON documents(archive_serial_number) WHERE archive_serial_number IS NOT NULL;
 

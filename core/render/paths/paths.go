@@ -2,8 +2,8 @@
 // compatible). This is what turns a documents row into the human-
 // browsable file-tree projection under $DATA_DIR/rendered/... .
 //
-// The template surface is intentionally the same shape as bundle-
-// ngx's storage_path template surface — imported archives keep their
+// The template surface accepts the same variable names that common
+// DMS storage-path templates use, so imported archives keep their
 // folder layout byte-equal (regression-tested below).
 //
 // Data context available to templates:
@@ -24,8 +24,8 @@
 //	{{ asn }}              archive_serial_number ("" if none)
 //	{{ owner }}            user email
 //
-// Missing values render as empty strings, matching Bundle's
-// silent-empty convention — regression tests would blow up otherwise.
+// Missing values render as empty strings — suchi's silent-empty
+// convention; regression tests would blow up otherwise.
 package paths
 
 import (
@@ -115,7 +115,7 @@ func ctxToGonja(c Context) map[string]any {
 }
 
 // pickYear extracts YYYY from a "YYYY-MM-DD" or "YYYY-MM-DDTHH..." shape.
-// Empty input → empty output (silent-empty matches bundle).
+// Empty input → empty output (suchi's silent-empty convention).
 func pickYear(s string) string {
 	if len(s) < 4 {
 		return ""

@@ -73,7 +73,7 @@ target:
 
 ## Sidecar compatibility
 
-mail-intake emits Bundle-native flat JSON:
+mail-intake emits flat-shape JSON:
 
 ```json
 {
@@ -85,13 +85,13 @@ mail-intake emits Bundle-native flat JSON:
 ```
 
 suchi's sidecar spec normally requires `"suchi_sidecar": 1`, but
-`core/ingest/sidecar` transparently accepts the Bundle-native
-shape — no producer patch needed. `"Name <address>"` correspondent
-strings are peeled to just the display name; `created` accepts
-RFC-3339 or `YYYY-MM-DD`.
+`core/ingest/sidecar` transparently accepts the flat-shape JSON —
+no producer patch needed. `"Name <address>"` correspondent strings
+are peeled to just the display name; `created` accepts RFC-3339 or
+`YYYY-MM-DD`.
 
 If you're writing your own producer, you can EITHER emit the
-Bundle-native shape (portable) OR the versioned suchi-native form
+flat-shape JSON (portable) OR the versioned suchi-native form
 (access to `jd_category`, `custom_fields`, multi-role correspondents,
 etc. — see [sidecar spec](/architecture#json-sidecar)).
 

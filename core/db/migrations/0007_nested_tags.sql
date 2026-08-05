@@ -2,12 +2,11 @@
 --
 -- Decision from the ecosystem-survey design pass:
 --
---   an existing DMS #380 is a top-5 all-time FR (222 upvotes) asking
---   for nested tags. suchi's JD taxonomy already gives DOCUMENTS a
---   hierarchy — the bundle ask is orthogonal: users want to
---   organize the TAG list (which is a cross-cutting labeling axis)
---   into a shallow tree for browsing, without changing what a tag
---   MEANS on a document.
+--   suchi's JD taxonomy already gives
+--   DOCUMENTS a hierarchy — this ask is orthogonal: users want to
+--   organize the TAG list (a cross-cutting labeling axis) into a
+--   shallow tree for browsing, without changing what a tag MEANS
+--   on a document.
 --
 -- Ship a minimal shape: `tags.parent_id` as a self-referential
 -- nullable FK. Adds no semantics to search (a search for the parent

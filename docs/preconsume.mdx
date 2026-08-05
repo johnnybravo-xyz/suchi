@@ -64,9 +64,9 @@ and skipped — create the field first via SQL / the admin surface.
 
 ## Example: try candidate passwords from a file
 
-Duplicates the an existing DMS pre-consume-decrypt pattern for the case
-where suchi's native decrypt path isn't enough (e.g. a non-PDF
-encrypted format we don't handle yet):
+A pre-consume-decrypt pattern for the case where suchi's native
+decrypt path isn't enough (e.g. a non-PDF encrypted format we don't
+handle yet):
 
 ```bash
 #!/bin/bash
@@ -125,5 +125,5 @@ exit 0
 
 The plugin surface (`plugin-api/`) is Go interfaces + Go builds — great
 for suchi maintainers, painful for operators. `PRE_CONSUME_SCRIPT` is
-the same escape hatch an existing DMS has offered for years:
-"here's a shell script, run it." Meets operators where they are.
+the classic shell-script escape hatch: "here's a script, run it."
+Meets operators where they are.
