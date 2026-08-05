@@ -49,7 +49,7 @@ Every module has its own `go.mod`; `go.work` links them so `go build ./...` at t
 - `djvutxt` from `djvulibre-bin` — DjVu text extraction
 - `ghostscript` — used by ocrmypdf and (in CI) to build the smoke fixture
 
-The Docker `slim` image ships qpdf + poppler-utils + tesseract (full PDF pipeline via `tessocr`, ~70 MB). The `full` image adds ocrmypdf + djvulibre + libreoffice-core (~1 GB) — pick full when you want the searchable-PDF archive or DjVu ingest.
+The Docker `slim` image ships qpdf + poppler-utils + tesseract (full PDF pipeline via `tessocr`, ~80 MB with anydoc). The `full` image adds ocrmypdf + djvulibre + msgconvert (~400 MB) — pick full when you want the searchable-PDF archive (text-selectable scanned PDFs), DjVu, or Outlook `.msg` support. Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.rtf`, `.csv`) ride in slim via anydoc — no LibreOffice fallback needed.
 
 Run `suchi doctor` any time for a snapshot of which tools are on PATH, egress surface, and schema version.
 
@@ -166,8 +166,8 @@ Production docs deploy is Mintlify-hosted (zero config beyond `docs.json` — se
 
 Two image targets in `Dockerfile`:
 
-- `slim` — Alpine + qpdf + poppler-utils + tesseract. ~70 MB. Full PDF pipeline including OCR of scanned pages (via the in-process `tessocr` engine — `pdftoppm | tesseract`). No searchable-PDF archive, no DjVu, no LibreOffice.
-- `full` — Debian slim + tesseract + ocrmypdf + qpdf + poppler-utils + djvulibre-bin + libreoffice-core. ~1 GB. Adds ocrmypdf (searchable-PDF archives) and the other converters.
+- `slim` — Alpine + qpdf + poppler-utils + tesseract + anydoc. ~80 MB. Full PDF pipeline including OCR of scanned pages (via the in-process `tessocr` engine — `pdftoppm | tesseract`) plus office-document text extraction (docx, xlsx, pptx, odt, rtf, csv) via anydoc. No searchable-PDF archive, no DjVu, no Outlook `.msg` support.
+- `full` — Debian slim + everything in slim + ocrmypdf + djvulibre-bin + msgconvert. ~400 MB. Adds text-selectable scanned-PDF archives (ocrmypdf writes the OCR layer inside the PDF), DjVu extraction, and Outlook `.msg` parsing.
 
 Both images accept `OCR_ENGINE={auto,tesseract,ocrmypdf}`. Slim defaults to `tesseract`; full defaults to `ocrmypdf`.
 

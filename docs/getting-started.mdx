@@ -72,13 +72,14 @@ in the repo (arrives in Phase 4.5).
 The `ghcr.io/suchi-dms/suchi:latest` tag is the **slim** image
 (~70 MB, Alpine + qpdf + pdftotext + tesseract). It covers the whole
 PDF pipeline including OCR of scanned pages via the in-process
-`tessocr` engine (pdftoppm → tesseract). Image barcodes and EPUBs
-work out of the box. **What it doesn't ship:** the ocrmypdf wrapper
-(so no searchable-PDF archive for scanned docs — the extracted text
-still lands in `documents.content` and FTS indexes it), DjVu, and
-the planned Office-doc converter.
+`tessocr` engine (pdftoppm → tesseract). Image barcodes, EPUBs, and
+office documents (docx, xlsx, pptx, odt, rtf, csv via anydoc) work
+out of the box. **What it doesn't ship:** the ocrmypdf wrapper (so
+no text-selectable scanned-PDF archives — the extracted text still
+lands in `documents.content` and FTS indexes it), DjVu, and Outlook
+`.msg` parsing.
 
-For those, pull the **full** image (~1 GB):
+For those, pull the **full** image (~400 MB):
 `ghcr.io/suchi-dms/suchi:latest-full`. Same binary, extra runtime deps.
 
 Both images can be forced to a specific OCR engine via `OCR_ENGINE`

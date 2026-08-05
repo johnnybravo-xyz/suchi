@@ -266,7 +266,6 @@ Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
 
 ## Not yet supported
 
-- **Office docs (`.docx`, `.odt`, etc.)** — `libreoffice-core` is in the full image but the conversion step isn't wired yet. Planned.
 - **`.zip` / `.tar` bundles** — no auto-explode. Ingest the individual documents.
 
 Add support by dropping a new package under `core/pipeline/<format>/`
@@ -293,16 +292,19 @@ fit.
 |---------|:----------:|:----------:|
 | Text-native PDF via `pdftotext` | ✅ | ✅ |
 | Scanned PDF via **tessocr** (pdftoppm + tesseract) | ✅ | ✅ |
-| Scanned PDF via **ocrmypdf** (adds searchable-PDF archive) | ❌ | ✅ |
+| Scanned PDF via **ocrmypdf** (writes text layer inside the PDF) | ❌ | ✅ |
 | PDF normalization via `qpdf` | ✅ | ✅ |
 | ZUGFeRD attachment extraction | ✅ | ✅ |
 | Image barcode decoding | ✅ | ✅ |
 | EPUB extraction | ✅ | ✅ |
+| Office documents via **anydoc** (docx, xlsx, pptx, odt, rtf, csv) | ✅ | ✅ |
 | DjVu extraction | ❌ | ✅ |
-| Image size (approx) | ~70 MB | ~1 GB |
+| Outlook `.msg` extraction | ❌ | ✅ |
+| Image size (approx) | ~80 MB | ~400 MB |
 | Default `OCR_ENGINE` | `tesseract` | `ocrmypdf` |
 
 The slim image is the recommended default — it covers PDF end-to-end
-including OCR of scanned pages, just without the searchable-PDF
-archive. Pick full when you need the archive PDF, DjVu ingest, or the
-Office-doc converter (planned).
+including OCR of scanned pages, plus office document text extraction
+via anydoc. Pick full when you need text-selectable scanned-PDF
+archives (ocrmypdf writes the OCR layer inside the PDF), DjVu ingest,
+or Outlook `.msg` parsing.
