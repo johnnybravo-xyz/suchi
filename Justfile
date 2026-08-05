@@ -80,6 +80,35 @@ doctor port="8000":
     echo "== disk =="
     du -sh {{DATA}} 2>/dev/null || echo "(no data dir)"
 
+# --- docs ---
+
+# Serve the Mintlify docs locally on :3000 with live-reload. Uses bun
+# by default; falls back to npx if bun isn't installed. See
+# docs/docs.json for the site structure.
+docs-serve:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd docs
+    if command -v bun >/dev/null 2>&1; then
+        bunx mint dev
+    elif command -v npx >/dev/null 2>&1; then
+        npx mint@latest dev
+    else
+        echo "install bun or node — bunx or npx must be on PATH"
+        exit 1
+    fi
+
+# Check the docs for broken cross-links before pushing.
+docs-lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd docs
+    if command -v bun >/dev/null 2>&1; then
+        bunx mint broken-links
+    else
+        npx mint@latest broken-links
+    fi
+
 # --- deploy recipe helpers ---
 
 # Run the mail-mbsync deploy recipe's smoke test (Docker; ~90s).
