@@ -4,6 +4,7 @@ use (
 	./core
 	./distro
 	./hack/emlfixtures
+	./hack/transcript
 	./plugin-api
 	./plugins/llm-classifier
 	./plugins/local-auth
