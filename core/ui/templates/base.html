@@ -58,7 +58,12 @@
           <a href="/admin/mail-setup">{{ msg "nav.mail_setup" }}</a>
         {{ end }}
         {{ if and .Principal (eq .Principal.Role "admin") }}
-          <a href="/admin/setup">{{ msg "nav.setup" }}</a>
+          <a href="/admin/setup" class="nav-with-badge">
+            {{ msg "nav.setup" }}
+            {{ if .SetupPendingCount }}
+              <span class="nav-badge" title="Setup steps still pending">{{ .SetupPendingCount }}</span>
+            {{ end }}
+          </a>
         {{ end }}
       </nav>
       <p class="sidenav-hint">

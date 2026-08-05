@@ -162,16 +162,13 @@ type listRow struct {
 }
 
 // List renders the paginated document list.
+//
+// Setup wizard is deliberately NOT force-redirected here anymore.
+// Every wizard step is optional (nothing blocks doc ingest or search),
+// so a fresh admin should see the app first, with the pending setup
+// state surfaced non-intrusively in the sidebar via the "Setup"
+// entry's data-pending count.
 func (s *Server) List(w http.ResponseWriter, r *http.Request) {
-	// Auto-redirect first-time admins to the setup wizard so they see
-	// the recap + can pick a step. Non-admins never get bounced.
-	if p := auth.FromContext(r.Context()); p != nil && p.Role == "admin" {
-		if needed, _ := settings.SetupNeeded(r.Context(), s.DB); needed {
-			http.Redirect(w, r, "/admin/setup", http.StatusFound)
-			return
-		}
-	}
-
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -702,6 +699,37 @@ func (s *Server) SetupPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// setupPendingCount returns the number of setup steps still marked
+// pending for admins, so the sidebar can render a badge next to the
+// Setup nav item. Returns 0 for non-admins, for anonymous requests,
+// and for any transient error — the badge is a hint, not a
+// correctness surface.
+//
+// Marked-complete admins get 0 too: MarkSetupComplete flips a single
+// row and SetupNeeded returns false, at which point the badge stops.
+func (s *Server) setupPendingCount(r *http.Request) int {
+	p := auth.FromContext(r.Context())
+	if p == nil || p.Role != "admin" {
+		return 0
+	}
+	needed, err := settings.SetupNeeded(r.Context(), s.DB)
+	if err != nil || !needed {
+		return 0
+	}
+	state, err := settings.LoadSetupState(r.Context(), s.DB)
+	if err != nil {
+		return 0
+	}
+	pending := 0
+	for _, o := range setupOrder {
+		if v, ok := state.Steps[o.Name]; ok && v == settings.StepDone {
+			continue
+		}
+		pending++
+	}
+	return pending
+}
+
 func isKnownStep(name string) bool {
 	for _, o := range setupOrder {
 		if o.Name == name {
@@ -802,6 +830,13 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	if m, ok := data.(map[string]any); ok {
 		if _, present := m["MailSetupEnabled"]; !present {
 			m["MailSetupEnabled"] = s.MailSetupEnabled
+		}
+		// SetupPendingCount fuels the sidebar badge on the "Setup" nav
+		// item. Only computed for admins (the wizard is admin-only)
+		// and only when the caller didn't pre-set it. Failure to
+		// compute → no badge, not a broken page.
+		if _, present := m["SetupPendingCount"]; !present {
+			m["SetupPendingCount"] = s.setupPendingCount(r)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
