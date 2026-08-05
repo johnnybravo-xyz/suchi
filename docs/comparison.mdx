@@ -1,0 +1,213 @@
+---
+title: "Comparison"
+description: "Honest side-by-side vs Paperless-ngx, Papra, and docspell — features suchi has, features they have, what's on the roadmap, what's out of scope."
+---
+
+The self-hosted document-management space has real, mature options.
+This page compares suchi against the three most credible alternatives
+and treats them generously. If your use case fits them better, they
+deserve the win — the goal is that a "which one should I pick?"
+thread ends with clarity, not a marketing pitch.
+
+**Snapshot date:** 2026-08-05. The alternatives ship faster than
+this doc; if you see stale claims about them, please file an issue.
+
+<Warning>
+This page is written by the suchi maintainer. It is not third-party
+review. We have tried to be honest about the gaps, but read the
+alternatives' own docs before deciding.
+</Warning>
+
+## The four projects, one line each
+
+| Project | One-line | License |
+| ------- | -------- | ------- |
+| **suchi** | Go single-binary DMS with SQLite-first storage + plugin seams | AGPL-3.0 |
+| **Paperless-ngx** | The reference OSS DMS. Django + Redis + Postgres + Celery. Ten years of polish. | GPL-3.0 |
+| **Papra** | Minimal, opinionated document management. Node/TypeScript, fast to try. | AGPL-3.0 |
+| **docspell** | Scala + Postgres + Solr. Powerful indexing, joex worker split. | GPL-3.0 |
+
+## The frame
+
+- **suchi** is fighting for "boring underneath, easy to get around."
+  One Go binary, one SQLite file, no external services. If you value
+  "I can grep the whole codebase" and "backup is `tar czf`", this is
+  the pitch.
+- **Paperless-ngx** is fighting for feature completeness and
+  ecosystem gravity — mobile apps, integrations, community, guides.
+  If you want the option that comes up first on Reddit and has an
+  answer to almost any question already documented, this is it.
+- **Papra** is fighting for "modern UX, minimal to try, doesn't
+  demand you learn a stack." Slick UI, quick onboarding.
+- **docspell** is fighting for indexing depth and language coverage.
+  If you have a large multilingual corpus and need serious search,
+  this is it.
+
+## Feature matrix
+
+Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
+
+### Ingest
+
+| Feature | suchi | Paperless-ngx | Papra | docspell |
+| ------- | :---: | :-----------: | :---: | :------: |
+| Upload API | ✅ | ✅ | ✅ | ✅ |
+| Watched folder | ✅ | ✅ | ✅ | ✅ |
+| Email intake (IMAP) | 🚧 (scaffold + polling loop; needs real mailbox test) | ✅ | ➖ | ✅ |
+| Sidecar-JSON ingest spec | ✅ | ➖ | ➖ | ➖ |
+| Multi-doc split on scan | ✅ | ✅ | ➖ | ➖ |
+| Blank-page removal | ✅ | ✅ | ➖ | ➖ |
+| Pre-consume script hook | ✅ | ✅ | ➖ | ➖ |
+| OCR (scanned PDFs, images) | ✅ (tesseract + ocrmypdf) | ✅ | ➖ | ✅ (5 engines) |
+| Office documents (docx/xlsx/…) | ✅ (via anydoc) | ✅ | ➖ | ✅ |
+| Email (.eml) → child docs | ✅ | ➖ | ➖ | ➖ |
+
+### Metadata + classification
+
+| Feature | suchi | Paperless-ngx | Papra | docspell |
+| ------- | :---: | :-----------: | :---: | :------: |
+| Tags | ✅ (nested via parent_id) | ✅ | ✅ | ✅ |
+| Correspondents (multi per doc) | ✅ | ➖ (one) | ➖ | ✅ |
+| Document types | ✅ | ✅ | ➖ | ✅ |
+| Storage paths (Gonja templates) | ✅ | ✅ | ➖ | ➖ |
+| Custom fields (typed) | ✅ | ✅ | ➖ | ✅ |
+| Rules-engine classifier | ✅ | ✅ | ➖ | ➖ |
+| LLM classifier (OpenAI-compatible) | ✅ | ➖ | ➖ | ➖ |
+| Johnny.Decimal tree by default | ✅ | ➖ | ➖ | ➖ |
+| Trigger→conditions→actions rules | ✅ | ✅ | ➖ | ➖ |
+| Human-in-the-loop approvals | ✅ | ➖ | ➖ | ➖ |
+
+### Surface
+
+| Feature | suchi | Paperless-ngx | Papra | docspell |
+| ------- | :---: | :-----------: | :---: | :------: |
+| REST API | ✅ | ✅ | ✅ | ✅ |
+| OpenAPI schema at `/api/schema/` | ✅ | ➖ | ❓ | ✅ |
+| DRF pagination shape | ✅ | ✅ | ➖ | ➖ |
+| Mobile-app wire compat (paperless-mobile / swift-paperless) | 🚧 | ✅ | ➖ | ➖ |
+| MCP server (agent tools) | ✅ (`suchi mcp`) | ➖ | ➖ | ➖ |
+| Share links (expiry + password) | ✅ | ✅ | ✅ | ➖ |
+| Full-text search | ✅ (SQLite FTS5) | ✅ (Postgres tsvector) | ✅ | ✅ (Solr) |
+| Search filters (tags/corr/type/…) | ✅ | ✅ | ✅ | ✅ |
+| Autocomplete | ✅ | ✅ | ➖ | ✅ |
+| Web UI | ✅ (Oat + minimal JS) | ✅ (Angular) | ✅ (React) | ✅ (Elm) |
+
+### Ops
+
+| Feature | suchi | Paperless-ngx | Papra | docspell |
+| ------- | :---: | :-----------: | :---: | :------: |
+| Single binary | ✅ | ➖ | ➖ | ➖ |
+| SQLite as primary store | ✅ | ➖ (Postgres) | ✅ | ➖ (Postgres) |
+| External services required | none | Postgres + Redis | none | Postgres + Solr |
+| Runtime deps at boot | libc + optional binaries | Python + workers + Redis | Node | JVM + Postgres + Solr |
+| Signed images + SBOM | ✅ | ➖ | ➖ | ➖ |
+| Import from Paperless-ngx | ✅ (`suchi import paperless`) | (self) | ➖ | ➖ |
+| Audit log | ✅ | ➖ | ➖ | ➖ |
+| Multi-user + per-user ownership | ✅ | ✅ | ✅ | ✅ |
+| ACLs (groups + object perms) | 🚧 (Phase 6) | ✅ | ➖ | ✅ |
+| Idle RAM (measured, small corpus) | 🚧 (benchmark pending) | ~350-500MB | ~100-150MB | ~500MB-1GB |
+
+## Where each project genuinely wins
+
+### Paperless-ngx wins if…
+
+- You want the biggest community and the most Reddit answers.
+- You need the fully mature mobile apps working out of the box today
+  (suchi's mobile compat is 90% shipped but not yet green against
+  pinned mobile release tags — that's the last Phase 4 batch).
+- You want an option so battle-tested that "will it work?" is a
+  non-question. Ten years of production is worth a lot.
+- Your infrastructure already includes Postgres + Redis and adding
+  another service is fine.
+
+### Papra wins if…
+
+- You care about "prettiest out of the box" and "smallest cognitive
+  load to try."
+- Your requirements are metadata-light: tags + folders + share
+  links are enough.
+- You want a smaller feature surface — less to configure, less that
+  can break.
+- You value the Node/TypeScript ecosystem for extension.
+
+### docspell wins if…
+
+- You have a **multilingual** corpus and need real search across
+  languages that FTS5 doesn't tokenize well.
+- You want the joex worker-split model at scale.
+- You already run a JVM stack.
+- You need Solr's advanced indexing (proximity, boosting, field
+  weighting).
+
+### suchi wins if…
+
+- You want one Go binary, one SQLite file, no external services.
+- You self-host on a NAS / Pi / small VPS where "keep it small"
+  matters.
+- You value the maintainer surface: grep the whole codebase, one
+  language, no ORMs.
+- You want the Johnny.Decimal taxonomy shipping opinion out of the
+  box, or the option to run flat if you don't.
+- You want MCP-native agent tools without a translation layer.
+- You need multi-party correspondents per doc (invoice sender vs.
+  recipient) as first-class data.
+- You want an audit log for "who deleted that?" from day one.
+- You want mobile-app wire compat as a design goal so the existing
+  apps work against a smaller substrate.
+- You value approvals + automations as distinct, well-named
+  primitives — not one confused feature.
+
+## Where suchi doesn't win
+
+Being honest about the gaps:
+
+- **Community.** Paperless-ngx has years of accumulated Reddit,
+  guides, videos. Suchi is pre-1.0.
+- **Mobile compat green.** The endpoints exist, but the
+  golden-transcript replay against pinned app releases isn't run
+  yet. Paperless-ngx is what the apps target natively.
+- **UI depth.** Paperless-ngx's Angular UI has features suchi
+  doesn't (bulk edit, saved-view editor UI, drag-drop custom-field
+  editor). Suchi's UI is intentionally thinner.
+- **Ecosystem plugins.** Paperless has more community-maintained
+  side-projects (mobile scan apps, integrations).
+- **Indexing depth.** SQLite FTS5 is great for most Latin-alphabet
+  corpora; not the equal of Solr for multilingual heavyweight use.
+
+## Roadmap items worth flagging
+
+- **Idle-resource benchmark** — planned as a published measurement,
+  not a claim. Until it's run, the RAM/CPU numbers in the "Ops"
+  table above are approximate from public issue-tracker reports.
+- **Public demo instance** — pending the repo flip.
+- **Postgres backend plugin** — E4 in the plan, triggered by
+  measured need (sustained p95 write > 500ms).
+
+## "But can I move if I chose wrong?"
+
+- **Paperless-ngx → suchi**: `suchi import paperless <dir>` is a
+  first-class product feature. See [importer](/importer).
+- **suchi → Paperless-ngx**: no shipped export tool. The DB is
+  SQLite; the schema is documented. You'd write a script.
+- **suchi → docspell / Papra**: same as above.
+
+If unsure between suchi and Paperless-ngx and you already have data
+in Paperless-ngx, the import path being one-way in the other
+direction is worth weighing. If you're greenfield, this is not a
+concern.
+
+## Not compared here
+
+- Commercial DMS products (M-Files, DocuWare, etc.). Different
+  market — enterprise procurement + support contracts.
+- SaaS document platforms (Papra Cloud, Google Drive, Notion).
+  Different tradeoff — you get zero-ops in exchange for the platform
+  reading everything you upload.
+- Immich / Photoprism. Adjacent but photo-first, not document-first.
+
+## Update history
+
+This page is manually maintained. If any claim is wrong, file an
+issue with a link to the alternative's docs and we'll fix it.
+
+- **2026-08-05** — initial version

@@ -20,7 +20,8 @@ is the stability signal.
 - **One binary.** No Postgres, no Redis, no Celery, no external
   services for the MVP. Idle RAM budget: ~100 MB.
 - **Content-addressed storage.** Dedup for free; rename never touches
-  bytes; backups are `blobs/` + a SQLite snapshot.
+  bytes; backups are `blobs/` + a SQLite snapshot. See
+  [backup and restore](/backup-restore) for the safe patterns.
 - **Plugin at every layer.** Ingest, OCR, storage, search, auth,
   classification, export — every seam is an interface.
 - **Lossless bundle import.** `suchi import paperless` brings tags,
@@ -56,6 +57,13 @@ is the stability signal.
   <Card title="Privacy & encryption" icon="lock" href="/privacy">
     What leaves the box (nothing). The encryption ladder. What
     suchi never logs.
+  </Card>
+  <Card title="Backup & restore" icon="box-archive" href="/backup-restore">
+    What to back up, when it's safe to copy, and how to bring an
+    instance back from bytes.
+  </Card>
+  <Card title="Alternatives" icon="scale-balanced" href="/comparison">
+    Honest side-by-side vs Paperless-ngx, Papra, docspell.
   </Card>
 </CardGroup>
 
