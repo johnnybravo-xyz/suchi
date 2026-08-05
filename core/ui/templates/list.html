@@ -3,12 +3,17 @@
 {{define "title"}}{{ msg "doc.list.title" }}{{end}}
 
 {{define "content"}}
-<section class="panel">
+<header class="page-header">
   <h1>{{ msg "doc.list.title" }}</h1>
-  <p class="muted">{{ msgf "doc.list.count" .Total }}</p>
+  <p class="subtitle">{{ msgf "doc.list.count" .Total }}</p>
+</header>
 
+<section>
   {{ if not .Documents }}
-    <p class="empty">{{ msg "doc.list.empty" }}</p>
+    <div class="empty">
+      <span class="brand-illust" role="img" aria-label=""></span>
+      <p>{{ msg "doc.list.empty" }}</p>
+    </div>
   {{ else }}
     <table class="rows">
       <thead>
@@ -22,7 +27,12 @@
       <tbody>
       {{ range .Documents }}
         <tr>
-          <td><a href="/docs/{{ .ID }}">{{ .Title }}</a></td>
+          <td>
+            {{- if .Sensitivity -}}
+              <span class="sens {{ .Sensitivity }}">{{ .Sensitivity }}</span>
+            {{- end -}}
+            <a href="/docs/{{ .ID }}">{{ .Title }}</a>
+          </td>
           <td>{{ if .Correspondent }}{{ .Correspondent }}{{ else }}{{ msg "none" }}{{ end }}</td>
           <td>
             {{- if .JDLabel -}}

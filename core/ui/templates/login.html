@@ -3,16 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>Sign in · suchi</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+  <link rel="stylesheet" href="/assets/vendor/oat.min.css">
   <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/theme.js"></script>
 </head>
 <body class="auth">
   <main class="login-card">
-    <h1>suchi</h1>
+    <span class="brand-hero" role="img" aria-label="suchi"></span>
+    <h1 class="brand">Sign in</h1>
+    <p class="muted">to continue to suchi.</p>
     {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
     <form method="post" action="/login">
-      <label>Email <input name="username" type="email" autocomplete="username" required autofocus></label>
-      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <label>
+        <span>Email</span>
+        <input name="username" type="email" autocomplete="username" required autofocus>
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
       <button type="submit">Sign in</button>
     </form>
   </main>

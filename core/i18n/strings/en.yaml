@@ -52,6 +52,11 @@ nav.upload: Upload
 nav.mail_setup: Mail
 nav.setup: Setup
 
+# Inbox (workflow tasks awaiting the current user)
+inbox.title: Inbox
+inbox.count: "%d open task(s) assigned to you"
+inbox.empty: "Nothing to review. New approvals will show up here."
+
 # Setup wizard
 setup.title: Setup
 setup.subtitle: One-time onboarding, but come back any time to reconfigure.

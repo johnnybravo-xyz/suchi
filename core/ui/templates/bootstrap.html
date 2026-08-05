@@ -1,0 +1,44 @@
+{{define "bootstrap"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Set up suchi</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+  <link rel="stylesheet" href="/assets/vendor/oat.min.css">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/theme.js"></script>
+</head>
+<body class="auth">
+  <main class="login-card bootstrap-card">
+    <span class="brand-hero" role="img" aria-label="suchi"></span>
+    <h1 class="brand">Set up suchi</h1>
+    <p class="muted">First-boot admin. The one-time token is in your server log as
+      <code>localauth.setup.token_minted</code>. Paste it below.</p>
+    {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
+    <form method="post" action="/bootstrap">
+      <label>
+        <span>Setup token</span>
+        <input name="token" type="text" required autofocus
+               spellcheck="false" autocomplete="off"
+               placeholder="paste the token from the log">
+      </label>
+      <label>
+        <span>Admin email</span>
+        <input name="email" type="email" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Display name <em class="muted">(optional)</em></span>
+        <input name="display_name" type="text" autocomplete="name">
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="new-password"
+               required minlength="8">
+      </label>
+      <button type="submit">Create admin</button>
+    </form>
+  </main>
+</body>
+</html>{{end}}

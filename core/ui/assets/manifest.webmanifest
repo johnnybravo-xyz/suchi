@@ -1,0 +1,12 @@
+{
+  "name": "suchi",
+  "short_name": "suchi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F2E8CE",
+  "theme_color": "#C13A2C",
+  "icons": [
+    { "src": "/assets/brand/suchi-tile.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/assets/brand/suchi-primary.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
