@@ -54,6 +54,15 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("document")
 	if err != nil {
+		// http.MaxBytesReader (wired at boot via BodyLimit) trips
+		// here with a *http.MaxBytesError. Distinguish so the caller
+		// gets the right shape.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
+				fmt.Sprintf("upload exceeded the %d-byte cap (see UPLOAD_MAX_BYTES / BODY_LIMIT)", mbe.Limit))
+			return
+		}
 		s.writeError(w, http.StatusBadRequest, "missing_file",
 			`multipart part "document" is required`)
 		return

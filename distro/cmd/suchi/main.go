@@ -386,6 +386,7 @@ func runServe() int {
 	if watcher, err := fswatch.New(ctx, fswatch.Config{
 		Dir:        fsw.Dir,
 		OwnerEmail: fsw.OwnerEmail,
+		MaxBytes:   cfg.BodyLimit, // same ceiling as HTTP uploads
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.fswatch.new", "err", err.Error())
 		return 1
