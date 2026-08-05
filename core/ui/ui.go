@@ -87,7 +87,7 @@ func New(d *db.DB, cas *blob.CAS, cat *i18n.Catalog, log *slog.Logger) (*Server,
 	}
 	maps.Copy(funcs, cat.FuncMap())
 
-	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap", "automations"}
+	pages := []string{"list", "detail", "login", "pending_decryption", "upload", "mail_setup", "setup", "inbox", "bootstrap", "automations", "groups"}
 	standalone := map[string]bool{"login": true, "bootstrap": true}
 	s.tmpls = map[string]*template.Template{}
 	for _, name := range pages {
@@ -130,6 +130,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /admin/mail-setup", s.RequireUI(http.HandlerFunc(s.MailSetupPage)))
 	mux.Handle("GET /admin/setup", s.RequireUI(http.HandlerFunc(s.SetupPage)))
 	mux.Handle("GET /admin/automations", s.RequireUI(http.HandlerFunc(s.AutomationsPage)))
+	mux.Handle("GET /admin/groups", s.RequireUI(http.HandlerFunc(s.GroupsPage)))
 	mux.Handle("GET /inbox", s.RequireUI(http.HandlerFunc(s.Inbox)))
 }
 
@@ -189,6 +190,20 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 			JOIN tags t ON t.id = dt.tag_id
 			WHERE dt.document_id = d.id AND t.slug = ?)`
 		args = append(args, tagFilter)
+	}
+	// Visibility filter (Phase 6). Admin sees everything; every other
+	// caller sees docs they own or hold an ACL grant on (directly or
+	// via any of their groups). Empty object_acls (the common case)
+	// keeps this identical to the legacy owner-only behavior.
+	p := auth.FromContext(r.Context())
+	if p != nil && p.Role != "admin" {
+		groupIDs, gerr := loadGroupIDs(r.Context(), s.DB, p.UserID)
+		if gerr != nil {
+			s.Log.Warn("ui.list.load_groups", "err", gerr.Error())
+		}
+		vf, vargs := docVisibilityWhere(p.UserID, groupIDs)
+		where += " AND " + vf
+		args = append(args, vargs...)
 	}
 
 	var total int
@@ -314,6 +329,22 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Visibility gate (Phase 6). Admin bypasses; every other caller
+	// must own the doc or hold an ACL grant on it (directly or via
+	// any of their groups). Non-visible returns 404 rather than 403
+	// to avoid leaking existence — matches the list handler which
+	// already hides unshared docs.
+	where := "d.id = ? AND d.trashed_at IS NULL"
+	args := []any{id}
+	if p := auth.FromContext(r.Context()); p != nil && p.Role != "admin" {
+		groupIDs, gerr := loadGroupIDs(r.Context(), s.DB, p.UserID)
+		if gerr != nil {
+			s.Log.Warn("ui.detail.load_groups", "err", gerr.Error())
+		}
+		vf, vargs := docVisibilityWhere(p.UserID, groupIDs)
+		where += " AND " + vf
+		args = append(args, vargs...)
+	}
 	var (
 		doc         detailDoc
 		created     int64
@@ -344,8 +375,8 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 		FROM documents d
 		LEFT JOIN document_types dt ON dt.id = d.document_type_id
 		LEFT JOIN jd_categories  jc ON jc.id = d.jd_category_id
-		WHERE d.id = ? AND d.trashed_at IS NULL
-	`, id).Scan(
+		WHERE `+where+`
+	`, args...).Scan(
 		&doc.ID, &doc.Title, &doc.Correspondent, &doc.DocType, &doc.JDLabel,
 		&created, &added, &archiveBlob, &doc.ASN, &doc.LegacyID,
 		&doc.SplitParentID, &doc.SplitIndex,

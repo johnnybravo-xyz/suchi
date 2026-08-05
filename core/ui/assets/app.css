@@ -832,3 +832,65 @@ body.auth {
   display: flex; gap: 8px; justify-content: flex-end;
 }
 .btn.danger { color: #dc2626; }
+
+/* ---------- admin groups page ---------- */
+
+.group-toolbar { margin: 16px 0; display: flex; justify-content: flex-end; }
+.group-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 12px;
+  background: var(--panel);
+}
+.group-card summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.group-card summary::-webkit-details-marker { display: none; }
+.group-card summary::before {
+  content: "▸"; font-size: 12px; color: var(--muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.group-card[open] summary::before { transform: rotate(90deg); }
+.group-desc { color: var(--muted); font-size: 12px; margin-left: 8px; }
+.group-body { padding-top: 12px; }
+.add-member-row {
+  display: flex; gap: 8px; margin: 12px 0;
+}
+.add-member-row select {
+  flex: 1; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--background); color: var(--foreground);
+}
+.group-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+#group-editor {
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--background); color: var(--foreground);
+  padding: 20px; max-width: 480px; width: 90%;
+}
+#group-editor::backdrop { background: rgba(0, 0, 0, 0.45); }
+.group-form header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.group-form h2 { margin: 0; font-size: 18px; }
+.group-form .close {
+  background: transparent; border: 0; font-size: 24px;
+  color: var(--muted); cursor: pointer;
+}
+.group-form label {
+  display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted);
+}
+.group-form input[type="text"] {
+  width: 100%; margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--background); color: var(--foreground);
+  font: inherit;
+}
+.group-form footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+}

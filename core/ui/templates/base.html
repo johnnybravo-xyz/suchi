@@ -59,6 +59,7 @@
         {{ end }}
         {{ if and .Principal (eq .Principal.Role "admin") }}
           <a href="/admin/automations">Automations</a>
+          <a href="/admin/groups">Groups</a>
           <a href="/admin/setup" class="nav-with-badge">
             {{ msg "nav.setup" }}
             {{ if .SetupPendingCount }}
