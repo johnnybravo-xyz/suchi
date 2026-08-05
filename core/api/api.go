@@ -151,6 +151,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /s/{token}", s.GetSharePublic)
 	mux.HandleFunc("GET /s/{token}/{doc_id}/download", s.GetSharePublicDownload)
 
+	// OpenAPI 3.1 spec. Unauthenticated; documents the surface but
+	// every operation still enforces its own auth.
+	mux.HandleFunc("GET /api/schema/", s.GetSchema)
+
 	// Document versions (chain of previous_version_id).
 	mux.HandleFunc("GET /api/documents/{id}/versions/", s.ListVersions)
 	mux.HandleFunc("POST /api/documents/{id}/versions/", s.UploadNewVersion)
