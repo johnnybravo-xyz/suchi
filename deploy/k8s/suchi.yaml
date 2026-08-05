@@ -1,0 +1,90 @@
+# Kubernetes manifest for suchi. One Deployment (single replica —
+# SQLite is single-writer), one Service, one PVC. Add an Ingress in
+# your own file so ingress-class and TLS come from your cluster's
+# existing wiring.
+#
+# Namespace: adjust or drop the metadata.namespace fields to match
+# your setup.
+#
+# Storage: PVCs default to your cluster's StorageClass. Suchi needs
+# read/write on DATA_DIR — do NOT use ReadWriteMany (multi-writer
+# breaks SQLite WAL).
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: suchi-data
+  namespace: suchi
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suchi
+  namespace: suchi
+  labels: { app: suchi }
+spec:
+  replicas: 1                          # SQLite single-writer discipline
+  strategy: { type: Recreate }         # avoid two pods opening the DB
+  selector:
+    matchLabels: { app: suchi }
+  template:
+    metadata:
+      labels: { app: suchi }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: suchi
+          image: ghcr.io/suchi-dms/suchi:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: DATA_DIR
+              value: /data
+            - name: LISTEN_ADDR
+              value: "0.0.0.0:8000"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "2000m", memory: "1Gi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: suchi-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: suchi
+  namespace: suchi
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+  selector: { app: suchi }

@@ -51,9 +51,21 @@ mkdir -p /var/lib/suchi
 suchi serve
 ```
 
-A systemd unit example lives under
-[`deploy/systemd`](https://github.com/suchi-dms/suchi/tree/main/deploy)
-in the repo (arrives in Phase 4.5).
+Ready-to-copy templates for the four common self-host shapes live
+under [`deploy/`](https://github.com/suchi-dms/suchi/tree/main/deploy)
+in the repo:
+
+- `deploy/systemd/suchi.service` — systemd unit with a hardened
+  sandbox and the two required env vars pre-set.
+- `deploy/caddy/Caddyfile` — Caddy reverse-proxy block (auto-TLS).
+- `deploy/nginx/suchi.conf` — nginx server block (bring your own
+  certs).
+- `deploy/traefik/suchi.yml` — Traefik dynamic-config snippet.
+- `deploy/k8s/suchi.yaml` — single-replica Deployment + PVC + Service.
+  SQLite is single-writer; do not scale up.
+
+Every template documents the placeholders you need to edit before
+paste.
 
 ## What just happened?
 
