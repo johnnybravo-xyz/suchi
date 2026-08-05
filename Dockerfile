@@ -6,8 +6,11 @@
 #   archive on scanned PDFs — that comes with ocrmypdf, which lives in
 #   the full image. Approx ~70 MB.
 #
-# full: adds ocrmypdf (searchable-PDF archives) + djvulibre-bin (DjVu)
-#   + libreoffice-core (planned office-doc converter). Approx ~1 GB.
+# full: adds ocrmypdf (searchable-PDF archives = text-selectable scanned
+#   PDFs) + djvulibre-bin (DjVu text extraction) + msgconvert (Outlook
+#   .msg → .eml). Approx ~400 MB. Office document coverage (docx, xlsx,
+#   pptx, odt, rtf, csv) rides in slim via anydoc — no longer needs a
+#   LibreOffice fallback here.
 #
 # TODO(phase-3.5): office document coverage via anydoc.
 #   Plan is to add a Rust build stage `anydoc-build` that compiles
@@ -69,7 +72,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       qpdf \
       poppler-utils \
       djvulibre-bin \
-      libreoffice-core \
       imagemagick \
       libheif1 \
       libemail-outlook-message-perl \

@@ -1,7 +1,7 @@
 // Package sandbox is the shared subprocess-invocation wrapper.
 //
 // Every child process that parses user-supplied bytes — pdf-inspector,
-// ocrmypdf, qpdf, LibreOffice — runs through Run(ctx, opts). The wrapper
+// ocrmypdf, qpdf, anydoc — runs through Run(ctx, opts). The wrapper
 // enforces:
 //
 //   - a hard context timeout, kill-the-whole-process-group on expiry
