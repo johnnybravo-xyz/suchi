@@ -65,12 +65,11 @@ type Correspondent struct {
 }
 
 // Parse decodes a sidecar payload. Handles both the native suchi
-// shape (versioned via `suchi_sidecar: 1`) and the Paperless-native
-// shape emitted by producers like paperless-ngx post-consume scripts
-// and johnnybravo-xyz/mail-intake — flat JSON with `title`, `created`,
+// shape (versioned via `suchi_sidecar: 1`) and a flat-JSON compat
+// shape emitted by external producers (post-consume scripts, mail
+// intake, third-party scanners) — flat JSON with `title`, `created`,
 // `correspondent`, `tags`. The compat path lets you drop suchi into
-// an existing Paperless-style ingest chain without patching the
-// upstream producer.
+// an existing ingest chain without patching the producer.
 //
 // Returns an error only on bad JSON or an explicit-but-mismatched
 // suchi_sidecar version. Absence of the version key means "producer
@@ -80,19 +79,19 @@ func Parse(b []byte) (*V1, error) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("sidecar: decode: %w", err)
 	}
-	// Compat: no version key → assume Paperless-native flat JSON.
+	// Compat: no version key → assume flat-JSON compat shape.
 	// Every field the compat producer sets lives at the same key
 	// name, so the initial Unmarshal already populated the shared
 	// fields; just tag the record as version 1 for downstream
 	// consumers.
 	if s.Version == 0 {
-		if !looksLikePaperlessSidecar(b) {
-			return nil, errors.New("sidecar: missing suchi_sidecar version and no recognized Paperless-style keys")
+		if !looksLikeFlatSidecar(b) {
+			return nil, errors.New("sidecar: missing suchi_sidecar version and no recognized flat-shape keys")
 		}
 		s.Version = Version
-		// Paperless-native `correspondent` may be a "Name <email>"
-		// address string. Peel to just the display name so tag
-		// lookups aren't confused by the angle-bracket suffix.
+		// Compat `correspondent` may be a "Name <email>" address
+		// string. Peel to just the display name so tag lookups
+		// aren't confused by the angle-bracket suffix.
 		s.Correspondent = normalizeCorrespondent(s.Correspondent)
 		return &s, nil
 	}
@@ -102,10 +101,10 @@ func Parse(b []byte) (*V1, error) {
 	return &s, nil
 }
 
-// looksLikePaperlessSidecar is the cheap sniff for "this JSON came
-// from a Paperless-compatible producer, not from a broken suchi one."
-// True when any of the well-known Paperless-native keys is present.
-func looksLikePaperlessSidecar(b []byte) bool {
+// looksLikeFlatSidecar is the cheap sniff for "this JSON came from
+// a flat-shape compat producer, not from a broken suchi one." True
+// when any of the well-known flat-shape keys is present.
+func looksLikeFlatSidecar(b []byte) bool {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
 		return false
@@ -145,7 +144,7 @@ func trimSpaceRight(s string) string {
 
 // CreatedUnix returns the created date as unix seconds, or 0 if the
 // producer didn't set one (or set an unparseable one). Accepts the
-// paperless-style ISO layouts.
+// common ISO layouts.
 func (s *V1) CreatedUnix() int64 {
 	if s == nil || s.Created == "" {
 		return 0

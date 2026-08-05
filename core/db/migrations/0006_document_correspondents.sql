@@ -1,10 +1,10 @@
 -- 0006_document_correspondents: multi-correspondent junction with role.
 --
--- Motivation (paperless-ngx FR #437, 136 upvotes; ecosystem survey):
+-- Motivation (widely-requested ecosystem-survey item):
 -- real docs have >1 party — a bank statement has {bank, account
--- holder}; an invoice has {vendor, customer}. Paperless models a
--- single correspondent per doc and forces the other party into a tag
--- or a custom field, which loses semantic clarity.
+-- holder}; an invoice has {vendor, customer}. A single-correspondent
+-- model forces the other party into a tag or a custom field, which
+-- loses semantic clarity.
 --
 -- Approach: keep documents.correspondent_id as the *primary* FK (the
 -- sender by convention; every existing code path still works). Add a

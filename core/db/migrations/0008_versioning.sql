@@ -1,9 +1,10 @@
 -- 0008_versioning: document versioning via previous_version_id.
 --
--- Paperless-ngx #1218 sits at the top of the all-time FR list (360
--- upvotes) asking for "update document version". Real workflows:
--- lease renewal (v1 = 2024 lease, v2 = 2026 lease over same doc);
--- corrected invoice; medical report retraction; contract amendment.
+-- "Update document version" is the single most-upvoted feature
+-- request across DMS trackers (360+ upvotes on the largest one).
+-- Real workflows: lease renewal (v1 = 2024 lease, v2 = 2026 lease
+-- over same doc); corrected invoice; medical report retraction;
+-- contract amendment.
 --
 -- Model choice (from the design pass): **linked-chain**. Each version
 -- is a full documents row with a nullable previous_version_id

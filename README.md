@@ -1,8 +1,8 @@
 # suchi
 
-**suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and wire-compatible with the Paperless-ngx mobile ecosystem.
+**suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and a mobile wire surface that common DMS mobile clients can drive.
 
-Status: **pre-alpha** — Phases 0-3 shipped, Phase 4 (mobile compat + go-public) next. Not for production use. Repo is private until Phase 4.
+Status: **pre-alpha** — Phases 0-3 shipped, Phase 4 (mobile wire surface + go-public) next. Not for production use. Repo is private until Phase 4.
 
 ## Non-negotiables
 
@@ -11,7 +11,7 @@ Status: **pre-alpha** — Phases 0-3 shipped, Phase 4 (mobile compat + go-public
 - **No telemetry, ever.** A stock install makes zero outbound connections. Every egress is opt-in, visible in `config.yaml`, and logged.
 - AGPL-3.0. DCO/CLA once the repo goes public.
 
-Full design lives at `../suchi-plan.md` (upstream design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify. Brand assets live at `../design-lang/brand/`.
+Full design lives at `../suchi-plan.md` (design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify. Brand assets live at `../design-lang/brand/`.
 
 ## Layout
 
@@ -214,7 +214,7 @@ Direct-to-internet installs can set both `TLS_CERT_FILE` and `TLS_KEY_FILE` to s
 ```
 suchi serve                 # HTTP server + job dispatcher
 suchi healthcheck           # exits 0 iff /readyz answers 200 (used by Docker HEALTHCHECK)
-suchi import paperless      # ingest a Paperless-ngx export bundle (see docs/importer.mdx)
+suchi import paperless      # ingest a compatible export bundle (see docs/importer.mdx)
 suchi gc                    # mark-and-sweep blob reclamation
 suchi taxonomy merge        # dedup tags/correspondents/types (see docs/cli.mdx)
 suchi doctor                # diagnostic report — egress surface, binaries on PATH, schema version, DATA_DIR writability

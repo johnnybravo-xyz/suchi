@@ -320,7 +320,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 
 	// JD category from sidecar, if it resolves. Unresolved codes
 	// (rule matched but code doesn't exist in this instance) fall
-	// through to inbox — same policy as the paperless importer.
+	// through to inbox — same policy as the bulk importer.
 	catID := inbox
 	if side != nil && side.JDCategory != 0 {
 		var id int64
@@ -575,7 +575,7 @@ func deriveTitle(path string, side *sidecar.V1) string {
 // both because producer conventions differ.
 func sidecarFor(path string) string {
 	// Prefer the "strip extension, add .json" shape (matches the
-	// paperless split-manifest sidecar pattern).
+	// split-manifest sidecar pattern used by common ingest tools).
 	base := strings.TrimSuffix(path, filepath.Ext(path))
 	if _, err := os.Stat(base + ".json"); err == nil {
 		return base + ".json"
@@ -583,8 +583,8 @@ func sidecarFor(path string) string {
 	return path + ".json"
 }
 
-// slugify: paperless-style slug from a name. Lowercase; non-alnum → '-'.
-// Cheap; matches the importer's slug convention.
+// slugify: lowercase, non-alnum → '-'. Cheap; matches the importer's
+// slug convention.
 func slugify(name string) string {
 	var b bytes.Buffer
 	for _, r := range strings.ToLower(strings.TrimSpace(name)) {

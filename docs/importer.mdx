@@ -1,5 +1,5 @@
 ---
-title: "Importing from Paperless"
+title: "Importing an export bundle"
 description: "suchi import paperless — verbatim metadata, dedup, --map-jd, --auto-jd, --verify."
 ---
 
@@ -10,8 +10,8 @@ export during a shadow window.
 
 ## Prerequisites
 
-- A completed Paperless-ngx export at `/path/to/export`. If you don't
-  have one, run this on the Paperless side:
+- A completed export bundle at `/path/to/export`. If you don't have
+  one, run this on the source side:
   ```bash
   document_exporter /path/to/export
   ```
@@ -54,9 +54,9 @@ visible, bulk-reassignable, never lost. Three flags override:
 <Tabs>
   <Tab title="--flat">
     Force every doc to the inbox. Never consult a rule. Use this if
-    you're a Paperless-classic migrator and want your tag/correspondent
-    workflow untouched — the inbox is your one bucket, JD affordances
-    stay hidden in the UI.
+    you want your existing tag/correspondent workflow untouched —
+    the inbox is your one bucket, JD affordances stay hidden in the
+    UI.
 
     ```bash
     suchi import paperless --from ./export --owner-email you@ex.com --flat
@@ -119,11 +119,11 @@ Report partitions every document in the bundle into:
 - **Differ** — present locally, but at least one compared field
   diverges. The report lists the field names.
 - **Orphan** — present in suchi with a `paperless_id_legacy` that
-  isn't in this bundle. Suggests a Paperless-side deletion since the
+  isn't in this bundle. Suggests a source-side deletion since the
   last export.
 
 Compared fields (Phase 1): `title`, `original_size`. Deliberately
-minimal — OCR text drifts trivially across Paperless versions and
+minimal — OCR text drifts trivially across source versions and
 would false-positive.
 
 ## Shadow migration recipe
@@ -131,11 +131,11 @@ would false-positive.
 The recommended cutover for cautious operators:
 
 <Steps>
-  <Step title="Stand suchi up alongside Paperless">
+  <Step title="Stand suchi up alongside the source system">
     Point it at the same backup pipeline.
   </Step>
   <Step title="Every night, verify">
-    Run `document_exporter` on the Paperless side and
+    Run `document_exporter` on the source side and
     `suchi import paperless --verify` on the suchi side.
   </Step>
   <Step title="Watch the diffs settle">
@@ -149,7 +149,7 @@ The recommended cutover for cautious operators:
     Update mobile apps and staging-dir producers to point at suchi.
   </Step>
   <Step title="Cool off">
-    Keep Paperless running for a two-week cool-off, then decommission.
+    Keep the source running for a two-week cool-off, then decommission.
   </Step>
 </Steps>
 

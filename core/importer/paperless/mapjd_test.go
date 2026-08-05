@@ -76,7 +76,7 @@ func TestAutoJDEndToEnd(t *testing.T) {
 	if err := d.Read.QueryRow(`
 		SELECT jc.code
 		FROM documents d JOIN jd_categories jc ON jc.id = d.jd_category_id
-		WHERE d.paperless_id_legacy = 200
+		WHERE d.legacy_id = 200
 	`).Scan(&code); err != nil {
 		t.Fatalf("query: %v", err)
 	}

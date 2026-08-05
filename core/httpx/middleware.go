@@ -146,11 +146,10 @@ func RequireAuth(next http.Handler) http.Handler {
 }
 
 // NormalizeAPITrailingSlash accepts both `/api/foo/bar` and
-// `/api/foo/bar/` for any registered API route, so Django-REST-style
-// clients (swift-paperless, Paperless Mobile, curl scripts written
-// against paperless docs) work against suchi without care about
-// trailing slash. Only paths under `/api/` are affected; the browser
-// UI keeps its stricter matching.
+// `/api/foo/bar/` for any registered API route, so third-party
+// clients that follow the trailing-slash convention work against
+// suchi without caring about the slash. Only paths under `/api/`
+// are affected; the browser UI keeps its stricter matching.
 //
 // Strategy: leave the mux registrations untouched. When a request
 // under `/api/` ends in `/` and the mux has no registered pattern for

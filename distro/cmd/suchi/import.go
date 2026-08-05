@@ -36,11 +36,11 @@ func runImport(args []string) int {
 func runImportPaperless(args []string) int {
 	fs := flag.NewFlagSet("suchi import paperless", flag.ContinueOnError)
 	var (
-		from       = fs.String("from", "", "path to the Paperless export bundle root (required)")
+		from       = fs.String("from", "", "path to the export bundle root (required)")
 		ownerEmail = fs.String("owner-email", "", "email of the user that will own imported documents (required unless --dry-run)")
 		dryRun     = fs.Bool("dry-run", false, "parse the bundle and report counts without writing")
 		flat       = fs.Bool("flat", false, "force every imported doc to the inbox category — skip JD resolution")
-		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping paperless metadata → JD code")
+		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping bundle metadata → JD code")
 		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
 		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
 	)
@@ -189,7 +189,7 @@ Verify (no writes).
 	if len(rep.Differ) > 0 {
 		fmt.Fprintln(os.Stderr, "\nDiffering docs:")
 		for _, d := range rep.Differ {
-			fmt.Fprintf(os.Stderr, "  pk=%d  fields=%v\n", d.PaperlessID, d.Fields)
+			fmt.Fprintf(os.Stderr, "  pk=%d  fields=%v\n", d.LegacyID, d.Fields)
 		}
 	}
 	if len(rep.Orphan) > 0 {

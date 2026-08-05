@@ -44,12 +44,12 @@ type VerifyReport struct {
 }
 
 // DocDiff names the fields that disagree between the bundle and the
-// live suchi row for a given paperless_id_legacy. Only field NAMES; the
+// live suchi row for a given legacy_id. Only field NAMES; the
 // values themselves aren't returned because they might be large (title
 // truncation, OCR text) and the operator wants a summary, not a dump.
 type DocDiff struct {
-	PaperlessID int64
-	Fields      []string
+	LegacyID int64
+	Fields   []string
 }
 
 // Verify reads the bundle and diffs it against the live DB without
@@ -85,7 +85,7 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 			suchiSize  int64
 		)
 		err := d.Read.QueryRowContext(ctx, `
-			SELECT title, original_size FROM documents WHERE paperless_id_legacy = ?
+			SELECT title, original_size FROM documents WHERE legacy_id = ?
 		`, o.PK).Scan(&suchiTitle, &suchiSize)
 		if err != nil {
 			// Not found → this doc would be imported.
@@ -97,14 +97,14 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 		if len(diff) == 0 {
 			rep.Match = append(rep.Match, o.PK)
 		} else {
-			rep.Differ = append(rep.Differ, DocDiff{PaperlessID: o.PK, Fields: diff})
+			rep.Differ = append(rep.Differ, DocDiff{LegacyID: o.PK, Fields: diff})
 		}
 	}
 
-	// Orphans: suchi docs with a paperless_id_legacy that's not in this bundle.
+	// Orphans: suchi docs with a legacy_id that's not in this bundle.
 	rows, err := d.Read.QueryContext(ctx, `
-		SELECT paperless_id_legacy FROM documents
-		WHERE paperless_id_legacy IS NOT NULL AND trashed_at IS NULL
+		SELECT legacy_id FROM documents
+		WHERE legacy_id IS NOT NULL AND trashed_at IS NULL
 	`)
 	if err != nil {
 		return nil, err

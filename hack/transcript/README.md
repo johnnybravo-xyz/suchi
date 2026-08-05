@@ -7,15 +7,8 @@ golden fixture (JSON header block + sidecar blobs for binary bodies).
 ## Why
 
 Golden transcripts are the honest way to know two implementations
-speak the same wire protocol. suchi's Phase-4 Paperless-ngx
-compat surface will be verified by replaying real
-`swift-paperless` / Paperless Mobile traffic against suchi and
-asserting response shape. This tool captures that traffic while a
-real Paperless-ngx is still running.
-
-Nothing about the tool is Paperless-specific — it's a generic
-`net/http/httputil.ReverseProxy` with a tee to disk. Use it against any
-upstream you want to characterize.
+speak the same wire protocol. It's a generic `net/http/httputil.ReverseProxy`
+with a tee to disk. Use it against any upstream you want to characterize.
 
 ## Build
 
@@ -34,7 +27,7 @@ It has zero dependencies beyond the stdlib and is not built into
 ./transcript \
   --listen  :8443 \
   --target  https://paperless.your-lan/ \
-  --out     ../../testdata/paperless-transcripts
+  --out     ../../testdata/transcripts
 ```
 
 Then point the client (mobile app, curl, whatever) at
@@ -43,18 +36,18 @@ captured. Kill the recorder when done; fixtures are already on disk.
 
 ### Flags
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `--listen` | `:8443` | Address to bind |
-| `--target` | *required* | Upstream URL to forward to |
-| `--out` | `testdata/paperless-transcripts` | Fixture directory |
-| `--blob-min` | `4096` | Bodies larger than N bytes (or non-textual) spill to `blobs/` |
-| `--insecure` | `false` | **Debug only.** Skips header redaction. Never commit fixtures made this way. |
+| Flag         | Default                | Purpose                                                                      |
+| ------------ | ---------------------- | ---------------------------------------------------------------------------- |
+| `--listen`   | `:8443`                | Address to bind                                                              |
+| `--target`   | _required_             | Upstream URL to forward to                                                   |
+| `--out`      | `testdata/transcripts` | Fixture directory                                                            |
+| `--blob-min` | `4096`                 | Bodies larger than N bytes (or non-textual) spill to `blobs/`                |
+| `--insecure` | `false`                | **Debug only.** Skips header redaction. Never commit fixtures made this way. |
 
 ## Fixture layout
 
 ```
-testdata/paperless-transcripts/
+testdata/transcripts/
 ├── 0001-GET-api-remote_version.json
 ├── 0002-POST-api-token.json
 ├── 0003-GET-api-documents.json
@@ -117,14 +110,14 @@ deleted, not committed.
   keyed by SHA-256 (dedup for free).
 - Commit both the JSON files and `blobs/`. They're the contract.
 - Never commit `blobs/` content with real personal documents — record
-  against a scratch Paperless with synthetic docs. `hack/emlfixtures`
+  against a scratch with synthetic docs. `hack/emlfixtures`
   ships PDFs suitable for the upload path.
 
 ## Roadmap
 
 - **Replay** side is Phase-4 work: reads the fixture set, hits suchi's
   compat surface, diffs against recorded responses. Placeholder home
-  will be `core/paperlesscompat/contract_test.go`.
+  will be `core/compat/contract_test.go`.
 - Optional TLS on `--listen` for iOS clients that refuse plaintext
   (mkcert + `--tls-cert` / `--tls-key`).
 - `--filter` to skip paths (e.g. `/api/logs/` polling noise).

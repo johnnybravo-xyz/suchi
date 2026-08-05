@@ -1,12 +1,11 @@
 -- 0004_per_user_dedup: scope the "no duplicate original bytes" invariant
 -- to a single owner instead of the whole instance.
 --
--- Motivation: paperless-ngx ships a global dedup keyspace (the top-ten
--- FR cluster on their tracker calls this out — same-file-two-users
--- gets 409'd out). suchi's Phase-2 upload API followed the same
--- pattern. That's fine for a one-person deployment; wrong for a
--- household or a shared team where two people legitimately land the
--- same insurance PDF for different tax filings.
+-- Motivation: a global dedup keyspace (as some other DMS
+-- implementations use) 409s two users uploading the same file. That's
+-- fine for a one-person deployment; wrong for a household or a shared
+-- team where two people legitimately land the same insurance PDF for
+-- different tax filings.
 --
 -- Change: drop the global-unique partial index and replace it with a
 -- (owner_id, original_blob) partial-unique index. `WHERE trashed_at

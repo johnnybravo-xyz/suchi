@@ -211,21 +211,21 @@ ls /tmp/suchi-r0/staging/errors/
 # → broken.pdf, broken.json, broken.pdf.err
 ```
 
-## Recipe 5 — Paperless import (dry-run first, then full)
+## Recipe 5 — bundle import (dry-run first, then full)
 
 ```bash
 # --verify: dry-diff against the live DB.
 ./dist/suchi import paperless \
-    --from /path/to/paperless-export --verify
+    --from /path/to/export --verify
 
 # Full import into inbox (safe default).
 ./dist/suchi import paperless \
-    --from /path/to/paperless-export \
+    --from /path/to/export \
     --owner-email you@ex.dev
 
 # ...or with the built-in heuristics:
 ./dist/suchi import paperless \
-    --from /path/to/paperless-export \
+    --from /path/to/export \
     --owner-email you@ex.dev \
     --auto-jd
 ```

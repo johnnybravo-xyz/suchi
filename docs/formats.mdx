@@ -117,8 +117,8 @@ and one password; `remember=true` fires once per batch on first hit.
 
 **qpdf warnings-are-fine gotcha.** Some bank PDFs ship spec-nonconformant
 `/Perms` and produce qpdf exit code 3 (warnings). suchi treats exit 3
-with non-empty output as success — matching the Paperless-ngx
-pre-consume convention.
+with non-empty output as success — the pragmatic convention for
+pre-consume decrypt.
 
 ### Email (message/rfc822)
 
@@ -319,7 +319,7 @@ Dockerfile comment — is:
 1. Run `hack/pin-bumper.sh` from repo root. It reports when the pinned
    version is more than 2 releases behind and suggests a bump to n-1
    (never latest — soak time matters).
-2. Read the upstream compare URL it prints. Scan `examples/convert.rs`
+2. Read the compare URL it prints. Scan `examples/convert.rs`
    for argv changes.
 3. Edit `ARG ANYDOC_TAG=` in `Dockerfile`. Rebuild slim, run
    `docker run --rm suchi:slim doctor` to confirm anydoc is on PATH,

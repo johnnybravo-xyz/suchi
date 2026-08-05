@@ -89,7 +89,7 @@ func usage() {
 Usage:
   suchi serve                     run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
-  suchi import paperless [flags]  import a Paperless-ngx export bundle
+  suchi import paperless [flags]  import a compatible export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
   suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
