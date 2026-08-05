@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt tidy run clean smoke install-hooks
+.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean
 
 BIN := $(PWD)/dist/suchi
 MODULES := plugin-api core plugins/local-auth plugins/oidc distro
@@ -39,6 +39,26 @@ run: build
 
 clean:
 	rm -rf dist
+
+# Build the Svelte SPA and refresh core/ui/spa/dist (embedded into the
+# Go binary). Prefers bun; falls back to npm. Contributors who don't
+# touch the UI never need either — the built dist is committed.
+ui:
+	@cd ui && \
+	  if command -v bun >/dev/null 2>&1; then \
+	    bun install --frozen-lockfile && bun run build; \
+	  else \
+	    npm ci && npm run build; \
+	  fi
+	@rm -rf core/ui/spa/dist && mkdir -p core/ui/spa
+	@cp -r ui/dist core/ui/spa/dist
+	@echo "embedded $$(du -sh core/ui/spa/dist | cut -f1) — commit core/ui/spa/dist"
+
+# Wipe the embedded SPA (rebuilt on next `make ui`). The Go build
+# still works after this — spa.go returns a 503 with a "run make ui"
+# hint if the embed tree is empty.
+ui-clean:
+	rm -rf core/ui/spa/dist ui/dist ui/node_modules
 
 # Copy tracked hooks into .git/hooks. Idempotent; re-run after adding a
 # new script under hooks/. Uses install -D so a fresh clone that

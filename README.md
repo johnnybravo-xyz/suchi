@@ -17,7 +17,7 @@ Full design lives at `../suchi-plan.md` (design doc, out of tree). User-facing r
 ## What ships in the box
 
 - **HTTP API** — ~135 routes covering documents, taxonomy, search, share links, automations, approvals, groups, ACLs, agents, MCP, mobile-compat, OpenAPI at `/api/schema/`.
-- **Server-rendered UI** — list, detail, upload, inbox, admin pages (setup wizard, mail-mbsync, automations, groups). Oat CSS + minimal JS; disable wholesale via `SUCHI_UI_DISABLED=1` for headless deployments.
+- **Two UIs, one binary.** Server-rendered pages (list, detail, upload, inbox, admin: setup, mail-mbsync, automations, groups, custom fields) at `/` — Oat CSS + minimal JS. Svelte SPA at `/app/` — full-featured browser client, `//go:embed`'d from `core/ui/spa/dist/`. Both consume the same auth chain + API. `SUCHI_UI_DISABLED=1` disables both for headless.
 - **Ingest pipeline** — 16 packages under `core/pipeline/` handling qpdf → pdf-inspector → OCR (tessocr / ocrmypdf) → anydoc (office docs) → eml / msg / epub / heic / djvu / zugferd / barcode / pageanalyze / docsplit → rules classifier → automations → rendered-view → optional LLM classifier.
 - **Three ingest producers** — HTTP upload (`POST /api/documents/`), fs-watch (`core/ingest/fswatch`), email-watch (`core/ingest/emailwatch` — real IMAP polling loop, cred-managed via mail-mbsync sidecar).
 - **Two automation engines** — [automations](docs/automations.mdx) (trigger→conditions→actions, `document_added` / `document_updated` / `consumption`) and [approvals](docs/approvals.mdx) (human-in-the-loop state machines with timeouts).
@@ -35,7 +35,7 @@ suchi/
 ├── plugin-api/            — interfaces + shared types; the only dep every module shares
 ├── core/                  — HTTP, DB, jobs, audit, auth chain, pipeline, workflow engine, UI. Imports plugin-api only.
 │   ├── api/               — HTTP handlers (JSON surface)
-│   ├── ui/                — server-rendered pages + assets
+│   ├── ui/                — server-rendered pages + assets + SPA embed at spa/dist/
 │   ├── db/migrations/     — 20 embedded SQL migrations
 │   ├── pipeline/          — 16 ingest processing steps
 │   ├── ingest/            — 3 canonical producers (fswatch, emailwatch, sidecar spec)
