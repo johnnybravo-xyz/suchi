@@ -2,7 +2,7 @@
 
 **suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and wire-compatible with the Paperless-ngx mobile ecosystem.
 
-Status: **pre-alpha** — Phase 2 shipping. Not for production use. Repo is private until Phase 4.
+Status: **pre-alpha** — Phases 0-3 shipped, Phase 4 (mobile compat + go-public) next. Not for production use. Repo is private until Phase 4.
 
 ## Non-negotiables
 
@@ -11,7 +11,7 @@ Status: **pre-alpha** — Phase 2 shipping. Not for production use. Repo is priv
 - **No telemetry, ever.** A stock install makes zero outbound connections. Every egress is opt-in, visible in `config.yaml`, and logged.
 - AGPL-3.0. DCO/CLA once the repo goes public.
 
-Full design lives in `notes/suchi-plan.md` (upstream design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify.
+Full design lives at `../suchi-plan.md` (upstream design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify. Brand assets live at `../design-lang/brand/`.
 
 ## Layout
 
@@ -19,15 +19,17 @@ Full design lives in `notes/suchi-plan.md` (upstream design doc, out of tree). U
 suchi/
 ├── go.work                — workspace linking all modules
 ├── plugin-api/            — interfaces + shared types; the only dep every module shares
-├── core/                  — HTTP, DB, jobs, audit, auth chain, pipeline. Imports plugin-api only.
+├── core/                  — HTTP, DB, jobs, audit, auth chain, pipeline, workflow engine, UI. Imports plugin-api only.
 ├── plugins/               — reference plugins, each its own module
 │   ├── local-auth/
 │   ├── oidc/
 │   └── llm-classifier/
 ├── distro/                — the shipped binary. Pins versions, blank-imports enabled plugins.
-│   └── cmd/suchi/         — main entry point (subcommands: serve, healthcheck, import, gc, taxonomy)
+│   └── cmd/suchi/         — main entry point (subcommands: serve, healthcheck, import, gc, taxonomy, doctor, version)
 ├── docs/                  — Mintlify MDX; published via docs.json
+├── hack/                  — local dev harnesses (ingest fixtures, smoke scripts)
 ├── hooks/                 — git hooks (pre-commit gofmt)
+├── Justfile               — dev shortcuts (`just serve`, `just fresh`, `just doctor`, etc.)
 ├── Dockerfile             — two targets: slim (distroless) + full (adds OCR/qpdf/poppler/djvulibre)
 └── .github/workflows/     — ci.yml (per-module test/vet), smoke.yml (full-image end-to-end)
 ```
@@ -36,7 +38,7 @@ Every module has its own `go.mod`; `go.work` links them so `go build ./...` at t
 
 ## Requirements
 
-**Build**: Go 1.25+.
+**Build**: Go 1.25+ (`plugin-api` targets 1.24 to stay maximally consumable).
 
 **Runtime**: for the full ingest pipeline install the external tools you want active — each degrades gracefully when absent:
 
@@ -48,6 +50,8 @@ Every module has its own `go.mod`; `go.work` links them so `go build ./...` at t
 - `ghostscript` — used by ocrmypdf and (in CI) to build the smoke fixture
 
 The Docker `slim` image ships qpdf + poppler-utils + tesseract (full PDF pipeline via `tessocr`, ~70 MB). The `full` image adds ocrmypdf + djvulibre + libreoffice-core (~1 GB) — pick full when you want the searchable-PDF archive or DjVu ingest.
+
+Run `suchi doctor` any time for a snapshot of which tools are on PATH, egress surface, and schema version.
 
 ## Development
 
@@ -62,18 +66,35 @@ make install-hooks     # copies hooks/pre-commit → .git/hooks; runs gofmt on s
 ### Run the server locally
 
 ```sh
-make run
+just serve             # preferred — boots against /tmp/suchi-dev, preserves data across restarts
 # equivalent to:
-#   PUBLIC_URL=http://127.0.0.1:8000 DATA_DIR=/tmp/suchi-dev ./dist/suchi serve
+#   PUBLIC_URL=http://127.0.0.1:8000 DATA_DIR=/tmp/suchi-dev LISTEN_ADDR=:8000 ./dist/suchi serve
 ```
 
-Then visit `http://127.0.0.1:8000/`. On first boot suchi prints a one-time **setup token** at WARN level in the log; POST it to `/setup` with an email + password to create the admin.
+Then visit `http://127.0.0.1:8000/`. On first boot suchi mints a one-time **setup token** (logged at WARN as `localauth.setup.token_minted`). Opening the browser drops you at `/bootstrap` — paste the token there and pick an admin email + password to finish setup, or POST it directly to `/setup`:
+
+```sh
+just setup-token       # prints the token from the running dev log
+curl -X POST http://127.0.0.1:8000/setup \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"...","email":"you@example.com","password":"..."}'
+```
+
+The setup token is only minted when the `users` table is empty — restart-safe:
+
+```sh
+just serve             # reboots against the same DB; keeps admin, docs, tokens
+just fresh             # wipes DATA_DIR and starts clean (use after `just setup-token` fails)
+just reset             # wipes DATA_DIR without booting
+```
+
+`just doctor` runs the same egress/binary/schema snapshot against a live instance on `:8000`.
 
 ### Full pipeline locally
 
-Uploads land in the outbox and get picked up by the post-ingest handler. To exercise the whole chain (qpdf → pdftotext / OCR → ZUGFeRD → rules → render → LLM), install the binaries listed under Requirements and re-run `make run`.
+Uploads land in the outbox and get picked up by the post-ingest handler. To exercise the whole chain (qpdf → pdftotext / OCR → ZUGFeRD → rules → render → LLM), install the binaries listed under Requirements and re-run `just serve`.
 
-Optional LLM classifier (Phase 3): set
+Optional LLM classifier (Phase 3, shipped): configure via the setup wizard's LLM step, or via env:
 
 ```sh
 export LLM_ENDPOINT_URL=http://127.0.0.1:11434/v1   # e.g. Ollama on box
@@ -82,16 +103,31 @@ export LLM_MODEL=llama3
 # export LLM_EGRESS_ACK=true
 ```
 
-before `make run`. Empty `LLM_ENDPOINT_URL` keeps the classifier off (zero-egress default).
+Empty `LLM_ENDPOINT_URL` keeps the classifier off (zero-egress default). Live-reload works — save settings via the wizard or `POST /api/admin/settings/llm` and the running classifier swaps to the new config on its next call.
+
+### Workflow engine (Phase 5, shipped)
+
+State-machine engine for review/approval chains. Definitions are JSON specs; runs advance through the durable outbox. Human approvals land in `/api/tasks/` alongside machine jobs so mobile clients poll one endpoint for both.
+
+- `POST /api/workflows` — register a spec (admin)
+- `POST /api/workflows/{slug}/start` — start a run
+- `POST /api/workflows/tasks/{id}/resolve` — resolve a human task
+
+See `docs/workflows.mdx` for the invoice-approval worked example.
+
+### Plugin authoring
+
+Three interfaces — `Subscriber`, `Authenticator`, `AuditSink` — cover most extension needs. See `docs/plugins.mdx` for a plugin authoring guide with worked examples (auto-tag-pdf, internal-JWT auth, syslog audit forwarder).
 
 ### Test / vet / lint
 
 ```sh
-make test         # per-module `go test -count=1 ./...`
+make test              # per-module `go test -count=1 ./...`
 make vet
-make lint         # staticcheck (auto-installs if missing)
-make fmt          # gofmt -w on every .go file
-make tidy         # `go mod tidy` in every module
+make lint              # staticcheck (auto-installs if missing)
+make fmt               # gofmt -w on every .go file
+make tidy              # `go mod tidy` in every module
+make check             # fmt clean + lint clean + tests — same gate CI runs
 ```
 
 The pre-commit hook runs `gofmt` and blocks the commit if anything's unformatted — CI's `gofmt` gate has bounced pushes before it landed, so leave the hook installed.
@@ -99,10 +135,12 @@ The pre-commit hook runs `gofmt` and blocks the commit if anything's unformatted
 ### Smoke test (local build sanity)
 
 ```sh
-make smoke        # builds, boots on :8765, hits /healthz + /readyz, kills
+make smoke             # builds, boots on :8765, hits /healthz + /readyz, kills
+just smoke-ingest      # boots suchi + drops .eml fixtures + asserts ingest pipeline
+just smoke-mail        # runs the mail-mbsync docker recipe smoke test
 ```
 
-For a full end-to-end run against real binaries, see `.github/workflows/smoke.yml` — it's easier to push and let CI run it than to reproduce the Docker + LaTeX-free PDF sample locally.
+For a full end-to-end run against real binaries, see `.github/workflows/smoke.yml` — easier to push and let CI run it than to reproduce the Docker + LaTeX-free PDF sample locally.
 
 ## Serving the docs
 
@@ -175,11 +213,12 @@ Direct-to-internet installs can set both `TLS_CERT_FILE` and `TLS_KEY_FILE` to s
 
 ```
 suchi serve                 # HTTP server + job dispatcher
-suchi healthcheck           # exits 0 iff /healthz answers 200 (used by Docker HEALTHCHECK)
-suchi import <flags>        # ingest a Paperless-ngx manifest (see docs/importer.mdx)
+suchi healthcheck           # exits 0 iff /readyz answers 200 (used by Docker HEALTHCHECK)
+suchi import paperless      # ingest a Paperless-ngx export bundle (see docs/importer.mdx)
 suchi gc                    # mark-and-sweep blob reclamation
-suchi taxonomy merge <...>  # dedup tags/correspondents/types (see docs/cli.mdx)
-suchi version
+suchi taxonomy merge        # dedup tags/correspondents/types (see docs/cli.mdx)
+suchi doctor                # diagnostic report — egress surface, binaries on PATH, schema version, DATA_DIR writability
+suchi version               # build info
 ```
 
 ## CI
