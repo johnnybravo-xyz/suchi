@@ -170,8 +170,18 @@ func Load() (*Config, error) {
 	}
 
 	var err error
-	if c.BodyLimit, err = parseBytes(env("BODY_LIMIT", "100M")); err != nil {
-		return nil, fmt.Errorf("BODY_LIMIT: %w", err)
+	// BODY_LIMIT applies to every HTTP request body (uploads,
+	// PATCHes, JSON POSTs). 500M by default because scanned PDFs
+	// routinely exceed the old 100M ceiling. `UPLOAD_MAX_BYTES` is
+	// accepted as an alias for the same value — the review used it,
+	// so we honor both. `0` disables the cap (for the operators who
+	// insist).
+	uploadEnv := env("UPLOAD_MAX_BYTES", "")
+	if uploadEnv == "" {
+		uploadEnv = env("BODY_LIMIT", "500M")
+	}
+	if c.BodyLimit, err = parseBytes(uploadEnv); err != nil {
+		return nil, fmt.Errorf("UPLOAD_MAX_BYTES / BODY_LIMIT: %w", err)
 	}
 	if c.BackupInterval, err = time.ParseDuration(env("BACKUP_INTERVAL", "24h")); err != nil {
 		return nil, fmt.Errorf("BACKUP_INTERVAL: %w", err)

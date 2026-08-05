@@ -230,11 +230,19 @@ func isCatchAll(pat string) bool {
 }
 
 // BodyLimit caps request bodies to n bytes using http.MaxBytesReader.
-// Applied globally; upload endpoints override with a larger cap.
+// Applied globally to every route. n <= 0 disables the cap for
+// operators who genuinely need unbounded (rare — the review guidance
+// is to keep the cap on with a sensible ceiling).
+//
+// When the reader trips, the handler downstream sees a
+// http.MaxBytesError on its next Read; the upload endpoints
+// specifically map that to a structured 413 response.
 func BodyLimit(n int64) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(w, r.Body, n)
+			if n > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

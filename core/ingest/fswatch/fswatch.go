@@ -75,6 +75,11 @@ type Config struct {
 	// Settle is the delay before opening a newly-visible file, to let
 	// slow producers finish writing. Default 250ms.
 	Settle time.Duration
+
+	// MaxBytes rejects files above this size at pickup time. Matches
+	// the HTTP UPLOAD_MAX_BYTES / BODY_LIMIT cap so producers can't
+	// route around the ingest ceiling. Zero disables the check.
+	MaxBytes int64
 }
 
 // Watcher wires the fsnotify loop to the ingest transaction.
@@ -224,6 +229,16 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 	// Skip if the file has vanished (rapid create + delete).
 	fi, err := os.Stat(path)
 	if err != nil || fi.IsDir() {
+		return
+	}
+
+	// Size cap — matches the HTTP producer's UPLOAD_MAX_BYTES so
+	// dropping a giant file into the staging dir can't do what the
+	// upload endpoint refuses. Skip + WARN; leave the file on disk
+	// so the operator can decide.
+	if w.cfg.MaxBytes > 0 && fi.Size() > w.cfg.MaxBytes {
+		w.log.Warn("fswatch.oversized",
+			"path", filepath.Base(path), "size", fi.Size(), "cap", w.cfg.MaxBytes)
 		return
 	}
 
