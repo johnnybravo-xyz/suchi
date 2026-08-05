@@ -306,18 +306,51 @@ smoke-anydoc` exercise the ingest pipelines.
   HTTP. This catches wrapper-vs-real-binary mismatches nothing
   else does.
 
+Tests are a **required** part of every PR that changes behavior.
+"I'll add them later" doesn't merge — later never lands, and the
+first regression six months out costs more than the test would have.
+
 If your PR touches:
 
-- **A handler** — add an integration test that exercises the
-  handler with a live DB. Auth, empty-body, happy path, one error
-  case.
+- **An API handler** — add an integration test in the same package
+  that exercises the handler with a live DB via `httptest.NewRecorder`.
+  Cover: auth (happy path + rejection), the empty-body / bad-body
+  case, and at least one shape of the mutation (round-trip
+  create → list → update → delete for CRUD surfaces). See
+  `core/api/customfields_crud_test.go` for the shape.
+- **A UI handler** (a `/admin/*` page or a doc-detail render) —
+  add a Go-level test that GETs the page as an admin, asserts 200
+  + the shipped DOM markers the JS keys off (`data-field-id`,
+  `data-name`, `class="cf-value"`, etc.). No headless-browser
+  tooling — we test template rendering server-side; the JS layer
+  is thin and covered by smoke. See `core/ui/customfields_test.go`
+  for the shape.
 - **A pipeline step** — add a golden-fixture test under the step's
   own `_test.go`. Real bytes in, expected output bytes/JSON out.
 - **A CLI subcommand** — smoke test that runs `go run
-./distro/cmd/suchi <subcommand>` against a temp `DATA_DIR`.
+  ./distro/cmd/suchi <subcommand>` against a temp `DATA_DIR`. Or
+  drive the subcommand's exported `runFoo(args []string) int`
+  function directly if the sub-command's logic lives in a
+  testable shape.
 - **A migration** — the migration itself is the test. Verify by
   running against a fresh DB and against a DB at the prior schema
-  version.
+  version. Add a Go test only when the migration transforms data
+  (rewriting values, backfilling columns) — pure DDL doesn't
+  need one.
+- **The authz layer** — pair every new perm-bit-consuming handler
+  with a test that admits owner, admits grantee, denies stranger,
+  denies anonymous. `core/authz/authz_test.go` is the reference
+  shape.
+
+**No headless-browser (Playwright / Cypress) tests**. Reviewed
+several times and rejected: the browser download adds ~200 MB to
+CI, the tests are brittle against CSS class changes, and the
+Go-level template-render tests cover the class of regression we
+actually see (renamed template vars, missing fields, forgotten
+data attributes). Reconsider only when the UI surface grows a
+piece that has non-trivial client-side state — until then the
+line is: JS is a thin wiring layer; test the templates + APIs it
+calls, not the JS itself.
 
 ## Docs updates
 
