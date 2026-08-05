@@ -1,12 +1,84 @@
 ---
 title: "Configuration"
-description: "Every env var + purpose. PUBLIC_URL is the only required one."
+description: "Every knob, its default, its purpose. Env vars + optional config file."
 ---
 
-Env-var-first. `config.yaml` is the advanced-mode escape hatch and
-does not exist in Phase 0/1. Anything a `config.yaml` field would set
-has an env-var equivalent — that's design principle 2 ("easy to get
-around").
+## Precedence
+
+suchi reads configuration from two layers, last wins:
+
+1. **Config file** (optional overlay — see below)
+2. **Process environment variables**
+
+Env values always beat file values. If a knob is set in both places,
+the env wins — safe for docker-compose overrides where the file lives
+in an image layer and the env comes from the run command.
+
+## Config file (optional)
+
+**Recommended format: TOML.** Explicit typing, no indentation
+surprises, no parse ambiguity. suchi also accepts HUML, YAML, and
+JSON — but TOML is what the examples use.
+
+Format is picked from file extension:
+
+| Extension | Parser |
+|---|---|
+| `.toml` | **recommended** — `github.com/BurntSushi/toml` |
+| `.huml` | [HUML](https://huml.io) — TOML-adjacent, human-friendly |
+| `.yaml` / `.yml` | `gopkg.in/yaml.v3` |
+| `.json` | stdlib `encoding/json` |
+
+> **Why TOML over YAML:** YAML has the Norway problem (bare `no` parses
+> as boolean false), sexagesimal time gotchas, and `1.10`-decimal-vs-
+> string ambiguity. TOML has none of these. If you use YAML anyway,
+> **quote string values** to defuse the surprises.
+
+### Search paths
+
+First readable file wins:
+
+1. `$SUCHI_CONFIG` — explicit path override (highest priority)
+2. `$XDG_CONFIG_HOME/suchi/config.<ext>`
+3. `$HOME/.config/suchi/config.<ext>`
+4. `/etc/suchi/config.<ext>`
+5. `./suchi.<ext>` (cwd)
+
+Within each directory, extensions are probed in the order **toml →
+huml → yaml/yml → json**.
+
+### File shape
+
+Keys mirror env var names in lower_snake. `PUBLIC_URL` becomes
+`public_url`; `BODY_LIMIT` becomes `body_limit`. Nested tables
+flatten with `_`:
+
+```toml
+[oidc]
+issuer = "https://id.example.com"
+client_id = "suchi"
+```
+
+is equivalent to:
+
+```
+OIDC_ISSUER=https://id.example.com
+OIDC_CLIENT_ID=suchi
+```
+
+Arrays become CSV strings: `ocr_languages = ["eng", "deu"]` matches
+`OCR_LANGUAGES=eng,deu`.
+
+Full samples:
+- [`config.example.toml`](https://github.com/johnnybravo-xyz/suchi/blob/main/docs/config.example.toml) (recommended)
+- [`config.example.huml`](https://github.com/johnnybravo-xyz/suchi/blob/main/docs/config.example.huml)
+- [`config.example.yaml`](https://github.com/johnnybravo-xyz/suchi/blob/main/docs/config.example.yaml)
+
+`SUCHI_CONFIG` opts operator into a specific file bypassing the
+search order — useful for multi-environment deployments where prod
+and staging point at different TOMLs.
+
+## Environment variables — the authoritative knob list
 
 ## Required
 
