@@ -75,6 +75,27 @@ areas:
 - Category codes are unique. Ranges nest exactly: category `22` must
   live inside an area `20..29`.
 
+## Over the JSON API
+
+Every non-browser consumer (mobile app, MCP tool, agent, SPA) that
+needs to render a filing chip or drive a picker uses two surfaces:
+
+- **`GET /api/jd/categories/`** — enumerate the tree. Query params:
+  `?q=<prefix>` (case-insensitive code-or-name match, `?q=22` and
+  `?q=tax` both hit `22 Tax`), `?area=<code>` (scope to one area's
+  10-slot range). Each row carries `area_code` + `area_name`
+  denormalized, so a picker can render the grouped tree in a single
+  request. See [`api#get-apijdcategories`](/api#get-apijdcategories).
+- **`GET /api/documents/{id}`** — the JD fields on the response are
+  denormalized: `jd_category_id`, `jd_category_code`,
+  `jd_category_name`, `jd_area_name`. Enough to render "22 Tax ·
+  Money" without a second call. Set the category by PATCHing back
+  with `{"jd_category_id": <n>}`.
+
+`jd_area_code` isn't included on either surface — the category's
+own `code` encodes it (22 → 20–29), and duplicating invites
+divergence.
+
 ## What the inbox is for
 
 <Note>
