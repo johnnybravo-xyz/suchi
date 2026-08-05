@@ -90,7 +90,7 @@ and staging point at different TOMLs.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `DATA_DIR` | `/data` | Root of `blobs/`, `dms.db` + WAL, `backups/`, `config.yaml`, `staging/`. |
+| `DATA_DIR` | `/data` | Root of `blobs/`, `suchi.db` + WAL, `backups/`, `config.yaml`, `staging/`. |
 | `LISTEN_ADDR` | `:8000` | HTTP listener. |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. |
 | `BODY_LIMIT` | `100M` | Multipart cap; uploads stream to disk. Accepts `K`/`M`/`G` suffixes or raw bytes. |
@@ -107,7 +107,7 @@ and staging point at different TOMLs.
 | `SCAN_SPLIT_TOKEN` | `SUCHI-SPLIT` | QR payload that marks a separator page. Case-sensitive; the value your `qrencode` (or equivalent) encodes on the printed separator. |
 | `SCAN_SPLIT_DPI` | `150` | Rasterization DPI for QR detection. Range `[72, 600]`. Bump if your separator QRs are small or your scans are low-res. |
 | `INGEST_PASSWORDS_FILE` | (unset) | Optional path to a newline-separated list of candidate PDF passwords tried before an encrypted PDF is parked in `encryption_state='encrypted'`. Blank lines and `#` comments are skipped. Reloaded per-doc so operators can append passwords without restart. Chmod 600 recommended — the file holds secrets. |
-| `DECRYPT_KEY_FILE` | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals operator-supplied passwords in the `decryption_passwords` table. Auto-generated 0600 on first boot. **Losing this file loses ALL stored passwords** — back up `$DATA_DIR` wholesale, not just `dms.db`. |
+| `DECRYPT_KEY_FILE` | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals operator-supplied passwords in the `decryption_passwords` table. Auto-generated 0600 on first boot. **Losing this file loses ALL stored passwords** — back up `$DATA_DIR` wholesale, not just `suchi.db`. |
 | `PRE_CONSUME_SCRIPT` | (unset) | Optional path to an operator-defined executable that runs on every doc before any built-in ingest logic. See [preconsume](/preconsume) for the contract (argv, env vars, stdout JSON envelope). |
 | `SUCHI_UI_DISABLED` | (unset) | Set to `1` or `true` to turn off the built-in server-rendered UI at boot. When enabled, `/`, `/docs/{id}`, `/inbox`, `/upload`, `/login`, `/bootstrap`, `/admin/*`, `/pending-decryption` don't register — only `/api/*`, `/healthz`, `/readyz`, `/metrics`, `/assets/*` are served. For deployments where an external SPA (React/Svelte/whatever) fronts `/api/`. Auth (Token/Bearer/OIDC) is unchanged. See [architecture#headless-mode](/architecture#headless-mode). |
 
@@ -175,11 +175,78 @@ won't double-ingest).
 docker network isolates it) and provide the Bridge-generated app
 password via `INGEST_IMAP_PASSWORD_FILE=/run/secrets/imap-password`.
 
+## LLM classifier (optional; egress on)
+
+Off by default. Setting these turns the classifier on; non-local
+endpoints require the egress ack.
+
+| Env var | Purpose |
+| ------- | ------- |
+| `LLM_ENDPOINT_URL` | e.g. `http://127.0.0.1:11434/v1` for Ollama, or an OpenAI-compatible URL. Unset = classifier disabled. |
+| `LLM_MODEL` | Model identifier passed to the endpoint (e.g. `llama3.1:8b`). |
+| `LLM_API_KEY` or `LLM_API_KEY_FILE` | Optional; blank for local Ollama, required for hosted endpoints. |
+| `LLM_EGRESS_ACK` | Must be `true` for non-local endpoints. Explicit acknowledgement that outbound traffic is intentional. Local endpoints (127.0.0.1, ::1) skip the check. |
+
+The setup wizard writes these into the `settings` table so live-reload
+works without a restart. Settings win over env when set.
+
+## Mail-mbsync sidecar (optional wizard)
+
+The mail-mbsync compose bundle in `deploy/mail-mbsync/` pairs suchi
+with an IMAP-poll sidecar. The wizard at `/admin/mail-setup` writes
+credentials into an env file that the sidecar reads.
+
+| Env var | Default | Purpose |
+| ------- | ------- | ------- |
+| `MAIL_SETUP_ENV_PATH` | (unset) | Writable path to the sidecar's env file. Unset = wizard disabled (route returns 404). |
+| `MAIL_SETUP_CONTAINER` | `suchi-mail-mbsync` | Docker container to restart after the wizard writes. Empty = no auto-restart. |
+| `MAIL_SETUP_DOCKER_SOCK` | `/var/run/docker.sock` | Docker Engine socket used for restarts. Ignored when the container name is empty. |
+
+## MCP client env (for `suchi mcp` / `suchi-mcp` symlink)
+
+The MCP subcommand acts as a client to a running suchi instance —
+these tell it how to reach the API. Flags override env.
+
+| Env var | Purpose |
+| ------- | ------- |
+| `SUCHI_URL` | Base URL, e.g. `http://127.0.0.1:8000`. Also honored by `--url`. |
+| `SUCHI_TOKEN` | Scoped API token from `POST /api/token/`. Also honored by `--token`. |
+
+## Config file loader itself
+
+| Env var | Purpose |
+| ------- | ------- |
+| `SUCHI_CONFIG` | Explicit override for the config file path. Bypasses the search order entirely. |
+| `XDG_CONFIG_HOME` | Standard XDG variable; feeds the search path. Falls back to `$HOME/.config` when unset. |
+| `HOME` | Standard shell variable; the config search reads `$HOME/.config/suchi/config.*` as one of the paths. |
+
+## Settings-only knobs (in-DB, not env-driven)
+
+These live in the `settings` table and are set via the admin UI's
+setup wizard rather than env vars. Settings win over env for the
+handful of keys that overlap (LLM, ingest fs-watch, OCR languages).
+
+| Key | Purpose |
+| --- | ------- |
+| `backup.interval_hours` | Backup cadence in hours (settings-win alternative to `BACKUP_INTERVAL`). |
+| `ingest.fs_watch_dir` / `ingest.fs_watch_owner` | Wizard-written overrides for the fs-watcher. |
+| `jd.preset` | JD taxonomy mode (`jd` or `flat`). |
+| `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` | LLM classifier config. `_sealed` is AEAD-encrypted with the settings key. |
+| `ocr.languages` | JSON array form of `OCR_LANGUAGES`. |
+| `setup.completed_at` / `setup.steps_done` / `setup.steps_skipped` | Wizard progress. |
+
 ## Secrets convention
 
 Every secret env var has a `_FILE` variant. The file's contents (trimmed
 of trailing newlines) becomes the value. Matches docker + k8s secret
 mounts. Secrets are never logged. Session key sits at 0600.
+
+Confirmed `_FILE` variants today:
+- `OIDC_CLIENT_SECRET_FILE`
+- `INGEST_IMAP_PASSWORD_FILE`
+- `LLM_API_KEY_FILE`
+
+If both the plain and `_FILE` variants are set, `_FILE` wins.
 
 ## Egress surface
 

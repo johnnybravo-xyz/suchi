@@ -65,6 +65,19 @@ is the stability signal.
   <Card title="Alternatives" icon="scale-balanced" href="/comparison">
     Honest side-by-side vs Paperless-ngx, Papra, docspell.
   </Card>
+  <Card title="Automations" icon="wand-magic-sparkles" href="/automations">
+    Trigger→conditions→actions rules on document events.
+  </Card>
+  <Card title="Approvals" icon="user-check" href="/approvals">
+    Human-in-the-loop review chains + timeouts.
+  </Card>
+  <Card title="Permissions" icon="users" href="/permissions">
+    Groups + object ACLs. Household sharing without admin roles.
+  </Card>
+  <Card title="MCP" icon="plug" href="/mcp">
+    Model Context Protocol tools: `search_documents`, `get_document`,
+    `list_inbox`, `resolve_approval_task`, `create_share_link`.
+  </Card>
 </CardGroup>
 
 ## Status by phase
@@ -73,8 +86,12 @@ is the stability signal.
 |-------|-----------|--------|
 | 0 | Skeleton, auth chain, durable outbox, /metrics | ✅ Shipped |
 | 1 | Read-only archive, JD taxonomy, importer, UI | ✅ Shipped |
-| 2 | Live ingest — fs-watch, upload, email, OCR pipeline | 🔨 In progress |
-| 3 | Custom fields + classification, agent surface | Planned |
-| 4 | Mobile compat + go public | Planned |
-| 4.5 | Distribution, docs, benchmarks | Planned |
+| 2 | Live ingest — fs-watch, upload, email, OCR pipeline | ✅ Shipped |
+| 3 | Custom fields, LLM classifier, agent surface, setup wizard | ✅ Shipped |
+| 3.5 | Office-doc coverage (anydoc), MIME zip refinement | ✅ Shipped |
+| 4 | Mobile compat surface: pagination, taxonomy CRUD, search, saved views, share links, OpenAPI, config file loader, MCP | ✅ Shipped (batch 8 repo-flip parked) |
+| 4.5 | Deploy templates, `suchi demo`, docs (privacy, backup, comparison) | ✅ Shipped |
+| 5 | Automations engine + admin UI; approvals engine rebranded | ✅ Shipped |
+| 6 | Groups + object ACLs + Authorizer interface | ✅ Shipped (doc-level enforced; taxonomy tail follow-up) |
+| 7 | Custom-field editor UI | Planned |
 | 8 | Reference migration (maintainer's own instance) | Planned |

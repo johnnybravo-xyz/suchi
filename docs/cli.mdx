@@ -1,6 +1,6 @@
 ---
 title: "CLI reference"
-description: "suchi subcommands: serve, healthcheck, import, version."
+description: "Every suchi subcommand: serve, healthcheck, import, gc, taxonomy, doctor, mcp, demo, version."
 ---
 
 ```
@@ -102,7 +102,67 @@ suchi taxonomy merge --kind tag \
     --from-name "BESCOM" --into-name "Bescom" --apply
 ```
 
+## `suchi doctor`
+
+One-shot diagnostic report. Prints:
+
+- Egress surface (every URL the running binary would call out to,
+  with the config key + status)
+- Optional binaries on PATH (`qpdf`, `pdftotext`, `pdftoppm`,
+  `tesseract`, `ocrmypdf`, `djvutxt`, `msgconvert`, `anydoc`, …) with
+  their versions
+- DB schema version + whether every migration applied
+- `$DATA_DIR` writability, disk-free, sub-directory presence
+  (`blobs/`, `rendered/`, `backups/`)
+
+Non-zero exit only on hard errors. Missing optional binaries print but
+don't fail — the ingest pipeline degrades gracefully. Useful for
+air-gap verification and support tickets.
+
+```sh
+suchi doctor            # human-readable
+suchi doctor --json     # machine-readable
+```
+
+## `suchi mcp [flags]`
+
+Start an MCP v2 (Model Context Protocol) server that adapts the REST
+surface into MCP tools. See [MCP guide](/mcp) for the client-side
+setup + tool reference.
+
+### Flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--http <addr>` | HTTP+SSE listener address (e.g. `:7000`). Omit for stdio (Claude Desktop, Cursor, etc.). |
+| `--url <url>` | suchi API base URL. Overrides `SUCHI_URL` env. |
+| `--token <hex>` | Scoped API token. Overrides `SUCHI_TOKEN` env. |
+
+The binary also responds to `suchi-mcp` when invoked via symlink — the
+argv[0] dispatcher rewrites the command so `command: "suchi-mcp"` in a
+Claude Desktop config stays clean.
+
+Uses a scoped API token, not an admin token. Every MCP call is
+attributed to that token's owner in the audit log.
+
+## `suchi demo [flags]`
+
+Seed `$DATA_DIR` with a small, representative dataset so a fresh
+install has something to click through. See the plan doc's Phase 4.5
+notes for the philosophy — "kick-tires-ready without editing a config".
+
+### Flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--data-dir <dir>` | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`. |
+
+Seeds one admin user (skipped if any user exists — never clobbers
+credentials), four correspondents, four document types, four tags,
+three sample documents (metadata only — no CAS blobs), one classifier
+rule, one automation. Idempotent — re-run without duplicates.
+
 ## `suchi version`
 
 Prints the binary version, build revision, and the Go version it
-was compiled with.
+was compiled with. `--json` for scripting.

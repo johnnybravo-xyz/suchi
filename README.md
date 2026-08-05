@@ -2,16 +2,30 @@
 
 **suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and a mobile wire surface that common DMS mobile clients can drive.
 
-Status: **pre-alpha** — Phases 0-3 shipped, Phase 4 (mobile wire surface + go-public) next. Not for production use. Repo is private until Phase 4.
+Status: **pre-alpha** — Phases 0–6 have shipped; Phase 4 batch 8 (repo public flip) is parked as a manual step. Not for production use. Repo is private until that flip.
 
 ## Non-negotiables
 
 - One binary, one config, one data dir. No Redis, no Postgres for MVP.
-- Idle RAM budget: ~100MB. Idle CPU: near-zero.
-- **No telemetry, ever.** A stock install makes zero outbound connections. Every egress is opt-in, visible in `config.yaml`, and logged.
+- Idle RAM budget: ~100 MB. Idle CPU: near-zero.
+- **No telemetry, ever.** A stock install makes zero outbound connections. Every egress is opt-in, listed in the config, and logged.
 - AGPL-3.0. DCO/CLA once the repo goes public.
+- Multi-user data model from Phase 0. Groups + object ACLs from Phase 6.
 
 Full design lives at `../suchi-plan.md` (design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify. Brand assets live at `../design-lang/brand/`.
+
+## What ships in the box
+
+- **HTTP API** — ~135 routes covering documents, taxonomy, search, share links, automations, approvals, groups, ACLs, agents, MCP, mobile-compat, OpenAPI at `/api/schema/`.
+- **Server-rendered UI** — list, detail, upload, inbox, admin pages (setup wizard, mail-mbsync, automations, groups). Oat CSS + minimal JS; disable wholesale via `SUCHI_UI_DISABLED=1` for headless deployments.
+- **Ingest pipeline** — 16 packages under `core/pipeline/` handling qpdf → pdf-inspector → OCR (tessocr / ocrmypdf) → anydoc (office docs) → eml / msg / epub / heic / djvu / zugferd / barcode / pageanalyze / docsplit → rules classifier → automations → rendered-view → optional LLM classifier.
+- **Three ingest producers** — HTTP upload (`POST /api/documents/`), fs-watch (`core/ingest/fswatch`), email-watch (`core/ingest/emailwatch` — real IMAP polling loop, cred-managed via mail-mbsync sidecar).
+- **Two automation engines** — [automations](docs/automations.mdx) (trigger→conditions→actions, `document_added` / `document_updated` / `consumption`) and [approvals](docs/approvals.mdx) (human-in-the-loop state machines with timeouts).
+- **Permissions** — `groups` + `object_acls` + `Authorizer` interface. Default is `ACLAuthorizer` — behaves as legacy "owner or admin" when no ACLs are set; unlocks per-user + per-group grants when they are.
+- **Agents + MCP** — task-claim/act loop (`POST /api/tasks/…/claim`), HMAC-signed webhooks, and an MCP v2 adapter (`suchi mcp` — stdio for Claude Desktop, `--http` for remote runtimes).
+- **Config file loader** — TOML (default), HUML, YAML, JSON. Env wins on collisions; search order: `--config` flag → `SUCHI_CONFIG` env → `$XDG_CONFIG_HOME/suchi/config.*` → `./suchi.toml`.
+
+Full feature list: [docs/comparison.mdx](docs/comparison.mdx) has the honest matrix vs Paperless-ngx, Papra, docspell.
 
 ## Layout
 
@@ -20,17 +34,31 @@ suchi/
 ├── go.work                — workspace linking all modules
 ├── plugin-api/            — interfaces + shared types; the only dep every module shares
 ├── core/                  — HTTP, DB, jobs, audit, auth chain, pipeline, workflow engine, UI. Imports plugin-api only.
+│   ├── api/               — HTTP handlers (JSON surface)
+│   ├── ui/                — server-rendered pages + assets
+│   ├── db/migrations/     — 20 embedded SQL migrations
+│   ├── pipeline/          — 16 ingest processing steps
+│   ├── ingest/            — 3 canonical producers (fswatch, emailwatch, sidecar spec)
+│   ├── workflow/          — state-machine "approvals" engine
+│   ├── automations/       — trigger→conditions→actions engine
+│   ├── authz/             — Authorizer interface + RoleAuthorizer/ACLAuthorizer
+│   ├── classify/rules/    — deterministic classifier
+│   ├── render/            — Gonja storage-path renderer + moves audit
+│   ├── settings/          — typed wrapper over settings k/v table
+│   ├── jd/                — Johnny.Decimal presets + tree
+│   └── ...                — audit, blob (CAS), config, jobs (outbox), sandbox, i18n, httpx, logx, mailsetup
 ├── plugins/               — reference plugins, each its own module
-│   ├── local-auth/
-│   ├── oidc/
-│   └── llm-classifier/
+│   ├── local-auth/        — argon2id password login + scoped API tokens + first-boot setup token
+│   ├── oidc/              — generic OIDC bearer + signed-cookie session
+│   └── llm-classifier/    — OpenAI-compatible endpoint, egress-ack gate
 ├── distro/                — the shipped binary. Pins versions, blank-imports enabled plugins.
-│   └── cmd/suchi/         — main entry point (subcommands: serve, healthcheck, import, gc, taxonomy, doctor, version)
+│   └── cmd/suchi/         — main entry point (subcommands below)
+├── deploy/                — systemd unit, Caddy/nginx/Traefik snippets, k8s manifest, mail-mbsync compose
 ├── docs/                  — Mintlify MDX; published via docs.json
-├── hack/                  — local dev harnesses (ingest fixtures, smoke scripts)
+├── hack/                  — local dev harnesses (ingest fixtures, transcript recorder, smoke scripts)
 ├── hooks/                 — git hooks (pre-commit gofmt)
 ├── Justfile               — dev shortcuts (`just serve`, `just fresh`, `just doctor`, etc.)
-├── Dockerfile             — two targets: slim (distroless) + full (adds OCR/qpdf/poppler/djvulibre)
+├── Dockerfile             — two targets: slim (Alpine + tessocr + anydoc) + full (adds ocrmypdf + djvulibre + msgconvert)
 └── .github/workflows/     — ci.yml (per-module test/vet), smoke.yml (full-image end-to-end)
 ```
 
@@ -47,9 +75,12 @@ Every module has its own `go.mod`; `go.work` links them so `go build ./...` at t
 - `tesseract-ocr` (+ language data) — required by the `tessocr` OCR engine (default in slim) and by `ocrmypdf`
 - `ocrmypdf` — optional; produces a searchable-PDF archive in addition to text (default engine in the full image)
 - `djvutxt` from `djvulibre-bin` — DjVu text extraction
+- `msgconvert` from `libemail-outlook-message-perl` — Outlook `.msg` → RFC 822 conversion
+- `imagemagick` — HEIC/HEIF → PDF conversion
 - `ghostscript` — used by ocrmypdf and (in CI) to build the smoke fixture
+- `anydoc` — static Rust binary compiled into both images; office-doc → Markdown extraction
 
-The Docker `slim` image ships qpdf + poppler-utils + tesseract (full PDF pipeline via `tessocr`, ~80 MB with anydoc). The `full` image adds ocrmypdf + djvulibre + msgconvert (~400 MB) — pick full when you want the searchable-PDF archive (text-selectable scanned PDFs), DjVu, or Outlook `.msg` support. Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.rtf`, `.csv`) ride in slim via anydoc — no LibreOffice fallback needed.
+The Docker `slim` image ships qpdf + poppler-utils + tesseract + anydoc (~80 MB). The `full` image adds ocrmypdf + djvulibre + msgconvert + imagemagick (~400 MB) — pick full when you want the searchable-PDF archive, DjVu, HEIC, or Outlook `.msg` support.
 
 Run `suchi doctor` any time for a snapshot of which tools are on PATH, egress surface, and schema version.
 
@@ -71,7 +102,7 @@ just serve             # preferred — boots against /tmp/suchi-dev, preserves d
 #   PUBLIC_URL=http://127.0.0.1:8000 DATA_DIR=/tmp/suchi-dev LISTEN_ADDR=:8000 ./dist/suchi serve
 ```
 
-Then visit `http://127.0.0.1:8000/`. On first boot suchi mints a one-time **setup token** (logged at WARN as `localauth.setup.token_minted`). Opening the browser drops you at `/bootstrap` — paste the token there and pick an admin email + password to finish setup, or POST it directly to `/setup`:
+Then visit `http://127.0.0.1:8000/`. On first boot suchi mints a one-time **setup token** (logged at WARN as `localauth.setup.token_minted`). Opening the browser drops you at `/bootstrap` — paste the token there and pick an admin email + password to finish setup, or POST it directly:
 
 ```sh
 just setup-token       # prints the token from the running dev log
@@ -90,11 +121,19 @@ just reset             # wipes DATA_DIR without booting
 
 `just doctor` runs the same egress/binary/schema snapshot against a live instance on `:8000`.
 
+### Kicking tires with the demo dataset
+
+```sh
+suchi demo             # or: just demo
+```
+
+Seeds `$DATA_DIR` with sample docs, tags, correspondents, one automation, one rule. Idempotent — re-run without clobbering existing data. Skips user creation when there are already users. See `distro/cmd/suchi/demo.go` for the exact seed set.
+
 ### Full pipeline locally
 
-Uploads land in the outbox and get picked up by the post-ingest handler. To exercise the whole chain (qpdf → pdftotext / OCR → ZUGFeRD → rules → render → LLM), install the binaries listed under Requirements and re-run `just serve`.
+Uploads land in the outbox and get picked up by the post-ingest handler. To exercise the whole chain (qpdf → pdftotext / OCR → anydoc → ZUGFeRD → rules → automations → render → LLM), install the binaries listed under Requirements and re-run `just serve`.
 
-Optional LLM classifier (Phase 3, shipped): configure via the setup wizard's LLM step, or via env:
+Optional LLM classifier: configure via the setup wizard's LLM step, or via env:
 
 ```sh
 export LLM_ENDPOINT_URL=http://127.0.0.1:11434/v1   # e.g. Ollama on box
@@ -105,19 +144,42 @@ export LLM_MODEL=llama3
 
 Empty `LLM_ENDPOINT_URL` keeps the classifier off (zero-egress default). Live-reload works — save settings via the wizard or `POST /api/admin/settings/llm` and the running classifier swaps to the new config on its next call.
 
-### Workflow engine (Phase 5, shipped)
+### Automations (Phase 5)
 
-State-machine engine for review/approval chains. Definitions are JSON specs; runs advance through the durable outbox. Human approvals land in `/api/tasks/` alongside machine jobs so mobile clients poll one endpoint for both.
+Trigger→conditions→actions engine. On events (`consumption`, `document_added`, `document_updated`), evaluate optional filters (path glob, filename glob, tag, correspondent, document_type, content regex, mail-rule id), then run actions in order (assign_title, assign_tags, assign_correspondent, assign_document_type, assign_storage_path, assign_owner, assign_custom_field, remove_*). See [`docs/automations.mdx`](docs/automations.mdx).
 
-- `POST /api/workflows` — register a spec (admin)
-- `POST /api/workflows/{slug}/start` — start a run
-- `POST /api/workflows/tasks/{id}/resolve` — resolve a human task
+- `GET/POST /api/automations/` — CRUD
+- `/admin/automations` — UI
 
-See `docs/workflows.mdx` for the invoice-approval worked example.
+### Approvals (state-machine engine)
+
+Human-in-the-loop chains. Definitions are JSON specs; runs advance through the durable outbox. Approval tasks land in `/api/tasks/` alongside machine jobs. See [`docs/approvals.mdx`](docs/approvals.mdx).
+
+- `POST /api/approvals` — register a spec (admin)
+- `POST /api/approvals/{slug}/start` — start a run
+- `POST /api/approvals/tasks/{id}/resolve` — resolve a human task
+
+### Permissions (Phase 6)
+
+Groups + per-object ACLs. `object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits)` behind the `Authorizer` interface. Empty ACLs = current owner+admin behavior; grants unlock per-user or per-group visibility. See [`docs/permissions.mdx`](docs/permissions.mdx).
+
+- `GET/POST/PATCH/DELETE /api/groups/` — group CRUD
+- `POST/DELETE /api/groups/{id}/members` — membership
+- `GET/PUT/DELETE /api/acls/{kind}/{id}` — grant management
+- `/admin/groups` — UI
 
 ### Plugin authoring
 
-Three interfaces — `Subscriber`, `Authenticator`, `AuditSink` — cover most extension needs. See `docs/plugins.mdx` for a plugin authoring guide with worked examples (auto-tag-pdf, internal-JWT auth, syslog audit forwarder).
+Three interfaces — `Subscriber`, `Authenticator`, `AuditSink` — cover most extension needs. See [`docs/plugins.mdx`](docs/plugins.mdx) for a plugin authoring guide with worked examples.
+
+### MCP v2 adapter
+
+```sh
+suchi mcp              # stdio (Claude Desktop, Cursor)
+suchi mcp --http :7000 # HTTP+SSE for remote runtimes
+```
+
+The binary also responds to `suchi-mcp` when invoked via symlink — Claude Desktop configs stay clean. Auth via `SUCHI_URL` + `SUCHI_TOKEN` env or `--url` / `--token` flags. Five tools: `search_documents`, `get_document`, `list_inbox`, `resolve_approval_task`, `create_share_link`. See [`docs/mcp.mdx`](docs/mcp.mdx).
 
 ### Test / vet / lint
 
@@ -137,10 +199,11 @@ The pre-commit hook runs `gofmt` and blocks the commit if anything's unformatted
 ```sh
 make smoke             # builds, boots on :8765, hits /healthz + /readyz, kills
 just smoke-ingest      # boots suchi + drops .eml fixtures + asserts ingest pipeline
+just smoke-anydoc      # boots suchi + drops .docx fixture + asserts anydoc extraction
 just smoke-mail        # runs the mail-mbsync docker recipe smoke test
 ```
 
-For a full end-to-end run against real binaries, see `.github/workflows/smoke.yml` — easier to push and let CI run it than to reproduce the Docker + LaTeX-free PDF sample locally.
+For a full end-to-end run against real binaries, see `.github/workflows/smoke.yml`.
 
 ## Serving the docs
 
@@ -149,42 +212,42 @@ Docs are Mintlify MDX under `docs/`, indexed by `docs/docs.json`. Mintlify resol
 ```sh
 cd docs
 bunx mint dev             # or: npx mint@latest dev (Node) — serves on http://127.0.0.1:3000
+bunx mint broken-links    # validate before pushing
 ```
 
-The dev server watches `.mdx` files and hot-reloads on save. To validate before pushing:
-
-```sh
-cd docs
-bunx mint broken-links
-```
-
-Production docs deploy is Mintlify-hosted (zero config beyond `docs.json` — see the Mintlify dashboard for the deploy pipeline).
+Production docs deploy is Mintlify-hosted (zero config beyond `docs.json`).
 
 ## Deployment
+
+Copy-and-edit templates for the four common self-host shapes live under [`deploy/`](deploy/):
+
+- `deploy/systemd/suchi.service` — hardened unit for a bare-binary Linux install
+- `deploy/caddy/Caddyfile` — auto-TLS reverse proxy
+- `deploy/nginx/suchi.conf` — bring-your-own-certs reverse proxy
+- `deploy/traefik/suchi.yml` — dynamic-config snippet
+- `deploy/k8s/suchi.yaml` — single-replica Deployment + PVC + Service (SQLite is single-writer; do NOT scale)
+- `deploy/mail-mbsync/` — docker-compose IMAP-bridge sidecar
+
+Every template documents the placeholders. See [`deploy/README.md`](deploy/README.md) for the one-liner-each intro.
 
 ### Docker
 
 Two image targets in `Dockerfile`:
 
-- `slim` — Alpine + qpdf + poppler-utils + tesseract + anydoc. ~80 MB. Full PDF pipeline including OCR of scanned pages (via the in-process `tessocr` engine — `pdftoppm | tesseract`) plus office-document text extraction (docx, xlsx, pptx, odt, rtf, csv) via anydoc. No searchable-PDF archive, no DjVu, no Outlook `.msg` support.
-- `full` — Debian slim + everything in slim + ocrmypdf + djvulibre-bin + msgconvert. ~400 MB. Adds text-selectable scanned-PDF archives (ocrmypdf writes the OCR layer inside the PDF), DjVu extraction, and Outlook `.msg` parsing.
+- `slim` — Alpine + qpdf + poppler-utils + tesseract + anydoc. ~80 MB. Full PDF pipeline including OCR of scanned pages (via `tessocr` — pdftoppm | tesseract) plus office-document text extraction (docx, xlsx, pptx, odt, rtf, csv) via anydoc.
+- `full` — Debian slim + everything in slim + ocrmypdf + djvulibre-bin + msgconvert + imagemagick. ~400 MB. Adds text-selectable scanned-PDF archives, DjVu extraction, HEIC/HEIF conversion, and Outlook `.msg` parsing.
 
 Both images accept `OCR_ENGINE={auto,tesseract,ocrmypdf}`. Slim defaults to `tesseract`; full defaults to `ocrmypdf`.
 
-Build + run:
-
 ```sh
 docker build --target full -t suchi:local .
-docker run -d \
-  --name suchi \
-  -p 8000:8000 \
-  -e PUBLIC_URL=http://127.0.0.1:8000 \
-  -v suchi-data:/data \
-  suchi:local
-docker logs -f suchi        # grab the setup token from a `localauth.setup.token_minted` line
+docker run -d --name suchi \
+  -p 8000:8000 -e PUBLIC_URL=http://127.0.0.1:8000 \
+  -v suchi-data:/data suchi:local
+docker logs -f suchi        # grab the setup token
 ```
 
-Both images pre-own `/data` as UID 65532; named-volume or empty-bind mounts inherit that ownership so the non-root process can create `dms.db` on first boot without an entrypoint chown dance.
+Both images pre-own `/data` as UID 65532; named-volume or empty-bind mounts inherit that ownership.
 
 ### Direct binary
 
@@ -195,9 +258,9 @@ make build       # produces dist/suchi, statically linked, CGO_ENABLED=0
 ./dist/suchi serve
 ```
 
-Runtime env vars: see `docs/config.mdx` (comprehensive) or `PUBLIC_URL` at minimum — that's the only required setting. `DATA_DIR` defaults to `/data`, `LISTEN_ADDR` to `:8000`.
+Runtime env vars: see [`docs/config.mdx`](docs/config.mdx) (comprehensive). `PUBLIC_URL` is the only required setting. `DATA_DIR` defaults to `/data`, `LISTEN_ADDR` to `:8000`.
 
-Backing services: none. SQLite lives at `$DATA_DIR/dms.db`, blobs at `$DATA_DIR/blobs/sha256/…`, rendered symlinks under `$DATA_DIR/rendered/`.
+Backing services: none. SQLite lives at `$DATA_DIR/suchi.db`, blobs at `$DATA_DIR/blobs/sha256/…`, rendered symlinks under `$DATA_DIR/rendered/`.
 
 ### Reverse proxy
 
@@ -205,25 +268,32 @@ Put nginx / caddy / traefik in front and terminate TLS there. `PUBLIC_URL` must 
 
 Direct-to-internet installs can set both `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve HTTPS from suchi itself.
 
-### Backups
+### Backups and restore
 
-`VACUUM INTO $DATA_DIR/backups/dms-<ts>.db` runs on the interval `BACKUP_INTERVAL` (default `24h`, `0` disables). Blobs are content-addressed so a filesystem-level snapshot of `$DATA_DIR` is consistent as long as the SQLite file is captured atomically (restic / borg / zfs snapshot are all fine).
+Full details in [`docs/backup-restore.mdx`](docs/backup-restore.mdx). Short version:
+
+- Back up `$DATA_DIR` — SQLite database, `blobs/`, `.decrypt-key`, `mail-*.env`.
+- `VACUUM INTO $DATA_DIR/backups/suchi-<ts>.db` runs on the interval `BACKUP_INTERVAL` (default `24h`, `0` disables).
+- **Never** `cp suchi.db` while suchi runs — use `sqlite3 .backup`, stop-and-tar, or a filesystem snapshot.
+- Blobs are content-addressed so a filesystem snapshot of `$DATA_DIR` is consistent as long as the SQLite file is captured atomically.
 
 ## Subcommands
 
 ```
-suchi serve                 # HTTP server + job dispatcher
-suchi healthcheck           # exits 0 iff /readyz answers 200 (used by Docker HEALTHCHECK)
-suchi import paperless      # ingest a compatible export bundle (see docs/importer.mdx)
-suchi gc                    # mark-and-sweep blob reclamation
-suchi taxonomy merge        # dedup tags/correspondents/types (see docs/cli.mdx)
-suchi doctor                # diagnostic report — egress surface, binaries on PATH, schema version, DATA_DIR writability
-suchi version               # build info
+suchi serve                     # HTTP server + job dispatcher (PUBLIC_URL required)
+suchi healthcheck               # probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
+suchi import paperless [flags]  # ingest a compatible export bundle (docs/importer.mdx)
+suchi gc [--older-than 30d]     # mark-and-sweep blob reclamation (dry-run default)
+suchi taxonomy merge [flags]    # dedup tag/correspondent/document_type (docs/cli.mdx)
+suchi doctor                    # diagnostic report — egress, binaries, schema, filesystem
+suchi mcp [--http :port]        # MCP v2 server (stdio default, HTTP+SSE with --http)
+suchi demo [--data-dir DIR]     # seed DATA_DIR with sample docs + one automation + one rule
+suchi version                   # print version + build info
 ```
 
 ## CI
 
 - `.github/workflows/ci.yml` — per-module `go test`, `go vet`, `gofmt` gate. Runs on every push + PR.
-- `.github/workflows/smoke.yml` — builds the Docker `full` image, boots it against a throwaway volume, uploads a Ghostscript-generated text-native PDF, and asserts the pipeline extracted the right content via HTTP. This is the only thing that catches wrapper-vs-real-binary mismatches.
+- `.github/workflows/smoke.yml` — builds the Docker `full` image, boots it against a throwaway volume, uploads a Ghostscript-generated text-native PDF, and asserts the pipeline extracted the right content via HTTP.
 
 Both must be green before merging to `main`.
