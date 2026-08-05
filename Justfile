@@ -39,12 +39,13 @@ tidy:
 
 # --- run modes ---
 
-# Boot suchi on :8000 pointed at /tmp/suchi-dev. Wipes prior data by
-# default — pass `just serve keep` to keep the previous dev DB.
-serve keep="":
+# Preserves existing DATA_DIR across reboots. To start clean, `just fresh`.
+# The binary itself only mints a setup token when users table is empty, so
+# existing installs boot straight into normal service.
+# Boot suchi on :8000 against DATA_DIR (default /tmp/suchi-dev).
+serve:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ "{{keep}}" != "keep" ]]; then rm -rf {{DATA}}; fi
     mkdir -p {{DATA}}
     PUBLIC_URL=http://127.0.0.1:8000 \
     DATA_DIR={{DATA}} \
@@ -52,8 +53,13 @@ serve keep="":
     LOG_LEVEL=info \
     {{BIN}} serve
 
-# Wipe the dev DATA_DIR and start fresh. Common when the setup token
-# has been used, admin creds forgotten, or you want a clean slate.
+# Setup token used, admin creds forgotten, or you want a clean slate.
+# Wipe DATA_DIR and boot suchi against a fresh install.
+fresh:
+    rm -rf {{DATA}}
+    just serve
+
+# Wipe the dev DATA_DIR (without booting).
 reset:
     rm -rf {{DATA}}
     @echo "reset {{DATA}}"
