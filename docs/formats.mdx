@@ -288,10 +288,49 @@ those MIMEs. anydoc's own coverage of them isn't used.
 
 Missing anydoc binary = documents in these formats still land, they
 just don't get their content indexed. Same posture as missing
-`ocrmypdf`. Install via the appropriate package (see the [Docker
-matrix](#docker-image-matrix) or build from source at
-[github.com/firecrawl/anydoc](https://github.com/firecrawl/anydoc)),
-then re-ingest.
+`ocrmypdf`. Both Docker images (slim and full) bundle anydoc as of
+Phase 3.5; bare-metal installs need to place an `anydoc` executable
+on PATH themselves — see [source caveats](#anydoc-source-caveats) below.
+
+### anydoc source caveats
+
+Two things worth knowing about how suchi consumes anydoc:
+
+**Upstream doesn't ship a standalone CLI binary.** anydoc is
+distributed as a Rust library (crates.io), Node napi binding (npm), and
+Python wheel (PyPI). Firecrawl's CLI story is `npx @firecrawl/anydoc`
+— a Node wrapper around the napi binding. suchi doesn't want Node in
+the runtime image, so the Dockerfile compiles `examples/convert.rs`
+from the anydoc repo into a static musl binary and installs it as
+`/usr/local/bin/anydoc`. Cost: ~10 MB, no runtime dependency.
+
+**`examples/convert.rs` is not upstream-guaranteed as a stable CLI.**
+It's an example — the argv shape could shift between anydoc releases.
+As of `v0.1.3` it's `convert <file> [-f <fmt>] [-o <out>]
+[--assets <dir>]`. suchi shells out with just `anydoc <file>`, reading
+stdout for Markdown. If a future upstream tag changes this shape,
+suchi's extractor at `core/pipeline/anydoc/anydoc.go` needs a matching
+update; symptoms would be silent Skipped=true with non-zero exit and
+"unrecognized argument" in `res.StderrTail`.
+
+**The bump procedure** — enforced by `hack/pin-bumper.sh` and the
+Dockerfile comment — is:
+
+1. Run `hack/pin-bumper.sh` from repo root. It reports when the pinned
+   version is more than 2 releases behind and suggests a bump to n-1
+   (never latest — soak time matters).
+2. Read the upstream compare URL it prints. Scan `examples/convert.rs`
+   for argv changes.
+3. Edit `ARG ANYDOC_TAG=` in `Dockerfile`. Rebuild slim, run
+   `docker run --rm suchi:slim doctor` to confirm anydoc is on PATH,
+   and smoke-test a docx ingest.
+4. Commit as a standalone "bump" commit so it's easy to roll back.
+
+**Alternative if the CLI drift becomes painful:** vendor the `convert`
+example into suchi's tree, stripping the language wrappers, and pin
+the anydoc *library* directly. Not done today because
+`examples/convert.rs` has been stable in shape since the crate's first
+release and the maintenance burden isn't worth it yet.
 
 ## Not yet supported
 
