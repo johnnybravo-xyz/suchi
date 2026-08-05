@@ -50,20 +50,35 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	query := sanitizeFTS5(raw)
 
+	// Structured filters. Each optional; combined with AND at the SQL
+	// layer. Missing values → no filter for that facet.
+	//   ?tags__id__in=1,2,3           → docs tagged with ANY of those tags
+	//   ?correspondents__id__in=4,5   → docs linked to ANY of those correspondents
+	//   ?document_type__id=7          → single-value FK filter
+	//   ?jd_category_id=42            → single-value FK filter
+	//
+	// The __in filters use EXISTS subqueries so a doc with N tags
+	// doesn't multiply the outer row set.
+	extra, extraArgs := buildSearchFilters(r)
+
 	// Count first for the envelope; FTS5 COUNT is a scan but cheap
 	// against the doc corpora we target.
+	countArgs := append([]any{query}, extraArgs...)
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT COUNT(*)
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid
-		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL
-	`, query).Scan(&total); err != nil {
+		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL`+extra,
+		countArgs...).Scan(&total); err != nil {
 		s.serverErr(w, "search.count", err)
 		return
 	}
 
 	p := ParsePageParams(r, 25, 100)
+	// Query args: MATCH ? first, then filter args, then LIMIT + OFFSET.
+	queryArgs := append([]any{query}, extraArgs...)
+	queryArgs = append(queryArgs, p.PageSize, p.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT d.id, d.title,
 		       snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20),
@@ -72,10 +87,10 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(d.mime_type, '')
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid
-		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL
+		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL`+extra+`
 		ORDER BY bm25(documents_fts)
 		LIMIT ? OFFSET ?
-	`, query, p.PageSize, p.Offset())
+	`, queryArgs...)
 	if err != nil {
 		// FTS5 syntax errors (unbalanced quotes, weird operators) surface
 		// here — sanitizeFTS5 catches most, this catches the rest.
@@ -231,6 +246,62 @@ func sanitizeFTS5(raw string) string {
 		return `""` // safe no-match
 	}
 	return strings.Join(parts, " OR ")
+}
+
+// buildSearchFilters converts DRF-style query params into an extra
+// SQL fragment (`AND ...`) plus its bind args. Every filter is
+// optional; the fragment is empty when no filter params are set.
+//
+// Values go through ParseCSVInts (which drops non-int / zero / negative
+// tokens) or strconv.ParseInt with a positive-only guard, so no user
+// input reaches the SQL as a literal.
+func buildSearchFilters(r *http.Request) (string, []any) {
+	var (
+		frag strings.Builder
+		args []any
+	)
+	if ids := ParseCSVInts(r, "tags__id__in"); len(ids) > 0 {
+		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id = d.id AND dt.tag_id IN (")
+		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString("))")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if ids := ParseCSVInts(r, "correspondents__id__in"); len(ids) > 0 {
+		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_correspondents dc WHERE dc.document_id = d.id AND dc.correspondent_id IN (")
+		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString("))")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if v := r.URL.Query().Get("document_type__id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
+			frag.WriteString(" AND d.document_type_id = ?")
+			args = append(args, id)
+		}
+	}
+	if v := r.URL.Query().Get("jd_category_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
+			frag.WriteString(" AND d.jd_category_id = ?")
+			args = append(args, id)
+		}
+	}
+	// Sensitivity — a mobile "hide confidential" toggle would flip this.
+	if v := r.URL.Query().Get("sensitivity"); v != "" && SensitivityLevels[v] {
+		frag.WriteString(" AND d.sensitivity = ?")
+		args = append(args, v)
+	}
+	return frag.String(), args
+}
+
+// placeholders returns "?, ?, ?" for n args.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
 }
 
 // escapeLike is defined in core/api/agent.go; reused here.
