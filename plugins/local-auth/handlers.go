@@ -305,6 +305,15 @@ func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request
 	return sid, err
 }
 
+// IssueAPIToken creates and returns a fresh API token. The plaintext
+// is returned once here and never persisted — only sha256(token) hits
+// disk. Exported so core/api can wire it in through Server.TokenIssuer
+// and mint tokens for session-authed callers (OIDC or cookie) without
+// this package needing to know about the API surface.
+func (p *Plugin) IssueAPIToken(ctx context.Context, userID int64, name, scopes string) (string, error) {
+	return p.issueAPIToken(ctx, userID, name, scopes)
+}
+
 // issueAPIToken creates and returns a fresh API token. The plaintext is
 // returned once here and never persisted — only sha256(token) hits disk.
 func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes string) (string, error) {
