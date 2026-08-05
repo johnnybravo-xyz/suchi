@@ -74,6 +74,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
 	mux.HandleFunc("GET /api/documents/{id}", s.GetDocument)
+	mux.HandleFunc("PATCH /api/documents/{id}", s.PatchDocument)
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
 	mux.HandleFunc("POST /api/documents/{id}/restore", s.RestoreDocument)
 

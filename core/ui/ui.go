@@ -445,10 +445,45 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 // downgrade those to same-origin here — the detail page needs to
 // embed its own PDF preview, but nothing outside the site should.
 func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
+	// Sensitivity gate: confidential/restricted docs don't render a
+	// preview inline unless the operator explicitly opts in with
+	// `?reveal=1`. Serves a 202-with-body-guidance so the detail page
+	// can render a "click to reveal" placeholder without a network
+	// round-trip to figure out what to do.
+	//
+	// The gate is UX + defense-in-depth: the actual bytes still live
+	// in the CAS and download endpoints work as usual (an operator who
+	// intentionally opens a confidential doc needs to see it). The
+	// point is that pointing a screen-recording session or shoulder-
+	// surfing onlooker at the app doesn't spray sensitive content by
+	// default.
+	if id, err := parsePathID(r, "id"); err == nil {
+		var sens sql.NullString
+		_ = s.DB.Read.QueryRowContext(r.Context(),
+			`SELECT sensitivity FROM documents
+			 WHERE id = ? AND trashed_at IS NULL`, id).Scan(&sens)
+		if sens.Valid && isHighSensitivity(sens.String) &&
+			r.URL.Query().Get("reveal") != "1" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Sensitivity", sens.String)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(
+				`{"sensitivity":"` + sens.String + `",` +
+					`"gated":true,"reveal_url":"?reveal=1"}`))
+			return
+		}
+	}
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
 	s.serveBlob(w, r, true /* prefer archive */, "inline")
+}
+
+// isHighSensitivity mirrors core/api.IsHighSensitivity — duplicated
+// here to avoid the ui→api import cycle. Both functions must stay in
+// lockstep; adding a new level goes in both.
+func isHighSensitivity(s string) bool {
+	return s == "confidential" || s == "restricted"
 }
 
 // pendingDocRow is the projection surfaced on the /pending-decryption
