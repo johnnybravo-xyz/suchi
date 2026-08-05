@@ -300,6 +300,135 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "affected": affected})
 }
 
+// PatchDocument — PATCH /api/documents/{id}. Partial update of the
+// fields callers can set from a mobile/agent surface: title,
+// sensitivity, jd_category_id. Adding a new field is a two-line
+// change: add a pointer to DocumentUpdate, add a `if in.X != nil`
+// branch here.
+//
+// Owner-scoped: a non-admin caller can only patch their own docs.
+// Every mutation writes an audit_events row with the before/after
+// snapshot of the fields it touched.
+func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
+	principal := auth.FromContext(r.Context())
+	id, err := parseIDPath(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	var in DocumentUpdate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if in.Sensitivity != nil {
+		if !SensitivityLevels[*in.Sensitivity] {
+			s.writeError(w, http.StatusBadRequest, "bad_sensitivity",
+				"sensitivity must be one of \"\", public, internal, confidential, restricted")
+			return
+		}
+	}
+
+	// Build UPDATE dynamically, columns hard-coded, values in ? bindings.
+	sets := []string{}
+	args := []any{}
+	before := map[string]any{}
+	after := map[string]any{}
+	if in.Title != nil {
+		sets = append(sets, "title = ?")
+		args = append(args, *in.Title)
+		after["title"] = *in.Title
+	}
+	if in.Sensitivity != nil {
+		sets = append(sets, "sensitivity = ?")
+		if *in.Sensitivity == "" {
+			args = append(args, sql.NullString{})
+		} else {
+			args = append(args, *in.Sensitivity)
+		}
+		after["sensitivity"] = *in.Sensitivity
+	}
+	if in.JDCategoryID != nil {
+		sets = append(sets, "jd_category_id = ?")
+		args = append(args, *in.JDCategoryID)
+		after["jd_category_id"] = *in.JDCategoryID
+	}
+	if len(sets) == 0 {
+		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
+		return
+	}
+	sets = append(sets, "updated_at = ?")
+	args = append(args, time.Now().Unix())
+	args = append(args, id, principal.UserID)
+
+	// Snapshot the before-values so the audit log carries a diff.
+	var (
+		curTitle       sql.NullString
+		curSensitivity sql.NullString
+		curJDCatID     sql.NullInt64
+	)
+	err = s.DB.Read.QueryRowContext(r.Context(),
+		`SELECT title, sensitivity, jd_category_id FROM documents
+		 WHERE id = ? AND owner_id = ?`,
+		id, principal.UserID).Scan(&curTitle, &curSensitivity, &curJDCatID)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "api.patch.select", err)
+		return
+	}
+	if in.Title != nil && curTitle.Valid {
+		before["title"] = curTitle.String
+	}
+	if in.Sensitivity != nil {
+		if curSensitivity.Valid {
+			before["sensitivity"] = curSensitivity.String
+		} else {
+			before["sensitivity"] = ""
+		}
+	}
+	if in.JDCategoryID != nil && curJDCatID.Valid {
+		before["jd_category_id"] = curJDCatID.Int64
+	}
+
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(r.Context(),
+			"UPDATE documents SET "+strings.Join(sets, ", ")+
+				" WHERE id = ? AND owner_id = ?", args...)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+			return
+		}
+		s.serverErr(w, "api.patch.update", err)
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor: principal, Action: "document.update",
+		ObjectKind: "document", ObjectID: id,
+		Before: before, After: after,
+		RequestID: logx.RequestID(r.Context()),
+	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
 // DocumentDetail is the projection returned by GET /api/documents/{id}.
 // Keeps the shape consistent with the mobile wire-compat surface:
 // content lands under `content`, correspondent list mirrors the multi-
@@ -314,11 +443,52 @@ type DocumentDetail struct {
 	ArchiveSize    int64              `json:"archive_size,omitempty"`
 	MIME           string             `json:"mime_type"`
 	JDCategoryID   int64              `json:"jd_category_id"`
+	Sensitivity    string             `json:"sensitivity,omitempty"`
 	CreatedAt      int64              `json:"created_at"`
 	UpdatedAt      int64              `json:"updated_at"`
 	TrashedAt      *int64             `json:"trashed_at,omitempty"`
 	Tags           []string           `json:"tags"`
 	Correspondents []DocCorrespondent `json:"correspondents"`
+}
+
+// DocumentUpdate is the PATCH /api/documents/{id} body. Fields are
+// pointers so unset != empty — the handler only writes columns the
+// client explicitly named.
+type DocumentUpdate struct {
+	Title        *string `json:"title,omitempty"`
+	Sensitivity  *string `json:"sensitivity,omitempty"`
+	JDCategoryID *int64  `json:"jd_category_id,omitempty"`
+}
+
+// SensitivityLevels is the closed vocabulary the API accepts. Empty
+// string means "no sensitivity classification" and clears any prior
+// value.
+//
+// The four levels sort by defensive posture, low to high:
+//   - public       — no restriction; preview + thumbnail render normally
+//   - internal     — no restriction; same rendering as public
+//   - confidential — high-sensitivity marker; UI blurs preview by default
+//   - restricted   — same visual posture as confidential; future ACL hook
+//
+// Adding a level? Update this map, the docs, and the "high sensitivity"
+// classifier in IsHighSensitivity below.
+var SensitivityLevels = map[string]bool{
+	"":             true, // clear/unset
+	"public":       true,
+	"internal":     true,
+	"confidential": true,
+	"restricted":   true,
+}
+
+// IsHighSensitivity reports whether s classifies as blur-by-default.
+// Callers use it to gate preview/thumbnail rendering; the pattern is
+//
+//	if IsHighSensitivity(doc.Sensitivity) { serveBlurred(w, r) }
+//
+// so the branching stays in one place. Any level added later that
+// should hide previews goes here.
+func IsHighSensitivity(s string) bool {
+	return s == "confidential" || s == "restricted"
 }
 
 // GetDocument — GET /api/documents/{id}. Returns the full projection
@@ -338,22 +508,23 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		d        DocumentDetail
-		archBlob sql.NullString
-		archSize sql.NullInt64
-		mimeNull sql.NullString
-		content  sql.NullString
-		trashed  sql.NullInt64
+		d           DocumentDetail
+		archBlob    sql.NullString
+		archSize    sql.NullInt64
+		mimeNull    sql.NullString
+		content     sql.NullString
+		trashed     sql.NullInt64
+		sensitivity sql.NullString
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT id, title, COALESCE(content, ''), original_blob, original_size,
 		       archive_blob, archive_size, mime_type,
-		       jd_category_id, created_at, updated_at, trashed_at
+		       jd_category_id, sensitivity, created_at, updated_at, trashed_at
 		FROM documents
 		WHERE id = ? AND owner_id = ?
 	`, id, principal.UserID).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
-		&d.JDCategoryID, &d.CreatedAt, &d.UpdatedAt, &trashed)
+		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.UpdatedAt, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -373,6 +544,9 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if mimeNull.Valid {
 		d.MIME = mimeNull.String
+	}
+	if sensitivity.Valid {
+		d.Sensitivity = sensitivity.String
 	}
 	if trashed.Valid {
 		v := trashed.Int64
