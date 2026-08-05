@@ -84,7 +84,7 @@ request via a context-scoped cache and maps `ErrDenied` → HTTP 403.
 
 ## 4. Enforcement today
 
-Wired for **documents**:
+Wired for **documents** and their sub-endpoints:
 
 | Endpoint | Requires |
 | -------- | -------- |
@@ -92,13 +92,39 @@ Wired for **documents**:
 | `PATCH /api/documents/{id}` | `change` |
 | `DELETE /api/documents/{id}` | `delete` |
 | `POST /api/documents/{id}/restore` | `change` |
+| `GET /api/documents/{id}/correspondents/` | `view` |
+| `POST /api/documents/{id}/correspondents/` | `change` |
+| `DELETE /api/documents/{id}/correspondents/{cid}/{role}` | `change` |
+| `GET /api/documents/{id}/versions/` | `view` |
+| `POST /api/documents/{id}/versions/` | `change` |
+| `PUT /api/documents/{id}/custom_fields/{field}` | `change` |
+| `DELETE /api/documents/{id}/custom_fields/{field}` | `change` |
+| `GET /api/search/` | filtered — snippets and results only for docs the caller can view |
 | `GET /` (UI list) | filtered — only docs the caller can view |
 | `GET /docs/{id}` (UI detail) | 404 if not visible (avoids info leak) |
 
-Taxonomy objects (`tag`, `correspondent`, `document_type`,
-`storage_path`) have grant CRUD wired but not yet enforced on their
-own handlers. That's a follow-up batch — the schema and API surface
-are stable so scripts can start creating grants today.
+And for **taxonomy mutations**:
+
+| Endpoint | Requires |
+| -------- | -------- |
+| `PATCH /api/correspondents/{id}` | `change` on the correspondent |
+| `DELETE /api/correspondents/{id}` | `delete` on the correspondent |
+| `PATCH /api/document_types/{id}` | `change` on the document type |
+| `DELETE /api/document_types/{id}` | `delete` on the document type |
+| `PATCH /api/storage_paths/{id}` | `change` on the storage path |
+| `DELETE /api/storage_paths/{id}` | `delete` on the storage path |
+| `PATCH /api/tags/{id}/parent` | `change` on the tag |
+
+Taxonomy **list / get** endpoints stay open to every authed user —
+tags, correspondents, document_types are shared vocabulary in a DMS.
+Restricting who can *see* the label "Landlord" exists as a
+correspondent is unusual and would break autocomplete + browse UX;
+restricting who can *rename or delete* it is the real ask, and
+that's what these grants unlock.
+
+Creation of new taxonomy rows stays **admin-only** — grants are
+per-object, so there's nothing to grant against a row that doesn't
+exist yet.
 
 ## 5. REST surface
 

@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
 // SearchHit is one row in a search response. Preserves the pattern
@@ -38,7 +39,8 @@ type SearchHit struct {
 // Trashed documents are excluded. Owner scoping goes here when
 // per-user permissions land in Phase 6.
 func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
@@ -60,6 +62,20 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	// The __in filters use EXISTS subqueries so a doc with N tags
 	// doesn't multiply the outer row set.
 	extra, extraArgs := buildSearchFilters(r)
+
+	// Visibility filter — non-admins only see docs they own or hold an
+	// ACL grant on (directly or via any of their groups). Without this
+	// the FTS snippet would leak content to unauthorized viewers.
+	if principal.Role != "admin" {
+		groups, err := s.principalGroups(r.Context(), principal.UserID)
+		if err != nil {
+			s.serverErr(w, "search.load_groups", err)
+			return
+		}
+		vf, vargs := authz.DocVisibilityWhere(principal.UserID, groups)
+		extra += " AND " + vf
+		extraArgs = append(extraArgs, vargs...)
+	}
 
 	// Count first for the envelope; FTS5 COUNT is a scan but cheap
 	// against the doc corpora we target.

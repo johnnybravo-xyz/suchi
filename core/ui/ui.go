@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -197,11 +198,11 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 	// keeps this identical to the legacy owner-only behavior.
 	p := auth.FromContext(r.Context())
 	if p != nil && p.Role != "admin" {
-		groupIDs, gerr := loadGroupIDs(r.Context(), s.DB, p.UserID)
+		groupIDs, gerr := authz.LoadGroups(r.Context(), s.DB, p.UserID)
 		if gerr != nil {
 			s.Log.Warn("ui.list.load_groups", "err", gerr.Error())
 		}
-		vf, vargs := docVisibilityWhere(p.UserID, groupIDs)
+		vf, vargs := authz.DocVisibilityWhere(p.UserID, groupIDs)
 		where += " AND " + vf
 		args = append(args, vargs...)
 	}
@@ -337,11 +338,11 @@ func (s *Server) Detail(w http.ResponseWriter, r *http.Request) {
 	where := "d.id = ? AND d.trashed_at IS NULL"
 	args := []any{id}
 	if p := auth.FromContext(r.Context()); p != nil && p.Role != "admin" {
-		groupIDs, gerr := loadGroupIDs(r.Context(), s.DB, p.UserID)
+		groupIDs, gerr := authz.LoadGroups(r.Context(), s.DB, p.UserID)
 		if gerr != nil {
 			s.Log.Warn("ui.detail.load_groups", "err", gerr.Error())
 		}
-		vf, vargs := docVisibilityWhere(p.UserID, groupIDs)
+		vf, vargs := authz.DocVisibilityWhere(p.UserID, groupIDs)
 		where += " AND " + vf
 		args = append(args, vargs...)
 	}
