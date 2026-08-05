@@ -182,7 +182,7 @@ func registerTools(server *mcp.Server, client *suchiClient) {
 	registerSearch(server, client)
 	registerGetDocument(server, client)
 	registerListInbox(server, client)
-	registerResolveWorkflowTask(server, client)
+	registerResolveApprovalTask(server, client)
 	registerCreateShareLink(server, client)
 }
 
@@ -237,7 +237,7 @@ type listInboxArgs struct{}
 func registerListInbox(server *mcp.Server, client *suchiClient) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_inbox",
-		Description: "List human-approval workflow tasks assigned to the caller. " +
+		Description: "List approval tasks assigned to the caller. " +
 			"Includes machine-outbox jobs too (for context on what suchi is doing).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listInboxArgs) (*mcp.CallToolResult, any, error) {
 		b, err := client.do(ctx, "GET", "/api/tasks/?limit=50", nil)
@@ -245,18 +245,18 @@ func registerListInbox(server *mcp.Server, client *suchiClient) {
 	})
 }
 
-// --- resolve_workflow_task ---
+// --- resolve_approval_task ---
 
 type resolveTaskArgs struct {
-	TaskID int64  `json:"task_id" jsonschema:"the workflow_tasks id to resolve"`
+	TaskID int64  `json:"task_id" jsonschema:"the approval task id to resolve"`
 	Choice string `json:"choice"  jsonschema:"one of the choices the task declared"`
 	Note   string `json:"note,omitempty" jsonschema:"optional operator note attached to the resolution"`
 }
 
-func registerResolveWorkflowTask(server *mcp.Server, client *suchiClient) {
+func registerResolveApprovalTask(server *mcp.Server, client *suchiClient) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "resolve_workflow_task",
-		Description: "Resolve a workflow task with the given choice (e.g. approve, reject).",
+		Name:        "resolve_approval_task",
+		Description: "Resolve an approval task with the given choice (e.g. approve, reject).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args resolveTaskArgs) (*mcp.CallToolResult, any, error) {
 		if args.TaskID <= 0 || args.Choice == "" {
 			return nil, nil, errors.New("task_id must be > 0 and choice non-empty")
@@ -266,7 +266,7 @@ func registerResolveWorkflowTask(server *mcp.Server, client *suchiClient) {
 			"note":   args.Note,
 		})
 		b, err := client.do(ctx, "POST",
-			"/api/workflows/tasks/"+strconv.FormatInt(args.TaskID, 10)+"/resolve",
+			"/api/approvals/tasks/"+strconv.FormatInt(args.TaskID, 10)+"/resolve",
 			strings.NewReader(string(body)))
 		return textResult(b, err)
 	})

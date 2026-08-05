@@ -1,10 +1,17 @@
 package api
 
-// Workflow engine HTTP surface. Admin gates on def-registration and
-// cancel; any authenticated member can start a run or resolve a task
-// they own (or an admin can override). Every string that reaches SQL
-// rides ExecContext with ?-placeholders — no dynamic SQL here; the
+// Approvals engine HTTP surface — routing/sign-off state machines,
+// distinct from the trigger→conditions→actions automations engine
+// exposed at /api/automations/ (see core/api/workflows.go and
+// core/automations/). Admin gates on def-registration and cancel;
+// any authenticated member can start a run or resolve a task they own
+// (or an admin can override). Every string that reaches SQL rides
+// ExecContext with ?-placeholders — no dynamic SQL here; the
 // workflow package owns that.
+//
+// URLs live under /api/approvals/*; the Go package stays
+// core/workflow/ because renaming it would touch dozens of files for
+// no functional gain.
 
 import (
 	"encoding/json"
@@ -22,15 +29,15 @@ import (
 // tokens. Keeps URLs safe + specs greppable.
 var workflowSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,63}$`)
 
-// registerWorkflow wires the /api/workflows/* routes. Called from
+// registerWorkflow wires the /api/approvals/* routes. Called from
 // Register().
 func (s *Server) registerWorkflow(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/workflows", s.WorkflowRegister)
-	mux.HandleFunc("GET /api/workflows/{slug}", s.WorkflowGetDef)
-	mux.HandleFunc("POST /api/workflows/{slug}/start", s.WorkflowStart)
-	mux.HandleFunc("GET /api/workflows/runs/{id}", s.WorkflowGetRun)
-	mux.HandleFunc("POST /api/workflows/tasks/{task_id}/resolve", s.WorkflowResolveTask)
-	mux.HandleFunc("POST /api/workflows/runs/{id}/cancel", s.WorkflowCancel)
+	mux.HandleFunc("POST /api/approvals", s.WorkflowRegister)
+	mux.HandleFunc("GET /api/approvals/{slug}", s.WorkflowGetDef)
+	mux.HandleFunc("POST /api/approvals/{slug}/start", s.WorkflowStart)
+	mux.HandleFunc("GET /api/approvals/runs/{id}", s.WorkflowGetRun)
+	mux.HandleFunc("POST /api/approvals/tasks/{task_id}/resolve", s.WorkflowResolveTask)
+	mux.HandleFunc("POST /api/approvals/runs/{id}/cancel", s.WorkflowCancel)
 }
 
 // WorkflowRegister persists a Spec at a new version for the given

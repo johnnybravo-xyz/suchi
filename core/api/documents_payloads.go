@@ -9,4 +9,10 @@ type postIngestPayload struct {
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 	MIME   string `json:"mime_type"`
+
+	// Consumption-trigger context. Uploaders populate what they have;
+	// missing fields disable the matching filter in automations.
+	Filename   string `json:"filename,omitempty"`
+	SourcePath string `json:"source_path,omitempty"`
+	MailRuleID int64  `json:"mail_rule_id,omitempty"`
 }

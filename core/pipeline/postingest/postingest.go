@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/classify/rules"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
@@ -63,6 +64,13 @@ type postIngestPayload struct {
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 	MIME   string `json:"mime_type"`
+
+	// Consumption-trigger context. Producers populate whichever of
+	// these they have; automations.ApplyOnConsumption filters against
+	// them. Zero values disable the corresponding filter.
+	Filename   string `json:"filename,omitempty"`     // upload multipart / basename of source path
+	SourcePath string `json:"source_path,omitempty"`  // absolute path when the doc came from fs-watch
+	MailRuleID int64  `json:"mail_rule_id,omitempty"` // set by mail-intake plugins that own a rule id
 }
 
 // PostClassifyKind is the job kind the LLM classifier plugin's
@@ -248,6 +256,15 @@ func (h *Handler) Kinds() []string { return []string{Kind} }
 // in state=dead and shows up in /api/tasks/.
 func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	log := h.log.With("doc_id", e.DocID)
+
+	// Consumption-trigger automations. Fire before any content
+	// processing so filters that key on filename/source_path/mail_rule
+	// can tag or route the doc up-front. Fail-soft: an error warns and
+	// never blocks the ingest pipeline.
+	consCtx := consumptionContextFromPayload(e.Payload)
+	if err := automations.ApplyOnConsumption(ctx, h.db, log, e.DocID, consCtx); err != nil {
+		log.Warn("post-ingest.consumption_automations.error", "err", err.Error())
+	}
 
 	origBlob, mime, err := h.loadDoc(ctx, e.DocID)
 	if err != nil {
@@ -1309,6 +1326,13 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		log.Info("post-ingest.rules.applied", "count", len(applied))
 	}
 
+	// Automations — trigger→conditions→actions on document_added.
+	// Fail-soft: an automation error logs a warning and never blocks the
+	// rest of the post-ingest chain. See core/automations for the shape.
+	if err := automations.ApplyOnDocumentAdded(ctx, h.db, log, docID); err != nil {
+		log.Warn("post-ingest.automations.error", "err", err.Error())
+	}
+
 	// Rendered-view projection — best-effort. A failed render logs
 	// a warning; the doc row is already the source of truth.
 	if h.render != nil {
@@ -1329,6 +1353,31 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		}
 	}
 	return nil
+}
+
+// consumptionContextFromPayload pulls the trigger-filter fields
+// producers put on the job payload. Missing fields become zero
+// values, which map to "no filter" in automations.ApplyOnConsumption.
+func consumptionContextFromPayload(p map[string]any) automations.Context {
+	var c automations.Context
+	if p == nil {
+		return c
+	}
+	if s, ok := p["filename"].(string); ok {
+		c.Filename = s
+	}
+	if s, ok := p["source_path"].(string); ok {
+		c.SourcePath = s
+	}
+	switch n := p["mail_rule_id"].(type) {
+	case float64:
+		c.MailRuleID = int64(n)
+	case int64:
+		c.MailRuleID = n
+	case int:
+		c.MailRuleID = int64(n)
+	}
+	return c
 }
 
 // loadDoc reads original_blob + mime_type. The trashed_at guard means
