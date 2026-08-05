@@ -6,7 +6,6 @@ use (
 	./hack/emlfixtures
 	./hack/transcript
 	./plugin-api
-	./plugins/anydoc-convert
 	./plugins/llm-classifier
 	./plugins/local-auth
 	./plugins/oidc

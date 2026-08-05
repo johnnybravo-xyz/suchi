@@ -27,6 +27,38 @@ suchi/
 Plugins never touch the core schema directly — every plugin gets
 `plugin_kv(plugin_name, key, value_json)` for its scratch space.
 
+### Where does new code go? `plugins/` vs `core/pipeline/`
+
+Two homes, one rule:
+
+- **`plugins/<name>/`** — a **separate Go module** with its own `go.mod`,
+  imported into `distro/cmd/suchi/main.go` via a blank import. Meant
+  for things that (a) register with the plugin-api (`Subscriber`,
+  `Authenticator`, `AuditSink`), (b) have their own lifecycle
+  (`New()`, boot-time configuration), or (c) could plausibly be
+  replaced by an external contributor (an alternative auth backend, a
+  different classifier). Examples: `plugins/local-auth`,
+  `plugins/oidc`, `plugins/llm-classifier`.
+
+- **`core/pipeline/<name>/`** — a **package inside the `core` module**.
+  A pure library that other core code calls synchronously. No lifecycle,
+  no registration, no imports from `plugins/`. Meant for file-format
+  extractors and ingest primitives: exposes `Recognized(mime)` and
+  `Extract(ctx, src, log, opts)` shaped like `core/pipeline/djvu`.
+  Examples: `pdf`, `pdfinspector`, `qpdf`, `tessocr`, `ocrmypdf`,
+  `epub`, `djvu`, `msg`, `heic`, `barcode`, `eml`, `anydoc`.
+
+**Rule of thumb:** if it lives on the outbox as a `Subscriber` or gets
+constructed once at boot and passed a handle, it's a plugin. If it's a
+pure function called from `postingest.go`, it's a `core/pipeline/`
+package.
+
+**Direction of imports:** `core` never imports from `plugins/`. `distro`
+imports from both. Getting this backwards (a `core/pipeline/` package
+depending on a `plugins/` module) creates a circular go.work headache
+and blurs the "core is the platform, plugins are the extensions"
+architecture.
+
 ## Data flow
 
 ```mermaid
