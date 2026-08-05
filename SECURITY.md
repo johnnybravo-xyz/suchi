@@ -90,8 +90,11 @@ Out of scope (interesting, but not "vulnerabilities"):
   `Exec`/`Query` uses `?` bind parameters. Static-checked by
   `staticcheck` and reviewed by hand.
 - **CSP + frame-ancestors + nosniff** on every UI response.
-- **CSRF** on cookie-auth routes (double-submit token from the
-  session).
+- **CSRF posture**: `SameSite=Lax` on every session cookie plus a
+  stateless `Sec-Fetch-Site` middleware that rejects cross-site
+  state-changing requests (POST/PATCH/PUT/DELETE) from
+  cookie-authenticated callers with 403. Token-authenticated
+  requests are exempt — headers can't be forged cross-site.
 - **Rate limits** on auth endpoints (login, setup, share-link
   password-check).
 - **ACL layer** (Phase 6). Every doc read/mutate goes through the

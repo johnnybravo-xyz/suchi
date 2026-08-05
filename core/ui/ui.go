@@ -562,8 +562,14 @@ func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	// CSP + sandbox on the preview response. `sandbox` (deliberately
+	// WITHOUT `allow-same-origin`) renders the previewed doc in an
+	// opaque origin so script execution is structurally worthless
+	// (nothing shares state with it) rather than merely policy-blocked.
+	// PDFs and images are unaffected. Belt-and-braces against a
+	// future CSP regression that would otherwise inherit the session.
 	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
+		"default-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; sandbox")
 	s.serveBlob(w, r, true /* prefer archive */, "inline")
 }
 
