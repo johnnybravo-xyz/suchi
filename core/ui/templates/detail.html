@@ -143,14 +143,50 @@
   {{ end }}
 
   {{ if .CustomFields }}
-  <section class="custom-fields">
+  <section class="custom-fields" data-doc-id="{{ .Doc.ID }}">
     <h2>{{ msg "doc.detail.section.custom_fields" }}</h2>
-    <dl>
-      {{ range .CustomFields }}
-        <dt>{{ .Name }}</dt>
-        <dd class="cf-{{ .DataType }}">{{ .Value }}</dd>
-      {{ end }}
-    </dl>
+    {{ range .CustomFields }}
+      <form class="cf-value"
+            data-field-id="{{ .ID }}"
+            data-field-name="{{ .Name }}"
+            data-data-type="{{ .DataType }}">
+        <label>{{ .Name }} <code class="muted">{{ .DataType }}</code></label>
+        {{ if eq .DataType "text" }}
+          <input type="text" name="value" value="{{ .Raw }}">
+        {{ else if eq .DataType "url" }}
+          <input type="url" name="value" value="{{ .Raw }}" placeholder="https://…">
+        {{ else if eq .DataType "documentlink" }}
+          <input type="text" name="value" value="{{ .Raw }}" placeholder="document id">
+        {{ else if eq .DataType "number" }}
+          <input type="number" step="any" name="value" value="{{ .Raw }}">
+        {{ else if eq .DataType "monetary" }}
+          <input type="number" step="0.01" name="value" value="{{ .Raw }}">
+        {{ else if eq .DataType "date" }}
+          <input type="date" name="value" value="{{ .Raw }}">
+        {{ else if eq .DataType "bool" }}
+          <select name="value">
+            <option value="">—</option>
+            <option value="true" {{ if eq .Raw "true" }}selected{{ end }}>true</option>
+            <option value="false" {{ if eq .Raw "false" }}selected{{ end }}>false</option>
+          </select>
+        {{ else if eq .DataType "select" }}
+          <select name="value">
+            <option value="">—</option>
+            {{ $raw := .Raw }}
+            {{ range .Choices }}
+              <option value="{{ . }}" {{ if eq . $raw }}selected{{ end }}>{{ . }}</option>
+            {{ end }}
+          </select>
+        {{ else if eq .DataType "multi" }}
+          <div class="cf-multi" data-multi-raw='{{ .Raw }}'>
+            {{ range .Choices }}
+              <label><input type="checkbox" name="choice" value="{{ . }}"> {{ . }}</label>
+            {{ end }}
+          </div>
+        {{ end }}
+        <span class="cf-status" aria-live="polite"></span>
+      </form>
+    {{ end }}
   </section>
   {{ end }}
 
