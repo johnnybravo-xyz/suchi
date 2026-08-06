@@ -27,8 +27,14 @@ type Config struct {
 	// BackupKeep — retention window for VACUUM INTO snapshots. After
 	// each successful snapshot, all-but-the-latest N are deleted.
 	// 0 = keep everything (documented; not the default).
-	BackupKeep   int
-	OCRLanguages []string
+	BackupKeep int
+	// AuditRetentionDays — sliding window over audit_events. Pruning
+	// runs after each backup snapshot (same ticker, single-writer
+	// serialization). Default 20; env caps at 100 so the notifications
+	// feed can't push storage growth without an operator conscious
+	// decision. 0 disables pruning.
+	AuditRetentionDays int
+	OCRLanguages       []string
 
 	// OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 	OIDCIssuerURL    string
@@ -192,6 +198,10 @@ func Load() (*Config, error) {
 	}
 	if c.BackupInterval, err = time.ParseDuration(env("BACKUP_INTERVAL", "24h")); err != nil {
 		return nil, fmt.Errorf("BACKUP_INTERVAL: %w", err)
+	}
+	if c.AuditRetentionDays, err = parseIntBounded("AUDIT_RETENTION_DAYS",
+		env("AUDIT_RETENTION_DAYS", "20"), 0, 100); err != nil {
+		return nil, err
 	}
 	if c.PdfMaxContentBytes, err = parseBytes(env("PDF_MAX_CONTENT_BYTES", "8M")); err != nil {
 		return nil, fmt.Errorf("PDF_MAX_CONTENT_BYTES: %w", err)
