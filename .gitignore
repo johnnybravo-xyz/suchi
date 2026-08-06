@@ -30,3 +30,13 @@
 # stray binary from ad-hoc `go build` calls
 /distro/suchi
 .decrypt-key
+
+# svelte SPA build tree
+ui/node_modules/
+ui/dist/
+
+# But DO commit the embedded dist — it ships in the binary and a fresh
+# clone must `go build` without Node installed. Whitelist beats the
+# global .gitignore's `dist/` rule that would otherwise trap this.
+!core/ui/spa/dist/
+!core/ui/spa/dist/**
