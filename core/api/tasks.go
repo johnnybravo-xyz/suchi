@@ -64,6 +64,22 @@ type WorkflowTask struct {
 	CreatedAt    int64    `json:"created_at"`
 }
 
+// HeuristicsProposalCard groups every pending proposal for one
+// document into a single Tasks-inbox card. The SPA renders it as a
+// "Auto-file from archive · <doc title>" block with per-item Apply/
+// Skip buttons plus the card-level "Apply all" / "Reject all"
+// choices. Distinct from WorkflowTask (which is one row per
+// workflow state) — heuristics proposals fan out across many fields
+// but the operator resolves them together.
+type HeuristicsProposalCard struct {
+	DocID     int64         `json:"doc_id"`
+	DocTitle  string        `json:"doc_title,omitempty"`
+	Kind      string        `json:"kind"` // always "heuristics_proposal"
+	Proposals []ProposalRow `json:"proposals"`
+	Choices   []string      `json:"choices"` // ["apply_all", "reject_all"]
+	CreatedAt int64         `json:"created_at"`
+}
+
 // TasksResponse is the /api/tasks/ envelope. Counts is a per-state
 // summary so the UI can render "3 dead" without a second round-trip;
 // Results is the requested slice, bounded by limit. WorkflowTasks
@@ -74,9 +90,10 @@ type WorkflowTask struct {
 // it's a live-poll queue endpoint, not a paginated list. Callers ask
 // for the top N via ?limit and re-poll; there's no next-page semantics.
 type TasksResponse struct {
-	Counts        map[string]int `json:"counts"`
-	Results       []Task         `json:"results"`
-	WorkflowTasks []WorkflowTask `json:"approval_tasks,omitempty"`
+	Counts              map[string]int           `json:"counts"`
+	Results             []Task                   `json:"results"`
+	WorkflowTasks       []WorkflowTask           `json:"approval_tasks,omitempty"`
+	HeuristicsProposals []HeuristicsProposalCard `json:"heuristics_proposals,omitempty"`
 }
 
 // ListTasks serves GET /api/tasks/. Query params:
@@ -144,7 +161,105 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Heuristics proposals — third source for the Tasks inbox. Owner-
+	// scoped (the doc owner sees the card; ACL grantees see docs they
+	// have change bits on today via authorize, but proposals stay on
+	// the owner's inbox — the SPA's Documents Detail panel is the
+	// fallback surface for anyone else).
+	if include != "jobs" && include != "workflow" && principal.UserID > 0 {
+		cards, err := s.heuristicsProposalsForUser(r, principal.UserID, limit)
+		if err != nil {
+			s.Log.Error("api.tasks.proposals_query", "err", err.Error())
+		} else {
+			resp.HeuristicsProposals = cards
+			resp.Counts["heuristics_open"] = len(cards)
+		}
+	}
+
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// heuristicsProposalsForUser groups pending document_proposals by
+// doc for the caller's own documents. Cap `limit` cards, ordered by
+// oldest first (so a doc that's been sitting the longest floats up).
+// Each card carries every pending proposal for that doc — SPA
+// renders per-item Apply/Skip on top of the card's Apply-all /
+// Reject-all.
+func (s *Server) heuristicsProposalsForUser(r *http.Request, userID int64, limit int) ([]HeuristicsProposalCard, error) {
+	// One query loads every pending proposal for the user's docs
+	// plus the doc's title. Grouping happens in Go; small N per user
+	// makes an in-memory group cheaper than a window-function SQL.
+	rows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT p.id, p.document_id, COALESCE(d.title, ''),
+		       p.field, COALESCE(p.value_id, 0), p.value_json,
+		       p.confidence, p.based_on, p.created_at
+		  FROM document_proposals p
+		  JOIN documents d ON d.id = p.document_id
+		 WHERE p.resolved_at IS NULL
+		   AND d.trashed_at IS NULL
+		   AND d.owner_id = ?
+		 ORDER BY p.created_at ASC, p.id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byDoc := map[int64]*HeuristicsProposalCard{}
+	order := []int64{}
+	for rows.Next() {
+		var (
+			pRow      ProposalRow
+			docID     int64
+			docTitle  string
+			basedOn   string
+			valueJSON string
+		)
+		if err := rows.Scan(&pRow.ID, &docID, &docTitle,
+			&pRow.Field, &pRow.ValueID, &valueJSON,
+			&pRow.Confidence, &basedOn, &pRow.CreatedAt); err != nil {
+			return nil, err
+		}
+		pRow.DocumentID = docID
+		var cache struct {
+			Label      string  `json:"label"`
+			Supporters []int64 `json:"supporters"`
+		}
+		if valueJSON != "" {
+			_ = json.Unmarshal([]byte(valueJSON), &cache)
+		}
+		pRow.Label = cache.Label
+		pRow.Supporters = cache.Supporters
+		if basedOn != "" {
+			_ = json.Unmarshal([]byte(basedOn), &pRow.BasedOn)
+		}
+
+		card, ok := byDoc[docID]
+		if !ok {
+			card = &HeuristicsProposalCard{
+				DocID:     docID,
+				DocTitle:  docTitle,
+				Kind:      "heuristics_proposal",
+				Choices:   []string{"apply_all", "reject_all"},
+				CreatedAt: pRow.CreatedAt,
+			}
+			byDoc[docID] = card
+			order = append(order, docID)
+		}
+		card.Proposals = append(card.Proposals, pRow)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if limit > 0 && len(order) > limit {
+		order = order[:limit]
+	}
+	out := make([]HeuristicsProposalCard, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byDoc[id])
+	}
+	return out, nil
 }
 
 // taskCounts returns pending/running/done/dead counts across the
