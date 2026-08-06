@@ -190,8 +190,8 @@
     "/api/search/":       { "get": { "summary": "FTS5 search over title + content." } },
     "/api/autocomplete/": { "get": { "summary": "Prefix suggestions across tags/correspondents/document_types." } },
 
-    "/api/saved_views/":       { "get": { "summary": "List caller's saved views." }, "post": { "summary": "Create." } },
-    "/api/saved_views/{id}":   { "patch": { "summary": "Update." }, "delete": { "summary": "Delete." } },
+    "/api/saved_views/":       { "get": { "summary": "List caller's saved views. ?include=shared also returns every other user's shared=true view (shared rows carry an owner_id field). Body accepts {name, filter_json, display, position, shared}." }, "post": { "summary": "Create." } },
+    "/api/saved_views/{id}":   { "patch": { "summary": "Update. Owner-scoped; shared toggle honored." }, "delete": { "summary": "Delete." } },
 
     "/api/ui_settings/":       { "get": { "summary": "Get caller's opaque JSON blob (or {})." },
                                   "put": { "summary": "Replace caller's blob." } },
