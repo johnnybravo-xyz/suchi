@@ -102,8 +102,8 @@ input, select, textarea { font: inherit; color: inherit; }
 .nav .badge {
   margin-left: auto; font-size: .68rem; font-weight: 600;
   font-family: ui-monospace, monospace;
-  background: var(--accent); color: var(--accent-ink);
-  border-radius: 99px; padding: 1px 7px;
+  background: var(--surface-2); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 99px; padding: 1px 7px;
 }
 
 .side-head {
@@ -312,13 +312,10 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .area-toggle .area { font-weight: 600; }
 .area-toggle .chev { display: inline-flex; color: var(--faint); transition: transform .15s; }
 .area-toggle .chev.open { transform: rotate(90deg); }
-.area-toggle .badge {
+.area-toggle .badge, .jd-tree .badge {
   margin-left: auto; font-size: .66rem; font-weight: 600; font-family: ui-monospace, monospace;
-  background: var(--accent); color: var(--accent-ink); border-radius: 99px; padding: 1px 7px;
-}
-.jd-tree .badge {
-  margin-left: auto; font-size: .66rem; font-weight: 600; font-family: ui-monospace, monospace;
-  background: var(--accent); color: var(--accent-ink); border-radius: 99px; padding: 1px 7px;
+  background: var(--surface-2); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 99px; padding: 1px 7px;
 }
 
 /* ---------- topbar bell + setup banner ---------- */
@@ -439,3 +436,12 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .hoveracts { display: none; gap: 6px; align-items: center; }
 .irow.hoverable:hover .hoveracts { display: inline-flex; }
 .irow.hoverable:hover .end .sub { display: none; }
+
+/* ---------- upload modal / admin / locked ---------- */
+.modal-veil { position: fixed; inset: 0; z-index: 85; background: color-mix(in srgb, var(--ink) 28%, transparent); display: flex; align-items: flex-start; justify-content: center; padding-top: 9vh; }
+.modal { width: min(680px, 94vw); max-height: 82vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); padding: 18px 20px; animation: rise-sm .16s ease backwards; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.modal-head h3 { font-size: 1rem; }
+.admin-tabs { margin-bottom: 16px; }
+.inline-edit { border: 0; background: none; font: inherit; color: inherit; padding: 2px 4px; border-radius: 4px; width: 100%; }
+.inline-edit:focus { background: var(--surface-2); outline: 1px solid var(--accent); }

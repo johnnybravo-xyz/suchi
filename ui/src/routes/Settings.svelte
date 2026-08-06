@@ -218,11 +218,5 @@
     {/if}
   </div>
 
-  <div class="card">
-    <h3>About this interface</h3>
-    <p class="sub" style="color:var(--muted);font-size:.84rem;margin:0">
-      Svelte SPA, zero runtime dependencies, talking to the same API the mobile apps use.
-      Theme follows your system; the toggle in the sidebar overrides it.
-    </p>
-  </div>
+
 </div>

@@ -15,10 +15,15 @@
   import Settings from './routes/Settings.svelte'
   import Setup from './routes/Setup.svelte'
   import Trash from './routes/Trash.svelte'
+  import Locked from './routes/Locked.svelte'
+  import Admin from './routes/Admin.svelte'
+  import UploadBox from './lib/UploadBox.svelte'
 
   let paletteOpen = $state(false)
   let drawerOpen = $state(false)
   let umenuOpen = $state(false)
+  let uploadOpen = $state(false)
+  let lockedCount = $state(0)
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
@@ -117,6 +122,11 @@
       const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
       recentDocs = r?.results || []
     } catch {}
+    try {
+      const { listPendingDecryption } = await import('./lib/api.js')
+      const r = await listPendingDecryption()
+      lockedCount = (r?.results || r || []).length
+    } catch { lockedCount = 0 }
   }
 
   function dismissSetup() {
@@ -143,7 +153,7 @@
 
   function onKey(e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); paletteOpen = !paletteOpen }
-    if (e.key === 'Escape') { paletteOpen = false; drawerOpen = false; umenuOpen = false }
+    if (e.key === 'Escape') { paletteOpen = false; drawerOpen = false; umenuOpen = false; uploadOpen = false }
   }
 
   $effect(() => { route.path; umenuOpen = false })
@@ -192,6 +202,16 @@
             {#if n.key === 'tasks' && pendingTasks.length > 0}<span class="badge">{pendingTasks.length}</span>{/if}
           </a>
         {/each}
+        {#if lockedCount > 0}
+          <a href="#/locked" class:on={page === 'locked'}>
+            <Icon name="lock" />Locked<span class="badge">{lockedCount}</span>
+          </a>
+        {/if}
+        {#if session.user?.role === 'admin'}
+          <a href="#/admin" class:on={page === 'admin'}>
+            <Icon name="shield" />Admin
+          </a>
+        {/if}
       </nav>
 
       {#if jdTree.length}
@@ -230,9 +250,9 @@
         <button class="searchbox" onclick={() => (paletteOpen = true)}>
           <Icon name="search" size={14} /> Search or jump to <kbd>⌘K</kbd>
         </button>
-        <a role="button" class="btn primary" href="#/upload" style="padding:8px 16px">
+        <button class="btn primary" style="padding:8px 16px" onclick={() => (uploadOpen = true)}>
           <Icon name="upload" size={15} /> Upload
-        </a>
+        </button>
         <button class="btn bell" onclick={() => { drawerOpen = !drawerOpen; if (drawerOpen) markEventsRead() }}
                 aria-label={`Activity, ${bellCount} items needing attention`} title="Activity">
           <Icon name="bell" size={16} />
@@ -278,6 +298,8 @@
         {:else if page === 'upload'}<Upload {notify} />
         {:else if page === 'settings'}<Settings {notify} setupPending={setupNeeded} />
         {:else if page === 'trash'}<Trash {notify} />
+        {:else if page === 'locked'}<Locked {notify} onChanged={() => pollActivity()} />
+        {:else if page === 'admin'}<Admin {notify} />
         {:else if page === 'setup'}<Setup {notify} onDone={() => { setupNeeded = false; go('#/dashboard') }} />
         {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />
         {:else}<div class="empty">Nothing filed under <code>#{route.path}</code>. <a href="#/dashboard">Back to the dashboard</a></div>
@@ -357,6 +379,18 @@
           <p class="sub" style="color:var(--muted);font-size:.8rem;margin-top:12px">Nothing needs you. The archive is running itself.</p>
         {/if}
       </aside>
+    </div>
+  {/if}
+
+  {#if uploadOpen}
+    <div class="modal-veil" onclick={() => (uploadOpen = false)} role="presentation">
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents">
+        <div class="modal-head">
+          <h3>Upload</h3>
+          <button class="btn sm" onclick={() => { uploadOpen = false; pollActivity() }}><Icon name="x" size={13} /></button>
+        </div>
+        <UploadBox {notify} />
+      </div>
     </div>
   {/if}
 
