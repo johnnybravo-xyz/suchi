@@ -103,6 +103,10 @@ func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
+	// Paginated list — every SPA list view + third-party client
+	// walks the archive through this. See documents_list.go for
+	// filter surface + ACL splicing.
+	mux.HandleFunc("GET /api/documents/", s.ListDocuments)
 	mux.HandleFunc("GET /api/documents/{id}", s.GetDocument)
 	mux.HandleFunc("PATCH /api/documents/{id}", s.PatchDocument)
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
