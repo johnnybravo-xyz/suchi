@@ -51,11 +51,17 @@ type WorkflowTask struct {
 	// `t.title || t.kind || Task #${t.id}`, so exposing prompt as
 	// title lets it show the human question without a client change.
 	// New clients should read `prompt`.
-	Title      string   `json:"title,omitempty"`
-	Choices    []string `json:"choices"`
-	Status     string   `json:"status"`
-	DeadlineAt int64    `json:"deadline_at,omitempty"`
-	CreatedAt  int64    `json:"created_at"`
+	Title string `json:"title,omitempty"`
+	// WorkflowName is the approval_defs.slug the run was started
+	// against ("invoice-approval", "manager-signoff"). Lets the
+	// approvals card render "Invoice approval → sign-off" instead
+	// of just the state key. Denormalized so the card doesn't have
+	// to hit /api/approvals/{slug} per row.
+	WorkflowName string   `json:"workflow_name,omitempty"`
+	Choices      []string `json:"choices"`
+	Status       string   `json:"status"`
+	DeadlineAt   int64    `json:"deadline_at,omitempty"`
+	CreatedAt    int64    `json:"created_at"`
 }
 
 // TasksResponse is the /api/tasks/ envelope. Counts is a per-state
@@ -236,11 +242,12 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 	me := fmt.Sprintf("user:%d", userID)
 
 	q := `
-		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0),
+		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0), d.slug,
 		       t.state_key, t.assignee, t.prompt,
 		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs d ON d.id = r.def_id
 		WHERE t.assignee = ? AND t.status IN ('open','claimed')
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT ?
@@ -259,8 +266,8 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 			deadline   int64
 			docID      int64
 		)
-		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &docID, &t.StateKey,
-			&t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
+		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &docID, &t.WorkflowName,
+			&t.StateKey, &t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
 			&t.CreatedAt); err != nil {
 			return nil, 0, err
 		}
