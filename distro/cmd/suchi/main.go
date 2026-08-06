@@ -452,9 +452,9 @@ func runServe() int {
 		mux.HandleFunc("GET /oidc/callback", oa.CallbackHandler)
 		mux.HandleFunc("GET /oidc/debug", oa.DebugInfoHandler)
 	}
-	// A tiny /whoami handler proves the auth chain wiring end-to-end
-	// without needing any Phase-1 code.
-	mux.Handle("GET /api/whoami", httpx.RequireAuth(http.HandlerFunc(whoamiHandler)))
+	// /api/whoami now lives on api.Server.Whoami (see core/api/users.go)
+	// so display_name + avatar_url ride the same shape as PATCH.
+	// The route is registered by apiSrv.Register below.
 
 	// i18n + read-only UI (CAS constructed above with the dispatcher).
 	// UIDisabled=true (env SUCHI_UI_DISABLED=1) skips both — headless
@@ -617,16 +617,6 @@ func runServe() int {
 	}
 	log.Info("main.shutdown.done")
 	return 0
-}
-
-// whoamiHandler returns the resolved Principal. Handy smoke test for the
-// auth chain; also useful for debugging.
-func whoamiHandler(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	// If we got here, RequireAuth already checked non-nil.
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"kind":%q,"user_id":%d,"email":%q,"role":%q,"authn_by":%q}`+"\n",
-		p.Kind, p.UserID, p.Email, p.Role, p.AuthNBy)
 }
 
 func runHealthcheck() int {

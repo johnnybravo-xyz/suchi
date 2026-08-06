@@ -106,14 +106,43 @@ no username/password oracle.
 
 ### `GET /api/whoami`
 
-Returns the authenticated Principal:
+Returns the authenticated Principal + profile fields. The SPA reads
+`display_name` for the topbar avatar menu and `avatar_url` for the
+image (initials fallback until an avatar is set).
 
 ```json
-{ "kind": "user|token", "user_id": 1, "email": "you@example.com",
-  "role": "admin|member", "authn_by": "local-auth|oidc" }
+{
+  "kind": "user|token",
+  "user_id": 1,
+  "email": "you@example.com",
+  "display_name": "You (Admin)",
+  "role": "admin|member",
+  "authn_by": "local-auth|oidc",
+  "avatar_url": "/api/users/1/avatar"
+}
 ```
 
-**401** if anonymous.
+`display_name` + `avatar_url` are omitted when unset. **401** if
+anonymous.
+
+### `PATCH /api/users/me`
+
+Update the caller's profile. Body accepts `display_name` only in the
+current pass:
+
+```json
+{ "display_name": "Ritesh S." }
+```
+
+- `display_name` — trimmed, 1–120 chars.
+- `email` — refused with `400 {"code": "email_change_unsupported"}`.
+  Email is the local-auth identifier; changing it needs a password
+  challenge + a dedicated flow (not yet wired).
+- Empty body → `400 {"code": "no_fields"}`.
+
+Successful writes emit an audit event
+(`user.display_name_changed`, old→new) and return the fresh
+`UserSelf` shape.
 
 ### `POST /api/documents/`
 
