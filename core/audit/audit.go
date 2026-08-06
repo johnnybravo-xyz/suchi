@@ -182,6 +182,49 @@ func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
 	fanoutToSinks(ctx, log, e, ts)
 }
 
+// LogInTx is the same as Log, but writes through a caller-supplied
+// tx. Use this when the caller is already inside a WriteTx (the
+// automations action layer, the resolve-proposal handler) — writing
+// via the top-level `Log` would deadlock the single-writer pool.
+// Sinks fanout still runs on success.
+func LogInTx(ctx context.Context, tx *sql.Tx, log *slog.Logger, e Event) {
+	before, err := marshal(e.Before)
+	if err != nil {
+		log.Error("audit.marshal_before", "err", err.Error(), "action", e.Action)
+		return
+	}
+	after, err := marshal(e.After)
+	if err != nil {
+		log.Error("audit.marshal_after", "err", err.Error(), "action", e.Action)
+		return
+	}
+	kind, id := ActorSystem, sql.NullInt64{}
+	if e.Actor != nil {
+		switch e.Actor.Kind {
+		case "user":
+			kind, id = ActorUser, sql.NullInt64{Int64: e.Actor.UserID, Valid: true}
+		case "token":
+			kind, id = ActorToken, sql.NullInt64{Int64: e.Actor.TokenID, Valid: true}
+		}
+	}
+	ts := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO audit_events
+			(ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		ts,
+		kind, id,
+		e.Action, e.ObjectKind, nullInt64(e.ObjectID),
+		nullString(before), nullString(after),
+		nullString(e.RequestID),
+	); err != nil {
+		log.Error("audit.write.failed_intx", "err", err.Error(), "action", e.Action)
+		return
+	}
+	fanoutToSinks(ctx, log, e, ts)
+}
+
 func marshal(v any) (string, error) {
 	if v == nil {
 		return "", nil

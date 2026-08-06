@@ -141,6 +141,10 @@ func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
 	if err := store.Delete(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
 		return
+	} else if errors.Is(err, automations.ErrSystemAutomation) {
+		s.writeError(w, http.StatusConflict, "system_automation",
+			"this is a built-in automation; toggle 'enabled' off instead of deleting")
+		return
 	} else if err != nil {
 		s.serverErr(w, "automations.delete", err)
 		return

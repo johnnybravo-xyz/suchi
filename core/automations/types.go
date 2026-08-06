@@ -66,11 +66,20 @@ func TriggerToCode(t TriggerType) int {
 }
 
 // Workflow is one row in `workflows`.
+//
+// System = true marks an automation that suchi seeded on first boot
+// ("Auto-file from archive" is the first of these). System rows are
+// undeletable but otherwise identical: the operator can toggle
+// enabled, rename them, and tune their action params. SystemSlug is
+// the seed's stable identifier; the seeder INSERT ... ON CONFLICT's
+// on it so re-runs are no-ops.
 type Workflow struct {
 	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
 	OrderIndex int       `json:"order"`
 	Enabled    bool      `json:"enabled"`
+	System     bool      `json:"system,omitempty"`
+	SystemSlug string    `json:"system_slug,omitempty"`
 	Triggers   []Trigger `json:"triggers"`
 	Actions    []Action  `json:"actions"`
 	CreatedAt  int64     `json:"created_at"`

@@ -25,7 +25,8 @@ func New(d *db.DB) *Store { return &Store{DB: d} }
 // Cheap enough at Phase-5 scale that we don't paginate.
 func (s *Store) List(ctx context.Context) ([]Workflow, error) {
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT id, name, order_index, enabled, created_at, updated_at
+		SELECT id, name, order_index, enabled, system, COALESCE(system_slug, ''),
+		       created_at, updated_at
 		FROM workflows
 		ORDER BY order_index, id
 	`)
@@ -37,12 +38,14 @@ func (s *Store) List(ctx context.Context) ([]Workflow, error) {
 	var out []Workflow
 	for rows.Next() {
 		var w Workflow
-		var enabled int
+		var enabled, system int
 		if err := rows.Scan(&w.ID, &w.Name, &w.OrderIndex, &enabled,
+			&system, &w.SystemSlug,
 			&w.CreatedAt, &w.UpdatedAt); err != nil {
 			return nil, err
 		}
 		w.Enabled = enabled == 1
+		w.System = system == 1
 		out = append(out, w)
 	}
 	if err := rows.Err(); err != nil {
@@ -70,16 +73,19 @@ func (s *Store) List(ctx context.Context) ([]Workflow, error) {
 // Get returns one workflow by ID or sql.ErrNoRows.
 func (s *Store) Get(ctx context.Context, id int64) (*Workflow, error) {
 	var w Workflow
-	var enabled int
+	var enabled, system int
 	err := s.DB.Read.QueryRowContext(ctx, `
-		SELECT id, name, order_index, enabled, created_at, updated_at
+		SELECT id, name, order_index, enabled, system, COALESCE(system_slug, ''),
+		       created_at, updated_at
 		FROM workflows WHERE id = ?
 	`, id).Scan(&w.ID, &w.Name, &w.OrderIndex, &enabled,
+		&system, &w.SystemSlug,
 		&w.CreatedAt, &w.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	w.Enabled = enabled == 1
+	w.System = system == 1
 	if w.Triggers, err = s.listTriggers(ctx, id); err != nil {
 		return nil, err
 	}
@@ -216,9 +222,26 @@ func (s *Store) Update(ctx context.Context, id int64, w Workflow) (*Workflow, er
 	return s.Get(ctx, id)
 }
 
-// Delete removes a workflow; children cascade via FK.
+// ErrSystemAutomation is returned by Delete when the caller tries to
+// remove a system=1 row. The API layer maps this to 409 with
+// code:"system_automation" so the SPA can render a "built-in — can't
+// delete" hint on the row.
+var ErrSystemAutomation = errors.New("automations: cannot delete a system automation")
+
+// Delete removes a workflow; children cascade via FK. System
+// automations (seeded by suchi) are undeletable — return
+// ErrSystemAutomation so the API can shape a 409. Callers who want
+// the automation gone should toggle enabled=false instead.
 func (s *Store) Delete(ctx context.Context, id int64) error {
 	return s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		var system int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT system FROM workflows WHERE id = ?`, id).Scan(&system); err != nil {
+			return err
+		}
+		if system == 1 {
+			return ErrSystemAutomation
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM workflows WHERE id = ?`, id)
 		if err != nil {
 			return err
