@@ -34,6 +34,8 @@ type SavedViewRow struct {
 	FilterJSON string `json:"filter_json"`
 	Display    string `json:"display"`
 	Position   int    `json:"position"`
+	Shared     bool   `json:"shared,omitempty"`
+	OwnerID    int64  `json:"owner_id,omitempty"` // populated only on shared rows the caller doesn't own
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
 }
@@ -44,29 +46,47 @@ type SavedViewUpsert struct {
 	FilterJSON *string `json:"filter_json,omitempty"`
 	Display    *string `json:"display,omitempty"`
 	Position   *int    `json:"position,omitempty"`
+	Shared     *bool   `json:"shared,omitempty"`
 }
 
-// ListSavedViews — GET /api/saved_views/. Scoped to the caller.
+// ListSavedViews — GET /api/saved_views/.
+//
+// By default returns the caller's own views. Passing ?include=shared
+// also returns every other user's `shared = 1` view. Rows the caller
+// doesn't own carry the owner_id field so the client can render
+// "shared by user #N" and skip the edit affordance.
 func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
+	includeShared := r.URL.Query().Get("include") == "shared"
+	where := "owner_id = ?"
+	args := []any{p.UserID}
+	if includeShared {
+		where = "(owner_id = ? OR shared = 1)"
+	}
+
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM saved_views WHERE owner_id = ?", p.UserID).Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM saved_views WHERE "+where, args...).Scan(&total); err != nil {
 		s.serverErr(w, "saved_views.count", err)
 		return
 	}
 	pp := ParsePageParams(r, 100, 500)
+	// Arg order matches placeholder order left-to-right: WHERE first,
+	// then the ORDER BY tie-breaker, then LIMIT/OFFSET.
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, p.UserID, pp.PageSize, pp.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT id, name, filter_json, display, position, created_at, updated_at
+		SELECT id, owner_id, name, filter_json, display, position, shared,
+		       created_at, updated_at
 		FROM saved_views
-		WHERE owner_id = ?
-		ORDER BY position ASC, name ASC
+		WHERE `+where+`
+		ORDER BY (owner_id = ?) DESC, position ASC, name ASC
 		LIMIT ? OFFSET ?
-	`, p.UserID, pp.PageSize, pp.Offset())
+	`, queryArgs...)
 	if err != nil {
 		s.serverErr(w, "saved_views.list", err)
 		return
@@ -74,11 +94,19 @@ func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	var out []SavedViewRow
 	for rows.Next() {
-		var v SavedViewRow
-		if err := rows.Scan(&v.ID, &v.Name, &v.FilterJSON, &v.Display,
-			&v.Position, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		var (
+			v       SavedViewRow
+			ownerID int64
+			shared  int
+		)
+		if err := rows.Scan(&v.ID, &ownerID, &v.Name, &v.FilterJSON, &v.Display,
+			&v.Position, &shared, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			s.serverErr(w, "saved_views.scan", err)
 			return
+		}
+		v.Shared = shared == 1
+		if ownerID != p.UserID {
+			v.OwnerID = ownerID // shared row from another user — expose so the client can label + gate edits
 		}
 		out = append(out, v)
 	}
@@ -132,13 +160,17 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	if in.Position != nil {
 		position = *in.Position
 	}
+	shared := 0
+	if in.Shared != nil && *in.Shared {
+		shared = 1
+	}
 	now := time.Now().Unix()
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO saved_views(owner_id, name, filter_json, display, position, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, p.UserID, strings.TrimSpace(*in.Name), filterJSON, display, position, now, now)
+			INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, p.UserID, strings.TrimSpace(*in.Name), filterJSON, display, position, shared, now, now)
 		if err != nil {
 			return err
 		}
@@ -195,6 +227,14 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 	if in.Position != nil {
 		sets = append(sets, "position = ?")
 		args = append(args, *in.Position)
+	}
+	if in.Shared != nil {
+		sets = append(sets, "shared = ?")
+		v := 0
+		if *in.Shared {
+			v = 1
+		}
+		args = append(args, v)
 	}
 	if len(sets) == 0 {
 		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
