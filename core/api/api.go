@@ -120,6 +120,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// vec0 layer stacks on top once sqlite-vec ships (see
 	// docs/wishlist/similar-documents.mdx).
 	mux.HandleFunc("GET /api/documents/{id}/similar", s.GetSimilarDocuments)
+	// Auto-file-from-archive proposals surface (heuristics engine).
+	// GET/POST resolve per doc + bulk endpoint the SPA bulk bar uses.
+	mux.HandleFunc("GET /api/documents/{id}/proposals", s.ListDocumentProposals)
+	mux.HandleFunc("POST /api/documents/{id}/proposals/{proposal_id}/resolve", s.ResolveDocumentProposal)
+	mux.HandleFunc("POST /api/proposals/resolve_bulk", s.ResolveBulkProposals)
 
 	// Document correspondents (multi-party per doc).
 	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)

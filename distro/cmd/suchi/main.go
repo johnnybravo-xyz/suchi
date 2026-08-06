@@ -366,7 +366,15 @@ func runServe() int {
 		postingest.WithPreConsume(cfg.PreConsumeScript),
 	))
 	if llm != nil {
-		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
+		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log).
+			WithFallback(func(ctx context.Context, docID int64) error {
+				// Low-confidence LLM outcome → force-fire the built-in
+				// heuristics automation. The action's own idempotency
+				// (UPDATE ... WHERE col IS NULL) means it can't stomp
+				// on fields LLM already set.
+				return automations.ApplyOnDocumentAdded(
+					automations.WithForceHeuristics(ctx), d, log, docID)
+			}))
 	}
 	// Render subscriber — every mutator that changes metadata enqueues
 	// a "render" job in its own tx; this dispatcher fires the move
