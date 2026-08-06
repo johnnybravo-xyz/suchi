@@ -24,7 +24,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Auth (JSON) | `POST /api/login`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami` |
 | Documents | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET /api/trash/` |
 | Doc extras | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption` |
-| Taxonomy | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/` |
+| Taxonomy | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/` |
 | Classifier rules | `/api/rules/` CRUD |
 | Search + autocomplete | `/api/search/`, `/api/autocomplete/` |
 | Saved views + UI prefs | `/api/saved_views/`, `/api/ui_settings/` |
@@ -148,6 +148,9 @@ the undelete flow.
   "archive_size": 62114,
   "mime_type": "application/pdf",
   "jd_category_id": 17,
+  "jd_category_code": 31,
+  "jd_category_name": "Utilities",
+  "jd_area_name": "Home",
   "created_at": 1793491200,
   "updated_at": 1793491200,
   "tags": ["utilities", "electricity"],
@@ -155,8 +158,52 @@ the undelete flow.
 }
 ```
 
+`jd_category_code` / `jd_category_name` / `jd_area_name` are denormalized
+from the JD tree so mobile clients + agents can render a filing chip
+without a second round-trip. See [`GET /api/jd/categories/`](#get-apijdcategories)
+for the picker enumeration. `jd_area_code` is deliberately omitted —
+the category's own `code` encodes the area (e.g. 31 → area 30–39).
+
 Empty lists always serialize as `[]` (never `null`) so mobile clients
 can iterate them safely.
+
+### `GET /api/jd/categories/`
+
+Read-only listing of every category in the current JD tree, with
+`area_code` + `area_name` denormalized onto each row so a picker
+can render a grouped tree in one request. Used by mobile pickers,
+the SPA's file-under dropdown, MCP tools that need to resolve
+`jd_category_id`, and any agent enumerating the taxonomy.
+
+Query params (both optional):
+
+- `?q=<prefix>` — case-insensitive prefix match on the category
+  code OR name. `?q=22` and `?q=tax` both match `22 Tax`.
+- `?area=<code>` — scope to one area's 10-slot range. `?area=20`
+  returns categories 20–29.
+
+DRF envelope. Read-only — creation happens via preset swap
+(`POST /api/admin/setup/jd-preset`), not per-row insert.
+
+**200 OK**
+```json
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 4,
+      "code": 22,
+      "name": "Tax",
+      "description": "annual filings",
+      "area_code": 20,
+      "area_name": "Money",
+      "system": false
+    }
+  ]
+}
+```
 
 ### `DELETE /api/documents/{id}`
 

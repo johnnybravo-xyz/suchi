@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -55,6 +56,51 @@ func New(d *db.DB, log *slog.Logger) *Dispatcher {
 		nudge:  make(chan struct{}, 1),
 		stopCh: make(chan struct{}),
 	}
+}
+
+// ReclaimOrphaned resets any dispatcher jobs left in state='running'
+// from a previous process. Called once at boot, before Run — a
+// process that crashed (or was SIGKILL'd) mid-handler leaves a
+// running row with no worker; without this, that job orphans
+// forever and the doc it belonged to sits with no OCR, no content,
+// no error.
+//
+// Excludes `agent:*` kinds — those use lease-deadline reclaim (see
+// core/api/agent.go) because their workers are external processes,
+// not the in-tree dispatcher.
+//
+// Safe to call at boot: single-process by design, and the write pool
+// pins one connection, so this and Run() never race.
+//
+// Returns the number of rows reset. Log at INFO as
+// `jobs.boot_reclaimed` so operators see a non-zero count after a
+// crash without grepping for it.
+func (d *Dispatcher) ReclaimOrphaned(ctx context.Context) (int64, error) {
+	var affected int64
+	err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE jobs
+			   SET state = 'pending',
+			       next_run_at = ?,
+			       updated_at = ?
+			 WHERE state = 'running'
+			   AND kind NOT LIKE 'agent:%'
+		`, time.Now().Unix(), time.Now().Unix())
+		if err != nil {
+			return err
+		}
+		affected, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if affected > 0 {
+		d.log.Info("jobs.boot_reclaimed",
+			"count", affected,
+			"reason", "prior process crashed mid-handler")
+	}
+	return affected, nil
 }
 
 // Register wires a subscriber to every kind it declares. Safe to call
@@ -256,6 +302,18 @@ func (d *Dispatcher) markRetry(ctx context.Context, id int64, attempts int, msg 
 }
 
 func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
+	// Snapshot the row so we can carry kind + doc_id + attempts into
+	// the audit event. Read is cheap; the write follows in the same
+	// tx.
+	var (
+		kind     string
+		docID    sql.NullInt64
+		attempts int64
+	)
+	_ = d.db.Read.QueryRowContext(ctx,
+		`SELECT kind, doc_id, attempts FROM jobs WHERE id = ?`,
+		id).Scan(&kind, &docID, &attempts)
+
 	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE jobs SET state='dead', last_error=?, updated_at=unixepoch() WHERE id=?
@@ -263,7 +321,30 @@ func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
 		return err
 	}); err != nil {
 		d.log.Error("jobs.mark_dead.failed", "job_id", id, "err", err.Error())
+		return
 	}
+
+	// Audit: operator-actionable signal that E-track SIEM exports
+	// consume via audit_events. Truncate the error to keep the row
+	// bounded — SIEMs choke on multi-KB fields. The full string
+	// stays in jobs.last_error.
+	truncated := msg
+	if len(truncated) > 512 {
+		truncated = truncated[:512] + "…(truncated)"
+	}
+	after := map[string]any{
+		"job_id":   id,
+		"kind":     kind,
+		"attempts": attempts,
+		"error":    truncated,
+	}
+	if docID.Valid {
+		after["doc_id"] = docID.Int64
+	}
+	audit.Log(ctx, d.db, d.log, audit.Event{
+		Action: "job.dead", ObjectKind: "job", ObjectID: id,
+		After: after,
+	})
 }
 
 func nullInt64(v int64) any {

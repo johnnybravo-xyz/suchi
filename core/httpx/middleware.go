@@ -35,20 +35,41 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 
 // SecurityHeaders sets baseline defensive headers on every response.
 //
-// The CSP is intentionally strict for the API surface. The UI (added
-// Phase 1) will loosen it with a nonce for its own inline HTMX handlers;
-// until then, no inline anything.
+// The CSP is intentionally strict for the API surface + server-rendered
+// UI. The Svelte SPA under /app/ needs `style-src 'unsafe-inline'`
+// because Svelte injects styles at runtime; that relaxation is scoped
+// to /app/* only. The rest of the surface stays locked down.
 func SecurityHeaders(next http.Handler) http.Handler {
+	const strict = "default-src 'self'; img-src 'self' data:; " +
+		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	// SPA CSP: same policy plus `style-src 'self' 'unsafe-inline'`.
+	// Every other directive stays; only the runtime-style compromise
+	// is allowed. No `script-src 'unsafe-inline'` — the JS bundle is
+	// external.
+	const spa = "default-src 'self'; img-src 'self' data:; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if isSPAPath(r.URL.Path) {
+			h.Set("Content-Security-Policy", spa)
+		} else {
+			h.Set("Content-Security-Policy", strict)
+		}
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSPAPath reports whether the request targets the Svelte shell or
+// one of its bundled assets. Kept as a plain string check (no route
+// match) so the middleware stays cheap.
+func isSPAPath(p string) bool {
+	return p == "/app" || len(p) >= 5 && p[:5] == "/app/"
 }
 
 // RequestID injects a random request id into the response header and
@@ -133,6 +154,50 @@ func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 	}
 }
 
+// SecFetchSite rejects cross-site state-changing requests where the
+// caller is authenticated by a session cookie. It's the modern
+// browser-shipped CSRF signal — every browser Google can see stamps
+// `Sec-Fetch-Site: same-origin | same-site | cross-site | none` on
+// every request. `SameSite=Lax` on the session cookie already blocks
+// most cross-site forms; this middleware closes the edge cases
+// (older engines with lax defaults, opaque origins, javascript:
+// redirect chains, subdomain takeovers).
+//
+// Token-authenticated calls (`Authorization: Token …` / `Bearer …`)
+// are exempt — a cross-site attacker cannot forge an Authorization
+// header, so the CSRF class of attack doesn't apply.
+//
+// Compose AFTER Authenticate — needs `auth.FromContext` to see the
+// principal kind.
+func SecFetchSite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only state-changing verbs need the check. GET/HEAD/OPTIONS
+		// with a cookie can leak information but not mutate.
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			next.ServeHTTP(w, r)
+			return
+		}
+		p := auth.FromContext(r.Context())
+		// Token / bearer calls exempt: forge-proof.
+		if p != nil && p.Kind == "token" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		site := r.Header.Get("Sec-Fetch-Site")
+		// Older browsers that don't send the header at all get a
+		// pass — turning them into 403 across the board would break
+		// curl + integration scripts that don't set the header. The
+		// SameSite=Lax cookie is the fallback line.
+		if site == "" || site == "same-origin" || site == "same-site" || site == "none" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "cross-site request refused", http.StatusForbidden)
+	})
+}
+
 // RequireAuth is a route-level guard for handlers that must have a
 // Principal. Compose after Authenticate.
 func RequireAuth(next http.Handler) http.Handler {
@@ -209,11 +274,19 @@ func isCatchAll(pat string) bool {
 }
 
 // BodyLimit caps request bodies to n bytes using http.MaxBytesReader.
-// Applied globally; upload endpoints override with a larger cap.
+// Applied globally to every route. n <= 0 disables the cap for
+// operators who genuinely need unbounded (rare — the review guidance
+// is to keep the cap on with a sensible ceiling).
+//
+// When the reader trips, the handler downstream sees a
+// http.MaxBytesError on its next Read; the upload endpoints
+// specifically map that to a structured 413 response.
 func BodyLimit(n int64) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(w, r.Body, n)
+			if n > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
