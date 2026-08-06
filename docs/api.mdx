@@ -168,6 +168,63 @@ Serves any user's avatar as `image/png`. Immutable ETag
 a new upload rotates the sha and invalidates every cached client
 automatically. Returns `404` if unset.
 
+### `GET /api/documents/`
+
+Paginated ACL-scoped document list. Every SPA list view + mobile
+client walks the archive through this. Scope: `documents:read`.
+
+Query params (all optional):
+
+| Param | Effect |
+| ----- | ------ |
+| `page`, `page_size` | Standard DRF paging (default 50, cap 200). |
+| `ordering` | `-created_at` (default), `created_at`, `-updated_at`, `updated_at`, `-title`, `title`. Unknown values fall back to default. |
+| `jd_category_id` | Exact filing-chip match. |
+| `sensitivity` | One of `public`, `internal`, `confidential`, `restricted`. |
+| `document_type__id` | Exact document type. |
+| `tags__id__in` | CSV of tag ids; result must carry **every** id (AND). |
+| `correspondents__id__in` | CSV of correspondent ids; result matches **any** (OR). |
+| `q` | Full-text search via FTS5 MATCH over title + content. |
+| `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive). |
+| `trashed` | `1` or `true` returns only trashed rows; default returns live. |
+
+Non-admin callers get the same ACL fragment the detail + patch
+endpoints use — a member sees only owned docs plus explicit grants
+(direct or via group). Admins bypass.
+
+**Row shape** (slimmer than `GET /{id}`; no `content` field — request
+detail for that):
+
+```json
+{
+  "count": 42,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id":              91,
+      "title":           "March electricity bill",
+      "mime_type":       "application/pdf",
+      "original_size":   16841,
+      "jd_category_id":  31,
+      "jd_category_code": 31,
+      "jd_category_name":"Utilities",
+      "jd_area_name":    "Home",
+      "sensitivity":     "",
+      "thumb_sha":       "ab12...",
+      "created_at":      1746662400,
+      "updated_at":      1746662400,
+      "tags":            ["utilities", "bescom"],
+      "correspondents":  ["BESCOM"]
+    }
+  ]
+}
+```
+
+`thumb_sha` non-empty means the row has a thumbnail at
+`/api/documents/{id}/thumb` (client can render immediately without
+a HEAD probe).
+
 ### `POST /api/documents/`
 
 Multipart upload. Streams the file into the CAS by SHA-256; the

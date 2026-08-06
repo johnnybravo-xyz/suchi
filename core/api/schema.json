@@ -166,7 +166,8 @@
     "/api/remote_version/": { "get": { "summary": "Version handshake." } },
     "/api/next_asn/":       { "get": { "summary": "MAX(archive_serial_number)+1 as a bare integer." } },
 
-    "/api/documents/":                 { "post": { "summary": "Multipart upload." } },
+    "/api/documents/":                 { "get":  { "summary": "Paginated ACL-scoped list. Filters: jd_category_id, sensitivity, document_type__id, tags__id__in (AND), correspondents__id__in (OR), q (FTS5), created_at__gte, created_at__lte, trashed. Ordering allow-list: (-)created_at, (-)updated_at, (-)title. DRF envelope with slim DocumentListRow projection (no content — use /{id} for detail)." },
+                                          "post": { "summary": "Multipart upload." } },
     "/api/documents/{id}":             { "get": { "summary": "Get document.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }] },
                                           "delete": { "summary": "Soft-delete (trash)." } },
     "/api/documents/{id}/restore":     { "post": { "summary": "Un-trash." } },
