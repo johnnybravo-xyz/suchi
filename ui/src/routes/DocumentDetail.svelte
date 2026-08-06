@@ -1,5 +1,5 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listJDCategories, previewPath, downloadPath } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listJDCategories, previewPath, downloadPath, similarDocs } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -14,6 +14,7 @@
   let titleDraft = $state('')
   let shareURL = $state('')
   let jdCats = $state([])
+  let similar = $state(null)   // {results, method} | null
 
   const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
   const areaGroups = $derived.by(() => {
@@ -32,6 +33,7 @@
       doc = await getDocument(id)
       titleDraft = doc.title
       documentVersions(id).then(v => (versions = v?.results || v || [])).catch(() => {})
+      similarDocs(id).then(r => (similar = r)).catch(() => (similar = null))
       listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
     } catch (ex) { err = ex.message || 'Could not load this document.' }
   }
@@ -46,8 +48,9 @@
 
   async function share() {
     try {
-      const res = await createShareLink({ document_id: Number(id) })
-      shareURL = res?.url || (res?.token ? `${location.origin}/s/${res.token}` : '')
+      const res = await createShareLink({ doc_ids: [Number(id)], label: doc?.title || '' })
+      shareURL = res?.public_url ? location.origin + res.public_url
+               : res?.token ? `${location.origin}/s/${res.token}` : ''
       if (shareURL && navigator.clipboard) {
         await navigator.clipboard.writeText(shareURL)
         notify?.('Share link copied')
@@ -161,6 +164,24 @@
                 <span class="dot" class:accent={String(v.id) === String(id)}></span>
                 <span class="title grow">#{v.id} {v.title || ''}</span>
                 <span class="sub">{fmtDate(v.created_at)}</span>
+              </a>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if similar?.results?.length}
+        <div class="card">
+          <h3 style="display:flex;align-items:center;gap:8px">Similar documents
+            <span class="pill" title={similar.method === 'fts' ? 'lexical (FTS5 more-like-this)' : 'semantic'}>{similar.method}</span>
+          </h3>
+          <div class="index" style="border:0">
+            {#each similar.results.slice(0, 6) as sd (sd.id)}
+              <a class="irow" href={`#/doc/${sd.id}`} style="padding:8px 4px">
+                <span class="dot"></span>
+                {#if sd.jd_category_id}<span class="chip">jd</span>{/if}
+                <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
+                <span class="sub">{fmtDate(sd.created_at)}</span>
               </a>
             {/each}
           </div>

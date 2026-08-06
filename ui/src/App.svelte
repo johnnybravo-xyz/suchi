@@ -19,6 +19,7 @@
   let paletteOpen = $state(false)
   let drawerOpen = $state(false)
   let umenuOpen = $state(false)
+  let dragDepth = $state(0)   // window-level drop target (except on #/upload)
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
@@ -123,6 +124,23 @@
     try { localStorage.setItem('suchi.setup.dismissed', '1') } catch {}
   }
 
+  async function globalDrop(e) {
+    e.preventDefault()
+    dragDepth = 0
+    if (page === 'upload' || !session.user) return   // upload page has its own zone
+    const files = [...(e.dataTransfer?.files || [])]
+    if (!files.length) return
+    notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
+    const { uploadDocument } = await import('./lib/api.js')
+    let ok = 0, dup = 0, fail = 0
+    for (const f of files) {
+      try { await uploadDocument(f); ok++ }
+      catch (ex) { ex.status === 409 ? dup++ : fail++ }
+    }
+    notify([ok && `${ok} uploaded`, dup && `${dup} duplicate${dup === 1 ? '' : 's'}`, fail && `${fail} failed`].filter(Boolean).join(' · '))
+    pollActivity()
+  }
+
   function onKey(e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); paletteOpen = !paletteOpen }
     if (e.key === 'Escape') { paletteOpen = false; drawerOpen = false; umenuOpen = false }
@@ -142,7 +160,17 @@
   ]
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey}
+  ondragenter={(e) => { if (e.dataTransfer?.types?.includes('Files') && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
+  ondragleave={() => (dragDepth = Math.max(0, dragDepth - 1))}
+  ondragover={(e) => { if (dragDepth > 0) e.preventDefault() }}
+  ondrop={globalDrop} />
+
+{#if dragDepth > 0}
+  <div class="dropveil" aria-hidden="true">
+    <div class="dropveil-inner"><b>Drop to upload</b><span>anywhere works — the pipeline takes it from here</span></div>
+  </div>
+{/if}
 
 {#if !session.checked}
   <div class="login-wrap"><div class="skel" style="width:220px"></div></div>

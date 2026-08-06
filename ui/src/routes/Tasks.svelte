@@ -40,8 +40,19 @@
     return { text: `due ${fmtDate(t.deadline_at)}`, soon: false }
   }
 
+  // Cmd/Ctrl+Enter resolves the top task with its first (primary) choice.
+  function onKey(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && tasks[0]) {
+      e.preventDefault()
+      const t = tasks[0]
+      resolve(t, (t.choices?.length ? t.choices : ['approve'])[0])
+    }
+  }
+
   load()
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 {#if err}<div class="err">{err}</div>{/if}
 
@@ -57,6 +68,7 @@
         <div class="card task-card">
           <div class="prompt">{t.prompt || t.title || `Task #${t.id}`}</div>
           <div class="meta">
+            {#if t.workflow_name}<span class="pill ok">{t.workflow_name}</span>{/if}
             {#if t.assignee}<span class="pill">{t.assignee}</span>{/if}
             <span>step <code>{t.state_key}</code></span>
             {#if t.doc_id}<a href={`#/doc/${t.doc_id}`}>document #{t.doc_id}</a>{/if}

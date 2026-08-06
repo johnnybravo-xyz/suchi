@@ -18,7 +18,7 @@
   // --- custom views ---
   let views = $state([])
   let facets = $state({ tags: [], correspondents: [], types: [], cats: [] })
-  let nv = $state({ name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '' })
+  let nv = $state({ name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false })
 
   async function loadViews() {
     try { const r = await listSavedViews(); views = (r?.results || r || []).sort((a, b) => a.position - b.position) } catch {}
@@ -40,8 +40,8 @@
     if (nv.jd) filters.jd_category_id = nv.jd
     if (nv.sens) filters.sensitivity = nv.sens
     try {
-      await createSavedView({ name: nv.name.trim(), filter_json: JSON.stringify(filters), display: 'list', position: views.length })
-      nv = { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '' }
+      await createSavedView({ name: nv.name.trim(), filter_json: JSON.stringify(filters), display: 'list', position: views.length, shared: nv.shared })
+      nv = { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false }
       notify?.('View saved — it is on the dashboard now')
       loadViews()
     } catch (ex) { notify?.(ex.message || 'Could not save the view') }
@@ -140,6 +140,7 @@
         <select class="input" bind:value={nv.corr}><option value="">Any correspondent</option>{#each facets.correspondents as c}<option value={c.id}>{c.name}</option>{/each}</select>
         <select class="input" bind:value={nv.type}><option value="">Any type</option>{#each facets.types as t}<option value={t.id}>{t.name}</option>{/each}</select>
         <select class="input" bind:value={nv.sens}><option value="">Any sensitivity</option><option value="public">Public</option><option value="internal">Internal</option><option value="confidential">Confidential</option></select>
+        <label class="wiz-check" style="margin:0" title="Visible on every user's dashboard"><input type="checkbox" bind:checked={nv.shared} /> Shared</label>
         <button class="btn primary sm">Save view</button>
       </div>
     </form>
@@ -149,6 +150,7 @@
           <div class="irow">
             <span class="dot accent"></span>
             <span class="title grow">{v.name}</span>
+            {#if v.shared}<span class="pill ok">shared</span>{/if}
             <span class="sub mono" style="font-size:.68rem">{v.filter_json}</span>
             <button class="btn sm danger" onclick={() => removeView(v)}><Icon name="trash" size={13} /></button>
           </div>
