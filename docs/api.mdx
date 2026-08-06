@@ -36,7 +36,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Automations | `/api/automations/` CRUD ([guide](/automations)) |
 | Approvals | `/api/approvals/…` ([guide](/approvals)) |
 | Groups + ACLs | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions)) |
-| Share links | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download` |
+| Share links | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them. |
 | Admin | `/api/admin/users`, `/api/admin/setup/*`, `/api/admin/mail-setup`, `/api/admin/settings/{llm,preferences,ingest}` |
 | Schema | `/api/schema/` (OpenAPI 3.1) |
 
@@ -592,6 +592,43 @@ Full guide at [permissions](/permissions).
 `{kind}` is one of `document|tag|correspondent|document_type|storage_path`.
 Perm bits are `view=1`, `change=2`, `delete=4` — OR them for
 combinations.
+
+### `POST /api/share_links/` — multi-doc bundles
+
+A share link covers 1–200 documents under a single opaque token.
+Bundles work by design: pass an array on POST, and the recipient sees
+one landing page with every doc listed.
+
+**Request**
+```json
+{
+  "doc_ids":    [42, 91, 108],
+  "label":      "Everything for the accountant",
+  "password":   "optional",
+  "expires_at": 1785782400
+}
+```
+
+- `doc_ids`: 1–200; every id must be visible to the caller
+  (owner or ACL-granted).
+- `label`: short human string shown on the landing page.
+- `password`: optional. Argon2id-hashed at rest; verified via
+  `?password=` on the public paths (rate-limited).
+- `expires_at`: unix seconds; omit for no expiry.
+
+**Response** carries the fresh `token` + the resolved
+`public_url` (`/s/<token>`).
+
+**Public paths** (unauthenticated, rate-limited):
+
+- `GET /s/{token}` — bundle metadata: `{label, requires_password?,
+  docs:[{id, title, mime, size, download}]}`.
+- `GET /s/{token}/{doc_id}/download` — streaming download of one doc
+  from the bundle. Both paths verify the token and the optional
+  `?password=` server-side.
+
+Revoke via `DELETE /api/share_links/{id}` — the token becomes 404
+immediately (no soft delete).
 
 ### `GET /api/documents/{id}/correspondents/`
 
