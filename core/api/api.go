@@ -112,6 +112,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/documents/bulk_edit", s.BulkEdit)
 	// Page-1 thumbnail — generated at ingest by post-ingest.thumb.
 	mux.HandleFunc("GET /api/documents/{id}/thumb", s.GetDocumentThumb)
+	// "Documents like this" — pure-Go FTS5 more-like-this today; a
+	// vec0 layer stacks on top once sqlite-vec ships (see
+	// docs/wishlist/similar-documents.mdx).
+	mux.HandleFunc("GET /api/documents/{id}/similar", s.GetSimilarDocuments)
 
 	// Document correspondents (multi-party per doc).
 	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)

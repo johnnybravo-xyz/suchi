@@ -146,13 +146,20 @@ or `· sqlite-vec disabled (SUCHI_VEC_PATH unset)`.
 ## Rollout
 
 1. Design doc lands ✅ (this file).
-2. Migration + `document_embeddings` table.
-3. `core/pipeline/embed` package with the LLM-endpoint call + vec0
-   insert. Behind `SUCHI_VEC_PATH` gate.
-4. `GET /api/documents/{id}/similar` — vec0 first, FTS5 fallback.
-5. `suchi embeddings --backfill` CLI.
-6. SPA DocumentDetail "Similar" strip.
-7. Docs: config.mdx new env rows, cli.mdx new verb.
+2. **`GET /api/documents/{id}/similar` FTS5 fallback shipped ✅.**
+   Pure-Go BM25 more-like-this at `core/api/documents_similar.go`;
+   returns `method: "fts"` on every response. Works today with no
+   new dependency.
+3. Migration + `document_embeddings` table. (Pending.)
+4. `core/pipeline/embed` package with the LLM-endpoint call + vec0
+   insert. Behind `SUCHI_VEC_PATH` gate. (Pending.)
+5. When vec0 loads at boot, the endpoint prefers vec0 and reports
+   `method: "vec"`; missing extension falls back to the FTS5 path
+   already in production. (Pending.)
+6. `suchi embeddings --backfill` CLI. (Pending.)
+7. SPA DocumentDetail "Similar" strip — can consume the FTS5 shape
+   today; the strip's quality improves silently when vec0 lands.
+8. Docs: config.mdx new env rows, cli.mdx new verb.
 
 The current bar for merging is: an instance that never loads vec0
 still passes every existing test. sqlite-vec doesn't become a hard
