@@ -135,7 +135,7 @@ func runMatching(ctx context.Context, d *db.DB, log *slog.Logger,
 		wlog := log.With("automation.id", w.ID, "automation.name", w.Name, "doc_id", evCtx.DocID)
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 			for _, a := range w.Actions {
-				if err := runAction(ctx, tx, wlog, evCtx.DocID, a); err != nil {
+				if err := runAction(ctx, tx, d, wlog, evCtx.DocID, a); err != nil {
 					wlog.Warn("automations.action.error",
 						"kind", a.Kind, "err", err.Error())
 				}
@@ -226,8 +226,16 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 
 // runAction dispatches on Kind. Every action is idempotent: re-running
 // the same automation on the same doc converges rather than diverging.
-func runAction(ctx context.Context, tx *sql.Tx, log *slog.Logger, docID int64, a Action) error {
+//
+// `d` is passed alongside `tx` because a couple of actions need to
+// reach the Read pool for expensive/aggregate queries (the FTS5
+// similar-docs read in apply_from_similar). Actions that only mutate
+// via tx ignore it.
+func runAction(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logger, docID int64, a Action) error {
 	switch a.Kind {
+	case "apply_from_similar":
+		return runApplyFromSimilar(ctx, tx, d, log, docID, a)
+
 	case "assign_title":
 		tpl, _ := a.Params["template"].(string)
 		if tpl == "" {

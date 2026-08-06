@@ -25,6 +25,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/backup"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
@@ -207,6 +208,15 @@ func runServe() int {
 		return 1
 	}
 
+	// Seed built-in system automations (the "Auto-file from archive"
+	// row and any future ships-in-the-box automation). Idempotent by
+	// system_slug — re-runs on every boot are no-ops. Runs after
+	// migrations so the system + system_slug columns exist.
+	if err := automations.Seed(ctx, d, log); err != nil {
+		log.Error("main.automations.seed", "err", err.Error())
+		return 1
+	}
+
 	// JD invariants: load starter tree on first boot; repair the inbox
 	// pointer if it's ever missing. Runs before any handler so ingest
 	// paths can always dereference jd_inbox_category_id.
@@ -315,6 +325,11 @@ func runServe() int {
 		log.Error("main.llm.new", "err", err.Error())
 		return 1
 	}
+	// Tell the automations engine whether LLM is doing the work. When
+	// true, the built-in apply_from_similar action no-ops; it only
+	// fires as a fallback when LLM's terminal-error hook explicitly
+	// forces it (see WithForceHeuristics).
+	automations.SetHeuristicsSkip(llm != nil)
 
 	// Jobs — the durable outbox dispatcher. Every ingest producer
 	// enqueues a post-ingest job in the same tx as its doc row insert;
