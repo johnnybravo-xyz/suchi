@@ -1,0 +1,160 @@
+---
+title: "Wishlist — similar documents via sqlite-vec"
+description: "Plan for a Detail-page \"similar documents\" strip + optional semantic search mode, backed by sqlite-vec embeddings."
+---
+
+A "similar documents" affordance on a doc's detail page is a
+well-established DMS feature and pairs naturally with sqlite-vec
+embeddings. suchi already has the LLM classifier wired against an
+operator-acknowledged endpoint, so the embedding call reuses the
+same egress the operator already acknowledged — no new external
+dependency.
+
+Status: **planned, flag-gated**. This doc captures the shape before
+the code lands so the trade-offs are visible.
+
+## The pure-Go trade-off
+
+suchi's binary is deliberately CGO-free — modernc.org/sqlite is a
+pure-Go SQLite. Adding sqlite-vec (a C extension) breaks that
+invariant unless we:
+
+- **Option A: load as a runtime extension.** Ship a `SUCHI_VEC_PATH`
+  env pointing at `libsqlite_vec.so`; the operator installs the
+  extension themselves. Binary stays pure-Go; feature is opt-in.
+- **Option B: fork modernc/sqlite** to link vec statically. Enormous
+  lift; not on the table.
+- **Option C: skip sqlite-vec, use pure-Go BM25 more-like-this on
+  top FTS5 terms.** Cheaper recall but zero new deps.
+
+The plan is **A** for the main feature and **C** as the always-on
+fallback. An instance without the vec extension loaded still shows
+"similar documents" — the results are just less semantic.
+
+## Data model
+
+New migration `0026_document_embeddings.sql`:
+
+```sql
+-- vec0 virtual table lives outside the main schema so a pure-Go
+-- build (no extension) doesn't fail at open time. The pipeline
+-- creates it lazily when SUCHI_VEC_PATH is set + loadable.
+--
+-- Dimension follows the endpoint's embedding model — 768 is the
+-- Ollama nomic-embed-text default; operators overriding to a
+-- different model set SUCHI_VEC_DIM to match.
+
+-- Actual table CREATE happens in Go at boot, gated on
+-- SUCHI_VEC_PATH loading successfully — a vec0 CREATE without
+-- the extension errors.
+
+-- The core row lives in a plain table so a vec-less build can
+-- still see "which docs have embeddings":
+CREATE TABLE document_embeddings (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    model       TEXT NOT NULL,           -- e.g. "nomic-embed-text:v1.5"
+    dim         INTEGER NOT NULL,        -- match the vec0 dim
+    generated_at INTEGER NOT NULL
+) STRICT;
+```
+
+## Ingest hook
+
+New pipeline step under `core/pipeline/embed/`:
+
+1. Runs post-content (after OCR text lands in `documents.content`).
+2. Takes the first ~4KB of `content` (embeddings on the full text
+   waste tokens on boilerplate — the intro paragraph carries most
+   of the signal).
+3. Hits `POST {LLM_ENDPOINT}/embeddings` with the standard OpenAI
+   shape.
+4. On success:
+   - `INSERT OR REPLACE INTO document_embeddings(...)`.
+   - `INSERT OR REPLACE INTO vec_documents(rowid, embedding) VALUES
+     (doc_id, ?)` — only when vec0 loaded; skip otherwise.
+5. On endpoint failure: log Warn, skip. Doc still ingests.
+
+Backfill for pre-migration docs: `suchi embeddings --backfill`,
+similar to `suchi refile`.
+
+## HTTP surface
+
+```
+GET /api/documents/{id}/similar?limit=10
+→
+{
+  "results": [
+    {"id": 91,  "title": "March rent",       "score": 0.87},
+    {"id": 108, "title": "February rent",    "score": 0.83},
+    ...
+  ],
+  "method": "vec" | "fts"    // which retrieval path answered
+}
+```
+
+Behind vec0: `SELECT rowid, distance FROM vec_documents WHERE
+embedding MATCH (SELECT embedding FROM vec_documents WHERE rowid=?)
+LIMIT ?`. Sub-millisecond at homelab scale.
+
+Fallback (no vec): pull the top 20 FTS5 terms from the source doc's
+content, run `MATCH` for each ORed together, return the top N ranked
+by BM25. Not semantic, but a useful "more like this" for docs that
+share domain vocabulary.
+
+## SPA integration
+
+DocumentDetail route grows a "Similar documents" strip below the
+metadata card. Every card is a thumbnail (via `#127`) + title +
+score. Card click → navigate to that doc.
+
+No SPA change needed for the search route in v1; a "semantic mode"
+toggle on Search lands as follow-up (v2) — that's the harder UX
+question (semantic + FTS blended results with rank fusion).
+
+## Config surface
+
+- `SUCHI_VEC_PATH` — path to `libsqlite_vec.so` (empty disables).
+- `SUCHI_VEC_DIM` — embedding dimension; must match the endpoint's
+  model. Default 768 (Ollama nomic-embed-text).
+- `SUCHI_VEC_MODEL` — model identifier stored on
+  `document_embeddings.model` for audit. Default
+  `"nomic-embed-text:v1.5"`.
+
+`suchi doctor` prints the vec status: `✓ sqlite-vec loaded (dim 768)`
+or `· sqlite-vec disabled (SUCHI_VEC_PATH unset)`.
+
+## Privacy invariants
+
+- Embeddings never leave the server outside the request to the
+  operator-acknowledged LLM endpoint. Stored embeddings + retrieval
+  are 100% local.
+- A doc marked `sensitivity IN ('confidential','restricted')` still
+  gets embedded but is excluded from the retrieval pool by default
+  (same rule as the ask endpoint in `docs/wishlist/qa-over-archive`).
+
+## What's NOT in scope
+
+- **Chunk-level embeddings.** One embedding per doc is enough for
+  the "similar docs" affordance. Chunk-per-page + retrieval is the
+  layer that makes ask (`#120`) work well; that lives in that doc.
+- **Semantic + FTS rank fusion.** Follow-up when semantic search
+  gets its own UI. v1 exposes vec-only or fts-only, not blended.
+- **Re-embed on doc.content change.** Post-consume script edits +
+  automations can rewrite content; we don't re-embed for cost. A
+  `--force` flag on the backfill CLI can re-embed one doc.
+
+## Rollout
+
+1. Design doc lands ✅ (this file).
+2. Migration + `document_embeddings` table.
+3. `core/pipeline/embed` package with the LLM-endpoint call + vec0
+   insert. Behind `SUCHI_VEC_PATH` gate.
+4. `GET /api/documents/{id}/similar` — vec0 first, FTS5 fallback.
+5. `suchi embeddings --backfill` CLI.
+6. SPA DocumentDetail "Similar" strip.
+7. Docs: config.mdx new env rows, cli.mdx new verb.
+
+The current bar for merging is: an instance that never loads vec0
+still passes every existing test. sqlite-vec doesn't become a hard
+dependency of the binary — the day it can't be built, the archive
+still works.
