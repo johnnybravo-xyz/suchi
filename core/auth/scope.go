@@ -34,6 +34,12 @@ const (
 	ScopeDocumentsWrite = "documents:write"
 	ScopeAgentTasks     = "agent:tasks"
 	ScopeAdminWebhooks  = "admin:webhooks"
+	// ScopeEventsRead grants read access to the /api/events/
+	// activity feed. Separate from documents:read because an
+	// agent may need to observe the change stream (e.g. Bravo
+	// reacting to document.created) without holding a full
+	// documents:read grant.
+	ScopeEventsRead = "events:read"
 
 	// Legacy coarse scopes issued by the Phase-0 mobile flow. Treated
 	// as wildcards over the granular set so pre-existing tokens keep
@@ -73,7 +79,7 @@ func isLegacyWildcardMatch(scopes []string, need string) bool {
 			// legacy "write" is a wildcard over every write surface
 			return true
 		}
-		if s == scopeLegacyRead && need == ScopeDocumentsRead {
+		if s == scopeLegacyRead && (need == ScopeDocumentsRead || need == ScopeEventsRead) {
 			return true
 		}
 	}

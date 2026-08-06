@@ -28,6 +28,9 @@ an `X-Request-Id` header — carry it into bug reports.
 | Classifier rules | `/api/rules/` CRUD |
 | Search + autocomplete | `/api/search/`, `/api/autocomplete/` |
 | Saved views + UI prefs | `/api/saved_views/`, `/api/ui_settings/` |
+| Activity feed | `GET /api/events/` (cursor over audit_events; `events:read` scope) |
+| Dashboard counters | `GET /api/stats/` (visibility-scoped one-shot) |
+| Blob mirrors | `GET /api/documents/{id}/preview`, `GET /api/documents/{id}/download` — same handlers as `/preview/{id}` and `/download/{id}`, mounted on `/api` so headless deploys keep blob access |
 | Mobile compat handshake | `/api/remote_version/`, `/api/next_asn/`, `/api/tasks/` |
 | Agents | `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`; `/api/agent/webhooks` |
 | Automations | `/api/automations/` CRUD ([guide](/automations)) |
@@ -205,6 +208,148 @@ DRF envelope. Read-only — creation happens via preset swap
 }
 ```
 
+### `GET /api/events/`
+
+Cursor-based activity feed over the audit log. The SPA's notification
+drawer, and any agent that wants a change stream, reads this instead
+of polling `/api/documents/` and `/api/tasks/` on a timer.
+
+Scope: **`events:read`** (new; browser sessions have it implicitly,
+legacy `read` tokens inherit it via the wildcard rule).
+
+Query params (all optional):
+
+- `?since_id=<id>` — return rows with `id > since_id`. First call
+  omits it; every subsequent call passes the previous response's
+  `latest_id`. `audit_events.id` is a strictly-increasing INTEGER PK.
+- `?kinds=a,b,c` — comma-separated allow-list. Unknown kinds
+  silently return nothing (no error), so a client rolling out a new
+  kind name never breaks on an older server.
+- `?limit=<n>` — 1–200, default 100. The server always reads at
+  most 2× this before visibility filtering, so a very restrictive
+  ACL setup with `limit=100` still returns quickly.
+
+**Visibility rules** (enforced server-side, not documentation-only):
+
+- Rows with `object_kind="document"` are filtered through the same
+  ACL fragment the list endpoints apply. A member never sees an event
+  about a doc they can't read.
+- Operational kinds (`job.dead`, `backup.written`) require admin.
+  A non-admin who asks for `?kinds=job.dead` gets an empty result set
+  (no 403 — the drawer keeps working).
+- Every other kind (`approval.task_created`, `share_link.*`, etc.) is
+  visible to any authed caller with `events:read`.
+
+**Summary rendering.** `summary` is a pre-rendered one-liner
+("Ingested March rent") so clients don't need a title lookup per row.
+The privacy invariant applies — summaries carry titles and kinds
+only, never document content or OCR text.
+
+**Kinds currently emitted** (non-exhaustive; new emit points land in
+new server versions and appear here as they arrive):
+
+| Kind | Fires when |
+| ---- | ---------- |
+| `document.create` | upload API landed a new doc row |
+| `document.ingested` | post-ingest pipeline finished (OCR + render done) |
+| `document.upload.conflict` | dedup hit on API upload or fs-watch drop |
+| `document.ingest.skipped` | ingest producer refused the file (oversize etc.) |
+| `document.update` / `.trash` / `.restore` | metadata mutations |
+| `document.correspondent.add` / `.remove` | correspondent link changed |
+| `document.custom_field.set` | custom field value set |
+| `document.decrypt` | password-protected PDF unlocked |
+| `document.version.create` | new version of an existing doc uploaded |
+| `approval.task_created` | workflow spawned a human-in-the-loop task |
+| `job.dead` (admin only) | outbox job exhausted retries |
+| `backup.written` (admin only) | VACUUM INTO snapshot landed |
+
+**200 OK**
+```json
+{
+  "results": [
+    {
+      "id": 4182,
+      "kind": "document.ingested",
+      "created_at": 1754441523,
+      "doc_id": 91,
+      "summary": "Ingested March rent"
+    },
+    {
+      "id": 4183,
+      "kind": "job.dead",
+      "created_at": 1754441599,
+      "summary": "A background job gave up after retries"
+    }
+  ],
+  "latest_id": 4183
+}
+```
+
+**Read/unread state** is a client concern — save `latest_id` locally
+(the SPA uses `PUT /api/ui_settings/` with `{events: {last_seen_id}}`
+so it follows across devices), pass it back as `since_id` on the next
+call.
+
+### `GET /api/jd/presets/`
+
+Admin-only preset catalog for the setup wizard. Returns one row per
+built-in preset defined in `core/jd/presets.go`; the wizard renders
+the area list as a tree preview so an operator can see what a preset
+actually contains before applying. No envelope — the population is
+bounded (five presets today).
+
+**200 OK**
+```json
+[
+  {
+    "id": "solo",
+    "name": "Solo",
+    "description": "Personal filing, no business.",
+    "areas": [
+      { "code": 10, "name": "Life",  "category_count": 6 },
+      { "code": 20, "name": "Money", "category_count": 4 }
+    ]
+  },
+  ...
+]
+```
+
+`blank: true` marks the empty preset (no areas), which the wizard
+gates behind an explicit confirm checkbox. Categories aren't included
+per row — they'd bloat the payload, and the wizard doesn't render them
+in the picker step. Once a preset is applied via
+`POST /api/admin/setup/jd-preset`, the tree becomes visible through
+`/api/jd/categories/`.
+
+### `GET /api/stats/`
+
+Dashboard counters in one round-trip. Replaces four `page_size=1` list
+probes plus two task lists — same numbers, one query. Every count is
+visibility-scoped per principal via the same WHERE fragment the list
+endpoints use.
+
+Scope: **`documents:read`**.
+
+**200 OK**
+```json
+{
+  "documents_total":   4182,
+  "trash_count":       12,
+  "inbox_count":       3,
+  "inbox_category_id": 49,
+  "pending_approvals": 2,
+  "dead_jobs":         1,
+  "ingested_7d":       57
+}
+```
+
+`inbox_category_id` echoes the current JD inbox pointer so a client
+can navigate to `#/documents?jd=49` without name-matching. `dead_jobs`
+is admin-only (members see `0`); `pending_approvals` scopes to the
+caller's own assignee for members and to the full open queue for
+admins. `ingested_7d` counts live docs created in the last 7 days —
+useful for a sparkline; not a filing-date metric.
+
 ### `DELETE /api/documents/{id}`
 
 Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
@@ -256,7 +401,7 @@ Timestamps are unix seconds. The Phase-4 mobile-compat shim
 converts to ISO8601 there — this endpoint keeps the suchi
 convention.
 
-`workflow_tasks` are scoped to the caller: an entry appears only if the
+`approval_tasks` are scoped to the caller: an entry appears only if the
 task's `assignee` resolves to the current user. Terminal statuses
 (`resolved`, `expired`) are omitted. Resolve one via
 `POST /api/approvals/tasks/{task_id}/resolve`. `workflow_open` in

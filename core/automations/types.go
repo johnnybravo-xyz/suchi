@@ -16,7 +16,7 @@
 //     work in postingest — a crash rolls back the doc's ingest tail
 //     and it retries.
 //
-// Named for what they do. Distinct from core/workflow/, which owns
+// Named for what they do. Distinct from core/approvals/, which owns
 // the state-machine "approvals" engine (routing/sign-off), exposed
 // at /api/approvals/*. Automations live at /api/automations/*.
 package automations

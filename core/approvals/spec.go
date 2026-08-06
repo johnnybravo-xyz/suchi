@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 )
 
 // Spec is the parsed, normalized workflow definition stored in
-// workflow_defs.spec_json. Keep the shape flat and self-describing —
+// approval_defs.spec_json. Keep the shape flat and self-describing —
 // this JSON is what admins POST via /api/approvals.
 type Spec struct {
 	Start  string           `json:"start"`  // state key to enter on Start()

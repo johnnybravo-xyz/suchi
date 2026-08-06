@@ -182,3 +182,18 @@ sections rot fastest.
   share-link password-check was throttled; code didn't wrap the
   handlers. Added the wraps in main.go + expanded the doc row to
   enumerate every path.
+
+## Notifications feed (docs/api.mdx §GET /api/events/)
+
+- [ ] **Every documented event kind is actually emitted.**
+      `grep -rn 'Action: "<kind>"' core/` for each row in the "Kinds
+      currently emitted" table. A row without a grep hit is drift.
+
+- [ ] **Visibility rule matches the code.**
+      `grep -n "operationalKinds\|docCentricKinds" core/api/events.go`
+      — the maps in code must include every kind the doc marks
+      admin-only / doc-scoped.
+
+- [ ] **events:read scope grants exactly the surfaces documented.**
+      `grep -n "ScopeEventsRead" core/` — endpoints that check it
+      should match the doc's "requires events:read" callouts.

@@ -10,14 +10,14 @@
 // Restart-safety, retries, and deadline-based escalation are inherited
 // from core/jobs — we never grow a second scheduler.
 //
-// Definitions are stored as normalized JSON in workflow_defs.spec_json.
+// Definitions are stored as normalized JSON in approval_defs.spec_json.
 // A YAML compiler is a v2 concern; adding it later needs no migration.
 //
 // Public API is the top-level functions in this file:
 //
 //	Register  — persist a Spec at a new version for a slug.
 //	Start     — kick off a run against a doc.
-//	Advance   — the workflow:advance job consumer entrypoint.
+//	Advance   — the approval:advance job consumer entrypoint.
 //	Resolve   — mark a workflow_task done, enqueue advance.
 //	Cancel    — abandon a running run.
 //	GetRun    — fetch a run + its transitions + open tasks.
@@ -27,7 +27,7 @@
 // The API layer holds a package-level Engine set via SetDefault so
 // handlers can call the top-level functions without wiring plumbing
 // through every request. Tests construct their own Engine directly.
-package workflow
+package approvals
 
 import (
 	"context"
@@ -135,7 +135,7 @@ func Register(ctx context.Context, spec Spec, slug string, actor *pluginapi.Prin
 }
 
 // Start kicks off a new run against docID using the active def for
-// slug. Returns the new run_id and enqueues a workflow:advance job so
+// slug. Returns the new run_id and enqueues a approval:advance job so
 // the first state runs after commit.
 func Start(ctx context.Context, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
 	e := Default()
@@ -145,7 +145,7 @@ func Start(ctx context.Context, slug string, docID int64, vars map[string]any, a
 	return e.Start(ctx, slug, docID, vars, actor)
 }
 
-// Advance is the workflow:advance job consumer entrypoint. Loads the
+// Advance is the approval:advance job consumer entrypoint. Loads the
 // run, runs the handler for its current state, applies the transition
 // in one tx. Trigger is the event key: "" for park/resume, "timeout"
 // for the sweeper, "approve"/"reject"/... for human resolutions.
