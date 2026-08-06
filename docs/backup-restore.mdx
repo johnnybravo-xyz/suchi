@@ -153,6 +153,23 @@ chown -R suchi:suchi /var/lib/suchi
 systemctl start suchi
 ```
 
+## CI-nightly restore drill
+
+The `nightly-restore-drill` workflow (`.github/workflows/nightly-restore-drill.yml`)
+runs every day at 03:00 UTC. It:
+
+1. Builds the current `suchi` binary.
+2. Boots it against a fresh `DATA_DIR` with `BACKUP_INTERVAL=1s`.
+3. Waits a few seconds so the loop writes at least one snapshot.
+4. Stops the server (WAL checkpoint flush).
+5. Opens the newest `suchi-*.db` snapshot with the `sqlite3` CLI and
+   runs `PRAGMA integrity_check` + confirms `schema_migrations` has
+   rows.
+
+A backup that never opens is a hope, not a backup. The drill catches
+silent regressions of the snapshot loop before they show up in a
+real recovery.
+
 ## Testing your backups
 
 A backup you haven't restored isn't a backup. Once a quarter:
