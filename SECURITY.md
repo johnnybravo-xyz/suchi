@@ -95,8 +95,12 @@ Out of scope (interesting, but not "vulnerabilities"):
   state-changing requests (POST/PATCH/PUT/DELETE) from
   cookie-authenticated callers with 403. Token-authenticated
   requests are exempt — headers can't be forged cross-site.
-- **Rate limits** on auth endpoints (login, setup, share-link
-  password-check).
+- **Rate limits** on auth endpoints — 5rps + burst 10 per source IP
+  on `POST /api/login`, `POST /setup`, `POST /bootstrap`,
+  `POST /api/token/*` (mint + revoke), and the anonymous share-link
+  fetch/download paths (`GET /s/{token}` and
+  `GET /s/{token}/{doc_id}/download`) which verify the share
+  password server-side.
 - **ACL layer** (Phase 6). Every doc read/mutate goes through the
   `Authorizer` interface. Search filters by visibility for
   non-admins so snippets don't leak. See
