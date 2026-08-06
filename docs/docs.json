@@ -36,7 +36,7 @@
           },
           {
             "group": "Operations",
-            "pages": ["backup-restore", "refile", "release-process"]
+            "pages": ["backup-restore", "refile", "release-process", "demo-instance"]
           },
           {
             "group": "Guides",
