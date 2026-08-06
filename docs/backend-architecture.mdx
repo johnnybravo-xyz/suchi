@@ -1,0 +1,364 @@
+---
+title: "Backend architecture"
+description: "Onboarding doc for anyone touching the Go server — module boundaries, the SQLite discipline, the durable-outbox pipeline, and the auth/authz split."
+---
+
+Read this before adding a package to `core/` or a subcommand to
+`distro/`. Companion to [SPA architecture](/spa-architecture) (the
+client) and [SPA backend](/spa-backend) (the endpoint-by-endpoint
+contract).
+
+## 1. What the backend is, in one paragraph
+
+A single Go binary — `distro/cmd/suchi` — that owns HTTP, SQLite,
+blob storage, ingest, the post-ingest pipeline, the durable job
+dispatcher, and the embedded Svelte SPA. One process, one file
+tree, one `.db`. CGO is off (modernc SQLite). Everything the caller
+sees comes through `/api/*` (JSON) or `/app/*` (embedded SPA);
+there is no second service, no message broker, no external cache.
+
+## 2. The constraints that explain everything else
+
+1. **One binary, one file tree.** No sidecars, no daemons, no
+   external services required to run. Anything you'd reach for a
+   Redis or a queue broker for lives in the SQLite `jobs` table.
+2. **Contributors clone and `go build`.** No CGO, no code
+   generators in the critical path, no pre-build steps beyond
+   `make ui` (SPA-only, and the built dist is committed).
+3. **The JSON API is the only contract.** The SPA, the mobile
+   apps, the agent surface, and the ingest producers all go
+   through `/api/*`. If a feature needs a private door, it's an
+   API bug.
+4. **Plugins are additive, versioned, and blank-imported.**
+   `plugin-api` is the only module every other module depends on;
+   it stays small on purpose. New plugin kinds go there; new
+   business logic doesn't.
+
+## 3. Repo layout
+
+```
+distro/
+  cmd/suchi/       the entry point — main.go wires everything
+  blobs/           per-instance CAS root (gitignored in real deploys)
+  dms.db           local dev DB (gitignored in real deploys)
+core/
+  api/             JSON HTTP surface (/api/*). One handler per file.
+  ui/              /login, /bootstrap, /preview, /download, / → /app/
+  auth/            authentication chain — plugin-driven, first-match-wins
+  authz/           authorization decision layer + visibility SQL fragments
+  audit/           append-only audit_events writer + SIEM sink registry
+  db/              two-pool SQLite bootstrap + migrations/*.sql
+  blob/            content-addressed store (sha256, 3-level shards)
+  jobs/            durable outbox dispatcher + subscriber registry
+  ingest/          producers: emailwatch, fswatch, sidecar
+  pipeline/        post-ingest handlers: qpdf, ocrmypdf, thumb, eml, …
+  approvals/       workflow engine (state machine over jobs)
+  automations/     rules DSL + evaluator
+  render/          rendered-view symlink tree (Johnny.Decimal on disk)
+  classify/        LLM-classifier host (adapter for plugins/llm-classifier)
+  crypto/          AES-GCM wrapper used by decrypt-key + webhook secrets
+  taxonomy/        correspondents, document types, tags, storage paths
+  customfield/     schema-per-doc extra fields
+  jd/              Johnny.Decimal areas + categories
+  refile/          on-disk move planner
+  gc/              orphan reap for blobs + trash reaper
+  backup/          VACUUM-INTO snapshot loop
+  settings/        DB-backed settings (setup wizard writes here)
+  mailsetup/       IMAP-poll sidecar config helper
+  config/          env + file config loader
+  i18n/            message catalogs (still used by /login + /bootstrap)
+  httpx/           auth/context middleware, request-id, panics
+  logx/            slog handler setup
+  sandbox/         subprocess exec with rlimits + working-dir isolation
+plugin-api/        the shared surface. plugin-api imports nothing.
+plugins/
+  local-auth/      Token + Bearer + password login. Ships by default.
+  oidc/            OIDC authenticator. Opt-in via config.
+  llm-classifier/  post-classify handler. Opt-in via config.
+hack/              throwaway tools (transcript, emlfixtures)
+ui/                Svelte source — see spa-architecture
+core/ui/spa/dist/  committed SPA build; go:embed picks it up
+```
+
+## 4. The SQLite discipline (this is the important one)
+
+`core/db` opens two pools against the same file:
+
+- **`DB.Write`** — `MaxOpenConns=1`. Every write goes through it.
+  Serializes at the process level so `SQLITE_BUSY` cannot happen
+  from our own code.
+- **`DB.Read`** — ordinary pool. WAL mode lets readers run
+  concurrently with the writer.
+
+Boot pragmas live in the DSN (`journal_mode=WAL`,
+`synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`,
+`mmap_size=256MiB`). `foreign_keys` is per-connection in SQLite,
+so the write pool re-applies it — do not remove that.
+
+Rules for handlers:
+
+- Reads use `DB.Read`. Writes use `DB.WriteTx(ctx, func(tx))`.
+- A read that races an in-flight write is fine (WAL); a write that
+  reads is fine (single writer sees its own state).
+- Do not open a third pool. Do not run raw `BEGIN` on `DB.Read`.
+- `foreign_keys=ON` is load-bearing. New migrations must not add
+  cycles that only survive with it OFF.
+
+Migrations live in `core/db/migrations/*.sql`, embedded via
+`go:embed` and applied at boot by `db.Migrate`. Numbered `NNNN_*`,
+apply-once, no down-migrations by design. If you need to change a
+prior migration's shape, add a new one.
+
+## 5. HTTP request lifecycle
+
+```
+listener → httpx.Middleware (request-id, panic, slog) →
+  auth.Chain.Authenticate (Token → Bearer → OIDC → cookie) →
+    ServeMux route match →
+      handler → authz.Can(...) OR RequireScope(...) →
+        DB read/write → writeJSON / writeError
+```
+
+- `auth.Chain` returns the first non-nil `*pluginapi.Principal`
+  from its authenticators. Order matters (config-defined). A
+  bad-token error stops the chain — no silent downgrade to
+  anonymous.
+- `auth.RequireScope(name, scope)(handler)` gates a handler on a
+  token scope (e.g. `documents:read`, `events:read`).
+- `authz.Authorizer.Can(ctx, principal, kind, id, perm)` is the
+  per-object decision. Two shipped implementations:
+  `RoleAuthorizer` (owner-or-admin) and `ACLAuthorizer`
+  (owner-or-admin plus `object_acls` + `group_members`).
+  `ACLAuthorizer` is the default — empty ACL table behaves like
+  Role, so it's backward-compatible.
+- List handlers do not call `Can` per row. They splice
+  `authz.DocVisibilityWhere(userID, groups)` into the SQL and let
+  the database do the filter. Never post-filter in Go what the DB
+  can filter in SQL — the pagination envelope depends on it.
+
+## 6. The durable outbox (ingest → pipeline)
+
+Every asynchronous unit of work is a row in `jobs`. The dispatcher
+(`core/jobs`) polls that table, hands rows to registered
+subscribers, and updates state on success/failure. In-process
+`nudge` shortens the poll window; the table remains the source of
+truth.
+
+Handler contract:
+
+- **Idempotent.** Backoff retries do not distinguish duplicates.
+- **Respect ctx.** Cancellation must return quickly.
+- **Payload is per-kind JSON.** Document the schema next to the
+  subscriber.
+
+Subscribers wired in `main.go` (see `runServe`):
+
+| Kind | Package | What it does |
+|---|---|---|
+| `postingest:*` | `core/pipeline/postingest` | qpdf → text-native check → OCR (or skip) → content write → refile |
+| `classify:*` | `core/classify` (adapter) + `plugins/llm-classifier` | LLM classification, optional |
+| `render:*` | `core/render/view` | rewrites the on-disk rendered-view symlink |
+| `webhook:*` | `core/pipeline/webhookdispatch` | AEAD-signed webhook delivery |
+| `approval:*`, `workflow:*` | `core/approvals` | workflow engine — Engine.Advance, TimeoutSweep |
+| `agent:*` | `core/api/agent.go` | lease-deadline reclaim, not dispatcher-owned |
+
+At boot, `disp.ReclaimOrphaned(ctx)` resets `state='running'` rows
+back to `pending` — a crash mid-handler otherwise strands the job
+forever. `agent:*` kinds are excluded because their workers are
+external processes with their own lease-deadline model.
+
+The producer contract: **enqueue the job in the same transaction
+as the row insert.** `core/pipeline/*` upload paths do this;
+follow the pattern. A doc row without its follow-up job = a
+document stuck in pre-ingest, and no dispatcher tick will save it.
+
+## 7. Ingest producers
+
+Three canonical entry points, all landing rows in `documents` and
+enqueuing `postingest:*`:
+
+- **`POST /api/documents/`** — multipart upload (SPA, mobile,
+  agents). Handler in `core/api/documents.go`.
+- **`core/ingest/fswatch`** — staging-directory watcher.
+  Config-driven; owner-email is the settings-first lookup with an
+  env fallback.
+- **`core/ingest/emailwatch`** — IMAP polling loop (canonical
+  ingest path #3). Attachments become child docs via the `eml`
+  pipeline package.
+
+A fourth (`core/ingest/sidecar`) exists for the paperless-native
+compat parse and mail-intake compose bundle — it's a consumer of
+files another process drops in, still going through the same doc
+row + job enqueue.
+
+## 8. API package conventions
+
+`core/api` is one handler per file, no framework, no middleware
+magic:
+
+- **One handler per file.** `documents_list.go`, `groups.go`,
+  `agent.go`. Grep for the endpoint, get the file.
+- **`s.writeJSON` / `s.writeError`.** Everything JSON, no template
+  rendering. Errors are `{code, message}`; codes are stable
+  strings the SPA and mobile clients switch on.
+- **Pagination envelope.** List endpoints return
+  `{count, next, previous, results}` — DRF-shaped for mobile
+  compat. Helpers in `httpx` (`ParsePageParams`, `BuildEnvelope`).
+- **Ordering allow-lists.** Never pass user-supplied ordering
+  strings into SQL. Each list handler declares an
+  `orderingAllow` map of accepted keys → SQL fragment. See
+  `documents_list.go`.
+- **Filters use bind params.** `sqlbuilder`-free by design; if you
+  need dynamic clauses, `strings.Builder` + `?` placeholders, and
+  pass every value as an interface. Nothing is interpolated.
+- **Audit-write every state change.** `audit.Log(ctx, Event{...})`
+  in the same transaction as the mutation. before/after JSON is
+  metadata only — never content, never secrets.
+
+The [SPA backend](/spa-backend) doc lists the endpoint table.
+`docs/api.mdx` and `core/api/schema.json` are the operator-facing
+reference; keep both in sync when adding an endpoint.
+
+## 9. Blob storage
+
+`core/blob.CAS` is content-addressed by sha256, sharded three
+levels deep:
+
+```
+$DATA_DIR/blobs/sha256/ab/cd/ef/abcdef…ff
+```
+
+- Duplicate `Put` is cheap: same hash → same path → return the
+  existing ref.
+- Writes stream through sha256 and land via atomic rename from a
+  per-put temp file in the same sharded directory (same-device).
+- The interface stays concrete for now. When an S3 backend or
+  blob-crypt lands, `Put/Get/Stat/Delete` lifts into `plugin-api`
+  and this promotes to `plugins/fs-cas`. Do not preempt that.
+- Original blobs are immutable. Every derived artifact (archive
+  PDF, thumbnail, decrypted variant) is a separate CAS entry
+  referenced by `document_blobs`.
+
+## 10. Search (FTS5)
+
+`documents_fts` is an FTS5 external-content table over
+`documents.content` + `documents.title`. Migration `0003_fts5.sql`
+sets it up; the pipeline writes the content column and the FTS
+index refreshes via triggers.
+
+- Query surface: `GET /api/search/` uses BM25 ranking + `<mark>`
+  snippet extraction. Snippets pass through `safeSnippet()` on
+  the client; server side, the SQL uses `snippet()` with a fixed
+  token count.
+- Autocomplete: `GET /api/autocomplete/` is a prefix scan against
+  the same table.
+- ACL: the search handler splices `DocVisibilityWhere` before the
+  FTS join — the raw FTS query never sees rows the caller can't
+  view.
+
+## 11. Auth chain, in more detail
+
+`plugins/local-auth` is the built-in authenticator. It handles:
+
+- **`Authorization: Token …`** — hashed API tokens. Scopes on the
+  row.
+- **Session cookie** — set at login, carries the user_id.
+- **Password login** — `POST /api/login` mints a token *and* sets
+  the cookie (dual-channel; the SPA needs both).
+
+`plugins/oidc` layers on top when configured — its `Authenticate`
+runs first if it's in the chain, and issues a Principal from the
+verified id_token. `plugins/local-auth` still gets a look for
+Token/Bearer.
+
+The plugin surface (`plugin-api/principal.go`) is deliberately
+minimal: `Kind`, `UserID`, `Email`, `Scopes`, `AuthNBy`. Anything
+more is a role or a permission — those live in `authz`, not in
+the Principal.
+
+## 12. Plugin seam
+
+`plugin-api` is the shared surface. Every other module imports it;
+it imports nothing from suchi. When something needs to be
+pluggable, it lands here:
+
+- `Authenticator` (auth chain)
+- `Subscriber` (jobs dispatcher)
+- `AuditSink` (SIEM export)
+- Value types: `Principal`, `Event`, `DocRef`, `BlobRef`
+
+Kinds live in `plugin-api/kinds.go` as string constants — enum by
+convention, because `distro`'s plugin index blank-imports one
+package per plugin and we do not need type safety at the plugin
+boundary, only vocabulary.
+
+New plugins live under `plugins/<name>/` with their own `go.mod`,
+added to `go.work`, and blank-imported (or wired explicitly) from
+`main.go`. Cross-plugin calls are not a thing — plugins talk to
+core through `plugin-api`, and to each other only through jobs +
+audit events.
+
+## 13. How to add a feature
+
+1. **Pick the surface.** JSON in-and-out ⇒ `core/api`. Async work
+   ⇒ new job kind + subscriber. Cross-cutting ⇒ new package under
+   `core/`, or a plugin if it should be opt-in.
+2. **Migration first.** If the schema changes, add
+   `NNNN_short_slug.sql`. Do not edit an applied migration.
+3. **Write the handler and the audit event together.** Every
+   state change writes an audit row in the same transaction as
+   the mutation. Not doing so is a bug caught in review.
+4. **Wire authz.** `authz.Can` for object-level, `RequireScope`
+   for token scopes, `DocVisibilityWhere` for list SQL. Never
+   post-filter in Go what the DB can filter in SQL.
+5. **Test the handler.** `httptest.NewRecorder`, real SQLite in
+   `t.TempDir`, real migrations. Mock nothing you can seed. See
+   `documents_list_test.go` for the pattern.
+6. **Docs update in the same commit.** New endpoint ⇒
+   `docs/api.mdx` + `core/api/schema.json`. New env var ⇒
+   `docs/config.mdx`. New CLI flag ⇒ `docs/cli.mdx`. New importer
+   flag ⇒ `docs/importer.mdx`.
+7. **`make fmt && go test ./... && gofmt -l core/`** before
+   pushing. CI's gofmt gate is not a suggestion.
+
+## 14. Known trade-offs
+
+- **SQLite + one writer.** Not a limitation — a discipline. If
+  you find yourself wanting Postgres, we probably want a
+  worker-tier plugin first. Bringing in a second database engine
+  is a design review, not an import.
+- **No ORM.** `database/sql` + hand-written SQL. Grep-ability and
+  query control beat repository patterns at this scale. If a
+  query is repeated enough to want a helper, promote it to a
+  named function in the same file.
+- **No framework.** `net/http.ServeMux` + `http.HandlerFunc`.
+  Method-scoped routes (`"GET /api/documents/"`) are Go 1.22+;
+  use them. Middleware is a function that wraps a handler; there
+  is no chain type.
+- **Durable outbox over Kafka/NATS/Redis.** SQLite jobs table is
+  the queue. Delivery-once semantics come from the write-pool
+  serialization + `state='running'` reclaim at boot. If you need
+  fan-out or cross-process coordination, that's a design review.
+- **No generated code in the critical path.** No sqlc, no
+  protobuf codegen for the JSON API. If you catch yourself
+  reaching for it, ask why the hand-written version is not good
+  enough.
+
+## 15. Glossary
+
+**CAS** — content-addressed store; blobs indexed by sha256.
+**Outbox** — the `jobs` table treated as a queue: producers write
+rows in the same tx as the state they describe, consumers (the
+dispatcher) read those rows and update state. **Post-ingest** —
+the first job the pipeline runs after a doc row lands; the qpdf →
+text-native → OCR chain lives here. **Rendered view** — the
+symlink tree under `$DATA_DIR/rendered/` that presents documents
+by Johnny.Decimal path; every metadata mutator enqueues a
+`render:*` job to keep it consistent. **Principal** — the
+authenticated caller: user id, email, scopes, authenticated-by
+plugin name. Anonymous = nil. **Authz** — the per-object decision
+layer (`Can`). **Scope** — a token-level permission
+(`documents:read`, `events:read`). Scopes gate handlers; authz
+gates rows. **Audit event** — append-only row in `audit_events`
+describing a state change; the request-id links it back to the
+log line.

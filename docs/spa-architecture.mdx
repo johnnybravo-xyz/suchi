@@ -1,0 +1,320 @@
+---
+title: "SPA architecture"
+description: "Onboarding doc for anyone touching ui/ — layout, build, routing, state, design system, and the guard-rails that keep the frontend small."
+---
+
+Read this before adding a feature to `ui/`. It takes ~20 minutes and
+after it you should be able to add a route, wire an endpoint, and
+ship without breaking the things that are deliberate. Companion to
+[SPA backend](/spa-backend), which documents the server side of the
+contract.
+
+## 1. What this frontend is, in one paragraph
+
+A single-page Svelte 5 app, compiled by Vite into **three static
+files** (one HTML, one JS, one CSS), committed into the Go repo and
+embedded into the suchi binary with `go:embed`, served at `/app/`.
+It has **zero runtime npm dependencies** — no component library, no
+router package, no icon package, no CSS framework, no webfonts.
+Everything it knows about the world arrives through suchi's
+documented HTTP API, the same one the mobile apps and agents use.
+Current weight: ~50 KB gzipped JS + ~4.5 KB CSS. That number is a
+feature; treat it like a budget, not a coincidence.
+
+## 2. The constraints that explain everything else
+
+Every architectural choice below falls out of four constraints. When
+you're unsure how to build something, re-derive from these:
+
+1. **suchi is one binary.** The UI must not add a runtime, a
+   sidecar, or a deployment step. Hence: static build, embedded,
+   no SSR, no SvelteKit (its server layer would be dead weight —
+   the Go binary *is* the server).
+2. **Contributors build the Go project without Node.** Hence: the
+   built `dist/` is committed to `core/ui/spa/dist/` (marked
+   linguist-generated). Node/bun is only needed when you touch
+   `ui/`.
+3. **The API is the only door.** No private endpoints for the UI.
+   If the UI can do something, an agent token can do the same thing
+   with the same calls. This keeps the UI honest and the API
+   complete — several server endpoints (`/api/stats/`,
+   `/api/events/`, `/api/jd/categories/`) exist because the UI
+   needed them and the need generalized.
+4. **Minimal supply chain, by org policy.** Three devDependencies
+   (`svelte`, `vite`, `@sveltejs/vite-plugin-svelte`), pinned via
+   lockfile, no postinstall scripts. Adding a dependency is a
+   design review, not an `npm install`.
+
+## 3. Repo layout & the build pipeline
+
+```
+ui/
+  index.html              entry; favicon data-URI, manifest link, theme-color
+  vite.config.js          base:'./', dev proxy → :8000, single-chunk output
+  public/manifest.webmanifest
+  src/
+    main.js               mount(App)
+    app.css               THE design system — all global styles live here
+    App.svelte            shell: sidebar, topbar, drawer, routing outlet
+    lib/
+      api.js              every HTTP call in the app; nothing fetches elsewhere
+      session.svelte.js   auth state + theme ($state rune module)
+      router.svelte.js    ~20-line hash router
+      format.js           dates, bytes, sensitivity→dot-color
+      Icon.svelte         hand-drawn 24×24 stroke icons (a path table)
+      Palette.svelte      ⌘K command palette
+    routes/               one file per page: Dashboard, Documents,
+                          DocumentDetail, Search, Tasks, Automations,
+                          Upload, Settings, Setup, Trash, Login
+core/ui/spa/
+  spa.go                  go:embed + /app/ handler (SPA fallback to index.html)
+  dist/                   committed build output — NEVER edit by hand
+```
+
+The pipeline, and the rule that protects it:
+
+```
+edit ui/src → cd ui && bun run dev  (Vite on :5173, proxying to a
+running `suchi serve` on :8000) → `make ui` (bun-first, npm-fallback;
+runs vite build and copies into core/ui/spa/dist) → `make build`
+(go:embed bakes AT COMPILE TIME) → restart binary → hard-refresh /app
+```
+
+**The classic failure** (it has happened): committing a new `dist/`
+without rebuilding the binary, or editing `ui/src` without running
+`make ui`. Source, dist, and binary are three snapshots that only
+agree if you run the pipeline. The CI stale-dist check (paths-gated
+on `ui/**`, builds and diffs against the committed dist) exists to
+catch exactly this — keep it green.
+
+**Sync discipline:** the `ui/` tree is replaced wholesale or patched
+with a reviewed diff. Never hand-port features between trees by
+eye — that's how the repo once ended up with a source tree older
+than its own committed dist.
+
+## 4. Routing
+
+Hash routing (`#/documents`, `#/doc/42`, `#/search?q=tax`),
+implemented in `router.svelte.js`: parse `location.hash` into
+`{path, parts, query}` held in a `$state` object, updated on
+`hashchange`. That's the whole router.
+
+Why hash and not history-API paths: the SPA is served at `/app/`
+behind arbitrary reverse proxies. Hash routes need **zero server
+route configuration** — no catch-all, no rewrite rules — and deep
+links survive any hosting arrangement, including `file://` during a
+quick check. The Go handler only has to serve `index.html` for
+`/app/` and the two asset files.
+
+Adding a route: create `src/routes/Thing.svelte`, import it in
+`App.svelte`, add a branch to the `{#if page === …}` chain and (if
+nav-worthy) an entry in the `nav` array. There is no route registry
+beyond that chain — with ~11 routes, a registry would be
+architecture cosplay.
+
+## 5. State: Svelte 5 runes, and what we deliberately don't have
+
+The app uses runes (`$state`, `$derived`, `$effect`, `$props`)
+throughout — no legacy stores, no `$:` labels. Cross-cutting state
+lives in `.svelte.js` modules exporting `$state` objects
+(`session.svelte.js` is the pattern). Everything else is
+**component-local**: each route owns its data, fetches on mount, and
+refetches on its own triggers.
+
+There is deliberately **no global cache/store layer** (no
+Redux-alike, no query library). Routes remount on navigation and
+refetch; the API is local and fast, and the payloads are small. The
+two pieces of genuinely shared server state — the stats snapshot and
+the events feed — live in `App.svelte` and flow *down* as props
+(see `Dashboard`). If you're about to build a cache, first check
+whether a 60-second poll and a refetch-on-visibility (`Documents`
+does this) already solve it, because so far they always have.
+
+Persistence uses `localStorage` under a `suchi.` prefix, always
+wrapped in try/catch (private-mode Safari throws): `suchi.token`,
+`suchi.theme`, `suchi.jd.open` (sidebar tree), `suchi.events.seen`
+(activity read cursor), `suchi.setup.dismissed`, `suchi.docs.view`
+(list/grid). Nothing sensitive beyond the API token goes in storage,
+and the token is same-trust-level as the cookie.
+
+## 6. The API layer — one file, several load-bearing conventions
+
+`lib/api.js` is the only place `fetch` appears. Conventions:
+
+- **Named function per endpoint**, thin, with the wire contract in
+  a comment where it isn't obvious. Grep-ability beats abstraction.
+- **Auth**: every request sends `Authorization: Token …` if a token
+  is stored, plus `credentials: 'same-origin'` so the session
+  cookie rides along. JSON login returns a token *and* sets the
+  cookie (server-side decision); the token covers API calls, the
+  cookie covers things that can't carry headers — `<iframe src>`
+  previews and `<a download>` links. Don't break either channel.
+- **Errors**: non-2xx throws `ApiError{status, code, message,
+  data}`. `data` is the parsed body — it matters (the 409
+  duplicate-upload body carries the matched document; that's a
+  feature, not an error detail).
+- **Pagination**: list endpoints wear the DRF envelope
+  `{count, next, previous, results}`; `qs()` builds query strings,
+  skipping empty values. Exception by server design: `/api/tasks/`
+  is a live-poll queue, not a paginated list — don't add paging UI
+  to it.
+- **Degrade, don't gate.** When the UI is built against an endpoint
+  that may not exist yet on the operator's server (this happens —
+  profile editing shipped UI-first), the failure mode is a calm
+  toast pointing at the backend-tasks doc, never a broken screen
+  and never a version check. Grep `catch` in Settings for the
+  pattern.
+- **Enums come from the server when possible** with hardcoded
+  *fallbacks*, not hardcoded *truth* — the automations builder
+  pulls trigger/action specs from `GET /api/automations/schema` and
+  only uses its literals offline. New backend enum ⇒ new UI
+  capability with no release.
+
+The one asymmetry worth knowing: JD area grouping is computed
+client-side from the flat `/api/jd/categories/` listing (grouping
+key is `area_code` from the rows — never derived from a category
+code; the server owns that invariant).
+
+## 7. Design system — `app.css` is the whole thing
+
+No preprocessor, no Tailwind, no CSS-in-JS. ~25 custom properties at
+the top of `app.css` drive everything; dark mode is a second token
+block under `[data-theme="dark"]`, not a second stylesheet.
+
+**Palette** (shared with the brand + landing page — changing the
+accent here without changing `brand/generate.py` is a bug):
+
+| token | light | dark | meaning |
+|---|---|---|---|
+| `--bg` / `--surface` | `#FAFAF8` / `#FFF` | `#141618` / `#1D2023` | paper / card |
+| `--ink` | `#17181A` | `#ECEAE2` | text |
+| `--manila` | `#F2E8CE` | `#38342A` | brand folder fill |
+| `--accent` | `#0575B6` | `#4FA8DC` (lifted) | the blue; AA-checked pairs |
+| `--ok` / `--warn` / `--danger` | greens/ambers/reds | lifted variants | status semantics |
+| `--tint` | `#EDF5FA` | translucent accent | hover/selection wash |
+
+**Type**: system stack, with `"Schibsted Grotesk"` (UI) and
+`"Spline Sans Mono"` (codes) named *first* — no webfont ships, but
+if the operator serves those files the brand faces light up
+automatically. Don't add a webfont; it's the single biggest weight
+line-item available and it was declined on purpose.
+
+**The signature element — the dotted index row (`.irow`).** The
+logo is "· ————": a dot, then a line. Every list row in the app is
+that mark made functional: leading status **dot** (accent = normal,
+green/amber/red = sensitivity or job state), optional JD **chip**
+(mono, tinted), **title**, metadata to the right. If you build a
+new list and it isn't an `.irow`, you're probably off-brand. Related
+vocabulary: `.chip` (mono JD code), `.pill` (soft status), `.card`,
+`.index` (row container), `.btn`/`.btn.primary`/`.btn.sm`,
+`.bulkbar`, `.seg` (segmented toggle).
+
+**Rules of the stylesheet**: flat class vocabulary, no nesting, no
+specificity games — any rule findable by grepping its class.
+Component-specific styles may live in the component's `<style>`
+(Svelte scopes them); anything reused twice moves to `app.css`.
+Spacing/radii via the tokens (`--r`, `--r-sm`).
+
+**Motion & a11y baseline**: animations are short, CSS-only, and
+every one is disabled under `prefers-reduced-motion`. `:focus-visible`
+gets the accent outline. Interactive things are real
+`<button>`/`<a>` elements (the one place we style a button as a
+heading — click-to-rename on detail — still uses a `<button>`).
+Keyboard surface: ⌘K palette, j/k/x/Enter on lists, Cmd/Ctrl+Enter
+on approvals, Escape closes overlays. New features should extend
+this, not regress it.
+
+**Empty states are copywriting**: icon + a bolded truth + a next
+action ("Inbox zero. Everything is filed." / "Nothing needs you.
+The archive is running itself."). Voice: plain, a little dry, never
+exclamatory, no em-dashes in UI copy.
+
+## 8. Security posture (frontend's share of it)
+
+- **Untrusted strings never meet `{@html}`** with one audited
+  exception: FTS search snippets, which pass through
+  `safeSnippet()` — escape everything, re-allow only `<mark>`. If
+  you need `{@html}` anywhere else, you need a sanitizer and a
+  review, in that order.
+- **Previews are hostile documents.** They render in an iframe from
+  `/preview/{id}`; the *server* applies a sandboxing CSP to that
+  response. The client's job: never set the iframe `src` for a
+  confidential doc until the user reveals (`blurred` gate in
+  `DocumentDetail`), and pass `?reveal=1` only on explicit action.
+- **Tokens**: shown once on mint (Settings), stored hashed
+  server-side; the UI never logs or re-displays them. Don't put
+  secrets in URLs.
+- **No third-party requests, ever.** No CDN scripts, no analytics,
+  no font hosts. The privacy page says zero egress; the UI holds
+  that line too.
+
+## 9. Feature map (route → server surface)
+
+| Route | Talks to | Notable behavior |
+|---|---|---|
+| `Login` | `POST /api/login`, `GET /api/whoami` | token+cookie dual channel |
+| `Dashboard` | `/api/stats/`, saved views (+1 count probe per view card) | home route |
+| `Documents` | `/api/documents/` list, `bulk_edit`, `share_links` (bundle), thumbs | multi-select (shift-range), j/k/x/Enter, grid/list, date range, hover actions, refetch-on-visibility |
+| `DocumentDetail` | doc GET/PATCH, `/preview/{id}`, versions, `/similar`, share bundle | sensitivity blur+reveal; JD picker grouped by area |
+| `Search` | `/api/search/`, `/api/autocomplete/` | sanitized `<mark>` snippets |
+| `Tasks` | `/api/tasks/?include=workflow\|jobs`, resolve | choice buttons from `choices[]`, deadline countdown, Cmd+Enter |
+| `Automations` | CRUD + `/api/automations/schema` | visual builder ⇄ JSON toggle (parse-guarded both ways) |
+| `Upload` | `POST /api/documents/` | per-file cards, hydration poll, 409 → matched doc link |
+| `Trash` | `/api/trash/`, restore | |
+| `Setup` | setup state/step/complete, presets, users, llm/prefs/ingest | every step skippable; egress-ack mirrors server check (server stays authoritative) |
+| `Settings` | tokens, saved views, profile (`/api/users/me`), setup state | prominence gradient on the wizard card |
+| shell (`App`) | stats + events poll (60s), drag-anywhere upload | bell = approvals + dead jobs + unseen events; durable read cursor |
+
+## 10. How to add a feature (the checklist that keeps quality flat)
+
+1. **Contract first.** Read the Go handler (or
+   [SPA backend](/spa-backend)) and pin the exact field names —
+   this project's history is littered with corrected assumptions;
+   grep the server, don't guess. If the endpoint doesn't exist,
+   write it into the current backend-tasks doc and build the UI to
+   degrade.
+2. Add the call to `lib/api.js` with a contract comment.
+3. Build the route/component: `.irow` for lists, tokens for colors,
+   empty state with a next action, keyboard path if it's a list,
+   reduced-motion-safe if it moves.
+4. `cd ui && bun run dev` against a running `suchi serve`; exercise
+   the failure paths (401, 404-endpoint-missing, empty list) not
+   just the happy one.
+5. `make ui` (check the size delta — a feature costing >5 KB gz
+   should be able to say why) → commit `ui/` **and**
+   `core/ui/spa/dist/` together → `make build` to verify embed.
+6. Update the feature-map table above.
+
+## 11. Known trade-offs, so you don't "fix" them
+
+- **Refetch over cache**: chosen; see §5.
+- **Sequentially-numbered polls, not SSE**: the 60s poll is interim
+  by design; `GET /api/events/stream` is the planned upgrade and
+  the drawer was built to swap onto it without layout change.
+- **`{#if}` route chain, hardcoded nav array**: fine at this scale;
+  revisit at ~20 routes, not before.
+- **Per-view count probes on the dashboard**: acceptable below ~10
+  saved views; `?with_counts=1` server flag is the documented
+  escape hatch.
+- **Client-side JD grouping**: the flat listing + client grouping
+  is the contract; a nested endpoint was considered and rejected.
+- **No tests in `ui/`**: honest current state. The compensating
+  controls are the tiny dependency surface, the API being the only
+  logic boundary (tested server-side), and the CI stale-dist check.
+  If the app grows real client-side logic (offline, optimistic
+  writes), that's the trigger to add Vitest — not before.
+
+## 12. Glossary
+
+**JD / Johnny.Decimal** — the filing taxonomy: areas (10–19,
+20–29…) containing categories (11, 12…). The sidebar tree, chips,
+and refile pickers all speak it. **Inbox** — the system JD category
+where low-confidence documents wait; its id comes from `/api/stats/`
+(`inbox_category_id`), never from name-matching. **Sensitivity** —
+`public | internal | confidential`; confidential blurs previews
+until revealed. **Dead job** — a pipeline job that exhausted
+retries; shows in Approvals, the drawer, and the bell count. **The
+drawer** — the right-side activity panel (events feed + tasks).
+**Bundle** — one share token covering 1–200 documents. **The dotted
+index row** — see §7; if you remember one design fact, make it this
+one.
