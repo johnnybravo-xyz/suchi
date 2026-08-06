@@ -106,11 +106,23 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	}
 	filterJSON := "{}"
 	if in.FilterJSON != nil && strings.TrimSpace(*in.FilterJSON) != "" {
-		if !json.Valid([]byte(*in.FilterJSON)) {
-			s.writeError(w, http.StatusBadRequest, "bad_filter_json", "filter_json must be valid JSON")
+		if err := validateFilterJSON(*in.FilterJSON); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
 			return
 		}
 		filterJSON = *in.FilterJSON
+	}
+
+	// Cap views per user. A saved-views tab that renders 500 entries
+	// is a UX smell — a filter set that big means the client should
+	// switch to search, not persist state.
+	var count int
+	_ = s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT COUNT(*) FROM saved_views WHERE owner_id = ?", p.UserID).Scan(&count)
+	if count >= 50 {
+		s.writeError(w, http.StatusConflict, "limit_reached",
+			"a user can hold at most 50 saved views")
+		return
 	}
 	display := "table"
 	if in.Display != nil {
@@ -169,8 +181,8 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 		args = append(args, strings.TrimSpace(*in.Name))
 	}
 	if in.FilterJSON != nil {
-		if !json.Valid([]byte(*in.FilterJSON)) {
-			s.writeError(w, http.StatusBadRequest, "bad_filter_json", "filter_json must be valid JSON")
+		if err := validateFilterJSON(*in.FilterJSON); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
 			return
 		}
 		sets = append(sets, "filter_json = ?")
@@ -388,3 +400,76 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
 }
+
+// savedViewAllowedKeys is the allow-list of document-list filter
+// params a saved_view can persist. Anything outside this set is a
+// client bug we'd rather surface loudly than store forever. Extend
+// only when the documents-list endpoint learns to honor the new key.
+var savedViewAllowedKeys = map[string]bool{
+	"q":                      true,
+	"tags__id__in":           true,
+	"correspondents__id__in": true,
+	"document_type__id":      true,
+	"jd_category_id":         true,
+	"sensitivity":            true,
+	"ordering":               true,
+}
+
+// filterJSONMaxBytes bounds one filter_json payload. 2KB is more than
+// enough for any realistic filter combination the documents-list
+// endpoint can honor; a payload above this is either an attacker
+// probing storage limits or a client dumping unrelated state.
+const filterJSONMaxBytes = 2048
+
+// validateFilterJSON checks a saved_view.filter_json payload. Rules:
+//   - valid JSON object (no arrays / scalars at the top level)
+//   - length <= filterJSONMaxBytes
+//   - every key in savedViewAllowedKeys
+//   - values are strings, numbers, bools, or arrays of scalars —
+//     no nested objects (a saved view is a flat query surface)
+//
+// Returns a message naming the first offending key so client bugs
+// surface with actionable text.
+func validateFilterJSON(raw string) error {
+	if len(raw) > filterJSONMaxBytes {
+		return errFilterTooLarge
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return errFilterNotObject
+	}
+	if m == nil {
+		return errFilterNotObject
+	}
+	for k, v := range m {
+		if !savedViewAllowedKeys[k] {
+			return &filterErr{msg: "unknown filter key: " + k}
+		}
+		switch vv := v.(type) {
+		case string, json.Number, bool, nil:
+			// scalar — fine
+		case []any:
+			for _, item := range vv {
+				switch item.(type) {
+				case string, json.Number, bool, nil:
+				default:
+					return &filterErr{msg: "filter key " + k + " has a non-scalar array element"}
+				}
+			}
+		default:
+			return &filterErr{msg: "filter key " + k + " is not a scalar or array of scalars"}
+		}
+	}
+	return nil
+}
+
+type filterErr struct{ msg string }
+
+func (e *filterErr) Error() string { return e.msg }
+
+var (
+	errFilterTooLarge  = &filterErr{msg: "filter_json exceeds 2KB"}
+	errFilterNotObject = &filterErr{msg: "filter_json must be a JSON object"}
+)

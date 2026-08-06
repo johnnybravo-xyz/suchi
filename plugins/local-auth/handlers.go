@@ -197,11 +197,37 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The mobile apps request JSON tokens; browsers get cookies.
+	// The SPA under /app/* is a browser client that ALSO wants a
+	// token (for Authorization: Token headers on API calls) — so
+	// it hits /api/login with Accept: application/json AND expects
+	// the same-origin cookie flow to work for subsequent blob
+	// fetches (/preview, /download). We plant the cookie on the
+	// JSON path so both channels are usable. Half-authenticated
+	// states (token minted, no cookie) were where support threads
+	// were being born.
 	if wantsJSON(r) {
 		token, err := p.issueAPIToken(r.Context(), userID, "mobile", "read,write")
 		if err != nil {
 			http.Error(w, "token failed", http.StatusInternalServerError)
 			return
+		}
+		sid, err := p.IssueSession(r.Context(), userID, r)
+		if err != nil {
+			// Token was minted but session failed — best-effort
+			// return the token so the caller isn't left with
+			// nothing. Log-worthy but not fatal.
+			p.log.Warn("localauth.json_login.session_failed",
+				"user_id", userID, "err", err.Error())
+		} else {
+			http.SetCookie(w, &http.Cookie{
+				Name:     CookieName,
+				Value:    sid,
+				Path:     "/",
+				Expires:  time.Now().Add(SessionTTL),
+				HttpOnly: true,
+				Secure:   r.TLS != nil,
+				SameSite: http.SameSiteLaxMode,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
