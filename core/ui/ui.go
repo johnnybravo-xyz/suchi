@@ -286,11 +286,21 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	}
 	stat, err := s.CAS.Stat(pick)
 	if err != nil {
+		if errors.Is(err, blob.ErrNotFound) {
+			s.Log.Warn("ui.serveBlob.missing", "doc_id", id, "sha256", pick)
+			http.NotFound(w, r)
+			return
+		}
 		s.serverError(w, r, err)
 		return
 	}
 	rc, err := s.CAS.Get(pick)
 	if err != nil {
+		if errors.Is(err, blob.ErrNotFound) {
+			s.Log.Warn("ui.serveBlob.missing", "doc_id", id, "sha256", pick)
+			http.NotFound(w, r)
+			return
+		}
 		s.serverError(w, r, err)
 		return
 	}
