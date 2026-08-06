@@ -478,7 +478,8 @@ code change.
   groups; owner and admin bypass the ACL check.
 - **What** — grants live on documents, tags, correspondents,
   document_types, storage_paths. `/api/groups/*` + `/api/acls/{kind}/{id}`
-  as the write surface; `/admin/groups` as the UI.
+  as the write surface; SPA admin panel pending (task #140), drive
+  over the JSON API until then.
 - **When** — empty ACL table falls through to legacy owner+admin
   behavior. Enterprise E2 layers SAML/SCIM group provisioning on
   top of the primitive. See [permissions](/permissions).

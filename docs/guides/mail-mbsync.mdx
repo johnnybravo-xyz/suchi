@@ -92,12 +92,14 @@ and `docker compose restart mbsync`.
 
 ## Mail wizard (in-browser)
 
-The compose recipe wires suchi's admin-only `/admin/mail-setup` page
-to the same `config/.env` file. Log in as an admin, open the wizard,
-pick a provider, save — suchi rewrites the file and restarts mbsync
-in place, no shell needed.
+The server-rendered `/admin/mail-setup` wizard retired with the SPA
+promotion; the equivalent in-app settings panel is tracked (task
+#141 — needs `GET/PUT /api/admin/settings/mail` and a connection-
+test endpoint). Until it lands, edit `config/.env` directly and
+`docker compose restart mbsync`.
 
-The wizard is opt-in via two mounts already set in `docker-compose.yml`:
+The compose recipe still ships the two mounts the future in-app
+panel will use:
 
 - `./config → /etc/suchi/mail-config` (RW) so suchi can rewrite the
   file. Directory mount, not a single-file bind — atomic rename
