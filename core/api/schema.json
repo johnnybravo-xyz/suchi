@@ -213,7 +213,13 @@
     "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace (admin)." }, "delete": { "summary": "Delete (admin)." } },
 
     "/api/jd/categories/":                       { "get":  { "summary": "List JD categories with denormalized area info. ?q=<prefix> matches code or name; ?area=<code> scopes to one area (start code)." } },
+    "/api/jd/presets/":                          { "get":  { "summary": "Admin-only setup-wizard preset catalog. One row per built-in preset with {id, name, description, blank, areas:[{code, name, category_count}]}. No envelope (bounded population)." } },
 
-    "/api/events/":                              { "get":  { "summary": "Cursor over audit_events. ?since_id, ?kinds=csv, ?limit up to 200. Doc-centric rows filtered by ACL; job.dead + backup.written admin-only. Requires events:read." } }
+    "/api/events/":                              { "get":  { "summary": "Cursor over audit_events. ?since_id, ?kinds=csv, ?limit up to 200. Doc-centric rows filtered by ACL; job.dead + backup.written admin-only. Requires events:read." } },
+
+    "/api/stats/":                               { "get":  { "summary": "Dashboard counters in one round-trip. documents_total, trash_count, inbox_count, inbox_category_id, pending_approvals, dead_jobs (admin only), ingested_7d. All counts visibility-scoped per principal." } },
+
+    "/api/documents/{id}/preview":               { "get":  { "summary": "Inline stream of the archive blob (or original if no archive). Same handler + sensitivity gate + ETag as /preview/{id}; the /api mirror lets headless deploys keep blob access." } },
+    "/api/documents/{id}/download":              { "get":  { "summary": "Attachment stream of the archive (or ?original=1 for the raw file). Same handler as /download/{id}; /api mirror for headless deploys." } }
   }
 }

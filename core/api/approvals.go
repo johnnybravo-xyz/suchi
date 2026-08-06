@@ -234,9 +234,14 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "task_id must be a positive integer")
 		return
 	}
+	// Body accepts either {choice} (server-native, matches
+	// state.choices vocab) or {decision} (mobile/SPA compat spelling).
+	// Choice wins when both are present so a client migrating to the
+	// canonical field has predictable behavior.
 	var body struct {
-		Choice string `json:"choice"`
-		Note   string `json:"note"`
+		Choice   string `json:"choice"`
+		Decision string `json:"decision"`
+		Note     string `json:"note"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -244,7 +249,11 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Choice = strings.TrimSpace(body.Choice)
 	if body.Choice == "" {
-		s.writeError(w, http.StatusBadRequest, "missing_choice", "choice is required")
+		body.Choice = strings.TrimSpace(body.Decision)
+	}
+	if body.Choice == "" {
+		s.writeError(w, http.StatusBadRequest, "missing_choice",
+			"choice (or decision) is required")
 		return
 	}
 	if err := approvals.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {

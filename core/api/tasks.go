@@ -37,12 +37,21 @@ type Task struct {
 // approval_tasks field entirely; the classic Results array is
 // unchanged. suchi-native clients read both.
 type WorkflowTask struct {
-	ID         int64    `json:"id"`
-	RunID      int64    `json:"run_id"`
-	WorkflowID int64    `json:"workflow_id"`
-	StateKey   string   `json:"state_key"`
-	Assignee   string   `json:"assignee"`
-	Prompt     string   `json:"prompt"`
+	ID         int64 `json:"id"`
+	RunID      int64 `json:"run_id"`
+	WorkflowID int64 `json:"workflow_id"`
+	// DocID is the document the run was started against, if any.
+	// Denormalized from approval_runs.doc_id so the drawer can link
+	// straight to the doc without a second lookup.
+	DocID    int64  `json:"doc_id,omitempty"`
+	StateKey string `json:"state_key"`
+	Assignee string `json:"assignee"`
+	Prompt   string `json:"prompt"`
+	// Title is a compat alias for Prompt — the SPA drawer renders
+	// `t.title || t.kind || Task #${t.id}`, so exposing prompt as
+	// title lets it show the human question without a client change.
+	// New clients should read `prompt`.
+	Title      string   `json:"title,omitempty"`
 	Choices    []string `json:"choices"`
 	Status     string   `json:"status"`
 	DeadlineAt int64    `json:"deadline_at,omitempty"`
@@ -227,7 +236,8 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 	me := fmt.Sprintf("user:%d", userID)
 
 	q := `
-		SELECT t.id, t.run_id, r.def_id, t.state_key, t.assignee, t.prompt,
+		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0),
+		       t.state_key, t.assignee, t.prompt,
 		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
@@ -247,11 +257,15 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 			t          WorkflowTask
 			choicesRaw string
 			deadline   int64
+			docID      int64
 		)
-		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &t.StateKey,
+		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &docID, &t.StateKey,
 			&t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
 			&t.CreatedAt); err != nil {
 			return nil, 0, err
+		}
+		if docID > 0 {
+			t.DocID = docID
 		}
 		if deadline > 0 {
 			t.DeadlineAt = deadline
@@ -259,6 +273,7 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 		if choicesRaw != "" {
 			_ = json.Unmarshal([]byte(choicesRaw), &t.Choices)
 		}
+		t.Title = t.Prompt
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {
