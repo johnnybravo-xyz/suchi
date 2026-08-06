@@ -86,6 +86,27 @@ converges rather than duplicating.
 | `remove_owner` | `{}` | Clears the FK to null. |
 | `assign_custom_field` | `{"field_id": 4, "value": ...}` | Upserts the (doc, field) row into `document_custom_field_values`. `value` shape must match the field's `data_type` — string for text/select/url/documentlink, number for number/monetary, bool for bool, unix seconds for date, array for multi. |
 | `remove_custom_field` | `{"field_id": 4}` | Deletes the (doc, field) row. |
+| `apply_from_similar` | `{"fields": ["jd_category","correspondent","document_type","tags"], "top_k": 10, "min_score": 0, "threshold_autoapply": 0.9, "threshold_propose": 0.5, "tag_frequency_min": 0.3}` | Aggregates the top-K similar existing docs' metadata via FTS5 more-like-this. Fields with confidence ≥ `threshold_autoapply` write directly (with `heuristics.autoapply` audit); confidence in `[threshold_propose, threshold_autoapply)` lands in `document_proposals` for the Tasks-inbox one-click chip. Skipped when the LLM classifier is configured; LLM's low-confidence branch re-invokes this action as fallback. |
+
+### Built-in: "Auto-file from archive"
+
+suchi ships one system automation on first boot: **Auto-file from
+archive** (system_slug `auto_file_from_archive`). It's an
+`apply_from_similar` action on `document_added` — the archive-based
+counterpart to the LLM classifier.
+
+- **Toggleable** — flip `enabled` off in `/automations` if you
+  prefer manual filing.
+- **Editable** — tune every threshold and the field set through the
+  visual builder or the JSON view. The action's own defaults are
+  the source of truth; leaving a param blank falls back to them.
+- **Undeletable** — the SPA hides the trash button; `DELETE
+  /api/automations/{id}` returns `409 system_automation`. Toggling
+  it off is the substitute.
+
+The "system" concept is data-driven (a `system=1` column on
+`workflows`) — future built-ins ship the same way. The seeder is
+idempotent by `system_slug`, so re-runs and upgrades are no-ops.
 
 ## 4. REST surface
 

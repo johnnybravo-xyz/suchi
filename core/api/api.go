@@ -120,6 +120,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// vec0 layer stacks on top once sqlite-vec ships (see
 	// docs/wishlist/similar-documents.mdx).
 	mux.HandleFunc("GET /api/documents/{id}/similar", s.GetSimilarDocuments)
+	// Auto-file-from-archive proposals surface (heuristics engine).
+	// GET/POST resolve per doc + bulk endpoint the SPA bulk bar uses.
+	mux.HandleFunc("GET /api/documents/{id}/proposals", s.ListDocumentProposals)
+	mux.HandleFunc("POST /api/documents/{id}/proposals/{proposal_id}/resolve", s.ResolveDocumentProposal)
+	mux.HandleFunc("POST /api/proposals/resolve_bulk", s.ResolveBulkProposals)
 
 	// Document correspondents (multi-party per doc).
 	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)
@@ -141,6 +146,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Tags — read + parent-hierarchy operations.
 	mux.HandleFunc("GET /api/tags/", s.ListTags)
+	mux.HandleFunc("POST /api/tags/", s.CreateTag)
+	mux.HandleFunc("PATCH /api/tags/{id}", s.UpdateTag)
+	mux.HandleFunc("DELETE /api/tags/{id}", s.DeleteTag)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
 
 	// Taxonomy CRUD (correspondents, document_types, storage_paths).
@@ -214,6 +222,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Mail-setup wizard — admin-only. Endpoint 404s when the wizard
 	// isn't configured (MAIL_SETUP_ENV_PATH unset).
 	mux.HandleFunc("POST /api/admin/mail-setup", s.MailSetupApply)
+	// SPA Admin panel: mail-intake settings for the in-process
+	// emailwatch poller (distinct surface from the mail-mbsync
+	// sidecar wizard above).
+	mux.HandleFunc("GET /api/admin/settings/mail", s.GetMailSettings)
+	mux.HandleFunc("PUT /api/admin/settings/mail", s.PutMailSettings)
+	mux.HandleFunc("POST /api/admin/settings/mail/test", s.TestMailSettings)
 
 	// Setup wizard surface (admin-only).
 	s.registerSetup(mux)

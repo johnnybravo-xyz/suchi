@@ -925,11 +925,86 @@ not the length of `results`. Each `TagView` carries `parent_id`
 (nullable) and `child_count` so the UI renders the shallow tree
 without extra round-trips.
 
+### `POST /api/tags/`
+
+Admin-only. Body: `{"name": "...", "slug": "...", "color": "#..."}` —
+only `name` is required. Slug defaults to `slugFromName(name)`;
+color defaults to `#a6cee3` at the DB level. Returns `201 {"id": <int>}`
+on success, `409 conflict` when the name or slug already exists.
+
+### `PATCH /api/tags/{id}`
+
+Admin-only. Body: any subset of `{name, slug, color}`. Empty body
+returns `400 no_fields`. Same `409 conflict` on unique collision.
+Parent moves live on `PATCH /api/tags/{id}/parent` (below) — that
+endpoint owns the cycle-check invariant and is not duplicated here.
+
+### `DELETE /api/tags/{id}`
+
+Admin-only. Returns `204 No Content` on success, `404 not_found`
+otherwise. `document_tags` rows cascade via ON DELETE CASCADE;
+children of the deleted tag re-root via ON DELETE SET NULL (the
+nested-tag migration set that up so a deleted parent doesn't
+orphan its subtree).
+
 ### `PATCH /api/tags/{id}/parent`
 
 Admin-only. Body: `{"parent_id": <int-or-null>}`. Rejects
 self-parent (`400 self_parent`) and cycles (`400 cycle`). See
 architecture doc for the "no inheritance in search" call.
+
+### `GET /api/admin/settings/mail`
+
+Admin-only. Read the persisted mail-intake config the emailwatch
+poller uses. Response shape:
+
+```json
+{
+  "imap_host": "imap.fastmail.com",
+  "imap_port": 993,
+  "username": "you@fastmail.com",
+  "folder": "INBOX",
+  "poll_interval_min": 10,
+  "owner_email": "you@fastmail.com"
+}
+```
+
+Password is **write-only** — it never appears in the GET response.
+A zero-value response (empty strings + defaults) means "not
+configured yet"; the SPA renders the form pre-filled with those
+defaults.
+
+### `PUT /api/admin/settings/mail`
+
+Admin-only. Persist mail-intake settings. Body accepts every field
+GET returns, plus `password`. Leaving `password` blank keeps the
+stored one — the SPA relies on this so edits don't require
+re-typing the credential. Response:
+
+```json
+{
+  "saved": true,
+  "restart_required": true,
+  "restart_hint": "settings saved; restart suchi to pick up the new mail intake config"
+}
+```
+
+Live reload isn't wired — the emailwatch goroutine is captured at
+boot with a URL. The SPA surfaces the restart hint.
+
+### `POST /api/admin/settings/mail/test`
+
+Admin-only. Dial the configured IMAP host and attempt `LOGIN`. Body
+is optional; when empty, tests the stored credentials. Never 500s
+on a connect-refused — that's user data being wrong, not a server
+bug.
+
+Response:
+
+```json
+{ "ok": true,  "message": "Connected — mailbox reachable." }
+{ "ok": false, "message": "login: 535 Authentication failed" }
+```
 
 ### `GET /api/rules/`
 

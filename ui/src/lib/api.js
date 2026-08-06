@@ -71,6 +71,14 @@ export const listDocumentTypes = () => api.get(`/api/document_types/${qs({ page_
 export const listTasks = (params) => api.get(`/api/tasks/${qs(params)}`)
 export const resolveApprovalTask = (id, body) => api.post(`/api/approvals/tasks/${id}/resolve`, body)
 
+// Auto-file-from-archive proposals — surfaced in the Tasks inbox as
+// heuristics_proposal cards; the SPA bulk bar posts to resolve_bulk.
+export const listDocumentProposals = (docId) => api.get(`/api/documents/${docId}/proposals`)
+export const resolveProposal = (docId, proposalId, action) =>
+  api.post(`/api/documents/${docId}/proposals/${proposalId}/resolve`, { action })
+export const resolveBulkProposals = (proposalIds, action) =>
+  api.post('/api/proposals/resolve_bulk', { proposal_ids: proposalIds, action })
+
 export const listAutomations = () => api.get('/api/automations/')
 export const createAutomation = (b) => api.post('/api/automations/', b)
 export const patchAutomation = (id, b) => api.patch(`/api/automations/${id}`, b)

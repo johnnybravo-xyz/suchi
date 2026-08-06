@@ -24,6 +24,7 @@ import (
 
 	"github.com/suchi-dms/suchi/core/auth"
 	"github.com/suchi-dms/suchi/core/authz"
+	"github.com/suchi-dms/suchi/core/similar"
 )
 
 func newSimilarServer(t *testing.T) *Server {
@@ -159,9 +160,9 @@ func TestTopTokens(t *testing.T) {
 		{"Bescom BESCOM bescom Insurance", 2, []string{"bescom", "insurance"}},
 	}
 	for _, tc := range cases {
-		got := topTokens(tc.in, tc.k)
+		got := similar.TopTokens(tc.in, tc.k)
 		if !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("topTokens(%q, %d) = %v, want %v", tc.in, tc.k, got, tc.want)
+			t.Errorf("TopTokens(%q, %d) = %v, want %v", tc.in, tc.k, got, tc.want)
 		}
 	}
 }
