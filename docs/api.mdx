@@ -397,8 +397,9 @@ Response shape:
       "next_run_at": 1785779486 }
   ],
   "workflow_tasks": [
-    { "id": 9, "run_id": 3, "workflow_id": 1, "state_key": "review",
-      "assignee": "user:5", "prompt": "Approve invoice?",
+    { "id": 9, "run_id": 3, "workflow_id": 1, "workflow_name": "invoice-approval",
+      "doc_id": 42, "state_key": "review",
+      "assignee": "user:5", "prompt": "Approve invoice?", "title": "Approve invoice?",
       "choices": ["approve","reject"], "status": "open",
       "deadline_at": 1785782400, "created_at": 1785779486 }
   ]
