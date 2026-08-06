@@ -28,7 +28,7 @@
           },
           {
             "group": "Reference",
-            "pages": ["config", "cli", "api", "importer", "formats"]
+            "pages": ["config", "cli", "api", "spa-backend", "importer", "formats"]
           },
           {
             "group": "Concepts",

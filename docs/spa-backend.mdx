@@ -1,0 +1,101 @@
+---
+title: "SPA ↔ backend map"
+description: "Every endpoint the shipped Svelte SPA depends on, with its scope + wire shape + status."
+---
+
+The `/app/` SPA (source in `ui/`, embedded at build via `just ui-build`)
+talks to the same `/api/` surface every other client uses. This page
+is the load-bearing map — a future SPA release, a third-party client
+that wants "everything the SPA does," or an agent that needs to
+approximate a UI can read this and know exactly which endpoints to
+wire.
+
+Every row here is *shipped*. When a new backend surface lands for the
+SPA it gets added here in the same PR that ships it.
+
+## Auth + profile
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `POST /api/login` (JSON) | none | login form → issues token AND plants session cookie so blob URLs work same-origin |
+| `GET /api/whoami` | any authed | boot: hydrate the topbar avatar menu with `display_name` + `avatar_url` |
+| `PATCH /api/users/me` | any authed | Profile card save (display_name) |
+| `POST /api/users/me/avatar` | any authed | Profile card avatar picker (multipart, ≤2 MiB, png/jpeg, re-encoded as PNG server-side) |
+| `GET /api/users/{id}/avatar` | any authed | topbar + shared views' owner label |
+| `POST /api/logout` | any authed | Sign out from the topbar user menu |
+
+## Documents core
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `GET /api/documents/` | `documents:read` | Documents list (filters, ordering, page-scroll) |
+| `POST /api/documents/` | `documents:write` | topbar upload button; drop-anywhere in a later polish pass |
+| `GET /api/documents/{id}` | `documents:read` | DocumentDetail route (title, JD chip, tags, correspondents, versions) |
+| `PATCH /api/documents/{id}` | `documents:write` | Detail edits (title/JD/sensitivity) |
+| `DELETE /api/documents/{id}` + `POST /restore` | `documents:write` | Row trash + Trash route restore |
+| `POST /api/documents/bulk_edit` | `documents:write` | Documents list multi-select: bulk refile / trash / tag / sensitivity — one round trip |
+| `GET /api/documents/{id}/preview`, `/download` | `documents:read` | Preview iframe + Download button (direct URL, honors cookie + immutable ETag) |
+| `GET /api/documents/{id}/thumb` | `documents:read` | Documents grid + Dashboard "recently added" rows |
+| `GET /api/documents/{id}/versions/` | `documents:read` | Detail versions section |
+
+## Taxonomy
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `GET /api/jd/categories/` | `documents:read` | sidebar tree + refile picker + row chips |
+| `GET /api/jd/presets/` | admin | in-app Setup wizard preset picker |
+| `GET /api/tags/`, `correspondents/`, `document_types/`, `storage_paths/` | `documents:read` | filter chips + automations builder pickers |
+| `GET /api/custom_fields/` + CRUD | admin (mutations) | admin/custom-fields editor |
+
+## Activity + counters
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `GET /api/events/` | `events:read` | notification drawer + unread cursor (persisted in `ui_settings` as `events.last_seen_id`) |
+| `GET /api/stats/` | `documents:read` | Dashboard cards, sidebar badges, dropped the `/inbox/i` name regex |
+| `GET /api/tasks/` | any authed | pending-approval badge + Approvals screen |
+| `GET /api/ui_settings/`, `PUT ...` | any authed | opaque per-user JSON blob — theme, drawer state, last-seen event id |
+
+## Automations + approvals
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `/api/automations/` CRUD | admin (writes) | Automations route visual builder + JSON toggle |
+| `GET /api/automations/schema` | any authed | builder reads this to render pickers — no client release for a new action kind |
+| `/api/approvals/` (register/start/get/cancel) | authed | Approvals screen for admins configuring flows |
+| `POST /api/approvals/tasks/{id}/resolve` | assignee or admin | Approve/Reject buttons on approval cards; accepts `{choice}` or `{decision}` |
+
+## Search + share
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `GET /api/search/`, `autocomplete/` | `documents:read` | Search route + Cmd+K palette |
+| `GET /api/saved_views/` (with `?include=shared`) | any authed | Custom-views cards; shared views render read-only from other owners |
+| `POST /api/share_links/` | authed | Share-selection bundle: 1–200 doc ids under one token |
+
+## Setup (admin, first-boot)
+
+| Endpoint | Scope | SPA use |
+|----------|-------|---------|
+| `GET /api/admin/setup/state` | admin | Setup route banner + Settings card |
+| `POST /api/admin/setup/{step,complete,users,jd-preset}` | admin | Setup route steps |
+| `POST /api/admin/settings/{llm,preferences,ingest}` | admin | Setup + Settings tabs |
+
+## What lives outside this page
+
+- Mobile-compat handshake (`/api/remote_version/`, `/api/next_asn/`)
+  — mobile-only, not the SPA.
+- Agent surface (`/api/tasks/` POST/claim/complete + `agent/webhooks`)
+  — programmatic clients.
+- MCP tooling — see `docs/mcp.mdx`.
+
+## Adding a new endpoint the SPA needs
+
+1. Ship the backend endpoint with tests + `schema.json` entry +
+   `docs/api.mdx` row.
+2. Add a row here in the same PR.
+3. Consume it in the SPA. If the SPA release lags, the backend row
+   here still describes reality — that's the point.
+
+The `docs-claims.md` pre-release checklist grep-verifies that
+every row here corresponds to a real registered route.
