@@ -82,7 +82,7 @@ func (p *Plugin) mintSetupToken() error {
 	}
 	p.setupToken = hex.EncodeToString(b[:])
 	p.log.Warn("localauth.setup.token_minted",
-		"msg", "first-boot setup token — one-time use; POST it to /setup with an admin email + password within 24h",
+		"msg", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
 		"token", p.setupToken)
 	return nil
 }
