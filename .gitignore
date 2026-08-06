@@ -40,3 +40,6 @@ ui/dist/
 # global .gitignore's `dist/` rule that would otherwise trap this.
 !core/ui/spa/dist/
 !core/ui/spa/dist/**
+
+# Maintainer scratchpad (personal backlog; not shipped)
+/tasks.md

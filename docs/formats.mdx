@@ -354,6 +354,49 @@ All accept `K`/`M`/`G` suffixes or raw byte counts. Truncation is
 silent + logged at Warn — the doc still lands, FTS still indexes what
 fit.
 
+## JSON sidecar spec
+
+Any producer dropping a file into the fs-watch staging dir (or a mail
+attachment carrying a Correspondent) can hand suchi structured
+metadata via a sibling `<name>.json` (or `<path>.json`) file. The
+sidecar shape below is the wire contract — additive fields don't need
+a version bump; a required-field change bumps `suchi_sidecar`.
+
+```json
+{
+  "suchi_sidecar": 1,
+  "title":         "Electricity bill Mar 2026",
+  "created":       "2026-03-02",
+  "correspondent": "BESCOM",
+  "correspondents": [
+    { "name": "BESCOM",       "role": "sender"    },
+    { "name": "Ritesh S.",    "role": "recipient" }
+  ],
+  "tags":          ["utilities", "source:fs-watch"],
+  "jd_category":   31,
+  "notes":         "auto-picked-up",
+  "custom_fields": { "amount_inr": "1420", "billing_period": "March" }
+}
+```
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `suchi_sidecar` | int | Must equal `1`. Producers that omit it get the flat-JSON compat path (title/created/correspondent/tags only). |
+| `title` | string | Overrides the filename-derived title. |
+| `created` | string (ISO 8601) | Source date. Stored as `documents.added_at` — the date the doc was created upstream, not the moment suchi ingested it. |
+| `correspondent` | string | Singular sender name. Backwards-compat with pre-Phase-2 producers. When `correspondents[]` is also set, the array wins. |
+| `correspondents[]` | array | Multi-party form. Each entry is `{name, role}`; role is `sender \| recipient \| cc \| other` (`sender` when omitted). Applied via `document_correspondents`. |
+| `tags[]` | array | Tag slugs. Auto-created on ingest. |
+| `jd_category` | int | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved. |
+| `notes` | string | Free-form; stored on the document row. |
+| `custom_fields` | object | Map of custom-field name → value. Field must exist (`/api/custom_fields/`); type coercion follows the field's declared type. |
+
+**Source of truth**: `core/ingest/sidecar/sidecar.go`. Parser accepts
+the native shape and a flat-JSON compat shape (no `suchi_sidecar` key,
+top-level `title/created/correspondent/tags`). Bad JSON or an
+explicit-but-mismatched `suchi_sidecar` version fails ingest; the
+file moves to `<dir>/errors/` with a `.err` companion.
+
 ## Docker image matrix
 
 | Feature | Slim image | Full image |
