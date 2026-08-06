@@ -144,6 +144,30 @@ Successful writes emit an audit event
 (`user.display_name_changed`, old→new) and return the fresh
 `UserSelf` shape.
 
+### `POST /api/users/me/avatar`
+
+Multipart upload with field name `avatar`. Server-side hardening:
+
+- Content-Type sniffed on the first 512 bytes; only `image/png` and
+  `image/jpeg` accepted (a `.png` filename over plain text is
+  refused).
+- Size cap 2 MiB; dimensions cap 2048×2048 (checked via
+  `image.DecodeConfig` before allocating the decoded frame).
+- The image is **decoded and re-encoded as PNG**. EXIF and any
+  post-image polyglot bytes never survive; the on-disk representation
+  is normalized. The original upload bytes are not stored.
+- Blob lands in the CAS; `users.avatar_sha` gets the fresh SHA-256.
+
+Returns the fresh `UserSelf` on success. Emits
+`user.avatar_changed` audit event with old + new sha.
+
+### `GET /api/users/{id}/avatar`
+
+Serves any user's avatar as `image/png`. Immutable ETag
+(`users.avatar_sha`) + `Cache-Control: max-age=31536000, immutable` —
+a new upload rotates the sha and invalidates every cached client
+automatically. Returns `404` if unset.
+
 ### `POST /api/documents/`
 
 Multipart upload. Streams the file into the CAS by SHA-256; the

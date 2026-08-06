@@ -254,11 +254,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// probes with one index-backed query set.
 	mux.HandleFunc("GET /api/stats/", s.GetStats)
 
-	// User profile — whoami + patch self. whoami used to live in
-	// main.go as a hand-formatted JSON literal; it's a proper handler
-	// now so display_name + avatar_url land on the same shape.
+	// User profile — whoami + patch self + avatar. whoami used to
+	// live in main.go as a hand-formatted JSON literal; it's a proper
+	// handler now so display_name + avatar_url land on the same shape.
 	mux.HandleFunc("GET /api/whoami", s.Whoami)
 	mux.HandleFunc("PATCH /api/users/me", s.PatchSelf)
+	mux.HandleFunc("POST /api/users/me/avatar", s.PostSelfAvatar)
+	mux.HandleFunc("GET /api/users/{id}/avatar", s.GetUserAvatar)
 
 	// Self-service API-token management for session/OIDC callers.
 	// Sibling to /api/token/ (credential-exchange, mobile-compat).
