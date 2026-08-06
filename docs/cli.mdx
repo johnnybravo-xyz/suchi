@@ -114,6 +114,12 @@ One-shot diagnostic report. Prints:
 - DB schema version + whether every migration applied
 - `$DATA_DIR` writability, disk-free, sub-directory presence
   (`blobs/`, `rendered/`, `backups/`)
+- Operational health: last-backup age (WARN past 2× `BACKUP_INTERVAL`),
+  dead-job count, oldest running job (WARN >15m), effective upload cap,
+  last boot's reaper count (from the `jobs.reclaimed` audit event —
+  a crash-looping box surfaces here without journalctl), CAS-shard
+  subdir count, and `audit_events` row total against the retention
+  window.
 
 Non-zero exit only on hard errors. Missing optional binaries print but
 don't fail — the ingest pipeline degrades gracefully. Useful for

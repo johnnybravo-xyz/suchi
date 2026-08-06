@@ -99,6 +99,13 @@ func (d *Dispatcher) ReclaimOrphaned(ctx context.Context) (int64, error) {
 		d.log.Info("jobs.boot_reclaimed",
 			"count", affected,
 			"reason", "prior process crashed mid-handler")
+		// Persist the count so `suchi doctor` can surface it later
+		// — the log line is transient; a crash-looping box benefits
+		// from seeing the last boot's reap count without journalctl.
+		audit.Log(ctx, d.db, d.log, audit.Event{
+			Action: "jobs.reclaimed", ObjectKind: "server",
+			After: map[string]any{"count": affected},
+		})
 	}
 	return affected, nil
 }

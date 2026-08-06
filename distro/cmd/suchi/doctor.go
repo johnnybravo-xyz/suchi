@@ -203,6 +203,40 @@ func runDoctor(args []string) int {
 		}
 	}
 
+	// Last boot's reaper count — the ReclaimOrphaned pass writes
+	// this to audit_events on each boot where it actually reset
+	// anything. A crash-looping box shows up as a repeating count
+	// here without needing journalctl access.
+	var (
+		reclaimTs   sql.NullInt64
+		reclaimBody sql.NullString
+	)
+	_ = d.Read.QueryRowContext(ctx,
+		`SELECT ts, after_json FROM audit_events
+		   WHERE action = 'jobs.reclaimed'
+		   ORDER BY id DESC LIMIT 1`).Scan(&reclaimTs, &reclaimBody)
+	if reclaimTs.Valid {
+		// after_json is a small map like {"count": 3}; a naive
+		// string search avoids pulling json in for one field.
+		count := "?"
+		if reclaimBody.Valid {
+			if i := strings.Index(reclaimBody.String, `"count":`); i >= 0 {
+				rest := reclaimBody.String[i+len(`"count":`):]
+				end := 0
+				for end < len(rest) && (rest[end] >= '0' && rest[end] <= '9') {
+					end++
+				}
+				if end > 0 {
+					count = rest[:end]
+				}
+			}
+		}
+		age := time.Since(time.Unix(reclaimTs.Int64, 0)).Truncate(time.Second)
+		fmt.Printf("  · last boot reclaimed %s orphaned jobs (%s ago)\n", count, age)
+	} else {
+		fmt.Println("  ✓ last boot reclaimed no orphaned jobs")
+	}
+
 	// Audit log row count + retention window. The notifications feed
 	// sits on audit_events, so unbounded growth here is the storage
 	// tail risk. Warn when the window is disabled AND the table is
