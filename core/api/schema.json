@@ -201,8 +201,10 @@
                                   "put": { "summary": "Replace caller's blob." } },
     "/api/trash/":             { "get": { "summary": "List soft-deleted docs (owner-scoped)." } },
 
-    "/api/share_links/":       { "get": { "summary": "List caller's share links." }, "post": { "summary": "Create a share link." } },
+    "/api/share_links/":       { "get": { "summary": "List caller's share links." }, "post": { "summary": "Create a share link. Body {doc_ids:[...], label, password?, expires_at?}. doc_ids accepts 1 to 200 ids — a multi-doc bundle shares under one token (\"everything for the accountant\")." } },
     "/api/share_links/{id}":   { "delete": { "summary": "Revoke." } },
+    "/s/{token}":              { "get":    { "summary": "Public metadata for a share bundle. Returns {label, docs:[{id, title, mime, size, download}], requires_password?}. Rate-limited." } },
+    "/s/{token}/{doc_id}/download": { "get": { "summary": "Public streaming download for one doc in a bundle. Rate-limited; verifies the token + optional ?password= server-side." } },
     "/s/{token}":              { "get": { "summary": "Public share metadata (anonymous).", "security": [] } },
     "/s/{token}/{doc_id}/download": { "get": { "summary": "Public download (anonymous).", "security": [] } },
 
