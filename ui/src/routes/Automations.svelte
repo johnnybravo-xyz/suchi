@@ -1,6 +1,6 @@
 <script>
   import { listAutomations, createAutomation, patchAutomation, deleteAutomation,
-           listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
+           listTags, listCorrespondents, listDocumentTypes, automationsSchema } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
@@ -13,13 +13,14 @@
   let draftErr = $state('')
   let facets = $state({ tags: [], correspondents: [], types: [] })
 
-  // Wire shape (Paperless-compatible): trigger.type is an integer code.
-  const TRIGGER_TYPES = [
+  // Enums come from GET /api/automations/schema so new kinds appear
+  // without a UI release; these literals are only the offline fallback.
+  let TRIGGER_TYPES = $state([
     { code: 2, label: 'Document added' },
     { code: 3, label: 'Document updated' },
     { code: 1, label: 'Consumption (before filing)' },
-  ]
-  const ACTION_KINDS = [
+  ])
+  let ACTION_KINDS = $state([
     { kind: 'assign_title',         label: 'Set title',        params: ['template'] },
     { kind: 'assign_tags',          label: 'Add tags',         params: ['tag_ids'] },
     { kind: 'assign_correspondent', label: 'Set correspondent', params: ['correspondent_id'] },
@@ -27,7 +28,13 @@
     { kind: 'assign_storage_path',  label: 'Set storage path', params: ['storage_path_id'] },
     { kind: 'assign_owner',         label: 'Set owner',        params: ['owner_id'] },
     { kind: 'assign_custom_field',  label: 'Set custom field', params: ['field_id', 'value'] },
-  ]
+  ])
+  automationsSchema().then(sc => {
+    if (sc?.triggers?.length) TRIGGER_TYPES = sc.triggers.map(t => ({ code: t.code, label: t.name || t.type }))
+    if (sc?.actions?.length) ACTION_KINDS = sc.actions.map(a => ({
+      kind: a.kind, label: a.name || a.kind, params: (a.params || []).map(p => p.name),
+    }))
+  }).catch(() => {})
 
   const blank = () => ({
     name: '', enabled: true, order: items.length,

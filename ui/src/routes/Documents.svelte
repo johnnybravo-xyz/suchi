@@ -1,5 +1,5 @@
 <script>
-  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories } from '../lib/api.js'
+  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath } from '../lib/api.js'
   import { route } from '../lib/router.svelte.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -14,6 +14,10 @@
   let tags = $state([]), correspondents = $state([]), types = $state([])
   let fTag = $state(''), fCorr = $state(''), fType = $state(''), fSens = $state('')
   let ordering = $state('-created_at')
+  let dateFrom = $state('')   // yyyy-mm-dd → created_at__gte (unix)
+  let dateTo = $state('')
+  let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
+  function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
   const isInbox = $derived(inbox != null)
   const jdFilter = $derived(route.query.get('jd') || '')
@@ -33,6 +37,8 @@
         tags__id__in: fTag, correspondents__id__in: fCorr,
         document_type__id: fType, sensitivity: fSens,
         jd_category_id: isInbox ? inbox?.id : jdFilter,
+        created_at__gte: dateFrom ? Math.floor(new Date(dateFrom) / 1000) : '',
+        created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
       }
       const res = await listDocuments(params)
       docs = res?.results || []
@@ -44,10 +50,15 @@
   async function fileTo(doc, jdId) {
     try {
       await patchDocument(doc.id, { jd_category_id: Number(jdId) })
-      docs = docs.filter(d => d.id !== doc.id)
-      count = Math.max(0, count - 1)
+      if (isInbox) { docs = docs.filter(d => d.id !== doc.id); count = Math.max(0, count - 1) }
+      else load()
       notify?.('Filed')
     } catch (ex) { notify?.(ex.message || 'Could not file it') }
+  }
+  async function trashOne(doc) {
+    if (!confirm(`Move “${doc.title || 'document #' + doc.id}” to trash?`)) return
+    try { await deleteDocument(doc.id); docs = docs.filter(d => d.id !== doc.id); count--; notify?.('Trashed') }
+    catch (ex) { notify?.(ex.message || 'Could not trash it') }
   }
 
   let jdCats = $state([])
@@ -75,21 +86,32 @@
   }
   function clearSel() { sel = new Set(); lastIdx = -1 }
 
-  async function bulk(label, fn) {
+  // One request, one transaction, one audit event — per-id results back.
+  async function bulk(label, method, parameters) {
     bulkBusy = true
-    let ok = 0, fail = 0
-    for (const id of sel) {
-      try { await fn(id); ok++ } catch { fail++ }
-    }
+    try {
+      const res = await bulkEdit([...sel], method, parameters)
+      const failed = (res?.results || []).filter(r => !r.ok).length
+      notify?.(failed ? `${label}: ${res.applied} done, ${failed} failed` : `${label}: ${res?.applied ?? sel.size} document${sel.size === 1 ? '' : 's'}`)
+    } catch (ex) { notify?.(ex.message || `${label} failed`) }
     bulkBusy = false
-    notify?.(fail ? `${label}: ${ok} done, ${fail} failed` : `${label}: ${ok} document${ok === 1 ? '' : 's'}`)
     clearSel()
     load()
   }
-  const bulkRefile = (jdId) => bulk('Refiled', (id) => patchDocument(id, { jd_category_id: Number(jdId) }))
-  const bulkSens = (s) => bulk('Sensitivity set', (id) => patchDocument(id, { sensitivity: s || null }))
+  const bulkRefile = (jdId) => bulk('Refiled', 'set_jd_category', { jd_category_id: Number(jdId) })
+  const bulkSens = (s) => bulk('Sensitivity set', 'set_sensitivity', { sensitivity: s })
   const bulkTrash = () => confirm(`Move ${sel.size} document${sel.size === 1 ? '' : 's'} to trash?`) &&
-    bulk('Trashed', (id) => deleteDocument(id))
+    bulk('Trashed', 'delete', {})
+  async function bulkShare() {
+    bulkBusy = true
+    try {
+      const res = await createShareLink({ doc_ids: [...sel], label: `Selection of ${sel.size}` })
+      const url = location.origin + (res?.public_url || `/s/${res?.token}`)
+      await navigator.clipboard?.writeText(url)
+      notify?.('Share link for the selection copied')
+    } catch (ex) { notify?.(ex.message || 'Could not create the bundle') }
+    bulkBusy = false
+  }
 
   // ---- keyboard: j/k move, x select, Enter open ----
   function onKey(e) {
@@ -107,7 +129,13 @@
 
   loadFacets()
   loadJDCats()
-  $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; load() })
+  $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; load() })
+  // uploads finish in the background — refetch when the tab comes back
+  $effect(() => {
+    const fn = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', fn)
+    return () => document.removeEventListener('visibilitychange', fn)
+  })
 
   const pages = $derived(Math.max(1, Math.ceil(count / pageSize)))
 </script>
@@ -129,6 +157,7 @@
       <option value="internal">Internal</option>
       <option value="confidential">Confidential</option>
     </select>
+    <button class="btn sm" disabled={bulkBusy} onclick={bulkShare}><Icon name="link" size={12} /> Share</button>
     <button class="btn sm danger" disabled={bulkBusy} onclick={bulkTrash}>Trash</button>
     <span class="spacer"></span>
     {#if bulkBusy}<span class="sub">working…</span>{/if}
@@ -158,7 +187,14 @@
       <option value="internal">Internal</option>
       <option value="confidential">Confidential</option>
     </select>
+    <input class="input" type="date" bind:value={dateFrom} title="Added on or after" style="max-width:150px" />
+    <input class="input" type="date" bind:value={dateTo} title="Added on or before" style="max-width:150px" />
     <span class="spacer"></span>
+    <span class="seg">
+      <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
+      <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
+    </span>
+    <button class="btn sm" onclick={load} title="Refresh"><Icon name="chev" size={13} /></button>
     <a class="btn sm" href="#/trash" title="Trash"><Icon name="trash" size={13} /></a>
     <select class="input" bind:value={ordering}>
       <option value="-created_at">Newest first</option>
@@ -181,12 +217,29 @@
     {/if}
   </div>
 {:else}
+  {#if view === 'grid' && !isInbox}
+    <div class="dgrid">
+      {#each docs as d, i (d.id)}
+        <a class="card gcard" href={`#/doc/${d.id}`} class:selected={sel.has(d.id)}>
+          <span class="gthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
+          <span class="gmeta">
+            <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
+                   onclick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSel(i, e) }} aria-label="Select" />
+            {#if d.jd_category_code}<span class="chip">{d.jd_category_code}</span>{/if}
+            <span class="title">{d.title || `Document #${d.id}`}</span>
+          </span>
+          <span class="sub" style="padding:0 12px 10px">{fmtDate(d.created_at)}</span>
+        </a>
+      {/each}
+    </div>
+  {:else}
   <div class="index">
     {#each docs as d, i (d.id)}
-      <a class="irow" href={`#/doc/${d.id}`} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
+      <a class="irow hoverable" href={`#/doc/${d.id}`} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
         <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
                onclick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSel(i, e) }}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />
+        <span class="rthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
         {#if d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_category_code}</span>{/if}
         <span class="title grow">{d.title || `Document #${d.id}`}</span>
@@ -201,12 +254,25 @@
               <option value="">File under…</option>
               {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
             </select>
+          {:else}
+            <span class="hoveracts" role="group" aria-label="Quick actions">
+              <select class="input" style="padding:2px 6px;font-size:.72rem;max-width:130px"
+                      onclick={(e) => e.preventDefault()}
+                      onchange={(e) => { e.preventDefault(); if (e.target.value) fileTo(d, e.target.value) }}>
+                <option value="">Refile…</option>
+                {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+              </select>
+              <button class="btn sm danger" title="Trash"
+                      onclick={(e) => { e.preventDefault(); e.stopPropagation(); trashOne(d) }}>
+                <Icon name="trash" size={12} /></button>
+            </span>
           {/if}
           <span class="sub">{fmtDate(d.created_at)}</span>
         </span>
       </a>
     {/each}
   </div>
+  {/if}
   {#if pages > 1}
     <div class="pager">
       <button class="btn sm" disabled={page <= 1} onclick={() => page--}>‹ Prev</button>
