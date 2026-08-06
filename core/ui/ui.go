@@ -554,6 +554,11 @@ func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
 			r.URL.Query().Get("reveal") != "1" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Sensitivity", sens.String)
+			// Never cache the gate response. If the operator later
+			// reclassifies the doc to lower sensitivity, a cached
+			// 202 would keep hiding it. Also blocks the same-etag
+			// 304 path that serveBlob emits for revealed bytes.
+			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(
 				`{"sensitivity":"` + sens.String + `",` +
@@ -686,10 +691,23 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
+	// ETag = content SHA-256 — blobs are content-addressed and
+	// immutable by construction, so the strong-validator is safe.
+	// Serves 304 Not Modified when the client re-requests, saving
+	// re-transfer on every list scroll and repeat preview.
+	// Sensitivity-gated 202 responses take a different branch above
+	// and stay Cache-Control: no-store so a later reveal isn't
+	// masked by a stale cached gate.
+	etag := `"` + pick + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size, 10))
 	fname := safeFilename(title.String, ".pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, fname))
-	w.Header().Set("Cache-Control", "private, max-age=300")
 	if _, err := io.Copy(w, rc); err != nil {
 		s.Log.Warn("ui.serveBlob.copy", "err", err.Error())
 	}

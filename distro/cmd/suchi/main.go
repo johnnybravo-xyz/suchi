@@ -543,13 +543,21 @@ func runServe() int {
 		httpx.SecFetchSite,
 	)
 
-	// Per-route rate limits: setup and login get their own bucket.
+	// Per-route rate limits. Every path that either takes a
+	// user-supplied secret (login, setup, share-link password) or
+	// mints one (token endpoints) gets throttled. GET /s/{token}
+	// verifies ?password= server-side so it needs the same guard as
+	// POST /api/login. The list here is the load-bearing complement
+	// to SECURITY.md's "Rate limits on auth endpoints" claim — any
+	// new secret-verifying handler must be added here.
 	rl := httpx.NewRateLimit(5, 10)
 	authRoutes := http.NewServeMux()
 	authRoutes.Handle("POST /setup", rl.Middleware(handler))
 	authRoutes.Handle("POST /bootstrap", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/login", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/token/", rl.Middleware(handler))
+	authRoutes.Handle("GET /s/{token}", rl.Middleware(handler))
+	authRoutes.Handle("GET /s/{token}/{doc_id}/download", rl.Middleware(handler))
 	// Anything else falls through to the un-limited handler.
 	authRoutes.Handle("/", handler)
 
