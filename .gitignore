@@ -26,6 +26,7 @@
 .env
 .env.*
 !.env.example
+!.env.sample
 
 # stray binary from ad-hoc `go build` calls
 /distro/suchi
