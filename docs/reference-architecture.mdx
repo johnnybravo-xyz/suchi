@@ -208,8 +208,8 @@ code change.
   own write. The dispatcher (`core/jobs`) polls, calls the
   subscribed handler, backs off on failure, parks dead-lettered
   jobs.
-- **What** — `post-ingest`, `render`, `workflow:advance`,
-  `workflow:resume`, `workflow:timeout-sweep`, `webhook:deliver`,
+- **What** — `post-ingest`, `render`, `approval:advance`,
+  `approval:resume`, `approval:timeout-sweep`, `webhook:deliver`,
   `post-classify`. Kinds are stable strings; adding a kind is
   additive.
 - **When** — every new step that reads the doc after ingest goes
@@ -371,8 +371,8 @@ code change.
 - **Why** — some flows need a person to click. "Finance must
   approve invoices > $10k before they land in the vault" is not
   a rule; it's a routing decision with a human in the middle.
-- **How** — `workflow_defs / workflow_runs / workflow_transitions /
-  workflow_tasks`; state-machine spec in JSON; advance/resume/
+- **How** — `approval_defs / approval_runs / approval_transitions /
+  approval_tasks`; state-machine spec in JSON; advance/resume/
   timeout-sweep jobs on the outbox for restart safety.
 - **What** — `/api/approvals/*` endpoints; state kinds are
   `approve` (spawns a task and parks), `end` (terminal),

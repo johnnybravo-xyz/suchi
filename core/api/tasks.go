@@ -30,11 +30,11 @@ type Task struct {
 
 // WorkflowTask is one human-in-the-loop approval row projected onto the
 // tasks surface. Shape is deliberately different from Task (jobs are
-// machine work; workflow tasks require a human choice), so the two live
+// machine work; approval tasks require a human choice), so the two live
 // side-by-side rather than being coerced into one struct.
 //
 // Mobile clients that only understand plain jobs can ignore the
-// workflow_tasks field entirely; the classic Results array is
+// approval_tasks field entirely; the classic Results array is
 // unchanged. suchi-native clients read both.
 type WorkflowTask struct {
 	ID         int64    `json:"id"`
@@ -61,7 +61,7 @@ type WorkflowTask struct {
 type TasksResponse struct {
 	Counts        map[string]int `json:"counts"`
 	Results       []Task         `json:"results"`
-	WorkflowTasks []WorkflowTask `json:"workflow_tasks,omitempty"`
+	WorkflowTasks []WorkflowTask `json:"approval_tasks,omitempty"`
 }
 
 // ListTasks serves GET /api/tasks/. Query params:
@@ -78,7 +78,7 @@ type TasksResponse struct {
 //
 // Workflow tasks are filtered to the caller's own assignee identity
 // ("user:<id>") — no cross-user visibility. Role-based dispatch is
-// resolved at workflow-advance time (see core/workflow's
+// resolved at approvals.advance time (see core/approvals's
 // AssigneeResolver), so an approver already sees their own tasks under
 // "user:<id>" here.
 func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +119,9 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if include != "jobs" && principal.UserID > 0 {
-		wtasks, open, err := s.workflowTasksForUser(r, principal.UserID, limit)
+		wtasks, open, err := s.approvalTasksForUser(r, principal.UserID, limit)
 		if err != nil {
-			s.Log.Error("api.tasks.workflow_query", "err", err.Error())
+			s.Log.Error("api.tasks.approvals_query", "err", err.Error())
 			// Non-fatal: jobs already loaded, degrade to jobs-only.
 		} else {
 			resp.WorkflowTasks = wtasks
@@ -213,24 +213,24 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix
 	return out, rows.Err()
 }
 
-// workflowTasksForUser returns open+claimed workflow_tasks whose
+// approvalTasksForUser returns open+claimed approval_tasks whose
 // assignee is the current user, plus the total open count for
-// "workflow_open" in Counts. The joined workflow_defs id is exposed as
+// "workflow_open" in Counts. The joined approval_defs id is exposed as
 // WorkflowID so a client can render "Invoice approval" without a second
 // round-trip to /api/approvals/{slug}.
 //
 // Assignee filter is exact: "user:<id>". Role-based assignees are
-// resolved to user rows at workflow-advance time (see
-// core/workflow.AssigneeResolver), so a role-scoped enterprise build
+// resolved to user rows at approvals.advance time (see
+// core/approvals.AssigneeResolver), so a role-scoped enterprise build
 // still surfaces the right rows here.
-func (s *Server) workflowTasksForUser(r *http.Request, userID int64, limit int) ([]WorkflowTask, int, error) {
+func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) ([]WorkflowTask, int, error) {
 	me := fmt.Sprintf("user:%d", userID)
 
 	q := `
 		SELECT t.id, t.run_id, r.def_id, t.state_key, t.assignee, t.prompt,
 		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at
-		FROM workflow_tasks t
-		JOIN workflow_runs r ON r.id = t.run_id
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
 		WHERE t.assignee = ? AND t.status IN ('open','claimed')
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT ?
@@ -269,7 +269,7 @@ func (s *Server) workflowTasksForUser(r *http.Request, userID int64, limit int) 
 	// when limit truncates the list.
 	var open int
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT COUNT(*) FROM workflow_tasks
+		SELECT COUNT(*) FROM approval_tasks
 		WHERE assignee = ? AND status = 'open'
 	`, me).Scan(&open)
 	if err != nil {

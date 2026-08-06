@@ -16,7 +16,7 @@ three are easy to mix up if you skim:
 | ------ | ------- | ---- | ------------ |
 | **Rules** | `core/classify/rules` | `/api/rules/` | Deterministic classifier: match on tag/correspondent/title/content, assign tags/correspondent/document_type/JD. One condition → one action. |
 | **Automations** | `core/automations` | `/api/automations/` | Trigger-driven multi-action orchestration: on `document_added` (etc.), filter, then run N actions in order. |
-| **Approvals** | `core/workflow` | `/api/approvals/` | Human-in-the-loop state machines: doc 17 needs manager sign-off, then finance, escalating on timeout. See [approvals](/approvals). |
+| **Approvals** | `core/approvals` | `/api/approvals/` | Human-in-the-loop state machines: doc 17 needs manager sign-off, then finance, escalating on timeout. See [approvals](/approvals). |
 
 If you're just tagging documents by keyword, use **rules** — they
 were built for that and they run on every post-ingest. If you need

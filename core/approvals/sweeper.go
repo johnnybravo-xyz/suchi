@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"context"
@@ -14,9 +14,9 @@ import (
 // second-precision deadlines are rare.
 const SweepInterval = 30 * time.Second
 
-// TimeoutSweep is called by the workflow:timeout-sweep subscriber. It:
+// TimeoutSweep is called by the approval:timeout-sweep subscriber. It:
 //  1. Finds every running run with deadline_at <= now.
-//  2. Enqueues workflow:advance{trigger:"timeout"} for each — the
+//  2. Enqueues approval:advance{trigger:"timeout"} for each — the
 //     handler for that state's Kind sees trigger and returns the
 //     "timeout" event, which On[] maps to the escalation state.
 //  3. Re-enqueues itself with run_after = now + SweepInterval.
@@ -26,7 +26,7 @@ const SweepInterval = 30 * time.Second
 func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	now := time.Now().Unix()
 	rows, err := e.db.Read.QueryContext(ctx, `
-		SELECT id FROM workflow_runs
+		SELECT id FROM approval_runs
 		WHERE state = 'running'
 		  AND deadline_at IS NOT NULL
 		  AND deadline_at <= ?
@@ -59,14 +59,14 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if err := jobs.Enqueue(ctx, tx, "workflow:advance", 0, string(payload)); err != nil {
+			if err := jobs.Enqueue(ctx, tx, "approval:advance", 0, string(payload)); err != nil {
 				return err
 			}
 			// Clear deadline so the next sweep pass doesn't fire again
 			// while the advance is queued. Handlers re-set deadline_at
 			// when they enter the next state.
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE workflow_runs SET deadline_at = NULL WHERE id = ?
+				UPDATE approval_runs SET deadline_at = NULL WHERE id = ?
 			`, id); err != nil {
 				return err
 			}
@@ -77,7 +77,7 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 		return err
 	}
 	if e.log != nil {
-		e.log.Info("workflow.sweep.fired", "count", len(due))
+		e.log.Info("approvals.sweep.fired", "count", len(due))
 	}
 	return e.rescheduleSweep(ctx)
 }
@@ -90,7 +90,7 @@ func (e *Engine) rescheduleSweep(ctx context.Context) error {
 		var n int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM jobs
-			WHERE kind = 'workflow:timeout-sweep' AND state = 'pending'
+			WHERE kind = 'approval:timeout-sweep' AND state = 'pending'
 		`).Scan(&n); err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func (e *Engine) rescheduleSweep(ctx context.Context) error {
 		next := time.Now().Add(SweepInterval).Unix()
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO jobs(kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-			VALUES ('workflow:timeout-sweep', NULL, '{}', 'pending', ?, ?, ?)
+			VALUES ('approval:timeout-sweep', NULL, '{}', 'pending', ?, ?, ?)
 		`, next, time.Now().Unix(), time.Now().Unix())
 		return err
 	})

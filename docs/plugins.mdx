@@ -355,7 +355,7 @@ the deployment convention every other pipeline stage uses. See
 | `core/pipeline/postingest` | `Subscriber` (`post-ingest`) | Deep-pipeline dispatch (many format branches in one) |
 | `core/pipeline/webhookdispatch` | `Subscriber` (`webhook:deliver`) | AEAD-sealed secret + retry semantics |
 | `core/render/view` | `Subscriber` (`render`) | Filesystem side-effects with reconcile-on-boot |
-| `core/workflow` | `Subscriber` (`workflow:advance|resume|timeout-sweep`) | State-machine engine with human-in-the-loop parking |
+| `core/approvals` | `Subscriber` (`approval:advance|resume|timeout-sweep`) | State-machine engine with human-in-the-loop parking |
 
 Each is a working example under 500 lines. Read one that matches your
 seam before writing your own.

@@ -1,6 +1,6 @@
 package api
 
-// Focused test for the workflow_tasks join surfaced through
+// Focused test for the approval_tasks join surfaced through
 // /api/tasks/. Exercises the SQL, the assignee filter, and the
 // open-count semantics. Full HTTP integration is covered indirectly by
 // the CLI smoke scripts under hack/.
@@ -36,7 +36,7 @@ func openTestDB(t *testing.T) *db.DB {
 	return d
 }
 
-// seedUser inserts a users row so workflow_defs.created_by FK is
+// seedUser inserts a users row so approval_defs.created_by FK is
 // satisfied. Idempotent per DB — called once from every seedWorkflowTask.
 func seedUser(t *testing.T, d *db.DB, id int64) {
 	t.Helper()
@@ -75,18 +75,18 @@ func seedWorkflowTask(t *testing.T, d *db.DB, assignee, status string) (defID, r
 
 	// A single shared def per DB — tests care about tasks, not defs. Upsert-on-slug.
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO workflow_defs(slug, version, spec_json, active, created_at, created_by)
+		INSERT OR IGNORE INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
 		VALUES ('t', 1, '{}', 1, 0, 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Read.QueryRowContext(ctx,
-		`SELECT id FROM workflow_defs WHERE slug='t' AND version=1`).Scan(&defID); err != nil {
+		`SELECT id FROM approval_defs WHERE slug='t' AND version=1`).Scan(&defID); err != nil {
 		t.Fatal(err)
 	}
 
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO workflow_runs(def_id, state, current_state, vars_json, state_entered_at, started_at)
+		INSERT INTO approval_runs(def_id, state, current_state, vars_json, state_entered_at, started_at)
 		VALUES (?, 'running', 'wait', '{}', 0, 0)
 	`, defID)
 	if err != nil {
@@ -95,7 +95,7 @@ func seedWorkflowTask(t *testing.T, d *db.DB, assignee, status string) (defID, r
 	runID, _ = res.LastInsertId()
 
 	res, err = d.Write.ExecContext(ctx, `
-		INSERT INTO workflow_tasks(run_id, state_key, assignee, prompt,
+		INSERT INTO approval_tasks(run_id, state_key, assignee, prompt,
 		                            choices_json, status, created_at)
 		VALUES (?, 'wait', ?, 'approve?', '["approve","reject"]', ?, 100)
 	`, runID, assignee, status)
@@ -116,7 +116,7 @@ func TestWorkflowTasksForUser_ScopedToAssignee(t *testing.T) {
 	_, _, _ = seedWorkflowTask(t, d, "user:6", "open")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.workflowTasksForUser(r, 5, 50)
+	tasks, open, err := s.approvalTasksForUser(r, 5, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestWorkflowTasksForUser_ExcludesResolved(t *testing.T) {
 	_, _, _ = seedWorkflowTask(t, d, "user:5", "expired")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.workflowTasksForUser(r, 5, 50)
+	tasks, open, err := s.approvalTasksForUser(r, 5, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestWorkflowTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
 	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.workflowTasksForUser(r, 5, 2)
+	tasks, open, err := s.approvalTasksForUser(r, 5, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

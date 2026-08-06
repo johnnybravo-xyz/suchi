@@ -1,6 +1,6 @@
 // /api/automations/ — CRUD over the trigger→conditions→actions engine
 // in core/automations. Distinct from the routing/sign-off state
-// machines at /api/approvals/ (backed by core/workflow).
+// machines at /api/approvals/ (backed by core/approvals).
 //
 // Body shape (create/update):
 //
