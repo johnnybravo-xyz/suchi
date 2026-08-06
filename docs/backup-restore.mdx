@@ -153,10 +153,14 @@ chown -R suchi:suchi /var/lib/suchi
 systemctl start suchi
 ```
 
-## CI-nightly restore drill
+## CI restore drill
 
-The `nightly-restore-drill` workflow (`.github/workflows/nightly-restore-drill.yml`)
-runs every day at 03:00 UTC. It:
+The `restore-drill` workflow (`.github/workflows/restore-drill.yml`)
+runs weekly (Sundays at 03:00 UTC) and can be triggered manually from
+the Actions tab (`workflow_dispatch`) after any backup, migration, or
+CAS-layout change. Cadence is weekly rather than nightly because the
+code paths this exercises only change with those subsystems — a daily
+run would burn CI minutes to re-prove yesterday's answer. It:
 
 1. Builds the current `suchi` binary.
 2. Boots it against a fresh `DATA_DIR` with `BACKUP_INTERVAL=1s`.
