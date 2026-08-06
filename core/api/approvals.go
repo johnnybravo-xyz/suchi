@@ -10,7 +10,7 @@ package api
 // workflow package owns that.
 //
 // URLs live under /api/approvals/*; the Go package stays
-// core/workflow/ because renaming it would touch dozens of files for
+// core/approvals/ because renaming it would touch dozens of files for
 // no functional gain.
 
 import (
@@ -21,34 +21,34 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/suchi-dms/suchi/core/approvals"
 	"github.com/suchi-dms/suchi/core/auth"
-	"github.com/suchi-dms/suchi/core/workflow"
 )
 
 // workflowSlugPattern constrains a workflow slug to identifier-ish
 // tokens. Keeps URLs safe + specs greppable.
 var workflowSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,63}$`)
 
-// registerWorkflow wires the /api/approvals/* routes. Called from
+// registerApprovals wires the /api/approvals/* routes. Called from
 // Register().
-func (s *Server) registerWorkflow(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/approvals", s.WorkflowRegister)
-	mux.HandleFunc("GET /api/approvals/{slug}", s.WorkflowGetDef)
-	mux.HandleFunc("POST /api/approvals/{slug}/start", s.WorkflowStart)
-	mux.HandleFunc("GET /api/approvals/runs/{id}", s.WorkflowGetRun)
-	mux.HandleFunc("POST /api/approvals/tasks/{task_id}/resolve", s.WorkflowResolveTask)
-	mux.HandleFunc("POST /api/approvals/runs/{id}/cancel", s.WorkflowCancel)
+func (s *Server) registerApprovals(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/approvals", s.ApprovalRegister)
+	mux.HandleFunc("GET /api/approvals/{slug}", s.ApprovalGetDef)
+	mux.HandleFunc("POST /api/approvals/{slug}/start", s.ApprovalStart)
+	mux.HandleFunc("GET /api/approvals/runs/{id}", s.ApprovalGetRun)
+	mux.HandleFunc("POST /api/approvals/tasks/{task_id}/resolve", s.ApprovalResolveTask)
+	mux.HandleFunc("POST /api/approvals/runs/{id}/cancel", s.ApprovalCancel)
 }
 
-// WorkflowRegister persists a Spec at a new version for the given
+// ApprovalRegister persists a Spec at a new version for the given
 // slug. Body: {"slug":"...", "spec": {...}}.
-func (s *Server) WorkflowRegister(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if workflow.Default() == nil {
+	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
-			"workflow engine not configured")
+			"approvals engine not configured")
 		return
 	}
 	var body struct {
@@ -69,7 +69,7 @@ func (s *Server) WorkflowRegister(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_spec", "spec is required")
 		return
 	}
-	var spec workflow.Spec
+	var spec approvals.Spec
 	if err := json.Unmarshal(body.Spec, &spec); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_spec_json", err.Error())
 		return
@@ -79,9 +79,9 @@ func (s *Server) WorkflowRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
-	id, err := workflow.Register(r.Context(), spec, body.Slug, actor)
+	id, err := approvals.Register(r.Context(), spec, body.Slug, actor)
 	if err != nil {
-		if errors.Is(err, workflow.ErrUnknownHandler) {
+		if errors.Is(err, approvals.ErrUnknownHandler) {
 			s.writeError(w, http.StatusBadRequest, "unknown_handler", err.Error())
 			return
 		}
@@ -94,8 +94,8 @@ func (s *Server) WorkflowRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// WorkflowGetDef returns the current active spec for slug.
-func (s *Server) WorkflowGetDef(w http.ResponseWriter, r *http.Request) {
+// ApprovalGetDef returns the current active spec for slug.
+func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 	if auth.FromContext(r.Context()) == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
 		return
@@ -112,7 +112,7 @@ func (s *Server) WorkflowGetDef(w http.ResponseWriter, r *http.Request) {
 	)
 	err := s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT id, version, spec_json
-		FROM workflow_defs
+		FROM approval_defs
 		WHERE slug = ? AND active = 1
 		ORDER BY version DESC LIMIT 1
 	`, slug).Scan(&id, &version, &specJSON)
@@ -120,7 +120,7 @@ func (s *Server) WorkflowGetDef(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "no_def", "no active workflow for slug")
 		return
 	}
-	var spec workflow.Spec
+	var spec approvals.Spec
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		s.serverErr(w, "workflow.getdef.decode", err)
 		return
@@ -133,17 +133,17 @@ func (s *Server) WorkflowGetDef(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// WorkflowStart kicks off a run for slug against doc_id. Body:
+// ApprovalStart kicks off a run for slug against doc_id. Body:
 // {"doc_id":N, "vars":{...}}. Any authenticated member.
-func (s *Server) WorkflowStart(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context())
 	if actor == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
 		return
 	}
-	if workflow.Default() == nil {
+	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
-			"workflow engine not configured")
+			"approvals engine not configured")
 		return
 	}
 	slug := strings.ToLower(r.PathValue("slug"))
@@ -163,9 +163,9 @@ func (s *Server) WorkflowStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_doc_id", "doc_id must be non-negative")
 		return
 	}
-	runID, err := workflow.Start(r.Context(), slug, body.DocID, body.Vars, actor)
+	runID, err := approvals.Start(r.Context(), slug, body.DocID, body.Vars, actor)
 	if err != nil {
-		if errors.Is(err, workflow.ErrNoDef) {
+		if errors.Is(err, approvals.ErrNoDef) {
 			s.writeError(w, http.StatusNotFound, "no_def", err.Error())
 			return
 		}
@@ -179,15 +179,15 @@ func (s *Server) WorkflowStart(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, map[string]any{"run_id": runID})
 }
 
-// WorkflowGetRun returns run + transitions + open tasks.
-func (s *Server) WorkflowGetRun(w http.ResponseWriter, r *http.Request) {
+// ApprovalGetRun returns run + transitions + open tasks.
+func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	if auth.FromContext(r.Context()) == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
 		return
 	}
-	if workflow.Default() == nil {
+	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
-			"workflow engine not configured")
+			"approvals engine not configured")
 		return
 	}
 	id, err := parseID(r.PathValue("id"))
@@ -195,16 +195,16 @@ func (s *Server) WorkflowGetRun(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be a positive integer")
 		return
 	}
-	run, tasks, err := workflow.GetRun(r.Context(), id)
+	run, tasks, err := approvals.GetRun(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, workflow.ErrNoRun) {
+		if errors.Is(err, approvals.ErrNoRun) {
 			s.writeError(w, http.StatusNotFound, "no_run", "run not found")
 			return
 		}
 		s.serverErr(w, "workflow.getrun", err)
 		return
 	}
-	transitions, err := workflow.Default().ListTransitions(r.Context(), id)
+	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
 	if err != nil {
 		s.serverErr(w, "workflow.getrun.transitions", err)
 		return
@@ -216,17 +216,17 @@ func (s *Server) WorkflowGetRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// WorkflowResolveTask marks a task done. Body: {"choice":"approve","note":"..."}.
+// ApprovalResolveTask marks a task done. Body: {"choice":"approve","note":"..."}.
 // Principal must be the assignee or an admin.
-func (s *Server) WorkflowResolveTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context())
 	if actor == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
 		return
 	}
-	if workflow.Default() == nil {
+	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
-			"workflow engine not configured")
+			"approvals engine not configured")
 		return
 	}
 	taskID, err := parseID(r.PathValue("task_id"))
@@ -234,9 +234,14 @@ func (s *Server) WorkflowResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "task_id must be a positive integer")
 		return
 	}
+	// Body accepts either {choice} (server-native, matches
+	// state.choices vocab) or {decision} (mobile/SPA compat spelling).
+	// Choice wins when both are present so a client migrating to the
+	// canonical field has predictable behavior.
 	var body struct {
-		Choice string `json:"choice"`
-		Note   string `json:"note"`
+		Choice   string `json:"choice"`
+		Decision string `json:"decision"`
+		Note     string `json:"note"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -244,18 +249,22 @@ func (s *Server) WorkflowResolveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Choice = strings.TrimSpace(body.Choice)
 	if body.Choice == "" {
-		s.writeError(w, http.StatusBadRequest, "missing_choice", "choice is required")
+		body.Choice = strings.TrimSpace(body.Decision)
+	}
+	if body.Choice == "" {
+		s.writeError(w, http.StatusBadRequest, "missing_choice",
+			"choice (or decision) is required")
 		return
 	}
-	if err := workflow.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {
+	if err := approvals.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {
 		switch {
-		case errors.Is(err, workflow.ErrNoTask):
+		case errors.Is(err, approvals.ErrNoTask):
 			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
-		case errors.Is(err, workflow.ErrTaskResolved):
+		case errors.Is(err, approvals.ErrTaskResolved):
 			s.writeError(w, http.StatusConflict, "already_resolved", "task already resolved")
-		case errors.Is(err, workflow.ErrBadChoice):
+		case errors.Is(err, approvals.ErrBadChoice):
 			s.writeError(w, http.StatusBadRequest, "bad_choice", "choice not in task.choices")
-		case errors.Is(err, workflow.ErrForbidden):
+		case errors.Is(err, approvals.ErrForbidden):
 			s.writeError(w, http.StatusForbidden, "forbidden", "not this task's assignee")
 		default:
 			s.serverErr(w, "workflow.resolve", err)
@@ -268,15 +277,15 @@ func (s *Server) WorkflowResolveTask(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// WorkflowCancel stops a running run. Admin-only for now — cancelling
+// ApprovalCancel stops a running run. Admin-only for now — cancelling
 // someone else's workflow is a privileged action.
-func (s *Server) WorkflowCancel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if workflow.Default() == nil {
+	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
-			"workflow engine not configured")
+			"approvals engine not configured")
 		return
 	}
 	id, err := parseID(r.PathValue("id"))
@@ -290,11 +299,11 @@ func (s *Server) WorkflowCancel(w http.ResponseWriter, r *http.Request) {
 	// Reason is optional; empty body is fine.
 	_ = decodeJSON(r, &body)
 	actor := auth.FromContext(r.Context())
-	if err := workflow.Cancel(r.Context(), id, body.Reason, actor); err != nil {
+	if err := approvals.Cancel(r.Context(), id, body.Reason, actor); err != nil {
 		switch {
-		case errors.Is(err, workflow.ErrNoRun):
+		case errors.Is(err, approvals.ErrNoRun):
 			s.writeError(w, http.StatusNotFound, "no_run", "run not found")
-		case errors.Is(err, workflow.ErrRunTerminal):
+		case errors.Is(err, approvals.ErrRunTerminal):
 			s.writeError(w, http.StatusConflict, "terminal", "run already in terminal state")
 		default:
 			s.serverErr(w, "workflow.cancel", err)

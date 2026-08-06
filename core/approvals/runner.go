@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/jobs"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 )
@@ -21,7 +22,7 @@ func (e *Engine) Register(ctx context.Context, spec Spec, slug string, actor *pl
 	// Handler-kind cross-check — validate() alone can't see the registry.
 	for key, st := range spec.States {
 		if _, ok := e.reg.Get(st.Kind); !ok {
-			return 0, fmt.Errorf("workflow.register: state %q has unregistered kind %q (%w)",
+			return 0, fmt.Errorf("approvals.register: state %q has unregistered kind %q (%w)",
 				key, st.Kind, ErrUnknownHandler)
 		}
 	}
@@ -46,7 +47,7 @@ func (e *Engine) Register(ctx context.Context, spec Spec, slug string, actor *pl
 }
 
 // Start kicks off a run for the current active def of slug, targeting
-// docID. Returns the new run_id. Enqueues a workflow:advance job in
+// docID. Returns the new run_id. Enqueues a approval:advance job in
 // the same tx so the first state fires right after commit.
 func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
 	d, err := activeDefBySlug(ctx, e.db.Read, slug)
@@ -55,11 +56,11 @@ func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[s
 	}
 	spec, err := DecodeSpec(d.SpecJSON)
 	if err != nil {
-		return 0, fmt.Errorf("workflow.start: decode spec: %w", err)
+		return 0, fmt.Errorf("approvals.start: decode spec: %w", err)
 	}
 	startState, ok := spec.States[spec.Start]
 	if !ok {
-		return 0, fmt.Errorf("workflow.start: start state %q missing", spec.Start)
+		return 0, fmt.Errorf("approvals.start: start state %q missing", spec.Start)
 	}
 	var startedBy int64
 	if actor != nil {
@@ -87,20 +88,20 @@ func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[s
 		return 0, err
 	}
 	if e.log != nil {
-		e.log.Info("workflow.start", "run_id", runID, "def_id", d.ID, "slug", slug, "doc_id", docID)
+		e.log.Info("approvals.start", "run_id", runID, "def_id", d.ID, "slug", slug, "doc_id", docID)
 	}
 	return runID, nil
 }
 
 // Advance runs one step of the machine for runID. Called by the
-// workflow:advance subscriber; trigger is the event key ("", "timeout",
+// approval:advance subscriber; trigger is the event key ("", "timeout",
 // "approve", "reject", <custom>).
 //
 // Contract:
 //  1. Load run + def; refuse if terminal.
 //  2. Look up handler for current state's Kind.
 //  3. Call Handle(ctx, run, state, trigger).
-//  4. If handler returns Task != nil → insert workflow_tasks row, park.
+//  4. If handler returns Task != nil → insert approval_tasks row, park.
 //  5. If handler returns Event != "" → resolve to next state via
 //     state.On[event]; write transition; update run; if next kind is
 //     "end", finalize; else enqueue advance("") to drive the next step.
@@ -115,7 +116,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	if run.Status != "running" {
 		if e.log != nil {
-			e.log.Info("workflow.advance.skip_terminal", "run_id", runID, "status", run.Status)
+			e.log.Info("approvals.advance.skip_terminal", "run_id", runID, "status", run.Status)
 		}
 		return nil // idempotent: the job is done
 	}
@@ -129,7 +130,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	state, ok := spec.States[run.CurrentState]
 	if !ok {
-		return fmt.Errorf("workflow.advance: run %d in unknown state %q", runID, run.CurrentState)
+		return fmt.Errorf("approvals.advance: run %d in unknown state %q", runID, run.CurrentState)
 	}
 	// Terminal state — nothing to do beyond finalizing.
 	if state.Kind == "end" {
@@ -142,7 +143,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	h, ok := e.reg.Get(state.Kind)
 	if !ok {
-		return fmt.Errorf("workflow.advance: state %q kind %q: %w",
+		return fmt.Errorf("approvals.advance: state %q kind %q: %w",
 			run.CurrentState, state.Kind, ErrUnknownHandler)
 	}
 	res, err := h.Handle(ctx, run, state, trigger)
@@ -168,32 +169,53 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 			v := time.Now().Add(time.Duration(secs) * time.Second).Unix()
 			deadline = &v
 		}
-		return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var taskID int64
+		if err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
 			// Refresh deadline_at on the run so the sweeper can find it.
 			if _, err := tx.ExecContext(ctx, `
-				UPDATE workflow_runs SET deadline_at = ? WHERE id = ?
+				UPDATE approval_runs SET deadline_at = ? WHERE id = ?
 			`, deadlineArg(deadline), runID); err != nil {
 				return err
 			}
-			_, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+			id, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+			if err != nil {
+				return err
+			}
+			taskID = id
+			return nil
+		}); err != nil {
 			return err
+		}
+		// Notification feed: audit outside the tx (audit.Log opens
+		// its own WriteTx; nesting on the single-writer pool would
+		// self-deadlock). doc_id is copied out of the run so the
+		// event summary can reference the doc the task is about.
+		audit.Log(ctx, e.db, e.log, audit.Event{
+			Action: "approval.task_created", ObjectKind: "workflow_task", ObjectID: taskID,
+			After: map[string]any{
+				"run_id":   runID,
+				"assignee": res.Task.Assignee,
+				"prompt":   res.Task.Prompt,
+				"doc_id":   run.DocID,
+			},
 		})
+		return nil
 	}
 	// Park without task — waiting on external trigger, no state change.
 	if res.Event == "" {
 		if e.log != nil {
-			e.log.Info("workflow.advance.park", "run_id", runID, "state", run.CurrentState)
+			e.log.Info("approvals.advance.park", "run_id", runID, "state", run.CurrentState)
 		}
 		return nil
 	}
 	next, ok := state.On[res.Event]
 	if !ok {
-		return fmt.Errorf("workflow.advance: state %q has no on[%q] mapping: %w",
+		return fmt.Errorf("approvals.advance: state %q has no on[%q] mapping: %w",
 			run.CurrentState, res.Event, ErrBadTransition)
 	}
 	nextState, ok := spec.States[next]
 	if !ok {
-		return fmt.Errorf("workflow.advance: on[%q] -> unknown state %q: %w",
+		return fmt.Errorf("approvals.advance: on[%q] -> unknown state %q: %w",
 			res.Event, next, ErrBadTransition)
 	}
 	// Merge vars.
@@ -225,7 +247,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 		return err
 	}
 	if e.log != nil {
-		e.log.Info("workflow.advance.transition",
+		e.log.Info("approvals.advance.transition",
 			"run_id", runID, "from", run.CurrentState, "to", next, "event", res.Event)
 	}
 	return nil
@@ -273,7 +295,7 @@ func (e *Engine) Resolve(ctx context.Context, taskID int64, choice string, actor
 		return err
 	}
 	if e.log != nil {
-		e.log.Info("workflow.resolve", "task_id", taskID, "run_id", t.RunID,
+		e.log.Info("approvals.resolve", "task_id", taskID, "run_id", t.RunID,
 			"choice", choice, "actor", actorTag)
 	}
 	return nil
@@ -327,7 +349,7 @@ func (e *Engine) ListTransitions(ctx context.Context, runID int64) ([]Transition
 
 // ---------- helpers ----------
 
-// enqueueAdvance queues a workflow:advance job with an empty trigger.
+// enqueueAdvance queues a approval:advance job with an empty trigger.
 // Used at start and after each non-terminal transition.
 func enqueueAdvance(ctx context.Context, tx *sql.Tx, runID int64, trigger string) error {
 	return enqueueAdvanceWithTrigger(ctx, tx, runID, trigger)
@@ -339,7 +361,7 @@ func enqueueAdvanceWithTrigger(ctx context.Context, tx *sql.Tx, runID int64, tri
 	if err != nil {
 		return err
 	}
-	return jobs.Enqueue(ctx, tx, "workflow:advance", 0, string(b))
+	return jobs.Enqueue(ctx, tx, "approval:advance", 0, string(b))
 }
 
 // mergeVars returns a fresh map that is base + overrides. Overrides

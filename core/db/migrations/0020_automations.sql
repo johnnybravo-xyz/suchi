@@ -1,10 +1,13 @@
 -- 0020_automations: trigger→conditions→actions engine for document
--- automations. Distinct from the state-machine workflow engine in
--- 0016_workflow.sql (which handles routing/approval): this one fires
+-- automations. Distinct from the state-machine approvals engine in
+-- 0016_workflow.sql (renamed to approval_* by 0022): this one fires
 -- on job events and applies bulk metadata operations.
 --
--- Named for what they do; the sibling engine at core/workflow/ owns
--- the state-machine "approvals" surface (routing/sign-off).
+-- Named for what they do; the sibling engine at core/approvals/ owns
+-- the state-machine "approvals" surface (routing/sign-off). The tables
+-- this migration defines (workflows, workflow_triggers, workflow_actions)
+-- retain the "workflow" prefix because those names are the paperless-ngx
+-- compat surface — mobile clients speak that vocabulary.
 -- URLs: /api/automations/ (this) vs /api/approvals/ (state-machine).
 --
 -- Shape:

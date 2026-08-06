@@ -1,4 +1,4 @@
-package workflow_test
+package approvals_test
 
 import (
 	"context"
@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/suchi-dms/suchi/core/approvals"
 	"github.com/suchi-dms/suchi/core/db"
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
-	"github.com/suchi-dms/suchi/core/workflow"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 )
 
 // setupDB brings up a fresh SQLite with every migration applied plus a
-// throwaway admin user (users.id=1) so workflow_defs FK constraints
+// throwaway admin user (users.id=1) so approval_defs FK constraints
 // pass. Mirrors settings/settings_test.go's pattern.
 func setupDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -36,7 +36,7 @@ func setupDB(t *testing.T) *db.DB {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	// Seed a user so workflow_defs.created_by FK is satisfied.
+	// Seed a user so approval_defs.created_by FK is satisfied.
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 		_, err := tx.ExecContext(ctx, `
@@ -51,18 +51,18 @@ func setupDB(t *testing.T) *db.DB {
 	return d
 }
 
-func newEngine(t *testing.T) *workflow.Engine {
+func newEngine(t *testing.T) *approvals.Engine {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return workflow.New(setupDB(t), log)
+	return approvals.New(setupDB(t), log)
 }
 
 // ---------- Spec.Validate ----------
 
 func TestSpecValidate_Ok(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "system", On: map[string]string{"success": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -73,7 +73,7 @@ func TestSpecValidate_Ok(t *testing.T) {
 }
 
 func TestSpecValidate_MissingStart(t *testing.T) {
-	s := workflow.Spec{States: map[string]workflow.State{
+	s := approvals.Spec{States: map[string]approvals.State{
 		"a": {Kind: "end"},
 	}}
 	if err := s.Validate(); err == nil {
@@ -82,9 +82,9 @@ func TestSpecValidate_MissingStart(t *testing.T) {
 }
 
 func TestSpecValidate_StartNotInStates(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "ghost",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "end"},
 		},
 	}
@@ -95,16 +95,16 @@ func TestSpecValidate_StartNotInStates(t *testing.T) {
 }
 
 func TestSpecValidate_EmptyStates(t *testing.T) {
-	s := workflow.Spec{Start: "a"}
+	s := approvals.Spec{Start: "a"}
 	if err := s.Validate(); err == nil {
 		t.Fatal("expected error for empty states map")
 	}
 }
 
 func TestSpecValidate_BadStateKey(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "1bad",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"1bad": {Kind: "end"},
 		},
 	}
@@ -114,9 +114,9 @@ func TestSpecValidate_BadStateKey(t *testing.T) {
 }
 
 func TestSpecValidate_EmptyKind(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {},
 		},
 	}
@@ -126,9 +126,9 @@ func TestSpecValidate_EmptyKind(t *testing.T) {
 }
 
 func TestSpecValidate_NegativeTimeout(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "end", TimeoutSec: -1},
 		},
 	}
@@ -138,9 +138,9 @@ func TestSpecValidate_NegativeTimeout(t *testing.T) {
 }
 
 func TestSpecValidate_BadAssignee(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {
 				Kind:     "approve",
 				Assignee: "bob",
@@ -157,9 +157,9 @@ func TestSpecValidate_BadAssignee(t *testing.T) {
 }
 
 func TestSpecValidate_ApproveWithoutAssignee(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "approve", Choices: []string{"approve"}, On: map[string]string{"approve": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -170,9 +170,9 @@ func TestSpecValidate_ApproveWithoutAssignee(t *testing.T) {
 }
 
 func TestSpecValidate_ApproveWithoutChoices(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "approve", Assignee: "user:1", On: map[string]string{"approve": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -183,9 +183,9 @@ func TestSpecValidate_ApproveWithoutChoices(t *testing.T) {
 }
 
 func TestSpecValidate_ApproveChoiceWithoutTransition(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {
 				Kind:     "approve",
 				Assignee: "user:1",
@@ -202,9 +202,9 @@ func TestSpecValidate_ApproveChoiceWithoutTransition(t *testing.T) {
 }
 
 func TestSpecValidate_TransitionToUnknownState(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "system", On: map[string]string{"success": "ghost"}},
 		},
 	}
@@ -215,9 +215,9 @@ func TestSpecValidate_TransitionToUnknownState(t *testing.T) {
 }
 
 func TestSpecValidate_EndWithTransitions(t *testing.T) {
-	s := workflow.Spec{
+	s := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "end", On: map[string]string{"success": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -230,9 +230,9 @@ func TestSpecValidate_EndWithTransitions(t *testing.T) {
 // ---------- EncodeSpec/DecodeSpec roundtrip ----------
 
 func TestSpecEncodeDecodeRoundtrip(t *testing.T) {
-	in := workflow.Spec{
+	in := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {
 				Kind:       "approve",
 				Assignee:   "role:finance",
@@ -246,11 +246,11 @@ func TestSpecEncodeDecodeRoundtrip(t *testing.T) {
 			"c": {Kind: "end"},
 		},
 	}
-	raw, err := workflow.EncodeSpec(in)
+	raw, err := approvals.EncodeSpec(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := workflow.DecodeSpec(raw)
+	out, err := approvals.DecodeSpec(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestSpecEncodeDecodeRoundtrip(t *testing.T) {
 
 func TestEngineRegister_RejectsInvalidSpec(t *testing.T) {
 	e := newEngine(t)
-	_, err := e.Register(context.Background(), workflow.Spec{Start: "ghost"}, "bad", adminPrincipal())
+	_, err := e.Register(context.Background(), approvals.Spec{Start: "ghost"}, "bad", adminPrincipal())
 	if err == nil {
 		t.Fatal("expected validate to reject bad spec")
 	}
@@ -278,9 +278,9 @@ func TestEngineRegister_RejectsInvalidSpec(t *testing.T) {
 func TestEngineRegister_RejectsUnknownHandler(t *testing.T) {
 	e := newEngine(t)
 	// Kind "does-not-exist" isn't registered — Register should refuse.
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "does-not-exist", On: map[string]string{"success": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -294,9 +294,9 @@ func TestEngineRegister_RejectsUnknownHandler(t *testing.T) {
 func TestEngineRegister_VersionsBumpPerSlug(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "a",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"a": {Kind: "system", On: map[string]string{"success": "b"}},
 			"b": {Kind: "end"},
 		},
@@ -320,7 +320,7 @@ func TestEngineStart_NoDef(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ErrNoDef")
 	}
-	if err != workflow.ErrNoDef {
+	if err != approvals.ErrNoDef {
 		t.Fatalf("expected ErrNoDef, got %v", err)
 	}
 }
@@ -328,9 +328,9 @@ func TestEngineStart_NoDef(t *testing.T) {
 func TestEngineStart_CreatesRun(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "wait",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"wait": {
 				Kind:     "approve",
 				Assignee: "user:1",
@@ -368,9 +368,9 @@ func TestEngineStart_CreatesRun(t *testing.T) {
 func TestEngineResolve_RejectsBadChoice(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "wait",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"wait": {
 				Kind:     "approve",
 				Assignee: "user:1",
@@ -400,7 +400,7 @@ func TestEngineResolve_RejectsBadChoice(t *testing.T) {
 		t.Fatalf("expected one task after advance, got %d", len(tasks))
 	}
 	err = e.Resolve(ctx, tasks[0].ID, "not-a-choice", adminPrincipal())
-	if err != workflow.ErrBadChoice {
+	if err != approvals.ErrBadChoice {
 		t.Fatalf("want ErrBadChoice, got %v", err)
 	}
 }
@@ -408,7 +408,7 @@ func TestEngineResolve_RejectsBadChoice(t *testing.T) {
 func TestEngineResolve_UnknownTask(t *testing.T) {
 	e := newEngine(t)
 	err := e.Resolve(context.Background(), 9999, "approve", adminPrincipal())
-	if err != workflow.ErrNoTask {
+	if err != approvals.ErrNoTask {
 		t.Fatalf("want ErrNoTask, got %v", err)
 	}
 }
@@ -416,17 +416,17 @@ func TestEngineResolve_UnknownTask(t *testing.T) {
 func TestEngineCancel_UnknownRun(t *testing.T) {
 	e := newEngine(t)
 	err := e.Cancel(context.Background(), 9999, "gone", adminPrincipal())
-	if err != workflow.ErrNoRun {
+	if err != approvals.ErrNoRun {
 		t.Fatalf("want ErrNoRun, got %v", err)
 	}
 }
 
 func TestDefault_UnsetErrors(t *testing.T) {
 	// Ensure any prior test that ran SetDefault is cleared. Package
-	// singleton is deliberate — see workflow.SetDefault docstring.
-	workflow.SetDefault(nil)
-	_, err := workflow.Start(context.Background(), "x", 0, nil, adminPrincipal())
-	if err != workflow.ErrEngineNotConfigured {
+	// singleton is deliberate — see approvals.SetDefault docstring.
+	approvals.SetDefault(nil)
+	_, err := approvals.Start(context.Background(), "x", 0, nil, adminPrincipal())
+	if err != approvals.ErrEngineNotConfigured {
 		t.Fatalf("want ErrEngineNotConfigured, got %v", err)
 	}
 }
@@ -444,14 +444,14 @@ func adminPrincipal() *pluginapi.Principal {
 //
 // The subscriber isn't wired here — we drive Advance directly to stand
 // in for what the outbox would do. The engine's contract is that
-// Resolve enqueues a workflow:advance{trigger:choice} job; we skip the
+// Resolve enqueues a approval:advance{trigger:choice} job; we skip the
 // jobs table and call Advance with the same trigger.
 func TestEngineResolve_HappyPath(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "wait",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"wait": {
 				Kind:     "approve",
 				Assignee: "user:1",
@@ -504,15 +504,15 @@ func TestEngineResolve_HappyPath(t *testing.T) {
 }
 
 // TestEngineTimeoutSweep verifies the deadline path: a run whose
-// deadline_at is in the past gets a workflow:advance{trigger:"timeout"}
+// deadline_at is in the past gets a approval:advance{trigger:"timeout"}
 // enqueued and its deadline_at cleared so the next sweep doesn't
 // double-fire. This backs the review's "plus timeout path" ask.
 func TestEngineTimeoutSweep(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "wait",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"wait": {
 				Kind:       "approve",
 				Assignee:   "user:1",
@@ -544,7 +544,7 @@ func TestEngineTimeoutSweep(t *testing.T) {
 	// out; we clobber to now-60s.
 	past := time.Now().Add(-time.Minute).Unix()
 	if _, err := e.DB().Write.ExecContext(ctx,
-		`UPDATE workflow_runs SET deadline_at = ? WHERE id = ?`, past, runID); err != nil {
+		`UPDATE approval_runs SET deadline_at = ? WHERE id = ?`, past, runID); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.TimeoutSweep(ctx); err != nil {
@@ -555,7 +555,7 @@ func TestEngineTimeoutSweep(t *testing.T) {
 		deadline sql.NullInt64
 	)
 	if err := e.DB().Read.QueryRow(
-		`SELECT payload FROM jobs WHERE kind='workflow:advance' AND state='pending' ORDER BY id DESC LIMIT 1`).
+		`SELECT payload FROM jobs WHERE kind='approval:advance' AND state='pending' ORDER BY id DESC LIMIT 1`).
 		Scan(&payload); err != nil {
 		t.Fatalf("advance not enqueued: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestEngineTimeoutSweep(t *testing.T) {
 		t.Errorf("advance payload = %s, want trigger=timeout", payload)
 	}
 	if err := e.DB().Read.QueryRow(
-		`SELECT deadline_at FROM workflow_runs WHERE id = ?`, runID).Scan(&deadline); err != nil {
+		`SELECT deadline_at FROM approval_runs WHERE id = ?`, runID).Scan(&deadline); err != nil {
 		t.Fatal(err)
 	}
 	if deadline.Valid {

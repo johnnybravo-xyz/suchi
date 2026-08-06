@@ -1,8 +1,14 @@
 // Package blob is the content-addressed store.
 //
-// One implementation, filesystem-backed, sharded two levels deep:
+// One implementation, filesystem-backed, sharded three levels deep:
 //
-//	$DATA_DIR/blobs/sha256/ab/cd/abcd...ff
+//	$DATA_DIR/blobs/sha256/ab/cd/ef/abcdef...ff
+//
+// Three levels caps any single directory at ~4k entries even with
+// millions of blobs — matters on ext4/xfs where a single directory
+// with hundreds of thousands of entries turns O(1) opens into O(N)
+// disk seeks, and matters for backup tooling (rsync, restic) that
+// walks the tree.
 //
 // Writes stream through sha256 and land via atomic rename from a
 // per-put temp file in the same sharded directory (so the rename is
@@ -187,10 +193,11 @@ func (c *CAS) List(fn func(pluginapi.BlobRef) error) error {
 	})
 }
 
-// path returns the sharded path for a hash. Never called on user input
-// without validHash first.
+// path returns the sharded path for a hash under the current
+// three-level layout. Never called on user input without validHash
+// first.
 func (c *CAS) path(sum string) string {
-	return filepath.Join(c.root, sum[0:2], sum[2:4], sum)
+	return filepath.Join(c.root, sum[0:2], sum[2:4], sum[4:6], sum)
 }
 
 // validHash checks that a string is exactly 64 lower-case hex chars.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/suchi-dms/suchi/core/api"
+	"github.com/suchi-dms/suchi/core/approvals"
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
 	"github.com/suchi-dms/suchi/core/backup"
@@ -43,7 +44,6 @@ import (
 	"github.com/suchi-dms/suchi/core/render/view"
 	"github.com/suchi-dms/suchi/core/settings"
 	"github.com/suchi-dms/suchi/core/ui"
-	"github.com/suchi-dms/suchi/core/workflow"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 	llmclassifier "github.com/suchi-dms/suchi/plugins/llm-classifier"
 
@@ -362,15 +362,15 @@ func runServe() int {
 	}
 	// Workflow engine — state-machine core over the durable outbox. The
 	// engine itself is a small runtime object; the subscriber wraps it
-	// so workflow:advance / workflow:resume / workflow:timeout-sweep
+	// so approval:advance / workflow:resume / approval:timeout-sweep
 	// jobs route to Engine.Advance / Engine.TimeoutSweep. SetDefault
 	// hands the API layer a package-level handle so /api/approvals/*
 	// works without threading the engine through every handler.
-	wfEngine := workflow.New(d, log)
-	workflow.SetDefault(wfEngine)
-	disp.Register(workflow.NewSubscriber(wfEngine))
+	wfEngine := approvals.New(d, log)
+	approvals.SetDefault(wfEngine)
+	disp.Register(approvals.NewSubscriber(wfEngine))
 	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
-		log.Warn("workflow.sweep.schedule_failed", "err", err.Error())
+		log.Warn("approvals.sweep.schedule_failed", "err", err.Error())
 	}
 	// Reap orphaned running-state jobs from a prior crashed process
 	// before starting the loop. See jobs.ReclaimOrphaned; agent:*
@@ -386,9 +386,10 @@ func runServe() int {
 	// external code review flagged it. Disabled by
 	// BACKUP_INTERVAL=0.
 	go backup.Loop(ctx, backup.Config{
-		DataDir:  cfg.DataDir,
-		Interval: cfg.BackupInterval,
-		Keep:     cfg.BackupKeep,
+		DataDir:            cfg.DataDir,
+		Interval:           cfg.BackupInterval,
+		Keep:               cfg.BackupKeep,
+		AuditRetentionDays: cfg.AuditRetentionDays,
 	}, d, log)
 
 	// fs-watch: staging-dir producer. Idle unless the resolved owner
@@ -480,6 +481,33 @@ func runServe() int {
 	} else {
 		log.Info("main.ui.disabled",
 			"reason", "SUCHI_UI_DISABLED — headless mode, /api/ only")
+	}
+
+	// Headless deploys (SUCHI_UI_DISABLED=1) still need blob access
+	// for agents. The UI-package handlers implement the sensitivity
+	// gate + ETag + sandbox CSP, so we mount them on /api paths
+	// alongside their /preview and /download aliases when the UI is
+	// enabled. When UI is off, the same handlers are constructed
+	// against a UI server that never gets Register()'d — the /api
+	// mirror stays live.
+	{
+		blobSrv, berr := ui.New(d, cas, nil, log)
+		if berr != nil {
+			log.Error("main.blobsrv.new", "err", berr.Error())
+			return 1
+		}
+		requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				if auth.FromContext(r.Context()) == nil {
+					http.Error(w, `{"error":"auth required","code":"unauthorized"}`,
+						http.StatusUnauthorized)
+					return
+				}
+				next(w, r)
+			}
+		}
+		mux.HandleFunc("GET /api/documents/{id}/preview", requireAuth(blobSrv.Preview))
+		mux.HandleFunc("GET /api/documents/{id}/download", requireAuth(blobSrv.Download))
 	}
 
 	// JSON API surface (/api/*). Attach the dispatcher so upload

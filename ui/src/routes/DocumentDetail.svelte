@@ -1,5 +1,5 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listJDCategories } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listJDCategories, fetchBlobURL, previewPath, downloadToDisk } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -14,6 +14,8 @@
   let titleDraft = $state('')
   let shareURL = $state('')
   let jdCats = $state([])
+  let previewURL = $state('')
+  let previewErr = $state('')
 
   const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
   const areaGroups = $derived.by(() => {
@@ -26,11 +28,23 @@
     return [...m.values()].sort((a, b) => a.lo - b.lo)
   })
 
+  async function loadPreview() {
+    previewErr = ''
+    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = '' }
+    try {
+      const b = await fetchBlobURL(previewPath(id) + (revealed ? '?reveal=1' : ''))
+      // sensitivity gate answers 202 JSON; the blurred overlay handles that case
+      if (b.type.includes('json')) { previewURL = ''; return }
+      previewURL = b.url
+    } catch (ex) { previewErr = ex.message || 'preview unavailable' }
+  }
+
   async function load() {
     err = ''
     try {
       doc = await getDocument(id)
       titleDraft = doc.title
+      loadPreview()
       documentVersions(id).then(v => (versions = v?.results || v || [])).catch(() => {})
       listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
     } catch (ex) { err = ex.message || 'Could not load this document.' }
@@ -61,13 +75,15 @@
     catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
 
-  $effect(() => { id; load() })
+  $effect(() => { id; revealed = false; load() })
+  $effect(() => { if (revealed) loadPreview() })
+  $effect(() => () => { if (previewURL) URL.revokeObjectURL(previewURL) })
 </script>
 
 <div class="toolbar">
   <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
   <span class="spacer"></span>
-  <a class="btn sm" href={`/download/${id}`} target="_blank" rel="noopener"><Icon name="download" size={13} /> Download</a>
+  <button class="btn sm" onclick={() => downloadToDisk(id, doc?.title)}><Icon name="download" size={13} /> Download</button>
   <button class="btn sm" onclick={share}><Icon name="link" size={13} /> Share</button>
   <button class="btn sm danger" onclick={trash}><Icon name="trash" size={13} /> Trash</button>
 </div>
@@ -77,7 +93,13 @@
 {#if doc}
   <div class="detail">
     <div class="preview" class:blurred>
-      <iframe src={`/preview/${id}`} title="Document preview"></iframe>
+      {#if previewURL}
+        <iframe src={previewURL} title="Document preview" sandbox=""></iframe>
+      {:else if previewErr}
+        <div class="reveal"><span class="pill danger">{previewErr}</span></div>
+      {:else if !blurred}
+        <div class="reveal"><div class="skel" style="width:50%"></div></div>
+      {/if}
       {#if blurred}
         <div class="reveal">
           <span class="pill danger">Confidential</span>

@@ -18,7 +18,34 @@ import (
 	"strings"
 
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/jd"
 )
+
+// jdPresetsView projects jd.Presets() into the wire shape. Kept out
+// of the handler so a unit test can pin the projection without a
+// server harness.
+func jdPresetsView() []JDPresetRow {
+	src := jd.Presets()
+	out := make([]JDPresetRow, 0, len(src))
+	for _, p := range src {
+		row := JDPresetRow{
+			ID:          p.ID,
+			Name:        p.Label,
+			Description: p.Description,
+			Blank:       p.Blank,
+			Areas:       make([]JDPresetArea, 0, len(p.Tree.Areas)),
+		}
+		for _, a := range p.Tree.Areas {
+			row.Areas = append(row.Areas, JDPresetArea{
+				Code:          a.Start,
+				Name:          a.Name,
+				CategoryCount: len(a.Categories),
+			})
+		}
+		out = append(out, row)
+	}
+	return out
+}
 
 // JDCategory is one row in /api/jd/categories/. Denormalized with the
 // area info so pickers don't need a second round-trip. area_code is
@@ -138,3 +165,42 @@ func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
 // checks; without this the linter complains on files with a
 // conditional import chain.
 var _ = sql.ErrNoRows
+
+// JDPresetRow is one row of the /api/jd/presets/ listing. The
+// wizard renders the areas + category counts as a tree preview so
+// the operator sees what a preset actually looks like before
+// committing to it.
+type JDPresetRow struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Blank       bool           `json:"blank,omitempty"`
+	Areas       []JDPresetArea `json:"areas"`
+}
+
+// JDPresetArea is the area-level summary the wizard needs — code
+// range for the header, name for the label, category_count so it
+// can show "12 categories" without hydrating the whole tree.
+type JDPresetArea struct {
+	Code          int    `json:"code"`
+	Name          string `json:"name"`
+	CategoryCount int    `json:"category_count"`
+}
+
+// ListJDPresets — GET /api/jd/presets/. Admin only. Sourced from
+// core/jd.Presets() so a new preset appears in the wizard with no
+// SPA release. No envelope — the population is bounded (currently
+// five rows) and pagination would just add noise.
+func (s *Server) ListJDPresets(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if p == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+		return
+	}
+	if p.Role != "admin" {
+		s.writeError(w, http.StatusForbidden, "forbidden", "admin only")
+		return
+	}
+	presets := jdPresetsView()
+	s.writeJSON(w, http.StatusOK, presets)
+}

@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"context"
@@ -27,7 +27,7 @@ type Handler interface {
 // Vars are merged into Run.Vars in the same tx that writes the
 // transition.
 //
-// Task, when non-nil, causes the runner to insert a workflow_tasks row
+// Task, when non-nil, causes the runner to insert a approval_tasks row
 // alongside the transition — this is how approve-kind states park
 // waiting for a human. TaskSpec.DeadlineIn=0 inherits State.TimeoutSec.
 type HandlerResult struct {
@@ -36,7 +36,7 @@ type HandlerResult struct {
 	Task  *TaskSpec
 }
 
-// TaskSpec describes a workflow_tasks row to spawn.
+// TaskSpec describes a approval_tasks row to spawn.
 type TaskSpec struct {
 	Assignee   string
 	Prompt     string
@@ -93,7 +93,7 @@ func (systemHandler) Handle(_ context.Context, _ Run, _ State, trigger string) (
 	return HandlerResult{Event: trigger}, nil
 }
 
-// approveHandler spawns a workflow_tasks row on state entry, then parks
+// approveHandler spawns a approval_tasks row on state entry, then parks
 // the run. When a human resolves the task, Resolve() enqueues
 // workflow:resume with trigger=<choice>; the runner re-enters this
 // state's handler with that trigger and now emits it as the event so
@@ -135,7 +135,7 @@ func (endHandler) Handle(_ context.Context, _ Run, _ State, _ string) (HandlerRe
 // ---------- assignee resolution ----------
 
 // AssigneeResolver validates that a task assignee string is claimable
-// before the runner writes a workflow_tasks row. Called inside the
+// before the runner writes a approval_tasks row. Called inside the
 // runner's write tx, so a returned error aborts task creation cleanly.
 //
 // The default resolver (built-in, wired by New) accepts "user:N" only.

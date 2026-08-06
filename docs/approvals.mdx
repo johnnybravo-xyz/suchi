@@ -15,29 +15,29 @@ ordered, resumable review chains: doc 17 needs manager sign-off,
 then finance sign-off, escalating on timeout.
 
 The design is a hybrid state-machine + job-graph. Each run keeps one
-`current_state` cursor; every step appends to `workflow_transitions`
-as a replay log; advancement is driven by `workflow:advance`,
-`workflow:resume`, and `workflow:timeout-sweep` jobs on the existing
+`current_state` cursor; every step appends to `approval_transitions`
+as a replay log; advancement is driven by `approval:advance`,
+`approval:resume`, and `approval:timeout-sweep` jobs on the existing
 outbox. Restart-safety, retries, and deadline scheduling are inherited
 from `core/jobs` — no second scheduler.
 
 ## 1. Concepts
 
-Four tables (see `core/db/migrations/0016_workflow.sql`) are all you
+Four tables (see `core/db/migrations/0016_workflow.sql (renamed by 0022)`) are all you
 need to reason about a run.
 
-- **`workflow_defs`** — one row per slug per version. `spec_json`
+- **`approval_defs`** — one row per slug per version. `spec_json`
   holds the normalized JSON definition, `active=1` selects the live
   version. Registering a new version bumps the prior one to inactive
   in the same tx, so exactly one is current per slug.
-- **`workflow_runs`** — one row per instance. `state` is
+- **`approval_runs`** — one row per instance. `state` is
   `running | done | failed | cancelled`; `current_state` is the cursor
   into `spec_json.states`; `deadline_at` is the epoch the sweeper
   compares against.
-- **`workflow_transitions`** — append-only audit log. `trigger` is one
+- **`approval_transitions`** — append-only audit log. `trigger` is one
   of `system`, `timeout`, `approve`, `reject`, `cancel`, or a custom
   event. `actor` is `user:N`, `token:N`, or `system`.
-- **`workflow_tasks`** — human-in-the-loop rows spawned by
+- **`approval_tasks`** — human-in-the-loop rows spawned by
   `approve`-kind states. `status` is
   `open | claimed | resolved | expired`.
 
@@ -49,7 +49,7 @@ handler emits an event mapped in `state.On`.
 
 ## 2. Spec shape
 
-The JSON body an admin POSTs. Source of truth is `core/workflow/spec.go`.
+The JSON body an admin POSTs. Source of truth is `core/approvals/spec.go`.
 
 ```json
 {
@@ -89,11 +89,11 @@ against the handler registry and refuses unknown kinds with
 
 ### Built-in state kinds
 
-Three ship in `core/workflow/handler.go`:
+Three ship in `core/approvals/handler.go`:
 
 - `system` — passthrough. Empty trigger emits `success`; otherwise
   echoes the trigger. Useful as a routing hub.
-- `approve` — spawns a `workflow_tasks` row on entry and parks. On
+- `approve` — spawns a `approval_tasks` row on entry and parks. On
   resume the trigger (the choice string, or `"timeout"`) is emitted
   as the event. Task `deadline_at` inherits `state.timeout_sec`.
 - `end` — terminal. The runner finalizes the run to `state='done'`
@@ -103,7 +103,7 @@ Plugin authors add new kinds via `Engine.RegisterHandler` — see §6.
 
 ## 3. HTTP surface
 
-Six endpoints in `core/api/workflow.go`, mounted under
+Six endpoints in `core/api/approvals.go`, mounted under
 `/api/approvals/*`.
 
 | Method | Path | Auth | Purpose |
@@ -122,7 +122,7 @@ Error codes worth handling:
 
 | Code | HTTP | When |
 |---|---|---|
-| `workflow_disabled` | 503 | `SetDefault` was never called (engine not wired). |
+| `approvals_disabled` | 503 | `SetDefault` was never called (engine not wired). |
 | `bad_slug`          | 400 | Slug fails the URL pattern. |
 | `bad_spec_json`     | 400 | Body isn't valid JSON. |
 | `bad_spec`          | 400 | `Spec.Validate()` failed — message names the offending state. |
@@ -201,8 +201,8 @@ Response `201`:
 { "run_id": 42 }
 ```
 
-The dispatcher is nudged so the first `workflow:advance` job fires
-immediately. The `approve` handler spawns a `workflow_tasks` row
+The dispatcher is nudged so the first `approval:advance` job fires
+immediately. The `approve` handler spawns a `approval_tasks` row
 assigned to `user:5` and parks the run.
 
 ### Step 3: Inspect the run
@@ -227,7 +227,7 @@ curl -sS -X POST http://localhost:8000/api/approvals/tasks/101/resolve \
   -d '{"choice": "approve"}'
 ```
 
-Returns `204`. The engine enqueues `workflow:advance` with
+Returns `204`. The engine enqueues `approval:advance` with
 `trigger="approve"`, maps it via `on` to `finance_review`, and spawns
 the next task on `user:9`.
 
@@ -254,18 +254,18 @@ literal `"approve"`. `cancel` transitions carry
 
 ## 5. Timeouts and the sweeper
 
-`state.timeout_sec` sets `workflow_runs.deadline_at` on entry. Every
-30 seconds (see `SweepInterval` in `core/workflow/sweeper.go`) the
-`workflow:timeout-sweep` job scans:
+`state.timeout_sec` sets `approval_runs.deadline_at` on entry. Every
+30 seconds (see `SweepInterval` in `core/approvals/sweeper.go`) the
+`approval:timeout-sweep` job scans:
 
 ```sql
-SELECT id FROM workflow_runs
+SELECT id FROM approval_runs
  WHERE state = 'running'
    AND deadline_at IS NOT NULL
    AND deadline_at <= ?
 ```
 
-For each due row it enqueues `workflow:advance` with
+For each due row it enqueues `approval:advance` with
 `trigger="timeout"` and nulls `deadline_at` in the same tx so the row
 can't be swept twice. The state's handler then emits `"timeout"` as
 the event; if `on.timeout` isn't mapped, the advance job errors and
@@ -276,7 +276,7 @@ The sweep loop is self-scheduling: at boot,
 `Engine.EnsureSweepScheduled` inserts a pending sweep row if none
 exists (wired at `distro/cmd/suchi/main.go`). Each sweep run
 re-enqueues the next one, guarded by a `SELECT COUNT(*) ... WHERE
-kind='workflow:timeout-sweep' AND state='pending'` so a double-invoke
+kind='approval:timeout-sweep' AND state='pending'` so a double-invoke
 never backlogs the queue.
 
 Task rows inherit their `deadline_at` from `TaskSpec.DeadlineIn`
@@ -294,20 +294,20 @@ type Handler interface {
 type HandlerResult struct {
     Event string          // "" parks; non-empty resolves via state.On
     Vars  map[string]any  // merged into run.vars in the transition tx
-    Task  *TaskSpec       // non-nil spawns a workflow_tasks row and parks
+    Task  *TaskSpec       // non-nil spawns an approval_tasks row and parks
 }
 ```
 
 - Handlers MUST be retry-safe — the outbox delivers at-least-once.
-- Register at boot, before `workflow.SetDefault(engine)`.
+- Register at boot, before `approvals.SetDefault(engine)`.
   Last-write-wins by `Kind()`, so built-ins can be overridden.
 - Return `Event=""` with no `Task` to park indefinitely — the run
   waits for an external `Resolve` / `Cancel` / timeout.
 
 ```go
-engine := workflow.New(dbHandle, logger)
+engine := approvals.New(dbHandle, logger)
 engine.RegisterHandler(myHandler{})   // add before SetDefault
-workflow.SetDefault(engine)
+approvals.SetDefault(engine)
 ```
 
 ### AssigneeResolver
@@ -332,7 +332,7 @@ aborts the write, the advance job retries, and the run stays
   `workflow.advance.transition`, `workflow.sweep.fired`,
   `workflow.resolve`, `workflow.advance.park` when a run stalls.
 - **Outbox visibility** — the three job kinds
-  (`workflow:advance`, `workflow:resume`, `workflow:timeout-sweep`)
+  (`approval:advance`, `approval:resume`, `approval:timeout-sweep`)
   show up on [`/api/tasks/`](/api). Filter with `?kind=workflow:` for
   the subsystem's queue depth.
 - **Cancel semantics** — writes a `trigger='cancel'` transition with
@@ -348,12 +348,12 @@ aborts the write, the advance job retries, and the run stays
 - **Parallel / fan-out states.** One `current_state` cursor per run;
   AND-splits are v2.
 - **YAML definition loader.** Specs are JSON in
-  `workflow_defs.spec_json`; a YAML compiler is additive and needs no
+  `approval_defs.spec_json`; a YAML compiler is additive and needs no
   migration. No watched-directory boot-time loader yet.
 - **`role:X` resolution + fair dispatch.** `AssigneeResolver` is
   reserved for enterprise; core ships only `user:N`. `Resolve`
   returns `[]int64` for eventual round-robin, but the runner doesn't
   consume the list yet.
-- **Merging `workflow_tasks` into `/api/tasks/`.** Today the outbox
-  and `workflow_tasks` are surfaced separately; the mobile-compat
+- **Merging `approval_tasks` into `/api/tasks/`.** Today the outbox
+  and `approval_tasks` are surfaced separately; the mobile-compat
   single-poll story lands with Phase 4.

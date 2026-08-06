@@ -886,9 +886,9 @@ func isKnownStep(name string) bool {
 	return false
 }
 
-// ---------- inbox (workflow tasks) ----------
+// ---------- inbox (approval tasks) ----------
 
-// inboxTaskRow projects one workflow_tasks row for the inbox template.
+// inboxTaskRow projects one approval_tasks row for the inbox template.
 // Kept flat and pre-formatted so the html/template doesn't reach into
 // time.Time / *string helpers.
 type inboxTaskRow struct {
@@ -901,8 +901,8 @@ type inboxTaskRow struct {
 	CreatedFmt   string
 }
 
-// Inbox renders the workflow-tasks queue scoped to the current user.
-// Reads directly from workflow_tasks — no /api/tasks/ hop — so a slow
+// Inbox renders the approval-tasks queue scoped to the current user.
+// Reads directly from approval_tasks — no /api/tasks/ hop — so a slow
 // jobs table doesn't stall the page. Status filter matches /api/tasks/
 // (open + claimed only; terminal states omitted).
 func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
@@ -916,9 +916,9 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT t.id, d.slug, t.state_key, t.prompt, t.choices_json,
 		       t.status, t.created_at
-		FROM workflow_tasks t
-		JOIN workflow_runs r ON r.id = t.run_id
-		JOIN workflow_defs d ON d.id = r.def_id
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs d ON d.id = r.def_id
 		WHERE t.assignee = ? AND t.status IN ('open','claimed')
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT 200

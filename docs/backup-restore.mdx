@@ -15,7 +15,7 @@ $DATA_DIR/
 ├── suchi.db-wal        WAL sidecar (active writes; do NOT copy alone)
 ├── suchi.db-shm        shared-memory index (do NOT copy alone)
 ├── blobs/              CAS — one file per unique original + archive PDF
-│   └── sha256/ab/cd/…
+│   └── sha256/ab/cd/ef/…    (three shard levels; caps any single dir at ~4k entries at 1M blobs)
 ├── rendered/           storage-path projection (symlinks or copies into
 │                       Gonja-rendered directory structure)
 ├── .decrypt-key        AEAD key for stored PDF passwords (0600, sensitive)
