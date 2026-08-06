@@ -386,9 +386,10 @@ func runServe() int {
 	// external code review flagged it. Disabled by
 	// BACKUP_INTERVAL=0.
 	go backup.Loop(ctx, backup.Config{
-		DataDir:  cfg.DataDir,
-		Interval: cfg.BackupInterval,
-		Keep:     cfg.BackupKeep,
+		DataDir:            cfg.DataDir,
+		Interval:           cfg.BackupInterval,
+		Keep:               cfg.BackupKeep,
+		AuditRetentionDays: cfg.AuditRetentionDays,
 	}, d, log)
 
 	// fs-watch: staging-dir producer. Idle unless the resolved owner

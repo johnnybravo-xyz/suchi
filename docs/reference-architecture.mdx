@@ -64,7 +64,7 @@ code change.
   merge a doc's owner — none of that touches the blob. Dedup is
   free (same bytes → same hash → same file on disk).
 - **How** — SHA-256 over the byte stream; two-level fanout at
-  `$DATA_DIR/blobs/sha256/aa/bb/<full-hash>`; atomic rename from
+  `$DATA_DIR/blobs/sha256/aa/bb/cc/<full-hash>` (three shard levels — caps any single directory at ~4k entries even at millions of blobs, so ext4/xfs stay O(1) on open and rsync/restic don't stall on a mega-directory); atomic rename from
   a per-put temp file in the destination shard (same device, POSIX
   atomic). Duplicate puts return the existing reference without
   rewriting.

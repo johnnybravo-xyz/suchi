@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -179,6 +180,47 @@ func runDoctor(args []string) int {
 				age.Truncate(time.Second))
 		} else {
 			fmt.Printf("  ✓ oldest running job: %s\n", age.Truncate(time.Second))
+		}
+	}
+
+	// CAS shard inode pressure. blobs/sha256/ has at most 256
+	// second-level dirs (00–ff); the concern is when a single second-
+	// level dir hits hundreds of thousands of subdirs. Sampling the
+	// first shard is enough — a hot shard is unusual, so `ab/` is a
+	// fair stand-in for the population.
+	sample := filepath.Join(cfg.DataDir, "blobs", "sha256", "ab")
+	if entries, err := os.ReadDir(sample); err == nil {
+		// Rough guide: 3-level sharding caps a single dir at ~4k
+		// entries at 1M blobs. Anything past 16k means the shard is
+		// stuffed and inode/backup-walk pressure is real. Missing
+		// dir isn't a warning — a fresh install has nothing.
+		switch {
+		case len(entries) > 16000:
+			fmt.Printf("  ✗ CAS shard %s has %d subdirs (deep-shard limit exceeded)\n",
+				sample, len(entries))
+		default:
+			fmt.Printf("  ✓ CAS shard %s: %d subdirs\n", sample, len(entries))
+		}
+	}
+
+	// Audit log row count + retention window. The notifications feed
+	// sits on audit_events, so unbounded growth here is the storage
+	// tail risk. Warn when the window is disabled AND the table is
+	// past 100k — that combination means the feed will trend up
+	// forever without intervention.
+	var auditRows int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_events`).Scan(&auditRows); err != nil {
+		fmt.Printf("  ✗ audit rows: %v\n", err)
+	} else {
+		switch {
+		case cfg.AuditRetentionDays == 0 && auditRows > 100_000:
+			fmt.Printf("  ✗ audit rows: %d (AUDIT_RETENTION_DAYS=0; growth unbounded)\n", auditRows)
+		case cfg.AuditRetentionDays == 0:
+			fmt.Printf("  · audit rows: %d (retention disabled)\n", auditRows)
+		default:
+			fmt.Printf("  ✓ audit rows: %d (retention %dd)\n",
+				auditRows, cfg.AuditRetentionDays)
 		}
 	}
 
