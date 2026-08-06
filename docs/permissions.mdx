@@ -100,8 +100,8 @@ Wired for **documents** and their sub-endpoints:
 | `PUT /api/documents/{id}/custom_fields/{field}` | `change` |
 | `DELETE /api/documents/{id}/custom_fields/{field}` | `change` |
 | `GET /api/search/` | filtered — snippets and results only for docs the caller can view |
-| `GET /` (UI list) | filtered — only docs the caller can view |
-| `GET /docs/{id}` (UI detail) | 404 if not visible (avoids info leak) |
+| `GET /api/documents/` (SPA list) | filtered — only docs the caller can view |
+| `GET /api/documents/{id}` (SPA detail) | 404 if not visible (avoids info leak) |
 
 And for **taxonomy mutations**:
 
@@ -231,12 +231,13 @@ curl -X DELETE  http://localhost:8000/api/groups/7 ...
 
 ## 7. Admin UI
 
-`/admin/groups` renders a card per group with an inline member
-table + a "new group" affordance. Delete surfaces the 409 message
-when the group still holds grants; every list, add, remove, save
-round-trips to the JSON API above.
+The SPA admin panel for groups, custom fields, taxonomy, and users
+is tracked (see task #140 in `tasks.md`). Until it lands, drive the
+list/add/remove/save flows over the JSON API directly; the
+`/api/groups/` and `/api/acls/` surfaces described above are the
+system of record.
 
-Per-object "share with…" affordances on the document detail page
+Per-object "share with…" affordances on the document detail view
 are planned; today, use the API directly or the eventual admin
 scripts.
 

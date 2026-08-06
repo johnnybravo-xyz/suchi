@@ -268,16 +268,16 @@ post-ingest.
 ## Headless mode
 
 `SUCHI_UI_DISABLED=1` skips registration of every browser-facing
-route at boot: `/`, `/docs/{id}`, `/preview/{id}`, `/download/{id}`,
-`/pending-decryption`, `/upload`, `/inbox`, `/login`, `/bootstrap`,
-`/admin/*`. What stays: `/api/*` (the JSON surface),
-`/healthz`, `/readyz`, `/metrics`, and `/assets/*` (kept so an
-external SPA can still fetch the favicon + manifest if it wants).
+route at boot: `/` (SPA redirect), `/app/*` (embedded Svelte SPA),
+`/preview/{id}`, `/download/{id}`, `/login`, `/bootstrap`, and
+`/assets/*`. What stays: `/api/*` (the JSON surface), `/healthz`,
+`/readyz`, `/metrics`. Blob access for headless callers keeps
+working via the `/api/documents/{id}/{preview,download}` mirrors.
 
-Intended for deployments where a separate frontend — an SPA built
-against `/api/`, an internal-tools dashboard, a mobile app — is
-the primary UX. suchi runs as an API server; the frontend is
-whatever the operator hosts.
+Intended for deployments where a separate frontend — an external
+SPA built against `/api/`, an internal-tools dashboard, a mobile
+app — is the primary UX. suchi runs as an API server; the
+frontend is whatever the operator hosts.
 
 The three auth chains (Token, Bearer, OIDC) are unaffected. The
 first-boot bootstrap flow (`POST /setup`) is unaffected — it's an
