@@ -95,8 +95,9 @@ Admin-only writes; any authed user can list/get.
 | ------ | ---- | ------- |
 | GET | `/api/automations/` | List all with triggers and actions nested. |
 | POST | `/api/automations/` | Create. |
+| GET | `/api/automations/schema` | Static schema of every trigger code + action kind + its param spec. Any authed caller can read; the SPA visual builder consumes this so adding a new kind server-side lands in the picker without a client release. |
 | GET | `/api/automations/{id}` | Get one. |
-| PATCH | `/api/automations/{id}` | Replace triggers and actions wholesale. |
+| PATCH | `/api/automations/{id}` | Replace triggers and actions wholesale. Field-sparse edits aren't supported — send the full workflow object. |
 | DELETE | `/api/automations/{id}` | Delete; triggers and actions cascade. |
 
 ### 4.1 Example — auto-tag Landlord docs and route to a folder
