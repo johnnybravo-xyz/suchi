@@ -1,7 +1,7 @@
 <script>
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listTasks, listDocuments, setupState } from './lib/api.js'
+  import { listJDCategories, listTasks, listDocuments, setupState, stats as fetchStats, listEvents } from './lib/api.js'
   import Icon from './lib/Icon.svelte'
   import Palette from './lib/Palette.svelte'
   import Login from './routes/Login.svelte'
@@ -14,9 +14,13 @@
   import Upload from './routes/Upload.svelte'
   import Settings from './routes/Settings.svelte'
   import Setup from './routes/Setup.svelte'
+  import Trash from './routes/Trash.svelte'
 
   let paletteOpen = $state(false)
   let drawerOpen = $state(false)
+  let umenuOpen = $state(false)
+  const initials = $derived((session.user?.display_name || session.user?.email || '?')
+    .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
@@ -24,6 +28,14 @@
   let pendingTasks = $state([])
   let deadJobs = $state([])
   let recentDocs = $state([])
+  let st = $state(null)                 // /api/stats/ snapshot
+  let events = $state([])               // activity feed rows (newest first)
+  let seenEventID = $state(loadSeen())  // durable read cursor
+  function loadSeen() { try { return Number(localStorage.getItem('suchi.events.seen') || 0) } catch { return 0 } }
+  function markEventsRead() {
+    if (events.length) seenEventID = Math.max(seenEventID, ...events.map(e => e.id))
+    try { localStorage.setItem('suchi.events.seen', String(seenEventID)) } catch {}
+  }
   let setupNeeded = $state(false)
   let toast = $state('')
   let toastTimer
@@ -48,6 +60,7 @@
   refreshSession().then(() => { if (session.user) boot() })
 
   async function boot() {
+    try { st = await fetchStats() } catch {}
     try {
       const cats = await listJDCategories()
       if (cats?.results) buildTree(cats.results)
@@ -72,12 +85,25 @@
       const lo = Number(c.area_code)
       if (!areas.has(lo)) areas.set(lo, { lo, name: c.area_name, categories: [] })
       areas.get(lo).categories.push(c)
-      if (/inbox/i.test(c.name)) inboxCategory = c
+      if (st?.inbox_category_id ? c.id === st.inbox_category_id : /inbox/i.test(c.name)) inboxCategory = c
     }
     jdTree = [...areas.values()].sort((a, b) => a.lo - b.lo)
   }
 
   async function pollActivity() {
+    try {
+      st = await fetchStats()
+      inboxCount = st?.inbox_count ?? 0
+      if (inboxCount > 0 && inboxCategory) {
+        const lo = Number(inboxCategory.area_code)
+        if (!openAreas.has(lo)) toggleArea(lo)   // pending work must be visible
+      }
+    } catch {}
+    try {
+      const ev = await listEvents({ limit: 40 })
+      events = (ev?.results || []).slice().reverse()   // newest first
+    } catch {}
+    // task lists still power the drawer rows + Approvals screen
     try {
       const [wf, jb] = await Promise.all([
         listTasks({ include: 'workflow', state: 'pending', limit: 50 }),
@@ -85,17 +111,6 @@
       ])
       pendingTasks = wf?.results || wf || []
       deadJobs = jb?.results || jb || []
-    } catch {}
-    try {
-      if (inboxCategory) {
-        const r = await listDocuments({ jd_category_id: inboxCategory.id, page_size: 1 })
-        inboxCount = r?.count ?? 0
-        // pending work in a collapsed drawer should be visible: open that area once
-        if (inboxCount > 0) {
-          const lo = Number(inboxCategory.area_code)
-          if (!openAreas.has(lo)) toggleArea(lo)
-        }
-      }
     } catch {}
     try {
       const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
@@ -110,11 +125,13 @@
 
   function onKey(e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); paletteOpen = !paletteOpen }
-    if (e.key === 'Escape') { paletteOpen = false; drawerOpen = false }
+    if (e.key === 'Escape') { paletteOpen = false; drawerOpen = false; umenuOpen = false }
   }
 
+  $effect(() => { route.path; umenuOpen = false })
   const page = $derived(route.parts[0] || 'dashboard')
-  const bellCount = $derived(pendingTasks.length + deadJobs.length)
+  const unseenEvents = $derived(events.filter(e => e.id > seenEventID).length)
+  const bellCount = $derived((st?.pending_approvals ?? pendingTasks.length) + (st?.dead_jobs ?? deadJobs.length) + unseenEvents)
   const nav = [
     { hash: '#/dashboard',   ico: 'gauge',  label: 'Dashboard',   key: 'dashboard' },
     { hash: '#/documents',   ico: 'docs',   label: 'Documents',   key: 'documents' },
@@ -173,13 +190,6 @@
         </nav>
       {/if}
 
-      <div class="side-foot">
-        <button class="btn sm" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')} title="Switch theme">
-          <Icon name={session.theme === 'dark' ? 'sun' : 'moon'} size={14} />
-        </button>
-        <a href="#/settings" class="btn sm" title="Settings"><Icon name="settings" size={14} /></a>
-        <button class="btn sm" onclick={signOut} title="Sign out"><Icon name="out" size={14} /></button>
-      </div>
     </aside>
 
     <div class="main">
@@ -195,11 +205,30 @@
         <a role="button" class="btn primary" href="#/upload" style="padding:8px 16px">
           <Icon name="upload" size={15} /> Upload
         </a>
-        <button class="btn bell" onclick={() => (drawerOpen = !drawerOpen)}
+        <button class="btn bell" onclick={() => { drawerOpen = !drawerOpen; if (drawerOpen) markEventsRead() }}
                 aria-label={`Activity, ${bellCount} items needing attention`} title="Activity">
           <Icon name="bell" size={16} />
           {#if bellCount > 0}<span class="bell-dot">{bellCount}</span>{/if}
         </button>
+        <button class="btn sm" style="padding:8px 11px" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')} title="Switch theme">
+          <Icon name={session.theme === 'dark' ? 'sun' : 'moon'} size={15} />
+        </button>
+        <div class="umenu-wrap">
+          <button class="avatar" onclick={() => (umenuOpen = !umenuOpen)} aria-label="Account menu" aria-expanded={umenuOpen}>
+            {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{initials}{/if}
+          </button>
+          {#if umenuOpen}
+            <div class="umenu" role="menu">
+              <div class="who">
+                <b>{session.user?.display_name || 'Account'}</b>
+                <span>{session.user?.email}</span>
+              </div>
+              <a href="#/settings" onclick={() => (umenuOpen = false)} role="menuitem"><Icon name="user" size={14} /> Profile</a>
+              <a href="#/settings" onclick={() => (umenuOpen = false)} role="menuitem"><Icon name="settings" size={14} /> Settings</a>
+              <button onclick={signOut} role="menuitem"><Icon name="out" size={14} /> Sign out</button>
+            </div>
+          {/if}
+        </div>
       </div>
 
       {#if setupNeeded && page !== 'settings'}
@@ -211,7 +240,7 @@
       {/if}
 
       <div class="content">
-        {#if page === 'dashboard'}<Dashboard {notify} {inboxCategory} {inboxCount} pending={pendingTasks.length} dead={deadJobs.length} recent={recentDocs} />
+        {#if page === 'dashboard'}<Dashboard {notify} {st} {inboxCategory} recent={recentDocs} />
         {:else if page === 'documents'}<Documents {notify} />
         {:else if page === 'doc'}<DocumentDetail id={route.parts[1]} {notify} />
         {:else if page === 'inbox'}<Documents {notify} inbox={inboxCategory} />
@@ -220,6 +249,7 @@
         {:else if page === 'automations'}<Automations {notify} />
         {:else if page === 'upload'}<Upload {notify} />
         {:else if page === 'settings'}<Settings {notify} setupPending={setupNeeded} />
+        {:else if page === 'trash'}<Trash {notify} />
         {:else if page === 'setup'}<Setup {notify} onDone={() => { setupNeeded = false; go('#/dashboard') }} />
         {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />
         {:else}<div class="empty">Nothing filed under <code>#{route.path}</code>. <a href="#/dashboard">Back to the dashboard</a></div>
@@ -257,6 +287,27 @@
                 <span class="title grow mono" style="font-size:.8rem">{j.kind}</span>
                 {#if j.doc_id}<span class="sub">doc #{j.doc_id}</span>{/if}
               </a>
+            {/each}
+          </div>
+        {/if}
+
+        {#if events.length}
+          <div class="side-head" style="padding-left:0">Activity</div>
+          <div class="index">
+            {#each events.slice(0, 12) as e (e.id)}
+              {#if e.doc_id}
+                <a class="irow" href={`#/doc/${e.doc_id}`} onclick={() => (drawerOpen = false)}>
+                  <span class="dot" class:danger={e.kind.startsWith('job.')} class:warn={e.kind.startsWith('approval.')} class:accent={e.kind.startsWith('document.')}></span>
+                  <span class="title grow" style="font-size:.84rem">{e.summary}</span>
+                  <span class="sub">{new Date(e.created_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </a>
+              {:else}
+                <div class="irow">
+                  <span class="dot" class:danger={e.kind.startsWith('job.')}></span>
+                  <span class="title grow" style="font-size:.84rem">{e.summary}</span>
+                  <span class="sub">{new Date(e.created_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}

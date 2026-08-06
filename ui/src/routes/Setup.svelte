@@ -1,6 +1,6 @@
 <script>
   import { setupState, setupStep, setupComplete, adminCreateUser, applyJDPreset,
-           saveLLMSettings, savePreferences, saveIngestSettings } from '../lib/api.js'
+           saveLLMSettings, savePreferences, saveIngestSettings, listJDPresets } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -16,13 +16,17 @@
     { name: 'rules',       label: 'Rules' },
     { name: 'preferences', label: 'OCR & backups' },
   ]
-  const PRESETS = [
-    { id: 'solo',        label: 'Solo',        blurb: 'One person: life admin, money, health, home.' },
-    { id: 'household',   label: 'Household',   blurb: 'A family: shared areas plus per-person categories.' },
-    { id: 'freelance',   label: 'Freelance',   blurb: 'Clients, invoicing, taxes, contracts.' },
-    { id: 'smb_billing', label: 'Small business', blurb: 'AP/AR heavy: vendors, invoices, compliance.' },
-    { id: 'blank',       label: 'Blank',       blurb: 'No tree. Build your own from scratch.' },
+  // Server is the source of truth (GET /api/jd/presets/); this list is
+  // only the offline fallback so the step never renders empty.
+  const FALLBACK_PRESETS = [
+    { id: 'solo', name: 'Solo', description: 'One person: life admin, money, health, home.', areas: [] },
+    { id: 'household', name: 'Household', description: 'A family: shared areas plus per-person categories.', areas: [] },
+    { id: 'freelance', name: 'Freelance', description: 'Clients, invoicing, taxes, contracts.', areas: [] },
+    { id: 'smb_billing', name: 'Small business', description: 'AP/AR heavy: vendors, invoices, compliance.', areas: [] },
+    { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
   ]
+  let presets = $state(FALLBACK_PRESETS)
+  listJDPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
 
   let steps = $state({})          // name -> 'done' | 'skipped'
   let cur = $state('welcome')
@@ -124,14 +128,19 @@
       <h3>Pick a filing tree</h3>
       <p class="wiz-p">Johnny.Decimal areas and categories, tailored to how you'll use the archive. You can always switch later — refile moves every document to the closest match in the new tree.</p>
       <div class="preset-grid">
-        {#each PRESETS as p}
+        {#each presets as p (p.id)}
           <label class="preset" class:on={preset.preset_id === p.id}>
             <input type="radio" bind:group={preset.preset_id} value={p.id} hidden />
-            <b>{p.label}</b><span class="sub">{p.blurb}</span>
+            <b>{p.name}</b><span class="sub">{p.description}</span>
+            {#if p.areas?.length}
+              <span class="preset-tree">
+                {#each p.areas as a}<span class="chip" title={`${a.category_count} categories`}>{a.code}–{a.code + 9} {a.name}</span>{/each}
+              </span>
+            {/if}
           </label>
         {/each}
       </div>
-      {#if preset.preset_id === 'blank'}
+      {#if presets.find(p => p.id === preset.preset_id)?.blank || preset.preset_id === 'blank'}
         <label class="wiz-check"><input type="checkbox" bind:checked={preset.confirm_blank} />
           I understand documents will pile up in the inbox until I build categories.</label>
       {/if}
@@ -240,5 +249,6 @@
     border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 12px 14px;
   }
   .preset .sub { font-size: .78rem; color: var(--muted); }
+  .preset-tree { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
   .preset.on { border-color: var(--accent); background: var(--tint); }
 </style>
