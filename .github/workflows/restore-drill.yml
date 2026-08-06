@@ -1,15 +1,23 @@
-name: nightly-restore-drill
+name: restore-drill
 
-# A backup that was never opened is a hope, not a backup. Every night
-# we boot suchi against a fresh data dir, ingest a fixture, force a
-# VACUUM INTO snapshot, then open the snapshot as a plain SQLite DB
-# and confirm it queries. Guards against a silent breakage of the
-# backup loop (schema drift, VACUUM INTO regression, disk-space edge
-# case that leaks a half-written file).
+# A backup that was never opened is a hope, not a backup. This drill
+# boots suchi against a fresh data dir, forces a VACUUM INTO snapshot,
+# opens the snapshot with the sqlite3 CLI, and confirms
+# PRAGMA integrity_check + schema_migrations rows. Guards against
+# silent breakage of the backup loop (schema drift, VACUUM INTO
+# regression, half-written file on disk-full).
+#
+# Weekly cadence: the code paths this exercises only change when
+# core/backup/* or the migrations set does — nightly runs would burn
+# CI minutes to re-prove yesterday's answer. Sundays at 03:00 UTC
+# lines up with the quietest window on most operators' clocks.
+# Run manually from the Actions tab (workflow_dispatch) when a
+# backup/migration/CAS-layout change lands and can't wait for the
+# weekly tick.
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # 03:00 UTC daily
+    - cron: "0 3 * * 0"   # Sundays 03:00 UTC
   workflow_dispatch:      # manual re-run from the Actions tab
 
 permissions:
