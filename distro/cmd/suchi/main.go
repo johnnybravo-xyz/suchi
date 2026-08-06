@@ -483,6 +483,33 @@ func runServe() int {
 			"reason", "SUCHI_UI_DISABLED — headless mode, /api/ only")
 	}
 
+	// Headless deploys (SUCHI_UI_DISABLED=1) still need blob access
+	// for agents. The UI-package handlers implement the sensitivity
+	// gate + ETag + sandbox CSP, so we mount them on /api paths
+	// alongside their /preview and /download aliases when the UI is
+	// enabled. When UI is off, the same handlers are constructed
+	// against a UI server that never gets Register()'d — the /api
+	// mirror stays live.
+	{
+		blobSrv, berr := ui.New(d, cas, nil, log)
+		if berr != nil {
+			log.Error("main.blobsrv.new", "err", berr.Error())
+			return 1
+		}
+		requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				if auth.FromContext(r.Context()) == nil {
+					http.Error(w, `{"error":"auth required","code":"unauthorized"}`,
+						http.StatusUnauthorized)
+					return
+				}
+				next(w, r)
+			}
+		}
+		mux.HandleFunc("GET /api/documents/{id}/preview", requireAuth(blobSrv.Preview))
+		mux.HandleFunc("GET /api/documents/{id}/download", requireAuth(blobSrv.Download))
+	}
+
 	// JSON API surface (/api/*). Attach the dispatcher so upload
 	// handlers can nudge it when a fresh doc's post-ingest job lands.
 	apiSrv, err := api.New(d, cas, log)
