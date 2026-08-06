@@ -210,7 +210,8 @@
     "/api/approvals/runs/{id}/cancel":           { "post": { "summary": "Cancel a run (admin)." } },
 
     "/api/automations/":                         { "get":  { "summary": "List automations." }, "post": { "summary": "Create an automation (admin)." } },
-    "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace (admin)." }, "delete": { "summary": "Delete (admin)." } },
+    "/api/automations/schema":                   { "get":  { "summary": "Static schema of trigger codes + action kinds + per-kind param specs the current server understands. SPA visual builder reads this to render pickers so a new kind lands with no client release." } },
+    "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace the workflow row + triggers + actions wholesale (admin). Field-sparse edits aren't supported — send the full object." }, "delete": { "summary": "Delete (admin)." } },
 
     "/api/jd/categories/":                       { "get":  { "summary": "List JD categories with denormalized area info. ?q=<prefix> matches code or name; ?area=<code> scopes to one area (start code)." } },
     "/api/jd/presets/":                          { "get":  { "summary": "Admin-only setup-wizard preset catalog. One row per built-in preset with {id, name, description, blank, areas:[{code, name, category_count}]}. No envelope (bounded population)." } },

@@ -213,6 +213,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// they do, not for what any other project called them. See
 	// docs/automations.mdx.
 	mux.HandleFunc("GET /api/automations/", s.ListAutomations)
+	mux.HandleFunc("GET /api/automations/schema", s.GetAutomationSchema)
 	mux.HandleFunc("POST /api/automations/", s.CreateAutomation)
 	mux.HandleFunc("GET /api/automations/{id}", s.GetAutomation)
 	mux.HandleFunc("PATCH /api/automations/{id}", s.UpdateAutomation)
