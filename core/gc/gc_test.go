@@ -201,7 +201,7 @@ func insertTrashedDoc(t *testing.T, ctx context.Context, d *db.DB, orig, archive
 // backdate rewinds a blob's mtime by delta (negative = older).
 func backdate(t *testing.T, root, sum string, delta time.Duration) {
 	t.Helper()
-	p := filepath.Join(root, "blobs", "sha256", sum[0:2], sum[2:4], sum)
+	p := filepath.Join(root, "blobs", "sha256", sum[0:2], sum[2:4], sum[4:6], sum)
 	ts := time.Now().Add(delta)
 	if err := os.Chtimes(p, ts, ts); err != nil {
 		t.Fatal(err)

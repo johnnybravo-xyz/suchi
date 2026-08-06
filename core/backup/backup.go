@@ -42,6 +42,12 @@ type Config struct {
 	// prune all-but-the-latest N. Zero means "keep everything"
 	// (dangerous; documented, not the default).
 	Keep int
+
+	// AuditRetentionDays is the sliding window for audit_events.
+	// After each snapshot, rows older than N days get deleted.
+	// 0 disables audit pruning. Same ticker as Snapshot, single-
+	// writer conn, so no separate goroutine.
+	AuditRetentionDays int
 }
 
 // Loop runs snapshots until ctx is cancelled. Intended to be spawned
@@ -68,6 +74,15 @@ func Loop(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger) {
 		case <-t.C:
 			if err := Snapshot(ctx, cfg, database, log); err != nil {
 				log.Warn("backup.snapshot.err", "err", err.Error())
+			}
+			// Audit retention piggy-backs on the backup tick — same
+			// interval is fine (retention drift of BackupInterval is
+			// well within a 20-day window), and reusing the ticker
+			// keeps the boot topology one goroutine simpler.
+			if cfg.AuditRetentionDays > 0 {
+				if _, err := audit.Prune(ctx, database, log, cfg.AuditRetentionDays); err != nil {
+					log.Warn("audit.prune.err", "err", err.Error())
+				}
 			}
 		}
 	}

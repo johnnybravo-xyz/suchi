@@ -173,7 +173,7 @@ func collectReferences(ctx context.Context, d *db.DB) (map[string]bool, error) {
 
 // blobPath re-derives the on-disk path for a hash. Duplicates the
 // sharding rule from core/blob but we don't want to grow the CAS
-// interface just for gc's mtime read.
+// interface just for gc's mtime read. Keep in sync with CAS.path().
 func blobPath(casRoot, sum string) string {
-	return filepath.Join(casRoot, "blobs", "sha256", sum[0:2], sum[2:4], sum)
+	return filepath.Join(casRoot, "blobs", "sha256", sum[0:2], sum[2:4], sum[4:6], sum)
 }
