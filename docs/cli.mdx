@@ -186,6 +186,34 @@ the existing corpus. Full walkthrough at [refile](/refile).
 Safe against a live server — uploads that arrive mid-sweep use the
 normal postingest chain and land under the new tree automatically.
 
+## `suchi export --out FILE.zip`
+
+Portable takeout of everything a user owns. Writes a single zip
+containing the original bytes of every live document plus a
+`documents/<name>-<id>.json` sidecar in the standard suchi format
+(see [formats § JSON sidecar](/formats#json-sidecar-spec)), plus
+flat JSON dumps of the taxonomy tables (tags, correspondents,
+document types, storage paths, custom fields, JD categories).
+
+```sh
+suchi export --out /tmp/my-suchi.zip                 # this instance's default admin
+suchi export --out /tmp/user-5.zip --owner-id 5      # scope to one owner
+suchi export --out /tmp/full.zip --all               # every owner (careful — big)
+```
+
+Round-trip: dropping the archive into an fs-watch staging directory
+on a fresh suchi instance re-ingests every document with title,
+correspondent, tags, JD category, and sensitivity intact.
+
+**Not included** in this version:
+- Avatars, thumbnails (derived — regenerate on re-import).
+- Document versions history.
+- Approvals + audit history.
+- Share links + saved views.
+
+Bumps to the export format land a new `version` in `manifest.json`
+so importers can gate on it.
+
 ## `suchi version`
 
 Prints the binary version, build revision, and the Go version it
