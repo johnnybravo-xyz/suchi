@@ -1,0 +1,142 @@
+---
+title: "Public demo instance — suchi.page"
+description: "Plan for hosting a read-only public suchi at suchi.page so people can click before they clone."
+---
+
+`suchi demo` seeds a fresh `DATA_DIR` with a small representative
+dataset (sample documents, one automation, one share link). That's
+the raw material for a public demo — this page is the plan for
+turning it into a safe, self-healing landing site at `suchi.page`.
+
+Status: **planned**. Landing HTML + `suchi demo` binary exist; the
+public-safety guard, auto-reset cadence, and hosting bind are what's
+left. This page carries the shape so the work lands consistently.
+
+## Design goals
+
+- **See it in 30 seconds.** Anyone hitting `demo.suchi.page` gets a
+  logged-in view of a populated archive without asking for creds.
+- **Zero write persistence.** Uploads, edits, deletions, and
+  approvals succeed *in the current session* but never touch the
+  next visitor's world.
+- **Self-healing.** A drift from the seed (deleted doc, broken
+  automation) resets in bounded time — the demo can't decay.
+- **Zero-egress-safe.** The demo instance never phones home. No
+  LLM endpoint, no OIDC issuer, no mail-mbsync sidecar.
+
+## Design (three moving parts)
+
+### 1. A read-only guard middleware
+
+New env `SUCHI_DEMO_MODE=1`. When set, `httpx.SecurityHeaders`'s
+chain sits an extra middleware in front of every mutating method
+(POST/PATCH/PUT/DELETE) that returns `403 {"code":"demo_read_only"}`
+unless the request lands one of two allow-lists:
+
+- **Anonymous demo-login.** `POST /api/login` with the fixed
+  demo credential mints a scoped token (`documents:read` +
+  `events:read` only). The topbar shows "Demo session — resets in
+  N min".
+- **Idempotent reads.** `GET`/`HEAD` on every documented endpoint.
+
+Approvals, uploads, and metadata edits go through unchanged inside
+the session (a member-scoped token) but the reset (§3) wipes them.
+Alternative under discussion: allow uploads to succeed and land
+under the visitor's own scratch owner so a "try uploading" flow
+works.
+
+Wire this in `distro/cmd/suchi/main.go`'s middleware chain, off by
+default. `docs/config.mdx` grows a `SUCHI_DEMO_MODE` row.
+
+### 2. Ephemeral per-visitor sessions
+
+Reuse the local-auth token flow. On first hit, the SPA calls a new
+`POST /api/demo/session` that:
+
+1. Creates a scratch user (`visitor-<nanoid>@demo.local`).
+2. Grants ACL access to the seeded doc tree.
+3. Mints a short-lived token (`ttl=15m`).
+4. Returns the token to the SPA which stashes it.
+
+The scratch user only sees seeded docs + anything they uploaded
+themselves. Two visitors never collide.
+
+`suchi demo` command grows a `--public` flag that pre-provisions the
+seeded doc tree with a shared read ACL group, and installs the
+`/api/demo/session` handler wiring.
+
+### 3. Reset ticker
+
+A goroutine (part of `serve`, gated on `SUCHI_DEMO_MODE=1`) runs
+every 30 minutes:
+
+- Deletes scratch users older than 30 minutes.
+- `DELETE FROM audit_events WHERE actor_kind='user' AND actor_id IN (<scratch>)`.
+- Cleans up their uploaded docs via `DELETE FROM documents` with the
+  usual ON DELETE CASCADE for tags/versions.
+- Runs `suchi gc --apply` on the CAS.
+
+Seeded rows (marked `system=1` where the schema supports it, else
+tracked via `settings.demo_seed_ids`) are never touched.
+
+Manual full reset: `suchi demo --reset` wipes and re-seeds.
+
+## Homelab hosting
+
+The `~/myworkspace/homelab/caddy` pattern already documented in the
+tasks scratchpad handles the edge:
+
+```caddy
+demo.suchi.page {
+  reverse_proxy suchi:8000
+  import security_headers
+  import jsonlog
+}
+```
+
+Cloudflare DNS-only (grey cloud) → Caddy → the suchi container.
+`SUCHI_DEMO_MODE=1` in the container env. `BACKUP_INTERVAL=0` and
+`AUDIT_RETENTION_DAYS=1` because backups + long audit history are
+noise for a demo.
+
+## Landing page (suchi.page apex)
+
+Separate Caddy block serving `/opt/homelab/site/suchi/index.html`
+statically. Content is a marketing page — features, screenshots,
+"Try the demo →" button linking to `demo.suchi.page`, "Install →"
+button linking to `docs.suchi.page/getting-started`.
+
+## Open questions
+
+- **Uploads allowed?** A visitor uploading their own PDF is a great
+  hook, but it's also an abuse vector (someone hosts illicit content
+  on suchi.page). Options: (a) disable uploads entirely — visitors
+  only browse seeded docs; (b) allow uploads but auto-trash on
+  session expiry; (c) allow uploads AND run every upload through a
+  sync-mode preconsume hook that scores content and rejects
+  hard-fail categories.
+- **Session cookie vs token?** Token-in-localStorage is simpler for
+  the SPA but leaves creds on-device longer than the ideal demo
+  lifetime; short-TTL cookie with SameSite=Strict is safer.
+- **Rate limit tuning.** The existing `NewRateLimit(5, 10)` on auth
+  paths is fine; the demo needs a stricter global limit
+  (`SUCHI_DEMO_GLOBAL_RPS=10` maybe).
+
+## Non-goals
+
+- Preserving demo-session state across restarts. Restarts wipe
+  everything; that's by design.
+- Multi-region hosting. One homelab box, one Caddy, one container.
+- Signup on demo. Visitors are anonymous; the "want your own?"
+  CTA links to Docker docs.
+
+## What ships next
+
+1. `SUCHI_DEMO_MODE=1` middleware + config row.
+2. `POST /api/demo/session` handler + SPA "demo session" banner.
+3. Reset ticker.
+4. Landing site under `/opt/homelab/site/suchi/`.
+5. `demo.suchi.page` Caddy block.
+
+See `~/myworkspace/project-suchi/tasks.md` for the concrete Caddy
++ DNS steps.
