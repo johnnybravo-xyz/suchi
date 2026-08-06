@@ -23,13 +23,21 @@
     finally { loading = false }
   }
 
-  async function resolve(t, decision) {
+  async function resolve(t, choice) {
     try {
-      await resolveApprovalTask(t.id, { decision })
+      await resolveApprovalTask(t.id, { choice, decision: choice })
       tasks = tasks.filter(x => x.id !== t.id)
       onCount?.(tasks.length)
-      notify?.(decision === 'approve' ? 'Approved' : 'Rejected')
+      notify?.(`Resolved: ${choice}`)
     } catch (ex) { notify?.(ex.message || 'Could not resolve the task') }
+  }
+
+  function deadline(t) {
+    if (!t.deadline_at) return null
+    const hrs = (t.deadline_at * 1000 - Date.now()) / 36e5
+    if (hrs < 0) return { text: 'deadline passed', soon: true }
+    if (hrs < 24) return { text: `${Math.max(1, Math.round(hrs))}h left`, soon: true }
+    return { text: `due ${fmtDate(t.deadline_at)}`, soon: false }
   }
 
   load()
@@ -41,19 +49,28 @@
   <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
 {:else}
   {#if tasks.length === 0}
-    <div class="empty"><Icon name="tasks" size={56} /><b>No approvals waiting.</b><span>Human-in-the-loop tasks from approval chains land here.</span></div>
+    <div class="empty"><Icon name="tasks" size={56} /><b>No approvals waiting.</b><span>Human-in-the-loop steps from approval chains land here.</span></div>
   {:else}
-    <div class="index" style="margin-bottom:20px">
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:22px">
       {#each tasks as t (t.id)}
-        <div class="irow" role="listitem">
-          <span class="dot warn"></span>
-          <span class="grow">
-            <span class="title" style="display:block">{t.title || t.kind || `Task #${t.id}`}</span>
-            <span class="sub">{t.doc_id ? `document #${t.doc_id} · ` : ''}{t.created_at ? fmtDate(t.created_at) : ''}</span>
-          </span>
-          {#if t.doc_id}<a class="btn sm" href={`#/doc/${t.doc_id}`}>Open doc</a>{/if}
-          <button class="btn sm" onclick={() => resolve(t, 'approve')}><Icon name="check" size={13} /> Approve</button>
-          <button class="btn sm danger" onclick={() => resolve(t, 'reject')}><Icon name="x" size={13} /> Reject</button>
+        {@const dl = deadline(t)}
+        <div class="card task-card">
+          <div class="prompt">{t.prompt || t.title || `Task #${t.id}`}</div>
+          <div class="meta">
+            {#if t.assignee}<span class="pill">{t.assignee}</span>{/if}
+            <span>step <code>{t.state_key}</code></span>
+            {#if t.doc_id}<a href={`#/doc/${t.doc_id}`}>document #{t.doc_id}</a>{/if}
+            <span>opened {fmtDate(t.created_at)}</span>
+            {#if dl}<span class:deadline-soon={dl.soon}>{dl.text}</span>{/if}
+          </div>
+          <div class="choices">
+            {#each (t.choices?.length ? t.choices : ['approve', 'reject']) as c, i}
+              <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
+                      onclick={() => resolve(t, c)}>
+                {#if i === 0}<Icon name="check" size={13} />{/if}{c}
+              </button>
+            {/each}
+          </div>
         </div>
       {/each}
     </div>
@@ -65,9 +82,12 @@
       {#each jobs as j (j.id)}
         <div class="irow">
           <span class="dot danger"></span>
-          <span class="title grow mono" style="font-size:.8rem">{j.kind}</span>
+          <span class="grow">
+            <span class="title mono" style="display:block;font-size:.8rem">{j.kind}</span>
+            {#if j.last_error}<span class="sub" title={j.last_error}>{j.last_error.slice(0, 90)}</span>{/if}
+          </span>
+          <span class="sub">{j.attempts} attempts</span>
           {#if j.doc_id}<a class="btn sm" href={`#/doc/${j.doc_id}`}>Doc #{j.doc_id}</a>{/if}
-          <span class="sub">{j.last_error ? j.last_error.slice(0, 60) : ''}</span>
         </div>
       {/each}
     </div>

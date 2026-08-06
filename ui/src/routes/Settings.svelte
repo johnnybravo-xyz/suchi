@@ -1,6 +1,6 @@
 <script>
-  import { listTokens, createToken, deleteToken, listSavedViews, createSavedView, deleteSavedView, listTags, listCorrespondents, listDocumentTypes, listJDCategories, setupState } from '../lib/api.js'
-  import { session } from '../lib/session.svelte.js'
+  import { listTokens, createToken, deleteToken, listSavedViews, createSavedView, deleteSavedView, listTags, listCorrespondents, listDocumentTypes, listJDCategories, setupState, patchMe, uploadAvatar } from '../lib/api.js'
+  import { session, refreshSession } from '../lib/session.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -52,6 +52,32 @@
     catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
   loadViews(); loadFacets()
+
+  // --- profile ---
+  let profile = $state({ display_name: session.user?.display_name || '', email: session.user?.email || '' })
+  let profileBusy = $state(false)
+  let avatarInput
+  async function saveProfile() {
+    profileBusy = true
+    try {
+      await patchMe({ display_name: profile.display_name.trim(), email: profile.email.trim() })
+      await refreshSession()
+      notify?.('Profile saved')
+    } catch (ex) {
+      notify?.(ex.status === 404 || ex.status === 405
+        ? 'Profile editing needs the server-side endpoint (see backend tasks doc)'
+        : ex.message || 'Could not save the profile')
+    } finally { profileBusy = false }
+  }
+  async function sendAvatar(file) {
+    if (!file) return
+    try { await uploadAvatar(file); await refreshSession(); notify?.('Avatar updated') }
+    catch (ex) {
+      notify?.(ex.status === 404 || ex.status === 405
+        ? 'Avatar upload needs the server-side endpoint (see backend tasks doc)'
+        : ex.message || 'Could not upload the avatar')
+    }
+  }
 
   async function load() {
     try {
@@ -132,12 +158,31 @@
   </div>
 
   <div class="card">
-    <h3>Account</h3>
-    <dl class="kv">
-      <dt>Signed in as</dt><dd>{session.user?.email}</dd>
-      <dt>Role</dt><dd><span class="pill">{session.user?.role}</span></dd>
-      <dt>Auth</dt><dd>{session.user?.authn_by}</dd>
-    </dl>
+    <h3>Profile</h3>
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+        <span class="avatar" style="width:56px;height:56px;font-size:1.2rem">
+          {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{(profile.display_name || session.user?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('')}{/if}
+        </span>
+        <button class="btn sm" onclick={() => avatarInput.click()}>Change</button>
+        <input bind:this={avatarInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onchange={(e) => sendAvatar(e.target.files[0])} />
+      </div>
+      <div style="flex:1">
+        <div class="field">
+          <label for="p-name">Display name</label>
+          <input id="p-name" class="input" bind:value={profile.display_name} />
+        </div>
+        <div class="field">
+          <label for="p-email">Email</label>
+          <input id="p-email" class="input" type="email" bind:value={profile.email} />
+        </div>
+        <div class="toolbar" style="margin:0">
+          <button class="btn primary sm" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
+          <span class="pill">{session.user?.role}</span>
+          <span class="sub" style="color:var(--faint);font-size:.74rem">auth: {session.user?.authn_by}</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
