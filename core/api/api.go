@@ -110,6 +110,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Bulk metadata edit. One tx, one audit event, per-id ACL check
 	// with a granular result array. See documents_bulk.go.
 	mux.HandleFunc("POST /api/documents/bulk_edit", s.BulkEdit)
+	// Page-1 thumbnail — generated at ingest by post-ingest.thumb.
+	mux.HandleFunc("GET /api/documents/{id}/thumb", s.GetDocumentThumb)
 
 	// Document correspondents (multi-party per doc).
 	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)

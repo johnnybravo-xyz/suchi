@@ -53,6 +53,7 @@ import (
 	"github.com/suchi-dms/suchi/core/pipeline/preconsume"
 	"github.com/suchi-dms/suchi/core/pipeline/qpdf"
 	"github.com/suchi-dms/suchi/core/pipeline/tessocr"
+	"github.com/suchi-dms/suchi/core/pipeline/thumb"
 	"github.com/suchi-dms/suchi/core/pipeline/zugferd"
 	"github.com/suchi-dms/suchi/core/render/view"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
@@ -1342,6 +1343,12 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		}
 	}
 
+	// First-page thumbnail. Best-effort — a missing pdftoppm (slim
+	// image without full-pipeline binaries) skips silently, non-PDFs
+	// fall through the same skip path. On success the endpoint
+	// GET /api/documents/{id}/thumb/ serves it with an immutable ETag.
+	h.generateThumb(ctx, log, docID)
+
 	// LLM classification handoff: enqueue a post-classify job that
 	// the llm-classifier plugin's Subscriber picks up. Only enqueue
 	// when the plugin is actually registered — otherwise the job
@@ -1368,6 +1375,69 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		After: map[string]any{"title": title.String},
 	})
 	return nil
+}
+
+// generateThumb renders page 1 of the doc's archive PDF (preferred)
+// or original blob into a PNG thumbnail, stores it in CAS, and
+// updates documents.thumb_sha. Every failure path (no archive_blob,
+// non-PDF, pdftoppm missing, rasterize timeout) logs at Warn/Info
+// and returns — thumbnails are a UX nicety, not an ingest invariant.
+func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int64) {
+	var (
+		archive sql.NullString
+		orig    sql.NullString
+		mime    sql.NullString
+	)
+	if err := h.db.Read.QueryRowContext(ctx,
+		`SELECT archive_blob, original_blob, mime_type FROM documents WHERE id = ?`,
+		docID).Scan(&archive, &orig, &mime); err != nil {
+		log.Warn("post-ingest.thumb.load_doc", "err", err.Error())
+		return
+	}
+	// Only PDFs have a well-known page-1 concept. Non-PDF docs (image
+	// originals, epub, msg) skip; the endpoint 404s and the SPA
+	// renders its initials placeholder.
+	var blobSHA string
+	if archive.Valid && archive.String != "" {
+		blobSHA = archive.String
+	} else if orig.Valid && orig.String != "" && mime.Valid && mime.String == "application/pdf" {
+		blobSHA = orig.String
+	}
+	if blobSHA == "" {
+		return
+	}
+	rc, err := h.cas.Get(blobSHA)
+	if err != nil {
+		log.Warn("post-ingest.thumb.cas_get", "err", err.Error())
+		return
+	}
+	pdfBytes, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		log.Warn("post-ingest.thumb.read", "err", err.Error())
+		return
+	}
+
+	res, err := thumb.Render(ctx, pdfBytes, log, thumb.Options{})
+	if err != nil {
+		log.Warn("post-ingest.thumb.render", "err", err.Error())
+		return
+	}
+	if res.Skipped {
+		return
+	}
+	ref, err := h.cas.Put(bytes.NewReader(res.PNG))
+	if err != nil {
+		log.Warn("post-ingest.thumb.cas_put", "err", err.Error())
+		return
+	}
+	if _, err := h.db.Write.ExecContext(ctx,
+		`UPDATE documents SET thumb_sha = ?, updated_at = unixepoch() WHERE id = ?`,
+		ref.SHA256, docID); err != nil {
+		log.Warn("post-ingest.thumb.write", "err", err.Error())
+		return
+	}
+	log.Info("post-ingest.thumb.written", "doc_id", docID, "sha", ref.SHA256, "size", len(res.PNG))
 }
 
 // consumptionContextFromPayload pulls the trigger-filter fields

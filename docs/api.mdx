@@ -472,6 +472,27 @@ The `{documents, method, parameters}` shape matches the mobile-compat
 DMS wire vocabulary suchi already speaks — existing clients hitting
 this URL with a familiar body work unchanged.
 
+### `GET /api/documents/{id}/thumb`
+
+Page-1 thumbnail rendered at ingest time from the archive PDF via
+`pdftoppm -f 1 -l 1 -r 40 -png`. PNG bytes; immutable ETag equal to
+`documents.thumb_sha`. Serve with
+`Cache-Control: private, max-age=31536000, immutable` so the SPA's
+list view can request one URL per doc and every subsequent scroll is
+a 304.
+
+Scope: `documents:read`. ACL rule matches `GET /api/documents/{id}`.
+
+Returns **404** when:
+- The doc has no archive PDF (image originals, EPUB, `.msg`, etc.).
+- The instance ran the ingest without `pdftoppm` on PATH (slim
+  Docker image; the pipeline logs the skip at info).
+- The doc predates migration `0025_document_thumbnails` and hasn't
+  been re-ingested.
+
+The SPA treats a 404 as "no thumbnail" and falls back to its
+title-initials placeholder — no error state on the row.
+
 ### `DELETE /api/documents/{id}`
 
 Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
