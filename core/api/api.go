@@ -107,6 +107,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/documents/{id}", s.PatchDocument)
 	mux.HandleFunc("DELETE /api/documents/{id}", s.SoftDeleteDocument)
 	mux.HandleFunc("POST /api/documents/{id}/restore", s.RestoreDocument)
+	// Bulk metadata edit. One tx, one audit event, per-id ACL check
+	// with a granular result array. See documents_bulk.go.
+	mux.HandleFunc("POST /api/documents/bulk_edit", s.BulkEdit)
 
 	// Document correspondents (multi-party per doc).
 	mux.HandleFunc("GET /api/documents/{id}/correspondents/", s.ListDocCorrespondents)
