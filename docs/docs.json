@@ -48,7 +48,7 @@
           },
           {
             "group": "Alternatives",
-            "pages": ["comparison", "wishlist/qa-over-archive"]
+            "pages": ["comparison", "wishlist/qa-over-archive", "wishlist/similar-documents"]
           }
         ]
       }
