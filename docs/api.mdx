@@ -290,6 +290,14 @@ new server versions and appear here as they arrive):
 so it follows across devices), pass it back as `since_id` on the next
 call.
 
+**Feed horizon.** Audit rows are pruned on the backup ticker per
+`AUDIT_RETENTION_DAYS` (default `20`, cap `100`). `since_id` stays
+valid across purges — IDs only grow — but a client that comes back
+after the retention window has elapsed sees a clean empty diff, not
+"the history it missed." This feed is a near-term change stream, not
+a permanent record. Long-horizon consumers should read `audit_events`
+via a SIEM sink instead.
+
 ### `GET /api/jd/presets/`
 
 Admin-only preset catalog for the setup wizard. Returns one row per

@@ -94,6 +94,12 @@ func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 // Register attaches every /api route this package owns to mux. Called
 // from main.go after the auth chain is wired — httpx.Authenticate runs
 // upstream, so handlers here can rely on auth.FromContext.
+//
+// Not every /api route lives here: blob mirrors
+// (GET /api/documents/{id}/preview, .../download) are registered in
+// distro/cmd/suchi/main.go because they reuse the ui.Server's
+// serveBlob (sensitivity gate, ETag, sandbox CSP). A grep for those
+// routes finds them there, not in this file.
 func (s *Server) Register(mux *http.ServeMux) {
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)

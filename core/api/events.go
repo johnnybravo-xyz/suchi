@@ -12,6 +12,14 @@
 //     monotonic cursor by construction (SQLite INTEGER PRIMARY KEY
 //     aliases ROWID, strictly increasing across inserts).
 //
+//   - Feed horizon = AUDIT_RETENTION_DAYS. Audit rows are pruned on
+//     the backup ticker (default 20d, cap 100d). since_id remains a
+//     valid cursor after a purge — IDs only grow — but a client that
+//     comes back after the retention window has elapsed will see a
+//     clean empty diff, not "the history it missed". Don't build a
+//     full-history client on this endpoint; use `audit_events` via a
+//     SIEM sink for that.
+//
 //   - Visibility: rows with object_kind='document' are filtered
 //     through the same DocVisibilityWhere fragment the list endpoints
 //     use — an ACL-restricted user can't see events about docs they
