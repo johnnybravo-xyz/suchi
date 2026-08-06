@@ -157,7 +157,8 @@
   ],
   "paths": {
     "/api/schema/":         { "get": { "summary": "This OpenAPI document.", "security": [], "responses": { "200": { "description": "OpenAPI 3.1 JSON" } } } },
-    "/api/whoami":          { "get": { "summary": "Return the resolved principal.", "responses": { "200": { "description": "Principal shape" }, "401": { "description": "anonymous" } } } },
+    "/api/whoami":          { "get": { "summary": "Return the resolved principal + user profile fields (display_name, avatar_url).", "responses": { "200": { "description": "UserSelf" }, "401": { "description": "anonymous" } } } },
+    "/api/users/me":        { "patch": { "summary": "Update the caller's display_name. email changes rejected with code=email_change_unsupported (needs a dedicated flow). Body {display_name?}." } },
     "/api/token/":          { "post": { "summary": "Exchange local credentials for an API token (mobile-compat).", "security": [], "responses": { "200": { "description": "{token}" }, "401": { "description": "bad creds" } } } },
     "/api/login":           { "post": { "summary": "Same handler as /api/token/ — accepts JSON or form.", "security": [] } },
     "/api/remote_version/": { "get": { "summary": "Version handshake." } },
