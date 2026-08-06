@@ -472,6 +472,42 @@ The `{documents, method, parameters}` shape matches the mobile-compat
 DMS wire vocabulary suchi already speaks — existing clients hitting
 this URL with a familiar body work unchanged.
 
+### `GET /api/documents/{id}/similar`
+
+"Documents like this" — pure-Go FTS5 more-like-this backed by the
+existing full-text index. Extracts the top-10 tokens from the source
+doc's title + first ~4 KiB of content, runs them as an FTS5
+`MATCH` query, ranks by BM25, and returns the top N. Scope:
+`documents:read`. Visibility-scoped identically to the list surface;
+the source doc is always excluded from its own results.
+
+```json
+{
+  "results": [
+    { "id": 91,  "title": "April electricity bill",  "mime_type": "application/pdf",
+      "jd_category_id": 31, "created_at": 1746662400, "score": 8.42 },
+    { "id": 108, "title": "March electricity bill",  "mime_type": "application/pdf",
+      "jd_category_id": 31, "created_at": 1744070400, "score": 7.11 }
+  ],
+  "method": "fts"
+}
+```
+
+Score is `-bm25(documents_fts)` so higher = more similar (matches
+the wire convention other suchi score fields already use). `?limit=N`
+takes 1–50, default 10.
+
+`method` is `"fts"` today. When `sqlite-vec` lands (see
+[the wishlist plan](/wishlist/similar-documents)) semantic recall
+takes over and this field flips to `"vec"`; the FTS5 path stays as
+the always-on fallback for instances without the vec extension
+loaded.
+
+Quality note: this is coarse vocabulary overlap, not semantic
+similarity. A receipt matches other receipts by shared words
+("total", "amount", "date") — good enough as a starter affordance,
+better once vec0 stacks on top.
+
 ### `GET /api/documents/{id}/thumb`
 
 Page-1 thumbnail rendered at ingest time from the archive PDF via

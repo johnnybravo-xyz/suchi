@@ -171,6 +171,7 @@
                                           "delete": { "summary": "Soft-delete (trash)." } },
     "/api/documents/{id}/restore":     { "post": { "summary": "Un-trash." } },
     "/api/documents/{id}/thumb":       { "get":  { "summary": "Page-1 thumbnail (PNG, ~40 DPI) rendered at ingest via pdftoppm. Immutable ETag = documents.thumb_sha. 404 for non-PDFs, docs ingested on a slim image without pdftoppm, or older docs pre-migration." } },
+    "/api/documents/{id}/similar":     { "get":  { "summary": "Documents like this one. Pure-Go FTS5 more-like-this today: top-10 tokens from source content ORed as an FTS5 MATCH query, ranked by BM25, visibility-scoped, source excluded. ?limit=N (1-50, default 10). method=\"fts\" today; \"vec\" once sqlite-vec ships (see wishlist/similar-documents)." } },
     "/api/documents/bulk_edit":        { "post": { "summary": "Batch metadata mutation. Body {documents:[ids], method, parameters}. Methods: set_correspondent, set_document_type, set_storage_path, set_jd_category, set_sensitivity, add_tag, remove_tag, trash, restore. One tx, one audit event, per-id ACL result array. Cap 500 documents per call. Wire shape matches the mobile-compat DMS vocabulary suchi already speaks." } },
 
     "/api/tags/":            { "get":  { "summary": "List tags (paginated)." },
