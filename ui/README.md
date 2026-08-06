@@ -47,6 +47,30 @@ npm install         # three build-time deps (svelte, vite, plugin) — see note 
 npm run dev         # vite on :5173, proxying /api /preview /download /login to :8000
 ```
 
+## End-to-end on the API alone
+
+The SPA has **no dependency on the server-rendered UI pages**:
+
+- **Setup wizard is in-app** (`#/setup`) — all eight steps over the setup
+  API (`/api/admin/setup/state|step/{name}|complete`, `/api/admin/users`,
+  `/api/admin/setup/jd-preset`, `/api/admin/settings/llm|preferences|ingest`),
+  every step optional/skippable, egress-ack enforced client-side for
+  non-local LLM endpoints exactly like the server wizard does.
+- **Previews and downloads are authenticated fetches** → object URLs, not
+  bare iframe/anchor hits. This matters because the JSON login path
+  issues a token *without* a session cookie, and iframes can't carry an
+  `Authorization` header — so the SPA fetches the blob itself and hands
+  the browser a local URL. Preview iframes additionally get `sandbox`
+  (object URLs are opaque-origin anyway; belt and suspenders).
+- Still used from the server, deliberately: `/preview/{id}` and
+  `/download/{id}` as **blob endpoints** (they are handlers, not pages —
+  see the backend doc for the proposal to mirror them under
+  `/api/documents/{id}/…`), and `/admin/mail` linked once from the wizard
+  because IMAP credentials should keep flowing through the server's own
+  guided page rather than being proxied through SPA state.
+- `/s/{token}` (anonymous share recipients) remains server-rendered by
+  design — recipients have no session and never load the SPA.
+
 ## Integrating into the suchi repo
 
 ### 1. Where the code lives
