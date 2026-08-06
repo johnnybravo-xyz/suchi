@@ -176,8 +176,10 @@
     "/api/documents/bulk_edit":        { "post": { "summary": "Batch metadata mutation. Body {documents:[ids], method, parameters}. Methods: set_correspondent, set_document_type, set_storage_path, set_jd_category, set_sensitivity, add_tag, remove_tag, trash, restore. One tx, one audit event, per-id ACL result array. Cap 500 documents per call. Wire shape matches the mobile-compat DMS vocabulary suchi already speaks." } },
 
     "/api/tags/":            { "get":  { "summary": "List tags (paginated)." },
-                                "patch": { "summary": "Not defined at collection." } },
-    "/api/tags/{id}/parent": { "patch": { "summary": "Reparent a tag (admin)." } },
+                                "post": { "summary": "Create tag (admin). Body {name, slug?, color?}." } },
+    "/api/tags/{id}":        { "patch": { "summary": "Update tag (admin). Body: partial {name, slug, color}. Parent moves live on /parent." },
+                                "delete": { "summary": "Delete tag (admin). Cascades document_tags; children re-root via ON DELETE SET NULL." } },
+    "/api/tags/{id}/parent": { "patch": { "summary": "Reparent a tag (admin). Cycle-guarded." } },
 
     "/api/correspondents/":         { "get": { "summary": "List." }, "post": { "summary": "Create (admin)." } },
     "/api/correspondents/{id}":     { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
@@ -187,6 +189,10 @@
     "/api/storage_paths/{id}":      { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
     "/api/custom_fields/":          { "get": { "summary": "List field definitions." }, "post": { "summary": "Create field (admin)." } },
     "/api/custom_fields/{id}":      { "patch": { "summary": "Update field (admin)." }, "delete": { "summary": "Delete field (admin)." } },
+
+    "/api/admin/settings/mail":      { "get":  { "summary": "Read mail-intake settings (admin). Password field is write-only — never returned." },
+                                        "put":  { "summary": "Persist mail-intake settings (admin). Body {imap_host, imap_port, username, password?, folder, poll_interval_min, owner_email}. Blank password keeps stored value. Response includes restart_required=true — no live reload today." } },
+    "/api/admin/settings/mail/test": { "post": { "summary": "Dial the IMAP server + LOGIN with submitted or stored creds (admin). Returns {ok, message}. Never 500s on a connect-refused." } },
 
     "/api/rules/":     { "get": { "summary": "List rules (paginated)." }, "post": { "summary": "Create rule (admin)." } },
     "/api/rules/{id}": { "patch": { "summary": "Update rule (admin)." }, "delete": { "summary": "Delete rule (admin)." } },

@@ -141,6 +141,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Tags — read + parent-hierarchy operations.
 	mux.HandleFunc("GET /api/tags/", s.ListTags)
+	mux.HandleFunc("POST /api/tags/", s.CreateTag)
+	mux.HandleFunc("PATCH /api/tags/{id}", s.UpdateTag)
+	mux.HandleFunc("DELETE /api/tags/{id}", s.DeleteTag)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)
 
 	// Taxonomy CRUD (correspondents, document_types, storage_paths).
@@ -214,6 +217,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Mail-setup wizard — admin-only. Endpoint 404s when the wizard
 	// isn't configured (MAIL_SETUP_ENV_PATH unset).
 	mux.HandleFunc("POST /api/admin/mail-setup", s.MailSetupApply)
+	// SPA Admin panel: mail-intake settings for the in-process
+	// emailwatch poller (distinct surface from the mail-mbsync
+	// sidecar wizard above).
+	mux.HandleFunc("GET /api/admin/settings/mail", s.GetMailSettings)
+	mux.HandleFunc("PUT /api/admin/settings/mail", s.PutMailSettings)
+	mux.HandleFunc("POST /api/admin/settings/mail/test", s.TestMailSettings)
 
 	// Setup wizard surface (admin-only).
 	s.registerSetup(mux)

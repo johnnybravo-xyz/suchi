@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/suchi-dms/suchi/core/audit"
@@ -104,6 +105,203 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 		out = []TagView{}
 	}
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
+}
+
+// tagUpsert is the POST/PATCH body. Every field optional on PATCH;
+// POST requires Name. Colors default at the DB level ('#a6cee3');
+// parent_id is set via PATCH /api/tags/{id}/parent, not here — that
+// endpoint owns the cycle check.
+type tagUpsert struct {
+	Name  *string `json:"name,omitempty"`
+	Slug  *string `json:"slug,omitempty"`
+	Color *string `json:"color,omitempty"`
+}
+
+// CreateTag — POST /api/tags/. Admin-only. Body: tagUpsert.
+// Returns {"id": <int>} on 201. 409 on unique-name/slug collision.
+func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var in tagUpsert
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
+		s.writeError(w, http.StatusBadRequest, "missing_name", "name is required")
+		return
+	}
+	name := strings.TrimSpace(*in.Name)
+	slug := ""
+	if in.Slug != nil {
+		slug = strings.TrimSpace(*in.Slug)
+	}
+	if slug == "" {
+		slug = slugFromName(name)
+	}
+	now := time.Now().Unix()
+
+	var id int64
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var (
+			res sql.Result
+			err error
+		)
+		if in.Color != nil {
+			res, err = tx.ExecContext(r.Context(),
+				`INSERT INTO tags(name, slug, color, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+				name, slug, strings.TrimSpace(*in.Color), now, now)
+		} else {
+			res, err = tx.ExecContext(r.Context(),
+				`INSERT INTO tags(name, slug, created_at, updated_at)
+				 VALUES (?, ?, ?, ?)`,
+				name, slug, now, now)
+		}
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			s.writeError(w, http.StatusConflict, "conflict",
+				"name or slug already exists")
+			return
+		}
+		s.serverErr(w, "tags.create", err)
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor:      auth.FromContext(r.Context()),
+		Action:     "tag.create",
+		ObjectKind: "tag",
+		ObjectID:   id,
+		After:      map[string]any{"name": name, "slug": slug},
+	})
+	s.writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// UpdateTag — PATCH /api/tags/{id}. Admin-only, matching the rest
+// of the taxonomy-write surface. Body: tagUpsert (partial). Parent
+// moves live on /api/tags/{id}/parent — that endpoint owns the
+// cycle-check invariant and is not duplicated here.
+func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	var in tagUpsert
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	sets := []string{}
+	args := []any{}
+	if in.Name != nil {
+		sets = append(sets, "name = ?")
+		args = append(args, strings.TrimSpace(*in.Name))
+	}
+	if in.Slug != nil {
+		sets = append(sets, "slug = ?")
+		args = append(args, strings.TrimSpace(*in.Slug))
+	}
+	if in.Color != nil {
+		sets = append(sets, "color = ?")
+		args = append(args, strings.TrimSpace(*in.Color))
+	}
+	if len(sets) == 0 {
+		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
+		return
+	}
+	sets = append(sets, "updated_at = ?")
+	args = append(args, time.Now().Unix())
+	args = append(args, id)
+
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(r.Context(),
+			"UPDATE tags SET "+strings.Join(sets, ", ")+" WHERE id = ?",
+			args...)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "no such tag")
+			return
+		}
+		if isUniqueViolation(err) {
+			s.writeError(w, http.StatusConflict, "conflict",
+				"name or slug already exists")
+			return
+		}
+		s.serverErr(w, "tags.update", err)
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor: auth.FromContext(r.Context()), Action: "tag.update",
+		ObjectKind: "tag", ObjectID: id,
+	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// DeleteTag — DELETE /api/tags/{id}. Admin-only. document_tags
+// rows cascade via ON DELETE CASCADE on the FK. Children (tags
+// with this row as parent_id) are re-rooted implicitly by
+// ON DELETE SET NULL — the nested-tag migration set that up so a
+// deleted parent doesn't orphan its subtree.
+func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(r.Context(),
+			`DELETE FROM tags WHERE id = ?`, id)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "no such tag")
+			return
+		}
+		s.serverErr(w, "tags.delete", err)
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor: auth.FromContext(r.Context()), Action: "tag.delete",
+		ObjectKind: "tag", ObjectID: id,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // SetTagParent — PATCH /api/tags/{id}/parent. Body:
