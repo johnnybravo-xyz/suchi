@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/automations"
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/classify/rules"
@@ -1352,6 +1353,20 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 			log.Warn("post-ingest.enqueue_classify", "err", err.Error())
 		}
 	}
+
+	// Notification feed: the pipeline has finished. document.create
+	// was already audited at upload time; this event marks "content
+	// is available, OCR/render done" — the state a user actually
+	// waits for. GET /api/events/ projects this into the activity
+	// drawer as "Ingested <title>". Best-effort; a failed audit
+	// write doesn't fail the pipeline.
+	var title sql.NullString
+	_ = h.db.Read.QueryRowContext(ctx,
+		`SELECT title FROM documents WHERE id = ?`, docID).Scan(&title)
+	audit.Log(ctx, h.db, log, audit.Event{
+		Action: "document.ingested", ObjectKind: "document", ObjectID: docID,
+		After: map[string]any{"title": title.String},
+	})
 	return nil
 }
 

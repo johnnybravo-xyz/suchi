@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/jobs"
 	pluginapi "github.com/suchi-dms/suchi/plugin-api"
 )
@@ -168,16 +169,37 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 			v := time.Now().Add(time.Duration(secs) * time.Second).Unix()
 			deadline = &v
 		}
-		return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var taskID int64
+		if err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
 			// Refresh deadline_at on the run so the sweeper can find it.
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE workflow_runs SET deadline_at = ? WHERE id = ?
 			`, deadlineArg(deadline), runID); err != nil {
 				return err
 			}
-			_, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+			id, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+			if err != nil {
+				return err
+			}
+			taskID = id
+			return nil
+		}); err != nil {
 			return err
+		}
+		// Notification feed: audit outside the tx (audit.Log opens
+		// its own WriteTx; nesting on the single-writer pool would
+		// self-deadlock). doc_id is copied out of the run so the
+		// event summary can reference the doc the task is about.
+		audit.Log(ctx, e.db, e.log, audit.Event{
+			Action: "approval.task_created", ObjectKind: "workflow_task", ObjectID: taskID,
+			After: map[string]any{
+				"run_id":   runID,
+				"assignee": res.Task.Assignee,
+				"prompt":   res.Task.Prompt,
+				"doc_id":   run.DocID,
+			},
 		})
+		return nil
 	}
 	// Park without task — waiting on external trigger, no state change.
 	if res.Event == "" {

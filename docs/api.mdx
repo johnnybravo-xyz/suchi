@@ -28,6 +28,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Classifier rules | `/api/rules/` CRUD |
 | Search + autocomplete | `/api/search/`, `/api/autocomplete/` |
 | Saved views + UI prefs | `/api/saved_views/`, `/api/ui_settings/` |
+| Activity feed | `GET /api/events/` (cursor over audit_events; `events:read` scope) |
 | Mobile compat handshake | `/api/remote_version/`, `/api/next_asn/`, `/api/tasks/` |
 | Agents | `POST /api/tasks/`, `.../claim`, `.../complete`, `.../release`; `/api/agent/webhooks` |
 | Automations | `/api/automations/` CRUD ([guide](/automations)) |
@@ -204,6 +205,88 @@ DRF envelope. Read-only — creation happens via preset swap
   ]
 }
 ```
+
+### `GET /api/events/`
+
+Cursor-based activity feed over the audit log. The SPA's notification
+drawer, and any agent that wants a change stream, reads this instead
+of polling `/api/documents/` and `/api/tasks/` on a timer.
+
+Scope: **`events:read`** (new; browser sessions have it implicitly,
+legacy `read` tokens inherit it via the wildcard rule).
+
+Query params (all optional):
+
+- `?since_id=<id>` — return rows with `id > since_id`. First call
+  omits it; every subsequent call passes the previous response's
+  `latest_id`. `audit_events.id` is a strictly-increasing INTEGER PK.
+- `?kinds=a,b,c` — comma-separated allow-list. Unknown kinds
+  silently return nothing (no error), so a client rolling out a new
+  kind name never breaks on an older server.
+- `?limit=<n>` — 1–200, default 100. The server always reads at
+  most 2× this before visibility filtering, so a very restrictive
+  ACL setup with `limit=100` still returns quickly.
+
+**Visibility rules** (enforced server-side, not documentation-only):
+
+- Rows with `object_kind="document"` are filtered through the same
+  ACL fragment the list endpoints apply. A member never sees an event
+  about a doc they can't read.
+- Operational kinds (`job.dead`, `backup.written`) require admin.
+  A non-admin who asks for `?kinds=job.dead` gets an empty result set
+  (no 403 — the drawer keeps working).
+- Every other kind (`approval.task_created`, `share_link.*`, etc.) is
+  visible to any authed caller with `events:read`.
+
+**Summary rendering.** `summary` is a pre-rendered one-liner
+("Ingested March rent") so clients don't need a title lookup per row.
+The privacy invariant applies — summaries carry titles and kinds
+only, never document content or OCR text.
+
+**Kinds currently emitted** (non-exhaustive; new emit points land in
+new server versions and appear here as they arrive):
+
+| Kind | Fires when |
+| ---- | ---------- |
+| `document.create` | upload API landed a new doc row |
+| `document.ingested` | post-ingest pipeline finished (OCR + render done) |
+| `document.upload.conflict` | dedup hit on API upload or fs-watch drop |
+| `document.ingest.skipped` | ingest producer refused the file (oversize etc.) |
+| `document.update` / `.trash` / `.restore` | metadata mutations |
+| `document.correspondent.add` / `.remove` | correspondent link changed |
+| `document.custom_field.set` | custom field value set |
+| `document.decrypt` | password-protected PDF unlocked |
+| `document.version.create` | new version of an existing doc uploaded |
+| `approval.task_created` | workflow spawned a human-in-the-loop task |
+| `job.dead` (admin only) | outbox job exhausted retries |
+| `backup.written` (admin only) | VACUUM INTO snapshot landed |
+
+**200 OK**
+```json
+{
+  "results": [
+    {
+      "id": 4182,
+      "kind": "document.ingested",
+      "created_at": 1754441523,
+      "doc_id": 91,
+      "summary": "Ingested March rent"
+    },
+    {
+      "id": 4183,
+      "kind": "job.dead",
+      "created_at": 1754441599,
+      "summary": "A background job gave up after retries"
+    }
+  ],
+  "latest_id": 4183
+}
+```
+
+**Read/unread state** is a client concern — save `latest_id` locally
+(the SPA uses `PUT /api/ui_settings/` with `{events: {last_seen_id}}`
+so it follows across devices), pass it back as `since_id` on the next
+call.
 
 ### `DELETE /api/documents/{id}`
 
