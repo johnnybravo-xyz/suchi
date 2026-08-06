@@ -41,5 +41,12 @@ ui/dist/
 !core/ui/spa/dist/
 !core/ui/spa/dist/**
 
+# Override the common global-gitignore `lib/` rule (matches Rust /lib,
+# Python installs, etc.) so ui/src/lib/* stays trackable from any dev's
+# machine. Without this, `git add ui/src/lib/api.js` silently no-ops on
+# hosts that carry the pattern in ~/.gitignore_global.
+!ui/src/lib/
+!ui/src/lib/**
+
 # Maintainer scratchpad (personal backlog; not shipped)
 /tasks.md

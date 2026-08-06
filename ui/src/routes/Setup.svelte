@@ -3,6 +3,7 @@
            saveLLMSettings, savePreferences, saveIngestSettings, listJDPresets } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
+  import MailForm from '../lib/MailForm.svelte'
 
   let { notify, onDone } = $props()
 
@@ -167,10 +168,9 @@
 
     {:else if cur === 'mail'}
       <h3>Email intake</h3>
-      <p class="wiz-p">Mailbox polling has its own guided page (IMAP credentials never pass through this wizard). Set it up there, then come back and mark this done.</p>
-      <div class="toolbar">
-        <a role="button" class="btn primary sm" href="/admin/mail" target="_blank" rel="noopener">Open mail setup ↗</a>
-        <button class="btn sm" onclick={() => mark('done')}>Done</button>
+      <p class="wiz-p">Point suchi at a mailbox and forwarded documents file themselves. Credentials stay server-side; the password field never reads back.</p>
+      <MailForm {notify} onSaved={() => mark('done')} />
+      <div class="toolbar" style="margin-top:12px">
         <button class="btn sm" onclick={() => mark('skipped')}>Skip for now</button>
       </div>
 
