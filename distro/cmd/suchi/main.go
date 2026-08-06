@@ -25,6 +25,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/backup"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
@@ -207,6 +208,15 @@ func runServe() int {
 		return 1
 	}
 
+	// Seed built-in system automations (the "Auto-file from archive"
+	// row and any future ships-in-the-box automation). Idempotent by
+	// system_slug — re-runs on every boot are no-ops. Runs after
+	// migrations so the system + system_slug columns exist.
+	if err := automations.Seed(ctx, d, log); err != nil {
+		log.Error("main.automations.seed", "err", err.Error())
+		return 1
+	}
+
 	// JD invariants: load starter tree on first boot; repair the inbox
 	// pointer if it's ever missing. Runs before any handler so ingest
 	// paths can always dereference jd_inbox_category_id.
@@ -315,6 +325,11 @@ func runServe() int {
 		log.Error("main.llm.new", "err", err.Error())
 		return 1
 	}
+	// Tell the automations engine whether LLM is doing the work. When
+	// true, the built-in apply_from_similar action no-ops; it only
+	// fires as a fallback when LLM's terminal-error hook explicitly
+	// forces it (see WithForceHeuristics).
+	automations.SetHeuristicsSkip(llm != nil)
 
 	// Jobs — the durable outbox dispatcher. Every ingest producer
 	// enqueues a post-ingest job in the same tx as its doc row insert;
@@ -351,7 +366,15 @@ func runServe() int {
 		postingest.WithPreConsume(cfg.PreConsumeScript),
 	))
 	if llm != nil {
-		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
+		disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log).
+			WithFallback(func(ctx context.Context, docID int64) error {
+				// Low-confidence LLM outcome → force-fire the built-in
+				// heuristics automation. The action's own idempotency
+				// (UPDATE ... WHERE col IS NULL) means it can't stomp
+				// on fields LLM already set.
+				return automations.ApplyOnDocumentAdded(
+					automations.WithForceHeuristics(ctx), d, log, docID)
+			}))
 	}
 	// Render subscriber — every mutator that changes metadata enqueues
 	// a "render" job in its own tx; this dispatcher fires the move
@@ -416,16 +439,41 @@ func runServe() int {
 	}
 
 	// email-watch: IMAP producer. Opt-in via INGEST_IMAP_URL +
-	// INGEST_IMAP_PASSWORD. Every unseen message becomes a
-	// message/rfc822 doc; post-ingest's eml path fans out attachments
-	// as child docs (see core/pipeline/eml).
+	// INGEST_IMAP_PASSWORD, or via the SPA Admin panel (settings-
+	// first, env fallback via ResolveEmailWatchConfig). Every unseen
+	// message becomes a message/rfc822 doc; post-ingest's eml path
+	// fans out attachments as child docs (see core/pipeline/eml).
 	imapOwner := cfg.IngestIMAPOwnerEmail
 	if imapOwner == "" {
 		imapOwner = cfg.IngestFSOwnerEmail // fall back to shared owner
 	}
+	imapURL := cfg.IngestIMAPURL
+	imapPassword := cfg.IngestIMAPPassword
+	// If env didn't provide a URL, try to stitch one from the SPA-
+	// written settings. Live-reload is not wired — a settings write
+	// requires a restart to take effect (PutMailSettings surfaces
+	// this via restart_required=true).
+	if imapURL == "" {
+		mail := settings.ResolveEmailWatchConfig(ctx, d, settings.EmailWatchConfig{})
+		if mail.Host != "" && mail.Username != "" {
+			port := mail.Port
+			if port == 0 {
+				port = 993
+			}
+			folder := mail.Folder
+			if folder == "" {
+				folder = "INBOX"
+			}
+			imapURL = fmt.Sprintf("imaps://%s@%s:%d/%s", mail.Username, mail.Host, port, folder)
+			imapPassword = mail.Password
+			if imapOwner == "" {
+				imapOwner = mail.OwnerEmail
+			}
+		}
+	}
 	if watcher, err := emailwatch.New(ctx, emailwatch.Config{
-		URL:        cfg.IngestIMAPURL,
-		Password:   cfg.IngestIMAPPassword,
+		URL:        imapURL,
+		Password:   imapPassword,
 		OwnerEmail: imapOwner,
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.emailwatch.new", "err", err.Error())

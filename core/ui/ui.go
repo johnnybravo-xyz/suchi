@@ -147,6 +147,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 		http.Redirect(w, r, "/docs/config#mail-mbsync-sidecar-optional-wizard", http.StatusFound)
 	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// Fresh instance guard: with no users yet, the SPA's Sign-in
+		// form is useless — nothing to log in as. Send the operator
+		// to /bootstrap first so they can consume the setup token
+		// and mint the first admin. LoginPage does the same check
+		// but only fires when someone hits /login directly.
+		if s.SetupPendingFn != nil && s.SetupPendingFn() {
+			http.Redirect(w, r, "/bootstrap", http.StatusFound)
+			return
+		}
 		target := "/app/"
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery

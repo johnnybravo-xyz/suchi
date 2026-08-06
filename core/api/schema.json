@@ -173,11 +173,16 @@
     "/api/documents/{id}/restore":     { "post": { "summary": "Un-trash." } },
     "/api/documents/{id}/thumb":       { "get":  { "summary": "Page-1 thumbnail (PNG, ~40 DPI) rendered at ingest via pdftoppm. Immutable ETag = documents.thumb_sha. 404 for non-PDFs, docs ingested on a slim image without pdftoppm, or older docs pre-migration." } },
     "/api/documents/{id}/similar":     { "get":  { "summary": "Documents like this one. Pure-Go FTS5 more-like-this today: top-10 tokens from source content ORed as an FTS5 MATCH query, ranked by BM25, visibility-scoped, source excluded. ?limit=N (1-50, default 10). method=\"fts\" today; \"vec\" once sqlite-vec ships (see wishlist/similar-documents)." } },
+    "/api/documents/{id}/proposals":   { "get":  { "summary": "Pending Auto-file-from-archive proposals for one doc (owner or ACL:view). Each row carries field, value_id, label, confidence, and the neighbour doc IDs in based_on." } },
+    "/api/documents/{id}/proposals/{proposal_id}/resolve": { "post": { "summary": "Resolve one proposal. Body {action:\"apply\"|\"reject\"}. Applies via UPDATE-with-null-guard so a user's edit between propose and apply is preserved." } },
+    "/api/proposals/resolve_bulk":     { "post": { "summary": "Resolve N proposals in one call. Body {proposal_ids:[..], action:\"apply\"|\"reject\"}. Per-id ACL check + per-id result array; forbidden entries come back as {id, ok:false, code:\"forbidden\"} while the rest apply. Cap 500." } },
     "/api/documents/bulk_edit":        { "post": { "summary": "Batch metadata mutation. Body {documents:[ids], method, parameters}. Methods: set_correspondent, set_document_type, set_storage_path, set_jd_category, set_sensitivity, add_tag, remove_tag, trash, restore. One tx, one audit event, per-id ACL result array. Cap 500 documents per call. Wire shape matches the mobile-compat DMS vocabulary suchi already speaks." } },
 
     "/api/tags/":            { "get":  { "summary": "List tags (paginated)." },
-                                "patch": { "summary": "Not defined at collection." } },
-    "/api/tags/{id}/parent": { "patch": { "summary": "Reparent a tag (admin)." } },
+                                "post": { "summary": "Create tag (admin). Body {name, slug?, color?}." } },
+    "/api/tags/{id}":        { "patch": { "summary": "Update tag (admin). Body: partial {name, slug, color}. Parent moves live on /parent." },
+                                "delete": { "summary": "Delete tag (admin). Cascades document_tags; children re-root via ON DELETE SET NULL." } },
+    "/api/tags/{id}/parent": { "patch": { "summary": "Reparent a tag (admin). Cycle-guarded." } },
 
     "/api/correspondents/":         { "get": { "summary": "List." }, "post": { "summary": "Create (admin)." } },
     "/api/correspondents/{id}":     { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
@@ -187,6 +192,10 @@
     "/api/storage_paths/{id}":      { "patch": { "summary": "Update (admin)." }, "delete": { "summary": "Delete (admin)." } },
     "/api/custom_fields/":          { "get": { "summary": "List field definitions." }, "post": { "summary": "Create field (admin)." } },
     "/api/custom_fields/{id}":      { "patch": { "summary": "Update field (admin)." }, "delete": { "summary": "Delete field (admin)." } },
+
+    "/api/admin/settings/mail":      { "get":  { "summary": "Read mail-intake settings (admin). Password field is write-only — never returned." },
+                                        "put":  { "summary": "Persist mail-intake settings (admin). Body {imap_host, imap_port, username, password?, folder, poll_interval_min, owner_email}. Blank password keeps stored value. Response includes restart_required=true — no live reload today." } },
+    "/api/admin/settings/mail/test": { "post": { "summary": "Dial the IMAP server + LOGIN with submitted or stored creds (admin). Returns {ok, message}. Never 500s on a connect-refused." } },
 
     "/api/rules/":     { "get": { "summary": "List rules (paginated)." }, "post": { "summary": "Create rule (admin)." } },
     "/api/rules/{id}": { "patch": { "summary": "Update rule (admin)." }, "delete": { "summary": "Delete rule (admin)." } },

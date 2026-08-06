@@ -15,6 +15,12 @@
 #   $HOME/.config/suchi/config.toml
 #   /etc/suchi/config.toml
 #   ./suchi.toml         (cwd)
+#
+# Every field below has a matching env var of the same name in
+# SCREAMING_SNAKE_CASE (see .env.sample for the flat form). Some
+# knobs — mail intake, LLM classifier, fs-watch owner — can also be
+# written from the SPA Admin panel; the DB settings win over env at
+# boot when both are set (see docs/config.mdx §"Layered config").
 
 # --------------------------------------------------------------------
 # Required
@@ -29,29 +35,41 @@ public_url = "http://127.0.0.1:8000"
 # Storage & runtime
 # --------------------------------------------------------------------
 
-data_dir     = "/data"
-listen_addr  = ":8000"
-log_level    = "info"     # debug | info | warn | error
-body_limit   = "100M"     # multipart cap
-backup_interval = "24h"   # 0 disables
+data_dir     = "/data"          # CAS blobs, rendered view, backups all under here
+listen_addr  = ":8000"          # ip:port; ":8000" listens on all interfaces
+log_level    = "info"           # debug | info | warn | error
+body_limit   = "100M"           # multipart cap (e.g. "20M", "1G")
+
+# Session-cookie signing key. Absent = generated + persisted under
+# $DATA_DIR/.session-key on first boot. Override only for restore-
+# from-backup or multi-node deploys.
+# session_key_path = "/etc/suchi/session-key"
+
+# --------------------------------------------------------------------
+# Backups
+# --------------------------------------------------------------------
+
+# VACUUM INTO snapshot cadence. "0" or "off" disables.
+backup_interval = "24h"
+
+# Retention window for snapshots — keep the N most recent. 0 = keep
+# everything (unbounded storage growth; not the default).
+backup_keep = 7
+
+# Audit-events sliding window (days). Pruning runs after each backup
+# snapshot. Default 20. Env caps at 100 so notifications-feed growth
+# can't blow up storage without an operator conscious decision. 0
+# disables pruning entirely.
+audit_retention_days = 20
 
 # --------------------------------------------------------------------
 # UI
 # --------------------------------------------------------------------
 
-# Set to "1" or "true" to disable the built-in server-rendered UI.
-# For deployments where an external SPA fronts /api/.
+# Set to "1" or "true" to disable all browser-facing routes at boot.
+# For deployments where an external SPA fronts /api/. What stays:
+# /api/*, /healthz, /readyz, /metrics.
 # suchi_ui_disabled = "true"
-
-# --------------------------------------------------------------------
-# OCR + ingest
-# --------------------------------------------------------------------
-
-ocr_languages     = ["eng"]    # array form; CSV form ("eng,deu") also works
-ocr_engine        = "auto"     # auto | tesseract | ocrmypdf
-pdf_max_content_bytes  = "8M"
-epub_max_content_bytes = "32M"
-djvu_max_content_bytes = "32M"
 
 # --------------------------------------------------------------------
 # TLS (only when suchi terminates TLS itself, not behind a proxy)
@@ -61,38 +79,98 @@ djvu_max_content_bytes = "32M"
 # tls_key_file  = "/etc/suchi/key.pem"
 
 # --------------------------------------------------------------------
-# OIDC (all-or-nothing group)
+# OCR + ingest limits
+# --------------------------------------------------------------------
+
+ocr_languages          = ["eng"]    # array; CSV form ("eng,deu") also works
+ocr_engine             = "auto"     # auto | tesseract | ocrmypdf
+pdf_max_content_bytes  = "8M"
+epub_max_content_bytes = "32M"
+djvu_max_content_bytes = "32M"
+
+# --------------------------------------------------------------------
+# Scan pre-processing
+# --------------------------------------------------------------------
+
+# Auto-drop blank pages before OCR to save index space + processing
+# time. Whiteness threshold is percent-of-white pixels above which
+# a page counts as blank (0–100).
+# scan_blank_removal            = "true"
+# scan_blank_whiteness_threshold = "99"
+
+# Multi-doc split via a QR/barcode separator page. Token matches the
+# barcode's payload; DPI is the raster resolution.
+# scan_split_enabled = "false"
+# scan_split_token   = "SUCHI-SPLIT"
+# scan_split_dpi     = "300"
+
+# --------------------------------------------------------------------
+# Pre-consume script — runs before the pipeline. Absolute path only.
+# --------------------------------------------------------------------
+
+# pre_consume_script = "/etc/suchi/pre-consume.sh"
+
+# --------------------------------------------------------------------
+# PDF decryption
+# --------------------------------------------------------------------
+
+# One-password-per-line file for auto-decrypting encrypted PDFs at
+# ingest. Passwords the operator saves via /api/documents/{id}/decrypt
+# also land in this pool.
+# ingest_passwords_file = "/etc/suchi/decrypt-passwords.txt"
+
+# --------------------------------------------------------------------
+# OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 # --------------------------------------------------------------------
 
 # [oidc]
-# issuer         = "https://id.example.com"
-# client_id      = "suchi"
-# client_secret  = "..."        # or use OIDC_CLIENT_SECRET_FILE
-# redirect_url   = "https://suchi.example.com/oidc/callback"
+# issuer_url    = "https://id.example.com"
+# client_id     = "suchi"
+# client_secret = "..."                    # or OIDC_CLIENT_SECRET_FILE
+# admin_email   = "you@example.com"        # granted admin on first login
 
 # --------------------------------------------------------------------
 # Filesystem-watch ingest
 # --------------------------------------------------------------------
 
 # [ingest_fs]
-# dir          = "/data/staging"
-# owner_email  = "you@example.com"
+# dir         = "/data/staging"
+# owner_email = "you@example.com"
 
 # --------------------------------------------------------------------
-# Email ingest (IMAP polling)
+# Email ingest (IMAP polling) — the in-process poller
 # --------------------------------------------------------------------
+#
+# The SPA Admin panel can also write these into DB settings; settings
+# override env at boot. Restart required after either kind of change.
 
 # [ingest_imap]
-# url           = "imap://user@mail.example.com/INBOX"
-# owner_email   = "you@example.com"
+# url           = "imaps://you@mail.example.com/INBOX"
 # password_file = "/run/secrets/imap-password"
+# owner_email   = "you@example.com"
 
 # --------------------------------------------------------------------
-# LLM classifier (Phase 3)
+# Mail-mbsync sidecar (separate compose bundle — NOT the poller above)
 # --------------------------------------------------------------------
+#
+# When the Docker compose bundle in deploy/mail-mbsync/ is in play,
+# these knobs let suchi rewrite the sidecar's .env and restart the
+# container over the docker socket. Empty MAIL_SETUP_ENV_PATH keeps
+# the whole surface disabled.
+
+# mail_setup_env_path    = "/etc/suchi/mail-config/.env"
+# mail_setup_container   = "suchi-mail-mbsync"
+# mail_setup_docker_sock = "/var/run/docker.sock"
+
+# --------------------------------------------------------------------
+# LLM classifier (Phase 3, opt-in)
+# --------------------------------------------------------------------
+#
+# Empty endpoint = classifier disabled. The SPA Admin panel can also
+# write these into DB settings.
 
 # [llm]
-# endpoint_url  = "http://127.0.0.1:11434/v1"    # Ollama by default
-# model         = "llama3.1:8b"
-# api_key       = ""                              # blank for local Ollama
-# egress_ack    = "true"                          # required for non-local endpoints
+# endpoint_url = "http://127.0.0.1:11434/v1"    # Ollama by default
+# model        = "llama3.1:8b"
+# api_key      = ""                              # blank for local Ollama
+# egress_ack   = "true"                          # REQUIRED for non-local endpoints
