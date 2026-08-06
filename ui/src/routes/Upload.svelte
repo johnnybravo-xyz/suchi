@@ -29,7 +29,7 @@
   }
 </script>
 
-<div class="content-narrow">
+<div class="upload-wrap">
   <div class="drop" class:over
        role="button" tabindex="0" aria-label="Upload documents"
        ondragover={(e) => { e.preventDefault(); over = true }}
@@ -37,8 +37,8 @@
        ondrop={onDrop}
        onclick={() => fileInput.click()}
        onkeydown={(e) => e.key === 'Enter' && fileInput.click()}>
-    <Icon name="upload" size={40} />
-    <p style="margin:10px 0 4px"><b>Drop documents here</b> or click to choose</p>
+    <Icon name="upload" size={44} />
+    <p style="margin:12px 0 4px;font-size:1.05rem"><b>Drop documents here</b> or click to choose</p>
     <p style="margin:0;font-size:.8rem">PDF, office docs, images, email files — the pipeline sorts out the rest</p>
     <input bind:this={fileInput} type="file" multiple hidden onchange={(e) => send([...e.target.files])} />
   </div>

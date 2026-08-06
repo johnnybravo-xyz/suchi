@@ -1,18 +1,17 @@
 <script>
-  import { listDocuments, listSavedViews, qs } from '../lib/api.js'
+  import { listDocuments, listSavedViews } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, inboxCategory, inboxCount, pending, dead, recent } = $props()
+  let { notify, st, inboxCategory, recent } = $props()
+  const inboxCount = $derived(st?.inbox_count ?? 0)
+  const pending = $derived(st?.pending_approvals ?? 0)
+  const dead = $derived(st?.dead_jobs ?? 0)
 
-  let total = $state(null)
+  const total = $derived(st?.documents_total ?? null)
   let views = $state([])          // saved views + live counts
 
   async function load() {
-    try {
-      const r = await listDocuments({ page_size: 1 })
-      total = r?.count ?? 0
-    } catch {}
     try {
       const res = await listSavedViews()
       const raw = res?.results || res || []
@@ -54,7 +53,7 @@
   <a class="metric card" href="#/documents">
     <span class="m-label"><Icon name="docs" size={14} /> Total documents</span>
     <span class="m-value">{total ?? '—'}</span>
-    <span class="m-sub">across the whole archive</span>
+    <span class="m-sub">{st?.ingested_7d ? `${st.ingested_7d} added in the last 7 days` : 'across the whole archive'}</span>
   </a>
   <a class="metric card" href="#/inbox" class:attn={inboxCount > 0}>
     <span class="m-label"><Icon name="inbox" size={14} /> Inbox</span>
