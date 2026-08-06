@@ -40,8 +40,9 @@ type AutomationAction struct {
 }
 
 // AutomationActionParam describes one field in the action's params
-// object. Types: string, int, id (foreign key), tag_ids (array of
-// tag ids), template (Jinja/Gonja template string).
+// object. Types: string, int, number, id (foreign key), tag_ids
+// (array of tag ids), template (Jinja/Gonja template string),
+// string_set (multi-select from a closed enum).
 type AutomationActionParam struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
@@ -51,6 +52,19 @@ type AutomationActionParam struct {
 	// knows which picker to render — one of "tag", "correspondent",
 	// "document_type", "storage_path", "custom_field", "user".
 	TargetKind string `json:"target_kind,omitempty"`
+	// Enum is the option set for `string_set` and `string` params
+	// with a closed vocabulary. When non-empty the SPA renders a
+	// checkbox list / radio group instead of a free-form input.
+	Enum []string `json:"enum,omitempty"`
+	// Default is the value to prefill in the visual builder when
+	// the operator creates a new action of this kind. Not enforced
+	// server-side — the action's own withDefaults() is the source
+	// of truth.
+	Default any `json:"default,omitempty"`
+	// Min / Max apply to `number` and `int` params so the SPA can
+	// clamp inputs. Omitted (nil) means "unbounded on that side".
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
 }
 
 // GetAutomationSchema serves GET /api/automations/schema. Any authed
@@ -120,5 +134,41 @@ var automationSchema = AutomationSchema{
 					Description: "Coerced to the field's declared type."},
 			},
 		},
+		{
+			Kind:        "apply_from_similar",
+			Name:        "Auto-file from archive",
+			Description: "Aggregates the top-K similar existing docs' metadata. Fields with confidence at or above the auto-apply threshold write directly; the propose tier lands in the Tasks inbox as a one-click chip. Skipped when the LLM classifier is configured — LLM's low-confidence branch re-invokes it as a fallback.",
+			Params: []AutomationActionParam{
+				{Name: "fields", Type: "string_set", Required: false,
+					Description: "Which metadata to consider. Default: all four.",
+					Enum:        []string{"jd_category", "correspondent", "document_type", "tags"},
+					Default:     []string{"jd_category", "correspondent", "document_type", "tags"},
+				},
+				{Name: "top_k", Type: "int", Required: false,
+					Description: "How many similar docs to aggregate over.",
+					Default:     10, Min: pf(1), Max: pf(50),
+				},
+				{Name: "min_score", Type: "number", Required: false,
+					Description: "Floor on the FTS5 BM25 score. 0 accepts every MATCH hit.",
+					Default:     0, Min: pf(0),
+				},
+				{Name: "threshold_autoapply", Type: "number", Required: false,
+					Description: "Confidence at which the action writes the field directly (with audit).",
+					Default:     0.9, Min: pf(0.5), Max: pf(1),
+				},
+				{Name: "threshold_propose", Type: "number", Required: false,
+					Description: "Confidence at which the action drops a proposal into the Tasks inbox.",
+					Default:     0.5, Min: pf(0), Max: pf(1),
+				},
+				{Name: "tag_frequency_min", Type: "number", Required: false,
+					Description: "A tag is a candidate when it appears in at least this fraction of neighbours.",
+					Default:     0.3, Min: pf(0), Max: pf(1),
+				},
+			},
+		},
 	},
 }
+
+// pf returns a pointer to a float64 — convenience for the schema
+// literals above so the min/max params stay one-liners.
+func pf(v float64) *float64 { return &v }
