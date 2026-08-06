@@ -1,0 +1,160 @@
+---
+title: "Wishlist — natural-language Q&A over the archive"
+description: "Plan for a suchi.ask surface that answers questions like \"when is my car insurance due?\" using the LLM classifier + FTS5 the archive already carries."
+---
+
+The archive already stores every document's text (`documents.content`)
+and indexes it in FTS5. The LLM classifier plugin is already
+configured for the operator-acknowledged endpoint. Combining the two
+into a natural-language Q&A layer is a natural next feature — but a
+big one. This doc is the plan.
+
+Status: **wishlist**. No code. This is what future PRs land against.
+
+## Motivating queries
+
+The operator's own words:
+
+- "when is my car insurance due?"
+- "what was the total utilities amount paid in month of November
+  last year?"
+- "who signed the lease amendment?"
+
+Two shapes: **entity extraction from a small set of matching docs**
+(insurance due date) and **aggregation across many** (utilities
+total). The plan below handles both.
+
+## Design
+
+### Layer 1: retrieval — FTS5 + optional embeddings
+
+`documents.content` + FTS5 already answer "which docs contain X."
+That's enough for the first shape.
+
+For richer semantic recall ("insurance renewal" matches "policy
+expires"), pair with `sqlite-vec` embeddings (already tracked as
+#128 sweep-2 C3). Same LLM endpoint provides the vectors — no new
+egress surface. When the extension isn't loaded, degrade to FTS5-
+only. Zero-egress installs get less recall but not less privacy.
+
+### Layer 2: constrained prompt + JSON extraction
+
+Prompt template (server-side, versioned):
+
+```
+You are answering a question over the operator's personal document
+archive. You may ONLY use the excerpts below. If the answer isn't in
+them, respond with {"answer": null, "reason": "no_matching_content"}.
+
+Question: {{ question }}
+
+Documents:
+{% for d in docs %}
+--- doc {{ d.id }} "{{ d.title }}" ({{ d.date }})
+{{ d.excerpt }}
+{% endfor %}
+
+Return JSON: {answer, cited_doc_ids, confidence}.
+```
+
+- **Excerpts, not full text.** Snippet extraction reuses the search
+  path's FTS5 highlight. Keeps prompts small + hides the rest of
+  the archive from the LLM even when the operator's endpoint is
+  their own local Ollama.
+- **Cited doc ids.** The response *must* name the docs it read.
+  Answers without citations get discarded. This is the load-bearing
+  hallucination-check.
+- **Confidence field.** Low-confidence answers ("< 0.5") render as
+  "I found some possibly-related docs; check them yourself" with the
+  citations linked.
+
+### Layer 3: aggregation queries via structured extraction
+
+For "total utilities in November last year," the LLM can't sum
+reliably — but it CAN extract `{doc_id, amount, currency, date}`
+structured records per matched doc. Server does the sum. Prompt
+shape:
+
+```
+Extract every payment record you can find. Return
+[{doc_id, amount_cents, currency, paid_on}].
+```
+
+Post-process: filter by date range → group by currency → sum. The
+LLM never does the arithmetic; it does what it's good at (extract),
+we do what we're good at (accumulate).
+
+### Layer 4: HTTP surface
+
+```
+POST /api/ask
+  {
+    "question": "when is my car insurance due?",
+    "max_docs": 10                (optional, default 8)
+  }
+  →
+  {
+    "answer": "Your car insurance is due 2026-03-14.",
+    "cited_doc_ids": [42, 91],
+    "confidence": 0.87,
+    "excerpts": [
+      {"doc_id": 42, "snippet": "...policy expires <mark>2026-03-14</mark>..."}
+    ],
+    "elapsed_ms": 620
+  }
+```
+
+Scope: `documents:read`. Falls back to a plain search result when
+the LLM endpoint isn't configured. Rate-limited (5rps / burst 10)
+per source IP — expensive endpoint, cheap DoS.
+
+### Layer 5: MCP tool
+
+Same call surfaces through the MCP server as an `ask` tool. Agents
+(Claude Desktop, Cursor, custom) can ask the archive questions
+without wiring HTTP.
+
+## Wire prerequisites
+
+- **#128 (sqlite-vec) landed.** Semantic recall is optional but a
+  big win.
+- **LLM endpoint acknowledged.** Same `llm.endpoint_url` +
+  `llm.egress_ack` config the classifier uses.
+- **New config**: `ASK_MAX_TOKENS` (default 4096), `ASK_TIMEOUT`
+  (default 30s), `ASK_MAX_DOCS` (default 8, cap 20). Everything
+  goes through the existing `settings` table via the setup wizard.
+
+## Privacy invariants
+
+- `documents.content` never leaves the server outside the LLM
+  request. The response we cache locally is the LLM's answer +
+  the ids, not the excerpts we shipped.
+- The excerpt window is bounded (default 400 chars per doc); we
+  never send the whole document.
+- A doc marked `sensitivity IN ('confidential','restricted')` is
+  excluded from the retrieval pool by default. An override header
+  or setting can flip that for personal instances; the archive
+  admin explicitly toggles it.
+
+## What NOT to build
+
+- **Chat history.** One question, one answer, no context carry.
+  Multi-turn is a v2; single-shot covers the motivating queries.
+- **Fine-tuning.** The LLM never sees the archive as training data.
+- **Automatic re-answer on doc mutation.** Answers are a query-time
+  computation; caching stale answers to a mutable archive is a
+  correctness footgun.
+
+## Rollout order
+
+1. Design doc lands ✅ (this file).
+2. #128 sqlite-vec extension + embedding-at-ingest job.
+3. `POST /api/ask` handler wiring FTS5 → prompt → LLM → JSON parse
+   → cite-check.
+4. MCP tool alias.
+5. SPA route (Search screen grows an "Ask" tab).
+6. Operator docs (how to bring up a local Ollama for offline use).
+
+Everything after step 1 is behind a feature flag
+(`ASK_ENABLED=false` by default) until the citation-check quality
+is proven on the maintainer's own archive.
