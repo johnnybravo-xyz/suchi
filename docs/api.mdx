@@ -411,6 +411,67 @@ caller's own assignee for members and to the full open queue for
 admins. `ingested_7d` counts live docs created in the last 7 days —
 useful for a sparkline; not a filing-date metric.
 
+### `POST /api/documents/bulk_edit`
+
+Batch metadata mutation across N documents in one write transaction.
+The SPA multi-select actions (bulk refile, bulk trash) call this
+instead of looping N PATCHes.
+
+Scope: `documents:write`. Cap: 500 documents per call.
+
+**Request**
+```json
+{
+  "documents": [1, 42, 91],
+  "method":    "set_jd_category",
+  "parameters": { "jd_category_id": 22 }
+}
+```
+
+**Methods**
+
+| method | parameters |
+| ------ | ---------- |
+| `set_correspondent` | `{correspondent_id}` |
+| `set_document_type` | `{document_type_id}` |
+| `set_storage_path` | `{storage_path_id}` |
+| `set_jd_category` | `{jd_category_id}` |
+| `set_sensitivity` | `{sensitivity}` — one of `""`, `public`, `internal`, `confidential`, `restricted` |
+| `add_tag` | `{tag_id}` — idempotent (INSERT OR IGNORE) |
+| `remove_tag` | `{tag_id}` |
+| `trash` (alias `delete`) | `{}` |
+| `restore` | `{}` |
+
+**Response**
+```json
+{
+  "method": "set_jd_category",
+  "total":   3,
+  "applied": 2,
+  "results": [
+    {"id": 1,  "ok": true},
+    {"id": 42, "ok": true},
+    {"id": 91, "ok": false, "code": "forbidden"}
+  ]
+}
+```
+
+**Behavior**
+
+- Every id is ACL-checked per the same rule as `PATCH
+  /api/documents/{id}`. Refused ids appear in the array with
+  `ok: false, code: "forbidden"`; the rest still run.
+- One `documents.bulk_edit` audit event per call (with `method` +
+  `total` + `applied`), not per doc — the granular outcome lives in
+  the response array.
+- All authorized ids run inside a single `WriteTx`. A per-id error
+  inside the tx aborts the whole batch by design — partial writes
+  would leave the archive in a half-state.
+
+The `{documents, method, parameters}` shape matches the mobile-compat
+DMS wire vocabulary suchi already speaks — existing clients hitting
+this URL with a familiar body work unchanged.
+
 ### `DELETE /api/documents/{id}`
 
 Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
