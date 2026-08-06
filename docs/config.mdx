@@ -93,9 +93,10 @@ and staging point at different TOMLs.
 | `DATA_DIR` | `/data` | Root of `blobs/`, `suchi.db` + WAL, `backups/`, `config.yaml`, `staging/`. |
 | `LISTEN_ADDR` | `:8000` | HTTP listener. |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. |
-| `BODY_LIMIT` | `100M` | Multipart cap; uploads stream to disk. Accepts `K`/`M`/`G` suffixes or raw bytes. |
+| `UPLOAD_MAX_BYTES` / `BODY_LIMIT` | `500M` | Per-request body cap. Applies to every HTTP endpoint (upload, PATCH, JSON POSTs) **and** the fs-watch producer's file-size check. `0` disables the cap. Set the same value at both env names — `UPLOAD_MAX_BYTES` wins if both are present. Accepts `K`/`M`/`G` suffixes or raw bytes. |
 | `SESSION_KEY_FILE` | `$DATA_DIR/.session-key` | Signed-cookie key. Auto-generated 0600 on first boot. |
-| `BACKUP_INTERVAL` | `24h` | `VACUUM INTO` snapshot cadence. `0` disables. |
+| `BACKUP_INTERVAL` | `24h` | `VACUUM INTO` snapshot cadence. Writes `$DATA_DIR/backups/suchi-<ts>.db`. `0` disables. |
+| `BACKUP_KEEP` | `7` | Retention — after each snapshot, prune all-but-the-latest N. `0` keeps everything (documented; not the default). |
 | `OCR_LANGUAGES` | `eng` | Comma-separated tesseract langs; shortcut for the OCR plugin's config. |
 | `PDF_MAX_CONTENT_BYTES` | `8M` | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit. |
 | `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on the concatenated XHTML text of an EPUB. Bigger than the PDF default because ebooks routinely exceed it (novels are fine, textbooks may still truncate). |

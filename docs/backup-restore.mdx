@@ -48,6 +48,25 @@ Restore = restore this tree.
   restore, `suchi serve` will lazily rebuild links as docs are
   re-touched, or you can force a full rebuild.
 
+## Built-in snapshot loop
+
+Suchi runs a periodic `VACUUM INTO` on a boot-spawned goroutine.
+Every `BACKUP_INTERVAL` (default `24h`) a fresh consistent
+snapshot lands under `$DATA_DIR/backups/suchi-<UTC-timestamp>.db`.
+Retention: the newest `BACKUP_KEEP` (default `7`) are kept, older
+snapshots are pruned automatically. `BACKUP_INTERVAL=0` disables
+the loop entirely.
+
+The snapshot is taken from the read pool so the single writer
+stays free during long vacuums. Each snapshot lands in
+`audit_events` as `backup.written` with path + size + duration,
+and shows up in `suchi doctor` as "last backup age".
+
+The built-in loop **only snapshots suchi.db**. Blobs (which are
+content-addressed and immutable) are not copied — a full restore
+needs both the snapshot AND `$DATA_DIR/blobs/`. Use the
+patterns below when you want a complete off-box backup.
+
 ## Safe copy patterns
 
 ### 1. Stop suchi first (simplest)

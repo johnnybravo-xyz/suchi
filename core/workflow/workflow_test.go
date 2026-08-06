@@ -434,3 +434,154 @@ func TestDefault_UnsetErrors(t *testing.T) {
 func adminPrincipal() *pluginapi.Principal {
 	return &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
 }
+
+// TestEngineResolve_HappyPath drives the full approval lifecycle in one
+// test: register → start → advance to create the task → resolve with a
+// valid choice → advance("approve") to consume the choice → run
+// transitions to end. This is the "crash-path" the review flagged as
+// under-tested: the individual pieces have unit tests but no test
+// walked through the entire happy path.
+//
+// The subscriber isn't wired here — we drive Advance directly to stand
+// in for what the outbox would do. The engine's contract is that
+// Resolve enqueues a workflow:advance{trigger:choice} job; we skip the
+// jobs table and call Advance with the same trigger.
+func TestEngineResolve_HappyPath(t *testing.T) {
+	e := newEngine(t)
+	ctx := context.Background()
+	spec := workflow.Spec{
+		Start: "wait",
+		States: map[string]workflow.State{
+			"wait": {
+				Kind:     "approve",
+				Assignee: "user:1",
+				Prompt:   "ok?",
+				Choices:  []string{"approve", "reject"},
+				On:       map[string]string{"approve": "done", "reject": "denied"},
+			},
+			"done":   {Kind: "end"},
+			"denied": {Kind: "end"},
+		},
+	}
+	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First advance materializes the human-approval task.
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatalf("advance to task: %v", err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 open task, got %d", len(tasks))
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "approve", adminPrincipal()); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	// Stand in for the outbox: consume the approve trigger.
+	if err := e.Advance(ctx, runID, "approve"); err != nil {
+		t.Fatalf("advance on resolve: %v", err)
+	}
+	run, openTasks, err := e.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "done" {
+		t.Errorf("run.Status = %q, want done", run.Status)
+	}
+	if run.CurrentState != "done" {
+		t.Errorf("run.CurrentState = %q, want done", run.CurrentState)
+	}
+	if len(openTasks) != 0 {
+		t.Errorf("expected 0 open tasks after resolve, got %d", len(openTasks))
+	}
+}
+
+// TestEngineTimeoutSweep verifies the deadline path: a run whose
+// deadline_at is in the past gets a workflow:advance{trigger:"timeout"}
+// enqueued and its deadline_at cleared so the next sweep doesn't
+// double-fire. This backs the review's "plus timeout path" ask.
+func TestEngineTimeoutSweep(t *testing.T) {
+	e := newEngine(t)
+	ctx := context.Background()
+	spec := workflow.Spec{
+		Start: "wait",
+		States: map[string]workflow.State{
+			"wait": {
+				Kind:       "approve",
+				Assignee:   "user:1",
+				Prompt:     "ok?",
+				Choices:    []string{"approve", "reject"},
+				TimeoutSec: 3600,
+				On: map[string]string{
+					"approve": "done",
+					"reject":  "denied",
+					"timeout": "expired",
+				},
+			},
+			"done":    {Kind: "end"},
+			"denied":  {Kind: "end"},
+			"expired": {Kind: "end"},
+		},
+	}
+	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatalf("advance to task: %v", err)
+	}
+	// Force the deadline into the past. The engine set it 3600s
+	// out; we clobber to now-60s.
+	past := time.Now().Add(-time.Minute).Unix()
+	if _, err := e.DB().Write.ExecContext(ctx,
+		`UPDATE workflow_runs SET deadline_at = ? WHERE id = ?`, past, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.TimeoutSweep(ctx); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	var (
+		payload  string
+		deadline sql.NullInt64
+	)
+	if err := e.DB().Read.QueryRow(
+		`SELECT payload FROM jobs WHERE kind='workflow:advance' AND state='pending' ORDER BY id DESC LIMIT 1`).
+		Scan(&payload); err != nil {
+		t.Fatalf("advance not enqueued: %v", err)
+	}
+	if !strings.Contains(payload, `"trigger":"timeout"`) {
+		t.Errorf("advance payload = %s, want trigger=timeout", payload)
+	}
+	if err := e.DB().Read.QueryRow(
+		`SELECT deadline_at FROM workflow_runs WHERE id = ?`, runID).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	if deadline.Valid {
+		t.Errorf("deadline_at not cleared after sweep: %d", deadline.Int64)
+	}
+	// Drive the sweep-generated advance manually to verify the run
+	// lands in the expired end state.
+	if err := e.Advance(ctx, runID, "timeout"); err != nil {
+		t.Fatalf("advance on timeout: %v", err)
+	}
+	run, _, err := e.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.CurrentState != "expired" {
+		t.Errorf("run.CurrentState = %q, want expired", run.CurrentState)
+	}
+	if run.Status != "done" {
+		t.Errorf("run.Status = %q, want done", run.Status)
+	}
+}

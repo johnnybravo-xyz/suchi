@@ -210,6 +210,8 @@
     "/api/approvals/runs/{id}/cancel":           { "post": { "summary": "Cancel a run (admin)." } },
 
     "/api/automations/":                         { "get":  { "summary": "List automations." }, "post": { "summary": "Create an automation (admin)." } },
-    "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace (admin)." }, "delete": { "summary": "Delete (admin)." } }
+    "/api/automations/{id}":                     { "get":  { "summary": "Get one." }, "patch": { "summary": "Replace (admin)." }, "delete": { "summary": "Delete (admin)." } },
+
+    "/api/jd/categories/":                       { "get":  { "summary": "List JD categories with denormalized area info. ?q=<prefix> matches code or name; ?area=<code> scopes to one area (start code)." } }
   }
 }

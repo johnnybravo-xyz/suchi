@@ -55,6 +55,13 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	//   that default is a good idea.
 	// _pragma=mmap_size(268435456) — 256MiB memory-mapped read window;
 	//   improves read locality without touching the OS page cache accounting.
+	//   Trade-off: on 32-bit builds this eats a big chunk of the 4GiB
+	//   address space and can OOM the process. suchi targets 64-bit hosts
+	//   (Go 1.25 + modernc/sqlite; the release matrix ships only amd64 +
+	//   arm64). If someone cross-compiles for 32-bit, drop this to 64MiB
+	//   or 0. mmap is a read-side optimization only — writes go through
+	//   the normal page cache path, so lowering this does not affect the
+	//   Write pool's single-writer discipline.
 	// _pragma=temp_store(MEMORY) — temp tables/indexes stay in RAM.
 	dsn := "file:" + abs + "?" + url.Values{
 		"_pragma": []string{

@@ -232,6 +232,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// live doc after a preset/template/rule change. See docs/refile.mdx.
 	mux.HandleFunc("POST /api/admin/refile", s.Refile)
 
+	// JD taxonomy — read-only listing so pickers + MCP tools + agents
+	// can enumerate categories and resolve jd_category_id → label
+	// without a second round-trip. Creation is a preset swap.
+	mux.HandleFunc("GET /api/jd/categories/", s.ListJDCategories)
+
 	// Self-service API-token management for session/OIDC callers.
 	// Sibling to /api/token/ (credential-exchange, mobile-compat).
 	mux.HandleFunc("GET /api/tokens/", s.ListTokens)

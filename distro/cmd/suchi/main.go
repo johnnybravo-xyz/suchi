@@ -24,6 +24,7 @@ import (
 	"github.com/suchi-dms/suchi/core/api"
 	"github.com/suchi-dms/suchi/core/audit"
 	"github.com/suchi-dms/suchi/core/auth"
+	"github.com/suchi-dms/suchi/core/backup"
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/config"
 	suchicrypto "github.com/suchi-dms/suchi/core/crypto"
@@ -371,8 +372,24 @@ func runServe() int {
 	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
 		log.Warn("workflow.sweep.schedule_failed", "err", err.Error())
 	}
+	// Reap orphaned running-state jobs from a prior crashed process
+	// before starting the loop. See jobs.ReclaimOrphaned; agent:*
+	// kinds keep their lease-deadline model.
+	if _, err := disp.ReclaimOrphaned(ctx); err != nil {
+		log.Warn("jobs.boot_reclaim_failed", "err", err.Error())
+	}
 	go disp.Run(ctx)
 	defer disp.Stop()
+
+	// Periodic VACUUM INTO snapshot loop. Docs have promised this
+	// since Phase 0; implementation was missing until the first
+	// external code review flagged it. Disabled by
+	// BACKUP_INTERVAL=0.
+	go backup.Loop(ctx, backup.Config{
+		DataDir:  cfg.DataDir,
+		Interval: cfg.BackupInterval,
+		Keep:     cfg.BackupKeep,
+	}, d, log)
 
 	// fs-watch: staging-dir producer. Idle unless the resolved owner
 	// email is set (settings written by the setup wizard take precedence
@@ -386,6 +403,7 @@ func runServe() int {
 	if watcher, err := fswatch.New(ctx, fswatch.Config{
 		Dir:        fsw.Dir,
 		OwnerEmail: fsw.OwnerEmail,
+		MaxBytes:   cfg.BodyLimit, // same ceiling as HTTP uploads
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.fswatch.new", "err", err.Error())
 		return 1
@@ -455,6 +473,10 @@ func runServe() int {
 		uiSrv.MailSetupEnabled = cfg.MailSetupEnvPath != ""
 		uiSrv.SetupPendingFn = func() bool { return la.SetupToken() != "" }
 		uiSrv.Register(mux)
+		// Svelte SPA mounted at /app/ alongside the server-rendered
+		// UI. Both share the auth chain; RequireUI does not apply
+		// to the SPA shell (public by design). See core/ui/spa.go.
+		uiSrv.RegisterSPA(mux)
 	} else {
 		log.Info("main.ui.disabled",
 			"reason", "SUCHI_UI_DISABLED — headless mode, /api/ only")
@@ -518,15 +540,24 @@ func runServe() int {
 		httpx.BodyLimit(cfg.BodyLimit),
 		httpx.CtxTimeout(30*time.Second),
 		httpx.Authenticate(authChain, log),
+		httpx.SecFetchSite,
 	)
 
-	// Per-route rate limits: setup and login get their own bucket.
+	// Per-route rate limits. Every path that either takes a
+	// user-supplied secret (login, setup, share-link password) or
+	// mints one (token endpoints) gets throttled. GET /s/{token}
+	// verifies ?password= server-side so it needs the same guard as
+	// POST /api/login. The list here is the load-bearing complement
+	// to SECURITY.md's "Rate limits on auth endpoints" claim — any
+	// new secret-verifying handler must be added here.
 	rl := httpx.NewRateLimit(5, 10)
 	authRoutes := http.NewServeMux()
 	authRoutes.Handle("POST /setup", rl.Middleware(handler))
 	authRoutes.Handle("POST /bootstrap", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/login", rl.Middleware(handler))
 	authRoutes.Handle("POST /api/token/", rl.Middleware(handler))
+	authRoutes.Handle("GET /s/{token}", rl.Middleware(handler))
+	authRoutes.Handle("GET /s/{token}/{doc_id}/download", rl.Middleware(handler))
 	// Anything else falls through to the un-limited handler.
 	authRoutes.Handle("/", handler)
 
