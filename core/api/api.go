@@ -201,7 +201,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Approvals engine surface — routing/sign-off state machines at
 	// /api/approvals/*. Distinct from automations below.
-	s.registerWorkflow(mux)
+	s.registerApprovals(mux)
 
 	// Automations — trigger→conditions→actions rules. Named for what
 	// they do, not for what any other project called them. See

@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 
 // KindAdvance and KindSweep are the job kinds this package owns.
 const (
-	KindAdvance = "workflow:advance"
+	KindAdvance = "approval:advance"
 	KindResume  = "workflow:resume" // alias — advance with trigger=""
-	KindSweep   = "workflow:timeout-sweep"
+	KindSweep   = "approval:timeout-sweep"
 )
 
 // Subscriber implements pluginapi.Subscriber for the three workflow
@@ -38,7 +38,7 @@ func (s *Subscriber) Kinds() []string {
 // event.Payload["raw"] as documented by core/jobs.
 func (s *Subscriber) Handle(ctx context.Context, e pluginapi.Event) error {
 	if s.e == nil {
-		return fmt.Errorf("workflow.subscriber: engine not wired")
+		return fmt.Errorf("approvals.subscriber: engine not wired")
 	}
 	switch e.Kind {
 	case KindSweep:
@@ -51,14 +51,14 @@ func (s *Subscriber) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		if raw != "" {
 			if err := json.Unmarshal([]byte(raw), &body); err != nil {
-				return fmt.Errorf("workflow.subscriber: bad payload: %w", err)
+				return fmt.Errorf("approvals.subscriber: bad payload: %w", err)
 			}
 		}
 		if body.RunID == 0 {
-			return fmt.Errorf("workflow.subscriber: missing run_id in payload")
+			return fmt.Errorf("approvals.subscriber: missing run_id in payload")
 		}
 		return s.e.Advance(ctx, body.RunID, body.Trigger)
 	default:
-		return fmt.Errorf("workflow.subscriber: unknown kind %q", e.Kind)
+		return fmt.Errorf("approvals.subscriber: unknown kind %q", e.Kind)
 	}
 }

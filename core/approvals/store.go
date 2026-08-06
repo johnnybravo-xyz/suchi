@@ -1,4 +1,4 @@
-package workflow
+package approvals
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Run mirrors workflow_runs. Nullable columns land as pointers so
+// Run mirrors approval_runs. Nullable columns land as pointers so
 // callers can distinguish absent from zero.
 type Run struct {
 	ID             int64
@@ -24,7 +24,7 @@ type Run struct {
 	EndedAt        *int64
 }
 
-// Task mirrors workflow_tasks.
+// Task mirrors approval_tasks.
 type Task struct {
 	ID             int64
 	RunID          int64
@@ -40,7 +40,7 @@ type Task struct {
 	CreatedAt      int64
 }
 
-// Transition mirrors workflow_transitions.
+// Transition mirrors approval_transitions.
 type Transition struct {
 	ID         int64
 	RunID      int64
@@ -52,7 +52,7 @@ type Transition struct {
 	OccurredAt int64
 }
 
-// def is an internal row shape for workflow_defs.
+// def is an internal row shape for approval_defs.
 type def struct {
 	ID       int64
 	Slug     string
@@ -61,7 +61,7 @@ type def struct {
 	Active   bool
 }
 
-// ---------- workflow_defs ----------
+// ---------- approval_defs ----------
 
 // insertDef persists a Spec at the next version for slug. Bumps prior
 // active versions to inactive so only one is "current" at a time. All
@@ -69,20 +69,20 @@ type def struct {
 func insertDef(ctx context.Context, tx *sql.Tx, slug, specJSON string, createdBy int64) (int64, int, error) {
 	var nextVersion int
 	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(version), 0) + 1 FROM workflow_defs WHERE slug = ?
+		SELECT COALESCE(MAX(version), 0) + 1 FROM approval_defs WHERE slug = ?
 	`, slug).Scan(&nextVersion)
 	if err != nil {
 		return 0, 0, err
 	}
-	// Deactivate prior versions so idx_workflow_defs_active narrows to one.
+	// Deactivate prior versions so idx_approval_defs_active narrows to one.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE workflow_defs SET active = 0 WHERE slug = ? AND active = 1
+		UPDATE approval_defs SET active = 0 WHERE slug = ? AND active = 1
 	`, slug); err != nil {
 		return 0, 0, err
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_defs(slug, version, spec_json, active, created_at, created_by)
+		INSERT INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
 		VALUES (?, ?, ?, 1, ?, ?)
 	`, slug, nextVersion, specJSON, now, createdBy)
 	if err != nil {
@@ -98,7 +98,7 @@ func activeDefBySlug(ctx context.Context, d rowQuerier, slug string) (def, error
 	var r def
 	err := d.QueryRowContext(ctx, `
 		SELECT id, slug, version, spec_json, active
-		FROM workflow_defs
+		FROM approval_defs
 		WHERE slug = ? AND active = 1
 		ORDER BY version DESC
 		LIMIT 1
@@ -115,7 +115,7 @@ func defByID(ctx context.Context, d rowQuerier, id int64) (def, error) {
 	var r def
 	err := d.QueryRowContext(ctx, `
 		SELECT id, slug, version, spec_json, active
-		FROM workflow_defs WHERE id = ?
+		FROM approval_defs WHERE id = ?
 	`, id).Scan(&r.ID, &r.Slug, &r.Version, &r.SpecJSON, &r.Active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return def{}, ErrNoDef
@@ -123,7 +123,7 @@ func defByID(ctx context.Context, d rowQuerier, id int64) (def, error) {
 	return r, err
 }
 
-// ---------- workflow_runs ----------
+// ---------- approval_runs ----------
 
 // insertRun creates a running row at the spec's start state. deadline
 // is optional — nil column when no timeout on the start state.
@@ -134,7 +134,7 @@ func insertRun(ctx context.Context, tx *sql.Tx, defID int64, docID *int64, start
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_runs(
+		INSERT INTO approval_runs(
 			def_id, doc_id, state, current_state, vars_json,
 			state_entered_at, deadline_at, started_by, started_at
 		) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
@@ -158,7 +158,7 @@ func loadRun(ctx context.Context, d rowQuerier, id int64) (Run, error) {
 	err := d.QueryRowContext(ctx, `
 		SELECT id, def_id, doc_id, state, current_state, vars_json,
 		       state_entered_at, deadline_at, started_by, started_at, ended_at
-		FROM workflow_runs WHERE id = ?
+		FROM approval_runs WHERE id = ?
 	`, id).Scan(&r.ID, &r.DefID, &docID, &r.Status, &r.CurrentState, &varsJSON,
 		&r.StateEnteredAt, &deadline, &startedBy, &r.StartedAt, &endedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -196,7 +196,7 @@ func updateRunState(ctx context.Context, tx *sql.Tx, runID int64, nextState stri
 	}
 	now := time.Now().Unix()
 	_, err = tx.ExecContext(ctx, `
-		UPDATE workflow_runs
+		UPDATE approval_runs
 		   SET current_state = ?,
 		       vars_json = ?,
 		       state_entered_at = ?,
@@ -210,14 +210,14 @@ func updateRunState(ctx context.Context, tx *sql.Tx, runID int64, nextState stri
 func finalizeRun(ctx context.Context, tx *sql.Tx, runID int64, status string) error {
 	now := time.Now().Unix()
 	_, err := tx.ExecContext(ctx, `
-		UPDATE workflow_runs
+		UPDATE approval_runs
 		   SET state = ?, ended_at = ?
 		 WHERE id = ?
 	`, status, now, runID)
 	return err
 }
 
-// ---------- workflow_transitions ----------
+// ---------- approval_transitions ----------
 
 func insertTransition(ctx context.Context, tx *sql.Tx, runID int64, from, to, trigger string, actor *string, payload map[string]any) error {
 	payloadJSON, err := marshalMap(payload)
@@ -230,7 +230,7 @@ func insertTransition(ctx context.Context, tx *sql.Tx, runID int64, from, to, tr
 	}
 	now := time.Now().Unix()
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO workflow_transitions(run_id, from_state, to_state, trigger, actor, payload_json, occurred_at)
+		INSERT INTO approval_transitions(run_id, from_state, to_state, trigger, actor, payload_json, occurred_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, runID, from, to, trigger, actorArg, payloadJSON, now)
 	return err
@@ -240,7 +240,7 @@ func insertTransition(ctx context.Context, tx *sql.Tx, runID int64, from, to, tr
 func listTransitions(ctx context.Context, d rowQuerier, runID int64) ([]Transition, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT id, run_id, from_state, to_state, trigger, actor, payload_json, occurred_at
-		FROM workflow_transitions
+		FROM approval_transitions
 		WHERE run_id = ?
 		ORDER BY occurred_at, id
 	`, runID)
@@ -269,7 +269,7 @@ func listTransitions(ctx context.Context, d rowQuerier, runID int64) ([]Transiti
 	return out, rows.Err()
 }
 
-// ---------- workflow_tasks ----------
+// ---------- approval_tasks ----------
 
 func insertTask(ctx context.Context, tx *sql.Tx, runID int64, stateKey string, spec TaskSpec, deadline *int64) (int64, error) {
 	choicesJSON, err := json.Marshal(spec.Choices)
@@ -278,7 +278,7 @@ func insertTask(ctx context.Context, tx *sql.Tx, runID int64, stateKey string, s
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_tasks(
+		INSERT INTO approval_tasks(
 			run_id, state_key, assignee, prompt, choices_json,
 			status, deadline_at, created_at
 		) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
@@ -303,7 +303,7 @@ func loadTask(ctx context.Context, d rowQuerier, id int64) (Task, error) {
 	err := d.QueryRowContext(ctx, `
 		SELECT id, run_id, state_key, assignee, prompt, choices_json,
 		       status, deadline_at, resolved_choice, resolved_by, resolved_at, created_at
-		FROM workflow_tasks WHERE id = ?
+		FROM approval_tasks WHERE id = ?
 	`, id).Scan(&t.ID, &t.RunID, &t.StateKey, &t.Assignee, &t.Prompt, &choicesRaw,
 		&t.Status, &deadline, &resolvedC, &resolvedBy, &resolvedAt, &t.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -338,7 +338,7 @@ func listOpenTasksForRun(ctx context.Context, d rowQuerier, runID int64) ([]Task
 	rows, err := d.QueryContext(ctx, `
 		SELECT id, run_id, state_key, assignee, prompt, choices_json,
 		       status, deadline_at, resolved_choice, resolved_by, resolved_at, created_at
-		FROM workflow_tasks
+		FROM approval_tasks
 		WHERE run_id = ? AND status IN ('open','claimed')
 		ORDER BY created_at, id
 	`, runID)
@@ -392,7 +392,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 func markTaskResolved(ctx context.Context, tx *sql.Tx, taskID int64, choice, actor string) error {
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		UPDATE workflow_tasks
+		UPDATE approval_tasks
 		   SET status = 'resolved',
 		       resolved_choice = ?,
 		       resolved_by = ?,
@@ -416,7 +416,7 @@ func markTaskResolved(ctx context.Context, tx *sql.Tx, taskID int64, choice, act
 // 'expired' — used by Cancel and by the terminal-state path in Advance.
 func expireOpenTasksForRun(ctx context.Context, tx *sql.Tx, runID int64) error {
 	_, err := tx.ExecContext(ctx, `
-		UPDATE workflow_tasks
+		UPDATE approval_tasks
 		   SET status = 'expired'
 		 WHERE run_id = ? AND status IN ('open','claimed')
 	`, runID)

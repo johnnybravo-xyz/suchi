@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/backup"
@@ -43,7 +44,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
-	"github.com/johnnybravo-xyz/suchi/core/workflow"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
 
@@ -362,15 +362,15 @@ func runServe() int {
 	}
 	// Workflow engine — state-machine core over the durable outbox. The
 	// engine itself is a small runtime object; the subscriber wraps it
-	// so workflow:advance / workflow:resume / workflow:timeout-sweep
+	// so approval:advance / workflow:resume / approval:timeout-sweep
 	// jobs route to Engine.Advance / Engine.TimeoutSweep. SetDefault
 	// hands the API layer a package-level handle so /api/approvals/*
 	// works without threading the engine through every handler.
-	wfEngine := workflow.New(d, log)
-	workflow.SetDefault(wfEngine)
-	disp.Register(workflow.NewSubscriber(wfEngine))
+	wfEngine := approvals.New(d, log)
+	approvals.SetDefault(wfEngine)
+	disp.Register(approvals.NewSubscriber(wfEngine))
 	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
-		log.Warn("workflow.sweep.schedule_failed", "err", err.Error())
+		log.Warn("approvals.sweep.schedule_failed", "err", err.Error())
 	}
 	// Reap orphaned running-state jobs from a prior crashed process
 	// before starting the loop. See jobs.ReclaimOrphaned; agent:*

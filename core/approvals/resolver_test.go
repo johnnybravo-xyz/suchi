@@ -1,4 +1,4 @@
-package workflow_test
+package approvals_test
 
 // Tests for the assignee-resolution hook (see handler.go AssigneeResolver
 // + Engine.SetAssigneeResolver). Focus on the boundary the enterprise
@@ -13,7 +13,7 @@ import (
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
-	"github.com/johnnybravo-xyz/suchi/core/workflow"
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 )
 
 // admin is the user created by setupDB (id=1).
@@ -24,10 +24,10 @@ func admin() *pluginapi.Principal {
 // approveSpec is a minimal 2-state workflow: an approve state that
 // spawns a task, then an end state. Used by resolver tests as the
 // harness for exercising the resolver call inside Advance.
-func approveSpec(assignee string) workflow.Spec {
-	return workflow.Spec{
+func approveSpec(assignee string) approvals.Spec {
+	return approvals.Spec{
 		Start: "review",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"review": {
 				Kind:     "approve",
 				Assignee: assignee,
@@ -42,7 +42,7 @@ func approveSpec(assignee string) workflow.Spec {
 
 // startAndAdvance is the common setup: register spec, start a run,
 // advance once. Returns whatever error Advance surfaces.
-func startAndAdvance(t *testing.T, e *workflow.Engine, assignee string) error {
+func startAndAdvance(t *testing.T, e *approvals.Engine, assignee string) error {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := e.Register(ctx, approveSpec(assignee), "test-flow", admin()); err != nil {
@@ -67,7 +67,7 @@ func TestDefaultResolver_UserNAccepted(t *testing.T) {
 func TestDefaultResolver_RoleRejected(t *testing.T) {
 	e := newEngine(t)
 	err := startAndAdvance(t, e, "role:finance")
-	if !errors.Is(err, workflow.ErrRoleUnresolved) {
+	if !errors.Is(err, approvals.ErrRoleUnresolved) {
 		t.Fatalf("role:* should be rejected with ErrRoleUnresolved, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "role:finance") {
@@ -127,7 +127,7 @@ func TestSetResolver_NilRestoresDefault(t *testing.T) {
 	e.SetAssigneeResolver(nil) // restore default
 
 	err := startAndAdvance(t, e, "role:finance")
-	if !errors.Is(err, workflow.ErrRoleUnresolved) {
+	if !errors.Is(err, approvals.ErrRoleUnresolved) {
 		t.Fatalf("nil SetAssigneeResolver should restore user-only default, got: %v", err)
 	}
 }
@@ -143,9 +143,9 @@ func TestResolver_SkippedOnNonTaskAdvance(t *testing.T) {
 	e.SetAssigneeResolver(&capturingResolver{err: errors.New("should not be called")})
 
 	// Spec with a system state that emits "success" and ends. No task.
-	spec := workflow.Spec{
+	spec := approvals.Spec{
 		Start: "prep",
-		States: map[string]workflow.State{
+		States: map[string]approvals.State{
 			"prep": {Kind: "system", On: map[string]string{"success": "done"}},
 			"done": {Kind: "end", On: map[string]string{}},
 		},

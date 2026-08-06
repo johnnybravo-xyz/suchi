@@ -339,7 +339,7 @@ Timestamps are unix seconds. The Phase-4 mobile-compat shim
 converts to ISO8601 there — this endpoint keeps the suchi
 convention.
 
-`workflow_tasks` are scoped to the caller: an entry appears only if the
+`approval_tasks` are scoped to the caller: an entry appears only if the
 task's `assignee` resolves to the current user. Terminal statuses
 (`resolved`, `expired`) are omitted. Resolve one via
 `POST /api/approvals/tasks/{task_id}/resolve`. `workflow_open` in
