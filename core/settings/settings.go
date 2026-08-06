@@ -36,6 +36,17 @@ const (
 
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
+
+	// Mail intake — the emailwatch IMAP poller. Written by the SPA
+	// Admin panel; read at boot by main.go (settings-first, env-
+	// fallback via ResolveEmailWatchConfig).
+	KeyIMAPHost            = "ingest.imap_host"
+	KeyIMAPPort            = "ingest.imap_port"
+	KeyIMAPUsername        = "ingest.imap_username"
+	KeyIMAPPasswordSealed  = "ingest.imap_password_sealed"
+	KeyIMAPFolder          = "ingest.imap_folder"
+	KeyIMAPPollIntervalMin = "ingest.imap_poll_interval_min"
+	KeyIMAPOwnerEmail      = "ingest.imap_owner_email"
 )
 
 // ErrNotFound signals the key isn't present (distinct from a scan
@@ -212,6 +223,58 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig) LLMCon
 	var b bool
 	if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
 		out.EgressAck = b
+	}
+	return out
+}
+
+// EmailWatchConfig mirrors the emailwatch runtime knobs the SPA
+// Admin panel can override. Plain scalars so this package doesn't
+// import emailwatch. The URL is assembled from Host/Port/Username/
+// Folder by the caller in main.go.
+type EmailWatchConfig struct {
+	Host            string
+	Port            int
+	Username        string
+	Password        string
+	Folder          string
+	PollIntervalMin int
+	OwnerEmail      string
+}
+
+// ResolveEmailWatchConfig merges settings over env fallback for the
+// mail-intake poller. Settings win when set; blank leaves the fb
+// value alone. Live-reload isn't wired — the watcher owns a
+// goroutine bound to a specific URL, so wizard writes take effect on
+// next boot. The handler surfaces this via {"restart_required": true}.
+func ResolveEmailWatchConfig(ctx context.Context, database *db.DB, fb EmailWatchConfig) EmailWatchConfig {
+	out := fb
+	var s string
+	if err := Get(ctx, database, KeyIMAPHost, &s); err == nil && s != "" {
+		out.Host = s
+	}
+	var n int
+	if err := Get(ctx, database, KeyIMAPPort, &n); err == nil && n > 0 {
+		out.Port = n
+	}
+	s = ""
+	if err := Get(ctx, database, KeyIMAPUsername, &s); err == nil && s != "" {
+		out.Username = s
+	}
+	s = ""
+	if err := Get(ctx, database, KeyIMAPPasswordSealed, &s); err == nil && s != "" {
+		out.Password = s
+	}
+	s = ""
+	if err := Get(ctx, database, KeyIMAPFolder, &s); err == nil && s != "" {
+		out.Folder = s
+	}
+	n = 0
+	if err := Get(ctx, database, KeyIMAPPollIntervalMin, &n); err == nil && n > 0 {
+		out.PollIntervalMin = n
+	}
+	s = ""
+	if err := Get(ctx, database, KeyIMAPOwnerEmail, &s); err == nil && s != "" {
+		out.OwnerEmail = s
 	}
 	return out
 }

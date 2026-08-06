@@ -30,7 +30,21 @@
   }
 
   function submit(e) { e.preventDefault(); page = 1; go(`#/search?q=${encodeURIComponent(q.trim())}`); run() }
-  $effect(() => { const rq = route.query.get('q'); if (rq && rq !== q) { q = rq; page = 1; run() } })
+  // Sync q FROM the URL when the URL changes — but never read q inside
+  // this effect, or every keystroke would re-fire it and clobber the
+  // user's typing. Locally-cached lastURLQ guards against re-running
+  // the search on unrelated route changes.
+  let lastURLQ = route.query.get('q') || ''
+  $effect(() => {
+    const rq = route.query.get('q') || ''
+    if (rq !== lastURLQ) {
+      lastURLQ = rq
+      q = rq
+      page = 1
+      if (rq) run()
+      else { hits = []; count = 0; searched = false }
+    }
+  })
   queueMicrotask(() => { if (q) run() })  // initial query from the URL
   const pages = $derived(Math.max(1, Math.ceil(count / 25)))
 </script>

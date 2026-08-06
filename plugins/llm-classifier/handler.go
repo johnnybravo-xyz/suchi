@@ -13,6 +13,14 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
+// OnFallbackFn is the "run heuristics fallback for this doc" hook
+// main.go wires. Called after the WriteTx commits when the LLM's
+// verdict was low-confidence — the archive-based automation gets a
+// chance to fill fields the LLM wasn't sure about. Nil means "no
+// fallback wired" (headless deploys with LLM but no automations
+// engine).
+type OnFallbackFn func(ctx context.Context, docID int64) error
+
 // Handler is the durable-outbox Subscriber that runs the classifier
 // on `post-classify` jobs. Registered by main.go only when the plugin
 // is enabled; otherwise post-classify jobs go to a dead-letter which
@@ -33,9 +41,10 @@ import (
 // lands. The plugin's own network call happens outside the tx to
 // avoid holding the SQLite writer during a slow LLM call.
 type Handler struct {
-	plugin *Plugin
-	db     dbHandle
-	log    *slog.Logger
+	plugin     *Plugin
+	db         dbHandle
+	log        *slog.Logger
+	onFallback OnFallbackFn
 }
 
 // dbHandle mirrors the small surface of *core/db.DB that Handler
@@ -54,6 +63,17 @@ func NewHandler(p *Plugin, db dbHandle, log *slog.Logger) *Handler {
 		return nil
 	}
 	return &Handler{plugin: p, db: db, log: log.With("component", "llm-classifier.handler")}
+}
+
+// WithFallback wires the archive-heuristics fallback hook. Called
+// after the WriteTx commits on the low-confidence branch — the
+// operator gets both signals side by side, matching the "if LLM is
+// unsure, corroborate with the archive" semantics main.go set up.
+func (h *Handler) WithFallback(fn OnFallbackFn) *Handler {
+	if h != nil {
+		h.onFallback = fn
+	}
+	return h
 }
 
 // Kinds implements pluginapi.Subscriber.
@@ -98,7 +118,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			"reasoning", res.Reasoning)
 	}
 
-	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 
 		if lowConfidence {
@@ -183,7 +203,21 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		// Enqueue in the same tx so a crash between metadata write and
 		// enqueue is impossible — the outbox pattern is the whole point.
 		return view.EnqueueMove(ctx, tx, e.DocID)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Low-confidence path fires the archive-heuristics fallback. LLM
+	// was unsure; the automation may still corroborate a jd_category
+	// or correspondent from the archive. Runs outside the WriteTx —
+	// the automation opens its own; nested writes on the single-
+	// writer pool would deadlock. Nil hook = no fallback wired.
+	if lowConfidence && h.onFallback != nil {
+		if err := h.onFallback(ctx, e.DocID); err != nil {
+			log.Warn("llm-classifier.fallback.error", "err", err.Error())
+		}
+	}
+	return nil
 }
 
 func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content string, err error) {
