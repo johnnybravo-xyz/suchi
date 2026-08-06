@@ -237,6 +237,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// without a second round-trip. Creation is a preset swap.
 	mux.HandleFunc("GET /api/jd/categories/", s.ListJDCategories)
 
+	// Activity feed. Cursor over audit_events; the SPA drawer and
+	// any agent that wants a change stream reads this. See events.go
+	// for visibility rules and summary rendering.
+	mux.HandleFunc("GET /api/events/", s.ListEvents)
+
 	// Self-service API-token management for session/OIDC callers.
 	// Sibling to /api/token/ (credential-exchange, mobile-compat).
 	mux.HandleFunc("GET /api/tokens/", s.ListTokens)

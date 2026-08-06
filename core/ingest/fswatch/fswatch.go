@@ -48,6 +48,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
@@ -239,6 +240,19 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 	if w.cfg.MaxBytes > 0 && fi.Size() > w.cfg.MaxBytes {
 		w.log.Warn("fswatch.oversized",
 			"path", filepath.Base(path), "size", fi.Size(), "cap", w.cfg.MaxBytes)
+		// Notification feed: an operator dropping a folder full of
+		// scans expects to see which files the ingester silently
+		// walked past. Audit the skip so /api/events/ can render
+		// "Skipped huge.pdf (size 800MiB > cap 500MiB)".
+		audit.Log(ctx, w.db, w.log, audit.Event{
+			Action: "document.ingest.skipped", ObjectKind: "ingest",
+			After: map[string]any{
+				"reason":   "oversized_file",
+				"filename": filepath.Base(path),
+				"size":     fi.Size(),
+				"cap":      w.cfg.MaxBytes,
+			},
+		})
 		return
 	}
 
@@ -258,12 +272,23 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 		side = s
 	}
 
-	docID, err := w.ingest(ctx, path, side)
+	docID, deduped, err := w.ingest(ctx, path, side)
 	if err != nil {
 		w.moveToErrors(path, sidecarPath, err)
 		return
 	}
-	w.log.Info("fswatch.ingested", "doc_id", docID, "path", filepath.Base(path))
+	if deduped {
+		w.log.Info("fswatch.deduped", "doc_id", docID, "path", filepath.Base(path))
+		// Notification feed: the same dedup event API uploads emit,
+		// so drop-folder workflows and manual uploads produce the
+		// same "already had X" entry.
+		audit.Log(ctx, w.db, w.log, audit.Event{
+			Action: "document.upload.conflict", ObjectKind: "document", ObjectID: docID,
+			After: map[string]any{"source": "fswatch", "filename": filepath.Base(path)},
+		})
+	} else {
+		w.log.Info("fswatch.ingested", "doc_id", docID, "path", filepath.Base(path))
+	}
 
 	if !w.cfg.KeepOnSuccess {
 		_ = os.Remove(path)
@@ -281,17 +306,18 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 // metadata inside a single write tx that also inserts the doc row
 // and enqueues the post-ingest job. The dedup rules match the upload
 // handler: alive collision → return existing id; trashed collision
-// → undelete; else insert.
-func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (int64, error) {
+// → undelete; else insert. Returns deduped=true when either dedup
+// branch fired (caller uses this for audit + log line phrasing).
+func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (int64, bool, error) {
 	// Hash-and-store into CAS.
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, fmt.Errorf("open: %w", err)
+		return 0, false, fmt.Errorf("open: %w", err)
 	}
 	defer f.Close()
 	ref, err := w.cas.Put(f)
 	if err != nil {
-		return 0, fmt.Errorf("cas put: %w", err)
+		return 0, false, fmt.Errorf("cas put: %w", err)
 	}
 
 	// Sniff MIME on first 512 bytes of the stored blob (matches the
@@ -330,7 +356,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 
 	inbox, err := jd.InboxCategoryID(ctx, w.db)
 	if err != nil {
-		return 0, fmt.Errorf("resolve inbox: %w", err)
+		return 0, false, fmt.Errorf("resolve inbox: %w", err)
 	}
 
 	// JD category from sidecar, if it resolves. Unresolved codes
@@ -344,11 +370,12 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		if err == nil {
 			catID = id
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("resolve jd code %d: %w", side.JDCategory, err)
+			return 0, false, fmt.Errorf("resolve jd code %d: %w", side.JDCategory, err)
 		}
 	}
 
 	var docID int64
+	var deduped bool
 	err = w.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		// Alive dedup — owner-scoped, matches phase-2(dedup).
 		var aliveID int64
@@ -359,6 +386,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		).Scan(&aliveID)
 		if errAlive == nil {
 			docID = aliveID
+			deduped = true
 			w.log.Info("fswatch.dedup.alive", "doc_id", docID, "sha", ref.SHA256)
 			return nil
 		}
@@ -382,6 +410,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 				return err
 			}
 			docID = trashedID
+			deduped = true
 			w.log.Info("fswatch.dedup.restored", "doc_id", docID)
 			return nil
 		}
@@ -431,7 +460,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		})
 		return jobs.Enqueue(ctx, tx, postingest.Kind, id, string(payload))
 	})
-	return docID, err
+	return docID, deduped, err
 }
 
 // applySidecar upserts correspondent/tags/notes for a freshly-created
