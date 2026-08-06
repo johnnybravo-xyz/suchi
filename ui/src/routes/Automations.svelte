@@ -195,6 +195,40 @@
           {:else if a.type === 'assign_custom_field'}
             <input class="input" style="max-width:110px" type="number" placeholder="field id" bind:value={a.params.field_id} />
             <input class="input" placeholder="value" bind:value={a.params.value} />
+          {:else if a.type === 'apply_from_similar'}
+            <div style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:260px">
+              <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:.8rem;color:var(--muted)">
+                {#each ['jd_category', 'correspondent', 'document_type', 'tags'] as f}
+                  <label style="display:flex;align-items:center;gap:4px">
+                    <input type="checkbox"
+                           checked={(a.params.fields || ['jd_category','correspondent','document_type','tags']).includes(f)}
+                           onchange={(e) => {
+                             const cur = new Set(a.params.fields || ['jd_category','correspondent','document_type','tags'])
+                             if (e.target.checked) cur.add(f); else cur.delete(f)
+                             a.params.fields = [...cur]
+                           }} /> {f}
+                  </label>
+                {/each}
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--muted)">
+                  top-K <input class="input" type="number" style="width:60px" min="1" max="50"
+                                bind:value={a.params.top_k} placeholder="10" />
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--muted)">
+                  auto-apply ≥ <input class="input" type="number" step="0.05" style="width:70px" min="0.5" max="1"
+                                       bind:value={a.params.threshold_autoapply} placeholder="0.9" />
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--muted)">
+                  propose ≥ <input class="input" type="number" step="0.05" style="width:70px" min="0" max="1"
+                                    bind:value={a.params.threshold_propose} placeholder="0.5" />
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;color:var(--muted)">
+                  tag freq ≥ <input class="input" type="number" step="0.05" style="width:70px" min="0" max="1"
+                                     bind:value={a.params.tag_frequency_min} placeholder="0.3" />
+                </label>
+              </div>
+            </div>
           {:else}
             <input class="input" style="max-width:130px" type="number" placeholder="id" bind:value={a.params[Object.keys(a.params)[0]]} />
           {/if}
@@ -223,12 +257,17 @@
       <div class="irow">
         <span class="dot" class:ok={a.enabled}></span>
         <span class="grow">
-          <span class="title" style="display:block">{a.name || `Automation #${a.id}`}</span>
+          <span class="title" style="display:block">
+            {a.name || `Automation #${a.id}`}
+            {#if a.system}<span class="pill ok" style="margin-left:8px;font-size:.7rem">Built-in</span>{/if}
+          </span>
           <span class="sub">{summary(a)}</span>
         </span>
         <button class="btn sm" onclick={() => toggle(a)}>{a.enabled ? 'Disable' : 'Enable'}</button>
         <button class="btn sm" onclick={() => openEditor(a)}>Edit</button>
-        <button class="btn sm danger" onclick={() => remove(a)}><Icon name="trash" size={13} /></button>
+        {#if !a.system}
+          <button class="btn sm danger" onclick={() => remove(a)}><Icon name="trash" size={13} /></button>
+        {/if}
       </div>
     {/each}
   </div>
