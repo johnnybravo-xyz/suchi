@@ -44,7 +44,7 @@
           },
           {
             "group": "Development",
-            "pages": ["preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
+            "pages": ["backend-architecture", "spa-architecture", "preconsume", "agents", "automations", "approvals", "plugins", "mcp"]
           },
           {
             "group": "Alternatives",
