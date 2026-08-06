@@ -416,16 +416,41 @@ func runServe() int {
 	}
 
 	// email-watch: IMAP producer. Opt-in via INGEST_IMAP_URL +
-	// INGEST_IMAP_PASSWORD. Every unseen message becomes a
-	// message/rfc822 doc; post-ingest's eml path fans out attachments
-	// as child docs (see core/pipeline/eml).
+	// INGEST_IMAP_PASSWORD, or via the SPA Admin panel (settings-
+	// first, env fallback via ResolveEmailWatchConfig). Every unseen
+	// message becomes a message/rfc822 doc; post-ingest's eml path
+	// fans out attachments as child docs (see core/pipeline/eml).
 	imapOwner := cfg.IngestIMAPOwnerEmail
 	if imapOwner == "" {
 		imapOwner = cfg.IngestFSOwnerEmail // fall back to shared owner
 	}
+	imapURL := cfg.IngestIMAPURL
+	imapPassword := cfg.IngestIMAPPassword
+	// If env didn't provide a URL, try to stitch one from the SPA-
+	// written settings. Live-reload is not wired — a settings write
+	// requires a restart to take effect (PutMailSettings surfaces
+	// this via restart_required=true).
+	if imapURL == "" {
+		mail := settings.ResolveEmailWatchConfig(ctx, d, settings.EmailWatchConfig{})
+		if mail.Host != "" && mail.Username != "" {
+			port := mail.Port
+			if port == 0 {
+				port = 993
+			}
+			folder := mail.Folder
+			if folder == "" {
+				folder = "INBOX"
+			}
+			imapURL = fmt.Sprintf("imaps://%s@%s:%d/%s", mail.Username, mail.Host, port, folder)
+			imapPassword = mail.Password
+			if imapOwner == "" {
+				imapOwner = mail.OwnerEmail
+			}
+		}
+	}
 	if watcher, err := emailwatch.New(ctx, emailwatch.Config{
-		URL:        cfg.IngestIMAPURL,
-		Password:   cfg.IngestIMAPPassword,
+		URL:        imapURL,
+		Password:   imapPassword,
 		OwnerEmail: imapOwner,
 	}, d, cas, disp, log); err != nil {
 		log.Error("main.emailwatch.new", "err", err.Error())
