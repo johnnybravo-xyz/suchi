@@ -83,6 +83,32 @@ const PostClassifyKind = "post-classify"
 // Kind is the job.kind value the outbox uses.
 const Kind = "post-ingest"
 
+// Pipeline versions. Written on every documents.content update so
+// `suchi rescan --stale <kind>` can pick out docs that lag the
+// current binary's signature. Bump the relevant constant here when
+// a pipeline change would produce a materially different output.
+//
+// PipelineVersionContent — the qpdf → pdftotext / OCR chain. Bump
+//
+//	when the OCR engine changes, when a new content extractor lands,
+//	or when the archive-blob renderer's semantics shift.
+//
+// PipelineVersionOCR     — narrower: OCR-specific. Bump when swapping
+//
+//	OCR engine or tesseract data.
+//
+// PipelineVersionLLM     — the post-classify LLM step. Bump when the
+//
+//	model, prompt template, or JSON schema changes.
+//
+// Zero (the schema default on ADD COLUMN) means "never processed by
+// this pipeline" — a fresh row before its first post-ingest tick.
+const (
+	PipelineVersionContent = 1
+	PipelineVersionOCR     = 1
+	PipelineVersionLLM     = 1
+)
+
 // ContentLimits carries the per-format byte caps applied when writing
 // documents.content. Zero-valued entries fall back to the extractor's
 // package-level DefaultMaxTextBytes.
@@ -944,9 +970,12 @@ func (h *Handler) updateEmailParent(ctx context.Context, docID int64, e *eml.Ema
 			    title = COALESCE(?, title),
 			    created_at = ?,
 			    email_message_id = COALESCE(?, email_message_id),
+			    pipeline_version_content = ?,
 			    updated_at = ?
 			WHERE id = ?
-		`, body, titleArg, created, msgIDArg, now, docID)
+		`, body, titleArg, created, msgIDArg,
+			PipelineVersionContent,
+			now, docID)
 		return err
 	})
 }
@@ -1510,9 +1539,13 @@ func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob str
 		}
 		_, err := tx.ExecContext(ctx, `
 			UPDATE documents
-			SET content = ?, archive_blob = ?, archive_size = ?, updated_at = ?
+			SET content = ?, archive_blob = ?, archive_size = ?,
+			    pipeline_version_content = ?, pipeline_version_ocr = ?,
+			    updated_at = ?
 			WHERE id = ?
-		`, content, archBlobArg, archSizeArg, time.Now().Unix(), id)
+		`, content, archBlobArg, archSizeArg,
+			PipelineVersionContent, PipelineVersionOCR,
+			time.Now().Unix(), id)
 		return err
 	})
 }
