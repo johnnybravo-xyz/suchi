@@ -6,7 +6,7 @@
 //	suchi healthcheck — probe /readyz over loopback; exits non-zero on failure
 //	suchi version     — print version + build info
 //
-// Later phases add: import bundle, gc, jd import, doctor, demo.
+// Later phases add: import, gc, jd import, doctor, demo.
 package main
 
 import (
@@ -110,7 +110,7 @@ func usage() {
 Usage:
   suchi serve                     run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
-  suchi import bundle [flags]  import a compatible export bundle
+  suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
   suchi taxonomy merge [flags]    merge duplicate tag/correspondent/document_type
   suchi doctor                    diagnostic report (egress, binaries, schema, filesystem)
