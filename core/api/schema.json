@@ -203,7 +203,7 @@
     "/api/tasks/":     { "get": { "summary": "Read the outbox + workflow tasks (live-poll, ?limit-based)." },
                           "post":{ "summary": "Agent enqueue (see /agents)." } },
 
-    "/api/search/":       { "get": { "summary": "FTS5 search over title + content." } },
+    "/api/search/":       { "get": { "summary": "FTS5 search over title + content. Ranking is BM25F (title weighted 3× over content) blended with an exponential recency-decay boost (30-day half-life). `?recency=off` disables the recency term for raw BM25F ordering. Structured filters: `tags__id__in`, `correspondents__id__in`, `document_type__id`, `jd_category_id`, `sensitivity`. ACL-scoped for non-admins." } },
     "/api/autocomplete/": { "get": { "summary": "Prefix suggestions across tags/correspondents/document_types." } },
 
     "/api/saved_views/":       { "get": { "summary": "List caller's saved views. ?include=shared also returns every other user's shared=true view (shared rows carry an owner_id field). Body accepts {name, filter_json, display, position, shared}." }, "post": { "summary": "Create." } },
