@@ -529,14 +529,59 @@ The `{documents, method, parameters}` shape matches the mobile-compat
 DMS wire vocabulary suchi already speaks — existing clients hitting
 this URL with a familiar body work unchanged.
 
+### `GET /api/search/`
+
+Full-text search over `documents_fts` (title + content). Scope:
+`documents:read`. Non-admin callers are ACL-scoped identically to
+the list surface — the FTS snippet cannot leak content the caller
+can't see.
+
+**Query params**:
+
+| Param | Purpose |
+|---|---|
+| `q` | The user's raw query string. Empty → empty envelope. |
+| `page`, `page_size` | Standard pagination (default 25, max 100). |
+| `recency` | `off` disables the recency-decay term in ranking. |
+| `tags__id__in`, `correspondents__id__in` | CSV IDs; doc matches ANY. |
+| `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters. |
+
+**Ranking — BM25F + recency decay.** The ORDER BY is:
+
+```
+bm25(documents_fts, 3.0, 1.0)
+  - 0.5 / (1.0 + (now - created_at) / 30_days)
+```
+
+- `bm25(documents_fts, 3.0, 1.0)` is BM25F with per-column weights
+  passed to SQLite FTS5's built-in `bm25()`. Title matches carry
+  3× the weight of content matches — a doc titled "Invoice 2026"
+  outranks a doc that merely mentions "invoice" deep in body text.
+- The subtracted term is a hyperbolic recency boost with a 30-day
+  half-life. New docs get up to `-0.5` off their raw BM25F score;
+  30-day-old docs get `-0.25`; year-old docs get `-0.04`. The boost
+  is modest by design — it nudges genuinely-close matches without
+  ever flipping a much-more-relevant older doc below a marginal
+  newer one. Set `?recency=off` for raw BM25F ordering.
+- Hyperbolic decay `1/(1 + age/half_life)` is used instead of true
+  `exp()` because modernc/sqlite doesn't always link SQLite's math
+  extensions. The two curves agree closely at the range we care
+  about (0–2 half-lives).
+
+**Response shape** — `{count, next, previous, results}` DRF envelope.
+Each hit carries `{id, title, snippet, rank, created_at, mime_type}`
+where `snippet` wraps the matching span in `<mark>...</mark>`.
+
 ### `GET /api/documents/{id}/similar`
 
 "Documents like this" — pure-Go FTS5 more-like-this backed by the
 existing full-text index. Extracts the top-10 tokens from the source
 doc's title + first ~4 KiB of content, runs them as an FTS5
-`MATCH` query, ranks by BM25, and returns the top N. Scope:
+`MATCH` query, ranks by **BM25F (same title 3× / content 1×
+weights as `/api/search/`)**, and returns the top N. Scope:
 `documents:read`. Visibility-scoped identically to the list surface;
-the source doc is always excluded from its own results.
+the source doc is always excluded from its own results. No recency
+term here — "similar" is about content, not freshness.
 
 ```json
 {

@@ -88,10 +88,15 @@ func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Princ
 		visArgs = args
 	}
 
+	// BM25F with the same title/content weights the search endpoint
+	// uses (title 3x, content 1x). Same rationale: a neighbour whose
+	// title shares tokens is a stronger similarity signal than a
+	// neighbour that only mentions them in body text. No recency term
+	// here — "similar" is about content, not freshness.
 	q := `
 		SELECT d.id, d.title, COALESCE(d.mime_type, ''),
 		       COALESCE(d.jd_category_id, 0), d.created_at,
-		       bm25(documents_fts) AS rank
+		       bm25(documents_fts, 3.0, 1.0) AS rank
 		  FROM documents_fts
 		  JOIN documents d ON d.id = documents_fts.rowid
 		 WHERE documents_fts MATCH ?

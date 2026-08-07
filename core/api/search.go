@@ -33,11 +33,32 @@ type SearchHit struct {
 	MIME      string  `json:"mime_type,omitempty"`
 }
 
-// Search — GET /api/search/?q=<terms>&page=<n>&page_size=<n>.
+// Ranking constants. BM25F weights favour title matches over body-text
+// matches so a query like "invoice" ranks a doc titled "Invoice 2026"
+// above one that merely mentions the word in its OCR content.
+// Recency decay adds an exponential preference for fresher docs, so a
+// same-relevance new upload outranks a 3-year-old with the same score.
+//
+// Half-life = 30 days. `k=0.5` is modest: the recency term shifts BM25
+// by at most 0.5, which nudges genuinely-close matches without ever
+// flipping a much-more-relevant older doc below a marginal newer one.
+// Callers can disable with `?recency=off` to see raw BM25F ordering.
+const (
+	bm25TitleWeight   = 3.0
+	bm25ContentWeight = 1.0
+	recencyBoost      = 0.5
+	recencyHalfLifeS  = 30 * 24 * 3600 // 30 days in seconds
+)
+
+// Search — GET /api/search/?q=<terms>&page=<n>&page_size=<n>&recency=off.
 // Empty q returns an empty envelope (no error).
 //
-// Trashed documents are excluded. Owner scoping goes here when
-// per-user permissions land in Phase 6.
+// Ranking: BM25F (title-weighted) blended with an exponential
+// recency-decay boost. `?recency=off` disables the recency term for
+// operators who want raw BM25F ordering.
+//
+// Trashed documents are excluded. Non-admin callers are ACL-scoped via
+// authz.DocVisibilityWhere.
 func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	principal := auth.FromContext(r.Context())
 	if principal == nil {
@@ -92,19 +113,45 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := ParsePageParams(r, 25, 100)
-	// Query args: MATCH ? first, then filter args, then LIMIT + OFFSET.
-	queryArgs := append([]any{query}, extraArgs...)
+
+	// Ranking expression. BM25F is bm25() with per-column weights —
+	// SQLite FTS5 accepts them positionally in the same order as the
+	// CREATE VIRTUAL TABLE column list (title, content). Recency term
+	// uses `1/(1 + age/half_life)` — a hyperbolic decay that
+	// approximates exp() without needing SQLite's math extensions
+	// (which modernc/sqlite doesn't always link). Numerically:
+	// half_life-old = 0.5x, 2*half_life = 0.33x, 4*half_life = 0.2x.
+	// Subtracting drops the score (bm25 is negative-is-more-relevant),
+	// so a newer doc gets a *more negative* score and outranks.
+	recencyDisabled := r.URL.Query().Get("recency") == "off"
+	rankExpr := "bm25(documents_fts, ?, ?)"
+	rankArgs := []any{bm25TitleWeight, bm25ContentWeight}
+	if !recencyDisabled {
+		rankExpr = "bm25(documents_fts, ?, ?) - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?))"
+		rankArgs = []any{bm25TitleWeight, bm25ContentWeight, recencyBoost, float64(recencyHalfLifeS)}
+	}
+
+	// Query args (positional, matching the SQL's `?` order):
+	//   1. rankArgs  — for the SELECT's rank column expression
+	//   2. query     — for the MATCH
+	//   3. extraArgs — for the WHERE filter fragments
+	//   4. rankArgs  — for the ORDER BY (same expression, needs its own binds)
+	//   5. PageSize, Offset — for the LIMIT clause
+	queryArgs := append([]any{}, rankArgs...)
+	queryArgs = append(queryArgs, query)
+	queryArgs = append(queryArgs, extraArgs...)
+	queryArgs = append(queryArgs, rankArgs...)
 	queryArgs = append(queryArgs, p.PageSize, p.Offset())
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT d.id, d.title,
 		       snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20),
-		       bm25(documents_fts),
+		       `+rankExpr+`,
 		       d.created_at,
 		       COALESCE(d.mime_type, '')
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid
 		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL`+extra+`
-		ORDER BY bm25(documents_fts)
+		ORDER BY `+rankExpr+`
 		LIMIT ? OFFSET ?
 	`, queryArgs...)
 	if err != nil {
