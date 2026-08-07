@@ -13,6 +13,14 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
+// PipelineVersionLLM is the "when did this doc last see the LLM
+// classifier?" marker. Bump when the model, prompt template, or
+// JSON schema changes so `suchi rescan --stale llm` picks the doc
+// up. Exported so main.go can read it into the version snapshot
+// it hands to core/rescan (which doesn't import this plugin to
+// keep the dep graph flat).
+const PipelineVersionLLM = 1
+
 // OnFallbackFn is the "run heuristics fallback for this doc" hook
 // main.go wires. Called after the WriteTx commits when the LLM's
 // verdict was low-confidence — the archive-based automation gets a
@@ -197,6 +205,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			if err := upsertTagAndAttach(ctx, tx, tag, e.DocID, now); err != nil {
 				return err
 			}
+		}
+
+		// Bump the LLM pipeline-version marker on this doc. Used by
+		// `suchi rescan --stale llm` to pick out docs still on an
+		// older LLM config after the operator swaps model/prompt.
+		// Kept as a bare integer here rather than an import from
+		// core/postingest to keep the plugin's dep graph flat.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET pipeline_version_llm = ?, updated_at = ?
+			WHERE id = ?
+		`, PipelineVersionLLM, now, e.DocID); err != nil {
+			return err
 		}
 
 		// Re-render the storage-path symlink after metadata changes.

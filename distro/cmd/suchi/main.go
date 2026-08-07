@@ -43,6 +43,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/webhookdispatch"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -93,6 +94,8 @@ func main() {
 		os.Exit(runExport(os.Args[2:]))
 	case "refile":
 		os.Exit(runRefile(os.Args[2:]))
+	case "rescan":
+		os.Exit(runRescan(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -117,6 +120,7 @@ Usage:
   suchi mcp [--http :port]        start an MCP v2 server (stdio by default, HTTP+SSE with --http)
   suchi demo [--data-dir DIR]     seed DATA_DIR with sample docs, tags, one automation, one share link
   suchi refile [flags]            re-run rules + enqueue re-render on every live doc after preset/template/rule changes
+  suchi rescan [flags]            re-run content extraction on selected docs (--stale/--jd/--tag/…; --dry-run + --estimate first)
   suchi export --out FILE.zip     write a portable takeout of documents + taxonomy (optionally --owner-id N or --all)
   suchi version                   print version + build info
 
@@ -397,6 +401,28 @@ func runServe() int {
 	disp.Register(approvals.NewSubscriber(wfEngine))
 	if err := wfEngine.EnsureSweepScheduled(ctx); err != nil {
 		log.Warn("approvals.sweep.schedule_failed", "err", err.Error())
+	}
+	// Rescan-via-Approvals wiring — the discovery surface for stale
+	// docs after a pipeline-version bump. See docs/architecture.mdx
+	// "Human-in-the-loop patterns" for why this rides the approvals
+	// engine (state-machine, one instance per topic, drives a system
+	// action) rather than the lighter document_proposals pattern.
+	pipelineVersions := rescan.Versions{
+		OCR:     postingest.PipelineVersionOCR,
+		LLM:     llmclassifier.PipelineVersionLLM,
+		Content: postingest.PipelineVersionContent,
+	}
+	wfEngine.RegisterHandler(rescan.NewHandler(d, pipelineVersions))
+	wfEngine.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: wfEngine, Log: log})
+	if err := wfEngine.EnsureDef(ctx, rescan.ProposalSlug, rescan.ProposalSpec(), nil); err != nil {
+		log.Error("main.rescan.seed", "err", err.Error())
+		return 1
+	}
+	if err := rescan.EnsureProposals(ctx, d, wfEngine, pipelineVersions); err != nil {
+		log.Warn("main.rescan.detect", "err", err.Error())
+		// Non-fatal: rescan discovery is a nice-to-have, not
+		// load-bearing. If detection failed the operator can still
+		// use the CLI directly.
 	}
 	// Reap orphaned running-state jobs from a prior crashed process
 	// before starting the loop. See jobs.ReclaimOrphaned; agent:*
