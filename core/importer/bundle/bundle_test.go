@@ -23,13 +23,13 @@ func TestImportEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	bundle := buildFakeBundle(t, tmp)
+	bundleDir := buildFakeBundle(t, tmp)
 
 	d, cas, log, ownerEmail := setupTarget(t, ctx, filepath.Join(tmp, "data"))
 
 	// First run: full import.
 	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
-		BundleRoot: bundle,
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func TestImportEndToEnd(t *testing.T) {
 
 	// Second run: everything must be skipped by legacy_id.
 	rep2, err := bundle.Run(ctx, d, cas, log, bundle.Options{
-		BundleRoot: bundle,
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
 	if err != nil {

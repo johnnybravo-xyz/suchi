@@ -13,7 +13,7 @@ import (
 
 // VerifyOptions carries flags to Verify. Zero value not runnable.
 type VerifyOptions struct {
-	// BundleRoot is the path to the Bundle exporter output dir. Required.
+	// BundleRoot is the path to the exporter output dir. Required.
 	BundleRoot string
 }
 
@@ -29,13 +29,13 @@ func (o VerifyOptions) Validate() error {
 // VerifyReport is the dry-diff between a bundle and the live suchi DB.
 // The three slices partition every doc in the bundle:
 //
-//	New    — bundle PKs that would be imported (no matching row here)
-//	Match  — bundle PKs that already exist AND whose compared fields agree
-//	Differ — bundle PKs that already exist BUT some field diverges
+//	New    — source PKs that would be imported (no matching row here)
+//	Match  — source PKs that already exist AND whose compared fields agree
+//	Differ — source PKs that already exist BUT some field diverges
 //
-// Orphan is orthogonal: bundle PKs present in the suchi DB but NOT
+// Orphan is orthogonal: source PKs present in the suchi DB but NOT
 // in this bundle. Useful during shadow-window migrations to spot
-// bundle-side deletions.
+// source-side deletions.
 type VerifyReport struct {
 	New    []int64
 	Match  []int64
@@ -142,7 +142,7 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 //   - original_size      : file size on disk vs stored original_size
 //
 // Deliberately NOT compared: content (OCR text can differ trivially
-// across bundle versions without a real change), tags (name-remap
+// across source-tool versions without a real change), tags (name-remap
 // noise would produce false positives before we build the mapping).
 // Add fields here as needs surface.
 func compareDoc(bundleRoot string, f DocumentFields, suchiTitle string, suchiSize int64) []string {

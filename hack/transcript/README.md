@@ -26,7 +26,7 @@ It has zero dependencies beyond the stdlib and is not built into
 ```
 ./transcript \
   --listen  :8443 \
-  --target  https://bundle.your-lan/ \
+  --target  https://your-existing-dms.your-lan/ \
   --out     ../../testdata/transcripts
 ```
 
