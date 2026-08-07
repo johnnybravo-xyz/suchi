@@ -116,7 +116,7 @@ func TestWorkflowTasksForUser_ScopedToAssignee(t *testing.T) {
 	_, _, _ = seedWorkflowTask(t, d, "user:6", "open")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.approvalTasksForUser(r, 5, 50)
+	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestWorkflowTasksForUser_ExcludesResolved(t *testing.T) {
 	_, _, _ = seedWorkflowTask(t, d, "user:5", "expired")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.approvalTasksForUser(r, 5, 50)
+	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestWorkflowTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
 	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
-	tasks, open, err := s.approvalTasksForUser(r, 5, 2)
+	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
