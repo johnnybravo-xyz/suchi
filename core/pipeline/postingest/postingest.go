@@ -39,6 +39,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/anydoc"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
@@ -104,7 +105,7 @@ const Kind = "post-ingest"
 // Zero (the schema default on ADD COLUMN) means "never processed by
 // this pipeline" — a fresh row before its first post-ingest tick.
 const (
-	PipelineVersionContent = 1
+	PipelineVersionContent = 2
 	PipelineVersionOCR     = 1
 	PipelineVersionLLM     = 1
 )
@@ -136,6 +137,7 @@ type Handler struct {
 	cas             *blob.CAS
 	log             *slog.Logger
 	langs           []string
+	langChain       *lang.Chain    // optional — nil = language detection is a no-op
 	render          *view.Renderer // optional — nil disables rendered-view
 	enqueueClassify bool           // true when an LLM classifier is registered
 	limits          ContentLimits
@@ -196,6 +198,16 @@ func WithLanguages(langs []string) Option {
 // no symlink tree is refreshed; useful for bare-metal or test setups.
 func WithRenderer(r *view.Renderer) Option {
 	return func(h *Handler) { h.render = r }
+}
+
+// WithLanguageChain wires in a language-detection chain (see
+// core/lang). Detectors run at post-content time and stamp the
+// dominant language onto documents.languages when confidence
+// clears the built-in threshold. A nil chain (or an empty one)
+// makes the detection step a no-op — the LLM classifier plugin
+// can still write documents.languages on its own if enabled.
+func WithLanguageChain(c *lang.Chain) Option {
+	return func(h *Handler) { h.langChain = c }
 }
 
 // WithLLMClassifier tells post-ingest to enqueue a post-classify job
@@ -1348,6 +1360,12 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte)
 // LLM classify handoff. Extracted so both entry paths share exactly
 // one implementation.
 func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID int64) error {
+	// Language detection — runs before the LLM classifier so the
+	// stamped code can hint the prompt. No-op when the chain is
+	// empty (default v1 build) or when the doc's languages are
+	// user-locked. See core/lang for the interface + defaults.
+	h.detectLanguages(ctx, log, docID)
+
 	// Rules engine runs after content lands so title/content triggers
 	// see the extracted text. Rules failure is logged, not fatal —
 	// classification is best-effort; the doc is already ingested.
@@ -1555,4 +1573,55 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// detectLanguages runs the registered detector chain against the
+// doc's extracted content and, if a candidate clears the
+// confidence threshold, writes it to documents.languages. A nil
+// or empty chain makes this a no-op — the LLM classifier plugin
+// can still write documents.languages independently.
+//
+// Best-effort: every failure path logs and returns. Language
+// stamping is a nicety, never fatal to post-ingest.
+func (h *Handler) detectLanguages(ctx context.Context, log *slog.Logger, docID int64) {
+	if h.langChain == nil || h.langChain.Len() == 0 {
+		return
+	}
+	var (
+		content sql.NullString
+		locked  int
+	)
+	if err := h.db.Read.QueryRowContext(ctx,
+		`SELECT content, languages_locked FROM documents WHERE id = ?`,
+		docID).Scan(&content, &locked); err != nil {
+		log.Warn("post-ingest.lang.load", "err", err.Error())
+		return
+	}
+	if locked != 0 {
+		// User set the languages via PATCH — never overwrite.
+		return
+	}
+	if !content.Valid || content.String == "" {
+		// No text to detect against (image-only, extraction failed).
+		return
+	}
+	r, ok := h.langChain.BestAbove(content.String, 0.5)
+	if !ok {
+		return
+	}
+	code := lang.Format(r.Code)
+	if code == "" {
+		return
+	}
+	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE documents SET languages = ?, updated_at = ?
+			 WHERE id = ? AND languages_locked = 0`,
+			code, time.Now().Unix(), docID)
+		return err
+	}); err != nil {
+		log.Warn("post-ingest.lang.write", "err", err.Error())
+		return
+	}
+	log.Info("post-ingest.lang.detected", "doc_id", docID, "languages", code)
 }

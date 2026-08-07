@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -203,6 +204,20 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				continue
 			}
 			if err := upsertTagAndAttach(ctx, tx, tag, e.DocID, now); err != nil {
+				return err
+			}
+		}
+
+		// Language — the LLM returns an ISO code (or short CSV) in
+		// res.Language. Normalise via core/lang.Format and write only
+		// when the doc isn't user-locked. The WHERE guard means a
+		// human PATCH survives future LLM re-runs.
+		if code := lang.Format(res.Language); code != "" {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE documents
+				SET languages = ?, updated_at = ?
+				WHERE id = ? AND languages_locked = 0
+			`, code, now, e.DocID); err != nil {
 				return err
 			}
 		}

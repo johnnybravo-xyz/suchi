@@ -180,6 +180,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/search/", s.Search)
 	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
 
+	// Language facet — distinct languages present in the archive
+	// with per-code doc counts. Powers the search-page facet + doc-
+	// detail language chip.
+	mux.HandleFunc("GET /api/languages/", s.ListLanguages)
+
 	// Saved views (per-user filter+display presets).
 	mux.HandleFunc("GET /api/saved_views/", s.ListSavedViews)
 	mux.HandleFunc("POST /api/saved_views/", s.CreateSavedView)

@@ -26,7 +26,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Doc extras | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption` |
 | Taxonomy | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/` |
 | Classifier rules | `/api/rules/` CRUD |
-| Search + autocomplete | `/api/search/`, `/api/autocomplete/` |
+| Search + autocomplete | `/api/search/`, `/api/autocomplete/`, `/api/languages/` |
 | Saved views + UI prefs | `/api/saved_views/` (POST body `{name, filter_json, display, position, shared}`; GET `?include=shared` also returns other users' shared views), `/api/ui_settings/` |
 | Activity feed | `GET /api/events/` (cursor over audit_events; `events:read` scope) |
 | Dashboard counters | `GET /api/stats/` (visibility-scoped one-shot) |
@@ -267,7 +267,9 @@ the undelete flow.
   "created_at": 1793491200,
   "updated_at": 1793491200,
   "tags": ["utilities", "electricity"],
-  "correspondents": [{"id": 3, "name": "BESCOM", "role": "sender"}]
+  "correspondents": [{"id": 3, "name": "BESCOM", "role": "sender"}],
+  "languages": "de,en",
+  "languages_locked": false
 }
 ```
 
@@ -277,8 +279,40 @@ without a second round-trip. See [`GET /api/jd/categories/`](#get-apijdcategorie
 for the picker enumeration. `jd_area_code` is deliberately omitted —
 the category's own `code` encodes the area (e.g. 31 → area 30–39).
 
+`languages` is a CSV of ISO-639-1 codes detected on the document
+(via LLM classifier or metadata hints — see
+[architecture § Languages](/architecture#languages)); empty when
+nothing was detected yet. `languages_locked` is `true` once a user
+has set the value via PATCH — future automatic detection won't
+overwrite it. Set `languages` (as CSV string or JSON array) via
+`PATCH /api/documents/{id}` to correct the detection; passing an
+empty value clears both the value and the lock.
+
 Empty lists always serialize as `[]` (never `null`) so mobile clients
 can iterate them safely.
+
+### `GET /api/languages/`
+
+Language facet — distinct codes present across live documents
+with per-code counts. Powers the SPA's search-page language
+filter and the doc-detail chip picker. Ordered by count
+descending, then code ascending.
+
+**200 OK**
+```json
+{
+  "languages": [
+    {"code": "en", "count": 812},
+    {"code": "de", "count": 143},
+    {"code": "kn", "count": 27}
+  ]
+}
+```
+
+Filter the search endpoint by language via
+[`GET /api/search/?lang=de`](#get-apisearch). The filter uses a
+comma-bracketed LIKE against `documents.languages` so 2-letter
+codes don't false-match 3-letter neighbours (`de` vs `deu`).
 
 ### `GET /api/jd/categories/`
 
@@ -545,6 +579,7 @@ can't see.
 | `recency` | `off` disables the recency-decay term in ranking. |
 | `tags__id__in`, `correspondents__id__in` | CSV IDs; doc matches ANY. |
 | `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters. |
+| `lang` | ISO-639-1 code (`de`, `kn`). Narrows to docs whose `languages` includes the code. Silently ignored if not 2–3 lowercase letters. |
 
 **Ranking — BM25F + recency decay.** The ORDER BY is:
 

@@ -38,6 +38,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest/fswatch"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/mailsetup"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
@@ -344,8 +345,16 @@ func runServe() int {
 	// classifier is registered — hands off to it via a post-classify
 	// job.
 	disp := jobs.New(d, log)
+
+	// Language-detection chain — empty by default. Plugins register
+	// detectors (see core/lang.Detector); v1 has no bundled Go-native
+	// detector, so the LLM classifier is the primary source (writes
+	// documents.languages from its own response schema).
+	langChain := lang.NewChain(log)
+
 	disp.Register(postingest.New(d, cas, log,
 		postingest.WithLanguages(cfg.OCRLanguages),
+		postingest.WithLanguageChain(langChain),
 		postingest.WithRenderer(renderer),
 		postingest.WithLLMClassifier(llm != nil),
 		postingest.WithContentLimits(postingest.ContentLimits{

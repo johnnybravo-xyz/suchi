@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
@@ -287,23 +288,25 @@ func sanitizeFTS5(raw string) string {
 		if f == "" {
 			continue
 		}
-		// FTS5 word chars only; allow alphanumeric + underscore. Aggressive
-		// on purpose — the alternative is exposing FTS5 parser errors.
-		buf := make([]byte, 0, len(f))
-		for i := 0; i < len(f); i++ {
-			c := f[i]
-			switch {
-			case c >= 'a' && c <= 'z',
-				c >= 'A' && c <= 'Z',
-				c >= '0' && c <= '9',
-				c == '_':
-				buf = append(buf, c)
+		// FTS5 word chars — Unicode letters + digits + underscore.
+		// Runewise so non-Latin scripts (Devanagari, Kannada, Tamil,
+		// CJK, Cyrillic, etc.) tokenise correctly; a byte-level
+		// alphanumeric filter would have silently dropped every
+		// Indian-language query into an empty match. Aggressive on
+		// symbols on purpose — the alternative is exposing FTS5
+		// parser errors.
+		var buf strings.Builder
+		buf.Grow(len(f))
+		for _, r := range f {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+				buf.WriteRune(r)
 			}
 		}
-		if len(buf) == 0 {
+		token := buf.String()
+		if token == "" {
 			continue
 		}
-		parts = append(parts, string(buf)+"*")
+		parts = append(parts, token+"*")
 	}
 	if len(parts) == 0 {
 		return `""` // safe no-match
@@ -355,6 +358,15 @@ func buildSearchFilters(r *http.Request) (string, []any) {
 	if v := r.URL.Query().Get("sensitivity"); v != "" && SensitivityLevels[v] {
 		frag.WriteString(" AND d.sensitivity = ?")
 		args = append(args, v)
+	}
+	// Language — `?lang=de` narrows to docs whose detected/user-set
+	// language(s) include the given code. Storage format is
+	// comma-bracketed (,de,en,) so a LIKE with commas both sides
+	// dodges the `de` vs `deu` false-match trap. Silently ignored
+	// when the value isn't a 2-3-letter ISO code.
+	if v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang"))); v != "" && len(v) >= 2 && len(v) <= 3 {
+		frag.WriteString(" AND d.languages LIKE ?")
+		args = append(args, "%,"+v+",%")
 	}
 	return frag.String(), args
 }

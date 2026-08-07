@@ -304,6 +304,50 @@ first-boot bootstrap flow (`POST /setup`) is unaffected — it's an
 API endpoint, not a UI page — but you'll need to POST the token
 manually since the `/bootstrap` browser wizard is gone.
 
+## Languages
+
+Every document row carries two language columns:
+
+- `languages` — comma-bracketed CSV of ISO-639-1 codes, e.g.
+  `,de,` or `,de,en,`. Empty means "not detected yet." The
+  comma-bracket dodges the `de` vs `deu` false-match trap when
+  filtering with `LIKE '%,de,%'`.
+- `languages_locked` — flipped to 1 when a user writes the field
+  via `PATCH /api/documents/{id}` so a rescan can't clobber the
+  human correction.
+
+Detection is a small chain in `core/lang`. The `Detector`
+interface + `Chain` type live there so ops can register offline
+detectors (see `plugins/xberg-lang` in the deferred pile) without
+touching the pipeline. In the default v1 build no Go-native
+detector is bundled — whatlanggo is abandoned, lingua-go is
+heavy and its exact binary-size impact is unmeasured. Instead:
+
+- The LLM classifier extends its response schema with a
+  `language` field. LLMs handle language ID trivially, so the
+  detection rides the classification call already in flight.
+  When `plugins/llm-classifier` is enabled and returns a code,
+  `documents.languages` is stamped (if not `_locked`).
+- PDF `/Lang` extraction and email `Content-Language` header
+  parsing sit in `core/lang/hints.go` as `FromPDFLang` and
+  `FromContentLanguage` — ready for a pipeline plumb-through
+  when someone needs LLM-independent detection.
+
+OCR runs single-pass with the operator-configured
+`OCR_LANGUAGES` list (default `eng`). Tesseract slows non-
+linearly past ~3 language packs, so keep the list to the langs
+you actually receive.
+
+FTS5 keeps the current `unicode61 porter remove_diacritics 2`
+tokenizer. Porter is English-only; its rules mostly don't match
+foreign tokens, so non-Latin content passes through un-mangled.
+The search query preprocessor (`sanitizeFTS5` in
+`core/api/search.go`) is Unicode-aware — Devanagari, Kannada,
+CJK, Cyrillic all tokenise correctly and get the same trailing-
+`*` recovery English users get. See `/search?lang=de` for the
+per-language filter and `/api/languages/` for the archive-wide
+facet.
+
 ## Content-addressed storage
 
 Blobs live at `$DATA_DIR/blobs/sha256/{aa}/{bb}/{full-hash}`. Puts

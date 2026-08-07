@@ -18,6 +18,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
@@ -381,6 +382,26 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *in.JDCategoryID)
 		after["jd_category_id"] = *in.JDCategoryID
 	}
+	// Languages — accepts CSV string or JSON array. Normalised to
+	// the comma-bracketed storage form. Setting the field implies
+	// languages_locked=1 so a rescan can't overwrite the human
+	// correction. Empty CSV / empty array clears the value AND the
+	// lock so future automatic detection can populate it again.
+	if in.Languages != nil {
+		normalised, err := parseLanguagesUpdate(*in.Languages)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_languages", err.Error())
+			return
+		}
+		sets = append(sets, "languages = ?", "languages_locked = ?")
+		lock := 1
+		if normalised == "" {
+			lock = 0
+		}
+		args = append(args, normalised, lock)
+		after["languages"] = strings.Trim(normalised, ",")
+		after["languages_locked"] = lock == 1
+	}
 	if len(sets) == 0 {
 		s.writeError(w, http.StatusBadRequest, "no_fields", "no updateable fields in body")
 		return
@@ -487,6 +508,11 @@ type DocumentDetail struct {
 	TrashedAt      *int64             `json:"trashed_at,omitempty"`
 	Tags           []string           `json:"tags"`
 	Correspondents []DocCorrespondent `json:"correspondents"`
+	// Languages — comma-separated ISO-639-1 codes (e.g. "de", "de,en").
+	// Stored comma-bracketed in the column; serialised without the
+	// leading/trailing commas for JSON clients.
+	Languages       string `json:"languages,omitempty"`
+	LanguagesLocked bool   `json:"languages_locked,omitempty"`
 }
 
 // DocumentUpdate is the PATCH /api/documents/{id} body. Fields are
@@ -496,6 +522,35 @@ type DocumentUpdate struct {
 	Title        *string `json:"title,omitempty"`
 	Sensitivity  *string `json:"sensitivity,omitempty"`
 	JDCategoryID *int64  `json:"jd_category_id,omitempty"`
+	// Languages accepts either a CSV string ("de,en") or a JSON array
+	// (["de","en"]). Normalised server-side to the comma-bracketed
+	// storage format. Setting this implicitly sets languages_locked=1
+	// — human overrides must survive rescans.
+	Languages *json.RawMessage `json:"languages,omitempty"`
+}
+
+// parseLanguagesUpdate normalises a PATCH body's `languages`
+// field. Accepts either a JSON string ("de,en") or a JSON array
+// (["de","en"]). Returns the comma-bracketed storage form (or ""
+// when the caller wants to clear the value). Rejects payloads
+// that decode to neither — with a message the API can bubble to
+// the client.
+func parseLanguagesUpdate(raw json.RawMessage) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "", nil
+	}
+	// Try JSON array first.
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return lang.Format(strings.Join(arr, ",")), nil
+	}
+	// Fall back to JSON string.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return lang.Format(s), nil
+	}
+	return "", fmt.Errorf("languages must be a string or array of strings")
 }
 
 // SensitivityLevels is the closed vocabulary the API accepts. Empty
@@ -560,13 +615,18 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		jdName      sql.NullString
 		jdAreaName  sql.NullString
 	)
+	var (
+		languagesStored string
+		languagesLocked int
+	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT d.id, d.title, COALESCE(d.content, ''),
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
 		       d.jd_category_id, d.sensitivity,
 		       d.created_at, d.updated_at, d.trashed_at,
-		       jc.code, jc.name, ja.name
+		       jc.code, jc.name, ja.name,
+		       d.languages, d.languages_locked
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
@@ -574,7 +634,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	`, id).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.UpdatedAt, &trashed,
-		&jdCode, &jdName, &jdAreaName)
+		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -611,6 +671,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		v := trashed.Int64
 		d.TrashedAt = &v
 	}
+	d.Languages = strings.Join(lang.Parse(languagesStored), ",")
+	d.LanguagesLocked = languagesLocked != 0
 
 	tagRows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT t.slug FROM tags t
