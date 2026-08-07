@@ -133,12 +133,20 @@ func insertRun(ctx context.Context, tx *sql.Tx, defID int64, docID *int64, start
 		return 0, err
 	}
 	now := time.Now().Unix()
+	// startedBy = 0 means "no human attribution" (e.g. system-driven
+	// detector runs). SQLite would happily insert 0 but the FK to
+	// users(id) would fail — NULL is the schema's intended
+	// representation.
+	var startedByCol any
+	if startedBy > 0 {
+		startedByCol = startedBy
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO approval_runs(
 			def_id, doc_id, state, current_state, vars_json,
 			state_entered_at, deadline_at, started_by, started_at
 		) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
-	`, defID, nullInt64(docID), start, varsJSON, now, nullInt64(deadline), startedBy, now)
+	`, defID, nullInt64(docID), start, varsJSON, now, nullInt64(deadline), startedByCol, now)
 	if err != nil {
 		return 0, err
 	}

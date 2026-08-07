@@ -13,12 +13,13 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-// pipelineVersionLLM is the "when did this doc last see the LLM
+// PipelineVersionLLM is the "when did this doc last see the LLM
 // classifier?" marker. Bump when the model, prompt template, or
 // JSON schema changes so `suchi rescan --stale llm` picks the doc
-// up. Kept in this package (not imported from core/postingest) to
-// keep the plugin dep graph clean.
-const pipelineVersionLLM = 1
+// up. Exported so main.go can read it into the version snapshot
+// it hands to core/rescan (which doesn't import this plugin to
+// keep the dep graph flat).
+const PipelineVersionLLM = 1
 
 // OnFallbackFn is the "run heuristics fallback for this doc" hook
 // main.go wires. Called after the WriteTx commits when the LLM's
@@ -215,7 +216,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			UPDATE documents
 			SET pipeline_version_llm = ?, updated_at = ?
 			WHERE id = ?
-		`, pipelineVersionLLM, now, e.DocID); err != nil {
+		`, PipelineVersionLLM, now, e.DocID); err != nil {
 			return err
 		}
 

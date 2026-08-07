@@ -160,6 +160,11 @@
         {@const dl = deadline(t)}
         <div class="card task-card">
           <div class="prompt">{t.prompt || t.title || `Task #${t.id}`}</div>
+          {#if t.workflow_name === 'rescan-proposal' && t.vars}
+            <div style="font-size:.85rem;color:var(--muted);margin-top:2px">
+              Pipeline <b>{t.vars.kind}</b> · {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} stale (v{(t.vars.current_version ?? 1) - 1} → v{t.vars.current_version})
+            </div>
+          {/if}
           <div class="meta">
             {#if t.workflow_name}<span class="pill ok">{t.workflow_name}</span>{/if}
             {#if t.assignee}<span class="pill">{t.assignee}</span>{/if}
