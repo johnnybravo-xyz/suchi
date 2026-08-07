@@ -265,6 +265,25 @@ suchi rescan --jd 22 --older-than 8760h --yes
 suchi rescan --only-failed
 ```
 
+### Discovery via the Tasks inbox
+
+The CLI is the surgical path — you pick filters, run the command,
+own the outcome. The Tasks inbox is the **discovery** path for the
+same feature: whenever `pipeline_version_ocr`, `pipeline_version_llm`,
+or `pipeline_version_content` in the binary is newer than what any
+docs are stamped with, boot-time detection opens a `rescan-proposal`
+approval card in the inbox. Admins see it as *"Pipeline ocr · 520
+documents stale (v1 → v2)"* with three choices — **approve all**,
+**approve sample** (20 docs), or **dismiss**. Approvals route
+through the same `core/rescan.Enqueue` helper the CLI uses, so the
+two surfaces are always in lockstep.
+
+Dismiss cleanly closes the run; the card doesn't come back until
+the next version bump. If someone rescans out-of-band and the stale
+count hits zero, the detector cancels the pending run on the next
+boot. See [Approvals engine → built-in defs](/approvals#built-ins)
+for the state-machine detail.
+
 ## `suchi export --out FILE.zip`
 
 Portable takeout of everything a user owns. Writes a single zip

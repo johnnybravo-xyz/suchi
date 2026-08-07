@@ -326,6 +326,64 @@ The runner calls `Resolve` inside the task-creation tx: an error
 aborts the write, the advance job retries, and the run stays
 `running` so the operator can fix wiring and re-drive it.
 
+## 6a. Built-in defs
+
+`suchi serve` seeds a small set of first-party approval definitions
+via `EnsureDef` at boot. They're idempotent: if the active def's
+spec already matches, the seed is a no-op; if the shipped spec
+changed, a new version registers and the previous version
+deactivates. All built-ins live under `core/<verb>/` (never under
+`core/approvals/`) so the engine stays generic.
+
+### `rescan-proposal`
+
+The discovery half of [`suchi rescan`](/cli#suchi-rescan-flags).
+When a pipeline version constant (`pipeline_version_ocr`,
+`pipeline_version_llm`, `pipeline_version_content`) is bumped in
+the binary, `core/rescan.EnsureProposals` runs at boot and, per
+kind, counts documents whose stamped version lags the current
+constant. If the count is > 0, it starts a `rescan-proposal` run
+with:
+
+```json
+{
+  "kind": "ocr",
+  "current_version": 2,
+  "stale_count": 520
+}
+```
+
+The spec is three states — `review` (an `approve` state assigned to
+`role:admin`), `enqueue_all` / `enqueue_sample` (both
+`kind: "rescan_enqueue"`, differing only in `with.sample_size`), and
+`end`. The three choices on `review` are `approve_all`,
+`approve_sample`, `dismiss`. Approvals route through the same
+`core/rescan.Enqueue` helper the CLI uses, so the two surfaces
+never drift.
+
+Lifecycle rules the detector enforces on every boot:
+
+- **Supersede on version bump.** If a pending run exists at an
+  older `current_version` than the binary now advertises, the
+  detector cancels it and starts a fresh one. Reason:
+  `detect: superseded by newer version`.
+- **Cancel when the archive catches up.** If the stale count hits
+  zero (someone rescanned via CLI, or the docs were re-uploaded),
+  the pending run is cancelled. Reason:
+  `detect: stale count reached 0`.
+- **Idempotent otherwise.** A pending run at the current version
+  is left alone.
+
+Cards render in the Tasks inbox with context:
+*"Pipeline ocr · 520 documents stale (v1 → v2)"* plus the three
+choice buttons. Dismissing closes the run without enqueuing
+anything; the card doesn't come back until the next version bump.
+
+Assignee resolution is `role:admin` via
+`approvals.AdminAssigneeResolver`, wired in `main.go`. Fresh
+instances with no admins yet park the task harmlessly — the runner
+retries assignee resolution on the next advance.
+
 ## 7. Operations
 
 - **Log tag** — every log line carries `component=workflow`. Grep on
@@ -350,10 +408,12 @@ aborts the write, the advance job retries, and the run stays
 - **YAML definition loader.** Specs are JSON in
   `approval_defs.spec_json`; a YAML compiler is additive and needs no
   migration. No watched-directory boot-time loader yet.
-- **`role:X` resolution + fair dispatch.** `AssigneeResolver` is
-  reserved for enterprise; core ships only `user:N`. `Resolve`
-  returns `[]int64` for eventual round-robin, but the runner doesn't
+- **Fair-dispatch across a resolved role.** `AssigneeResolver`
+  ships with a built-in `AdminAssigneeResolver` (`role:admin` →
+  every admin's user id) that the rescan-proposal built-in uses,
+  and `/api/tasks/` widens listing/count for admins so the role
+  task is visible to all of them. What's still deferred:
+  round-robin claim ownership — today the task shows in every
+  admin's inbox until one resolves it. `Resolve` returns
+  `[]int64` for eventual per-user routing, but the runner doesn't
   consume the list yet.
-- **Merging `approval_tasks` into `/api/tasks/`.** Today the outbox
-  and `approval_tasks` are surfaced separately; the mobile-compat
-  single-poll story lands with Phase 4.

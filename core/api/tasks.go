@@ -62,6 +62,12 @@ type WorkflowTask struct {
 	Status       string   `json:"status"`
 	DeadlineAt   int64    `json:"deadline_at,omitempty"`
 	CreatedAt    int64    `json:"created_at"`
+	// Vars is the run's opaque JSON payload (approval_runs.vars_json).
+	// Denormalized so the SPA can render context-rich cards
+	// (e.g. "OCR pipeline · 520 docs stale, v1→v2" for rescan-proposal)
+	// without a per-row round-trip to /api/approvals/runs/{id}. Opaque
+	// map so definitions can evolve without a struct change here.
+	Vars map[string]any `json:"vars,omitempty"`
 }
 
 // HeuristicsProposalCard groups every pending proposal for one
@@ -151,7 +157,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if include != "jobs" && principal.UserID > 0 {
-		wtasks, open, err := s.approvalTasksForUser(r, principal.UserID, limit)
+		wtasks, open, err := s.approvalTasksForUser(r, principal.UserID, principal.Role, limit)
 		if err != nil {
 			s.Log.Error("api.tasks.approvals_query", "err", err.Error())
 			// Non-fatal: jobs already loaded, degrade to jobs-only.
@@ -353,17 +359,27 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix
 // resolved to user rows at approvals.advance time (see
 // core/approvals.AssigneeResolver), so a role-scoped enterprise build
 // still surfaces the right rows here.
-func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) ([]WorkflowTask, int, error) {
+func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string, limit int) ([]WorkflowTask, int, error) {
 	me := fmt.Sprintf("user:%d", userID)
+
+	// Role-scoped tasks (e.g. `assignee = "role:admin"`) show up
+	// to every user whose role matches. Non-role assignees still
+	// filter by user:N exact match. The OR fragment is empty for
+	// non-privileged users, keeping their inbox to their own tasks.
+	roleClause := ""
+	if role == "admin" {
+		roleClause = " OR t.assignee = 'role:admin'"
+	}
 
 	q := `
 		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0), d.slug,
 		       t.state_key, t.assignee, t.prompt,
-		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at
+		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at,
+		       COALESCE(r.vars_json, '{}')
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
 		JOIN approval_defs d ON d.id = r.def_id
-		WHERE t.assignee = ? AND t.status IN ('open','claimed')
+		WHERE (t.assignee = ?` + roleClause + `) AND t.status IN ('open','claimed')
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT ?
 	`
@@ -378,12 +394,13 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 		var (
 			t          WorkflowTask
 			choicesRaw string
+			varsRaw    string
 			deadline   int64
 			docID      int64
 		)
 		if err := rows.Scan(&t.ID, &t.RunID, &t.WorkflowID, &docID, &t.WorkflowName,
 			&t.StateKey, &t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
-			&t.CreatedAt); err != nil {
+			&t.CreatedAt, &varsRaw); err != nil {
 			return nil, 0, err
 		}
 		if docID > 0 {
@@ -395,6 +412,9 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 		if choicesRaw != "" {
 			_ = json.Unmarshal([]byte(choicesRaw), &t.Choices)
 		}
+		if varsRaw != "" && varsRaw != "{}" {
+			_ = json.Unmarshal([]byte(varsRaw), &t.Vars)
+		}
 		t.Title = t.Prompt
 		out = append(out, t)
 	}
@@ -403,12 +423,11 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, limit int) 
 	}
 
 	// Separate count query so the "open inbox" number is honest even
-	// when limit truncates the list.
+	// when limit truncates the list. Widened with the same role clause
+	// as the SELECT so the sidebar badge matches what the list shows.
 	var open int
-	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT COUNT(*) FROM approval_tasks
-		WHERE assignee = ? AND status = 'open'
-	`, me).Scan(&open)
+	countQ := `SELECT COUNT(*) FROM approval_tasks WHERE (assignee = ?` + roleClause + `) AND status = 'open'`
+	err = s.DB.Read.QueryRowContext(r.Context(), countQ, me).Scan(&open)
 	if err != nil {
 		return nil, 0, err
 	}

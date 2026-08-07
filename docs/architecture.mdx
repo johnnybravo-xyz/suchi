@@ -265,6 +265,26 @@ The rules engine (`core/classify/rules/`) sits below both — it's
 the one-shot deterministic classifier that runs first in
 post-ingest.
 
+### Human-in-the-loop patterns
+
+Three surfaces answer "does the machine need a human?" Pick by
+shape, not by familiarity — a new feature should slot into one of
+these, not spawn a fourth.
+
+| Surface | Use when… | Example |
+| --- | --- | --- |
+| **Rules / automations** (no human) | The decision is deterministic or configured up front; the outcome fires without asking. | Rules classifier; the auto-file-from-archive **auto-apply** tier (≥ 0.9 confidence). |
+| **Heuristics proposals** (`document_proposals` table + `/api/tasks/` chip cluster) | Many parallel low-stakes yes/no decisions on individual documents. Reversible. Batch-resolvable. No timeout. | Auto-file-from-archive's **propose** tier — one chip per (doc, field). |
+| **Approvals engine** (`approval_defs` / `_runs` / `_tasks`) | A single approval directly drives a system action; or multi-step future (escalation, timeout, sign-off chain). One instance at a time per topic. Coarse-grained. | Pipeline `rescan-proposal` (surfaces stale docs after a version bump); doc-vault sign-off. |
+
+Practical implication for engines-vs-verbs layering: `approvals`
+and `automations` are **engines** — generic registries and state
+machines. `rescan` (and future verbs like `refile`) are verbs that
+plug into those engines via `RegisterHandler` + `EnsureDef` at
+boot. Engines must never learn about specific verbs; verbs must
+never import each other. The dependency graph is
+`main → verbs → engines → primitives`.
+
 ## Headless mode
 
 `SUCHI_UI_DISABLED=1` skips registration of every browser-facing
