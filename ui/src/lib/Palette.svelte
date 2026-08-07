@@ -48,7 +48,8 @@
 </script>
 
 <div class="palette-veil" onclick={close} role="presentation">
-  <div class="palette" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Command palette">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="palette" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Command palette" tabindex="-1">
     <input bind:this={inputEl} bind:value={q} oninput={onInput} onkeydown={onKey}
            placeholder="Search documents or jump to a page…" />
     <div class="hits index" style="border:0;border-radius:0">
