@@ -46,6 +46,28 @@
     } catch (ex) { notify?.(ex.message || 'Could not save') }
   }
 
+  async function editLanguages() {
+    // Simple prompt-based edit — matches how title / sensitivity
+    // land on this page today. Empty string clears both value +
+    // lock so future automatic detection can populate it again.
+    const current = doc?.languages || ''
+    const next = window.prompt(
+      'Languages — comma-separated ISO codes (e.g. "de,en"). Empty clears + unlocks.',
+      current
+    )
+    if (next === null) return
+    const trimmed = next.trim()
+    try {
+      await patchDocument(id, { languages: trimmed })
+      doc = {
+        ...doc,
+        languages: trimmed,
+        languages_locked: trimmed !== '',
+      }
+      notify?.(trimmed ? 'Languages updated' : 'Languages cleared')
+    } catch (ex) { notify?.(ex.message || 'Could not update languages') }
+  }
+
   async function share() {
     try {
       const res = await createShareLink({ doc_ids: [Number(id)], label: doc?.title || '' })
@@ -146,6 +168,18 @@
             <dt>Correspondents</dt>
             <dd>{#each doc.correspondents as c}<span class="pill" style="margin-right:5px">{c.name} · {c.role}</span>{/each}</dd>
           {/if}
+          <dt>Languages</dt>
+          <dd>
+            {#if doc.languages}
+              {#each doc.languages.split(',') as code}
+                <span class="pill" style="margin-right:5px">{code.trim()}</span>
+              {/each}
+              {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
+            {:else}
+              <span class="sub">not detected</span>
+            {/if}
+            <button class="btn sm" style="margin-left:8px" onclick={editLanguages} type="button">Edit</button>
+          </dd>
         </dl>
         {#if shareURL}
           <div class="field" style="margin-top:12px;margin-bottom:0">

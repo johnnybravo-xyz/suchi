@@ -58,6 +58,7 @@ export const documentVersions = (id) => api.get(`/api/documents/${id}/versions/`
 
 export const search = (q, params) => api.get(`/api/search/${qs({ q, ...params })}`)
 export const autocomplete = (q, limit = 8) => api.get(`/api/autocomplete/${qs({ q, limit })}`)
+export const listLanguages = () => api.get('/api/languages/')
 
 // JD taxonomy — GET /api/jd/categories/ (flat, DRF envelope).
 // results: [{ id, code, name, description, area_code, area_name, system }]

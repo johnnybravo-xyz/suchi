@@ -1,7 +1,7 @@
 <script>
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listTasks, listDocuments, setupState, stats as fetchStats, listEvents } from './lib/api.js'
+  import { listJDCategories, listTasks, listDocuments, setupState, stats as fetchStats, listEvents, listPendingDecryption, uploadDocument } from './lib/api.js'
   import Icon from './lib/Icon.svelte'
   import Palette from './lib/Palette.svelte'
   import Login from './routes/Login.svelte'
@@ -123,7 +123,6 @@
       recentDocs = r?.results || []
     } catch {}
     try {
-      const { listPendingDecryption } = await import('./lib/api.js')
       const r = await listPendingDecryption()
       lockedCount = (r?.results || r || []).length
     } catch { lockedCount = 0 }
@@ -141,7 +140,6 @@
     const files = [...(e.dataTransfer?.files || [])]
     if (!files.length) return
     notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
-    const { uploadDocument } = await import('./lib/api.js')
     let ok = 0, dup = 0, fail = 0
     for (const f of files) {
       try { await uploadDocument(f); ok++ }
@@ -310,6 +308,7 @@
 
   {#if drawerOpen}
     <div class="drawer-veil" onclick={() => (drawerOpen = false)} role="presentation">
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
       <aside class="ndrawer" onclick={(e) => e.stopPropagation()} aria-label="Activity">
         <div class="ndrawer-head">
           <h3>Activity</h3>
@@ -384,7 +383,8 @@
 
   {#if uploadOpen}
     <div class="modal-veil" onclick={() => (uploadOpen = false)} role="presentation">
-      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents">
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents" tabindex="-1">
         <div class="modal-head">
           <h3>Upload</h3>
           <button class="btn sm" onclick={() => { uploadOpen = false; pollActivity() }}><Icon name="x" size={13} /></button>
