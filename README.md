@@ -1,29 +1,51 @@
-# suchi
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/brand/suchi-hero-dark.svg">
+    <img src=".github/brand/suchi-hero.svg" alt="suchi" width="128">
+  </picture>
+</p>
 
-**suchi** (Sanskrit *सूची*, "an index, a catalog, a list"; pronounced *SOO-chee*, like kimchi) — a document-management system as a single Go binary. SQLite by default, content-addressed storage, plugin seams at every layer, and a mobile wire surface that common DMS mobile clients can drive.
+<h1 align="center">suchi</h1>
 
-Status: **pre-alpha** — Phases 0–6 have shipped; Phase 4 batch 8 (repo public flip) is parked as a manual step. Not for production use. Repo is private until that flip.
+<p align="center">
+  <b>A document-management system as a single Go binary.</b><br>
+  <sub>Sanskrit <i>सूची</i> — "an index, a catalog, a list"; pronounced <i>SOO-chee</i>, like kimchi.</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/johnnybravo-xyz/suchi/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/johnnybravo-xyz/suchi/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-007ec6"></a>
+  <a href="https://suchi.page"><img alt="Homepage" src="https://img.shields.io/badge/site-suchi.page-007ec6"></a>
+</p>
+
+SQLite by default, content-addressed storage, plugin seams at every layer, and a mobile wire surface common DMS mobile clients can drive.
+
+Status: **pre-alpha** — not for production use. The API + storage layout are stabilising but not frozen; migrations will apply cleanly across upgrades. See the [`suchi.page`](https://suchi.page) homepage for the pitch and [`docs/`](docs/) (published via Mintlify) for the full reference.
 
 ## Non-negotiables
 
-- One binary, one config, one data dir. No Redis, no Postgres for MVP.
+- One binary, one config, one data dir. No Redis, no Postgres.
 - Idle RAM budget: ~100 MB. Idle CPU: near-zero.
 - **No telemetry, ever.** A stock install makes zero outbound connections. Every egress is opt-in, listed in the config, and logged.
-- AGPL-3.0. DCO/CLA once the repo goes public.
-- Multi-user data model from Phase 0. Groups + object ACLs from Phase 6.
+- AGPL-3.0.
+- Multi-user data model + groups + object ACLs from day one.
+- Pure Go: `CGO_ENABLED=0`, single statically-linked binary, cross-platform out of the box.
 
-Full design lives at `../suchi-plan.md` (design doc, out of tree). User-facing reference lives in `docs/` and is published via Mintlify. Brand assets live at `../design-lang/brand/`.
+Brand assets: [`.github/brand/`](.github/brand/) (hero + dark variants).
 
 ## What ships in the box
 
-- **HTTP API** — ~135 routes covering documents, taxonomy, search, share links, automations, approvals, groups, ACLs, agents, MCP, mobile-compat, OpenAPI at `/api/schema/`.
+- **HTTP API** — ~140 routes covering documents, taxonomy, search, share links, automations, approvals, groups, ACLs, agents, MCP, mobile-compat, OpenAPI at `/api/schema/`.
 - **Two UIs, one binary.** Server-rendered pages (list, detail, upload, inbox, admin: setup, mail-mbsync, automations, groups, custom fields) at `/` — Oat CSS + minimal JS. Svelte SPA at `/app/` — full-featured browser client, `//go:embed`'d from `core/ui/spa/dist/`. Both consume the same auth chain + API. `SUCHI_UI_DISABLED=1` disables both for headless.
 - **Ingest pipeline** — 16 packages under `core/pipeline/` handling qpdf → pdf-inspector → OCR (tessocr / ocrmypdf) → anydoc (office docs) → eml / msg / epub / heic / djvu / zugferd / barcode / pageanalyze / docsplit → rules classifier → automations → rendered-view → optional LLM classifier.
 - **Three ingest producers** — HTTP upload (`POST /api/documents/`), fs-watch (`core/ingest/fswatch`), email-watch (`core/ingest/emailwatch` — real IMAP polling loop, cred-managed via mail-mbsync sidecar).
-- **Two automation engines** — [automations](docs/automations.mdx) (trigger→conditions→actions, `document_added` / `document_updated` / `consumption`) and [approvals](docs/approvals.mdx) (human-in-the-loop state machines with timeouts).
-- **Permissions** — `groups` + `object_acls` + `Authorizer` interface. Default is `ACLAuthorizer` — behaves as legacy "owner or admin" when no ACLs are set; unlocks per-user + per-group grants when they are.
+- **Multi-language support** — per-doc `documents.languages` column, LLM-driven detection (opt-in), `?lang=` search filter, `/api/languages/` archive facet. Search preprocessor is Unicode-aware — Devanagari, Kannada, Tamil, CJK, Cyrillic queries all work. Detection is LLM-first in v1; interface seam at `core/lang.Detector` for future plugins (xberg-sidecar, lingua-go, etc.).
+- **Two automation engines** — [automations](docs/automations.mdx) (trigger→conditions→actions, `document_added` / `document_updated` / `consumption`) and [approvals](docs/approvals.mdx) (human-in-the-loop state machines with timeouts). Ships a built-in `rescan-proposal` approval def that surfaces stale-pipeline docs to admins after a version bump.
+- **Selective re-processing** — `suchi refile` re-runs the rules classifier + render job; `suchi rescan --stale <kind>` re-runs the full extraction chain (OCR / LLM / content) against docs whose signature lags the current binary. Signature bumps are code-driven per-kind — nothing runs unless the operator asks.
+- **Permissions** — `groups` + `object_acls` + `Authorizer` interface. Default `ACLAuthorizer` — behaves as legacy "owner or admin" when no ACLs are set; unlocks per-user + per-group grants when they are.
 - **Agents + MCP** — task-claim/act loop (`POST /api/tasks/…/claim`), HMAC-signed webhooks, and an MCP v2 adapter (`suchi mcp` — stdio for Claude Desktop, `--http` for remote runtimes).
 - **Config file loader** — TOML (default), HUML, YAML, JSON. Env wins on collisions; search order: `--config` flag → `SUCHI_CONFIG` env → `$XDG_CONFIG_HOME/suchi/config.*` → `./suchi.toml`.
+- **Portable export** — `suchi export --out FILE.zip` writes every doc's original bytes + JSON sidecars + taxonomy dumps into one archive. Rehydrates via `suchi import --from FILE.zip`.
 
 Full feature list: [docs/comparison.mdx](docs/comparison.mdx) has the honest matrix vs Paperless-ngx, Papra, docspell.
 
@@ -36,13 +58,16 @@ suchi/
 ├── core/                  — HTTP, DB, jobs, audit, auth chain, pipeline, workflow engine, UI. Imports plugin-api only.
 │   ├── api/               — HTTP handlers (JSON surface)
 │   ├── ui/                — server-rendered pages + assets + SPA embed at spa/dist/
-│   ├── db/migrations/     — 20 embedded SQL migrations
+│   ├── db/migrations/     — 29 embedded SQL migrations
 │   ├── pipeline/          — 16 ingest processing steps
 │   ├── ingest/            — 3 canonical producers (fswatch, emailwatch, sidecar spec)
-│   ├── workflow/          — state-machine "approvals" engine
+│   ├── approvals/         — state-machine engine for human-in-the-loop chains
 │   ├── automations/       — trigger→conditions→actions engine
 │   ├── authz/             — Authorizer interface + RoleAuthorizer/ACLAuthorizer
 │   ├── classify/rules/    — deterministic classifier
+│   ├── lang/              — language-detection seam (Detector, Chain, metadata hints)
+│   ├── rescan/            — signature-driven re-extract verb (CLI + approvals handler)
+│   ├── refile/            — rules re-run + render enqueue verb
 │   ├── render/            — Gonja storage-path renderer + moves audit
 │   ├── settings/          — typed wrapper over settings k/v table
 │   ├── jd/                — Johnny.Decimal presets + tree
@@ -89,7 +114,7 @@ Run `suchi doctor` any time for a snapshot of which tools are on PATH, egress su
 ### First-time setup
 
 ```sh
-git clone git@github.com:suchi-dms/suchi.git
+git clone git@github.com:johnnybravo-xyz/suchi.git
 cd suchi
 make install-hooks     # copies hooks/pre-commit → .git/hooks; runs gofmt on staged .go files
 ```
@@ -158,6 +183,15 @@ Human-in-the-loop chains. Definitions are JSON specs; runs advance through the d
 - `POST /api/approvals` — register a spec (admin)
 - `POST /api/approvals/{slug}/start` — start a run
 - `POST /api/approvals/tasks/{id}/resolve` — resolve a human task
+
+Built-in def: `rescan-proposal` — after a `pipeline_version_*` bump, boot-time detection opens a card in every admin's inbox with **approve all / approve sample / dismiss** choices. Approvals route through the same `core/rescan.Enqueue` the CLI uses.
+
+### Selective re-processing (refile / rescan)
+
+Two verbs for coming back and changing your mind — both fully explicit, both signature-aware:
+
+- **`suchi refile`** — re-run the rules classifier + enqueue a render/move job for every live doc. Use after preset / template / rule edits. Cheap.
+- **`suchi rescan --stale <ocr|llm|content>`** — re-run the full extraction chain against docs whose `pipeline_version_<kind>` lags the current binary. Use after swapping OCR engine, LLM model, or content-pipeline shape. Expensive but authoritative. Filter by tag / correspondent / JD / date / `--sample N` / `--dry-run` / `--estimate`. See [`docs/cli.mdx#suchi-rescan-flags`](docs/cli.mdx).
 
 ### Permissions (Phase 6)
 
@@ -280,16 +314,21 @@ Full details in [`docs/backup-restore.mdx`](docs/backup-restore.mdx). Short vers
 ## Subcommands
 
 ```
-suchi serve                     # HTTP server + job dispatcher (PUBLIC_URL required)
-suchi healthcheck               # probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
+suchi serve                       # HTTP server + job dispatcher (PUBLIC_URL required)
+suchi healthcheck                 # probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
 suchi import --from ./export      # ingest a bundle from your existing DMS (docs/importer.mdx)
-suchi gc [--older-than 30d]     # mark-and-sweep blob reclamation (dry-run default)
-suchi taxonomy merge [flags]    # dedup tag/correspondent/document_type (docs/cli.mdx)
-suchi doctor                    # diagnostic report — egress, binaries, schema, filesystem
-suchi mcp [--http :port]        # MCP v2 server (stdio default, HTTP+SSE with --http)
-suchi demo [--data-dir DIR]     # seed DATA_DIR with sample docs + one automation + one rule
-suchi version                   # print version + build info
+suchi export --out FILE.zip       # portable takeout of every live doc + taxonomy dump
+suchi gc [--older-than 30d]       # mark-and-sweep blob reclamation (dry-run default)
+suchi taxonomy merge [flags]      # dedup tag/correspondent/document_type
+suchi refile [flags]              # re-run rules classifier + enqueue render for every live doc
+suchi rescan --stale <kind> ...   # signature-driven re-extract (OCR/LLM/content) with filters
+suchi doctor [--json]             # diagnostic report — egress, binaries, schema, filesystem
+suchi mcp [--http :port]          # MCP v2 server (stdio default, HTTP+SSE with --http)
+suchi demo [--data-dir DIR]       # seed DATA_DIR with sample docs + one automation + one rule
+suchi version                     # print version + build info
 ```
+
+Every subcommand has full flag documentation in [`docs/cli.mdx`](docs/cli.mdx).
 
 ## CI
 
