@@ -16,25 +16,12 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 )
 
-// runImport dispatches `suchi import <source>`. Phase-1 ships one source:
-// bundle. Others (fs, mail-sidecar, etc.) can slot in here alongside.
+// runImport handles `suchi import [flags]`. Point --from at an export
+// bundle produced by your current DMS — the importer speaks the widely-
+// used JSON-manifest + originals/archive/ layout and lands docs +
+// metadata verbatim.
 func runImport(args []string) int {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: suchi import <source> [flags]")
-		fmt.Fprintln(os.Stderr, "sources: bundle")
-		return 2
-	}
-	switch args[0] {
-	case "bundle":
-		return runImportBundle(args[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "unknown source %q\n", args[0])
-		return 2
-	}
-}
-
-func runImportBundle(args []string) int {
-	fs := flag.NewFlagSet("suchi import bundle", flag.ContinueOnError)
+	fs := flag.NewFlagSet("suchi import", flag.ContinueOnError)
 	var (
 		from       = fs.String("from", "", "path to the export bundle root (required)")
 		ownerEmail = fs.String("owner-email", "", "email of the user that will own imported documents (required unless --dry-run)")
@@ -51,7 +38,7 @@ func runImportBundle(args []string) int {
 	// because verify never writes and never resolves JD categories. It
 	// answers "what would change" against current DB state.
 	if *verify {
-		return runImportBundleVerify(*from)
+		return runImportVerify(*from)
 	}
 
 	mapping, err := bundle.LoadMapping(*mapJD)
@@ -154,10 +141,10 @@ Import complete (dry_run=%v).
 	return 0
 }
 
-// runImportBundleVerify is the --verify entry point. Reads-only:
-// parses the bundle, diffs against the live DB, prints a partition.
-// Never opens a write transaction and never resolves owner-email.
-func runImportBundleVerify(bundleRoot string) int {
+// runImportVerify is the --verify entry point. Reads-only: parses the
+// bundle, diffs against the live DB, prints a partition. Never opens a
+// write transaction and never resolves owner-email.
+func runImportVerify(bundleRoot string) int {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)

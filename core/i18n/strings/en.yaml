@@ -40,7 +40,7 @@ doc.detail.field.tags: Tags
 doc.detail.field.original: Original file
 doc.detail.field.archive: Archive (OCR)
 doc.detail.field.asn: Archive serial
-doc.detail.field.legacy: Imported from Bundle (id)
+doc.detail.field.legacy: Legacy id (from import)
 doc.detail.field.split_from: Split from
 doc.detail.field.email_from: Attachment of email
 doc.detail.section.decrypt: Password required

@@ -2,7 +2,7 @@ package main
 
 // Focused tests for the pure helpers. The proxy path itself is
 // exercised by hand against a real upstream — no test double for a
-// live an existing DMS would be useful.
+// live upstream would be useful.
 
 import "testing"
 
