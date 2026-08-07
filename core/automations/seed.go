@@ -84,7 +84,7 @@ func insertSystemAutomation(ctx context.Context, tx *sql.Tx, s systemSeed, log *
 		INSERT INTO workflows(name, order_index, enabled, system, system_slug,
 		                      created_at, updated_at)
 		VALUES (?, 0, ?, 1, ?, ?, ?)
-		ON CONFLICT(system_slug) DO NOTHING
+        ON CONFLICT(system_slug) WHERE system_slug IS NOT NULL DO NOTHING
 	`, s.name, boolInt(s.enabled), s.slug, now, now)
 	if err != nil {
 		return err
