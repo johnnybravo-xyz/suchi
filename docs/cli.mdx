@@ -25,10 +25,10 @@ Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server
 answers `200`, non-zero otherwise. Wired as the Docker `HEALTHCHECK`
 so the distroless-static image doesn't need `wget`/`curl`.
 
-## `suchi import paperless [flags]`
+## `suchi import [flags]`
 
-Import a compatible export bundle. See [importer](/importer) for the
-full walkthrough.
+Point `--from` at your existing DMS's export bundle. See
+[importer](/importer) for the full walkthrough.
 
 ### Flags
 

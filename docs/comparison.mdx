@@ -101,7 +101,7 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 | External services required | none | Postgres + Redis | none | Postgres + Solr |
 | Runtime deps at boot | libc + optional binaries | Python + workers + Redis | Node | JVM + Postgres + Solr |
 | Signed images + SBOM | ✅ | ➖ | ➖ | ➖ |
-| Import from Paperless-ngx | ✅ (`suchi import paperless`) | (self) | ➖ | ➖ |
+| Import from Paperless-ngx | ✅ (`suchi import`) | (self) | ➖ | ➖ |
 | Audit log | ✅ | ➖ | ➖ | ➖ |
 | Multi-user + per-user ownership | ✅ | ✅ | ✅ | ✅ |
 | ACLs (groups + object perms) | 🚧 (Phase 6) | ✅ | ➖ | ✅ |
@@ -185,7 +185,7 @@ Being honest about the gaps:
 
 ## "But can I move if I chose wrong?"
 
-- **Paperless-ngx → suchi**: `suchi import paperless <dir>` is a
+- **Paperless-ngx → suchi**: `suchi import --from <dir>` is a
   first-class product feature. See [importer](/importer).
 - **suchi → Paperless-ngx**: no shipped export tool. The DB is
   SQLite; the schema is documented. You'd write a script.

@@ -1,4 +1,4 @@
-package paperless_test
+package bundle_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/suchi-dms/suchi/core/importer/paperless"
+	"github.com/suchi-dms/suchi/core/importer/bundle"
 )
 
 // TestVerifyReport exercises new/match/differ/orphan partitioning.
@@ -24,11 +24,11 @@ func TestVerifyReport(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	baseBundle := buildFakeBundle(t, tmp) // pk 100 + 101 from paperless_test.go
+	baseBundle := buildFakeBundle(t, tmp) // pk 100 + 101 from bundle_test.go
 	d, cas, log, ownerEmail := setupTarget(t, ctx, tmp+"/data")
 
 	// Import the base bundle to seed suchi with 100 and 101.
-	if _, err := paperless.Run(ctx, d, cas, log, paperless.Options{
+	if _, err := bundle.Run(ctx, d, cas, log, bundle.Options{
 		BundleRoot: baseBundle,
 		OwnerEmail: ownerEmail,
 	}); err != nil {
@@ -57,15 +57,15 @@ func TestVerifyReport(t *testing.T) {
 
 	corPtr := int64(1)
 	arch100 := "doc-100.pdf"
-	mk := func(model string, pk int64, fields any) paperless.Object {
+	mk := func(model string, pk int64, fields any) bundle.Object {
 		f, err := json.Marshal(fields)
 		must(t, err)
-		return paperless.Object{Model: model, PK: pk, Fields: f}
+		return bundle.Object{Model: model, PK: pk, Fields: f}
 	}
-	manifest := paperless.Manifest{
-		mk("documents.tag", 2, paperless.TagFields{Name: "utilities", Slug: "utilities"}),
-		mk("documents.correspondent", 1, paperless.CorrespondentFields{Name: "BESCOM", Slug: "bescom"}),
-		mk("documents.document", 100, paperless.DocumentFields{
+	manifest := bundle.Manifest{
+		mk("documents.tag", 2, bundle.TagFields{Name: "utilities", Slug: "utilities"}),
+		mk("documents.correspondent", 1, bundle.CorrespondentFields{Name: "BESCOM", Slug: "bescom"}),
+		mk("documents.document", 100, bundle.DocumentFields{
 			Title:            "Electricity bill March 2026",
 			OriginalFilename: "doc-100.pdf",
 			ArchiveFilename:  &arch100,
@@ -74,14 +74,14 @@ func TestVerifyReport(t *testing.T) {
 			Correspondent:    &corPtr,
 			Tags:             []int64{2},
 		}),
-		mk("documents.document", 101, paperless.DocumentFields{
+		mk("documents.document", 101, bundle.DocumentFields{
 			Title:            "Property tax 2025-26 (retitled)", // ← changed
 			OriginalFilename: "doc-101.pdf",
 			MimeType:         "application/pdf",
 			Created:          time.Now().UTC().Format(time.RFC3339),
 			Tags:             []int64{2},
 		}),
-		mk("documents.document", 102, paperless.DocumentFields{
+		mk("documents.document", 102, bundle.DocumentFields{
 			Title:            "Brand new doc",
 			OriginalFilename: "doc-102.pdf",
 			MimeType:         "application/pdf",
@@ -92,7 +92,7 @@ func TestVerifyReport(t *testing.T) {
 	must(t, err)
 	must(t, os.WriteFile(nextRoot+"/manifest.json", b, 0o644))
 
-	rep, err := paperless.Verify(ctx, d, log, paperless.VerifyOptions{BundleRoot: nextRoot})
+	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{BundleRoot: nextRoot})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}

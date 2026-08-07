@@ -235,16 +235,16 @@ ls /tmp/suchi-r0/staging/errors/
 
 ```bash
 # --verify: dry-diff against the live DB.
-./dist/suchi import paperless \
+./dist/suchi import \
     --from /path/to/export --verify
 
 # Full import into inbox (safe default).
-./dist/suchi import paperless \
+./dist/suchi import \
     --from /path/to/export \
     --owner-email you@ex.dev
 
 # ...or with the built-in heuristics:
-./dist/suchi import paperless \
+./dist/suchi import \
     --from /path/to/export \
     --owner-email you@ex.dev \
     --auto-jd

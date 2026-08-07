@@ -1,4 +1,4 @@
-package paperless
+package bundle
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 // is required unless DryRun. Validate() enforces these so the CLI and
 // any programmatic caller share one source of truth.
 type Options struct {
-	// BundleRoot is the path to the Paperless exporter output dir. Required.
+	// BundleRoot is the path to the exporter output dir. Required.
 	BundleRoot string
 
 	// OwnerEmail resolves to a users row; imported documents land under
@@ -116,7 +116,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 	} else if effective == nil {
 		source = "none"
 	}
-	log = log.With("component", "import.paperless", "bundle", opts.BundleRoot, "dry_run", opts.DryRun, "map_source", source)
+	log = log.With("component", "import.bundle", "bundle", opts.BundleRoot, "dry_run", opts.DryRun, "map_source", source)
 	rep := &Report{}
 
 	// Resolve owner up front so we fail fast on a bad --owner-email.
@@ -148,7 +148,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		buckets[o.Model] = append(buckets[o.Model], o)
 	}
 
-	// PK-remap tables: Paperless PK → suchi PK. Populated by phase 1
+	// PK-remap tables: source PK → suchi PK. Populated by phase 1
 	// (reference tables), consumed by phase 2 (documents).
 	tagMap := map[int64]int64{}
 	corMap := map[int64]int64{}
@@ -315,7 +315,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		}
 	}
 
-	log.Info("import.paperless.done",
+	log.Info("import.bundle.done",
 		"tags", rep.Tags,
 		"correspondents", rep.Correspondents,
 		"document_types", rep.DocumentTypes,
@@ -363,7 +363,7 @@ type docResult struct {
 func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Options, in docInput) (docResult, error) {
 	log = log.With("legacy_pk", in.LegacyID)
 
-	// Idempotency: if this Paperless doc has already been imported, skip.
+	// Idempotency: if this imported doc has already been imported, skip.
 	if !opts.DryRun {
 		var have int
 		err := d.Read.QueryRowContext(ctx,
@@ -518,7 +518,7 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 			}
 		}
 
-		// Custom-field values. Paperless value is JSON-typed; suchi splits
+		// Custom-field values. value is JSON-typed; suchi splits
 		// into typed columns. We attempt integer → number → text in order.
 		for _, cfi := range in.Instances {
 			fieldID, ok := in.CFMap[cfi.Field]
@@ -705,8 +705,8 @@ func upsertStoragePath(ctx context.Context, d *db.DB, dry bool, f StoragePathFie
 	return id, err
 }
 
-// Paperless data_type enum → suchi data_type string.
-var paperlessCFDataType = map[int]string{
+// source data_type enum → suchi data_type string.
+var bundleCFDataType = map[int]string{
 	1: "text",
 	2: "date",
 	3: "bool",
@@ -721,7 +721,7 @@ func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFie
 	if dry {
 		return 0, nil
 	}
-	dt, ok := paperlessCFDataType[f.DataType]
+	dt, ok := bundleCFDataType[f.DataType]
 	if !ok {
 		dt = "text" // best-effort fallback
 	}

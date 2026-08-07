@@ -1,4 +1,4 @@
-package paperless_test
+package bundle_test
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/suchi-dms/suchi/core/blob"
 	"github.com/suchi-dms/suchi/core/db"
 	migrations "github.com/suchi-dms/suchi/core/db/migrations"
-	"github.com/suchi-dms/suchi/core/importer/paperless"
+	"github.com/suchi-dms/suchi/core/importer/bundle"
 	"github.com/suchi-dms/suchi/core/jd"
 )
 
@@ -23,13 +23,13 @@ func TestImportEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	bundle := buildFakeBundle(t, tmp)
+	bundleDir := buildFakeBundle(t, tmp)
 
 	d, cas, log, ownerEmail := setupTarget(t, ctx, filepath.Join(tmp, "data"))
 
 	// First run: full import.
-	rep, err := paperless.Run(ctx, d, cas, log, paperless.Options{
-		BundleRoot: bundle,
+	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
 	if err != nil {
@@ -81,8 +81,8 @@ func TestImportEndToEnd(t *testing.T) {
 	}
 
 	// Second run: everything must be skipped by legacy_id.
-	rep2, err := paperless.Run(ctx, d, cas, log, paperless.Options{
-		BundleRoot: bundle,
+	rep2, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
 	if err != nil {
@@ -96,7 +96,7 @@ func TestImportEndToEnd(t *testing.T) {
 	}
 }
 
-// buildFakeBundle writes a minimal but structurally-valid Paperless-ngx
+// buildFakeBundle writes a minimal but structurally-valid an existing DMS
 // export bundle into tmp/bundle and returns the bundle root.
 //
 // Structure:
@@ -121,23 +121,23 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 	corPtr := int64(1)
 	arch100 := "doc-100.pdf"
 
-	mk := func(model string, pk int64, fields any) paperless.Object {
+	mk := func(model string, pk int64, fields any) bundle.Object {
 		f, err := json.Marshal(fields)
 		must(t, err)
-		return paperless.Object{Model: model, PK: pk, Fields: f}
+		return bundle.Object{Model: model, PK: pk, Fields: f}
 	}
 
-	manifest := paperless.Manifest{
-		mk("documents.tag", 1, paperless.TagFields{
+	manifest := bundle.Manifest{
+		mk("documents.tag", 1, bundle.TagFields{
 			Name: "tax", Slug: "tax", Color: "#a6cee3",
 		}),
-		mk("documents.tag", 2, paperless.TagFields{
+		mk("documents.tag", 2, bundle.TagFields{
 			Name: "utilities", Slug: "utilities", Color: "#fdbf6f",
 		}),
-		mk("documents.correspondent", 1, paperless.CorrespondentFields{
+		mk("documents.correspondent", 1, bundle.CorrespondentFields{
 			Name: "BESCOM", Slug: "bescom",
 		}),
-		mk("documents.document", 100, paperless.DocumentFields{
+		mk("documents.document", 100, bundle.DocumentFields{
 			Title:            "Electricity bill March 2026",
 			Content:          "total due for the electricity supply period",
 			MimeType:         "application/pdf",
@@ -149,7 +149,7 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 			Correspondent:    &corPtr,
 			Tags:             []int64{2},
 		}),
-		mk("documents.document", 101, paperless.DocumentFields{
+		mk("documents.document", 101, bundle.DocumentFields{
 			Title:            "Property tax 2025-26",
 			Content:          "assessment for the fiscal year",
 			MimeType:         "application/pdf",
@@ -157,7 +157,7 @@ func buildFakeBundle(t *testing.T, tmp string) string {
 			Created:          time.Now().UTC().Format(time.RFC3339),
 			Tags:             []int64{1, 2},
 		}),
-		mk("documents.note", 1, paperless.NoteFields{
+		mk("documents.note", 1, bundle.NoteFields{
 			Document: 100, Note: "auto-fetched from mail", Created: time.Now().UTC().Format(time.RFC3339),
 		}),
 	}
@@ -186,22 +186,22 @@ func buildAutoJDBundle(t *testing.T, tmp string) string {
 	writeFile("originals/tax.pdf", "%PDF-1.7\ntax\n%%EOF\n")
 	writeFile("originals/misc.pdf", "%PDF-1.7\nmisc\n%%EOF\n")
 
-	mk := func(model string, pk int64, fields any) paperless.Object {
+	mk := func(model string, pk int64, fields any) bundle.Object {
 		f, err := json.Marshal(fields)
 		must(t, err)
-		return paperless.Object{Model: model, PK: pk, Fields: f}
+		return bundle.Object{Model: model, PK: pk, Fields: f}
 	}
-	manifest := paperless.Manifest{
-		mk("documents.tag", 1, paperless.TagFields{Name: "tax", Slug: "tax", Color: "#000"}),
-		mk("documents.tag", 2, paperless.TagFields{Name: "cli-test", Slug: "cli-test", Color: "#000"}),
-		mk("documents.document", 200, paperless.DocumentFields{
+	manifest := bundle.Manifest{
+		mk("documents.tag", 1, bundle.TagFields{Name: "tax", Slug: "tax", Color: "#000"}),
+		mk("documents.tag", 2, bundle.TagFields{Name: "cli-test", Slug: "cli-test", Color: "#000"}),
+		mk("documents.document", 200, bundle.DocumentFields{
 			Title:            "ITR 2025-26",
 			OriginalFilename: "tax.pdf",
 			MimeType:         "application/pdf",
 			Created:          time.Now().UTC().Format(time.RFC3339),
 			Tags:             []int64{1},
 		}),
-		mk("documents.document", 201, paperless.DocumentFields{
+		mk("documents.document", 201, bundle.DocumentFields{
 			Title:            "Random note",
 			OriginalFilename: "misc.pdf",
 			MimeType:         "application/pdf",

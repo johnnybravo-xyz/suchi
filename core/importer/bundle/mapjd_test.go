@@ -1,16 +1,16 @@
-package paperless_test
+package bundle_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/suchi-dms/suchi/core/importer/paperless"
+	"github.com/suchi-dms/suchi/core/importer/bundle"
 )
 
 // TestAutoMappingParses is a smoke test — the embedded heuristics.yaml
 // must parse and validate, else no consumer ever gets past AutoMapping().
 func TestAutoMappingParses(t *testing.T) {
-	m, err := paperless.AutoMapping()
+	m, err := bundle.AutoMapping()
 	if err != nil {
 		t.Fatalf("auto mapping: %v", err)
 	}
@@ -22,16 +22,16 @@ func TestAutoMappingParses(t *testing.T) {
 func TestOptionsValidate(t *testing.T) {
 	cases := []struct {
 		name string
-		opts paperless.Options
+		opts bundle.Options
 		ok   bool
 	}{
-		{"empty bundle", paperless.Options{}, false},
-		{"missing owner", paperless.Options{BundleRoot: "/x"}, false},
-		{"dry-run OK without owner", paperless.Options{BundleRoot: "/x", DryRun: true}, true},
-		{"minimal ok", paperless.Options{BundleRoot: "/x", OwnerEmail: "a@b"}, true},
-		{"flat + auto conflict", paperless.Options{BundleRoot: "/x", OwnerEmail: "a@b", Flat: true, AutoJD: true}, false},
-		{"map + auto conflict", paperless.Options{BundleRoot: "/x", OwnerEmail: "a@b", MapJD: &paperless.Mapping{Rules: []paperless.Rule{{If: "tag:x", Category: 22}}}, AutoJD: true}, false},
-		{"just auto", paperless.Options{BundleRoot: "/x", OwnerEmail: "a@b", AutoJD: true}, true},
+		{"empty bundle", bundle.Options{}, false},
+		{"missing owner", bundle.Options{BundleRoot: "/x"}, false},
+		{"dry-run OK without owner", bundle.Options{BundleRoot: "/x", DryRun: true}, true},
+		{"minimal ok", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b"}, true},
+		{"flat + auto conflict", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", Flat: true, AutoJD: true}, false},
+		{"map + auto conflict", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", MapJD: &bundle.Mapping{Rules: []bundle.Rule{{If: "tag:x", Category: 22}}}, AutoJD: true}, false},
+		{"just auto", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", AutoJD: true}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,11 +53,11 @@ func TestAutoJDEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	bundle := buildAutoJDBundle(t, tmp)
+	bundleDir := buildAutoJDBundle(t, tmp)
 	d, cas, log, ownerEmail := setupTarget(t, ctx, tmp+"/data")
 
-	rep, err := paperless.Run(ctx, d, cas, log, paperless.Options{
-		BundleRoot: bundle,
+	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 		AutoJD:     true,
 	})

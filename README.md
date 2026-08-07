@@ -282,7 +282,7 @@ Full details in [`docs/backup-restore.mdx`](docs/backup-restore.mdx). Short vers
 ```
 suchi serve                     # HTTP server + job dispatcher (PUBLIC_URL required)
 suchi healthcheck               # probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
-suchi import paperless [flags]  # ingest a compatible export bundle (docs/importer.mdx)
+suchi import --from ./export      # ingest a bundle from your existing DMS (docs/importer.mdx)
 suchi gc [--older-than 30d]     # mark-and-sweep blob reclamation (dry-run default)
 suchi taxonomy merge [flags]    # dedup tag/correspondent/document_type (docs/cli.mdx)
 suchi doctor                    # diagnostic report — egress, binaries, schema, filesystem

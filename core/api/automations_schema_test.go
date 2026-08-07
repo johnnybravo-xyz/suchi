@@ -90,6 +90,7 @@ func TestAutomationSchema_HasEveryActionKind(t *testing.T) {
 		"assign_storage_path":  true,
 		"assign_owner":         true,
 		"assign_custom_field":  true,
+		"apply_from_similar":   true,
 	}
 	for _, a := range got.Actions {
 		if !wantKinds[a.Kind] {
