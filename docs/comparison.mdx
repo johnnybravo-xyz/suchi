@@ -1,6 +1,6 @@
 ---
 title: "Comparison"
-description: "Honest side-by-side vs an existing DMS, Papra, and docspell — features suchi has, features they have, what's on the roadmap, what's out of scope."
+description: "Honest side-by-side vs Paperless-ngx, Papra, and docspell — features suchi has, features they have, what's on the roadmap, what's out of scope."
 ---
 
 The self-hosted document-management space has real, mature options.
@@ -23,7 +23,7 @@ alternatives' own docs before deciding.
 | Project | One-line | License |
 | ------- | -------- | ------- |
 | **suchi** | Go single-binary DMS with SQLite-first storage + plugin seams | AGPL-3.0 |
-| **an existing DMS** | The reference OSS DMS. Django + Redis + Postgres + Celery. Ten years of polish. | GPL-3.0 |
+| **Paperless-ngx** | The reference OSS DMS. Django + Redis + Postgres + Celery. Ten years of polish. | GPL-3.0 |
 | **Papra** | Minimal, opinionated document management. Node/TypeScript, fast to try. | AGPL-3.0 |
 | **docspell** | Scala + Postgres + Solr. Powerful indexing, joex worker split. | GPL-3.0 |
 
@@ -33,7 +33,7 @@ alternatives' own docs before deciding.
   One Go binary, one SQLite file, no external services. If you value
   "I can grep the whole codebase" and "backup is `tar czf`", this is
   the pitch.
-- **an existing DMS** is fighting for feature completeness and
+- **Paperless-ngx** is fighting for feature completeness and
   ecosystem gravity — mobile apps, integrations, community, guides.
   If you want the option that comes up first on Reddit and has an
   answer to almost any question already documented, this is it.
@@ -49,7 +49,7 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 ### Ingest
 
-| Feature | suchi | an existing DMS | Papra | docspell |
+| Feature | suchi | Paperless-ngx | Papra | docspell |
 | ------- | :---: | :-----------: | :---: | :------: |
 | Upload API | ✅ | ✅ | ✅ | ✅ |
 | Watched folder | ✅ | ✅ | ✅ | ✅ |
@@ -64,7 +64,7 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 ### Metadata + classification
 
-| Feature | suchi | an existing DMS | Papra | docspell |
+| Feature | suchi | Paperless-ngx | Papra | docspell |
 | ------- | :---: | :-----------: | :---: | :------: |
 | Tags | ✅ (nested via parent_id) | ✅ | ✅ | ✅ |
 | Correspondents (multi per doc) | ✅ | ➖ (one) | ➖ | ✅ |
@@ -79,12 +79,12 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 ### Surface
 
-| Feature | suchi | an existing DMS | Papra | docspell |
+| Feature | suchi | Paperless-ngx | Papra | docspell |
 | ------- | :---: | :-----------: | :---: | :------: |
 | REST API | ✅ | ✅ | ✅ | ✅ |
 | OpenAPI schema at `/api/schema/` | ✅ | ➖ | ❓ | ✅ |
 | DRF pagination shape | ✅ | ✅ | ➖ | ➖ |
-| Mobile-app wire compat (bundle-mobile / swift-bundle) | 🚧 | ✅ | ➖ | ➖ |
+| Mobile-app wire compat (paperless-mobile / swift-paperless) | 🚧 | ✅ | ➖ | ➖ |
 | MCP server (agent tools) | ✅ (`suchi mcp`) | ➖ | ➖ | ➖ |
 | Share links (expiry + password) | ✅ | ✅ | ✅ | ➖ |
 | Full-text search | ✅ (SQLite FTS5) | ✅ (Postgres tsvector) | ✅ | ✅ (Solr) |
@@ -94,14 +94,14 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 ### Ops
 
-| Feature | suchi | an existing DMS | Papra | docspell |
+| Feature | suchi | Paperless-ngx | Papra | docspell |
 | ------- | :---: | :-----------: | :---: | :------: |
 | Single binary | ✅ | ➖ | ➖ | ➖ |
 | SQLite as primary store | ✅ | ➖ (Postgres) | ✅ | ➖ (Postgres) |
 | External services required | none | Postgres + Redis | none | Postgres + Solr |
 | Runtime deps at boot | libc + optional binaries | Python + workers + Redis | Node | JVM + Postgres + Solr |
 | Signed images + SBOM | ✅ | ➖ | ➖ | ➖ |
-| Import from an existing DMS | ✅ (`suchi import`) | (self) | ➖ | ➖ |
+| Import from Paperless-ngx | ✅ (`suchi import`) | (self) | ➖ | ➖ |
 | Audit log | ✅ | ➖ | ➖ | ➖ |
 | Multi-user + per-user ownership | ✅ | ✅ | ✅ | ✅ |
 | ACLs (groups + object perms) | 🚧 (Phase 6) | ✅ | ➖ | ✅ |
@@ -109,7 +109,7 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 ## Where each project genuinely wins
 
-### an existing DMS wins if…
+### Paperless-ngx wins if…
 
 - You want the biggest community and the most Reddit answers.
 - You need the fully mature mobile apps working out of the box today
@@ -161,15 +161,15 @@ Legend: ✅ = ships · 🚧 = roadmap · ➖ = not planned · ❓ = unknown
 
 Being honest about the gaps:
 
-- **Community.** an existing DMS has years of accumulated Reddit,
+- **Community.** Paperless-ngx has years of accumulated Reddit,
   guides, videos. Suchi is pre-1.0.
 - **Mobile compat green.** The endpoints exist, but the
   golden-transcript replay against pinned app releases isn't run
-  yet. an existing DMS is what the apps target natively.
-- **UI depth.** an existing DMS's Angular UI has features suchi
+  yet. Paperless-ngx is what the apps target natively.
+- **UI depth.** Paperless-ngx's Angular UI has features suchi
   doesn't (bulk edit, saved-view editor UI, drag-drop custom-field
   editor). Suchi's UI is intentionally thinner.
-- **Ecosystem plugins.** Bundle has more community-maintained
+- **Ecosystem plugins.** Paperless has more community-maintained
   side-projects (mobile scan apps, integrations).
 - **Indexing depth.** SQLite FTS5 is great for most Latin-alphabet
   corpora; not the equal of Solr for multilingual heavyweight use.
@@ -185,14 +185,14 @@ Being honest about the gaps:
 
 ## "But can I move if I chose wrong?"
 
-- **an existing DMS → suchi**: `suchi import --from <dir>` is a
+- **Paperless-ngx → suchi**: `suchi import --from <dir>` is a
   first-class product feature. See [importer](/importer).
-- **suchi → an existing DMS**: no shipped export tool. The DB is
+- **suchi → Paperless-ngx**: no shipped export tool. The DB is
   SQLite; the schema is documented. You'd write a script.
 - **suchi → docspell / Papra**: same as above.
 
-If unsure between suchi and an existing DMS and you already have data
-in an existing DMS, the import path being one-way in the other
+If unsure between suchi and Paperless-ngx and you already have data
+in Paperless-ngx, the import path being one-way in the other
 direction is worth weighing. If you're greenfield, this is not a
 concern.
 

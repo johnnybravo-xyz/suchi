@@ -25,7 +25,7 @@ Full design lives at `../suchi-plan.md` (design doc, out of tree). User-facing r
 - **Agents + MCP** — task-claim/act loop (`POST /api/tasks/…/claim`), HMAC-signed webhooks, and an MCP v2 adapter (`suchi mcp` — stdio for Claude Desktop, `--http` for remote runtimes).
 - **Config file loader** — TOML (default), HUML, YAML, JSON. Env wins on collisions; search order: `--config` flag → `SUCHI_CONFIG` env → `$XDG_CONFIG_HOME/suchi/config.*` → `./suchi.toml`.
 
-Full feature list: [docs/comparison.mdx](docs/comparison.mdx) has the honest matrix vs an existing DMS, Papra, docspell.
+Full feature list: [docs/comparison.mdx](docs/comparison.mdx) has the honest matrix vs Paperless-ngx, Papra, docspell.
 
 ## Layout
 
@@ -89,7 +89,7 @@ Run `suchi doctor` any time for a snapshot of which tools are on PATH, egress su
 ### First-time setup
 
 ```sh
-git clone git@github.com:johnnybravo-xyz/suchi.git
+git clone git@github.com:suchi-dms/suchi.git
 cd suchi
 make install-hooks     # copies hooks/pre-commit → .git/hooks; runs gofmt on staged .go files
 ```

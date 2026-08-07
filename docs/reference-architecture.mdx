@@ -25,7 +25,7 @@ code change.
 
 - **Why** — self-hosters overwhelmingly run one machine (VPS, NAS,
   Pi). Every extra service is a monitor, an upgrade, a debug
-  target, a security patch. an existing DMS needs Postgres + Redis
+  target, a security patch. Paperless-ngx needs Postgres + Redis
   + Celery + a Django worker; docspell needs Postgres + Solr + JVM.
   The plan doc's stated competition is "on the machine underneath",
   not "on the feature list up top".
@@ -115,7 +115,7 @@ code change.
 
 - **Why** — a household member uploading the same insurance PDF
   their spouse already has is two documents, not a collision. The
-  ecosystem-survey pass on Bundle issues flagged this repeatedly
+  ecosystem-survey pass on Paperless issues flagged this repeatedly
   as a real user-hostile behavior.
 - **How** — `(owner_id, original_blob)` partial unique index
   `WHERE trashed_at IS NULL`; the CAS still stores one file (the
@@ -128,7 +128,7 @@ code change.
 
 ### 2.3 Johnny.Decimal as the default taxonomy
 
-- **Why** — flat tag soup is what gets Bundle installs into
+- **Why** — flat tag soup is what gets Paperless installs into
   ten-year tag graveyards. JD gives every user a schema-level
   taxonomy the app can validate, route on, and browse by number.
   It's opinionated enough to be a spine, generic enough to fit
@@ -164,7 +164,7 @@ code change.
 
 ### 2.5 Document versioning via `previous_version_id`
 
-- **Why** — versions in Bundle are the #1-upvoted FR (360
+- **Why** — versions in Paperless are the #1-upvoted FR (360
   upvotes). Modeling them as a flat blob replacement loses
   history; a separate "versions" table diverges from the "docs
   are the same object" mental model.
@@ -504,7 +504,7 @@ code change.
 
 ### 7.1 Mobile compat via DRF envelope
 
-- **Why** — existing mobile apps (bundle-mobile / swift-bundle)
+- **Why** — existing mobile apps (paperless-mobile / swift-paperless)
   are a shipping-day-one channel. They speak Django REST
   Framework's shape: `{count, next, previous, results}` +
   trailing-slash routes. Emitting the shape gets us their user
@@ -512,7 +512,7 @@ code change.
 - **How** — every list endpoint wraps results in
   `BuildEnvelope`; every mutation route accepts `foo` AND `foo/`
   via a middleware that normalizes trailing slashes.
-- **What** — Bundle-shaped surface at `/api/documents/`,
+- **What** — Paperless-shaped surface at `/api/documents/`,
   `/api/tags/`, etc. suchi-native extensions (search filters, MCP)
   add without breaking compat.
 - **When** — new endpoints follow the same shape unless there's
@@ -717,7 +717,7 @@ future contributor knows to expect a "won't fix" on these:
 - **Rich WYSIWYG document editor.** Documents are archival; edits
   land as new versions.
 - **Real-time collaborative editing.** Same reason.
-- **A mobile app of our own.** bundle-mobile and swift-bundle
+- **A mobile app of our own.** paperless-mobile and swift-paperless
   work against our surface; that's the story.
 - **Headless-browser tests in CI.** See §9.3.
 - **JSON as the default config format.** TOML is recommended; JSON
@@ -873,11 +873,11 @@ silently — a "revoked" note preserves the trail.
 
 - [Architecture](/architecture) — the run-time data flow that
   implements these decisions.
-- [Plan doc](https://github.com/johnnybravo-xyz/suchi/blob/main/suchi-plan.md)
+- [Plan doc](https://github.com/suchi-dms/suchi/blob/main/suchi-plan.md)
   — the design doc that predates the code; some sections cover
   work-in-flight not yet reflected here.
 - [Comparison](/comparison) — how the decisions compare against
-  an existing DMS / Papra / docspell.
+  Paperless-ngx / Papra / docspell.
 - [Permissions](/permissions) — the deepest per-feature dive on
   the Phase 6 layer.
 - [Release process](/release-process) — how these decisions ship.
