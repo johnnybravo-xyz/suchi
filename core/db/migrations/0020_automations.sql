@@ -6,8 +6,8 @@
 -- Named for what they do; the sibling engine at core/approvals/ owns
 -- the state-machine "approvals" surface (routing/sign-off). The tables
 -- this migration defines (workflows, workflow_triggers, workflow_actions)
--- retain the "workflow" prefix because those names are the an-existing-dms
--- compat surface — mobile clients speak that vocabulary.
+-- retain the "workflow" prefix because those names match the mobile-
+-- compat wire vocabulary — the mobile apps expect it.
 -- URLs: /api/automations/ (this) vs /api/approvals/ (state-machine).
 --
 -- Shape:

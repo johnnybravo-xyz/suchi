@@ -28,7 +28,7 @@ func AutoMapping() (*Mapping, error) {
 	return &m, nil
 }
 
-// Mapping is a first-match ruleset from Bundle metadata → JD code.
+// Mapping is a first-match ruleset from source metadata → JD code.
 //
 // YAML shape (documented in docs/import.md when that lands):
 //
@@ -103,7 +103,7 @@ func validateRules(rules []Rule) error {
 	return nil
 }
 
-// nameSets are the Bundle PK → lowercased name maps the resolver
+// nameSets are the source PK → lowercased name maps the resolver
 // needs. Assembled once at the start of Run so per-doc resolve is O(rules).
 type nameSets struct {
 	tags           map[int64]string

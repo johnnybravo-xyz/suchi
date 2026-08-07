@@ -24,7 +24,7 @@ is the stability signal.
   [backup and restore](/backup-restore) for the safe patterns.
 - **Plugin at every layer.** Ingest, OCR, storage, search, auth,
   classification, export — every seam is an interface.
-- **Lossless bundle import.** `suchi import bundle` brings tags,
+- **Lossless bundle import.** `suchi import` brings tags,
   correspondents, custom fields verbatim from a compatible export
   bundle. Existing DMS mobile clients drive suchi's wire surface
   directly.
@@ -40,7 +40,7 @@ is the stability signal.
     Five-minute quickstart — docker compose or bare binary.
   </Card>
   <Card title="Importing a bundle" icon="file-import" href="/importer">
-    `suchi import bundle` — verbatim metadata, dedup, --verify.
+    `suchi import` — verbatim metadata, dedup, --verify.
   </Card>
   <Card title="Configuration" icon="sliders" href="/config">
     Every env var + purpose. `PUBLIC_URL` is the only required one.
@@ -79,3 +79,4 @@ is the stability signal.
     `list_inbox`, `resolve_approval_task`, `create_share_link`.
   </Card>
 </CardGroup>
+

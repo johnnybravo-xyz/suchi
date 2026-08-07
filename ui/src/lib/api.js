@@ -99,7 +99,7 @@ export const listEvents = (params) => api.get(`/api/events/${qs(params)}`)
 
 export const listTrash = () => api.get('/api/trash/')
 
-// One transaction, one audit event, N documents. Bundle wire shape.
+// One transaction, one audit event, N documents. Mobile-compat wire shape.
 // methods: set_jd_category{jd_category_id} · set_sensitivity{sensitivity}
 //          set_correspondent/document_type/storage_path{*_id}
 //          add_tag/remove_tag{tag_id} · delete · restore

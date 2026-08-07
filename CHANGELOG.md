@@ -73,8 +73,8 @@ opens.
   "automations" = machine rules) matching the URLs.
 - MCP tool `resolve_workflow_task` → `resolve_approval_task`
   (same reasoning).
-- Column rename `documents.bundle_id_legacy` → `documents.legacy_id`
-  (pre-alpha, amended in 0002 without a migration bump).
+- Column renamed to `documents.legacy_id` (pre-alpha, amended in
+  0002 without a migration bump).
 
 ⚠ **Migration** — nothing here is deployed yet, so no operator
 action is needed. If you're running a checkout: update any scripts

@@ -53,11 +53,11 @@ func TestAutoJDEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	bundle := buildAutoJDBundle(t, tmp)
+	bundleDir := buildAutoJDBundle(t, tmp)
 	d, cas, log, ownerEmail := setupTarget(t, ctx, tmp+"/data")
 
 	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
-		BundleRoot: bundle,
+		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 		AutoJD:     true,
 	})

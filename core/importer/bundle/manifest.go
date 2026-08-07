@@ -1,4 +1,4 @@
-// Package bundle imports a an existing DMS export bundle.
+// Package bundle imports an export bundle from an existing DMS.
 //
 // Bundle shape (default `document_exporter` output):
 //
@@ -18,7 +18,7 @@
 //   - Verbatim metadata: tags, correspondents, document_types,
 //     storage_paths, custom_fields, notes flow through unchanged.
 //   - Blobs land in the CAS by content hash. Two docs with identical
-//     bytes will dedup in the CAS layer even if Bundle kept both.
+//     bytes will dedup in the CAS layer even if the source kept both.
 //
 // Not yet implemented (deferred to follow-ups, not the MVP importer):
 //   - --map-jd: rule-based JD-category assignment. Until it lands,
@@ -66,7 +66,7 @@ func LoadManifests(root string) (Manifest, error) {
 	}
 
 	// Split-manifest sidecars: `<root>/*.json` other than manifest.json.
-	// Newer Bundle writes them under `documents/`; older versions
+	// Newer the exporter writes them under `documents/`; older versions
 	// keep them at root. Look in both.
 	dirs := []string{root, filepath.Join(root, "documents")}
 	for _, d := range dirs {
@@ -119,7 +119,7 @@ func loadOne(path string) (Manifest, error) {
 }
 
 func trimSpaces(b []byte) []byte {
-	// Bundle serializations are UTF-8 with occasional BOM. Strip
+	// exporter serializations are UTF-8 with occasional BOM. Strip
 	// whitespace + BOM before probing the first byte.
 	for len(b) > 0 {
 		switch b[0] {
@@ -174,14 +174,14 @@ type StoragePathFields struct {
 // CustomFieldFields is one field DEFINITION. Values live in CustomFieldInstance rows.
 type CustomFieldFields struct {
 	Name      string          `json:"name"`
-	DataType  int             `json:"data_type"` // Bundle enum
+	DataType  int             `json:"data_type"` // source enum
 	ExtraData json.RawMessage `json:"extra_data,omitempty"`
 }
 
 type CustomFieldInstance struct {
 	Document int64 `json:"document"`
 	Field    int64 `json:"field"`
-	// value is polymorphic in Bundle; we keep the raw and decode per-type at write time.
+	// value is polymorphic in the source; we keep the raw and decode per-type at write time.
 	Value json.RawMessage `json:"value"`
 }
 
@@ -190,10 +190,10 @@ type NoteFields struct {
 	Document int64  `json:"document"`
 	User     *int64 `json:"user"`
 	Note     string `json:"note"`
-	Created  string `json:"created"` // Bundle writes ISO8601
+	Created  string `json:"created"` // the exporter writes ISO8601
 }
 
-// DocumentFields is the main event. Bundle serializes many optional
+// DocumentFields is the main event. the exporter serializes many optional
 // fields; we consume only what suchi needs and log any surprises.
 type DocumentFields struct {
 	Title            string  `json:"title"`
@@ -230,7 +230,7 @@ const (
 )
 
 // FilePaths resolves the location of a document's original + archive
-// files on disk relative to the bundle root. Bundle names files
+// files on disk relative to the bundle root. the exporter names files
 // deterministically from the document's title + correspondent + date;
 // the manifest carries `original_filename` + `archive_filename` fields
 // that we simply concatenate with the well-known subdirs.
@@ -260,7 +260,7 @@ func isNotExist(err error) bool {
 	return err != nil && os.IsNotExist(err)
 }
 
-// ParseTime accepts Bundle's ISO8601 variants and returns a Unix
+// ParseTime accepts the source's ISO8601 variants and returns a Unix
 // timestamp. Returns 0 on empty/unparseable input — the caller decides
 // whether to treat that as an error or a "use now()".
 func ParseTime(s string) int64 {
