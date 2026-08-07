@@ -87,6 +87,14 @@ type Result struct {
 	JDCategory    int      `json:"jd_category"`
 	Confidence    float64  `json:"confidence"`
 	Reasoning     string   `json:"reasoning,omitempty"`
+	// Language is the dominant language of the document as the
+	// LLM sees it — an ISO-639-1 code ("de", "en", "kn"), or a
+	// short CSV for genuinely mixed content ("de,en"). Written to
+	// documents.languages when the field is non-empty and the doc
+	// isn't user-locked. LLMs handle language ID trivially, so we
+	// piggyback it onto the classification call rather than adding
+	// a separate round-trip.
+	Language string `json:"language,omitempty"`
 }
 
 // Plugin holds the resolved config + an HTTP client. The config is
@@ -274,6 +282,8 @@ Respond with a JSON object:
   jd_category: Johnny-Decimal category code (integer 10-99, 0 if unclear)
   confidence: 0.0-1.0 self-assessed confidence
   reasoning: one short sentence explaining low confidence, else empty
+  language: dominant language as an ISO-639-1 code ("en","de","kn"),
+            or a short CSV for mixed content ("de,en"); "" if unclear
 
 Return ONLY the JSON object; no prose, no markdown.`
 
