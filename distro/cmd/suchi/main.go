@@ -93,6 +93,8 @@ func main() {
 		os.Exit(runExport(os.Args[2:]))
 	case "refile":
 		os.Exit(runRefile(os.Args[2:]))
+	case "rescan":
+		os.Exit(runRescan(os.Args[2:]))
 	case "version":
 		printVersion()
 	case "-h", "--help", "help":
@@ -117,6 +119,7 @@ Usage:
   suchi mcp [--http :port]        start an MCP v2 server (stdio by default, HTTP+SSE with --http)
   suchi demo [--data-dir DIR]     seed DATA_DIR with sample docs, tags, one automation, one share link
   suchi refile [flags]            re-run rules + enqueue re-render on every live doc after preset/template/rule changes
+  suchi rescan [flags]            re-run content extraction on selected docs (--stale/--jd/--tag/…; --dry-run + --estimate first)
   suchi export --out FILE.zip     write a portable takeout of documents + taxonomy (optionally --owner-id N or --all)
   suchi version                   print version + build info
 

@@ -186,6 +186,85 @@ the existing corpus. Full walkthrough at [refile](/refile).
 Safe against a live server — uploads that arrive mid-sweep use the
 normal postingest chain and land under the new tree automatically.
 
+## `suchi rescan [flags]`
+
+Re-run the content-extraction pipeline (qpdf → OCR → content write →
+rules → automations → render → thumb → post-classify) against
+originals for a **selected set** of docs. Sibling to `refile`; the
+split is:
+
+- **`refile`** = re-run the rules classifier + enqueue a render job.
+  Cheap, changes taxonomy. Use after preset / template / rule edits.
+- **`rescan`** = re-run everything, including OCR against the
+  original blob. Expensive but authoritative — this is the tool for
+  "I swapped tesseract for ocrmypdf" or "I upgraded the LLM
+  classifier model."
+
+Every rescan is explicit + selectable + previewable. There is no
+"rescan all" default and no background auto-rescan — the operator
+picks the set every time.
+
+### Filters (compose with AND)
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--stale <ocr\|llm\|content>` | Signature-driven. Docs whose `pipeline_version_<kind>` lags the current binary's constant. Bump the constant in code when the pipeline output shape changes; only the affected docs rescan next time. |
+| `--jd <code>` | Restrict to a single JD category id. |
+| `--tag <name>` | Docs carrying this tag. |
+| `--correspondent <name>` | Docs whose primary correspondent matches this name. |
+| `--older-than <duration>` | Docs created before now-DURATION (Go duration syntax, e.g. `720h` for 30 days). |
+| `--newer-than <duration>` | Docs created after now-DURATION. |
+| `--only-failed` | Docs whose last `post-ingest` job hit `state='dead'` in the outbox. |
+| `--only-no-ocr` | Docs with empty `content` — never OCR'd or OCR silently failed. |
+| `--sample <N>` | Randomly cap the matching set to N (post-filter). Useful for smoke-testing a rescan on a small subset before the full run. |
+
+### Pre-flight
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--dry-run` | Print the affected count + a sample of IDs; enqueue nothing. |
+| `--estimate` | Print rough wall-clock and LLM-cost estimates. Coarse — the point is to warn when the operator asked for 5000 docs, not to be precise. |
+| `--yes` | Skip the confirmation prompt that fires when the affected count ≥ 100. |
+
+### How it works under the hood
+
+Each matching doc gets a fresh `post-ingest` job in the durable
+outbox. When `suchi serve` is running (or the next boot picks the
+job up), those drain through the same chain a fresh upload runs.
+Idempotent — re-running against the same doc bumps its
+`pipeline_version_*` markers but doesn't otherwise diverge. Batched
+in groups of 200 so a crash mid-run leaves the outbox consistent.
+
+Signature semantics — each pipeline step reads a version constant
+and writes it onto the doc on success:
+
+- `pipeline_version_content` bumps when the content-extraction
+  chain changes (new format handler, byte-cap change, etc.).
+- `pipeline_version_ocr` bumps when the OCR engine or its data
+  changes.
+- `pipeline_version_llm` bumps when the classifier's model, prompt,
+  or JSON schema changes (constant lives in the plugin package).
+
+Bumping the constant in code, rebuilding, and running
+`suchi rescan --stale <kind>` catches only affected docs — the
+selective alternative to a bulldozer.
+
+### Examples
+
+```bash
+# What would change if we rescanned every doc whose OCR is stale?
+suchi rescan --stale ocr --dry-run --estimate
+
+# Actually do it, but sanity-check with 20 random docs first.
+suchi rescan --stale ocr --sample 20
+
+# All docs in JD 22 (Tax) older than a year, forced-retry.
+suchi rescan --jd 22 --older-than 8760h --yes
+
+# Every doc that ever landed in the dead-letter queue.
+suchi rescan --only-failed
+```
+
 ## `suchi export --out FILE.zip`
 
 Portable takeout of everything a user owns. Writes a single zip
