@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -278,18 +280,50 @@ type ShareLinkPubDoc struct {
 // GetSharePublic — GET /s/{token}[?password=<pw>].
 // Returns 404 for missing/revoked/expired links (no oracle on which);
 // 401 for password-required with no password; 403 for wrong password.
+//
+// Content negotiation: browsers (Accept: text/html) get a small landing
+// page with password form + download links. Programmatic callers
+// (curl, agents) that accept application/json get the JSON payload
+// below. That way a recipient who just clicks the link in an email
+// gets a page they can actually use, not a JSON dump.
 func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	link, err := s.loadShareByToken(r, token)
 	if err != nil {
+		if wantsHTML(r) {
+			renderShareHTML(w, http.StatusNotFound, shareHTMLData{
+				Title: "Link expired",
+				Notice: "This share link is invalid, expired, or was revoked. " +
+					"Ask the sender for a fresh link.",
+			})
+			return
+		}
 		s.writeError(w, http.StatusNotFound, "not_found", "invalid or expired share link")
 		return
 	}
-	if err := s.verifySharePassword(link, r.URL.Query().Get("password")); err != nil {
+	pw := readSharePassword(r)
+	if err := s.verifySharePassword(link, pw); err != nil {
 		if errors.Is(err, errShareNeedsPassword) {
+			if wantsHTML(r) {
+				renderShareHTML(w, http.StatusOK, shareHTMLData{
+					Title:            link.label,
+					Token:            token,
+					RequiresPassword: true,
+				})
+				return
+			}
 			s.writeJSON(w, http.StatusOK, ShareLinkPublic{
 				Label:            link.label,
 				RequiresPassword: true,
+			})
+			return
+		}
+		if wantsHTML(r) {
+			renderShareHTML(w, http.StatusForbidden, shareHTMLData{
+				Title:            link.label,
+				Token:            token,
+				RequiresPassword: true,
+				BadPassword:      true,
 			})
 			return
 		}
@@ -301,6 +335,15 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "share_links.load_docs", err)
 		return
 	}
+	// Bump view_count on successful metadata fetch. Best-effort; a
+	// failure here doesn't fail the response.
+	_ = s.bumpShareViewCount(r, link.id)
+	if wantsHTML(r) {
+		renderShareHTML(w, http.StatusOK, shareHTMLData{
+			Title: link.label, Token: token, Docs: docs,
+		})
+		return
+	}
 	out := ShareLinkPublic{Label: link.label, Docs: make([]ShareLinkPubDoc, 0, len(docs))}
 	for _, d := range docs {
 		out.Docs = append(out.Docs, ShareLinkPubDoc{
@@ -308,11 +351,229 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 			Download: "/s/" + token + "/" + strconv.FormatInt(d.ID, 10) + "/download",
 		})
 	}
-	// Bump view_count on successful metadata fetch. Best-effort; a
-	// failure here doesn't fail the response.
-	_ = s.bumpShareViewCount(r, link.id)
 	s.writeJSON(w, http.StatusOK, out)
 }
+
+// PostSharePublic — POST /s/{token}. Accepts `password` from a form
+// body, verifies it server-side, and on success sets a short-lived
+// HttpOnly cookie path-scoped to /s/{token} so subsequent GETs (page +
+// downloads) authenticate without the password ever appearing in a URL.
+// Wrong password re-renders the form with a message.
+func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if err := r.ParseForm(); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_form", "invalid form body")
+		return
+	}
+	pw := r.PostFormValue("password")
+	link, err := s.loadShareByToken(r, token)
+	if err != nil {
+		renderShareHTML(w, http.StatusNotFound, shareHTMLData{
+			Title:  "Link expired",
+			Notice: "This share link is invalid, expired, or was revoked.",
+		})
+		return
+	}
+	if err := s.verifySharePassword(link, pw); err != nil {
+		renderShareHTML(w, http.StatusForbidden, shareHTMLData{
+			Title:            link.label,
+			Token:            token,
+			RequiresPassword: true,
+			BadPassword:      true,
+		})
+		return
+	}
+	// Set the path-scoped share cookie. Path=/s/{token} means the value
+	// is only sent back on requests for THIS share, so unlocking one
+	// bundle never leaks credentials to another.
+	http.SetCookie(w, &http.Cookie{
+		Name:     sharePasswordCookieName,
+		Value:    pw,
+		Path:     "/s/" + token,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   requestIsHTTPS(r),
+		MaxAge:   3600, // one hour — long enough for a recipient to grab their files
+	})
+	http.Redirect(w, r, "/s/"+token, http.StatusSeeOther)
+}
+
+// sharePasswordCookieName is the fixed cookie name for share-link
+// password auth. The security is in the Path attribute (scoped to the
+// specific /s/{token}), not the name.
+const sharePasswordCookieName = "share_pw"
+
+// readSharePassword returns the password from any accepted source in
+// priority order: explicit ?password= query (for curl / agents that
+// don't do cookies), then the path-scoped share cookie set by
+// PostSharePublic (for browsers).
+func readSharePassword(r *http.Request) string {
+	if q := r.URL.Query().Get("password"); q != "" {
+		return q
+	}
+	if c, err := r.Cookie(sharePasswordCookieName); err == nil {
+		return c.Value
+	}
+	return ""
+}
+
+// requestIsHTTPS returns true when the request came in over TLS or via
+// a proxy that terminated TLS upstream (`X-Forwarded-Proto: https`).
+// Used only to decide the cookie's Secure flag — never for auth.
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// wantsHTML returns true when the request looks like a browser click —
+// i.e. it explicitly accepts text/html. Curl, XHR, and agent traffic
+// send `*/*` or `application/json` and get the JSON contract unchanged.
+func wantsHTML(r *http.Request) bool {
+	a := r.Header.Get("Accept")
+	if a == "" {
+		return false
+	}
+	// Explicit text/html anywhere in the Accept list. Order and q= are
+	// ignored — the presence is enough to know the caller can render.
+	return strings.Contains(a, "text/html")
+}
+
+// shareHTMLData drives the recipient-facing HTML render. The password
+// is never held here — the browser presents it via the share_pw cookie
+// (set by PostSharePublic), so download hrefs stay clean.
+type shareHTMLData struct {
+	Title            string
+	Token            string
+	RequiresPassword bool
+	BadPassword      bool
+	Notice           string
+	Docs             []shareDocMeta
+}
+
+// renderShareHTML writes the recipient landing page. No JS, no external
+// assets, tokens from the design system used by the SPA.
+func renderShareHTML(w http.ResponseWriter, status int, d shareHTMLData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// CSP: nothing external, no inline scripts. Inline <style> is
+	// needed for the design tokens; no <script>, so `'unsafe-inline'`
+	// on style-src only.
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(shareHTMLDoctype))
+	_, _ = fmt.Fprintf(w, shareHTMLShell, html.EscapeString(d.Title))
+	if d.Notice != "" {
+		_, _ = fmt.Fprintf(w, `<div class="notice">%s</div>`, html.EscapeString(d.Notice))
+	} else if d.RequiresPassword {
+		bad := ""
+		if d.BadPassword {
+			bad = `<div class="err">Wrong password. Try again.</div>`
+		}
+		_, _ = fmt.Fprintf(w, `%s<form method="post" action="/s/%s">`+
+			`<label>Password<input type="password" name="password" required autofocus autocomplete="off" /></label>`+
+			`<button type="submit">Unlock</button></form>`,
+			bad, html.EscapeString(d.Token))
+	} else {
+		_, _ = w.Write([]byte(`<ul class="docs">`))
+		for _, doc := range d.Docs {
+			href := "/s/" + html.EscapeString(d.Token) + "/" +
+				strconv.FormatInt(doc.ID, 10) + "/download"
+			_, _ = fmt.Fprintf(w,
+				`<li><a href="%s" download><span class="ic">↓</span>`+
+					`<span class="meta"><b>%s</b><em>%s · %s</em></span></a></li>`,
+				href,
+				html.EscapeString(defaultString(doc.Title, "Document #"+strconv.FormatInt(doc.ID, 10))),
+				html.EscapeString(defaultString(doc.MIME, "unknown type")),
+				html.EscapeString(fmtSize(doc.Size)))
+		}
+		_, _ = w.Write([]byte(`</ul>`))
+	}
+	_, _ = w.Write([]byte(shareHTMLFoot))
+}
+
+func defaultString(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// fmtSize is a byte-count formatter that keeps the page dep-free. Rounds
+// to one decimal in the KB/MB/GB range; recipients only need the ballpark.
+func fmtSize(n int64) string {
+	const K, M, G = 1024, 1024 * 1024, 1024 * 1024 * 1024
+	switch {
+	case n >= G:
+		return fmt.Sprintf("%.1f GB", float64(n)/float64(G))
+	case n >= M:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(M))
+	case n >= K:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(K))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+const shareHTMLDoctype = `<!doctype html>`
+
+// shareHTMLShell has one %s for the page title. Keep the design tokens
+// aligned with ui/src/app.css.
+const shareHTMLShell = `<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>%[1]s · suchi share</title>
+<style>
+:root { --bg:#FAFAF8; --surface:#FFF; --ink:#17181A; --muted:#6A7079;
+  --line:rgba(23,24,26,.1); --accent:#0575B6; --tint:#EDF5FA;
+  --danger:#C13A2C; --danger-soft:rgba(193,58,44,.1); }
+* { box-sizing: border-box; }
+body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--ink); padding: 48px 24px; line-height: 1.55; }
+.wrap { max-width: 640px; margin: 0 auto; }
+h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -.01em; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: .88rem; margin: 0 0 24px; }
+.notice { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; color: var(--muted); }
+.err { background: var(--danger-soft); color: var(--danger); border-radius: 8px;
+  padding: 10px 14px; margin: 0 0 14px; font-size: .9rem; }
+form { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+label { display: flex; flex-direction: column; gap: 6px; flex: 1; font-size: .8rem;
+  font-weight: 600; color: var(--muted); }
+input { font: inherit; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+input:focus { outline: 2px solid var(--accent); }
+button { font: inherit; font-weight: 600; padding: 8px 20px; border-radius: 8px;
+  border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+button:hover { filter: brightness(1.08); }
+ul.docs { list-style: none; padding: 0; margin: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+ul.docs li + li { border-top: 1px solid var(--line); }
+ul.docs a { display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+  text-decoration: none; color: inherit; }
+ul.docs a:hover { background: var(--tint); }
+.ic { width: 28px; height: 28px; border-radius: 8px; background: var(--tint);
+  color: var(--accent); display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; flex: none; }
+.meta { display: flex; flex-direction: column; min-width: 0; }
+.meta b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta em { font-style: normal; font-size: .78rem; color: var(--muted); }
+.sub a { color: var(--accent); text-decoration: none; }
+.sub a:hover { text-decoration: underline; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#141618; --surface:#1D2023; --ink:#ECEAE2; --muted:#9C9A90;
+    --line:rgba(236,234,226,.1); --accent:#4FA8DC; --tint:rgba(79,168,220,.12); }
+}
+</style></head><body><div class="wrap">
+<h1>%[1]s</h1><p class="sub">Shared via <a href="https://suchi.page" target="_blank" rel="noopener noreferrer">suchi</a>. Click a document to download.</p>`
+
+const shareHTMLFoot = `</div></body></html>`
 
 // GetSharePublicDownload — GET /s/{token}/{doc_id}/download.
 // Streams the original blob if the share link covers doc_id and the
@@ -329,7 +590,7 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, "not_found", "invalid or expired share link")
 		return
 	}
-	if err := s.verifySharePassword(link, r.URL.Query().Get("password")); err != nil {
+	if err := s.verifySharePassword(link, readSharePassword(r)); err != nil {
 		s.writeError(w, http.StatusForbidden, "bad_password", "wrong password")
 		return
 	}
