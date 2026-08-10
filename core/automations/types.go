@@ -101,7 +101,7 @@ type Trigger struct {
 }
 
 // Action is one row in `workflow_actions`. Params shape depends on
-// Kind — see 0020_automations.sql for the per-kind schema.
+// Kind — see workflow_actions in 0001_baseline.sql for the per-kind schema.
 type Action struct {
 	ID         int64          `json:"id"`
 	OrderIndex int            `json:"order"`
