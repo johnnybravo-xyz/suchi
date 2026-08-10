@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func TestDemoReadOnly(t *testing.T) {
@@ -43,6 +46,58 @@ func TestDemoReadOnly(t *testing.T) {
 					tc.method, tc.path, w.Code, tc.wantStatus, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestDemoReadOnly_AnonPrincipal(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := DemoReadOnly(inner)
+
+	anon := &pluginapi.Principal{Kind: "demo-anon"}
+	real := &pluginapi.Principal{Kind: "user", UserID: 7}
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		principal  *pluginapi.Principal
+		wantStatus int
+	}{
+		{"anon GET anywhere → 200", http.MethodGet, "/api/documents/", anon, http.StatusOK},
+		{"anon POST doc upload → 403 (needs upgrade)", http.MethodPost, "/api/documents/", anon, http.StatusForbidden},
+		{"anon POST upgrade → 200", http.MethodPost, "/api/demo/session/upgrade", anon, http.StatusOK},
+		{"real user POST doc upload → 200 (past deny-list)", http.MethodPost, "/api/documents/", real, http.StatusOK},
+		{"real user POST tag → 403 (shared state)", http.MethodPost, "/api/tags/", real, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			ctx := auth.WithPrincipal(r.Context(), tc.principal)
+			r = r.WithContext(ctx)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("got %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestDemoReadOnly_AnonUpgradeErrorBody(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	h := DemoReadOnly(inner)
+	r := httptest.NewRequest(http.MethodPost, "/api/documents/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(),
+		&pluginapi.Principal{Kind: "demo-anon"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d", w.Code)
+	}
+	if !contains(w.Body.String(), `"code":"demo_upgrade_required"`) {
+		t.Fatalf("body missing demo_upgrade_required: %s", w.Body.String())
 	}
 }
 

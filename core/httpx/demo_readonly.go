@@ -13,7 +13,22 @@ package httpx
 import (
 	"net/http"
 	"strings"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
+
+// demoAnonAllowedMutation is the small allow-list of write endpoints an
+// anonymous demo visitor is permitted to hit. Everything else is 403.
+// Currently: the upgrade endpoint that trades the anon token for a
+// scratch user.
+var demoAnonAllowedMutation = map[string]struct{}{
+	"/api/demo/session/upgrade": {},
+}
+
+// demoAnonPrincipalKind mirrors core/api.PrincipalKindDemoAnon and
+// distro/demo.PrincipalKind. Duplicated to keep httpx from importing
+// either. main.go asserts the three constants agree at boot.
+const demoAnonPrincipalKind = "demo-anon"
 
 // demoDenyPrefixes lists shared-state paths that must stay read-only
 // under demo mode. Mutation methods (POST/PATCH/PUT/DELETE) against
@@ -53,6 +68,19 @@ func DemoReadOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Anonymous demo visitors: everything is read-only EXCEPT the
+		// upgrade endpoint. Keeps the load plane cheap — no scratch
+		// user until they explicitly opt in.
+		if p := auth.FromContext(r.Context()); p != nil && p.Kind == demoAnonPrincipalKind {
+			if _, ok := demoAnonAllowedMutation[r.URL.Path]; !ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"code":"demo_upgrade_required","message":"anonymous demo sessions are read-only — POST /api/demo/session/upgrade for a writable scratch identity."}`))
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
