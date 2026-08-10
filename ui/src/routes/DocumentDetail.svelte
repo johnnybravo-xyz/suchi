@@ -233,8 +233,17 @@
 
       {#if doc.content}
         <div class="card">
-          <h3>Extracted text</h3>
-          <p class="sub" style="white-space:pre-wrap;max-height:220px;overflow:auto;font-size:.8rem;color:var(--muted);margin:0">{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? '…' : ''}</p>
+          <h3 style="display:flex;align-items:center;gap:8px">
+            Extracted text
+            {#if blurred}
+              <span class="pill danger" style="font-size:.7rem">Confidential</span>
+              <button class="btn sm" style="margin-left:auto" onclick={() => (revealed = true)}><Icon name="eye" size={12} /> Reveal</button>
+            {/if}
+          </h3>
+          <p class="sub extracted"
+             class:blurred
+             style="white-space:pre-wrap;max-height:220px;overflow:auto;font-size:.8rem;color:var(--muted);margin:0"
+             aria-hidden={blurred}>{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? '…' : ''}</p>
         </div>
       {/if}
     </div>
