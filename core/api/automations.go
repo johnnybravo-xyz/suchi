@@ -2,7 +2,7 @@
 // in core/automations. Distinct from the routing/sign-off state
 // machines at /api/approvals/ (backed by core/approvals).
 //
-// Body shape (create/update):
+// POST body (create) — every field required:
 //
 //	{
 //	  "name": "route insurance",
@@ -16,6 +16,10 @@
 //	    { "type": "assign_owner", "params": {"owner_id": 2} }
 //	  ]
 //	}
+//
+// PATCH body (update) is sparse — send only the fields you want to
+// change. `{"enabled": false}` flips just the enabled flag; sending
+// `triggers`/`actions` replaces those child rows wholesale.
 //
 // Trigger `type` accepts the integer code
 // (1=consumption, 2=document_added, 3=document_updated) or the enum
@@ -97,6 +101,11 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, wf)
 }
 
+// UpdateAutomation handles PATCH /api/automations/{id} with sparse
+// semantics — only the JSON fields the caller sent are written. The SPA's
+// enable/disable button posts {"enabled": false}; a full-edit form posts
+// name+order+enabled+triggers+actions. Triggers/actions replace their
+// child rows wholesale when their key is present.
 func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil || p.Role != "admin" {
@@ -108,13 +117,13 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be a positive integer")
 		return
 	}
-	var body automations.Workflow
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var patch automations.WorkflowPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
 	store := automations.New(s.DB)
-	wf, err := store.Update(r.Context(), id, body)
+	wf, err := store.Update(r.Context(), id, patch)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
 		return

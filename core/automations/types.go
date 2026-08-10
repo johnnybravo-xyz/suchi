@@ -108,3 +108,16 @@ type Action struct {
 	Kind       string         `json:"type"`
 	Params     map[string]any `json:"params"`
 }
+
+// WorkflowPatch is a sparse update — nil pointers leave the field
+// untouched. PATCH /api/automations/{id} decodes into this so the SPA
+// can flip `enabled` without resending the whole workflow. Triggers /
+// Actions replace wholesale when their pointer is non-nil (empty slice
+// clears the list); leave nil to keep the current rows.
+type WorkflowPatch struct {
+	Name       *string    `json:"name,omitempty"`
+	OrderIndex *int       `json:"order,omitempty"`
+	Enabled    *bool      `json:"enabled,omitempty"`
+	Triggers   *[]Trigger `json:"triggers,omitempty"`
+	Actions    *[]Action  `json:"actions,omitempty"`
+}
