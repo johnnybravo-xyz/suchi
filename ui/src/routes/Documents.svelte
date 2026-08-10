@@ -168,7 +168,7 @@
 {#if err}<div class="err">{err}</div>{/if}
 
 {#if !isInbox}
-  <div class="toolbar">
+  <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select, input[type="date"]')) e.target.blur() }}>
     <select class="input" bind:value={fTag}>
       <option value="">All tags</option>
       {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
@@ -193,6 +193,9 @@
     <span class="seg">
       <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
       <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
+    </span>
+    <span class="kbdhint" title="Keyboard: j/k move · x select · shift-click range · Enter open" aria-label="Keyboard shortcuts: j and k to move, x to select, shift-click for a range, Enter to open">
+      <kbd>j</kbd><kbd>k</kbd><kbd>x</kbd><kbd>⏎</kbd>
     </span>
     <button class="btn sm" onclick={load} title="Refresh"><Icon name="chev" size={13} /></button>
     <a class="btn sm" href="#/trash" title="Trash"><Icon name="trash" size={13} /></a>

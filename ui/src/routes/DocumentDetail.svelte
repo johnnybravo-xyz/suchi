@@ -1,5 +1,5 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listJDCategories, previewPath, downloadPath, similarDocs } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, listJDCategories, previewPath, downloadPath, similarDocs } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -67,16 +67,36 @@
     } catch (ex) { notify?.(ex.message || 'Could not update languages') }
   }
 
-  async function share() {
+  // ---- share dialog: expiry + optional password + existing links ----
+  let shareOpen = $state(false)
+  let shareLinks = $state([])
+  let sh = $state({ expiry: '0', password: '' })
+  const EXPIRIES = [['0', 'Never expires'], ['86400', '1 day'], ['604800', '7 days'], ['2592000', '30 days']]
+
+  async function openShare() {
+    shareOpen = true
     try {
-      const res = await createShareLink({ doc_ids: [Number(id)], label: doc?.title || '' })
-      shareURL = res?.public_url ? location.origin + res.public_url
-               : res?.token ? `${location.origin}/s/${res.token}` : ''
-      if (shareURL && navigator.clipboard) {
-        await navigator.clipboard.writeText(shareURL)
-        notify?.('Share link copied')
-      }
-    } catch (ex) { notify?.(ex.message || 'Could not create a share link') }
+      const r = await listShareLinks()
+      shareLinks = (r?.results || r || []).filter(l => (l.doc_ids || []).includes(Number(id)))
+    } catch { shareLinks = [] }
+  }
+  async function makeLink() {
+    try {
+      const res = await createShareLink({
+        doc_ids: [Number(id)], label: doc?.title || '',
+        expires_in_sec: Number(sh.expiry), password: sh.password,
+      })
+      const url = location.origin + (res?.public_url || `/s/${res?.token}`)
+      await navigator.clipboard?.writeText(url)
+      shareURL = url
+      notify?.(sh.password ? 'Password-protected link copied' : 'Share link copied')
+      sh = { expiry: '0', password: '' }
+      openShare()
+    } catch (ex) { notify?.(ex.message || 'Could not create the link') }
+  }
+  async function revoke(l) {
+    try { await deleteShareLink(l.id); shareLinks = shareLinks.filter(x => x.id !== l.id); notify?.('Link revoked') }
+    catch (ex) { notify?.(ex.message || 'Could not revoke') }
   }
 
   async function trash() {
@@ -92,7 +112,7 @@
   <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
   <span class="spacer"></span>
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
-  <button class="btn sm" onclick={share}><Icon name="link" size={13} /> Share</button>
+  <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
   <button class="btn sm danger" onclick={trash}><Icon name="trash" size={13} /> Trash</button>
 </div>
 
@@ -253,3 +273,43 @@
     </div>
   </div>
 {/if}
+
+{#if shareOpen}
+  <div class="modal-veil" onclick={() => (shareOpen = false)} role="presentation">
+    <div class="modal" style="width:min(520px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') shareOpen = false }} role="dialog" aria-label="Share document" tabindex="-1">
+      <div class="modal-head">
+        <h3>Share “{doc?.title || `Document #${id}`}”</h3>
+        <button class="btn sm" onclick={() => (shareOpen = false)}><Icon name="x" size={13} /></button>
+      </div>
+      <p class="sub" style="color:var(--muted);font-size:.82rem;margin:0 0 12px">
+        Anyone with the link can view and download. No account needed on their side.
+      </p>
+      <div class="toolbar" style="margin:0 0 10px">
+        <select class="input" bind:value={sh.expiry} aria-label="Link expiry">
+          {#each EXPIRIES as [v, label]}<option value={v}>{label}</option>{/each}
+        </select>
+        <input class="input" type="password" style="flex:1" placeholder="Password (optional)"
+               bind:value={sh.password} autocomplete="new-password" />
+        <button class="btn primary sm" onclick={makeLink}><Icon name="link" size={13} /> Create &amp; copy</button>
+      </div>
+      {#if shareURL}
+        <input class="input mono" style="font-size:.74rem;margin-bottom:12px" readonly value={shareURL}
+               onclick={(e) => e.target.select()} />
+      {/if}
+      {#if shareLinks.length}
+        <h3 style="font-size:.85rem;margin:6px 0 4px">Active links</h3>
+        <div class="index" style="border:0">
+          {#each shareLinks as l (l.id)}
+            <div class="irow" style="padding:7px 2px">
+              <span class="dot" class:warn={l.has_passwd || l.HasPasswd}></span>
+              <span class="title grow mono" style="font-size:.74rem">{l.public_url || `/s/${l.token}`}</span>
+              {#if l.has_passwd || l.HasPasswd}<span class="pill warn">password</span>{/if}
+              <button class="btn sm" onclick={() => revoke(l)}>Revoke</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
