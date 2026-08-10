@@ -3,7 +3,7 @@ name: restore-drill
 # A backup that was never opened is a hope, not a backup. This drill
 # boots suchi against a fresh data dir, forces a VACUUM INTO snapshot,
 # opens the snapshot with the sqlite3 CLI, and confirms
-# PRAGMA integrity_check + schema_migrations rows. Guards against
+# PRAGMA integrity_check + PRAGMA user_version. Guards against
 # silent breakage of the backup loop (schema drift, VACUUM INTO
 # regression, half-written file on disk-full).
 #
@@ -88,11 +88,10 @@ jobs:
           RESULT="$(sqlite3 "$NEWEST" 'PRAGMA integrity_check;')"
           echo "integrity_check: $RESULT"
           test "$RESULT" = "ok" || (echo "integrity check failed"; exit 1)
-          # user_version isn't set (suchi tracks schema in
-          # schema_migrations), but the query itself proves the file
-          # opens as a well-formed SQLite DB. Also confirm at least
-          # one migration row landed — an empty DB would silently
-          # pass the integrity check.
-          MIGS="$(sqlite3 "$NEWEST" 'SELECT COUNT(*) FROM schema_migrations;')"
-          echo "schema_migrations rows: $MIGS"
-          test "$MIGS" -ge 1 || (echo "no migrations in snapshot"; exit 1)
+          # suchi tracks migration state in PRAGMA user_version (see
+          # core/db/migrate.go), not a schema_migrations table. A fresh-
+          # migrated DB has user_version >= 1; a raw sqlite file with
+          # no migrations reports 0.
+          UV="$(sqlite3 "$NEWEST" 'PRAGMA user_version;')"
+          echo "user_version: $UV"
+          test "$UV" -ge 1 || (echo "no migrations in snapshot"; exit 1)
