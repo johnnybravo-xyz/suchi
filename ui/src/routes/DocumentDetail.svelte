@@ -158,6 +158,10 @@
             </select>
           </dd>
           <dt>Added</dt><dd>{fmtDate(doc.created_at)}</dd>
+          {#if doc.source_mtime}
+            <dt title="Filesystem mtime carried from the source file at ingest">Created</dt>
+            <dd>{fmtDate(doc.source_mtime)}</dd>
+          {/if}
           <dt>Original</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}<dt>Archive</dt><dd>searchable PDF · {fmtBytes(doc.archive_size)}</dd>{/if}
           {#if doc.tags?.length}

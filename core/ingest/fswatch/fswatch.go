@@ -426,12 +426,19 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 				created = c
 			}
 		}
+		// source_mtime — capture the source file's mtime on disk. Cheap
+		// os.Stat; on error we skip rather than fail ingest.
+		var srcMTime sql.NullInt64
+		if fi, statErr := os.Stat(path); statErr == nil {
+			srcMTime.Int64 = fi.ModTime().Unix()
+			srcMTime.Valid = true
+		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, added_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, w.ownerID, ref.SHA256, ref.Size, title, mime, catID, now, created, now)
+				jd_category_id, added_at, created_at, updated_at, source_mtime
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, w.ownerID, ref.SHA256, ref.Size, title, mime, catID, now, created, now, srcMTime)
 		if err != nil {
 			return err
 		}
