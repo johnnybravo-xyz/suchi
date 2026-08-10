@@ -12,6 +12,8 @@
   let revealed = $state(false)
   let editingTitle = $state(false)
   let titleDraft = $state('')
+  let editingLanguages = $state(false)
+  let languagesDraft = $state('')
   let shareURL = $state('')
   let jdCats = $state([])
   let similar = $state(null)   // {results, method} | null
@@ -46,17 +48,14 @@
     } catch (ex) { notify?.(ex.message || 'Could not save') }
   }
 
-  async function editLanguages() {
-    // Simple prompt-based edit — matches how title / sensitivity
-    // land on this page today. Empty string clears both value +
-    // lock so future automatic detection can populate it again.
-    const current = doc?.languages || ''
-    const next = window.prompt(
-      'Languages — comma-separated ISO codes (e.g. "de,en"). Empty clears + unlocks.',
-      current
-    )
-    if (next === null) return
-    const trimmed = next.trim()
+  function startEditLanguages() {
+    languagesDraft = doc?.languages || ''
+    editingLanguages = true
+  }
+
+  async function saveLanguages() {
+    const trimmed = languagesDraft.trim()
+    editingLanguages = false
     try {
       await patchDocument(id, { languages: trimmed })
       doc = {
@@ -170,15 +169,25 @@
           {/if}
           <dt>Languages</dt>
           <dd>
-            {#if doc.languages}
-              {#each doc.languages.split(',') as code}
-                <span class="pill" style="margin-right:5px">{code.trim()}</span>
-              {/each}
-              {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
+            {#if editingLanguages}
+              <form onsubmit={(e) => { e.preventDefault(); saveLanguages() }} style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <input class="input mono" style="max-width:200px" bind:value={languagesDraft}
+                       placeholder="e.g. de,en — empty clears" />
+                <button class="btn sm" type="submit">Save</button>
+                <button class="btn sm" type="button" onclick={() => (editingLanguages = false)}>Cancel</button>
+                <span class="sub" style="width:100%">Comma-separated ISO codes. Empty clears &amp; unlocks.</span>
+              </form>
             {:else}
-              <span class="sub">not detected</span>
+              {#if doc.languages}
+                {#each doc.languages.split(',') as code}
+                  <span class="pill" style="margin-right:5px">{code.trim()}</span>
+                {/each}
+                {#if doc.languages_locked}<span class="sub" title="Set by user; automatic detection won't overwrite">· locked</span>{/if}
+              {:else}
+                <span class="sub">not detected</span>
+              {/if}
+              <button class="btn sm" style="margin-left:8px" onclick={startEditLanguages} type="button">Edit</button>
             {/if}
-            <button class="btn sm" style="margin-left:8px" onclick={editLanguages} type="button">Edit</button>
           </dd>
         </dl>
         {#if shareURL}
