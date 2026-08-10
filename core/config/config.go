@@ -142,6 +142,20 @@ type Config struct {
 	MailSetupContainer  string
 	MailSetupDockerSock string
 
+	// DemoMode toggles public-showcase behaviour. When set:
+	//   - the SPA renders a persistent "resets daily" banner + the
+	//     /app/#/demo landing panel;
+	//   - GET /api/demo/mode returns enabled=true (SPA polls this
+	//     to decide whether to render the banner);
+	//   - per-visitor scratch users + a reset ticker take over — see
+	//     docs/demo-instance.mdx for the full operational shape.
+	// Read from SUCHI_DEMO_MODE. Default off. Nothing outside the demo
+	// container is expected to set it.
+	DemoMode bool
+	// DemoGlobalRPS caps the global per-IP request rate when DemoMode is
+	// on. 0 disables the cap. Read from SUCHI_DEMO_GLOBAL_RPS.
+	DemoGlobalRPS int
+
 	// UIDisabled turns off the built-in server-rendered UI at boot.
 	// Set SUCHI_UI_DISABLED=1 for headless deployments where an
 	// external SPA (React/Svelte/whatever) fronts /api/. When true,
@@ -250,6 +264,13 @@ func Load() (*Config, error) {
 
 	c.UIDisabled = env("SUCHI_UI_DISABLED", "") == "true" ||
 		env("SUCHI_UI_DISABLED", "") == "1"
+
+	c.DemoMode = env("SUCHI_DEMO_MODE", "") == "true" ||
+		env("SUCHI_DEMO_MODE", "") == "1"
+	if c.DemoGlobalRPS, err = parseIntBounded("SUCHI_DEMO_GLOBAL_RPS",
+		env("SUCHI_DEMO_GLOBAL_RPS", "0"), 0, 10_000); err != nil {
+		return nil, err
+	}
 
 	// Secrets support _FILE convention for docker/k8s secret mounts.
 	if c.OIDCClientSecret, err = readSecret("OIDC_CLIENT_SECRET"); err != nil {
