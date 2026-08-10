@@ -19,7 +19,10 @@
         listTasks({ include: 'jobs', state: 'dead', limit: 50 }),
         listTasks({ limit: 200 }),   // default: proposals ride the "include=both" reply
       ])
-      tasks = wf?.results || wf || []
+      // `include=workflow` skips the classic tasks branch → server returns
+      // an empty `results` array; the actual approval-task list lives under
+      // `approval_tasks`. Jobs still ride the classic `results` shape.
+      tasks = wf?.approval_tasks || []
       jobs = jb?.results || jb || []
       proposalCards = allTasks?.heuristics_proposals || []
       onCount?.(tasks.length + proposalCards.length)
