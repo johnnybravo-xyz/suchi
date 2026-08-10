@@ -155,6 +155,12 @@ type Config struct {
 	// DemoGlobalRPS caps the global per-IP request rate when DemoMode is
 	// on. 0 disables the cap. Read from SUCHI_DEMO_GLOBAL_RPS.
 	DemoGlobalRPS int
+	// DemoScratchTTLMinutes bounds how long a per-visitor scratch user
+	// (and its uploads) survive before the reset ticker sweeps them.
+	// Read from SUCHI_DEMO_SCRATCH_TTL_MINUTES; default 30. The ticker
+	// runs every ceil(TTL/2) minutes so an expiry never lingers more
+	// than TTL past its deadline.
+	DemoScratchTTLMinutes int
 
 	// UIDisabled turns off the built-in server-rendered UI at boot.
 	// Set SUCHI_UI_DISABLED=1 for headless deployments where an
@@ -269,6 +275,10 @@ func Load() (*Config, error) {
 		env("SUCHI_DEMO_MODE", "") == "1"
 	if c.DemoGlobalRPS, err = parseIntBounded("SUCHI_DEMO_GLOBAL_RPS",
 		env("SUCHI_DEMO_GLOBAL_RPS", "0"), 0, 10_000); err != nil {
+		return nil, err
+	}
+	if c.DemoScratchTTLMinutes, err = parseIntBounded("SUCHI_DEMO_SCRATCH_TTL_MINUTES",
+		env("SUCHI_DEMO_SCRATCH_TTL_MINUTES", "30"), 1, 24*60); err != nil {
 		return nil, err
 	}
 
