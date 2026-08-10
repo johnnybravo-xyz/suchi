@@ -30,31 +30,51 @@ index. Add a converter (or wait for a future ingester) to fill in
 
 The PDF path is the most involved because it fans out based on content:
 
+```mermaid
+flowchart TD
+    U([Upload / fs-watch / IMAP]) --> PC[preconsume<br/><i>optional operator script</i>]
+    PC --> QPDF[qpdf<br/>normalize · strip restrictions · try decrypt]
+    QPDF -- all password<br/>candidates fail --> ENC(("encryption_state=encrypted<br/>halt · await POST /api/documents/{id}/decrypt"))
+    QPDF -- unencrypted or<br/>decrypted --> SPLIT[docsplit<br/><i>opt-in · pdftoppm + QR scan</i>]
+    SPLIT -- separators<br/>found --> FAN(("fan out one child<br/>doc per segment<br/>soft-delete parent"))
+    SPLIT -- no<br/>separators --> BLANK[pageanalyze<br/><i>optional · drop blank pages</i>]
+    BLANK --> INSP[pdf-inspector<br/>pdftotext -layout]
+    INSP -- ≥ 32 non-whitespace<br/>chars --> TN[text-native shortcut<br/>write content directly]
+    INSP -- otherwise --> OCR[OCR path<br/><i>tesseract or ocrmypdf</i>]
+    OCR -.->|only when engine=ocrmypdf| ARCH[(searchable-PDF archive<br/>documents.archive_blob)]
+    TN --> ZUG[zugferd<br/><i>Factur-X / XRechnung CII XML</i>]
+    OCR --> ZUG
+    ZUG --> RULES[rules engine → rendered-view symlink → optional LLM handoff]
+
+    classDef halt fill:#fde8e6,stroke:#b8442e,color:#8b1a09
+    classDef optional fill:#f4f4f2,stroke:#999,color:#333
+    class ENC,FAN halt
+    class PC,SPLIT,BLANK optional
 ```
-upload → preconsume (optional; operator script — see /preconsume)
-      → qpdf (normalize, strip restrictions, decrypt using
-                empty password + candidates from passwords file
-                + learned passwords for this owner)
-          → if all decrypt attempts fail: mark encryption_state='encrypted',
-             bail out. Operator supplies password via
-             POST /api/documents/{id}/decrypt to resume the pipeline.
-      → docsplit (opt-in; pdftoppm+QR scan → separator pages)
-          → if separators found: fan out one child doc per segment,
-             soft-delete parent, exit (children carry the chain)
-      → pageanalyze (optional; pdftoppm at 50 DPI → per-page mean intensity)
-          → qpdf --pages … keep only non-blank pages in the working copy
-      → pdf-inspector (pdftotext -layout)
-          ├─ ≥32 non-whitespace chars → text-native shortcut
-          │      → write content directly
-          └─ otherwise → OCR path (see engine dispatch below)
-                 → text sidecar (documents.content)
-                 → optional searchable-PDF archive (documents.archive_blob),
-                    when the engine is ocrmypdf
-      → zugferd (qpdf --list-attachments → --show-attachment → CII XML parse)
-             → invoice_* custom fields (when a Factur-X / XRechnung
-                attachment is present)
-      → rules engine → rendered-view symlink → optional LLM handoff
-```
+
+Detail per step (matching the boxes above):
+
+- **preconsume** — operator-defined script; see [preconsume](/preconsume).
+- **qpdf** — normalize, strip restrictions, decrypt using empty password
+  + candidates from the passwords file + learned passwords for this
+  owner. If all attempts fail: mark `encryption_state='encrypted'` and
+  halt — operator supplies a password via
+  `POST /api/documents/{id}/decrypt` to resume.
+- **docsplit** — opt-in QR-scan pass. When separators fire, fan out one
+  child doc per segment, soft-delete the parent, and exit (children
+  carry the chain).
+- **pageanalyze** — optional. `pdftoppm` at 50 DPI → per-page mean
+  intensity → `qpdf --pages …` to keep only non-blank pages in the
+  working copy.
+- **pdf-inspector** — `pdftotext -layout`. ≥ 32 non-whitespace chars is
+  the text-native shortcut (write `documents.content` directly);
+  otherwise fall through to OCR (see engine dispatch below).
+- **OCR path** — writes the text sidecar to `documents.content`. When
+  the engine is `ocrmypdf` it also writes a searchable-PDF archive
+  into `documents.archive_blob`.
+- **zugferd** — `qpdf --list-attachments` → `--show-attachment` → CII
+  XML parse. Emits `invoice_*` custom fields when a Factur-X /
+  XRechnung attachment is present.
 
 Each step degrades independently. Missing `pdftotext` sends every PDF
 to the OCR path (slower but correct). Missing OCR engine leaves the
