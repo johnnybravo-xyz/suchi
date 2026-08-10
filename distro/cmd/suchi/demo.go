@@ -38,11 +38,16 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
 func runDemo(args []string) int {
 	fs := flag.NewFlagSet("suchi demo", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "DATA_DIR to seed; defaults to $DATA_DIR or /data")
+	corpusFile := fs.String("corpus-file", "", "path to a suchi-demo corpus tarball (skips HTTP fetch)")
+	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a suchi-demo corpus tarball; defaults to the latest release")
+	fetchOnly := fs.Bool("fetch-only", false, "download + extract the corpus into the cache; do not seed the DB")
+	resetFlag := fs.Bool("reset", false, "wipe demo-seeded rows before seeding (idempotent full reset)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -60,6 +65,26 @@ func runDemo(args []string) int {
 	slog.SetDefault(log)
 
 	ctx := context.Background()
+
+	// If the operator pointed at a corpus tarball (or asked us to fetch
+	// one), resolve it before touching the DB. --fetch-only exits after
+	// extraction — used by the demo container's Dockerfile to warm the
+	// cache at build time so runtime egress stays zero.
+	var corpusDir string
+	if *corpusFile != "" || *corpusURL != "" {
+		corpusDir, err = demo.Fetch(ctx, demo.FetchOptions{
+			LocalFile: *corpusFile,
+			URL:       *corpusURL,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "corpus fetch: %v\n", err)
+			return 1
+		}
+		fmt.Printf("corpus ready at %s\n", corpusDir)
+	}
+	if *fetchOnly {
+		return 0
+	}
 
 	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {
@@ -80,6 +105,16 @@ func runDemo(args []string) int {
 	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
 		fmt.Fprintf(os.Stderr, "jd tree: %v\n", err)
 		return 1
+	}
+
+	if *resetFlag {
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return resetDemoRows(ctx, tx)
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "demo reset: %v\n", err)
+			return 1
+		}
+		fmt.Println("demo rows wiped; reseeding")
 	}
 
 	now := time.Now().Unix()
@@ -129,8 +164,54 @@ func runDemo(args []string) int {
 		return 1
 	}
 
+	// Optional richer seed from a manifest-driven corpus. The MVP-era
+	// manifest ships with clusters + zero fixtures — the seed logs
+	// "would seed 0" and moves on. Real fixture ingest lands in a
+	// follow-up commit once hero fixtures exist in the sibling repo.
+	if corpusDir != "" {
+		stats, err := demo.SeedFromManifest(ctx, demo.SeedOptions{
+			CorpusDir: corpusDir,
+			Log:       log,
+			// FixtureIngest left nil — see comment above. When the CAS +
+			// pipeline wiring lands, pass a closure that streams the file
+			// into blob.CAS.Put and inserts the document row.
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "manifest seed: %v\n", err)
+			return 1
+		}
+		fmt.Printf("manifest seed: seeded=%d skipped=%d failed=%d would-seed=%d\n",
+			stats.Seeded, stats.Skipped, stats.Failed, stats.WouldSeed)
+	}
+
 	fmt.Println("demo seed complete — start `suchi serve` and browse the doc list.")
 	return 0
+}
+
+// resetDemoRows wipes rows previously seeded by `suchi demo` so a
+// nightly reset returns the DB to the canonical seed state. Deletes:
+//   - workflows / rules whose name starts with "demo:"
+//   - documents whose original_blob starts with "demo:"
+//   - correspondents / tags / document_types are LEFT ALONE — they
+//     may be referenced by user uploads, and seedTaxonomy is
+//     idempotent via ON CONFLICT.
+//
+// The reset is intentionally narrow. Users' own uploads survive until
+// the demo-mode ticker's scratch-user sweep evicts them.
+func resetDemoRows(ctx context.Context, tx *sql.Tx) error {
+	stmts := []string{
+		`DELETE FROM workflow_actions WHERE workflow_id IN (SELECT id FROM workflows WHERE name LIKE 'demo:%')`,
+		`DELETE FROM workflow_triggers WHERE workflow_id IN (SELECT id FROM workflows WHERE name LIKE 'demo:%')`,
+		`DELETE FROM workflows WHERE name LIKE 'demo:%'`,
+		`DELETE FROM rules WHERE name LIKE 'demo:%'`,
+		`DELETE FROM documents WHERE original_blob LIKE 'demo:%'`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("%s: %w", s, err)
+		}
+	}
+	return nil
 }
 
 func seedTaxonomy(ctx context.Context, tx *sql.Tx, now int64) error {
