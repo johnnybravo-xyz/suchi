@@ -99,14 +99,19 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Approvals — admins see the full open queue; members see only
-	// their own inbox so the dashboard number matches the badge.
+	// Approvals — the count MUST match what the Tasks page shows for
+	// this caller. Same WHERE clause as approvalTasksForUser in
+	// tasks.go: `user:<me>` always, plus `role:admin` when the caller
+	// is admin. Otherwise a task assigned to another role/user bumps
+	// the dashboard counter but never surfaces on the page the counter
+	// links to — a classic "number won't stop nagging me" bug.
+	me := "user:" + strconv.FormatInt(p.UserID, 10)
 	if isAdmin {
 		_ = s.DB.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM approval_tasks WHERE status IN ('open','claimed')`).
-			Scan(&out.PendingApprovals)
+			`SELECT COUNT(*) FROM approval_tasks
+			 WHERE assignee IN (?, 'role:admin') AND status IN ('open','claimed')`,
+			me).Scan(&out.PendingApprovals)
 	} else {
-		me := "user:" + strconv.FormatInt(p.UserID, 10)
 		_ = s.DB.Read.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM approval_tasks WHERE assignee = ? AND status IN ('open','claimed')`,
 			me).Scan(&out.PendingApprovals)
