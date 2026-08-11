@@ -7,7 +7,8 @@
 //	  "method": "set_correspondent" | "set_document_type" | "set_storage_path"
 //	          | "add_tag" | "remove_tag" | "modify_tags"
 //	          | "delete" | "restore"
-//	          | "set_sensitivity" | "set_jd_category",
+//	          | "set_sensitivity" | "set_jd_category"
+//	          | "rescan_enqueue",
 //	  "parameters": { ... method-specific ... } }
 //
 // Every id is ACL-checked; the response array carries a per-id
@@ -34,6 +35,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 )
 
 // BulkEditRequest is the wire input.
@@ -329,6 +331,15 @@ func (s *Server) applyBulkEdit(r *http.Request, method string, params map[string
 				args...)
 			return err
 		})
+	case "rescan_enqueue":
+		// Re-run the content-extraction pipeline on the selected docs.
+		// Shares the outbox path with the CLI (`suchi rescan`) and the
+		// approvals-engine handler — one enqueue path, one place to
+		// evolve the job payload. Filter pins to the authorized id list;
+		// trashed_at IS NULL is applied inside Select so trashed picks
+		// silently drop.
+		_, err := rescan.Enqueue(r.Context(), s.DB, rescan.Options{IDs: ids})
+		return err
 	}
 	return errBadMethod
 }

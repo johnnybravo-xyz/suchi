@@ -100,6 +100,7 @@
   }
   const bulkRefile = (jdId) => bulk('Refiled', 'set_jd_category', { jd_category_id: Number(jdId) })
   const bulkSens = (s) => bulk('Sensitivity set', 'set_sensitivity', { sensitivity: s })
+  const bulkRescan = () => bulk('Rescan enqueued', 'rescan_enqueue', {})
   const bulkTrash = () => confirm(`Move ${sel.size} document${sel.size === 1 ? '' : 's'} to trash?`) &&
     bulk('Trashed', 'delete', {})
   async function bulkShare() {
@@ -161,6 +162,9 @@
     <button class="btn sm danger" disabled={bulkBusy} onclick={bulkTrash}>Trash</button>
     <span class="spacer"></span>
     {#if bulkBusy}<span class="sub">working…</span>{/if}
+    <button class="btn sm" disabled={bulkBusy} onclick={bulkRescan} title="Re-run the extraction pipeline on the selected documents">
+      <Icon name="zap" size={12} /> Rescan
+    </button>
     <button class="btn sm" onclick={clearSel}>Clear</button>
   </div>
 {/if}

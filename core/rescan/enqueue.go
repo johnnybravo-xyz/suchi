@@ -39,6 +39,7 @@ const PostIngestKind = "post-ingest"
 type Options struct {
 	// Selection filters — combined with AND.
 	Stale         string        // "ocr" | "llm" | "content" | ""
+	IDs           []int64       // explicit id list; empty = no filter
 	JDCategory    int64         // 0 = no filter
 	Tag           string        // by name; empty = no filter
 	Correspondent string        // by name; empty = no filter
@@ -180,6 +181,19 @@ func buildFilters(opts Options) (string, []any) {
 	if col, cur, ok := staleColumn(opts); ok {
 		b.WriteString(" AND d." + col + " < ?")
 		args = append(args, cur)
+	}
+	if len(opts.IDs) > 0 {
+		// Explicit id list — used by the SPA's rescan bulk action.
+		// Combines with trashed_at IS NULL so trashed picks silently drop.
+		b.WriteString(" AND d.id IN (")
+		for i, id := range opts.IDs {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString("?")
+			args = append(args, id)
+		}
+		b.WriteString(")")
 	}
 	if opts.JDCategory > 0 {
 		b.WriteString(" AND d.jd_category_id = ?")
