@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *db.DB {
 }
 
 // seedUser inserts a users row so approval_defs.created_by FK is
-// satisfied. Idempotent per DB — called once from every seedWorkflowTask.
+// satisfied. Idempotent per DB — called once from every seedApprovalTask.
 func seedUser(t *testing.T, d *db.DB, id int64) {
 	t.Helper()
 	_, err := d.Write.ExecContext(context.Background(), `
@@ -65,9 +65,9 @@ func itoa(n int64) string {
 	return string(b[i:])
 }
 
-// seedWorkflowTask inserts a def+run+task triple. Returns the def id
+// seedApprovalTask inserts a def+run+task triple. Returns the def id
 // and the task id so tests can assert on both.
-func seedWorkflowTask(t *testing.T, d *db.DB, assignee, status string) (defID, runID, taskID int64) {
+func seedApprovalTask(t *testing.T, d *db.DB, assignee, status string) (defID, runID, taskID int64) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -106,14 +106,14 @@ func seedWorkflowTask(t *testing.T, d *db.DB, assignee, status string) (defID, r
 	return
 }
 
-func TestWorkflowTasksForUser_ScopedToAssignee(t *testing.T) {
+func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
 	// user 5 owns two tasks (one open, one claimed); user 6 owns one.
-	_, _, _ = seedWorkflowTask(t, d, "user:5", "open")
-	_, _, _ = seedWorkflowTask(t, d, "user:5", "claimed")
-	_, _, _ = seedWorkflowTask(t, d, "user:6", "open")
+	_, _, _ = seedApprovalTask(t, d, "user:5", "open")
+	_, _, _ = seedApprovalTask(t, d, "user:5", "claimed")
+	_, _, _ = seedApprovalTask(t, d, "user:6", "open")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
@@ -130,8 +130,11 @@ func TestWorkflowTasksForUser_ScopedToAssignee(t *testing.T) {
 		if wt.Assignee != "user:5" {
 			t.Errorf("cross-user leak: got assignee %q", wt.Assignee)
 		}
-		if wt.WorkflowID == 0 {
-			t.Errorf("WorkflowID not populated: %+v", wt)
+		if wt.ApprovalID == 0 {
+			t.Errorf("ApprovalID not populated: %+v", wt)
+		}
+		if wt.WorkflowID != wt.ApprovalID {
+			t.Errorf("WorkflowID compat mirror not populated: %+v", wt)
 		}
 		if len(wt.Choices) != 2 {
 			t.Errorf("choices not decoded: %v", wt.Choices)
@@ -139,12 +142,12 @@ func TestWorkflowTasksForUser_ScopedToAssignee(t *testing.T) {
 	}
 }
 
-func TestWorkflowTasksForUser_ExcludesResolved(t *testing.T) {
+func TestApprovalTasksForUser_ExcludesResolved(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
-	_, _, _ = seedWorkflowTask(t, d, "user:5", "resolved")
-	_, _, _ = seedWorkflowTask(t, d, "user:5", "expired")
+	_, _, _ = seedApprovalTask(t, d, "user:5", "resolved")
+	_, _, _ = seedApprovalTask(t, d, "user:5", "expired")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
@@ -159,12 +162,12 @@ func TestWorkflowTasksForUser_ExcludesResolved(t *testing.T) {
 	}
 }
 
-func TestWorkflowTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
+func TestApprovalTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
 	for i := 0; i < 5; i++ {
-		_, _, _ = seedWorkflowTask(t, d, "user:5", "open")
+		_, _, _ = seedApprovalTask(t, d, "user:5", "open")
 	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)

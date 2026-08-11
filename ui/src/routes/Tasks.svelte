@@ -15,11 +15,11 @@
     loading = true; err = ''
     try {
       const [wf, jb, allTasks] = await Promise.all([
-        listTasks({ include: 'workflow', state: 'pending', limit: 200 }),
+        listTasks({ include: 'approvals', state: 'pending', limit: 200 }),
         listTasks({ include: 'jobs', state: 'dead', limit: 50 }),
         listTasks({ limit: 200 }),   // default: proposals ride the "include=both" reply
       ])
-      // `include=workflow` skips the classic tasks branch → server returns
+      // `include=approvals` skips the classic tasks branch → server returns
       // an empty `results` array; the actual approval-task list lives under
       // `approval_tasks`. Jobs still ride the classic `results` shape.
       tasks = wf?.approval_tasks || []
@@ -163,13 +163,13 @@
         {@const dl = deadline(t)}
         <div class="card task-card">
           <div class="prompt">{t.prompt || t.title || `Task #${t.id}`}</div>
-          {#if t.workflow_name === 'rescan-proposal' && t.vars}
+          {#if t.approval_name === 'rescan-proposal' && t.vars}
             <div style="font-size:.85rem;color:var(--muted);margin-top:2px">
               Pipeline <b>{t.vars.kind}</b> · {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} stale (v{(t.vars.current_version ?? 1) - 1} → v{t.vars.current_version})
             </div>
           {/if}
           <div class="meta">
-            {#if t.workflow_name}<span class="pill ok">{t.workflow_name}</span>{/if}
+            {#if t.approval_name}<span class="pill ok">{t.approval_name}</span>{/if}
             {#if t.assignee}<span class="pill">{t.assignee}</span>{/if}
             <span>step <code>{t.state_key}</code></span>
             {#if t.doc_id}<a href={`#/doc/${t.doc_id}`}>document #{t.doc_id}</a>{/if}

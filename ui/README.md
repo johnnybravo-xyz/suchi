@@ -30,7 +30,7 @@ sites' cookie banners, in keeping with the one-binary ethos.
 | Inbox | Same list scoped to the inbox JD category, with a quick "File under…" action (`PATCH`) per row |
 | Document | `GET /api/documents/{id}` + `/preview/{id}` iframe, sensitivity **blur with reveal**, rename/refile/sensitivity `PATCH`, versions, share link (`POST /api/share_links/`), download, trash |
 | Search | `GET /api/search/` with `<mark>` snippets (sanitized), pagination; `GET /api/autocomplete/` powers the palette |
-| Approvals | `GET /api/tasks/?include=workflow` + approve/reject via `POST /api/approvals/tasks/{id}/resolve`; dead jobs surfaced from the outbox |
+| Approvals | `GET /api/tasks/?include=approvals` + approve/reject via `POST /api/approvals/tasks/{id}/resolve`; dead jobs surfaced from the outbox |
 | Automations | List/create/edit/toggle/delete via `/api/automations/` (JSON spec editor with a template) |
 | Upload | Drag-and-drop multi-file `POST /api/documents/` with per-file dedup/restore feedback |
 | Settings | whoami, API-token mint/revoke (`/api/tokens/`) |
