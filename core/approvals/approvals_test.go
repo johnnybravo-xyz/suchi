@@ -59,171 +59,143 @@ func newEngine(t *testing.T) *approvals.Engine {
 
 // ---------- Spec.Validate ----------
 
-func TestSpecValidate_Ok(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "system", On: map[string]string{"success": "b"}},
-			"b": {Kind: "end"},
-		},
-	}
-	if err := s.Validate(); err != nil {
-		t.Fatalf("valid spec rejected: %v", err)
-	}
-}
-
-func TestSpecValidate_MissingStart(t *testing.T) {
-	s := approvals.Spec{States: map[string]approvals.State{
-		"a": {Kind: "end"},
-	}}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for missing start")
-	}
-}
-
-func TestSpecValidate_StartNotInStates(t *testing.T) {
-	s := approvals.Spec{
-		Start: "ghost",
-		States: map[string]approvals.State{
-			"a": {Kind: "end"},
-		},
-	}
-	err := s.Validate()
-	if err == nil || !strings.Contains(err.Error(), "start state") {
-		t.Fatalf("want start-not-found error, got %v", err)
-	}
-}
-
-func TestSpecValidate_EmptyStates(t *testing.T) {
-	s := approvals.Spec{Start: "a"}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for empty states map")
-	}
-}
-
-func TestSpecValidate_BadStateKey(t *testing.T) {
-	s := approvals.Spec{
-		Start: "1bad",
-		States: map[string]approvals.State{
-			"1bad": {Kind: "end"},
-		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for state key starting with digit")
-	}
-}
-
-func TestSpecValidate_EmptyKind(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {},
-		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for empty kind")
-	}
-}
-
-func TestSpecValidate_NegativeTimeout(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "end", TimeoutSec: -1},
-		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for negative timeout")
-	}
-}
-
-func TestSpecValidate_BadAssignee(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {
-				Kind:     "approve",
-				Assignee: "bob",
-				Choices:  []string{"approve"},
-				On:       map[string]string{"approve": "b"},
+// TestSpecValidate is a table over Spec.Validate() — one row per
+// rejection reason plus the happy path. Adding a new invariant means
+// adding one row, not one function.
+func TestSpecValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    approvals.Spec
+		wantErr string // "" = must succeed; otherwise substring must appear in err
+	}{
+		{
+			name: "Ok",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "system", On: map[string]string{"success": "b"}},
+					"b": {Kind: "end"},
+				},
 			},
-			"b": {Kind: "end"},
 		},
-	}
-	err := s.Validate()
-	if err == nil || !strings.Contains(err.Error(), "assignee") {
-		t.Fatalf("want assignee-format error, got %v", err)
-	}
-}
-
-func TestSpecValidate_ApproveWithoutAssignee(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "approve", Choices: []string{"approve"}, On: map[string]string{"approve": "b"}},
-			"b": {Kind: "end"},
+		{
+			name:    "MissingStart",
+			spec:    approvals.Spec{States: map[string]approvals.State{"a": {Kind: "end"}}},
+			wantErr: "start",
 		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for approve without assignee")
-	}
-}
-
-func TestSpecValidate_ApproveWithoutChoices(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "approve", Assignee: "user:1", On: map[string]string{"approve": "b"}},
-			"b": {Kind: "end"},
-		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for approve without choices")
-	}
-}
-
-func TestSpecValidate_ApproveChoiceWithoutTransition(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {
-				Kind:     "approve",
-				Assignee: "user:1",
-				Choices:  []string{"approve", "reject"},
-				On:       map[string]string{"approve": "b"}, // missing reject
+		{
+			name: "StartNotInStates",
+			spec: approvals.Spec{
+				Start:  "ghost",
+				States: map[string]approvals.State{"a": {Kind: "end"}},
 			},
-			"b": {Kind: "end"},
+			wantErr: "start state",
+		},
+		{
+			name:    "EmptyStates",
+			spec:    approvals.Spec{Start: "a"},
+			wantErr: "state",
+		},
+		{
+			name: "BadStateKey",
+			spec: approvals.Spec{
+				Start:  "1bad",
+				States: map[string]approvals.State{"1bad": {Kind: "end"}},
+			},
+			wantErr: "state",
+		},
+		{
+			name: "EmptyKind",
+			spec: approvals.Spec{
+				Start:  "a",
+				States: map[string]approvals.State{"a": {}},
+			},
+			wantErr: "kind",
+		},
+		{
+			name: "NegativeTimeout",
+			spec: approvals.Spec{
+				Start:  "a",
+				States: map[string]approvals.State{"a": {Kind: "end", TimeoutSec: -1}},
+			},
+			wantErr: "timeout",
+		},
+		{
+			name: "BadAssignee",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "approve", Assignee: "bob", Choices: []string{"approve"}, On: map[string]string{"approve": "b"}},
+					"b": {Kind: "end"},
+				},
+			},
+			wantErr: "assignee",
+		},
+		{
+			name: "ApproveWithoutAssignee",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "approve", Choices: []string{"approve"}, On: map[string]string{"approve": "b"}},
+					"b": {Kind: "end"},
+				},
+			},
+			wantErr: "assignee",
+		},
+		{
+			name: "ApproveWithoutChoices",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "approve", Assignee: "user:1", On: map[string]string{"approve": "b"}},
+					"b": {Kind: "end"},
+				},
+			},
+			wantErr: "choice",
+		},
+		{
+			name: "ApproveChoiceWithoutTransition",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "approve", Assignee: "user:1", Choices: []string{"approve", "reject"}, On: map[string]string{"approve": "b"}},
+					"b": {Kind: "end"},
+				},
+			},
+			wantErr: "reject",
+		},
+		{
+			name: "TransitionToUnknownState",
+			spec: approvals.Spec{
+				Start:  "a",
+				States: map[string]approvals.State{"a": {Kind: "system", On: map[string]string{"success": "ghost"}}},
+			},
+			wantErr: "unknown state",
+		},
+		{
+			name: "EndWithTransitions",
+			spec: approvals.Spec{
+				Start: "a",
+				States: map[string]approvals.State{
+					"a": {Kind: "end", On: map[string]string{"success": "b"}},
+					"b": {Kind: "end"},
+				},
+			},
+			wantErr: "end",
 		},
 	}
-	err := s.Validate()
-	if err == nil || !strings.Contains(err.Error(), "reject") {
-		t.Fatalf("want missing-transition error, got %v", err)
-	}
-}
-
-func TestSpecValidate_TransitionToUnknownState(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "system", On: map[string]string{"success": "ghost"}},
-		},
-	}
-	err := s.Validate()
-	if err == nil || !strings.Contains(err.Error(), "unknown state") {
-		t.Fatalf("want unknown-target error, got %v", err)
-	}
-}
-
-func TestSpecValidate_EndWithTransitions(t *testing.T) {
-	s := approvals.Spec{
-		Start: "a",
-		States: map[string]approvals.State{
-			"a": {Kind: "end", On: map[string]string{"success": "b"}},
-			"b": {Kind: "end"},
-		},
-	}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for end-with-transitions")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.spec.Validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("valid spec rejected: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("want error containing %q, got %q", tc.wantErr, err.Error())
+			}
+		})
 	}
 }
 

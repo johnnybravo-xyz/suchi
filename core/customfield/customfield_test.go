@@ -143,61 +143,32 @@ func TestValidate_Multi(t *testing.T) {
 	}
 }
 
-func TestRender_Monetary(t *testing.T) {
-	h := Lookup("monetary")
-	got := h.Render(ValueRow{Number: sql.NullFloat64{Float64: 4523, Valid: true}})
-	if got != "4523.00" {
-		t.Errorf("got %q want %q", got, "4523.00")
+// TestRender is a table over Handler.Render — one row per (kind, input)
+// pair. Adding a new format-quirk is a one-line row.
+func TestRender(t *testing.T) {
+	dateTs := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC).Unix()
+	cases := []struct {
+		kind string
+		val  ValueRow
+		want string
+	}{
+		{"monetary", ValueRow{Number: sql.NullFloat64{Float64: 4523, Valid: true}}, "4523.00"},
+		{"number", ValueRow{Number: sql.NullFloat64{Float64: 42.5, Valid: true}}, "42.5"},
+		{"number", ValueRow{Number: sql.NullFloat64{Float64: 42, Valid: true}}, "42"},
+		{"date", ValueRow{Date: sql.NullInt64{Int64: dateTs, Valid: true}}, "2026-08-04"},
+		{"bool", ValueRow{Bool: sql.NullInt64{Int64: 1, Valid: true}}, "Yes"},
+		{"bool", ValueRow{Bool: sql.NullInt64{Int64: 0, Valid: true}}, "No"},
+		{"bool", ValueRow{}, ""},
+		{"multi", ValueRow{Text: sql.NullString{String: `["a","b","c"]`, Valid: true}}, "a, b, c"},
+		{"documentlink", ValueRow{Int: sql.NullInt64{Int64: 42, Valid: true}}, "#42"},
 	}
-}
-
-func TestRender_Number_NoTrailingZeros(t *testing.T) {
-	h := Lookup("number")
-	got := h.Render(ValueRow{Number: sql.NullFloat64{Float64: 42.5, Valid: true}})
-	if got != "42.5" {
-		t.Errorf("got %q want %q", got, "42.5")
-	}
-	got = h.Render(ValueRow{Number: sql.NullFloat64{Float64: 42, Valid: true}})
-	if got != "42" {
-		t.Errorf("got %q want %q", got, "42")
-	}
-}
-
-func TestRender_Date(t *testing.T) {
-	h := Lookup("date")
-	ts := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC).Unix()
-	got := h.Render(ValueRow{Date: sql.NullInt64{Int64: ts, Valid: true}})
-	if got != "2026-08-04" {
-		t.Errorf("got %q want %q", got, "2026-08-04")
-	}
-}
-
-func TestRender_Bool(t *testing.T) {
-	h := Lookup("bool")
-	if got := h.Render(ValueRow{Bool: sql.NullInt64{Int64: 1, Valid: true}}); got != "Yes" {
-		t.Errorf("true → %q", got)
-	}
-	if got := h.Render(ValueRow{Bool: sql.NullInt64{Int64: 0, Valid: true}}); got != "No" {
-		t.Errorf("false → %q", got)
-	}
-	if got := h.Render(ValueRow{}); got != "" {
-		t.Errorf("null → %q", got)
-	}
-}
-
-func TestRender_Multi(t *testing.T) {
-	h := Lookup("multi")
-	got := h.Render(ValueRow{Text: sql.NullString{String: `["a","b","c"]`, Valid: true}})
-	if got != "a, b, c" {
-		t.Errorf("got %q want %q", got, "a, b, c")
-	}
-}
-
-func TestRender_DocumentLink(t *testing.T) {
-	h := Lookup("documentlink")
-	got := h.Render(ValueRow{Int: sql.NullInt64{Int64: 42, Valid: true}})
-	if got != "#42" {
-		t.Errorf("got %q want %q", got, "#42")
+	for _, tc := range cases {
+		t.Run(tc.kind+"/"+tc.want, func(t *testing.T) {
+			got := Lookup(tc.kind).Render(tc.val)
+			if got != tc.want {
+				t.Errorf("%s: got %q want %q", tc.kind, got, tc.want)
+			}
+		})
 	}
 }
 
