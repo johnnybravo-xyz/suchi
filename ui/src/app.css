@@ -433,6 +433,11 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .gthumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 .gthumb.none { background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 8px, var(--surface) 8px, var(--surface) 16px); }
 .gthumb.none img { display: none; }
+/* Confidential/restricted docs: blur the first-page thumb so a
+   passer-by can't read the content off the list, but the doc still
+   reads as "has content" (not "missing thumbnail"). Matches the
+   preview-gate policy on /api/documents/{id}/thumb. */
+.rthumb.blurred img, .gthumb.blurred img { filter: blur(6px); }
 .gmeta { display: flex; gap: 8px; align-items: center; padding: 0 12px; min-width: 0; }
 .gmeta .title { font-size: .84rem; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hoveracts { display: none; gap: 6px; align-items: center; }

@@ -128,6 +128,15 @@
 <div class="toolbar">
   <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
   <span class="spacer"></span>
+  {#if doc?.sensitivity === 'confidential'}
+    <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
+         (inside the preview) still works — this one gives a symmetric
+         way to re-hide without navigating away and back. -->
+    <button class="btn sm" onclick={() => (revealed = !revealed)}
+            title={revealed ? 'Hide preview + extracted text' : 'Reveal preview + extracted text'}>
+      <Icon name="eye" size={13} /> {revealed ? 'Hide' : 'Reveal'}
+    </button>
+  {/if}
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
   <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
   <button class="btn sm danger" onclick={trash}><Icon name="trash" size={13} /> Trash</button>

@@ -7,6 +7,13 @@
 // SPA falls back to its title-initials placeholder.
 //
 // ACL: same rule as GET /api/documents/{id} (owner or ACL grant).
+//
+// Sensitivity gate: mirrors the /preview/{id} handler. Confidential
+// and restricted docs return 202 with a small JSON body unless the
+// caller explicitly opts in with ?reveal=1. Keeps direct URL access
+// (e.g. an audit or a stray bookmark scan) from surfacing the raw
+// first page while the SPA still requests the pixels with reveal=1
+// on behalf of the authorized user viewing the list.
 
 package api
 
@@ -35,16 +42,32 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, p, authz.KindDocument, id, authz.PermView) {
 		return
 	}
-	var sha sql.NullString
+	var (
+		sha  sql.NullString
+		sens sql.NullString
+	)
 	err = s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT thumb_sha FROM documents WHERE id = ? AND trashed_at IS NULL`,
-		id).Scan(&sha)
+		`SELECT thumb_sha, sensitivity FROM documents WHERE id = ? AND trashed_at IS NULL`,
+		id).Scan(&sha, &sens)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
 	}
 	if err != nil {
 		s.serverErr(w, "thumb.load", err)
+		return
+	}
+	if sens.Valid && IsHighSensitivity(sens.String) &&
+		r.URL.Query().Get("reveal") != "1" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Sensitivity", sens.String)
+		// Never cache the gate response so a later reclassification
+		// (or a later reveal) isn't masked by a stale 202.
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(
+			`{"sensitivity":"` + sens.String + `",` +
+				`"gated":true,"reveal_url":"?reveal=1"}`))
 		return
 	}
 	if !sha.Valid || sha.String == "" {

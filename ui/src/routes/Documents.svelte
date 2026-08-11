@@ -21,6 +21,10 @@
   const pageSize = 50
   const isInbox = $derived(inbox != null)
   const jdFilter = $derived(route.query.get('jd') || '')
+  // Mirrors core/api.IsHighSensitivity — used to blur thumbnails and
+  // pass ?reveal=1 to the thumb endpoint (which now sensitivity-gates
+  // the same way /preview/{id} does).
+  const isHigh = (s) => s === 'confidential' || s === 'restricted'
 
   async function loadFacets() {
     try {
@@ -228,7 +232,7 @@
     <div class="dgrid">
       {#each docs as d, i (d.id)}
         <a class="card gcard" href={`#/doc/${d.id}`} class:selected={sel.has(d.id)}>
-          <span class="gthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
+          <span class="gthumb" class:blurred={isHigh(d.sensitivity)}><img src={thumbPath(d.id, isHigh(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
           <span class="gmeta">
             <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
                    onclick={(e) => e.stopPropagation()}
@@ -248,7 +252,7 @@
                onclick={(e) => e.stopPropagation()}
                onchange={(e) => toggleSel(i, e)}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />
-        <span class="rthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
+        <span class="rthumb" class:blurred={isHigh(d.sensitivity)}><img src={thumbPath(d.id, isHigh(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
         {#if d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_category_code}</span>{/if}
         <span class="title grow">{d.title || `Document #${d.id}`}</span>
