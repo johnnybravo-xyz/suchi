@@ -82,6 +82,18 @@ var operationalKinds = map[string]bool{
 	"backup.written": true,
 }
 
+// feedHiddenKinds are audit actions that get recorded (for the
+// durable trail and operator observability via the raw table) but
+// never surface in the notification feed — they're server-lifecycle
+// or janitor noise, not user-actionable events. Hidden for every
+// caller, admin or not; anyone chasing them has the audit_events
+// table and structured logs.
+var feedHiddenKinds = map[string]bool{
+	"server.start":   true,
+	"audit.pruned":   true,
+	"jobs.reclaimed": true,
+}
+
 // docCentricKinds are events whose object_id points at a documents
 // row — these get filtered through DocVisibilityWhere. Everything
 // else (task_created for a workflow_task, share_link.*, etc.) is
@@ -130,11 +142,16 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 	requestedKinds := parseKindsCSV(r.URL.Query().Get("kinds"))
 	isAdmin := p.Role == "admin"
 
-	// Drop operational kinds from the filter list for non-admins.
-	// A member who asks for job.dead silently gets 0 rows for that
-	// kind — better than a 403 that breaks the whole drawer.
+	// Drop operational kinds from the filter list for non-admins and
+	// drop feed-hidden kinds for everyone. A member who asks for
+	// job.dead silently gets 0 rows for that kind — better than a 403
+	// that breaks the whole drawer. Same treatment for server.start
+	// and other lifecycle noise.
 	kinds := make([]string, 0, len(requestedKinds))
 	for _, k := range requestedKinds {
+		if feedHiddenKinds[k] {
+			continue
+		}
 		if operationalKinds[k] && !isAdmin {
 			continue
 		}
@@ -156,14 +173,22 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 			Results: []EventRow{}, LatestID: sinceID,
 		})
 		return
-	case !isAdmin:
-		ops := make([]string, 0, len(operationalKinds))
-		for k := range operationalKinds {
-			ops = append(ops, k)
+	default:
+		// No include filter — build a NOT IN of the kinds this caller
+		// isn't allowed / meant to see. Feed-hidden kinds are always
+		// excluded; operational kinds are excluded for non-admins.
+		hide := make([]string, 0, len(feedHiddenKinds)+len(operationalKinds))
+		for k := range feedHiddenKinds {
+			hide = append(hide, k)
 		}
-		placeholders := strings.Repeat("?,", len(ops)-1) + "?"
+		if !isAdmin {
+			for k := range operationalKinds {
+				hide = append(hide, k)
+			}
+		}
+		placeholders := strings.Repeat("?,", len(hide)-1) + "?"
 		whereKind = "AND action NOT IN (" + placeholders + ")"
-		for _, k := range ops {
+		for _, k := range hide {
 			kindArgs = append(kindArgs, k)
 		}
 	}

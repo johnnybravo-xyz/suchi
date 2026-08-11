@@ -201,6 +201,44 @@ func TestListEvents_OperationalKindsAdminOnly(t *testing.T) {
 	}
 }
 
+func TestListEvents_FeedHiddenKinds(t *testing.T) {
+	// server.start / audit.pruned / jobs.reclaimed are ops-log noise,
+	// not user notifications — the drawer must skip them for every
+	// caller, admin included, whether or not they're named in ?kinds=.
+	s := newEventsServer(t)
+	_ = seedAuditEvent(t, s.DB, 100, "server.start", "server", 0)
+	_ = seedAuditEvent(t, s.DB, 101, "audit.pruned", "audit", 0)
+	_ = seedAuditEvent(t, s.DB, 102, "jobs.reclaimed", "job", 0)
+	visibleID := seedAuditEvent(t, s.DB, 103, "tag.create", "tag", 1)
+
+	for _, who := range []struct {
+		name string
+		p    *pluginapi.Principal
+	}{{"admin", adminPrincipal(1)}, {"member", memberPrincipal(2)}} {
+		_, body := doListEvents(t, s, "/api/events/", who.p)
+		for _, r := range body.Results {
+			if feedHiddenKinds[r.Kind] {
+				t.Errorf("%s leaked hidden kind %q in nofilter feed", who.name, r.Kind)
+			}
+		}
+		var seen bool
+		for _, r := range body.Results {
+			if r.ID == visibleID {
+				seen = true
+			}
+		}
+		if !seen {
+			t.Errorf("%s missing tag.create row in nofilter feed", who.name)
+		}
+
+		// Explicit ?kinds=server.start must return 0 even for admin.
+		_, body = doListEvents(t, s, "/api/events/?kinds=server.start", who.p)
+		if len(body.Results) != 0 {
+			t.Errorf("%s got hidden kind via explicit filter: %+v", who.name, body.Results)
+		}
+	}
+}
+
 func TestListEvents_DocVisibility(t *testing.T) {
 	s := newEventsServer(t)
 	// Doc A owned by user 1, doc B owned by user 2. User 2 must
