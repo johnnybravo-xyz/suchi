@@ -73,6 +73,15 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 				return
 			}
 		}
+		// Fresh-instance guard: with the setup token still unclaimed
+		// there is no user to sign in as, so the SPA's login form is a
+		// dead end. Match the / and /login handlers and route the
+		// operator to /bootstrap first. Runs AFTER the asset short-
+		// circuit so /bootstrap's own /app/assets/* still resolve.
+		if s.SetupPendingFn != nil && s.SetupPendingFn() {
+			http.Redirect(w, r, "/bootstrap", http.StatusFound)
+			return
+		}
 		if shell != nil {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write(shell)
