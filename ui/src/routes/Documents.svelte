@@ -227,7 +227,8 @@
           <span class="gthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
           <span class="gmeta">
             <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
-                   onclick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSel(i, e) }} aria-label="Select" />
+                   onclick={(e) => e.stopPropagation()}
+                   onchange={(e) => toggleSel(i, e)} aria-label="Select" />
             {#if d.jd_category_code}<span class="chip">{d.jd_category_code}</span>{/if}
             <span class="title">{d.title || `Document #${d.id}`}</span>
           </span>
@@ -240,7 +241,8 @@
     {#each docs as d, i (d.id)}
       <a class="irow hoverable" href={`#/doc/${d.id}`} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
         <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
-               onclick={(e) => { e.preventDefault(); e.stopPropagation(); toggleSel(i, e) }}
+               onclick={(e) => e.stopPropagation()}
+               onchange={(e) => toggleSel(i, e)}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />
         <span class="rthumb"><img src={thumbPath(d.id)} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
