@@ -19,6 +19,23 @@
   let similar = $state(null)   // {results, method} | null
 
   const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
+  // Inline-previewable formats: archive_blob is always PDF, and browsers
+  // render PDF + common images + plain text natively. Everything else
+  // (docx/xlsx/pptx, epub, eml, unknown) can't be iframed without
+  // triggering a save/download dialog, so we swap the iframe for a
+  // small "no inline preview" panel and lean on the extracted-text card
+  // below. Keeps parity with previewPath's server-side content-type.
+  const previewable = $derived.by(() => {
+    if (!doc) return false
+    if (doc.archive_blob) return true
+    const m = (doc.mime_type || '').toLowerCase().split(';')[0].trim()
+    if (m === 'application/pdf') return true
+    if (m.startsWith('image/')) {
+      return ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/avif'].includes(m)
+    }
+    if (m === 'text/plain' || m === 'text/html' || m === 'text/csv' || m === 'text/markdown') return true
+    return false
+  })
   const areaGroups = $derived.by(() => {
     const m = new Map()
     for (const c of jdCats) {
@@ -121,15 +138,21 @@
 {#if doc}
   <div class="detail">
     <div class="preview" class:blurred>
-      {#if !blurred}
-        <!-- direct URL: session cookie authenticates; server CSP sandboxes;
-             streaming + immutable-ETag caching come back for free -->
-        <iframe src={previewPath(id, doc.sensitivity === 'confidential')} title="Document preview"></iframe>
-      {/if}
       {#if blurred}
         <div class="reveal">
           <span class="pill danger">Confidential</span>
           <button class="btn" onclick={() => (revealed = true)}><Icon name="eye" size={14} /> Reveal preview</button>
+        </div>
+      {:else if previewable}
+        <!-- direct URL: session cookie authenticates; server CSP sandboxes;
+             streaming + immutable-ETag caching come back for free -->
+        <iframe src={previewPath(id, doc.sensitivity === 'confidential')} title="Document preview"></iframe>
+      {:else}
+        <div class="reveal">
+          <span class="pill">{doc.mime_type || 'unknown format'}</span>
+          <b style="font-size:.95rem">No inline preview for this format</b>
+          <span class="sub" style="max-width:32ch;text-align:center">Browsers can't render this file inline. Download the original, or read the extracted text below.</span>
+          <a class="btn" href={downloadPath(id)} download><Icon name="download" size={13} /> Download original</a>
         </div>
       {/if}
     </div>
