@@ -42,7 +42,20 @@ func EnsureProposals(ctx context.Context, d *db.DB, engine *approvals.Engine, ve
 	for _, kind := range kindsToCheck {
 		current := versionFor(kind, versions)
 		if current <= 0 {
-			continue // kind's version is disabled (zero); nothing to detect against
+			// Kind is disabled (e.g. llm with no classifier wired).
+			// Cancel any pending run left over from when the kind
+			// WAS wired; the archive can never advance those rows,
+			// so nagging the operator to approve a rescan is stale.
+			pending, err := findPendingRun(ctx, d, kind)
+			if err != nil {
+				return fmt.Errorf("rescan.detect: find pending %s: %w", kind, err)
+			}
+			if pending != nil {
+				if err := engine.Cancel(ctx, pending.ID, "detect: kind disabled", systemActor()); err != nil {
+					return fmt.Errorf("rescan.detect: cancel %s: %w", kind, err)
+				}
+			}
+			continue
 		}
 		stale, err := CountStale(ctx, d, kind, current)
 		if err != nil {
