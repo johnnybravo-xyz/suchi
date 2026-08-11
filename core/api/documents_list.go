@@ -194,10 +194,11 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, term)
 	}
 
-	// Visibility: admins bypass; members get the ACL fragment. Reuse
-	// the exact SQL every other list surface uses so scope stays
-	// consistent.
-	if p != nil && p.Role != "admin" {
+	// Visibility: admins + demo-anon bypass; members get the ACL
+	// fragment. Demo-anon visitors see the shared demo corpus by design
+	// (httpx.DemoReadOnly gates any mutation attempt at the route
+	// layer; authz.Can gates single-doc reads).
+	if p != nil && p.Role != "admin" && p.Kind != "demo-anon" {
 		groups, err := s.principalGroups(r.Context(), p.UserID)
 		if err != nil {
 			s.serverErr(w, "docs.list.load_groups", err)

@@ -3,23 +3,32 @@
 // empty state. Idempotent per run: if the target rows already exist,
 // they are skipped.
 //
-// What lands:
-//   - 1 admin user (email demo@example.com) if none exists yet — but
-//     ONLY when the DB has zero users. If bootstrap already ran, the
-//     demo skips user creation to avoid clobbering credentials.
+// What lands (user-independent, always):
 //   - 4 correspondents (Landlord, HDFC Bank, Amazon, BESCOM)
 //   - 4 document_types (Invoice, Receipt, Bank statement, Utility bill)
 //   - 4 tags (rent, utilities, purchase, banking)
-//   - 3 sample documents (title + content only; no real files)
 //   - 1 automation ("route utilities" — auto-tags BESCOM docs)
 //   - 1 rule (title-contains "invoice" → set_document_type Invoice)
 //
-// It writes no blobs — the docs are purely metadata for browse
-// testing. If you need real file previews, upload a few PDFs after.
+// What lands (only when an admin/user already exists):
+//   - 3 sample documents (title + content only; no real files) owned
+//     by the first available admin (or first user if no admin).
 //
-// Not idempotent on the user side: re-running never touches an
-// existing user. Everything else uses INSERT OR IGNORE / UPSERT so
-// re-running converges on the same state.
+// Admin provisioning:
+//   - Normal (SUCHI_DEMO_MODE unset): the seed does NOT create a user.
+//     /setup is the single source of truth for admin credentials, so
+//     there's no UNIQUE-email collision. On a fresh DATA_DIR: run
+//     `suchi demo` → `suchi serve` → `/bootstrap` → rerun `suchi demo`
+//     to seed docs owned by the new admin.
+//   - Public demo (SUCHI_DEMO_MODE=1): the seed mints a passwordless
+//     system admin (`admin@demo.local`, password_hash NULL) so first
+//     boot is zero-touch — visitors land on the SPA via the anon
+//     session tier, no `/bootstrap` handshake needed. The row exists
+//     only to own docs + satisfy usersEmpty; NULL hash means no login
+//     path (localauth treats !hash.Valid as invalid credentials).
+//
+// Everything uses INSERT OR IGNORE / UPSERT so re-running converges on
+// the same state.
 
 package main
 
@@ -30,15 +39,31 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"mime"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
+	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
+)
+
+// Public demo credentials. Rendered as a hint on /login when
+// SUCHI_DEMO_MODE=1 (see ui.Server.DemoHint) so visitors who bother to
+// open the login page know how to get in. Not a secret by design —
+// the anon-session tier is the primary landing path anyway.
+const (
+	DemoLoginEmail    = "user@demo.suchi.page"
+	DemoLoginPassword = "demo"
 )
 
 func runDemo(args []string) int {
@@ -46,6 +71,7 @@ func runDemo(args []string) int {
 	dataDir := fs.String("data-dir", "", "DATA_DIR to seed; defaults to $DATA_DIR or /data")
 	corpusFile := fs.String("corpus-file", "", "path to a suchi-demo corpus tarball (skips HTTP fetch)")
 	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a suchi-demo corpus tarball; defaults to the latest release")
+	corpusDirFlag := fs.String("corpus-dir", "", "path to an already-extracted corpus directory (skips tarball fetch + extract)")
 	fetchOnly := fs.Bool("fetch-only", false, "download + extract the corpus into the cache; do not seed the DB")
 	resetFlag := fs.Bool("reset", false, "wipe demo-seeded rows before seeding (idempotent full reset)")
 	if err := fs.Parse(args); err != nil {
@@ -67,11 +93,15 @@ func runDemo(args []string) int {
 	ctx := context.Background()
 
 	// If the operator pointed at a corpus tarball (or asked us to fetch
-	// one), resolve it before touching the DB. --fetch-only exits after
-	// extraction — used by the demo container's Dockerfile to warm the
-	// cache at build time so runtime egress stays zero.
+	// one), resolve it before touching the DB. --corpus-dir skips the
+	// tarball dance entirely (compose stacks that bind-mount the corpus
+	// as a volume). --fetch-only exits after extraction.
 	var corpusDir string
-	if *corpusFile != "" || *corpusURL != "" {
+	switch {
+	case *corpusDirFlag != "":
+		corpusDir = *corpusDirFlag
+		fmt.Printf("corpus dir: %s\n", corpusDir)
+	case *corpusFile != "" || *corpusURL != "":
 		corpusDir, err = demo.Fetch(ctx, demo.FetchOptions{
 			LocalFile: *corpusFile,
 			URL:       *corpusURL,
@@ -119,29 +149,51 @@ func runDemo(args []string) int {
 
 	now := time.Now().Unix()
 
-	// Seed a demo admin user only if the DB has zero users.
-	var userCount int
-	_ = d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount)
-	var demoUser int64
-	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		if userCount == 0 {
-			res, err := tx.ExecContext(ctx, `
-				INSERT INTO users(email, display_name, role, created_at, updated_at)
-				VALUES ('demo@example.com', 'Demo Admin', 'admin', ?, ?)
-			`, now, now)
-			if err != nil {
-				return err
-			}
-			demoUser, _ = res.LastInsertId()
-			fmt.Println("seeded demo user: demo@example.com (no password — run bootstrap or the API to add credentials)")
-		} else {
-			_ = tx.QueryRowContext(ctx, `SELECT id FROM users ORDER BY id LIMIT 1`).Scan(&demoUser)
+	// Demo mode + empty DB: mint the public demo admin. Credentials
+	// are intentionally fixed + trivial (published on the login page)
+	// so a visitor who wants to "log in" can, but the SPA's default
+	// landing goes through the anon-session tier and never asks.
+	//
+	// Security posture:
+	//   - Role stays admin so seeded docs stay visible to the login
+	//     path and rescan seeding has an owner. Shared-state mutations
+	//     from this session are still blocked by httpx.DemoReadOnly
+	//     (the middleware guards regardless of role).
+	//   - Fixed password is hashed with argon2id via localauth.HashPassword,
+	//     matching every other credentialed row. Publishing the plaintext
+	//     is a demo affordance, not a leak.
+	//   - Guarded on cfg.DemoMode so a normal `suchi demo` invocation
+	//     never plants a known-password admin on a real install.
+	//   - INSERT ... WHERE NOT EXISTS keeps re-runs idempotent.
+	if cfg.DemoMode {
+		hash, err := localauth.HashPassword(DemoLoginPassword)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "demo admin hash: %v\n", err)
+			return 1
 		}
-		return nil
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "seed user: %v\n", err)
-		return 1
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
+				SELECT ?, 'Demo User', 'admin', ?, ?, ?
+				WHERE NOT EXISTS (SELECT 1 FROM users)
+			`, DemoLoginEmail, hash, now, now)
+			return err
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "demo admin: %v\n", err)
+			return 1
+		}
 	}
+
+	// Look up an owner for the sample docs. Prefer an admin; fall back
+	// to the first user. On non-demo installs before /setup, this comes
+	// up empty and the doc seed is skipped.
+	var demoUser int64
+	_ = d.Read.QueryRowContext(ctx, `
+		SELECT id FROM users
+		WHERE disabled = 0
+		ORDER BY role = 'admin' DESC, id ASC
+		LIMIT 1
+	`).Scan(&demoUser)
 
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		return seedTaxonomy(ctx, tx, now)
@@ -150,11 +202,23 @@ func runDemo(args []string) int {
 		return 1
 	}
 
-	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return seedDocs(ctx, tx, now, demoUser)
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "seed docs: %v\n", err)
-		return 1
+	// The 3 metadata-only sample rows are only useful as a smoke-test
+	// stand-in when no real corpus is available — they carry sentinel
+	// `demo:*` blob keys and can't preview. Skip them entirely when a
+	// corpus is being ingested (the corpus's own fixtures are the
+	// browse-testing dataset).
+	switch {
+	case corpusDir != "":
+		// covered by the manifest seed below
+	case demoUser > 0:
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return seedDocs(ctx, tx, now, demoUser)
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "seed docs: %v\n", err)
+			return 1
+		}
+	default:
+		fmt.Println("no users yet — skipping sample docs. Complete /setup, then re-run `suchi demo` to seed docs owned by the new admin.")
 	}
 
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -164,17 +228,29 @@ func runDemo(args []string) int {
 		return 1
 	}
 
-	// Optional richer seed from a manifest-driven corpus. The MVP-era
-	// manifest ships with clusters + zero fixtures — the seed logs
-	// "would seed 0" and moves on. Real fixture ingest lands in a
-	// follow-up commit once hero fixtures exist in the sibling repo.
+	// Manifest-driven corpus seed. For every fixture in the manifest:
+	//   - stream the file into the CAS (dedup is automatic on hash)
+	//   - upsert its correspondent + document_type into taxonomy
+	//   - insert the document row (idempotent via ON CONFLICT DO NOTHING
+	//     on the (owner_id, original_blob) partial index)
+	//   - link tags via document_tags
+	//   - enqueue a post-ingest job so content extraction + FTS happen
+	//     in the background once serve starts
 	if corpusDir != "" {
+		if demoUser <= 0 {
+			fmt.Fprintln(os.Stderr, "corpus seed: no admin/owner found — cannot own docs. Complete /setup first or enable SUCHI_DEMO_MODE.")
+			return 1
+		}
+		cas, err := blob.New(cfg.DataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "corpus seed cas: %v\n", err)
+			return 1
+		}
+		ingest := makeFixtureIngest(d, cas, demoUser, now, log)
 		stats, err := demo.SeedFromManifest(ctx, demo.SeedOptions{
-			CorpusDir: corpusDir,
-			Log:       log,
-			// FixtureIngest left nil — see comment above. When the CAS +
-			// pipeline wiring lands, pass a closure that streams the file
-			// into blob.CAS.Put and inserts the document row.
+			CorpusDir:     corpusDir,
+			Log:           log,
+			FixtureIngest: ingest,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "manifest seed: %v\n", err)
@@ -389,4 +465,214 @@ func slugify(s string) string {
 		out = out[:len(out)-1]
 	}
 	return string(out)
+}
+
+// makeFixtureIngest builds the demo.SeedFromManifest callback. Each
+// fixture becomes:
+//   - one blob in the CAS (dedup automatic on hash)
+//   - one row in `documents` (idempotent — the unique index on
+//     (owner_id, original_blob) means a re-run is a no-op)
+//   - one link row per tag in `document_tags`
+//   - one post-ingest job so content extraction + FTS + thumb happen
+//     in the background when serve starts
+//
+// Correspondents / document_types named by the manifest are upserted
+// on demand; the fixture author doesn't have to pre-populate taxonomy.
+// JD categories are looked up by code and fall back to the JD inbox
+// (code=10) if the manifest names something outside the seeded tree.
+func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *slog.Logger) func(context.Context, demo.ManifestFixture, string) error {
+	return func(ctx context.Context, f demo.ManifestFixture, path string) error {
+		// 1. Stream the file into the CAS.
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open fixture: %w", err)
+		}
+		defer file.Close()
+		ref, err := cas.Put(file)
+		if err != nil {
+			return fmt.Errorf("cas put: %w", err)
+		}
+
+		// 2. Derive a browsable title from the fixture filename.
+		title := titleFromFilename(f.Filename)
+
+		// 3. Sniff MIME from extension. Falls back to octet-stream so
+		//    the ingest pipeline can still route it (content-detect
+		//    inside post-ingest is the source of truth anyway).
+		mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(f.Filename)))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+
+		// 4. JD category by manifest code; fall back to inbox.
+		var jdCatID int64
+		if f.JDCategory > 0 {
+			_ = d.Read.QueryRowContext(ctx,
+				`SELECT id FROM jd_categories WHERE code = ?`, f.JDCategory).
+				Scan(&jdCatID)
+		}
+		if jdCatID == 0 {
+			if err := d.Read.QueryRowContext(ctx,
+				`SELECT id FROM jd_categories WHERE code = 10`).Scan(&jdCatID); err != nil {
+				_ = d.Read.QueryRowContext(ctx,
+					`SELECT id FROM jd_categories ORDER BY id LIMIT 1`).Scan(&jdCatID)
+			}
+		}
+
+		// 5. One write-tx: upsert taxonomy, insert doc, link tags,
+		//    enqueue post-ingest. Keeps the doc row + its outbox job
+		//    atomic so a crash between them can't leave orphan work.
+		return d.WriteTx(ctx, func(tx *sql.Tx) error {
+			corrID, err := upsertCorrespondent(ctx, tx, f.Correspondent, now)
+			if err != nil {
+				return err
+			}
+			dtID, err := upsertDocumentType(ctx, tx, f.DocumentType, now)
+			if err != nil {
+				return err
+			}
+
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO documents(
+					owner_id, original_blob, original_size, title, mime_type,
+					jd_category_id, correspondent_id, document_type_id,
+					sensitivity, languages,
+					added_at, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT DO NOTHING
+			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
+				jdCatID, corrID, dtID,
+				nullString(f.Sensitivity), f.Language,
+				now, now, now)
+			if err != nil {
+				return err
+			}
+			docID, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			if docID == 0 {
+				// Already seeded (ON CONFLICT hit). Skip tag + job wiring
+				// so re-runs stay silent.
+				return nil
+			}
+
+			for _, name := range f.Tags {
+				tagID, err := upsertTag(ctx, tx, name, now)
+				if err != nil {
+					return err
+				}
+				if tagID == 0 {
+					continue
+				}
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO document_tags(document_id, tag_id)
+					VALUES (?, ?) ON CONFLICT DO NOTHING
+				`, docID, tagID); err != nil {
+					return err
+				}
+			}
+
+			payload, err := json.Marshal(map[string]any{
+				"sha256":    ref.SHA256,
+				"size":      ref.Size,
+				"mime_type": mimeType,
+				"filename":  f.Filename,
+			})
+			if err != nil {
+				return err
+			}
+			return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
+		})
+	}
+}
+
+// upsertCorrespondent finds or creates a correspondent row by exact
+// name (empty name => NULL). Returns the id wrapped in NullInt64 so
+// the caller can splice it directly into an INSERT.
+func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
+	if name == "" {
+		return sql.NullInt64{}, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO correspondents(name, slug, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO NOTHING
+	`, name, slugify(name), now, now); err != nil {
+		return sql.NullInt64{}, err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM correspondents WHERE name = ?`, name).Scan(&id); err != nil {
+		return sql.NullInt64{}, err
+	}
+	return sql.NullInt64{Int64: id, Valid: true}, nil
+}
+
+// upsertDocumentType — same shape as upsertCorrespondent, for
+// document_types.
+func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
+	if name == "" {
+		return sql.NullInt64{}, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_types(name, slug, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO NOTHING
+	`, name, slugify(name), now, now); err != nil {
+		return sql.NullInt64{}, err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM document_types WHERE name = ?`, name).Scan(&id); err != nil {
+		return sql.NullInt64{}, err
+	}
+	return sql.NullInt64{Int64: id, Valid: true}, nil
+}
+
+// upsertTag returns 0 (not an error) for an empty name so the caller
+// can skip cleanly.
+func upsertTag(ctx context.Context, tx *sql.Tx, name string, now int64) (int64, error) {
+	if name == "" {
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO tags(name, slug, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO NOTHING
+	`, name, slugify(name), now, now); err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM tags WHERE name = ?`, name).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// titleFromFilename turns "bescom_january.pdf" → "Bescom January". Not
+// clever — the demo intent is "the row shows up with a plausible
+// title", not linguistic accuracy. Anything better belongs in the
+// content-extraction pipeline once it runs.
+func titleFromFilename(name string) string {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	base = strings.NewReplacer("_", " ", "-", " ", ".", " ").Replace(base)
+	fields := strings.Fields(base)
+	for i, w := range fields {
+		if len(w) == 0 {
+			continue
+		}
+		if w[0] >= 'a' && w[0] <= 'z' {
+			fields[i] = string(w[0]-32) + w[1:]
+		}
+	}
+	return strings.Join(fields, " ")
+}
+
+func nullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
 }

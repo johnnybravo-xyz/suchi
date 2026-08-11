@@ -34,6 +34,12 @@ import (
 // them together.
 const PrincipalKindDemoAnon = "demo-anon"
 
+// DemoAnonCookieName is the cookie the SPA reads for direct-URL
+// resources (<iframe src="/preview/{id}">, /download/{id}) that can't
+// attach the X-Suchi-Demo-Token header. The auth chain accepts the
+// token from either header or cookie.
+const DemoAnonCookieName = "suchi_demo_anon"
+
 // DemoConfig carries the mode flag + next-reset hint to the SPA. Kept
 // small so the endpoint's response fits in a single TCP packet.
 //
@@ -106,6 +112,20 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "mint_failed", "could not mint demo token")
 		return
 	}
+	// Plant the token in a cookie so the browser attaches it to direct
+	// resource fetches (<iframe src="/preview/{id}">, /download/{id})
+	// where JavaScript can't set X-Suchi-Demo-Token. HttpOnly keeps the
+	// SPA from double-reading it (sessionStorage remains the source of
+	// truth for header-based /api/* calls).
+	http.SetCookie(w, &http.Cookie{
+		Name:     DemoAnonCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  exp,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
 	s.writeJSON(w, http.StatusOK, demoSessionResp{
 		Kind:        "anon",
 		Token:       token,

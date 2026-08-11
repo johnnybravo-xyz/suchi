@@ -34,7 +34,7 @@ func TestDemoReadOnly(t *testing.T) {
 		{"POST login allowed", http.MethodPost, "/api/login", http.StatusOK},
 		{"POST demo session allowed", http.MethodPost, "/api/demo/session", http.StatusOK},
 		{"POST bootstrap allowed", http.MethodPost, "/bootstrap", http.StatusOK},
-		{"POST setup denied", http.MethodPost, "/setup", http.StatusForbidden},
+		{"POST setup allowed (localauth self-gates after first use)", http.MethodPost, "/setup", http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

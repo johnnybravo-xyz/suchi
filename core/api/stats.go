@@ -39,7 +39,16 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 	p := auth.FromContext(r.Context())
 	ctx := r.Context()
+	// Demo-anon visitors see the same shared corpus as admins for
+	// document read purposes (documents_list.go treats them the same
+	// way). Without seeCorpus, the dashboard doc tiles report 0 while
+	// the docs list shows 81.
+	//
+	// isAdmin stays strict: approvals + dead-jobs are admin-only
+	// operational counters and demo-anon must not see the real admin's
+	// pending queue.
 	isAdmin := p.Role == "admin"
+	seeCorpus := isAdmin || p.Kind == PrincipalKindDemoAnon
 
 	groups, err := s.principalGroups(ctx, p.UserID)
 	if err != nil {
@@ -64,7 +73,7 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		docArgs, trashArgs, weekArgs []any
 		inboxArgs                    = []any{inbox}
 	)
-	if !isAdmin {
+	if !seeCorpus {
 		vf, vargs := authz.DocVisibilityWhere(p.UserID, groups)
 		docWhere += " AND " + vf
 		trashWhere += " AND " + vf

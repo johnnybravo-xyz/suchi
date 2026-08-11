@@ -51,8 +51,14 @@ func (s *Server) GetSimilarDocuments(w http.ResponseWriter, r *http.Request) {
 
 	var sp *similar.Principal
 	if p != nil {
-		sp = &similar.Principal{UserID: p.UserID, Role: p.Role}
-		if p.Role != "admin" {
+		// Treat demo-anon as an admin-shaped principal for read
+		// visibility — same rationale as documents_list.go.
+		role := p.Role
+		if p.Kind == "demo-anon" {
+			role = "admin"
+		}
+		sp = &similar.Principal{UserID: p.UserID, Role: role}
+		if role != "admin" {
 			gs, err := s.principalGroups(r.Context(), p.UserID)
 			if err != nil {
 				s.serverErr(w, "similar.load_groups", err)

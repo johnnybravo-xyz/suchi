@@ -165,29 +165,34 @@ func (a *AnonAuthenticator) sign(nonceHex, expStr string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// extractToken looks in Authorization (Token/Bearer) and
-// X-Suchi-Demo-Token. Returns "" if none is present or the scheme
-// doesn't match.
+// CookieName is the name the SPA / server-side both use for the
+// direct-URL fallback cookie. See extractToken.
+const CookieName = "suchi_demo_anon"
+
+// extractToken looks in (order): the X-Suchi-Demo-Token header, the
+// Authorization Token/Bearer header, and the suchi_demo_anon cookie.
+// The cookie path exists so <iframe src="/preview/{id}"> and other
+// browser-native fetches — which can't set custom headers — still
+// resolve as demo-anon. Returns "" if nothing matches.
 func extractToken(r *http.Request) string {
 	if h := r.Header.Get("X-Suchi-Demo-Token"); strings.HasPrefix(h, TokenPrefix) {
 		return h
 	}
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		scheme, rest, ok := strings.Cut(auth, " ")
+		if ok {
+			rest = strings.TrimSpace(rest)
+			if strings.HasPrefix(rest, TokenPrefix) &&
+				(strings.EqualFold(scheme, "Token") || strings.EqualFold(scheme, "Bearer")) {
+				return rest
+			}
+		}
 	}
-	scheme, rest, ok := strings.Cut(auth, " ")
-	if !ok {
-		return ""
+	if c, err := r.Cookie(CookieName); err == nil &&
+		strings.HasPrefix(c.Value, TokenPrefix) {
+		return c.Value
 	}
-	rest = strings.TrimSpace(rest)
-	if !strings.HasPrefix(rest, TokenPrefix) {
-		return ""
-	}
-	if !strings.EqualFold(scheme, "Token") && !strings.EqualFold(scheme, "Bearer") {
-		return ""
-	}
-	return rest
+	return ""
 }
 
 // loadOrMintKey reads a 32-byte HMAC secret from path; if the file is
