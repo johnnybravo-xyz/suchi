@@ -39,7 +39,7 @@ func runGC(args []string) int {
 
 	ctx := context.Background()
 
-	d, err := db.Open(ctx, cfg.DataDir+"/dms.db")
+	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {
 		log.Error("gc.db.open", "err", err.Error())
 		return 1

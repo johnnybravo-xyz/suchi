@@ -220,7 +220,7 @@ func buildAutoJDBundle(t *testing.T, tmp string) string {
 func setupTarget(t *testing.T, ctx context.Context, dataDir string) (*db.DB, *blob.CAS, *slog.Logger, string) {
 	t.Helper()
 	must(t, os.MkdirAll(dataDir, 0o755))
-	d, err := db.Open(ctx, filepath.Join(dataDir, "dms.db"))
+	d, err := db.Open(ctx, filepath.Join(dataDir, "suchi.db"))
 	must(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 

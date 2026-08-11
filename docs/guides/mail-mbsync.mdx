@@ -82,7 +82,7 @@ docker compose logs -f mbsync suchi
 | `.env` | Compose-level env (profile, port, UID/GID). |
 | `maildir/` | mbsync's Maildir tree. |
 | `ingest/` | Handoff between mbsync and suchi. Ephemeral — suchi deletes files after successful ingest. |
-| `suchi-data/` | Suchi's `dms.db`, blob CAS, backups. |
+| `suchi-data/` | Suchi's `suchi.db`, blob CAS, backups. |
 | `bridge-data/` | Proton Bridge vault (Proton only). |
 
 ## Rotating credentials

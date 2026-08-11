@@ -124,7 +124,7 @@ func TestGCGraceSparesFresh(t *testing.T) {
 
 func setupDB(t *testing.T, ctx context.Context, dir string) (*db.DB, *slog.Logger) {
 	t.Helper()
-	d, err := db.Open(ctx, filepath.Join(dir, "dms.db"))
+	d, err := db.Open(ctx, filepath.Join(dir, "suchi.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

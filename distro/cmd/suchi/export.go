@@ -127,7 +127,7 @@ func runExport(args []string) int {
 		log.Error("export.datadir", "err", err.Error())
 		return 1
 	}
-	d, err := db.Open(ctx, cfg.DataDir+"/dms.db")
+	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {
 		log.Error("export.db.open", "err", err.Error())
 		return 1

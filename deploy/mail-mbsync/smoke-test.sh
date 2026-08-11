@@ -116,7 +116,7 @@ echo "== wait for docs to stabilize =="
 prev=-1
 stable=0
 for i in $(seq 1 60); do
-    docs=$(sqlite3 suchi-data/dms.db \
+    docs=$(sqlite3 suchi-data/suchi.db \
         "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL" 2>/dev/null || echo 0)
     if [ "$docs" = "$prev" ]; then
         stable=$((stable + 1))
@@ -144,19 +144,19 @@ check() {
     fi
 }
 
-email_docs=$(sqlite3 suchi-data/dms.db \
+email_docs=$(sqlite3 suchi-data/suchi.db \
     "SELECT COUNT(*) FROM documents WHERE mime_type='message/rfc822' AND trashed_at IS NULL")
-child_docs=$(sqlite3 suchi-data/dms.db \
+child_docs=$(sqlite3 suchi-data/suchi.db \
     "SELECT COUNT(*) FROM documents WHERE email_parent_id IS NOT NULL AND trashed_at IS NULL")
-total_docs=$(sqlite3 suchi-data/dms.db \
+total_docs=$(sqlite3 suchi-data/suchi.db \
     "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL")
-dup_msgid=$(sqlite3 suchi-data/dms.db \
+dup_msgid=$(sqlite3 suchi-data/suchi.db \
     "SELECT COUNT(*) FROM documents WHERE email_message_id='<01-plain@fixtures.suchi>' AND trashed_at IS NULL")
-inherited=$(sqlite3 suchi-data/dms.db \
+inherited=$(sqlite3 suchi-data/suchi.db \
     "SELECT COUNT(*) FROM document_correspondents dc
      JOIN documents d ON d.id = dc.document_id
      WHERE d.email_parent_id IS NOT NULL AND dc.role = 'sender'")
-enc_title=$(sqlite3 suchi-data/dms.db \
+enc_title=$(sqlite3 suchi-data/suchi.db \
     "SELECT title FROM documents WHERE email_message_id='<04-encoded@fixtures.suchi>'")
 
 dedup_fired=0
@@ -171,7 +171,7 @@ check "children inherit sender"         "$inherited"   "6"
 check "encoded subject decoded"         "$enc_title"   "Statement — 2026"
 
 if [ "$heic_expected" = "1" ]; then
-    heic_archived=$(sqlite3 suchi-data/dms.db \
+    heic_archived=$(sqlite3 suchi-data/suchi.db \
         "SELECT COUNT(*) FROM documents WHERE mime_type='image/heic' AND archive_blob IS NOT NULL AND trashed_at IS NULL")
     check "HEIC doc has PDF archive"        "$heic_archived" "1"
 fi

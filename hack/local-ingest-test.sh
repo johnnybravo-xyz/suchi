@@ -120,7 +120,7 @@ echo "== wait for downstream post-ingest to drain =="
 prev=-1
 stable=0
 for i in $(seq 1 60); do
-    docs=$(sqlite3 "$DATA_DIR/dms.db" "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL")
+    docs=$(sqlite3 "$DATA_DIR/suchi.db" "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL")
     if [ "$docs" = "$prev" ]; then
         stable=$((stable + 1))
         if [ "$stable" -ge 5 ]; then
@@ -141,13 +141,13 @@ docs_json=$(curl -sf "http://127.0.0.1:$PORT/api/documents/" \
     -H "Authorization: Token $API_TOKEN" 2>/dev/null || echo '{"results":[]}')
 # api/documents/ isn't a list endpoint yet; use tasks to count instead.
 # Count via the tasks table + the docs we can walk individually.
-total_docs=$(sqlite3 "$DATA_DIR/dms.db" \
+total_docs=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL")
-email_docs=$(sqlite3 "$DATA_DIR/dms.db" \
+email_docs=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE mime_type='message/rfc822' AND trashed_at IS NULL")
-attach_docs=$(sqlite3 "$DATA_DIR/dms.db" \
+attach_docs=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE email_parent_id IS NOT NULL AND trashed_at IS NULL")
-dup_msgid_count=$(sqlite3 "$DATA_DIR/dms.db" \
+dup_msgid_count=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE email_message_id='<01-plain@fixtures.suchi>' AND trashed_at IS NULL")
 
 check() {
@@ -171,17 +171,17 @@ check "total docs alive"             "$total_docs" "14"
 check "dedup: one doc for dup msgID" "$dup_msgid_count" "1"
 
 # Verify the encoded subject decoded correctly.
-enc_title=$(sqlite3 "$DATA_DIR/dms.db" \
+enc_title=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT title FROM documents WHERE email_message_id='<04-encoded@fixtures.suchi>'")
 check "encoded subject decoded" "$enc_title" "Statement — 2026"
 
 # Inline image was NOT ingested as a child doc.
-inline_img=$(sqlite3 "$DATA_DIR/dms.db" \
+inline_img=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE mime_type='image/png' AND trashed_at IS NULL")
 check "inline image skipped (0 PNG docs)" "$inline_img" "0"
 
 # From address became a correspondent.
-bescom_corr=$(sqlite3 "$DATA_DIR/dms.db" \
+bescom_corr=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM correspondents WHERE name='BESCOM Billing'")
 check "from → correspondent upsert" "$bescom_corr" "1"
 
