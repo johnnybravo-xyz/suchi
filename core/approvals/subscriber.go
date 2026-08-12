@@ -11,11 +11,10 @@ import (
 // KindAdvance and KindSweep are the job kinds this package owns.
 const (
 	KindAdvance = "approval:advance"
-	KindResume  = "workflow:resume" // alias — advance with trigger=""
 	KindSweep   = "approval:timeout-sweep"
 )
 
-// Subscriber implements pluginapi.Subscriber for the three workflow
+// Subscriber implements pluginapi.Subscriber for the approval-engine
 // job kinds. Constructed via NewSubscriber and registered with the
 // dispatcher at boot.
 type Subscriber struct {
@@ -31,7 +30,7 @@ func NewSubscriber(e *Engine) *Subscriber {
 
 // Kinds implements pluginapi.Subscriber.
 func (s *Subscriber) Kinds() []string {
-	return []string{KindAdvance, KindResume, KindSweep}
+	return []string{KindAdvance, KindSweep}
 }
 
 // Handle implements pluginapi.Subscriber. Payload arrives via
@@ -43,7 +42,7 @@ func (s *Subscriber) Handle(ctx context.Context, e pluginapi.Event) error {
 	switch e.Kind {
 	case KindSweep:
 		return s.e.TimeoutSweep(ctx)
-	case KindAdvance, KindResume:
+	case KindAdvance:
 		raw, _ := e.Payload["raw"].(string)
 		var body struct {
 			RunID   int64  `json:"run_id"`

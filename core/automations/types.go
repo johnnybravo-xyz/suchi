@@ -22,7 +22,7 @@
 package automations
 
 // TriggerType names the event that fires an automation. Values match
-// the on-disk `workflow_triggers.type` column and the compat API's
+// the on-disk `automation_triggers.type` column and the compat API's
 // integer codes below.
 type TriggerType string
 
@@ -65,7 +65,7 @@ func TriggerToCode(t TriggerType) int {
 	return 0
 }
 
-// Workflow is one row in `workflows`.
+// Automation is one row in `automations`.
 //
 // System = true marks an automation that suchi seeded on first boot
 // ("Auto-file from archive" is the first of these). System rows are
@@ -73,7 +73,7 @@ func TriggerToCode(t TriggerType) int {
 // enabled, rename them, and tune their action params. SystemSlug is
 // the seed's stable identifier; the seeder INSERT ... ON CONFLICT's
 // on it so re-runs are no-ops.
-type Workflow struct {
+type Automation struct {
 	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
 	OrderIndex int       `json:"order"`
@@ -86,7 +86,7 @@ type Workflow struct {
 	UpdatedAt  int64     `json:"updated_at"`
 }
 
-// Trigger is one row in `workflow_triggers`.
+// Trigger is one row in `automation_triggers`.
 type Trigger struct {
 	ID               int64       `json:"id"`
 	Type             TriggerType `json:"-"`
@@ -100,8 +100,8 @@ type Trigger struct {
 	FilterContentRE  string      `json:"filter_content_matching,omitempty"`
 }
 
-// Action is one row in `workflow_actions`. Params shape depends on
-// Kind — see workflow_actions in 0001_baseline.sql for the per-kind schema.
+// Action is one row in `automation_actions`. Params shape depends on
+// Kind — see automation_actions in 0001_baseline.sql for the per-kind schema.
 type Action struct {
 	ID         int64          `json:"id"`
 	OrderIndex int            `json:"order"`
@@ -109,12 +109,12 @@ type Action struct {
 	Params     map[string]any `json:"params"`
 }
 
-// WorkflowPatch is a sparse update — nil pointers leave the field
+// AutomationPatch is a sparse update — nil pointers leave the field
 // untouched. PATCH /api/automations/{id} decodes into this so the SPA
-// can flip `enabled` without resending the whole workflow. Triggers /
+// can flip `enabled` without resending the whole automation. Triggers /
 // Actions replace wholesale when their pointer is non-nil (empty slice
 // clears the list); leave nil to keep the current rows.
-type WorkflowPatch struct {
+type AutomationPatch struct {
 	Name       *string    `json:"name,omitempty"`
 	OrderIndex *int       `json:"order,omitempty"`
 	Enabled    *bool      `json:"enabled,omitempty"`

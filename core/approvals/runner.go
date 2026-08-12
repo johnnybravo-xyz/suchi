@@ -191,7 +191,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 		// self-deadlock). doc_id is copied out of the run so the
 		// event summary can reference the doc the task is about.
 		audit.Log(ctx, e.db, e.log, audit.Event{
-			Action: "approval.task_created", ObjectKind: "workflow_task", ObjectID: taskID,
+			Action: "approval.task_created", ObjectKind: "approval_task", ObjectID: taskID,
 			After: map[string]any{
 				"run_id":   runID,
 				"assignee": res.Task.Assignee,
@@ -253,7 +253,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	return nil
 }
 
-// Resolve marks a task done and enqueues workflow:resume so the run
+// Resolve marks a task done and enqueues approval:advance so the run
 // advances. Actor must be the assignee or an admin — caller enforces.
 func (e *Engine) Resolve(ctx context.Context, taskID int64, choice string, actor *pluginapi.Principal) error {
 	t, err := loadTask(ctx, e.db.Read, taskID)

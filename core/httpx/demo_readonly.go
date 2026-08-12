@@ -57,7 +57,6 @@ var demoDenyPrefixes = []string{
 	"/api/tokens",
 	"/api/users",
 	"/api/webhooks",
-	"/api/workflows",
 	// /setup and POST /bootstrap are NOT in this list — they're the
 	// one-shot admin-provisioning endpoints, self-gated by localauth
 	// (token burned on success, 409 "already initialized" thereafter).

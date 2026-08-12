@@ -2,12 +2,12 @@ package api
 
 // Approvals engine HTTP surface — routing/sign-off state machines,
 // distinct from the trigger→conditions→actions automations engine
-// exposed at /api/automations/ (see core/api/workflows.go and
+// exposed at /api/automations/ (see core/api/automations.go and
 // core/automations/). Admin gates on def-registration and cancel;
 // any authenticated member can start a run or resolve a task they own
 // (or an admin can override). Every string that reaches SQL rides
 // ExecContext with ?-placeholders — no dynamic SQL here; the
-// workflow package owns that.
+// approvals package owns that.
 //
 // URLs live under /api/approvals/*; the Go package stays
 // core/approvals/ because renaming it would touch dozens of files for
@@ -25,9 +25,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
-// workflowSlugPattern constrains a workflow slug to identifier-ish
+// slugPattern constrains a approval-flow slug to identifier-ish
 // tokens. Keeps URLs safe + specs greppable.
-var workflowSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,63}$`)
+var slugPattern = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,63}$`)
 
 // registerApprovals wires the /api/approvals/* routes. Called from
 // Register().
@@ -47,7 +47,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if approvals.Default() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
+		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
 	}
@@ -60,7 +60,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Slug = strings.TrimSpace(strings.ToLower(body.Slug))
-	if !workflowSlugPattern.MatchString(body.Slug) {
+	if !slugPattern.MatchString(body.Slug) {
 		s.writeError(w, http.StatusBadRequest, "bad_slug",
 			"slug must match [a-z][a-z0-9_-]{0,63}")
 		return
@@ -85,7 +85,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "unknown_handler", err.Error())
 			return
 		}
-		s.serverErr(w, "workflow.register", err)
+		s.serverErr(w, "approval.register", err)
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, map[string]any{
@@ -101,7 +101,7 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := strings.ToLower(r.PathValue("slug"))
-	if !workflowSlugPattern.MatchString(slug) {
+	if !slugPattern.MatchString(slug) {
 		s.writeError(w, http.StatusBadRequest, "bad_slug", "bad slug")
 		return
 	}
@@ -117,12 +117,12 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 		ORDER BY version DESC LIMIT 1
 	`, slug).Scan(&id, &version, &specJSON)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, "no_def", "no active workflow for slug")
+		s.writeError(w, http.StatusNotFound, "no_def", "no active approval flow for slug")
 		return
 	}
 	var spec approvals.Spec
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
-		s.serverErr(w, "workflow.getdef.decode", err)
+		s.serverErr(w, "approval.getdef.decode", err)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
@@ -142,12 +142,12 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if approvals.Default() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
+		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
 	}
 	slug := strings.ToLower(r.PathValue("slug"))
-	if !workflowSlugPattern.MatchString(slug) {
+	if !slugPattern.MatchString(slug) {
 		s.writeError(w, http.StatusBadRequest, "bad_slug", "bad slug")
 		return
 	}
@@ -169,7 +169,7 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "no_def", err.Error())
 			return
 		}
-		s.serverErr(w, "workflow.start", err)
+		s.serverErr(w, "approval.start", err)
 		return
 	}
 	// Nudge the dispatcher so the first advance job runs immediately.
@@ -186,7 +186,7 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if approvals.Default() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
+		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
 	}
@@ -201,12 +201,12 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "no_run", "run not found")
 			return
 		}
-		s.serverErr(w, "workflow.getrun", err)
+		s.serverErr(w, "approval.getrun", err)
 		return
 	}
 	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
 	if err != nil {
-		s.serverErr(w, "workflow.getrun.transitions", err)
+		s.serverErr(w, "approval.getrun.transitions", err)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
@@ -225,7 +225,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if approvals.Default() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
+		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, approvals.ErrForbidden):
 			s.writeError(w, http.StatusForbidden, "forbidden", "not this task's assignee")
 		default:
-			s.serverErr(w, "workflow.resolve", err)
+			s.serverErr(w, "approval.resolve", err)
 		}
 		return
 	}
@@ -278,13 +278,13 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // ApprovalCancel stops a running run. Admin-only for now — cancelling
-// someone else's workflow is a privileged action.
+// someone else's approval run is a privileged action.
 func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
 	if approvals.Default() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "workflow_disabled",
+		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
 	}
@@ -306,7 +306,7 @@ func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, approvals.ErrRunTerminal):
 			s.writeError(w, http.StatusConflict, "terminal", "run already in terminal state")
 		default:
-			s.serverErr(w, "workflow.cancel", err)
+			s.serverErr(w, "approval.cancel", err)
 		}
 		return
 	}

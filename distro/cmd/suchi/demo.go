@@ -266,7 +266,7 @@ func runDemo(args []string) int {
 
 // resetDemoRows wipes rows previously seeded by `suchi demo` so a
 // nightly reset returns the DB to the canonical seed state. Deletes:
-//   - workflows / rules whose name starts with "demo:"
+//   - automations / rules whose name starts with "demo:"
 //   - documents whose original_blob starts with "demo:"
 //   - correspondents / tags / document_types are LEFT ALONE — they
 //     may be referenced by user uploads, and seedTaxonomy is
@@ -276,9 +276,9 @@ func runDemo(args []string) int {
 // the demo-mode ticker's scratch-user sweep evicts them.
 func resetDemoRows(ctx context.Context, tx *sql.Tx) error {
 	stmts := []string{
-		`DELETE FROM workflow_actions WHERE workflow_id IN (SELECT id FROM workflows WHERE name LIKE 'demo:%')`,
-		`DELETE FROM workflow_triggers WHERE workflow_id IN (SELECT id FROM workflows WHERE name LIKE 'demo:%')`,
-		`DELETE FROM workflows WHERE name LIKE 'demo:%'`,
+		`DELETE FROM automation_actions WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
+		`DELETE FROM automation_triggers WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
+		`DELETE FROM automations WHERE name LIKE 'demo:%'`,
 		`DELETE FROM rules WHERE name LIKE 'demo:%'`,
 		`DELETE FROM documents WHERE original_blob LIKE 'demo:%'`,
 	}
@@ -407,33 +407,33 @@ func seedAutomationAndRule(ctx context.Context, tx *sql.Tx, now int64) error {
 		return nil
 	}
 
-	var wfID int64
+	var atmID int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM workflows WHERE name = 'demo: route utilities'`).Scan(&wfID)
+		`SELECT id FROM automations WHERE name = 'demo: route utilities'`).Scan(&atmID)
 	if err == nil {
 		return nil // already seeded
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO workflows(name, order_index, enabled, created_at, updated_at)
+		INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
 		VALUES ('demo: route utilities', 10, 1, ?, ?)
 	`, now, now)
 	if err != nil {
 		return err
 	}
-	wfID, _ = res.LastInsertId()
+	atmID, _ = res.LastInsertId()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_triggers(workflow_id, type, filter_corr_id, created_at)
+		INSERT INTO automation_triggers(automation_id, type, filter_corr_id, created_at)
 		VALUES (?, 'document_added', ?, ?)
-	`, wfID, corrID, now); err != nil {
+	`, atmID, corrID, now); err != nil {
 		return err
 	}
 
 	params, _ := json.Marshal(map[string]any{"tag_ids": []int64{tagID}})
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_actions(workflow_id, order_index, kind, params_json, created_at)
+		INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
 		VALUES (?, 0, 'assign_tags', ?, ?)
-	`, wfID, string(params), now); err != nil {
+	`, atmID, string(params), now); err != nil {
 		return err
 	}
 	return nil

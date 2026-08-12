@@ -383,7 +383,7 @@ Three interfaces in `plugin-api/`:
 
 - `Authenticator` — read the request, return a Principal.
 - `Subscriber` — receive durable-outbox events (post-ingest, render,
-  workflow-advance, etc.).
+  approval-advance, etc.).
 - `AuditSink` — receive audit events for external emission.
 
 For a Subscriber:

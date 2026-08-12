@@ -81,8 +81,8 @@ func autoFileFromArchiveSeed() systemSeed {
 func insertSystemAutomation(ctx context.Context, tx *sql.Tx, s systemSeed, log *slog.Logger) error {
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO workflows(name, order_index, enabled, system, system_slug,
-		                      created_at, updated_at)
+		INSERT INTO automations(name, order_index, enabled, system, system_slug,
+		                        created_at, updated_at)
 		VALUES (?, 0, ?, 1, ?, ?, ?)
         ON CONFLICT(system_slug) WHERE system_slug IS NOT NULL DO NOTHING
 	`, s.name, boolInt(s.enabled), s.slug, now, now)
@@ -94,17 +94,17 @@ func insertSystemAutomation(ctx context.Context, tx *sql.Tx, s systemSeed, log *
 		// Already seeded on a prior boot. Nothing to do.
 		return nil
 	}
-	wfID, err := res.LastInsertId()
+	atmID, err := res.LastInsertId()
 	if err != nil {
 		return err
 	}
-	log.Info("automations.seed.inserted", "slug", s.slug, "id", wfID, "name", s.name)
+	log.Info("automations.seed.inserted", "slug", s.slug, "id", atmID, "name", s.name)
 
 	// Trigger + actions (no filters — the seed fires on every upload).
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO workflow_triggers(workflow_id, type, created_at)
+		INSERT INTO automation_triggers(automation_id, type, created_at)
 		VALUES (?, ?, ?)
-	`, wfID, string(s.trigger), now); err != nil {
+	`, atmID, string(s.trigger), now); err != nil {
 		return err
 	}
 	for i, a := range s.actions {
@@ -113,9 +113,9 @@ func insertSystemAutomation(ctx context.Context, tx *sql.Tx, s systemSeed, log *
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO workflow_actions(workflow_id, order_index, kind, params_json, created_at)
+			INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
 			VALUES (?, ?, ?, ?, ?)
-		`, wfID, i, a.Kind, string(raw), now); err != nil {
+		`, atmID, i, a.Kind, string(raw), now); err != nil {
 			return err
 		}
 	}

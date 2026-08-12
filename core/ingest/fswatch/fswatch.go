@@ -280,7 +280,7 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 	if deduped {
 		w.log.Info("fswatch.deduped", "doc_id", docID, "path", filepath.Base(path))
 		// Notification feed: the same dedup event API uploads emit,
-		// so drop-folder workflows and manual uploads produce the
+		// so drop-folder ingests and manual uploads produce the
 		// same "already had X" entry.
 		audit.Log(ctx, w.db, w.log, audit.Event{
 			Action: "document.upload.conflict", ObjectKind: "document", ObjectID: docID,

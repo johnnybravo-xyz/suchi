@@ -1,6 +1,6 @@
 // Approval-def seeding — the "ships in the box" primitive for
-// built-in workflows. Same shape as automations.Seed, adapted for
-// the approval_defs schema (which auto-versions by slug).
+// built-in approval flows. Same shape as automations.Seed, adapted
+// for the approval_defs schema (which auto-versions by slug).
 //
 // Idempotency invariant: if an active def with matching spec_json
 // already exists for the slug, EnsureDef is a no-op. If none

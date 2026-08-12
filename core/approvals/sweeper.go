@@ -10,8 +10,8 @@ import (
 )
 
 // SweepInterval is how often the sweeper re-enqueues itself. 30s is a
-// good balance between deadline latency and DB churn — workflows with
-// second-precision deadlines are rare.
+// good balance between deadline latency and DB churn — approval flows
+// with second-precision deadlines are rare.
 const SweepInterval = 30 * time.Second
 
 // TimeoutSweep is called by the approval:timeout-sweep subscriber. It:

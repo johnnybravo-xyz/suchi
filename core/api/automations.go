@@ -46,16 +46,16 @@ func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
-	wfs, err := store.List(r.Context())
+	atms, err := store.List(r.Context())
 	if err != nil {
 		s.serverErr(w, "automations.list", err)
 		return
 	}
-	if wfs == nil {
-		wfs = []automations.Workflow{}
+	if atms == nil {
+		atms = []automations.Automation{}
 	}
 	p := ParsePageParams(r, 100, 200)
-	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, len(wfs), p, wfs))
+	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, len(atms), p, atms))
 }
 
 func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +69,7 @@ func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
-	wf, err := store.Get(r.Context(), id)
+	atm, err := store.Get(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
 		return
@@ -78,7 +78,7 @@ func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "automations.get", err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, wf)
+	s.writeJSON(w, http.StatusOK, atm)
 }
 
 func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
@@ -87,18 +87,18 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
 		return
 	}
-	var body automations.Workflow
+	var body automations.Automation
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
 	store := automations.New(s.DB)
-	wf, err := store.Create(r.Context(), body)
+	atm, err := store.Create(r.Context(), body)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, wf)
+	s.writeJSON(w, http.StatusCreated, atm)
 }
 
 // UpdateAutomation handles PATCH /api/automations/{id} with sparse
@@ -117,13 +117,13 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be a positive integer")
 		return
 	}
-	var patch automations.WorkflowPatch
+	var patch automations.AutomationPatch
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
 	store := automations.New(s.DB)
-	wf, err := store.Update(r.Context(), id, patch)
+	atm, err := store.Update(r.Context(), id, patch)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
 		return
@@ -132,7 +132,7 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "update_failed", err.Error())
 		return
 	}
-	s.writeJSON(w, http.StatusOK, wf)
+	s.writeJSON(w, http.StatusOK, atm)
 }
 
 func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {

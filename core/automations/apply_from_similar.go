@@ -60,7 +60,7 @@ func isForcedHeuristics(ctx context.Context) bool {
 	return v
 }
 
-// applyFromSimilarParams is the JSON shape stored in workflow_actions.params_json.
+// applyFromSimilarParams is the JSON shape stored in automation_actions.params_json.
 // All fields have sane defaults so an operator seeing the automation
 // in the visual builder doesn't have to fill anything to make it work.
 type applyFromSimilarParams struct {

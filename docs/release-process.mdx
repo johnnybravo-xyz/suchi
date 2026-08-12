@@ -40,10 +40,12 @@ Every commit message MUST follow [Conventional Commits](https://www.conventional
 `BREAKING CHANGE:` footer:
 
 ```
-feat(api)!: rename /api/workflows to /api/approvals
+feat(db)!: rename workflows* tables to automations*
 
-BREAKING CHANGE: state-machine URLs moved. Update every script that
-hits /api/workflows/* to /api/approvals/*.
+BREAKING CHANGE: the automations engine's tables lost the paperless
+naming. Any external tool that read `workflows` / `workflow_triggers`
+/ `workflow_actions` directly must switch to the new table names.
+The API surface at /api/automations/ is unchanged.
 ```
 
 Concrete examples from the log:

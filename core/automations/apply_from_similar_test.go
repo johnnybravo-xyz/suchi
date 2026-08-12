@@ -50,7 +50,7 @@ func TestApplyFromSimilar_AutoApplyAndPropose(t *testing.T) {
 		"policy renewal premium insurance annual coverage")
 
 	store := automations.New(d)
-	if _, err := store.Create(ctx, automations.Workflow{
+	if _, err := store.Create(ctx, automations.Automation{
 		Name:     "Auto-file from archive",
 		Enabled:  true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
@@ -91,7 +91,7 @@ func TestApplyFromSimilar_EmptyArchive_NoOp(t *testing.T) {
 	targetID := seedDoc(t, ctx, d, "Only doc", "solo content in the archive")
 
 	store := automations.New(d)
-	if _, err := store.Create(ctx, automations.Workflow{
+	if _, err := store.Create(ctx, automations.Automation{
 		Name:     "Auto-file from archive",
 		Enabled:  true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
@@ -131,7 +131,7 @@ func TestApplyFromSimilar_LLMSkip(t *testing.T) {
 		"policy renewal premium insurance annual coverage")
 
 	store := automations.New(d)
-	if _, err := store.Create(ctx, automations.Workflow{
+	if _, err := store.Create(ctx, automations.Automation{
 		Name:     "Auto-file from archive",
 		Enabled:  true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
