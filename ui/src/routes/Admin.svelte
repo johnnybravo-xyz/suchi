@@ -59,15 +59,15 @@
 
   // ---------- custom fields ----------
   let fields = $state([])
-  let nf = $state({ name: '', data_type: 'string' })
-  const FIELD_TYPES = ['string', 'integer', 'float', 'boolean', 'date', 'url', 'monetary', 'select']
+  let nf = $state({ name: '', data_type: 'text' })
+  const FIELD_TYPES = ['text', 'number', 'date', 'bool', 'select', 'multi', 'url', 'monetary', 'documentlink']
   async function loadFields() {
     try { const r = await listCustomFields(); fields = r?.results || r || [] } catch {}
   }
   async function addField(e) {
     e.preventDefault()
     if (!nf.name.trim()) return
-    try { await createCustomField({ name: nf.name.trim(), data_type: nf.data_type }); nf = { name: '', data_type: 'string' }; notify?.('Field created'); loadFields() }
+    try { await createCustomField({ name: nf.name.trim(), data_type: nf.data_type }); nf = { name: '', data_type: 'text' }; notify?.('Field created'); loadFields() }
     catch (ex) { notify?.(ex.message || 'Could not create the field') }
   }
   async function renameField(f, name) {
