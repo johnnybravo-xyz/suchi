@@ -36,6 +36,11 @@ import (
 )
 
 // Rule mirrors the table row.
+//
+// PresetSlug is the singleton owner: empty = user-owned (the classic
+// pre-0002 shape); non-empty = seeded by a taxonomy preset and
+// immutable. Any PATCH/DELETE on a preset-owned rule via the API
+// forks a user-owned copy (see core/api/rules.go).
 type Rule struct {
 	ID          int64
 	Name        string
@@ -46,6 +51,7 @@ type Rule struct {
 	ThenValue   string
 	Priority    int
 	Enabled     bool
+	PresetSlug  string
 	CreatedAt   int64
 	UpdatedAt   int64
 }
@@ -179,7 +185,8 @@ func loadEnabled(ctx context.Context, d *db.DB) ([]Rule, error) {
 	rows, err := d.Read.QueryContext(ctx, `
 		SELECT id, name, COALESCE(description, ''),
 		       if_kind, if_value, then_kind, then_value,
-		       priority, enabled, created_at, updated_at
+		       priority, enabled, COALESCE(preset_slug, ''),
+		       created_at, updated_at
 		FROM rules
 		WHERE enabled = 1
 		ORDER BY priority ASC, id ASC
@@ -194,7 +201,8 @@ func loadEnabled(ctx context.Context, d *db.DB) ([]Rule, error) {
 		var en int
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description,
 			&r.IfKind, &r.IfValue, &r.ThenKind, &r.ThenValue,
-			&r.Priority, &en, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&r.Priority, &en, &r.PresetSlug,
+			&r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.Enabled = en == 1

@@ -73,6 +73,12 @@ func TriggerToCode(t TriggerType) int {
 // enabled, rename them, and tune their action params. SystemSlug is
 // the seed's stable identifier; the seeder INSERT ... ON CONFLICT's
 // on it so re-runs are no-ops.
+//
+// PresetSlug marks an automation seeded by a taxonomy preset. Empty =
+// user-owned or system-owned; non-empty = preset singleton. PATCH or
+// DELETE via the API forks a user-owned copy (see store.Update /
+// store.Delete). System and PresetSlug are orthogonal axes — a row is
+// at most one of the two.
 type Automation struct {
 	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
@@ -80,6 +86,7 @@ type Automation struct {
 	Enabled    bool      `json:"enabled"`
 	System     bool      `json:"system,omitempty"`
 	SystemSlug string    `json:"system_slug,omitempty"`
+	PresetSlug string    `json:"preset_slug,omitempty"`
 	Triggers   []Trigger `json:"triggers"`
 	Actions    []Action  `json:"actions"`
 	CreatedAt  int64     `json:"created_at"`

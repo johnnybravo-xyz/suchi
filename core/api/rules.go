@@ -14,6 +14,11 @@ import (
 )
 
 // RuleView is the JSON projection of a rules row for the API.
+//
+// `preset_slug` is the singleton owner: empty for user-owned rules,
+// non-empty for rules seeded by a taxonomy preset (immutable — the
+// SPA renders an "Owned by <preset> filing tree" pill and PATCH/DELETE
+// forks a user-owned copy).
 type RuleView struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
@@ -24,6 +29,7 @@ type RuleView struct {
 	ThenValue   string `json:"then_value"`
 	Priority    int    `json:"priority"`
 	Enabled     bool   `json:"enabled"`
+	PresetSlug  string `json:"preset_slug,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
 }
@@ -66,7 +72,8 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, name, COALESCE(description, ''),
 		       if_kind, if_value, then_kind, then_value,
-		       priority, enabled, created_at, updated_at
+		       priority, enabled, COALESCE(preset_slug, ''),
+		       created_at, updated_at
 		FROM rules
 		ORDER BY `+order+`
 		LIMIT ? OFFSET ?
@@ -83,7 +90,8 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 		var en int
 		if err := rows.Scan(&v.ID, &v.Name, &v.Description,
 			&v.IfKind, &v.IfValue, &v.ThenKind, &v.ThenValue,
-			&v.Priority, &en, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			&v.Priority, &en, &v.PresetSlug,
+			&v.CreatedAt, &v.UpdatedAt); err != nil {
 			s.Log.Error("api.rules.scan", "err", err.Error())
 			s.writeError(w, http.StatusInternalServerError, "db_read", "scan failed")
 			return
