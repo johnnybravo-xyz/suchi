@@ -1,0 +1,106 @@
+format = "suchi-taxonomy/v1"
+id = "solo"
+version = 1
+name = "Personal filing"
+license = "CC0-1.0"
+inbox = 49
+story = "One person's admin: ID, taxes, health, receipts. Compact 4-area tree."
+
+[[areas]]
+code = 10
+name = "Life admin"
+
+  [[areas.categories]]
+  code = 11
+  name = "Identity"
+  description = "ID, passport, driver's license"
+  keywords = ["passport", "aadhaar", "driver license", "national id"]
+
+  [[areas.categories]]
+  code = 12
+  name = "Housing"
+  description = "Rent, mortgage, utilities"
+  keywords = ["rent agreement", "lease", "mortgage", "electricity bill", "water bill", "gas bill", "internet bill"]
+
+  [[areas.categories]]
+  code = 13
+  name = "Insurance"
+  keywords = ["insurance policy", "premium", "sum insured", "policyholder"]
+
+  [[areas.categories]]
+  code = 14
+  name = "Vehicles"
+  keywords = ["vehicle registration", "driving licence", "rc book", "puc"]
+
+[[areas]]
+code = 20
+name = "Money"
+
+  [[areas.categories]]
+  code = 21
+  name = "Banking"
+  keywords = ["bank statement", "account statement", "cheque"]
+
+  [[areas.categories]]
+  code = 22
+  name = "Investments"
+  keywords = ["mutual fund", "portfolio statement", "dividend", "demat"]
+
+  [[areas.categories]]
+  code = 23
+  name = "Taxes"
+  keywords = ["tax return", "form 16", "form 26as", "itr", "w-2", "1099"]
+
+  [[areas.categories]]
+  code = 24
+  name = "Receipts"
+  keywords = ["receipt", "invoice", "purchase order"]
+
+[[areas]]
+code = 30
+name = "Health"
+
+  [[areas.categories]]
+  code = 31
+  name = "Medical records"
+  keywords = ["diagnosis", "medical report", "discharge summary"]
+
+  [[areas.categories]]
+  code = 32
+  name = "Prescriptions"
+  keywords = ["prescription", "pharmacy", "medicine"]
+
+  [[areas.categories]]
+  code = 33
+  name = "Bills & claims"
+  keywords = ["hospital bill", "medical claim", "reimbursement"]
+
+[[areas]]
+code = 40
+name = "System"
+
+  [[areas.categories]]
+  code = 49
+  name = "Inbox"
+
+[seeds]
+
+  [[seeds.automations]]
+  name = "Tag utility bills"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)electricity bill|water bill|gas bill|internet bill|broadband"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 12
+
+  [[seeds.automations]]
+  name = "File tax documents"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)form 16|form 26as|income tax return|itr[- ]?[1-7]|form w-?2|form 1099"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 23

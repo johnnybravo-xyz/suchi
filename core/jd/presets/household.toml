@@ -1,0 +1,128 @@
+format = "suchi-taxonomy/v1"
+id = "household"
+version = 1
+name = "Household"
+license = "CC0-1.0"
+inbox = 49
+story = "Two adults, kids, shared finances. Adds a family area for school, activities, pets."
+
+[[areas]]
+code = 10
+name = "Household admin"
+
+  [[areas.categories]]
+  code = 11
+  name = "Family IDs"
+  keywords = ["passport", "aadhaar", "birth certificate", "marriage certificate"]
+
+  [[areas.categories]]
+  code = 12
+  name = "Home"
+  keywords = ["property tax", "society maintenance", "rent agreement", "lease"]
+
+  [[areas.categories]]
+  code = 13
+  name = "Utilities"
+  keywords = ["electricity bill", "water bill", "gas bill", "internet bill", "broadband"]
+
+  [[areas.categories]]
+  code = 14
+  name = "Insurance"
+  keywords = ["insurance policy", "premium", "sum insured"]
+
+[[areas]]
+code = 20
+name = "Finance"
+
+  [[areas.categories]]
+  code = 21
+  name = "Bank accounts"
+  keywords = ["bank statement", "account statement"]
+
+  [[areas.categories]]
+  code = 22
+  name = "Investments"
+  keywords = ["mutual fund", "dividend", "portfolio statement"]
+
+  [[areas.categories]]
+  code = 23
+  name = "Taxes"
+  keywords = ["tax return", "form 16", "itr", "w-2", "1099"]
+
+  [[areas.categories]]
+  code = 24
+  name = "Loans & credit"
+  keywords = ["loan statement", "emi", "credit card statement"]
+
+  [[areas.categories]]
+  code = 25
+  name = "Receipts"
+  keywords = ["receipt", "invoice"]
+
+[[areas]]
+code = 30
+name = "Health & medical"
+
+  [[areas.categories]]
+  code = 31
+  name = "Records"
+  keywords = ["diagnosis", "medical report", "discharge summary"]
+
+  [[areas.categories]]
+  code = 32
+  name = "Bills & claims"
+  keywords = ["hospital bill", "medical claim", "reimbursement"]
+
+  [[areas.categories]]
+  code = 33
+  name = "Prescriptions"
+  keywords = ["prescription", "pharmacy"]
+
+[[areas]]
+code = 40
+name = "System"
+
+  [[areas.categories]]
+  code = 49
+  name = "Inbox"
+
+[[areas]]
+code = 50
+name = "Family life"
+
+  [[areas.categories]]
+  code = 51
+  name = "School & activities"
+  keywords = ["report card", "school fee", "parent meeting", "admission"]
+
+  [[areas.categories]]
+  code = 52
+  name = "Pets"
+  keywords = ["vaccination", "vet"]
+
+  [[areas.categories]]
+  code = 53
+  name = "Travel"
+  keywords = ["itinerary", "boarding pass", "hotel booking", "visa"]
+
+[seeds]
+
+  [[seeds.automations]]
+  name = "Tag utility bills"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)electricity bill|water bill|gas bill|internet bill|broadband"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 13
+
+  [[seeds.automations]]
+  name = "File school documents"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)report card|school fee|parent[- ]?teacher"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 51

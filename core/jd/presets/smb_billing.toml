@@ -1,0 +1,138 @@
+format = "suchi-taxonomy/v1"
+id = "smb_billing"
+version = 1
+name = "Small-business billing"
+license = "CC0-1.0"
+inbox = 49
+story = "Shop / factory / SME admin: customer invoices, vendor bills, payroll, statutory compliance."
+
+[[areas]]
+code = 10
+name = "Customers"
+
+  [[areas.categories]]
+  code = 11
+  name = "Customer records"
+  keywords = ["kyc", "customer onboarding", "account opening"]
+
+  [[areas.categories]]
+  code = 12
+  name = "Invoices out"
+  keywords = ["invoice", "tax invoice", "credit note"]
+
+  [[areas.categories]]
+  code = 13
+  name = "Delivery notes"
+  keywords = ["delivery note", "goods receipt", "consignment"]
+
+  [[areas.categories]]
+  code = 14
+  name = "Receivables"
+  keywords = ["receivable", "ageing", "outstanding"]
+
+[[areas]]
+code = 20
+name = "Vendors"
+
+  [[areas.categories]]
+  code = 21
+  name = "Vendor records"
+  keywords = ["vendor onboarding", "supplier kyc"]
+
+  [[areas.categories]]
+  code = 22
+  name = "Bills in"
+  keywords = ["vendor bill", "supplier invoice", "bill of supply"]
+
+  [[areas.categories]]
+  code = 23
+  name = "Purchase orders"
+  keywords = ["purchase order", "po number"]
+
+  [[areas.categories]]
+  code = 24
+  name = "Payments"
+  keywords = ["remittance advice", "payment voucher", "utr"]
+
+[[areas]]
+code = 30
+name = "Payroll & HR"
+
+  [[areas.categories]]
+  code = 31
+  name = "Employee records"
+  keywords = ["employee id", "kyc", "offer letter"]
+
+  [[areas.categories]]
+  code = 32
+  name = "Payslips"
+  keywords = ["payslip", "salary slip"]
+
+  [[areas.categories]]
+  code = 33
+  name = "Contracts"
+  keywords = ["employment contract", "nda"]
+
+[[areas]]
+code = 40
+name = "System"
+
+  [[areas.categories]]
+  code = 49
+  name = "Inbox"
+
+[[areas]]
+code = 50
+name = "Compliance & tax"
+
+  [[areas.categories]]
+  code = 51
+  name = "Tax filings"
+  keywords = ["gstr", "form 26as", "tds return", "itr", "tax return"]
+
+  [[areas.categories]]
+  code = 52
+  name = "Statutory returns"
+  keywords = ["pf return", "esi return", "roc filing", "statutory return"]
+
+  [[areas.categories]]
+  code = 53
+  name = "Audits"
+  keywords = ["audit report", "auditor letter"]
+
+  [[areas.categories]]
+  code = 54
+  name = "Licenses & permits"
+  keywords = ["licence", "permit", "trade licence"]
+
+[seeds]
+
+  [[seeds.automations]]
+  name = "File vendor invoices"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)vendor invoice|supplier invoice|bill of supply"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 22
+
+  [[seeds.automations]]
+  name = "File customer invoices"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)tax invoice|invoice to customer|credit note"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 12
+
+  [[seeds.automations]]
+  name = "File GST / statutory filings"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)gstr[- ]?[0-9]|tds return|pf return|esi return"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 52

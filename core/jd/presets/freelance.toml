@@ -1,0 +1,118 @@
+format = "suchi-taxonomy/v1"
+id = "freelance"
+version = 1
+name = "Freelance / consultant"
+license = "CC0-1.0"
+inbox = 49
+story = "Client-driven project work: per-client folders, project files, invoices out, self-employment taxes."
+
+[[areas]]
+code = 10
+name = "Clients"
+
+  [[areas.categories]]
+  code = 11
+  name = "Client records"
+  keywords = ["kyc", "client onboarding", "master service agreement"]
+
+  [[areas.categories]]
+  code = 12
+  name = "Contracts & NDAs"
+  keywords = ["msa", "nda", "engagement letter", "sow"]
+
+  [[areas.categories]]
+  code = 13
+  name = "Invoices out"
+  keywords = ["invoice", "tax invoice", "credit note"]
+
+  [[areas.categories]]
+  code = 14
+  name = "Statements of work"
+  keywords = ["statement of work", "sow", "project brief"]
+
+[[areas]]
+code = 20
+name = "Projects"
+
+  [[areas.categories]]
+  code = 21
+  name = "Active"
+  keywords = ["project plan", "timesheet"]
+
+  [[areas.categories]]
+  code = 22
+  name = "Delivered"
+  keywords = ["completion certificate", "sign-off", "handover"]
+
+  [[areas.categories]]
+  code = 23
+  name = "Assets & deliverables"
+  keywords = ["deliverable", "asset pack"]
+
+[[areas]]
+code = 30
+name = "Finance"
+
+  [[areas.categories]]
+  code = 31
+  name = "Bank & receivables"
+  keywords = ["bank statement", "receivable", "remittance"]
+
+  [[areas.categories]]
+  code = 32
+  name = "Expenses"
+  keywords = ["expense report", "travel expense", "receipt"]
+
+  [[areas.categories]]
+  code = 33
+  name = "Self-employment tax"
+  keywords = ["schedule c", "self-employment tax", "itr", "form 16", "form 26as"]
+
+[[areas]]
+code = 40
+name = "System"
+
+  [[areas.categories]]
+  code = 49
+  name = "Inbox"
+
+[[areas]]
+code = 50
+name = "Portfolio & marketing"
+
+  [[areas.categories]]
+  code = 51
+  name = "Case studies"
+  keywords = ["case study", "portfolio piece"]
+
+  [[areas.categories]]
+  code = 52
+  name = "Testimonials"
+  keywords = ["testimonial", "reference letter"]
+
+  [[areas.categories]]
+  code = 53
+  name = "Templates"
+  keywords = ["template", "boilerplate"]
+
+[seeds]
+
+  [[seeds.automations]]
+  name = "File client contracts"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)master service agreement|statement of work|nda|engagement letter"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 12
+
+  [[seeds.automations]]
+  name = "File outgoing invoices"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)tax invoice|invoice.*due|please remit"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 13

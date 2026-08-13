@@ -1,0 +1,15 @@
+format = "suchi-taxonomy/v1"
+id = "blank"
+version = 1
+name = "Blank slate"
+license = "CC0-1.0"
+inbox = 49
+story = "No categories beyond Inbox. Harder to migrate away from — opt-in only."
+
+[[areas]]
+code = 40
+name = "System"
+
+  [[areas.categories]]
+  code = 49
+  name = "Inbox"
