@@ -94,17 +94,29 @@ type Automation struct {
 }
 
 // Trigger is one row in `automation_triggers`.
+//
+// The FilterEmail* fields match against payload keys the mail-intake
+// producers put on the consumption job (email_from, email_subject,
+// email_folder, email_has_attachment). FilterEmailHasAttachment is
+// three-state: nil = "don't care", *true = "must have attachments",
+// *false = "must have none". A pointer keeps the JSON round-trip
+// honest — omitempty on *bool omits the field when nil rather than
+// serialising it as false.
 type Trigger struct {
-	ID               int64       `json:"id"`
-	Type             TriggerType `json:"-"`
-	TypeCode         int         `json:"type"` // JSON emits integer for wire compat
-	FilterPath       string      `json:"filter_path,omitempty"`
-	FilterFilename   string      `json:"filter_filename,omitempty"`
-	FilterMailRuleID int64       `json:"filter_mailrule,omitempty"`
-	FilterTagID      int64       `json:"filter_has_tag,omitempty"`
-	FilterCorrID     int64       `json:"filter_has_correspondent,omitempty"`
-	FilterDocTypeID  int64       `json:"filter_has_document_type,omitempty"`
-	FilterContentRE  string      `json:"filter_content_matching,omitempty"`
+	ID                       int64       `json:"id"`
+	Type                     TriggerType `json:"-"`
+	TypeCode                 int         `json:"type"` // JSON emits integer for wire compat
+	FilterPath               string      `json:"filter_path,omitempty"`
+	FilterFilename           string      `json:"filter_filename,omitempty"`
+	FilterMailRuleID         int64       `json:"filter_mailrule,omitempty"`
+	FilterTagID              int64       `json:"filter_has_tag,omitempty"`
+	FilterCorrID             int64       `json:"filter_has_correspondent,omitempty"`
+	FilterDocTypeID          int64       `json:"filter_has_document_type,omitempty"`
+	FilterContentRE          string      `json:"filter_content_matching,omitempty"`
+	FilterEmailFrom          string      `json:"filter_email_from,omitempty"`
+	FilterEmailSubject       string      `json:"filter_email_subject,omitempty"`
+	FilterEmailFolder        string      `json:"filter_email_folder,omitempty"`
+	FilterEmailHasAttachment *bool       `json:"filter_email_has_attachment,omitempty"`
 }
 
 // Action is one row in `automation_actions`. Params shape depends on
