@@ -1,0 +1,27 @@
+format: "suchi-taxonomy/v1"
+id: "uk-landlord"
+version: 1
+name: "UK landlord"
+market: "uk"
+language: "en"
+maintainer: "@johnnybravo"
+license: "CC0-1.0"
+flat: false
+inbox: 49
+story: "Three tenancies, nine renewal dates."
+
+areas:
+  - code: 10
+    name: "Properties"
+    categories:
+      - code: 11
+        name: "Tenancy agreements"
+        keywords: ["tenancy", "AST", "renewal"]
+      - code: 12
+        name: "Deposits"
+        keywords: ["deposit", "DPS"]
+  - code: 40
+    name: "System"
+    categories:
+      - code: 49
+        name: "Inbox"

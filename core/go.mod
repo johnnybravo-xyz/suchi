@@ -3,25 +3,25 @@ module github.com/johnnybravo-xyz/suchi/core
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/emersion/go-imap v1.2.1
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/huml-lang/go-huml v0.3.0
+	github.com/johnnybravo-xyz/suchi/plugin-api v0.0.0-00010101000000-000000000000
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/nikolalohinski/gonja/v2 v2.9.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/johnnybravo-xyz/suchi/plugin-api v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.34.1
 )
 
 require (
-	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/huml-lang/go-huml v0.3.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
