@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
+	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -110,6 +111,7 @@ type Watcher struct {
 	cas     *blob.CAS
 	disp    *jobs.Dispatcher
 	aead    *crypto.AEADKey
+	msal    *oauth.Client
 	log     *slog.Logger
 
 	interval  time.Duration
@@ -123,7 +125,7 @@ type Watcher struct {
 // error only for hard-fails the operator needs to see (bad CA file);
 // password unseal is deferred to connect so a rotated/stale seal
 // doesn't block the whole supervisor at build time.
-func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, log *slog.Logger) (*Watcher, error) {
+func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Client, log *slog.Logger) (*Watcher, error) {
 	if account == nil || !account.Enabled {
 		return nil, nil
 	}
@@ -175,6 +177,7 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 		cas:     cas,
 		disp:    disp,
 		aead:    aead,
+		msal:    msal,
 		log: log.With(
 			"component", "emailwatch",
 			"account_id", account.ID,
@@ -359,11 +362,44 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 			return nil, fmt.Errorf("login %s@%s: %w", w.account.Username, w.account.Host, err)
 		}
 	case emailaccounts.AuthXOAuth2:
-		_ = c.Logout()
-		w.log.Warn("emailwatch.auth_unsupported",
-			"reason", "xoauth2 not yet wired",
-			"auth_method", string(w.account.AuthMethod))
-		return nil, errors.New("emailwatch: xoauth2 not yet supported")
+		if w.msal == nil {
+			_ = c.Logout()
+			return nil, errors.New("emailwatch: xoauth2 client not configured")
+		}
+		cacheJSON, err := emailaccounts.OpenTokenCache(w.aead, w.account.SealedSecret)
+		if err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("emailwatch: unseal token cache: %w", err)
+		}
+		refreshed, err := w.msal.AcquireTokenSilent(ctx, cacheJSON, w.account.OAuthAccountID)
+		if err != nil {
+			_ = c.Logout()
+			if errors.Is(err, oauth.ErrCacheStale) {
+				// Surface the stale-token state via last_error so the
+				// UI can prompt the operator to re-run device code.
+				// MarkSync is the only write path for last_error;
+				// reuse it rather than adding a parallel one.
+				_ = emailaccounts.MarkSync(ctx, w.db, w.account.ID, w.account.LastSyncAt, err.Error())
+			}
+			return nil, fmt.Errorf("emailwatch: acquire token: %w", err)
+		}
+		if refreshed.Rotated {
+			sealed, sealErr := emailaccounts.SealTokenCache(w.aead, refreshed.CacheJSON)
+			if sealErr != nil {
+				_ = c.Logout()
+				return nil, fmt.Errorf("emailwatch: seal rotated cache: %w", sealErr)
+			}
+			if _, patchErr := emailaccounts.Patch(ctx, w.db, w.account.ID, emailaccounts.AccountPatch{SealedSecret: &sealed}); patchErr != nil {
+				// Persistence failure isn't fatal for this poll cycle
+				// — MSAL will re-rotate on the next AcquireTokenSilent
+				// — but log it.
+				w.log.Warn("emailwatch.cache_persist_failed", "err", patchErr, "account_id", w.account.ID)
+			}
+		}
+		if err := c.Authenticate(oauth.XOAUTH2Client(w.account.Username, refreshed.AccessToken)); err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("emailwatch: xoauth2 authenticate: %w", err)
+		}
 	default:
 		_ = c.Logout()
 		return nil, fmt.Errorf("emailwatch: unknown auth_method %q", string(w.account.AuthMethod))

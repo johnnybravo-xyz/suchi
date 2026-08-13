@@ -13,6 +13,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
+	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
@@ -30,6 +31,7 @@ type Supervisor struct {
 	cas  *blob.CAS
 	disp *jobs.Dispatcher
 	aead *crypto.AEADKey
+	msal *oauth.Client
 	log  *slog.Logger
 
 	mu      sync.Mutex
@@ -48,13 +50,17 @@ type watcherHandle struct {
 
 // NewSupervisor constructs an idle supervisor. Call Run to seed and
 // block; call Reload from API handlers after email_accounts writes.
-func NewSupervisor(cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, log *slog.Logger) *Supervisor {
+//
+// msal may be nil — password-only deployments don't need an MSAL
+// client; XOAUTH2 accounts will surface a clear error at connect time.
+func NewSupervisor(cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Client, log *slog.Logger) *Supervisor {
 	return &Supervisor{
 		cfg:     cfg,
 		db:      d,
 		cas:     cas,
 		disp:    disp,
 		aead:    aead,
+		msal:    msal,
 		log:     log.With("component", "emailwatch.supervisor"),
 		running: make(map[int64]watcherHandle),
 	}
@@ -145,7 +151,7 @@ func (s *Supervisor) Reload(ctx context.Context) error {
 // is silently skipped so the supervisor's map only tracks live rows.
 func (s *Supervisor) startLocked(parent context.Context, a *emailaccounts.Account) {
 	perCtx, cancel := context.WithCancel(parent)
-	w, err := New(perCtx, a, s.cfg, s.db, s.cas, s.disp, s.aead, s.log)
+	w, err := New(perCtx, a, s.cfg, s.db, s.cas, s.disp, s.aead, s.msal, s.log)
 	if err != nil {
 		cancel()
 		s.log.Warn("supervisor.new_watcher_failed",

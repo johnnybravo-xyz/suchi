@@ -52,6 +52,11 @@ type Config struct {
 	IngestIMAPPassword   string
 	IngestIMAPOwnerEmail string
 	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
+	// IngestIMAPOAuthClientIDMicrosoft overrides the default suchi Azure
+	// app registration with an operator-owned, tenant-scoped client ID.
+	// Empty falls back to oauth.DefaultClientID. Public-client device-
+	// code flow — no tenant / secret required.
+	IngestIMAPOAuthClientIDMicrosoft string
 
 	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
@@ -178,24 +183,25 @@ type Config struct {
 // called exactly once at process start.
 func Load() (*Config, error) {
 	c := &Config{
-		PublicURL:            env("PUBLIC_URL", ""),
-		DataDir:              env("DATA_DIR", "/data"),
-		ListenAddr:           env("LISTEN_ADDR", ":8000"),
-		LogLevel:             env("LOG_LEVEL", "info"),
-		OCRLanguages:         splitCSV(env("OCR_LANGUAGES", "eng")),
-		OIDCIssuerURL:        env("OIDC_ISSUER_URL", ""),
-		OIDCClientID:         env("OIDC_CLIENT_ID", ""),
-		AdminEmail:           env("ADMIN_EMAIL", ""),
-		TLSCertFile:          env("TLS_CERT_FILE", ""),
-		TLSKeyFile:           env("TLS_KEY_FILE", ""),
-		IngestIMAPURL:        env("INGEST_IMAP_URL", ""),
-		IngestIMAPOwnerEmail: env("INGEST_IMAP_OWNER_EMAIL", ""),
-		IngestIMAPTLSCAFile:  env("INGEST_IMAP_TLS_CA_FILE", ""),
-		IngestFSDir:          env("INGEST_FS_DIR", ""),
-		IngestFSOwnerEmail:   env("INGEST_FS_OWNER_EMAIL", ""),
-		LLMEndpointURL:       env("LLM_ENDPOINT_URL", ""),
-		LLMModel:             env("LLM_MODEL", ""),
-		LLMEgressAck:         env("LLM_EGRESS_ACK", "") == "true",
+		PublicURL:                        env("PUBLIC_URL", ""),
+		DataDir:                          env("DATA_DIR", "/data"),
+		ListenAddr:                       env("LISTEN_ADDR", ":8000"),
+		LogLevel:                         env("LOG_LEVEL", "info"),
+		OCRLanguages:                     splitCSV(env("OCR_LANGUAGES", "eng")),
+		OIDCIssuerURL:                    env("OIDC_ISSUER_URL", ""),
+		OIDCClientID:                     env("OIDC_CLIENT_ID", ""),
+		AdminEmail:                       env("ADMIN_EMAIL", ""),
+		TLSCertFile:                      env("TLS_CERT_FILE", ""),
+		TLSKeyFile:                       env("TLS_KEY_FILE", ""),
+		IngestIMAPURL:                    env("INGEST_IMAP_URL", ""),
+		IngestIMAPOwnerEmail:             env("INGEST_IMAP_OWNER_EMAIL", ""),
+		IngestIMAPTLSCAFile:              env("INGEST_IMAP_TLS_CA_FILE", ""),
+		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
+		IngestFSDir:                      env("INGEST_FS_DIR", ""),
+		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
+		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),
+		LLMModel:                         env("LLM_MODEL", ""),
+		LLMEgressAck:                     env("LLM_EGRESS_ACK", "") == "true",
 	}
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")
