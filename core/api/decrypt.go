@@ -47,6 +47,11 @@ func (s *Server) AttachDecrypt(mux *http.ServeMux, deps DecryptDeps) {
 	mux.HandleFunc("GET /api/documents/pending-decryption", s.ListPendingDecryption)
 	mux.HandleFunc("POST /api/documents/{id}/decrypt", s.DecryptDocument)
 	mux.HandleFunc("POST /api/documents/decrypt-batch", s.DecryptBatch)
+	// Vault management. Labels + timestamps only in responses — the
+	// sealed ciphertext never leaves the server.
+	mux.HandleFunc("GET /api/decryption-passwords/", s.ListDecryptionPasswords)
+	mux.HandleFunc("PATCH /api/decryption-passwords/{id}", s.RenameDecryptionPassword)
+	mux.HandleFunc("DELETE /api/decryption-passwords/{id}", s.DeleteDecryptionPassword)
 }
 
 // ---------- GET /api/documents/pending-decryption ----------
@@ -126,7 +131,7 @@ func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ownerID, blobSHA, ok, err := s.loadEncryptedDoc(r, docID, p)
+	ownerID, blobSHA, title, ok, err := s.loadEncryptedDoc(r, docID, p)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
@@ -134,6 +139,13 @@ func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "not_found", "no encrypted doc with that id")
 		return
+	}
+
+	// Auto-label: fall back to the doc's title when the caller didn't
+	// send one. Makes vault entries self-describing on the Settings
+	// screen without asking the user to type a label on every unlock.
+	if req.Label == "" && title != "" {
+		req.Label = title
 	}
 
 	if err := s.attemptDecrypt(r, docID, ownerID, blobSHA, req); err != nil {
@@ -199,8 +211,9 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 	single := DecryptRequest{Password: req.Password, Label: req.Label}
 	results := make([]DecryptBatchResult, 0, len(req.DocIDs))
 	anySuccess := false
+	firstOKTitle := ""
 	for _, id := range req.DocIDs {
-		ownerID, blobSHA, ok, err := s.loadEncryptedDoc(r, id, p)
+		ownerID, blobSHA, title, ok, err := s.loadEncryptedDoc(r, id, p)
 		if err != nil {
 			results = append(results, DecryptBatchResult{DocID: id, Reason: "db_read: " + err.Error()})
 			continue
@@ -218,10 +231,17 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		anySuccess = true
+		if firstOKTitle == "" {
+			firstOKTitle = title
+		}
 		results = append(results, DecryptBatchResult{DocID: id, OK: true})
 	}
 	if req.Remember && anySuccess {
-		if err := s.rememberPassword(r, p.UserID, req.Password, req.Label); err != nil {
+		label := req.Label
+		if label == "" && firstOKTitle != "" {
+			label = firstOKTitle
+		}
+		if err := s.rememberPassword(r, p.UserID, req.Password, label); err != nil {
 			s.Log.Warn("api.decrypt.batch.remember", "err", err.Error())
 		}
 	}
@@ -237,35 +257,38 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 
 var errBadPassword = errors.New("bad password")
 
-// loadEncryptedDoc fetches the owner + original blob for a doc that
-// must be alive AND in encryption_state='encrypted' AND owned by the
-// caller (or the caller is admin). Returns ok=false when any of those
-// invariants fail — the caller returns 404 uniformly to avoid a
-// probe oracle.
-func (s *Server) loadEncryptedDoc(r *http.Request, docID int64, p *pluginapi.Principal) (int64, string, bool, error) {
+// loadEncryptedDoc fetches the owner + original blob + title for a
+// doc that must be alive AND in encryption_state='encrypted' AND
+// owned by the caller (or the caller is admin). Returns ok=false
+// when any of those invariants fail — the caller returns 404
+// uniformly to avoid a probe oracle. Title is surfaced so the
+// decrypt handlers can auto-label a remembered password with a
+// self-describing string.
+func (s *Server) loadEncryptedDoc(r *http.Request, docID int64, p *pluginapi.Principal) (int64, string, string, bool, error) {
 	var (
 		owner   int64
 		blobSHA string
+		title   string
 		state   sql.NullString
 	)
 	err := s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT owner_id, original_blob, encryption_state
+		SELECT owner_id, original_blob, COALESCE(title, ''), encryption_state
 		FROM documents
 		WHERE id = ? AND trashed_at IS NULL
-	`, docID).Scan(&owner, &blobSHA, &state)
+	`, docID).Scan(&owner, &blobSHA, &title, &state)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", "", false, err
 	}
 	if !state.Valid || state.String != "encrypted" {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
 	if p.Role != "admin" && owner != p.UserID {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
-	return owner, blobSHA, true, nil
+	return owner, blobSHA, title, true, nil
 }
 
 // attemptDecrypt runs qpdf against the encrypted blob with req.Password.
@@ -322,6 +345,157 @@ func (s *Server) attemptDecrypt(r *http.Request, docID, ownerID int64, blobSHA s
 		}
 	}
 	return nil
+}
+
+// ---------- vault management ----------
+
+// DecryptionPasswordView is the safe projection of a vault row —
+// label + timestamps only. The sealed ciphertext never leaves the
+// server; there's no endpoint that returns the plaintext either
+// (recovering it would defeat the at-rest sealing).
+type DecryptionPasswordView struct {
+	ID         int64  `json:"id"`
+	OwnerID    int64  `json:"owner_id,omitempty"`
+	Label      string `json:"label,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt int64  `json:"last_used_at,omitempty"`
+}
+
+// ListDecryptionPasswords — GET /api/decryption-passwords/.
+// Non-admin callers see their own vault. Admin sees everyone's when
+// ?all=1 is present; otherwise still just their own so the default
+// path stays small.
+func (s *Server) ListDecryptionPasswords(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
+	p := auth.FromContext(r.Context())
+	q := `SELECT id, owner_id, COALESCE(label, ''), created_at, COALESCE(last_used_at, 0)
+	      FROM decryption_passwords WHERE owner_id = ?
+	      ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC`
+	args := []any{p.UserID}
+	if p.Role == "admin" && r.URL.Query().Get("all") == "1" {
+		q = `SELECT id, owner_id, COALESCE(label, ''), created_at, COALESCE(last_used_at, 0)
+		     FROM decryption_passwords
+		     ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC`
+		args = nil
+	}
+	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []DecryptionPasswordView{}
+	for rows.Next() {
+		var v DecryptionPasswordView
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.Label, &v.CreatedAt, &v.LastUsedAt); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+			return
+		}
+		out = append(out, v)
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
+}
+
+// RenameDecryptionPassword — PATCH /api/decryption-passwords/{id}.
+// Body: {label: string}. Owner-scoped (admin can rename anyone's).
+func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
+	p := auth.FromContext(r.Context())
+	id, err := parseIDPath(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	var req struct {
+		Label *string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
+		return
+	}
+	if req.Label == nil {
+		s.writeError(w, http.StatusBadRequest, "empty_patch", "label field required")
+		return
+	}
+	var labelArg any
+	if *req.Label != "" {
+		labelArg = *req.Label
+	}
+	var affected int64
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		q := `UPDATE decryption_passwords SET label = ? WHERE id = ? AND owner_id = ?`
+		args := []any{labelArg, id, p.UserID}
+		if p.Role == "admin" {
+			q = `UPDATE decryption_passwords SET label = ? WHERE id = ?`
+			args = []any{labelArg, id}
+		}
+		res, err := tx.ExecContext(r.Context(), q, args...)
+		if err != nil {
+			return err
+		}
+		affected, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		return
+	}
+	if affected == 0 {
+		s.writeError(w, http.StatusNotFound, "not_found", "no such vault entry")
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor: p, Action: "decryption_password.rename",
+		ObjectKind: "decryption_password", ObjectID: id,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteDecryptionPassword — DELETE /api/decryption-passwords/{id}.
+// Owner-scoped (admin can delete anyone's). Idempotent-ish: a second
+// DELETE returns 404 because the row is gone.
+func (s *Server) DeleteDecryptionPassword(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
+	p := auth.FromContext(r.Context())
+	id, err := parseIDPath(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	var affected int64
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		q := `DELETE FROM decryption_passwords WHERE id = ? AND owner_id = ?`
+		args := []any{id, p.UserID}
+		if p.Role == "admin" {
+			q = `DELETE FROM decryption_passwords WHERE id = ?`
+			args = []any{id}
+		}
+		res, err := tx.ExecContext(r.Context(), q, args...)
+		if err != nil {
+			return err
+		}
+		affected, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		return
+	}
+	if affected == 0 {
+		s.writeError(w, http.StatusNotFound, "not_found", "no such vault entry")
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Actor: p, Action: "decryption_password.delete",
+		ObjectKind: "decryption_password", ObjectID: id,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // rememberPassword seals the plaintext with the AEAD key and stores
