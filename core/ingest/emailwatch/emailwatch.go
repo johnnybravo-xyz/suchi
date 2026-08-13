@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +71,11 @@ type Config struct {
 	PollInterval    time.Duration
 	ProcessedFolder string // move-to-folder on success; empty = mark \Seen
 	MaxAttachBytes  int64
+	// TLSCAFile is an optional path to a PEM file whose CAs are added
+	// to the trust pool used for imaps:// connections. Bridge, self-
+	// hosted Dovecot, and homelab CAs live here. System roots stay
+	// trusted; this only widens the set.
+	TLSCAFile string
 }
 
 // Watcher is what Run reads. Constructed by New; nil when idle.
@@ -86,6 +93,7 @@ type Watcher struct {
 	useTLS    bool
 	interval  time.Duration
 	maxAttach int64
+	rootCAs   *x509.CertPool // nil = use system roots only
 }
 
 // New validates cfg + resolves the owner. Returns (nil, nil) when the
@@ -112,6 +120,25 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		maxAttach = DefaultMaxAttach
 	}
 
+	// Widen the trust pool with an operator-supplied CA when set —
+	// Bridge, self-hosted Dovecot, homelab CAs, etc. System roots stay
+	// trusted; hard-fail rather than silently degrade if the file is
+	// unreadable or malformed.
+	var rootCAs *x509.CertPool
+	if cfg.TLSCAFile != "" {
+		pem, err := os.ReadFile(cfg.TLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("emailwatch: read INGEST_IMAP_TLS_CA_FILE %q: %w", cfg.TLSCAFile, err)
+		}
+		rootCAs, err = x509.SystemCertPool()
+		if err != nil || rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
+		if !rootCAs.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("emailwatch: no valid PEM certs in %q", cfg.TLSCAFile)
+		}
+	}
+
 	var ownerID int64
 	err = d.Read.QueryRowContext(ctx,
 		`SELECT id FROM users WHERE email = ? AND disabled = 0`,
@@ -127,7 +154,7 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		cfg: cfg, db: d, cas: cas, disp: disp, ownerID: ownerID,
 		log:  log.With("component", "emailwatch", "host", host, "user", user, "folder", folder),
 		host: host, user: user, folder: folder, useTLS: useTLS,
-		interval: interval, maxAttach: maxAttach,
+		interval: interval, maxAttach: maxAttach, rootCAs: rootCAs,
 	}, nil
 }
 
@@ -256,7 +283,20 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 	if !ok {
 		deadline = time.Now().Add(30 * time.Second)
 	}
-	addr := fmt.Sprintf("%s:%s", w.host, defaultPort(w.host, w.useTLS))
+	// w.host may embed a :port (url.URL.Host includes it). Split so
+	// addr assembly and TLS ServerName each get the piece they need.
+	host, port := w.host, ""
+	if i := strings.LastIndex(w.host, ":"); i > 0 {
+		host, port = w.host[:i], w.host[i+1:]
+	}
+	if port == "" {
+		if w.useTLS {
+			port = "993"
+		} else {
+			port = "143"
+		}
+	}
+	addr := fmt.Sprintf("%s:%s", host, port)
 	var (
 		c   *imapclient.Client
 		err error
@@ -266,7 +306,10 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 	done := make(chan error, 1)
 	go func() {
 		if w.useTLS {
-			c, err = imapclient.DialTLS(addr, &tls.Config{ServerName: w.host})
+			c, err = imapclient.DialTLS(addr, &tls.Config{
+				ServerName: host,
+				RootCAs:    w.rootCAs, // nil => system roots only
+			})
 		} else {
 			c, err = imapclient.Dial(addr)
 		}
@@ -285,18 +328,6 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 		return nil, fmt.Errorf("login %s@%s: %w", w.user, w.host, err)
 	}
 	return c, nil
-}
-
-// defaultPort strips a port from host if present, else picks the
-// scheme default. Users can override by embedding the port in the URL.
-func defaultPort(host string, useTLS bool) string {
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		return host[i+1:]
-	}
-	if useTLS {
-		return "993"
-	}
-	return "143"
 }
 
 // materialize reads the whole raw message body out of the imap.Message

@@ -51,6 +51,7 @@ type Config struct {
 	IngestIMAPURL        string
 	IngestIMAPPassword   string
 	IngestIMAPOwnerEmail string
+	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
 
 	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
@@ -189,6 +190,7 @@ func Load() (*Config, error) {
 		TLSKeyFile:           env("TLS_KEY_FILE", ""),
 		IngestIMAPURL:        env("INGEST_IMAP_URL", ""),
 		IngestIMAPOwnerEmail: env("INGEST_IMAP_OWNER_EMAIL", ""),
+		IngestIMAPTLSCAFile:  env("INGEST_IMAP_TLS_CA_FILE", ""),
 		IngestFSDir:          env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:   env("INGEST_FS_OWNER_EMAIL", ""),
 		LLMEndpointURL:       env("LLM_ENDPOINT_URL", ""),
