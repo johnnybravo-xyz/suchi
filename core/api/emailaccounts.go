@@ -70,6 +70,11 @@ type emailAccountInput struct {
 	Username        *string `json:"username,omitempty"`
 	Password        *string `json:"password,omitempty"`
 	OAuthAccountID  *string `json:"oauth_account_id,omitempty"`
+	// SealedSecretB64 carries a pre-sealed MSAL token cache from an
+	// /oauth/complete call that ran without an account_id: the SPA
+	// holds the bytes for one create request and passes them here so
+	// xoauth2 rows can be constructed in a single POST.
+	SealedSecretB64 *string `json:"sealed_secret_b64,omitempty"`
 	AttachmentsOnly *bool   `json:"attachments_only,omitempty"`
 	FromAllowlist   *string `json:"from_allowlist,omitempty"`
 	Enabled         *bool   `json:"enabled,omitempty"`
@@ -198,31 +203,40 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// XOAUTH2 accounts must be constructed through the OAuth flow so the
-	// sealed_secret carries a real MSAL cache. Password sealing here
-	// would silently mask the missing token cache.
+	// xoauth2 needs a pre-sealed MSAL cache from /oauth/complete;
+	// password mode seals the plaintext here. Either path lands
+	// SealedSecret before Create so the NOT NULL column is satisfied.
 	if acc.AuthMethod == emailaccounts.AuthXOAuth2 {
-		s.writeError(w, http.StatusBadRequest, "oauth_required",
-			"xoauth2 accounts must be created via /oauth/start + /oauth/complete")
-		return
+		if in.SealedSecretB64 == nil || *in.SealedSecretB64 == "" {
+			s.writeError(w, http.StatusBadRequest, "oauth_required",
+				"xoauth2 accounts must be created with sealed_secret_b64 from /oauth/complete")
+			return
+		}
+		sealed, err := base64.StdEncoding.DecodeString(*in.SealedSecretB64)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_sealed_secret",
+				"sealed_secret_b64 is not valid base64")
+			return
+		}
+		acc.SealedSecret = sealed
+	} else {
+		if in.Password == nil || *in.Password == "" {
+			s.writeError(w, http.StatusBadRequest, "missing_password",
+				"password is required for password-auth accounts")
+			return
+		}
+		if s.EmailwatchAEAD == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "no_aead",
+				"server AEAD key not configured")
+			return
+		}
+		sealed, err := emailaccounts.SealPassword(s.EmailwatchAEAD, *in.Password)
+		if err != nil {
+			s.serverErr(w, "email_accounts.seal", err)
+			return
+		}
+		acc.SealedSecret = sealed
 	}
-
-	if in.Password == nil || *in.Password == "" {
-		s.writeError(w, http.StatusBadRequest, "missing_password",
-			"password is required for password-auth accounts")
-		return
-	}
-	if s.EmailwatchAEAD == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "no_aead",
-			"server AEAD key not configured")
-		return
-	}
-	sealed, err := emailaccounts.SealPassword(s.EmailwatchAEAD, *in.Password)
-	if err != nil {
-		s.serverErr(w, "email_accounts.seal", err)
-		return
-	}
-	acc.SealedSecret = sealed
 
 	if err := s.validateOwnerID(r.Context(), acc.OwnerID); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_owner", err.Error())

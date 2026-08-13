@@ -3,7 +3,7 @@
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
            listTags, listCorrespondents, listDocumentTypes, listStoragePaths,
            createTaxon, patchTaxon, deleteTaxon } from '../lib/api.js'
-  import MailForm from '../lib/MailForm.svelte'
+  import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
   import { exportTaxonomy } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
@@ -263,12 +263,11 @@
   </div>
 
 {:else if tab === 'mail'}
-  <div class="card content-narrow" style="margin:0">
-    <h3>Email intake</h3>
-    <p class="sub" style="color:var(--muted);font-size:.84rem;margin:4px 0 14px">
-      suchi polls a mailbox and files what it finds. Credentials are stored server-side and never shown back.
+  <div class="content-narrow" style="margin:0">
+    <p class="sub" style="color:var(--muted);font-size:.84rem;margin:0 0 14px">
+      suchi polls each mailbox on its own schedule and files what it finds. Credentials are stored server-side and never shown back.
     </p>
-    <MailForm {notify} />
+    <EmailAccounts {notify} />
   </div>
 {/if}
 
