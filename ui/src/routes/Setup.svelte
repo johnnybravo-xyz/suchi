@@ -195,7 +195,8 @@
 
     {:else if cur === 'rules'}
       <h3>Rules</h3>
-      <p class="wiz-p">Rules and automations have a full editor of their own — triggers, conditions, actions. Nothing to decide here during setup; visit it whenever the first pattern annoys you.</p>
+      <p class="wiz-p">Your preset already ships a starter set of filing rules and automations — the ones under the "Owned by <em>&lt;preset&gt;</em> filing tree" pill. Editing or disabling any of them forks a user-owned copy; re-picking the same preset never touches your edits.</p>
+      <p class="wiz-p">Full editor for both engines lives in <a href="#/automations">Automations</a>; nothing more to decide here during setup.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
         <button class="btn sm" onclick={() => mark('done')}>Done</button>
