@@ -52,15 +52,20 @@ const (
 	PluginName          = "email-ingest"   // plugin_kv namespace for msg-id dedup
 )
 
-// AllowedMIMEs is the initial attachment-type allowlist. Kept small
-// on purpose: an inbox is hostile input, and the ingest pipeline
-// only really has qpdf + pdf-inspector + ocrmypdf paths right now.
-// Widens as we ship more converters (exotic-file-types tasks).
+// AllowedMIMEs is the attachment-type allowlist. Kept tight on
+// purpose: an inbox is hostile input, and only types the downstream
+// pipeline can render + text-extract belong here. Currently: PDFs,
+// common raster images, plus the office-doc formats the converter
+// chain already handles (docx / xlsx / odt) and plain text.
 var AllowedMIMEs = map[string]bool{
 	"application/pdf": true,
 	"image/jpeg":      true,
 	"image/png":       true,
 	"image/tiff":      true,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":       true, // .xlsx
+	"application/vnd.oasis.opendocument.text":                                 true, // .odt
+	"text/plain": true,
 }
 
 // Config carries the knobs. Zero-value: everything empty → disabled.
