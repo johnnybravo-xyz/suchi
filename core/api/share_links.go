@@ -607,15 +607,23 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, "not_found", "no such document in share")
 		return
 	}
+	// Prefer decrypted_blob when the doc was decrypted post-ingest —
+	// recipients of a share link don't have the PDF password, so
+	// handing them the encrypted original would 100% prompt them for
+	// one they can never supply. Falls back to original when the
+	// working copy is absent (the archive was uploaded already-open
+	// or decryption never fired).
 	var (
-		origBlob    sql.NullString
-		title, mime sql.NullString
-		size        int64
+		origBlob, decBlob sql.NullString
+		decSize           sql.NullInt64
+		title, mime       sql.NullString
+		origSize          int64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT original_blob, title, COALESCE(mime_type, ''), original_size
+		SELECT original_blob, decrypted_blob, decrypted_size,
+		       title, COALESCE(mime_type, ''), original_size
 		FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, docID).Scan(&origBlob, &title, &mime, &size)
+	`, docID).Scan(&origBlob, &decBlob, &decSize, &title, &mime, &origSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "no such document")
 		return
@@ -624,11 +632,25 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		s.serverErr(w, "share_links.download.query", err)
 		return
 	}
-	if !origBlob.Valid {
-		s.writeError(w, http.StatusNotFound, "not_found", "no original blob")
+	var (
+		pick string
+		size int64
+	)
+	switch {
+	case decBlob.Valid && decBlob.String != "":
+		pick = decBlob.String
+		if decSize.Valid {
+			size = decSize.Int64
+		}
+	case origBlob.Valid:
+		pick = origBlob.String
+		size = origSize
+	}
+	if pick == "" {
+		s.writeError(w, http.StatusNotFound, "not_found", "no blob for document")
 		return
 	}
-	rc, err := s.CAS.Get(origBlob.String)
+	rc, err := s.CAS.Get(pick)
 	if err != nil {
 		s.serverErr(w, "share_links.download.cas", err)
 		return
@@ -639,7 +661,9 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
 	if title.Valid {
 		w.Header().Set("Content-Disposition",
 			`attachment; filename="`+strings.ReplaceAll(title.String, `"`, "")+`"`)

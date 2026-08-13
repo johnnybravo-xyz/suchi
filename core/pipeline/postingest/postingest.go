@@ -1429,15 +1429,22 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 // updates documents.thumb_sha. Every failure path (no archive_blob,
 // non-PDF, pdftoppm missing, rasterize timeout) logs at Warn/Info
 // and returns — thumbnails are a UX nicety, not an ingest invariant.
+//
+// Blob priority: archive → decrypted → original. A doc that was
+// decrypted post-ingest (encryption_state='decrypted') has a working
+// copy in decrypted_blob; pdftoppm on the raw original_blob would
+// fail with "Incorrect password" because originals are preserved
+// verbatim in the CAS (spec §immutability).
 func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int64) {
 	var (
 		archive sql.NullString
 		orig    sql.NullString
+		dec     sql.NullString
 		mime    sql.NullString
 	)
 	if err := h.db.Read.QueryRowContext(ctx,
-		`SELECT archive_blob, original_blob, mime_type FROM documents WHERE id = ?`,
-		docID).Scan(&archive, &orig, &mime); err != nil {
+		`SELECT archive_blob, original_blob, decrypted_blob, mime_type FROM documents WHERE id = ?`,
+		docID).Scan(&archive, &orig, &dec, &mime); err != nil {
 		log.Warn("post-ingest.thumb.load_doc", "err", err.Error())
 		return
 	}
@@ -1445,9 +1452,12 @@ func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int
 	// originals, epub, msg) skip; the endpoint 404s and the SPA
 	// renders its initials placeholder.
 	var blobSHA string
-	if archive.Valid && archive.String != "" {
+	switch {
+	case archive.Valid && archive.String != "":
 		blobSHA = archive.String
-	} else if orig.Valid && orig.String != "" && mime.Valid && mime.String == "application/pdf" {
+	case dec.Valid && dec.String != "":
+		blobSHA = dec.String
+	case orig.Valid && orig.String != "" && mime.Valid && mime.String == "application/pdf":
 		blobSHA = orig.String
 	}
 	if blobSHA == "" {
