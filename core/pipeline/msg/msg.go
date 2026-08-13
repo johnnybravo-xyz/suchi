@@ -80,7 +80,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	}
 	if _, err := exec.LookPath(binary); err != nil {
 		_, _ = io.Copy(io.Discard, src)
-		log.Info("msg.skip.no_binary", "binary", binary)
+		log.Warn("msg.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true, StderrTail: "msgconvert not available"}, nil
 	}
 

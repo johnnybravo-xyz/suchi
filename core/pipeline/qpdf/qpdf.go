@@ -106,7 +106,7 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 		if rerr != nil {
 			return nil, fmt.Errorf("read src: %w", rerr)
 		}
-		log.Info("qpdf.skip.no_binary", "binary", binary, "bytes", len(data))
+		log.Warn("qpdf.skip.no_binary", "binary", binary, "bytes", len(data))
 		return &Result{
 			Data: data, Skipped: true,
 			StderrTail:    "qpdf binary not on PATH",
@@ -268,7 +268,7 @@ func SelectPages(ctx context.Context, pdfBytes []byte, pages []int, log *slog.Lo
 		binary = DefaultBinary
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		log.Info("qpdf.select-pages.skip.no_binary", "binary", binary)
+		log.Warn("qpdf.select-pages.skip.no_binary", "binary", binary)
 		return &Result{Data: pdfBytes, Skipped: true, StderrTail: "qpdf binary not on PATH"}, nil
 	}
 	timeout := opts.Timeout

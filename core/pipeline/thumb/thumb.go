@@ -66,7 +66,7 @@ func Render(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Options
 		binary = DefaultBinary
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		log.Info("thumb.skip.no_binary", "binary", binary)
+		log.Warn("thumb.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true}, nil
 	}
 	timeout := opts.Timeout

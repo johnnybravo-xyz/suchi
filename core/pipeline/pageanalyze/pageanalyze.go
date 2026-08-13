@@ -88,7 +88,7 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 		binary = DefaultBinary
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		log.Info("pageanalyze.skip.no_binary", "binary", binary)
+		log.Warn("pageanalyze.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true}, nil
 	}
 	timeout := opts.Timeout

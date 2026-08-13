@@ -1110,7 +1110,7 @@ func (h *Handler) trimBlankPages(ctx context.Context, log *slog.Logger, pdfBytes
 		return nil, err
 	}
 	if pa.Skipped {
-		log.Info("post-ingest.scan_blank.skip.no_binary")
+		log.Warn("post-ingest.scan_blank.skip.no_binary")
 		return nil, nil
 	}
 	blanks := len(pa.Pages) - len(pa.NonBlank)

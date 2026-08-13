@@ -133,7 +133,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	}
 	if _, err := exec.LookPath(binary); err != nil {
 		_, _ = io.Copy(io.Discard, src)
-		log.Info("anydoc.skip.no_binary", "binary", binary)
+		log.Warn("anydoc.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true, StderrTail: "anydoc not available"}, nil
 	}
 	timeout := opts.Timeout

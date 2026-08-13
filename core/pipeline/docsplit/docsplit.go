@@ -96,7 +96,7 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 		binary = DefaultBinary
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		log.Info("docsplit.skip.no_binary", "binary", binary)
+		log.Warn("docsplit.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true}, nil
 	}
 	timeout := opts.Timeout

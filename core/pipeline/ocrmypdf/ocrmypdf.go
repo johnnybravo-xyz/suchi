@@ -86,7 +86,7 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 	}
 	if _, err := exec.LookPath(binary); err != nil {
 		_, _ = io.Copy(io.Discard, src)
-		log.Info("ocrmypdf.skip.no_binary", "binary", binary)
+		log.Warn("ocrmypdf.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true, StderrTail: "ocrmypdf binary not on PATH"}, nil
 	}
 

@@ -95,7 +95,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 			binary = FallbackBinary
 		} else {
 			_, _ = io.Copy(io.Discard, src)
-			log.Info("heic.skip.no_binary", "binary", DefaultBinary)
+			log.Warn("heic.skip.no_binary", "binary", DefaultBinary)
 			return &Result{Skipped: true, StderrTail: "ImageMagick not available"}, nil
 		}
 	}

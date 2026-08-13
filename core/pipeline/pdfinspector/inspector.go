@@ -92,7 +92,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	if _, err := exec.LookPath(binary); err != nil {
 		// Drain src so upstream callers aren't left holding it.
 		_, _ = io.Copy(io.Discard, src)
-		log.Info("pdf-inspector.skip.no_binary", "binary", binary)
+		log.Warn("pdf-inspector.skip.no_binary", "binary", binary)
 		return &Result{Skipped: true, StderrTail: "no extractor available", SourceTool: binary}, nil
 	}
 
