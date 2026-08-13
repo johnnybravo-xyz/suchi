@@ -20,9 +20,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -36,11 +38,17 @@ import (
 )
 
 // TaxonomyImportReq is the POST body.
+//
+// Remaps resolves merge-mode collisions. Key = the incoming preset
+// code (as a JSON string — JSON object keys can't be integers).
+// Value = 0 to skip the category, or a fresh in-decade code to
+// import under. Ignored in replace mode.
 type TaxonomyImportReq struct {
-	Content   string `json:"content"`              // raw file text
-	Format    string `json:"format,omitempty"`     // "huml"|"toml"|"yaml"|"" (auto-detect)
-	Apply     bool   `json:"apply,omitempty"`      // false = dry-run (default)
-	SkipSeeds bool   `json:"skip_seeds,omitempty"` // only touch the JD tree, no rules/automations
+	Content   string         `json:"content"`
+	Format    string         `json:"format,omitempty"`
+	Apply     bool           `json:"apply,omitempty"`
+	SkipSeeds bool           `json:"skip_seeds,omitempty"`
+	Remaps    map[string]int `json:"remaps,omitempty"`
 }
 
 // TaxonomyDiff is what dry-run returns (and apply=true echoes on
@@ -144,50 +152,65 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if mode == "merge" {
-		if len(diff.Collisions) > 0 {
-			s.writeJSON(w, http.StatusConflict, diff)
+		remaps := decodeRemaps(req.Remaps)
+		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			_, err := importer.ApplyMerge(r.Context(), tx, s.Log, pf, importer.Options{
+				SkipSeeds: req.SkipSeeds,
+				Remaps:    remaps,
+			})
+			return err
+		}); err != nil {
+			var unresolved *importer.UnresolvedCollisionsError
+			if errors.As(err, &unresolved) {
+				diff.Collisions = diff.Collisions[:0]
+				for _, u := range unresolved.Items {
+					diff.Collisions = append(diff.Collisions, TaxonomyColl{
+						Code: u.Code, Existing: u.Existing, Incoming: u.Incoming,
+					})
+				}
+				s.writeJSON(w, http.StatusConflict, diff)
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
 			return
 		}
-		s.writeError(w, http.StatusNotImplemented, "merge_not_wired",
-			"merge apply lands with the admin taxonomy screen; use dry-run for now")
-		return
-	}
-
-	// Replace path — mirrors applyPreset in core/jd/presets.go.
-	if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Park docs on the current system category; delete + re-seed.
-		if _, err := tx.ExecContext(r.Context(), `
-			UPDATE documents SET jd_category_id = (
-				SELECT id FROM jd_categories WHERE system = 1 LIMIT 1
-			) WHERE trashed_at IS NULL
-		`); err != nil {
-			return fmt.Errorf("park docs: %w", err)
-		}
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM jd_categories`); err != nil {
+	} else {
+		// Replace path — mirrors applyPreset in core/jd/presets.go.
+		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			// Park docs on the current system category; delete + re-seed.
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE documents SET jd_category_id = (
+					SELECT id FROM jd_categories WHERE system = 1 LIMIT 1
+				) WHERE trashed_at IS NULL
+			`); err != nil {
+				return fmt.Errorf("park docs: %w", err)
+			}
+			if _, err := tx.ExecContext(r.Context(), `DELETE FROM jd_categories`); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(r.Context(), `DELETE FROM jd_areas`); err != nil {
+				return err
+			}
+			_, err := importer.ApplyReplace(r.Context(), tx, s.Log, pf, importer.Options{
+				SkipSeeds: req.SkipSeeds,
+			})
+			if err != nil {
+				return err
+			}
+			// Repoint parked docs to the new inbox.
+			var newInbox int64
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(r.Context(), `
+				UPDATE documents SET jd_category_id = ? WHERE trashed_at IS NULL
+			`, newInbox)
 			return err
+		}); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+			return
 		}
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM jd_areas`); err != nil {
-			return err
-		}
-		_, err := importer.ApplyReplace(r.Context(), tx, s.Log, pf, importer.Options{
-			SkipSeeds: req.SkipSeeds,
-		})
-		if err != nil {
-			return err
-		}
-		// Repoint parked docs to the new inbox.
-		var newInbox int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(r.Context(), `
-			UPDATE documents SET jd_category_id = ? WHERE trashed_at IS NULL
-		`, newInbox)
-		return err
-	}); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
-		return
 	}
 	diff.Applied = true
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
@@ -402,4 +425,21 @@ func buildExportPresetFile(ctx context.Context, s *Server) (*presetfile.PresetFi
 func sha256hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// decodeRemaps converts the wire form (string→int; keys are numeric
+// strings because JSON object keys can't be integers) into the
+// int→int shape ApplyMerge expects. Junk keys are silently
+// dropped — importer surfaces unresolved collisions explicitly.
+func decodeRemaps(in map[string]int) map[int]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[int]int, len(in))
+	for k, v := range in {
+		if code, err := strconv.Atoi(strings.TrimSpace(k)); err == nil {
+			out[code] = v
+		}
+	}
+	return out
 }

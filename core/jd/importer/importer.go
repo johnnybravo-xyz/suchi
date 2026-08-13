@@ -15,9 +15,11 @@
 //   - Merge is additive: new areas/categories added where codes are
 //     free, seeds from the incoming preset get preset_slug=<incoming>
 //     and coexist with the prior preset's rows. Never deletes or
-//     renames. Not yet implemented in this commit — the wizard path
-//     is replace-only; the admin-import endpoint (next commit) wires
-//     merge.
+//     renames. Same-code / same-name is a no-op; same-code /
+//     different-name is a collision that opts.Remaps must resolve
+//     (0 = skip, positive = fresh in-decade code). Unresolved
+//     collisions surface as *UnresolvedCollisionsError so the admin
+//     endpoint can reply 409 with the list.
 //
 // User-owned CoW copies of preset rules/automations (preset_slug NULL,
 // after a fork) are never touched by any mode — they were promoted
@@ -28,7 +30,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -39,8 +40,15 @@ import (
 )
 
 // Options tunes an Import call.
+//
+// Remaps only applies to ApplyMerge — one entry per unresolved
+// category-code collision. Key: incoming preset code. Value: 0 to
+// skip the category, or a fresh code in the same decade to import
+// under. Missing keys mean the collision is still unresolved and
+// ApplyMerge will error with UnresolvedCollisionsError.
 type Options struct {
-	SkipSeeds bool // when true, only the JD tree lands — no keyword rules, no seed automations
+	SkipSeeds bool
+	Remaps    map[int]int
 }
 
 // Result reports what changed.
@@ -49,12 +57,33 @@ type Result struct {
 	CategoriesSeeded  int
 	KeywordsSeeded    int
 	AutomationsSeeded int
+	CategoriesSkipped int
 }
 
-// ErrMergeNotImplemented is returned when the archive already has
-// filed documents. The wizard path uses replace mode; the admin
-// import path wires merge in a follow-up.
-var ErrMergeNotImplemented = errors.New("importer: merge mode not implemented in this build")
+// MergeCollision names one category-code clash where the incoming
+// preset wants a different name than the existing row.
+type MergeCollision struct {
+	Code     int    `json:"code"`
+	Existing string `json:"existing"`
+	Incoming string `json:"incoming"`
+}
+
+// UnresolvedCollisionsError is returned by ApplyMerge when at least
+// one collision is missing from opts.Remaps. The caller (typically
+// the /api/admin/taxonomy/import handler) should surface the list
+// as a 409 diff and let the operator pick skip or a fresh code.
+type UnresolvedCollisionsError struct {
+	Items []MergeCollision
+}
+
+func (e *UnresolvedCollisionsError) Error() string {
+	return fmt.Sprintf("merge: %d unresolved category collision(s)", len(e.Items))
+}
+
+// codeMap is incoming preset code → effective DB code. In replace
+// mode it's identity across all incoming categories; in merge mode
+// it applies remaps and omits skipped ones (missing key = skipped).
+type codeMap map[int]int
 
 // ApplyReplace nukes the current JD tree + preset-owned seed rows,
 // then seeds the given PresetFile inside one write-tx. The caller
@@ -79,26 +108,88 @@ func ApplyReplace(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetf
 	if err != nil {
 		return nil, err
 	}
+	// Replace mode: codeMap is identity across every incoming category.
+	cm := identityCodeMap(pf)
 
-	if !opts.SkipSeeds {
-		if pf.Seeds != nil {
-			nAuto, err := seedAutomations(ctx, tx, log, pf, catByCode)
-			if err != nil {
-				return nil, err
-			}
-			res.AutomationsSeeded = nAuto
-		}
-		nKw, err := seedKeywordRules(ctx, tx, pf, catByCode)
-		if err != nil {
-			return nil, err
-		}
-		res.KeywordsSeeded = nKw
+	if err := runSeeds(ctx, tx, log, pf, cm, catByCode, opts, res); err != nil {
+		return nil, err
 	}
 
 	log.Info("jd.importer.replaced",
 		"areas", res.AreasSeeded, "categories", res.CategoriesSeeded,
 		"keywords", res.KeywordsSeeded, "automations", res.AutomationsSeeded)
 	return res, nil
+}
+
+// ApplyMerge lands a PresetFile additively on top of the current
+// tree: new areas + categories added at free codes, existing rows
+// preserved (spec §3 "never rename or delete"). Same-code
+// same-name is a no-op; same-code different-name is a collision
+// that must be resolved via opts.Remaps (skip or fresh in-decade
+// code). Preset-owned rules + automations from this preset are
+// cleared and re-seeded so re-applying the same file is idempotent;
+// prior presets' seed rows stay put.
+//
+// Returns an *UnresolvedCollisionsError when opts.Remaps doesn't
+// cover every different-name collision — the caller shapes it as a
+// 409.
+func ApplyMerge(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.PresetFile, opts Options) (*Result, error) {
+	log = log.With("component", "jd.importer", "preset", pf.ID, "mode", "merge")
+
+	// Clear this preset's prior seed rows so re-apply is idempotent;
+	// leave other presets' seed rows and user-owned CoW copies alone.
+	if err := ClearForPreset(ctx, tx, pf.ID); err != nil {
+		return nil, fmt.Errorf("clear this preset: %w", err)
+	}
+
+	cm, catByCode, res, err := mergeTree(ctx, tx, pf, opts.Remaps)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := runSeeds(ctx, tx, log, pf, cm, catByCode, opts, res); err != nil {
+		return nil, err
+	}
+
+	log.Info("jd.importer.merged",
+		"areas", res.AreasSeeded, "categories", res.CategoriesSeeded,
+		"skipped", res.CategoriesSkipped,
+		"keywords", res.KeywordsSeeded, "automations", res.AutomationsSeeded)
+	return res, nil
+}
+
+// runSeeds is the shared tail — keyword rules + seed automations —
+// used by both ApplyReplace and ApplyMerge.
+func runSeeds(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.PresetFile, cm codeMap, catByCode map[int]int64, opts Options, res *Result) error {
+	if opts.SkipSeeds {
+		return nil
+	}
+	if pf.Seeds != nil {
+		n, err := seedAutomations(ctx, tx, log, pf, catByCode, cm)
+		if err != nil {
+			return err
+		}
+		res.AutomationsSeeded = n
+	}
+	n, err := seedKeywordRules(ctx, tx, pf, catByCode, cm)
+	if err != nil {
+		return err
+	}
+	res.KeywordsSeeded = n
+	return nil
+}
+
+// identityCodeMap builds a codeMap where every incoming category
+// code maps to itself — the shape ApplyReplace hands to the seed
+// helpers.
+func identityCodeMap(pf *presetfile.PresetFile) codeMap {
+	m := codeMap{}
+	for _, a := range pf.Areas {
+		for _, c := range a.Categories {
+			m[c.Code] = c.Code
+		}
+	}
+	return m
 }
 
 // seedTree writes jd_areas + jd_categories and returns a code→id map.
@@ -146,6 +237,166 @@ func seedTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile) (map[i
 	return catByCode, res, nil
 }
 
+// mergeTree walks pf against the current jd_areas / jd_categories
+// state and lands new rows additively:
+//
+//   - Areas: new decade codes are inserted at the next position; a
+//     same-code area keeps its existing name (spec §3: never
+//     rename).
+//   - Categories:
+//     -- same code, same name → no-op, codeMap[c.Code] = c.Code so
+//     downstream keyword/automation seeds still resolve.
+//     -- same code, different name → collision. Resolved via
+//     remaps[c.Code]: 0 skips the category, a fresh in-decade
+//     free code imports at that new code.
+//     -- collisions missing from remaps accumulate into
+//     UnresolvedCollisionsError, returned after the walk so the
+//     operator sees the full list at once.
+//     -- free code → insert.
+//
+// Never deletes, never renames. User-owned CoW copies (preset_slug
+// NULL) are not touched at any point.
+func mergeTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, remaps map[int]int) (codeMap, map[int]int64, *Result, error) {
+	res := &Result{}
+	cm := codeMap{}
+	catByCode := map[int]int64{}
+
+	// Snapshot the existing state. jd_areas has no `id` column — its
+	// primary key is code_start; we only need "does this area code
+	// exist" and the next unused position.
+	existingAreas := map[int]bool{}
+	existingAreaPos := 0
+	arows, err := tx.QueryContext(ctx, `SELECT code_start, position FROM jd_areas`)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for arows.Next() {
+		var code, pos int
+		if err := arows.Scan(&code, &pos); err != nil {
+			arows.Close()
+			return nil, nil, nil, err
+		}
+		existingAreas[code] = true
+		if pos+1 > existingAreaPos {
+			existingAreaPos = pos + 1
+		}
+	}
+	arows.Close()
+
+	existingCats := map[int]struct {
+		ID   int64
+		Name string
+	}{}
+	crows, err := tx.QueryContext(ctx, `SELECT id, code, name FROM jd_categories`)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for crows.Next() {
+		var id int64
+		var code int
+		var name string
+		if err := crows.Scan(&id, &code, &name); err != nil {
+			crows.Close()
+			return nil, nil, nil, err
+		}
+		existingCats[code] = struct {
+			ID   int64
+			Name string
+		}{ID: id, Name: name}
+	}
+	crows.Close()
+
+	var unresolved []MergeCollision
+
+	for _, a := range pf.Areas {
+		if !existingAreas[a.Code] {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO jd_areas(code_start, code_end, name, description, position)
+				VALUES (?, ?, ?, ?, ?)
+			`, a.Code, a.Code+9, a.Name, nullString(""), existingAreaPos); err != nil {
+				return nil, nil, nil, fmt.Errorf("insert area %d: %w", a.Code, err)
+			}
+			existingAreas[a.Code] = true
+			existingAreaPos++
+			res.AreasSeeded++
+		}
+
+		for _, c := range a.Categories {
+			if ex, ok := existingCats[c.Code]; ok {
+				if ex.Name == c.Name {
+					// Same code + same name: no-op. Seeds still land under
+					// this category via cm/catByCode.
+					cm[c.Code] = c.Code
+					catByCode[c.Code] = ex.ID
+					continue
+				}
+				// Same code + different name: collision.
+				choice, decided := remaps[c.Code]
+				if !decided {
+					unresolved = append(unresolved, MergeCollision{
+						Code: c.Code, Existing: ex.Name, Incoming: c.Name,
+					})
+					continue
+				}
+				if choice == 0 {
+					// Operator chose to skip. No codeMap entry → keyword
+					// rules + jd_category_code refs get dropped.
+					res.CategoriesSkipped++
+					continue
+				}
+				// Remap to `choice`. Validate: same decade + free code.
+				if choice/10 != c.Code/10 {
+					return nil, nil, nil, fmt.Errorf(
+						"remap %d → %d: target out of decade %d-%d",
+						c.Code, choice, a.Code, a.Code+9)
+				}
+				if _, taken := existingCats[choice]; taken {
+					return nil, nil, nil, fmt.Errorf(
+						"remap %d → %d: target code already taken", c.Code, choice)
+				}
+				r, err := tx.ExecContext(ctx, `
+					INSERT INTO jd_categories(area_start, code, name, description, system)
+					VALUES (?, ?, ?, ?, 0)
+				`, a.Code, choice, c.Name, nullString(c.Description))
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf("insert remap category %d→%d: %w", c.Code, choice, err)
+				}
+				id, _ := r.LastInsertId()
+				existingCats[choice] = struct {
+					ID   int64
+					Name string
+				}{ID: id, Name: c.Name}
+				cm[c.Code] = choice
+				catByCode[choice] = id
+				res.CategoriesSeeded++
+				continue
+			}
+			// Free code — plain insert. Never mark system=1 in merge
+			// mode; the existing inbox stays authoritative.
+			r, err := tx.ExecContext(ctx, `
+				INSERT INTO jd_categories(area_start, code, name, description, system)
+				VALUES (?, ?, ?, ?, 0)
+			`, a.Code, c.Code, c.Name, nullString(c.Description))
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("insert category %d: %w", c.Code, err)
+			}
+			id, _ := r.LastInsertId()
+			existingCats[c.Code] = struct {
+				ID   int64
+				Name string
+			}{ID: id, Name: c.Name}
+			cm[c.Code] = c.Code
+			catByCode[c.Code] = id
+			res.CategoriesSeeded++
+		}
+	}
+
+	if len(unresolved) > 0 {
+		return nil, nil, nil, &UnresolvedCollisionsError{Items: unresolved}
+	}
+	return cm, catByCode, res, nil
+}
+
 // seedInboxPointer locates the row with system=1 and writes its id
 // into settings.jd_inbox_category_id.
 func seedInboxPointer(ctx context.Context, tx *sql.Tx) error {
@@ -162,10 +413,11 @@ func seedInboxPointer(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-// seedKeywordRules materializes per-category keywords as content_contains
-// rules pinned to their category. Preset-owned singletons; empty
-// preset_slug is the "user" bucket.
-func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, catByCode map[int]int64) (int, error) {
+// seedKeywordRules materializes per-category keywords as
+// content_contains rules pinned to their (post-remap) category
+// code. Preset-owned singletons; missing codeMap entry means the
+// category was skipped and its keywords are dropped with it.
+func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, catByCode map[int]int64, cm codeMap) (int, error) {
 	n := 0
 	now := time.Now().Unix()
 	for _, a := range pf.Areas {
@@ -173,19 +425,23 @@ func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile
 			if len(c.Keywords) == 0 {
 				continue
 			}
+			effective, ok := cm[c.Code]
+			if !ok {
+				continue // category skipped in merge mode
+			}
 			for _, kw := range c.Keywords {
 				kw = strings.TrimSpace(kw)
 				if kw == "" {
 					continue
 				}
-				name := fmt.Sprintf("%s: %s → %d %s", pf.ID, kw, c.Code, c.Name)
+				name := fmt.Sprintf("%s: %s → %d %s", pf.ID, kw, effective, c.Name)
 				desc := fmt.Sprintf("Seeded by preset %q. Edit or disable to fork a user-owned copy.", pf.ID)
 				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO rules(name, description, if_kind, if_value, then_kind, then_value,
 					                  priority, enabled, preset_slug, created_at, updated_at)
 					VALUES (?, ?, 'content_contains', ?, 'set_jd_category', ?, ?, 1, ?, ?, ?)
 					ON CONFLICT(name) DO NOTHING
-				`, name, desc, kw, fmt.Sprintf("%d", c.Code), 100, pf.ID, now, now); err != nil {
+				`, name, desc, kw, fmt.Sprintf("%d", effective), 100, pf.ID, now, now); err != nil {
 					return n, fmt.Errorf("seed keyword rule %q: %w", kw, err)
 				}
 				n++
@@ -198,7 +454,7 @@ func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile
 // seedAutomations materializes seeds.automations rows with symbolic
 // refs resolved to instance ids. Each automation is one INSERT into
 // `automations` + N triggers + M actions.
-func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.PresetFile, catByCode map[int]int64) (int, error) {
+func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.PresetFile, catByCode map[int]int64, cm codeMap) (int, error) {
 	now := time.Now().Unix()
 	n := 0
 	for i, sa := range pf.Seeds.Automations {
@@ -244,7 +500,7 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *pres
 
 		// Actions — resolve symbolic refs.
 		for idx, act := range sa.Actions {
-			resolved, err := resolveActionParams(ctx, tx, act, catByCode)
+			resolved, err := resolveActionParams(ctx, tx, act, catByCode, cm)
 			if err != nil {
 				return n, fmt.Errorf("seed automation %q action[%d]: %w", sa.Name, idx, err)
 			}

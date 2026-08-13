@@ -15,15 +15,21 @@ import (
 // returns a fresh map with the instance-specific ids substituted.
 // Unknown params pass through untouched — the automations engine will
 // reject them at apply time if the action kind requires them.
-func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action, catByCode map[int]int64) (map[string]any, error) {
+func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action, catByCode map[int]int64, cm codeMap) (map[string]any, error) {
 	out := map[string]any{}
 	for k, v := range act.Params {
 		out[k] = v
 	}
 
-	// jd_category_code → jd_category_id.
+	// jd_category_code → jd_category_id. Translate the incoming preset
+	// code through codeMap first so remapped or skipped categories are
+	// handled correctly.
 	if code, ok := intField(out, "jd_category_code"); ok {
-		id, ok := catByCode[code]
+		effective, ok := cm[code]
+		if !ok {
+			return nil, fmt.Errorf("jd_category_code %d does not resolve (category was skipped in merge)", code)
+		}
+		id, ok := catByCode[effective]
 		if !ok {
 			return nil, fmt.Errorf("jd_category_code %d does not resolve", code)
 		}
