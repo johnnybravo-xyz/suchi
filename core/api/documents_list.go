@@ -57,9 +57,14 @@ type DocumentListRow struct {
 	JDAreaName     string `json:"jd_area_name,omitempty"`
 	Sensitivity    string `json:"sensitivity,omitempty"`
 	ThumbSHA       string `json:"thumb_sha,omitempty"` // client renders /api/documents/{id}/thumb when set
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
-	TrashedAt      *int64 `json:"trashed_at,omitempty"`
+	// EncryptionState is "" (never encrypted, or decrypted-at-boot),
+	// "encrypted" (needs a password), or "decrypted". The SPA reads
+	// this to render an inline unlock affordance on the Inbox row —
+	// no separate /pending-decryption round-trip needed.
+	EncryptionState string `json:"encryption_state,omitempty"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
+	TrashedAt       *int64 `json:"trashed_at,omitempty"`
 	// Tags + correspondents surfaced as the flat forms the SPA row
 	// renders. Empty slices, not null.
 	Tags           []string `json:"tags"`
@@ -237,6 +242,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(jc.code, 0), COALESCE(jc.name, ''), COALESCE(ja.name, ''),
 		       COALESCE(d.sensitivity, ''),
 		       COALESCE(d.thumb_sha, ''),
+		       COALESCE(d.encryption_state, ''),
 		       d.created_at, d.updated_at, d.trashed_at
 		  FROM documents d
 		  LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
@@ -259,7 +265,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		)
 		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.OriginalSize,
 			&row.JDCategoryID, &row.JDCategoryCode, &row.JDCategoryName, &row.JDAreaName,
-			&row.Sensitivity, &row.ThumbSHA,
+			&row.Sensitivity, &row.ThumbSHA, &row.EncryptionState,
 			&row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
 			s.serverErr(w, "docs.list.scan", err)
 			return

@@ -1,5 +1,5 @@
 <script>
-  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath } from '../lib/api.js'
+  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
   import { route } from '../lib/router.svelte.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -118,8 +118,74 @@
     bulkBusy = false
   }
 
+  // ---- inline unlock ----
+  // Encrypted docs live in Inbox (they land there when postingest can't
+  // read them). The row shows an inline lock chip + password field
+  // instead of the usual "File under…" dropdown. Success optimistically
+  // flips encryption_state to 'decrypted' so the affordance disappears
+  // right away; the doc's postingest re-enqueue fills in category/thumb
+  // on the next refresh.
+  let unlockPw = $state({})           // { [id]: string }
+  let unlockErr = $state({})          // { [id]: string }
+  let unlockBusy = $state(new Set())  // ids in flight
+  async function unlockOne(d) {
+    const password = (unlockPw[d.id] || '').trim()
+    if (!password) return
+    unlockBusy = new Set([...unlockBusy, d.id])
+    unlockErr = { ...unlockErr, [d.id]: '' }
+    try {
+      await decryptDocument(d.id, { password, remember: true })
+      d.encryption_state = 'decrypted'
+      docs = docs   // nudge reactivity
+      unlockPw = { ...unlockPw, [d.id]: '' }
+      notify?.(`Unlocked "${d.title || 'document #' + d.id}"`)
+    } catch (ex) {
+      const code = ex?.code || ''
+      unlockErr = { ...unlockErr, [d.id]: code === 'bad_password' ? 'wrong password' : (ex.message || 'unlock failed') }
+    } finally {
+      const next = new Set(unlockBusy); next.delete(d.id); unlockBusy = next
+    }
+  }
+
+  // Bulk unlock: one password across every selected row that's still
+  // encrypted. Modal opens from the bulk bar. The endpoint filters the
+  // set to encrypted docs server-side; we just pass every selected id.
+  let bulkDecOpen = $state(false)
+  let bulkDecPw = $state('')
+  let bulkDecBusy = $state(false)
+  let bulkDecInput = $state()
+  // Autofocus the password field when the modal opens. Done via
+  // $effect + .focus() so the a11y linter doesn't flag a bare
+  // `autofocus` attribute (which is fine here — the input only
+  // exists when the modal is open — but the linter can't tell).
+  $effect(() => { if (bulkDecOpen && bulkDecInput) bulkDecInput.focus() })
+  const anyLockedSelected = $derived(
+    [...sel].some(id => docs.find(d => d.id === id)?.encryption_state === 'encrypted')
+  )
+  async function runBulkDecrypt() {
+    const password = bulkDecPw.trim()
+    if (!password) return
+    bulkDecBusy = true
+    try {
+      const res = await decryptBatch({ password, remember: true, doc_ids: [...sel] })
+      const results = res?.results || []
+      const opened = results.filter(r => r.ok).length
+      const tried = results.length || sel.size
+      notify?.(opened ? `Unlocked ${opened} of ${tried}` : 'That password opened nothing')
+      bulkDecPw = ''
+      bulkDecOpen = false
+      clearSel()
+      load()
+    } catch (ex) {
+      notify?.(ex.message || 'Batch unlock failed')
+    } finally { bulkDecBusy = false }
+  }
+
   // ---- keyboard: j/k move, x select, Enter open ----
   function onKey(e) {
+    // Escape closes the bulk-decrypt modal even if focus is on its
+    // password input — special-case it before the input-guard below.
+    if (bulkDecOpen && e.key === 'Escape') { bulkDecOpen = false; return }
     if (e.target.closest('input,select,textarea') || e.metaKey || e.ctrlKey) return
     if (e.key === 'j' || e.key === 'k') {
       e.preventDefault()
@@ -163,6 +229,12 @@
       <option value="confidential">Confidential</option>
     </select>
     <button class="btn sm" disabled={bulkBusy} onclick={bulkShare}><Icon name="link" size={12} /> Share</button>
+    {#if anyLockedSelected}
+      <button class="btn sm" disabled={bulkBusy} onclick={() => (bulkDecOpen = true)}
+              title="Try one password against every encrypted doc in the selection">
+        <Icon name="lock" size={12} /> Decrypt…
+      </button>
+    {/if}
     <button class="btn sm danger" disabled={bulkBusy} onclick={bulkTrash}>Trash</button>
     <span class="spacer"></span>
     {#if bulkBusy}<span class="sub">working…</span>{/if}
@@ -260,7 +332,25 @@
           {#each d.tags.slice(0, 3) as t}<span class="pill">{t}</span>{/each}
         {/if}
         <span class="end">
-          {#if isInbox && jdCats.length}
+          {#if d.encryption_state === 'encrypted'}
+            <span class="unlock-inline" role="group" aria-label="Unlock this document">
+              <span class="pill warn" title="This doc is encrypted; unlock to make it searchable and previewable">
+                <Icon name="lock" size={11} /> Locked
+              </span>
+              <input type="password" class="input" style="padding:3px 8px;font-size:.76rem;max-width:160px"
+                     placeholder="password"
+                     bind:value={unlockPw[d.id]}
+                     disabled={unlockBusy.has(d.id)}
+                     onclick={(e) => e.preventDefault()}
+                     onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); unlockOne(d) } }}
+                     aria-label={`Password for ${d.title || 'document ' + d.id}`} />
+              <button class="btn sm primary" disabled={unlockBusy.has(d.id) || !unlockPw[d.id]}
+                      onclick={(e) => { e.preventDefault(); e.stopPropagation(); unlockOne(d) }}>
+                {unlockBusy.has(d.id) ? '…' : 'Unlock'}
+              </button>
+              {#if unlockErr[d.id]}<span class="sub" style="color:var(--danger)">{unlockErr[d.id]}</span>{/if}
+            </span>
+          {:else if isInbox && jdCats.length}
             <select class="input" style="padding:3px 8px;font-size:.76rem;max-width:150px"
                     onclick={(e) => e.preventDefault()}
                     onchange={(e) => { e.preventDefault(); if (e.target.value) fileTo(d, e.target.value) }}>
@@ -293,4 +383,38 @@
       <button class="btn sm" disabled={page >= pages} onclick={() => page++}>Next ›</button>
     </div>
   {/if}
+{/if}
+
+{#if bulkDecOpen}
+  <div class="modal-veil"
+       onclick={() => (bulkDecOpen = false)}
+       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); bulkDecOpen = false } }}
+       role="button" tabindex="-1" aria-label="Close bulk-decrypt dialog">
+    <div class="modal" style="width:min(420px,94vw)"
+         onclick={(e) => e.stopPropagation()}
+         onkeydown={(e) => e.stopPropagation()}
+         role="dialog" aria-modal="true" aria-label="Bulk unlock" tabindex="-1">
+      <div class="modal-head">
+        <h3>Try one password against {sel.size} document{sel.size === 1 ? '' : 's'}</h3>
+        <button class="btn sm" onclick={() => (bulkDecOpen = false)}><Icon name="x" size={13} /></button>
+      </div>
+      <p class="sub" style="margin:0 0 10px">
+        The server tries this password against every selected document that's still encrypted.
+        Matches unlock in place and land in the vault so the next upload with the same password
+        auto-decrypts.
+      </p>
+      <div class="field">
+        <label for="bulkdec-pw">Password</label>
+        <input id="bulkdec-pw" type="password" class="input" bind:value={bulkDecPw}
+               bind:this={bulkDecInput} disabled={bulkDecBusy}
+               onkeydown={(e) => { if (e.key === 'Enter') runBulkDecrypt() }} />
+      </div>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="btn primary sm" disabled={bulkDecBusy || !bulkDecPw.trim()} onclick={runBulkDecrypt}>
+          {bulkDecBusy ? 'Trying…' : 'Try password'}
+        </button>
+        <button class="btn sm" disabled={bulkDecBusy} onclick={() => (bulkDecOpen = false)}>Cancel</button>
+      </div>
+    </div>
+  </div>
 {/if}
