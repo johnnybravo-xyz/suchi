@@ -85,6 +85,70 @@ func (e *UnresolvedCollisionsError) Error() string {
 // it applies remaps and omits skipped ones (missing key = skipped).
 type codeMap map[int]int
 
+// Settings keys for the last-applied taxonomy triple (spec §3). The
+// import handler writes these post-apply so re-importing the same
+// file is detectable as a no-op and `doctor` can answer "which
+// preset is this archive on".
+const (
+	SettingTaxonomyPresetID      = "taxonomy_preset_id"
+	SettingTaxonomyPresetVersion = "taxonomy_preset_version"
+	SettingTaxonomyPresetSHA256  = "taxonomy_preset_sha256"
+)
+
+// WriteImportProvenance records the triple after a successful apply.
+// Runs inside the caller's write-tx so it's crash-consistent with
+// the tree/seed insert. Overwrites any prior triple — the archive
+// tracks the last file that was written, not a history.
+func WriteImportProvenance(ctx context.Context, tx *sql.Tx, id string, version int, sha256hex string) error {
+	now := time.Now().Unix()
+	for _, kv := range []struct {
+		Key string
+		Val any
+	}{
+		{SettingTaxonomyPresetID, id},
+		{SettingTaxonomyPresetVersion, version},
+		{SettingTaxonomyPresetSHA256, sha256hex},
+	} {
+		b, err := json.Marshal(kv.Val)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+		`, kv.Key, string(b), now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadImportProvenance returns the last-applied preset id, version,
+// and content sha256 hex. Empty strings + 0 when nothing has been
+// applied yet.
+func ReadImportProvenance(ctx context.Context, d *db.DB) (id string, version int, sha256hex string, err error) {
+	if err = readSetting(ctx, d, SettingTaxonomyPresetID, &id); err != nil {
+		return
+	}
+	if err = readSetting(ctx, d, SettingTaxonomyPresetVersion, &version); err != nil {
+		return
+	}
+	err = readSetting(ctx, d, SettingTaxonomyPresetSHA256, &sha256hex)
+	return
+}
+
+func readSetting(ctx context.Context, d *db.DB, key string, dst any) error {
+	var s string
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT value_json FROM settings WHERE key = ?`, key).Scan(&s); err != nil {
+		if err == sql.ErrNoRows {
+			return nil // zero-value stays
+		}
+		return err
+	}
+	return json.Unmarshal([]byte(s), dst)
+}
+
 // ApplyReplace nukes the current JD tree + preset-owned seed rows,
 // then seeds the given PresetFile inside one write-tx. The caller
 // must already have checked the "no non-inbox docs" or "refile

@@ -38,8 +38,14 @@ type PresetFile struct {
 	// synthetic System area).
 	Inbox int    `huml:"inbox,omitempty" toml:"inbox,omitempty" yaml:"inbox,omitempty" json:"inbox,omitempty"`
 	Story string `huml:"story" toml:"story" yaml:"story" json:"story"`
-	Areas []Area `huml:"areas" toml:"areas" yaml:"areas" json:"areas"`
-	Seeds *Seeds `huml:"seeds,omitempty" toml:"seeds,omitempty" yaml:"seeds,omitempty" json:"seeds,omitempty"`
+	Areas []Area `huml:"areas,omitempty" toml:"areas,omitempty" yaml:"areas,omitempty" json:"areas,omitempty"`
+	// Categories is the flat-mode input surface: when Flat=true, the
+	// file carries a single `categories:` list instead of areas, and
+	// the parser synthesizes area 10 (named after the preset) around
+	// it plus a System area with a 49 inbox. In structured mode this
+	// stays empty and Areas is authoritative.
+	Categories []Category `huml:"categories,omitempty" toml:"categories,omitempty" yaml:"categories,omitempty" json:"categories,omitempty"`
+	Seeds      *Seeds     `huml:"seeds,omitempty" toml:"seeds,omitempty" yaml:"seeds,omitempty" json:"seeds,omitempty"`
 }
 
 // Area — one JD area (decade). Code is the decade start (10..90).

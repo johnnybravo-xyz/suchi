@@ -104,10 +104,74 @@ func Parse(data []byte, format SerFormat) (*PresetFile, error) {
 	if len(errs) > 0 {
 		return nil, errs
 	}
+	if pf.Flat {
+		expandFlat(&pf)
+	}
 	if verrs := Validate(&pf); len(verrs) > 0 {
 		return nil, verrs
 	}
 	return &pf, nil
+}
+
+// expandFlat implements spec §2.1: flat mode replaces `areas` with a
+// single `categories:` list. Synthesize area 10 (name = preset Name)
+// wrapping those categories, plus a System area at 40 carrying a 49
+// inbox. If the caller already provided Areas, we trust them and
+// only inject the System area / inbox when missing.
+func expandFlat(pf *PresetFile) {
+	if len(pf.Areas) == 0 && len(pf.Categories) > 0 {
+		// Renumber categories 11..n inside area 10 so codes are
+		// spec-compliant (decade-nested + globally unique). The input
+		// codes are advisory in flat mode.
+		cats := make([]Category, 0, len(pf.Categories))
+		next := 11
+		for _, c := range pf.Categories {
+			c.Code = next
+			cats = append(cats, c)
+			next++
+			if next > 19 {
+				break // JD decade cap; anything past 19 gets dropped
+			}
+		}
+		pf.Areas = []Area{{
+			Code: 10, Name: pf.Name, Categories: cats,
+		}}
+		pf.Categories = nil
+	}
+	// Ensure the System area + inbox exist regardless of how Areas
+	// got populated.
+	haveSystem := false
+	haveInbox := false
+	for _, a := range pf.Areas {
+		if a.Code == 40 {
+			haveSystem = true
+			for _, c := range a.Categories {
+				if c.Code == 49 {
+					haveInbox = true
+					break
+				}
+			}
+			break
+		}
+	}
+	if !haveSystem {
+		pf.Areas = append(pf.Areas, Area{
+			Code: 40, Name: "System",
+			Categories: []Category{{Code: 49, Name: "Inbox"}},
+		})
+		haveInbox = true
+	} else if !haveInbox {
+		for i := range pf.Areas {
+			if pf.Areas[i].Code == 40 {
+				pf.Areas[i].Categories = append(pf.Areas[i].Categories,
+					Category{Code: 49, Name: "Inbox"})
+				break
+			}
+		}
+	}
+	if pf.Inbox == 0 {
+		pf.Inbox = 49
+	}
 }
 
 // ParseFromExt is a convenience: pick the SerFormat from a filename

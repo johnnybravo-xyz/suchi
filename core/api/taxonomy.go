@@ -69,13 +69,18 @@ type TaxonomyDiff struct {
 }
 
 // TaxonomyColl reports a merge-mode collision (same code, different
-// name). The SPA renders these as skip/remap rows; this endpoint
-// short-circuits with a 409 when any collision is present since the
-// remap-choice flow is not yet wired.
+// name). The SPA renders these as skip/remap rows.
+//
+// ProposedCode is the next free code inside the incoming category's
+// decade — a good default if the operator wants "just move it out
+// of the way". 0 when no code in the decade is free (the operator
+// must pick skip or pick a code in a different area — which the
+// importer will refuse).
 type TaxonomyColl struct {
-	Code     int    `json:"code"`
-	Existing string `json:"existing"`
-	Incoming string `json:"incoming"`
+	Code         int    `json:"code"`
+	Existing     string `json:"existing"`
+	Incoming     string `json:"incoming"`
+	ProposedCode int    `json:"proposed_code,omitempty"`
 }
 
 // ImportTaxonomy — POST /api/admin/taxonomy/import.
@@ -154,19 +159,30 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 	if mode == "merge" {
 		remaps := decodeRemaps(req.Remaps)
 		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := importer.ApplyMerge(r.Context(), tx, s.Log, pf, importer.Options{
+			if _, err := importer.ApplyMerge(r.Context(), tx, s.Log, pf, importer.Options{
 				SkipSeeds: req.SkipSeeds,
 				Remaps:    remaps,
-			})
-			return err
+			}); err != nil {
+				return err
+			}
+			return importer.WriteImportProvenance(r.Context(), tx,
+				pf.ID, pf.Version, diff.ContentSHA256)
 		}); err != nil {
 			var unresolved *importer.UnresolvedCollisionsError
 			if errors.As(err, &unresolved) {
+				// Preserve the proposed_code hints computed earlier;
+				// index by incoming code to enrich the unresolved list.
+				byCode := map[int]TaxonomyColl{}
+				for _, c := range diff.Collisions {
+					byCode[c.Code] = c
+				}
 				diff.Collisions = diff.Collisions[:0]
 				for _, u := range unresolved.Items {
-					diff.Collisions = append(diff.Collisions, TaxonomyColl{
-						Code: u.Code, Existing: u.Existing, Incoming: u.Incoming,
-					})
+					c := TaxonomyColl{Code: u.Code, Existing: u.Existing, Incoming: u.Incoming}
+					if prior, ok := byCode[u.Code]; ok {
+						c.ProposedCode = prior.ProposedCode
+					}
+					diff.Collisions = append(diff.Collisions, c)
 				}
 				s.writeJSON(w, http.StatusConflict, diff)
 				return
@@ -203,10 +219,13 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 				`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(r.Context(), `
+			if _, err := tx.ExecContext(r.Context(), `
 				UPDATE documents SET jd_category_id = ? WHERE trashed_at IS NULL
-			`, newInbox)
-			return err
+			`, newInbox); err != nil {
+				return err
+			}
+			return importer.WriteImportProvenance(r.Context(), tx,
+				pf.ID, pf.Version, diff.ContentSHA256)
 		}); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
 			return
@@ -318,6 +337,13 @@ func detectMergeCollisions(ctx context.Context, s *Server, pf *presetfile.Preset
 		}
 		existing[code] = name
 	}
+	// Reserve codes the incoming preset has already claimed for
+	// non-colliding categories so the "propose next free" walk
+	// doesn't hand two collisions the same target.
+	reserved := map[int]bool{}
+	for k := range existing {
+		reserved[k] = true
+	}
 	var coll []TaxonomyColl
 	var add []int
 	for _, a := range pf.Areas {
@@ -325,16 +351,38 @@ func detectMergeCollisions(ctx context.Context, s *Server, pf *presetfile.Preset
 			ex, present := existing[c.Code]
 			if !present {
 				add = append(add, c.Code)
+				reserved[c.Code] = true
 				continue
 			}
 			if ex != c.Name {
+				proposed := nextFreeInDecade(c.Code, reserved)
+				if proposed > 0 {
+					reserved[proposed] = true
+				}
 				coll = append(coll, TaxonomyColl{
 					Code: c.Code, Existing: ex, Incoming: c.Name,
+					ProposedCode: proposed,
 				})
 			}
 		}
 	}
 	return coll, add, nil
+}
+
+// nextFreeInDecade returns the smallest unused code inside the same
+// JD decade as `code`. Returns 0 when every code in the decade is
+// taken.
+func nextFreeInDecade(code int, taken map[int]bool) int {
+	decade := (code / 10) * 10
+	for c := decade + 1; c <= decade+9; c++ {
+		if c == code {
+			continue
+		}
+		if !taken[c] {
+			return c
+		}
+	}
+	return 0
 }
 
 // buildExportPresetFile reads jd_areas + jd_categories + preset-owned

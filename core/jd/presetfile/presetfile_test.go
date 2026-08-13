@@ -208,6 +208,44 @@ areas:
 	}
 }
 
+func TestParseFlatModeSynthesizesAreas(t *testing.T) {
+	yaml := []byte(`format: "suchi-taxonomy/v1"
+id: "flat-example"
+version: 1
+name: "Flat"
+story: "flat mode test"
+flat: true
+categories:
+  - code: 1
+    name: "Bills"
+    keywords: ["invoice"]
+  - code: 2
+    name: "Receipts"
+`)
+	pf, err := Parse(yaml, FormatYAML)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(pf.Areas) != 2 {
+		t.Fatalf("areas: got %d, want 2 (10 + System)", len(pf.Areas))
+	}
+	if pf.Areas[0].Code != 10 || pf.Areas[0].Name != "Flat" {
+		t.Fatalf("area 10: got %+v", pf.Areas[0])
+	}
+	if len(pf.Areas[0].Categories) != 2 {
+		t.Fatalf("cat count: got %d, want 2", len(pf.Areas[0].Categories))
+	}
+	if pf.Areas[0].Categories[0].Code != 11 {
+		t.Fatalf("first cat code: got %d, want 11 (renumbered)", pf.Areas[0].Categories[0].Code)
+	}
+	if pf.Inbox != 49 {
+		t.Fatalf("inbox: got %d, want 49", pf.Inbox)
+	}
+	if len(pf.Categories) != 0 {
+		t.Fatalf("Categories should have been consumed into Areas, got %d", len(pf.Categories))
+	}
+}
+
 func TestParseEmptyDocumentFails(t *testing.T) {
 	_, err := Parse(nil, "")
 	if err == nil {
