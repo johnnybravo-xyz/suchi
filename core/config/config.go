@@ -46,8 +46,12 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// IMAP email ingest (Phase 2; parsed here so Phase 0 doctor can already
-	// report the egress surface honestly)
+	// IMAP email ingest.
+	// Seed-only: consumed once at first boot when email_accounts is
+	// empty; ignored thereafter. The email_accounts table is the
+	// source of truth; the admin API at /api/admin/email-accounts owns
+	// live mutation. Left in place so an operator can bootstrap a
+	// mailbox from env before ever opening the UI.
 	IngestIMAPURL        string
 	IngestIMAPPassword   string
 	IngestIMAPOwnerEmail string
