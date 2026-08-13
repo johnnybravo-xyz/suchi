@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -171,6 +172,11 @@ func (s *Server) CreateRule(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteRule — DELETE /api/rules/{id}. Admin-only.
+//
+// Preset-owned rules can't be deleted outright — deletion forks a
+// user-owned copy with enabled=false (soft-delete). Re-picking the
+// same preset later won't resurrect the hidden rule; the user's
+// disabled fork wins.
 func (s *Server) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil || p.Role != "admin" {
@@ -180,6 +186,22 @@ func (s *Server) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid rule id")
+		return
+	}
+	// Fork if preset-owned; the fork is created disabled to preserve
+	// the "delete" intent while leaving provenance intact.
+	disabled := false
+	forkReq := RuleUpsert{Enabled: &disabled}
+	if forkedID, forked, err := s.maybeForkPresetRule(r.Context(), id, forkReq); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		return
+	} else if forked {
+		audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+			Actor: p, Action: "rule.fork_delete",
+			ObjectKind: "rule", ObjectID: forkedID,
+			Before: map[string]any{"preset_original_id": id},
+		})
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	var affected int64
@@ -205,7 +227,107 @@ func (s *Server) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maybeForkPresetRule is the copy-on-write path for both PATCH and
+// DELETE on a preset-owned rule. It:
+//  1. reads the row (bails with (0,false,nil) if the row is user-owned
+//     — normal PATCH/DELETE handles it),
+//  2. inserts a fresh row with preset_slug=” and the patch applied,
+//  3. soft-disables the preset original (enabled=0).
+//
+// Returns (newID, true, nil) on a successful fork.
+func (s *Server) maybeForkPresetRule(ctx context.Context, id int64, patch RuleUpsert) (int64, bool, error) {
+	// Snapshot the row + its ownership. RETURNING is used instead of a
+	// second SELECT so the read is inside the write pool.
+	var (
+		presetSlug                           string
+		name, desc                           string
+		ifKind, ifValue, thenKind, thenValue string
+		priority                             int
+		enabled                              int
+	)
+	err := s.DB.Read.QueryRowContext(ctx, `
+		SELECT COALESCE(preset_slug, ''), name, COALESCE(description, ''),
+		       if_kind, if_value, then_kind, then_value, priority, enabled
+		FROM rules WHERE id = ?
+	`, id).Scan(&presetSlug, &name, &desc,
+		&ifKind, &ifValue, &thenKind, &thenValue, &priority, &enabled)
+	if err == sql.ErrNoRows {
+		return 0, false, nil // caller falls through to NotFound
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if presetSlug == "" {
+		return 0, false, nil // user-owned — caller runs normal PATCH/DELETE
+	}
+
+	// Apply patch to snapshot.
+	if patch.Name != nil {
+		name = *patch.Name
+	}
+	if patch.Description != nil {
+		desc = *patch.Description
+	}
+	if patch.IfKind != nil {
+		ifKind = *patch.IfKind
+	}
+	if patch.IfValue != nil {
+		ifValue = *patch.IfValue
+	}
+	if patch.ThenKind != nil {
+		thenKind = *patch.ThenKind
+	}
+	if patch.ThenValue != nil {
+		thenValue = *patch.ThenValue
+	}
+	if patch.Priority != nil {
+		priority = *patch.Priority
+	}
+	if patch.Enabled != nil {
+		if *patch.Enabled {
+			enabled = 1
+		} else {
+			enabled = 0
+		}
+	}
+
+	// The rules table has UNIQUE(name); the fork gets an " (edited)"
+	// suffix so both rows coexist. If the user renamed via patch we
+	// still suffix to keep the pair distinguishable in the UI.
+	forkName := name + " (edited)"
+
+	var newID int64
+	now := time.Now().Unix()
+	err = s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO rules(name, description, if_kind, if_value, then_kind, then_value,
+			                  priority, enabled, preset_slug, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+		`, forkName, desc, ifKind, ifValue, thenKind, thenValue,
+			priority, enabled, now, now)
+		if err != nil {
+			return err
+		}
+		newID, err = res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE rules SET enabled = 0, updated_at = ? WHERE id = ?`, now, id)
+		return err
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return newID, true, nil
+}
+
 // UpdateRule — PATCH /api/rules/{id}. Admin-only. Any subset of fields.
+//
+// Preset-owned rules (preset_slug != "") are immutable: instead of
+// updating the row, this forks a fresh user-owned copy with the patch
+// applied and soft-disables the preset original. Returned id is the
+// new (or existing, if already user-owned) row.
 func (s *Server) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil || p.Role != "admin" {
@@ -220,6 +342,19 @@ func (s *Server) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	var req RuleUpsert
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
+		return
+	}
+	// Copy-on-write for preset-owned rules — see forkPresetRule below.
+	if forkedID, forked, err := s.maybeForkPresetRule(r.Context(), id, req); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		return
+	} else if forked {
+		audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+			Actor: p, Action: "rule.fork",
+			ObjectKind: "rule", ObjectID: forkedID,
+			Before: map[string]any{"preset_original_id": id},
+		})
+		s.writeJSON(w, http.StatusOK, map[string]any{"id": forkedID, "forked_from": id})
 		return
 	}
 	// Build a partial UPDATE dynamically. Small n, ok to concat.
