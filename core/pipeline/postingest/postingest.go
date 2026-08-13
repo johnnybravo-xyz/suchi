@@ -532,7 +532,14 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// state, snapshot the decrypted bytes into the CAS as a second
 	// blob (original is preserved verbatim), and bump last_used_at on
 	// the winning learned-password row so hot passwords stay hot.
-	if normalized.PasswordIndex >= 0 {
+	//
+	// The !Skipped guard is important: qpdf.Normalize returns
+	// Skipped=true (with Data == raw input bytes) when the qpdf binary
+	// is missing on PATH. Without the guard, we'd record those
+	// still-encrypted bytes as `decrypted_blob` and stamp the row
+	// 'decrypted' — the serving path would then hand the browser
+	// ciphertext and the PDF viewer would prompt every fetch.
+	if !normalized.Skipped && normalized.PasswordIndex >= 0 {
 		if err := h.recordDecrypted(ctx, log, e.DocID, pdfBytes, pwdSources, normalized.PasswordIndex); err != nil {
 			log.Warn("post-ingest.decrypt.record_failed", "err", err.Error())
 		}

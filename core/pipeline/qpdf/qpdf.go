@@ -107,7 +107,11 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 			return nil, fmt.Errorf("read src: %w", rerr)
 		}
 		log.Info("qpdf.skip.no_binary", "binary", binary, "bytes", len(data))
-		return &Result{Data: data, Skipped: true, StderrTail: "qpdf binary not on PATH"}, nil
+		return &Result{
+			Data: data, Skipped: true,
+			StderrTail:    "qpdf binary not on PATH",
+			PasswordIndex: -1,
+		}, nil
 	}
 
 	timeout := opts.Timeout
