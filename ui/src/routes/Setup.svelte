@@ -4,6 +4,7 @@
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import MailForm from '../lib/MailForm.svelte'
+  import TaxonomyImport from '../lib/TaxonomyImport.svelte'
 
   let { notify, onDone } = $props()
 
@@ -37,6 +38,7 @@
   // step-local form state
   let user = $state({ email: '', password: '', display_name: '', role: 'member' })
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false })
+  let jdTab = $state('presets')
   let llm = $state({ endpoint_url: '', model: '', api_key: '', egress_ack: false })
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '' })
@@ -128,6 +130,16 @@
     {:else if cur === 'jd'}
       <h3>Pick a filing tree</h3>
       <p class="wiz-p">Johnny.Decimal areas and categories, tailored to how you'll use the archive. You can always switch later — refile moves every document to the closest match in the new tree.</p>
+      <span class="seg" style="margin-bottom:14px">
+        <button class:on={jdTab === 'presets'} onclick={() => (jdTab = 'presets')}>Presets</button>
+        <button class:on={jdTab === 'import'} onclick={() => (jdTab = 'import')}>Import a file</button>
+      </span>
+      {#if jdTab === 'import'}
+        <TaxonomyImport {notify} onApplied={() => mark('done')} />
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
+        </div>
+      {:else}
       <div class="preset-grid">
         {#each presets as p (p.id)}
           <label class="preset" class:on={preset.preset_id === p.id}>
@@ -152,6 +164,7 @@
                 onclick={() => saveAnd(() => applyJDPreset(preset), 'Filing tree applied')}>Apply preset</button>
         <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
       </div>
+      {/if}
 
     {:else if cur === 'sources'}
       <h3>Ingest sources</h3>

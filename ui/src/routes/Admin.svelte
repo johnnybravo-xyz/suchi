@@ -4,6 +4,8 @@
            listTags, listCorrespondents, listDocumentTypes, listStoragePaths,
            createTaxon, patchTaxon, deleteTaxon } from '../lib/api.js'
   import MailForm from '../lib/MailForm.svelte'
+  import TaxonomyImport from '../lib/TaxonomyImport.svelte'
+  import { exportTaxonomy } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
@@ -89,6 +91,18 @@
     { kind: 'storage_paths', label: 'Storage paths', load: listStoragePaths },
   ]
   let taxon = $state('tags')
+  let taxImpOpen = $state(false)
+  async function doExport(format) {
+    try {
+      const text = await exportTaxonomy(format)
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+      a.download = `taxonomy.${format}`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+      notify?.(`Exported taxonomy.${format}`)
+    } catch (ex) { notify?.(ex.message || 'Export failed') }
+  }
   let taxRows = $state([])
   let ntName = $state('')
   async function loadTaxa() {
@@ -220,6 +234,14 @@
       <span class="seg">
         {#each TAXA as t}<button class:on={taxon === t.kind} onclick={() => (taxon = t.kind)}>{t.label}</button>{/each}
       </span>
+      <span class="spacer"></span>
+      <button class="btn sm" onclick={() => (taxImpOpen = true)}><Icon name="upload" size={13} /> Import</button>
+      <button class="btn sm" onclick={() => doExport('huml')} title="suchi-taxonomy/v1, HuML">Export</button>
+      <select class="input" style="max-width:86px;padding:5px 8px;font-size:.76rem"
+              onchange={(e) => { if (e.target.value) { doExport(e.target.value); e.target.value = '' } }}
+              aria-label="Export as">
+        <option value="">as…</option><option value="huml">huml</option><option value="toml">toml</option><option value="yaml">yaml</option>
+      </select>
     </div>
     <form class="toolbar" onsubmit={addTaxon}>
       <input class="input" style="flex:1;max-width:300px" placeholder={`New ${TAXA.find(t => t.kind === taxon).label.toLowerCase().replace(/s$/, '')} name`} bind:value={ntName} />
@@ -247,5 +269,25 @@
       suchi polls a mailbox and files what it finds. Credentials are stored server-side and never shown back.
     </p>
     <MailForm {notify} />
+  </div>
+{/if}
+
+<svelte:window onkeydown={(e) => { if (taxImpOpen && e.key === 'Escape') taxImpOpen = false }} />
+
+{#if taxImpOpen}
+  <div class="modal-veil"
+       onclick={() => (taxImpOpen = false)}
+       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); taxImpOpen = false } }}
+       role="button" tabindex="-1" aria-label="Close import dialog">
+    <div class="modal" style="width:min(640px,94vw)"
+         onclick={(e) => e.stopPropagation()}
+         onkeydown={(e) => e.stopPropagation()}
+         role="dialog" aria-modal="true" aria-label="Import taxonomy" tabindex="-1">
+      <div class="modal-head">
+        <h3>Import a taxonomy</h3>
+        <button class="btn sm" onclick={() => (taxImpOpen = false)}><Icon name="x" size={13} /></button>
+      </div>
+      <TaxonomyImport {notify} onApplied={() => { taxImpOpen = false; loadTaxa() }} />
+    </div>
   </div>
 {/if}
