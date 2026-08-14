@@ -61,6 +61,11 @@ type Config struct {
 	// Empty falls back to oauth.DefaultClientID. Public-client device-
 	// code flow — no tenant / secret required.
 	IngestIMAPOAuthClientIDMicrosoft string
+	// IngestIMAPOAuthScopesMicrosoft is a comma-separated list of MSAL
+	// scopes. Empty falls back to oauth.DefaultScopes (IMAP + offline).
+	// Override when the app registration does not consent to
+	// offline_access (some corp tenants, well-known public client IDs).
+	IngestIMAPOAuthScopesMicrosoft string
 
 	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
@@ -201,6 +206,7 @@ func Load() (*Config, error) {
 		IngestIMAPOwnerEmail:             env("INGEST_IMAP_OWNER_EMAIL", ""),
 		IngestIMAPTLSCAFile:              env("INGEST_IMAP_TLS_CA_FILE", ""),
 		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
+		IngestIMAPOAuthScopesMicrosoft:   env("INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", ""),
 		IngestFSDir:                      env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
 		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),
