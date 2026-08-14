@@ -51,3 +51,7 @@ ui/dist/
 
 # Maintainer scratchpad (personal backlog; not shipped)
 /tasks.md
+
+# bench harness results (regenerable, timestamped, sometimes multi-GB)
+/hack/bench/results/
+/hack/bench/tools/*/bin/

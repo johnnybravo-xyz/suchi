@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean
+.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean bench-check
 
 BIN := $(PWD)/dist/suchi
 MODULES := plugin-api core plugins/local-auth plugins/oidc distro
@@ -69,3 +69,11 @@ install-hooks:
 	  install -D -m 0755 "$$f" .git/hooks/"$$(basename $$f)"; \
 	  echo "installed .git/hooks/$$(basename $$f)"; \
 	done
+
+# Perf guardrail: rebuild suchi and re-measure idle RAM, cold start,
+# goroutine count, binary size. Fails hard if any metric exceeds the
+# `hard` threshold in hack/bench/thresholds.json.
+bench-check: build
+	@./hack/bench/bench.sh --scenario 01 --scenario 02 --scenario 03 --scenario 07 --thresholds
+
+.PHONY: bench-check

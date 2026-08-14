@@ -1,0 +1,6 @@
+{
+  "idle_rss_mb_median": {"target": 40, "soft": 60, "hard": 100},
+  "cold_start_ms":      {"target": 100, "soft": 300, "hard": 1000},
+  "goroutines_idle":    {"target": 15, "soft": 30, "hard": 100},
+  "binary_size_mb":     {"target": 30, "soft": 40, "hard": 60}
+}

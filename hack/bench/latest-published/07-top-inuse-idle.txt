@@ -1,0 +1,25 @@
+File: suchi
+Build ID: 6d42fbc8007c308a2e01ea7da70a5f88a650fae9
+Type: inuse_space
+Time: 2026-08-14 19:07:01 IST
+Showing nodes accounting for 5.03MB, 100% of 5.03MB total
+      flat  flat%   sum%        cum   cum%
+       2MB 39.84% 39.84%        2MB 39.84%  runtime.mallocgc
+    1.02MB 20.37% 60.21%     1.02MB 20.37%  regexp.onePassCopy
+    0.50MB  9.96% 70.17%     0.50MB  9.96%  github.com/nikolalohinski/gonja/v2/tokens.map.init.0
+    0.50MB  9.94% 80.12%     0.50MB  9.94%  net/http.readRequest
+    0.50MB  9.94% 90.06%     0.50MB  9.94%  modernc.org/sqlite.interruptOnDone.func1
+    0.50MB  9.94%   100%     0.50MB  9.94%  internal/sync.newEntryNode[go.shape.interface {},go.shape.interface {}] (inline)
+         0     0%   100%     0.50MB  9.94%  encoding/json.(*Encoder).Encode
+         0     0%   100%     0.50MB  9.94%  encoding/json.(*encodeState).marshal
+         0     0%   100%     0.50MB  9.94%  encoding/json.(*encodeState).reflectValue
+         0     0%   100%     0.50MB  9.94%  encoding/json.typeEncoder
+         0     0%   100%     0.50MB  9.94%  encoding/json.valueEncoder
+         0     0%   100%     0.52MB 10.34%  github.com/johnnybravo-xyz/suchi/core/api.init
+         0     0%   100%     0.50MB 10.03%  github.com/johnnybravo-xyz/suchi/core/approvals.init
+         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.RequestID.func1
+         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.SecFetchSite.func1
+         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.SecurityHeaders.func1
+         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/plugins/local-auth.(*Plugin).SetupHandler
+         0     0%   100%     0.50MB  9.96%  github.com/nikolalohinski/gonja/v2/tokens.init
+         0     0%   100%     0.50MB  9.94%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Store (inline)
