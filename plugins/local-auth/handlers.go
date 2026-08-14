@@ -160,9 +160,12 @@ func setupErrStatus(err error) int {
 }
 
 // LoginRequest is the payload for POST /api/login (also used by the
-// mobile-compat endpoint /api/token/ in Phase 4).
+// mobile-compat endpoint /api/token/ in Phase 4). Accepts both
+// `username` (mobile-legacy) and `email` (SPA); when both present,
+// `email` wins.
 type LoginRequest struct {
 	Username string `json:"username"`
+	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
@@ -173,6 +176,9 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
+	}
+	if req.Email != "" {
+		req.Username = req.Email
 	}
 	if req.Username == "" || req.Password == "" {
 		http.Error(w, "username and password required", http.StatusBadRequest)
