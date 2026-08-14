@@ -91,16 +91,43 @@ func (p *Plugin) mintSetupToken() error {
 // already initialized. Used by the /setup handler; also useful for tests.
 func (p *Plugin) SetupToken() string { return p.setupToken }
 
+// DevAdminMinPasswordLen mirrors core/api/setup.go's minimum for
+// operator-created users — dev-mode is not an escape hatch to bypass
+// password-quality checks that apply elsewhere.
+const DevAdminMinPasswordLen = 8
+
 // EnsureDevAdmin auto-provisions (or re-provisions) an admin user for
-// SUCHI_DEV=1 boots. Idempotent: if the email already exists, its
-// password_hash + role are rewritten so a forgotten dev password is
-// always recoverable by restarting with a fresh SUCHI_DEV_ADMIN. Burns
-// the setup token so /bootstrap redirects fall away.
+// SUCHI_DEV=1 boots. Idempotent: if the email already exists AND is
+// already an admin, its password hash is rewritten so a forgotten
+// dev password is always recoverable by restarting with a fresh
+// SUCHI_DEV_ADMIN. Burns the setup token so /bootstrap redirects
+// fall away.
 //
-// Never wired outside dev — main.go gates the call on cfg.DevMode.
+// Guardrails (never wired outside dev — main.go gates on cfg.DevMode
+// AND the local-URL check):
+//   - Rejects passwords shorter than DevAdminMinPasswordLen.
+//   - Rejects if the email exists with a non-admin role (would
+//     silently promote a real member account).
+//   - Never resets the `disabled` column on UPDATE — an operator who
+//     quarantined the admin manually keeps the quarantine across dev
+//     restarts.
 func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) error {
 	if email == "" || password == "" {
 		return errors.New("localauth: dev admin email and password required")
+	}
+	if len(password) < DevAdminMinPasswordLen {
+		return fmt.Errorf("localauth: dev password must be at least %d chars", DevAdminMinPasswordLen)
+	}
+	var existingRole string
+	err := p.db.Read.QueryRowContext(ctx,
+		`SELECT role FROM users WHERE email = ?`, email).Scan(&existingRole)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// New row — insert path.
+	case err != nil:
+		return fmt.Errorf("localauth: lookup dev admin: %w", err)
+	case existingRole != "admin":
+		return fmt.Errorf("localauth: dev admin email %q already exists with role %q; refusing to promote (change SUCHI_DEV_ADMIN or fix the row manually)", email, existingRole)
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
@@ -112,8 +139,6 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 		VALUES (?, ?, 'admin', ?, ?, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			password_hash = excluded.password_hash,
-			role          = 'admin',
-			disabled      = 0,
 			updated_at    = excluded.updated_at
 	`, email, email, hash, now, now)
 	if err != nil {
