@@ -161,6 +161,21 @@ input, select, textarea { font: inherit; color: inherit; }
   background: none; border: 0; padding: 0;
   color: var(--faint); font: inherit; font-style: italic; cursor: pointer;
 }
+.mbx-row {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 11px 16px; border-bottom: 1px solid var(--line);
+}
+.mbx-row:last-child { border-bottom: none; }
+.mbx-row:hover { background: var(--tint); }
+.mbx-row-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mbx-row-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.mbx-row-head .dot.ok { background: var(--ok); }
+.mbx-row-head .dot.warn { background: var(--warn); }
+.mbx-row-head .dot.danger { background: var(--danger); }
+.mbx-row-head .grow { flex: 1; min-width: 0; overflow: hidden; }
+.mbx-row-head .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mbx-row-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mbx-row-meta .mbx-spacer { flex: 1; }
 @media (max-width: 780px) {
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
 }
