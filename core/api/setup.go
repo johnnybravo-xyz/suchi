@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
@@ -43,7 +44,9 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/setup/state", s.SetupState)
 	mux.HandleFunc("POST /api/admin/setup/step/{name}", s.SetupStep)
 	mux.HandleFunc("POST /api/admin/setup/complete", s.SetupComplete)
+	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
+	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
 	mux.HandleFunc("POST /api/admin/setup/jd-preset", s.ApplyJDPreset)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
@@ -131,10 +134,11 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		DisplayName string `json:"display_name"`
-		Role        string `json:"role"`
+		Email        string   `json:"email"`
+		Password     string   `json:"password"`
+		DisplayName  string   `json:"display_name"`
+		Role         string   `json:"role"`
+		Capabilities []string `json:"capabilities"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -156,6 +160,19 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = body.Email
 	}
+	// Capabilities column is only meaningful for members; admins are
+	// implicitly capable via the role short-circuit. Validate the wire
+	// slugs regardless so a typo never sneaks in.
+	caps, err := authz.ParseWire(body.Capabilities)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_capability", err.Error())
+		return
+	}
+	capsJSON, err := json.Marshal(caps.SliceStrings())
+	if err != nil {
+		s.serverErr(w, "createuser.marshal_caps", err)
+		return
+	}
 	hash, err := s.PasswordHasher(body.Password)
 	if err != nil {
 		s.serverErr(w, "createuser.hash", err)
@@ -165,9 +182,9 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, body.Email, displayName, body.Role, hash, now, now)
+			INSERT INTO users(email, display_name, role, password_hash, capabilities, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, body.Email, displayName, body.Role, hash, string(capsJSON), now, now)
 		if err != nil {
 			return err
 		}
@@ -183,9 +200,10 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, map[string]any{
-		"id":    newID,
-		"email": body.Email,
-		"role":  body.Role,
+		"id":           newID,
+		"email":        body.Email,
+		"role":         body.Role,
+		"capabilities": caps.SliceStrings(),
 	})
 }
 

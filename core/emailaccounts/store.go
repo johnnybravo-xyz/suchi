@@ -22,6 +22,34 @@ func ListEnabled(ctx context.Context, database *db.DB) ([]Account, error) {
 	return listWhere(ctx, database, "WHERE enabled = 1", nil)
 }
 
+// ListByOwner returns every mailbox row for ownerID, ordered by id.
+// Feeds the per-member mailbox surface (sidebar + list page) after
+// the mailboxes capability is granted.
+func ListByOwner(ctx context.Context, database *db.DB, ownerID int64) ([]Account, error) {
+	return listWhere(ctx, database, "WHERE owner_id = ?", []any{ownerID})
+}
+
+// DisableAllByOwner flips enabled=0 on every mailbox owned by
+// ownerID and returns the number of rows the write touched. Called
+// from the users PATCH revoke hook when CapMailboxes is removed;
+// idempotent (already-disabled rows stay disabled and don't count).
+func DisableAllByOwner(ctx context.Context, database *db.DB, ownerID int64) (int64, error) {
+	var n int64
+	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE email_accounts
+			SET enabled = 0, updated_at = ?
+			WHERE owner_id = ? AND enabled = 1`,
+			time.Now().Unix(), ownerID)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
+	return n, err
+}
+
 func listWhere(ctx context.Context, database *db.DB, where string, args []any) ([]Account, error) {
 	q := `
 		SELECT id, name, owner_id, provider, host, port, use_tls,

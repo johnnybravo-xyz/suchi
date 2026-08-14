@@ -1,6 +1,6 @@
 package api
 
-// Handler-level coverage for /api/admin/email-accounts. Every path that
+// Handler-level coverage for /api/email-accounts. Every path that
 // mutates state or reads sealed_secret has its own case so a future
 // refactor can't silently drop the admin gate, leak the sealed blob,
 // or skip the supervisor reload.
@@ -53,15 +53,15 @@ func newEmailAccountsServer(t *testing.T) (*Server, *atomic.Int64) {
 // only when the request rides through a ServeMux match.
 func muxFor(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/admin/email-accounts", s.ListEmailAccounts)
-	mux.HandleFunc("POST /api/admin/email-accounts", s.CreateEmailAccount)
-	mux.HandleFunc("GET /api/admin/email-accounts/{id}", s.GetEmailAccount)
-	mux.HandleFunc("PATCH /api/admin/email-accounts/{id}", s.PatchEmailAccount)
-	mux.HandleFunc("DELETE /api/admin/email-accounts/{id}", s.DeleteEmailAccount)
-	mux.HandleFunc("POST /api/admin/email-accounts/{id}/test", s.TestEmailAccount)
-	mux.HandleFunc("POST /api/admin/email-accounts/oauth/start", s.StartEmailAccountOAuth)
-	mux.HandleFunc("POST /api/admin/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
-	mux.HandleFunc("POST /api/admin/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
+	mux.HandleFunc("GET /api/email-accounts", s.ListEmailAccounts)
+	mux.HandleFunc("POST /api/email-accounts", s.CreateEmailAccount)
+	mux.HandleFunc("GET /api/email-accounts/{id}", s.GetEmailAccount)
+	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
+	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/oauth/start", s.StartEmailAccountOAuth)
+	mux.HandleFunc("POST /api/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
+	mux.HandleFunc("POST /api/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
 	return mux
 }
 
@@ -93,15 +93,15 @@ func TestEmailAccounts_AdminGate(t *testing.T) {
 	cases := []struct {
 		method, path string
 	}{
-		{"GET", "/api/admin/email-accounts"},
-		{"POST", "/api/admin/email-accounts"},
-		{"GET", "/api/admin/email-accounts/1"},
-		{"PATCH", "/api/admin/email-accounts/1"},
-		{"DELETE", "/api/admin/email-accounts/1"},
-		{"POST", "/api/admin/email-accounts/1/test"},
-		{"POST", "/api/admin/email-accounts/oauth/start"},
-		{"POST", "/api/admin/email-accounts/oauth/complete"},
-		{"POST", "/api/admin/email-accounts/1/oauth/revoke"},
+		{"GET", "/api/email-accounts"},
+		{"POST", "/api/email-accounts"},
+		{"GET", "/api/email-accounts/1"},
+		{"PATCH", "/api/email-accounts/1"},
+		{"DELETE", "/api/email-accounts/1"},
+		{"POST", "/api/email-accounts/1/test"},
+		{"POST", "/api/email-accounts/oauth/start"},
+		{"POST", "/api/email-accounts/oauth/complete"},
+		{"POST", "/api/email-accounts/1/oauth/revoke"},
 	}
 	for _, c := range cases {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		"password":"hunter2",
 		"enabled":true
 	}`
-	rec := call(t, s, "POST", "/api/admin/email-accounts", body, adminPrincipal(1))
+	rec := call(t, s, "POST", "/api/email-accounts", body, adminPrincipal(1))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -201,7 +201,7 @@ func TestEmailAccounts_Create_Validation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rec := call(t, s, "POST", "/api/admin/email-accounts", c.body, adminPrincipal(1))
+			rec := call(t, s, "POST", "/api/email-accounts", c.body, adminPrincipal(1))
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
@@ -228,7 +228,7 @@ func TestEmailAccounts_List_OmitsSealedSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := call(t, s, "GET", "/api/admin/email-accounts", "", adminPrincipal(1))
+	rec := call(t, s, "GET", "/api/email-accounts", "", adminPrincipal(1))
 	if rec.Code != 200 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -239,7 +239,7 @@ func TestEmailAccounts_List_OmitsSealedSecret(t *testing.T) {
 
 func TestEmailAccounts_Get_404(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
-	rec := call(t, s, "GET", "/api/admin/email-accounts/999", "", adminPrincipal(1))
+	rec := call(t, s, "GET", "/api/email-accounts/999", "", adminPrincipal(1))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -263,7 +263,7 @@ func TestEmailAccounts_Patch_PasswordSealsAndAudits(t *testing.T) {
 	prev := reloads.Load()
 
 	rec := call(t, s, "PATCH",
-		"/api/admin/email-accounts/"+strconv.FormatInt(acc.ID, 10),
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10),
 		`{"password":"new-hunter"}`, adminPrincipal(1))
 	if rec.Code != 200 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -310,7 +310,7 @@ func TestEmailAccounts_Delete(t *testing.T) {
 	prev := reloads.Load()
 
 	rec := call(t, s, "DELETE",
-		"/api/admin/email-accounts/"+strconv.FormatInt(acc.ID, 10),
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10),
 		"", adminPrincipal(1))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -328,7 +328,7 @@ func TestEmailAccounts_Delete(t *testing.T) {
 	}
 	// Row is gone.
 	if rec := call(t, s, "GET",
-		"/api/admin/email-accounts/"+strconv.FormatInt(acc.ID, 10),
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10),
 		"", adminPrincipal(1)); rec.Code != http.StatusNotFound {
 		t.Fatalf("post-delete GET status=%d", rec.Code)
 	}
@@ -353,7 +353,7 @@ func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := call(t, s, "POST",
-		"/api/admin/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/test",
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/test",
 		"", adminPrincipal(1))
 	if rec.Code != 200 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -367,7 +367,7 @@ func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 
 func TestEmailAccounts_OAuth_Start_NoMSAL(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
-	rec := call(t, s, "POST", "/api/admin/email-accounts/oauth/start",
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/start",
 		`{"provider":"microsoft"}`, adminPrincipal(1))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -376,7 +376,7 @@ func TestEmailAccounts_OAuth_Start_NoMSAL(t *testing.T) {
 
 func TestEmailAccounts_OAuth_Start_BadProvider(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
-	rec := call(t, s, "POST", "/api/admin/email-accounts/oauth/start",
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/start",
 		`{"provider":"gmail"}`, adminPrincipal(1))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -393,7 +393,7 @@ func TestEmailAccounts_OAuth_Complete_UnknownHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.EmailwatchMSAL = c
-	rec := call(t, s, "POST", "/api/admin/email-accounts/oauth/complete",
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
 		`{"flow_handle":"does-not-exist"}`, adminPrincipal(1))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -418,7 +418,7 @@ func TestEmailAccounts_OAuth_Revoke_ClearsAndDisables(t *testing.T) {
 	prev := reloads.Load()
 
 	rec := call(t, s, "POST",
-		"/api/admin/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/oauth/revoke",
+		"/api/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/oauth/revoke",
 		"", adminPrincipal(1))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())

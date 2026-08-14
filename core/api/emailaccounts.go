@@ -1,8 +1,10 @@
-// Admin CRUD + OAuth wiring for the email_accounts table.
+// CRUD + OAuth wiring for the email_accounts table.
 //
-// Every handler is admin-gated at entry. sealed_secret never appears in
-// a response body and is never logged. Password writes accept a
-// plaintext `password` field on the wire; the server seals it via
+// Entry gate is s.requireCapability(..., CapMailboxes): admins see
+// everything; members see only rows they own, and only when the
+// capability is granted. sealed_secret never appears in a response
+// body and is never logged. Password writes accept a plaintext
+// `password` field on the wire; the server seals it via
 // emailaccounts.SealPassword before storing.
 //
 // The OAuth start/complete pair holds device-code flows in an in-
@@ -32,6 +34,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
@@ -93,12 +96,21 @@ type emailAccountInput struct {
 
 // ---------- list + get + create + patch + delete ----------
 
-// ListEmailAccounts — GET /api/admin/email-accounts.
+// ListEmailAccounts — GET /api/email-accounts.
 func (s *Server) ListEmailAccounts(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
-	rows, err := emailaccounts.List(r.Context(), s.DB)
+	var (
+		rows []emailaccounts.Account
+		err  error
+	)
+	if isAdmin {
+		rows, err = emailaccounts.List(r.Context(), s.DB)
+	} else {
+		rows, err = emailaccounts.ListByOwner(r.Context(), s.DB, p.UserID)
+	}
 	if err != nil {
 		s.serverErr(w, "email_accounts.list", err)
 		return
@@ -109,9 +121,10 @@ func (s *Server) ListEmailAccounts(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"accounts": rows})
 }
 
-// GetEmailAccount — GET /api/admin/email-accounts/{id}.
+// GetEmailAccount — GET /api/email-accounts/{id}.
 func (s *Server) GetEmailAccount(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	id, ok := s.pathID(w, r)
@@ -127,12 +140,18 @@ func (s *Server) GetEmailAccount(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "email_accounts.get", err)
 		return
 	}
+	if !isAdmin && acc.OwnerID != p.UserID {
+		// Existence-safe 404 — members can't probe other users' rows.
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+		return
+	}
 	s.writeJSON(w, http.StatusOK, acc)
 }
 
-// CreateEmailAccount — POST /api/admin/email-accounts.
+// CreateEmailAccount — POST /api/email-accounts.
 func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	var in emailAccountInput
@@ -145,8 +164,14 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Name != nil {
 		acc.Name = strings.TrimSpace(*in.Name)
 	}
-	if in.OwnerID != nil {
-		acc.OwnerID = *in.OwnerID
+	if isAdmin {
+		if in.OwnerID != nil {
+			acc.OwnerID = *in.OwnerID
+		}
+	} else {
+		// Members can't spoof an owner_id — server-force self before
+		// validation so the wire value never lands in the row.
+		acc.OwnerID = p.UserID
 	}
 	if in.Provider != nil {
 		acc.Provider = emailaccounts.Provider(strings.TrimSpace(*in.Provider))
@@ -289,9 +314,10 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, created)
 }
 
-// PatchEmailAccount — PATCH /api/admin/email-accounts/{id}.
+// PatchEmailAccount — PATCH /api/email-accounts/{id}.
 func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	id, ok := s.pathID(w, r)
@@ -312,6 +338,14 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverErr(w, "email_accounts.get", err)
 		return
+	}
+	if !isAdmin && before.OwnerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+		return
+	}
+	// Members can never re-owner a row via PATCH — silently ignore.
+	if !isAdmin {
+		in.OwnerID = nil
 	}
 
 	patch := emailaccounts.AccountPatch{
@@ -400,9 +434,10 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, updated)
 }
 
-// DeleteEmailAccount — DELETE /api/admin/email-accounts/{id}.
+// DeleteEmailAccount — DELETE /api/email-accounts/{id}.
 func (s *Server) DeleteEmailAccount(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	id, ok := s.pathID(w, r)
@@ -416,6 +451,10 @@ func (s *Server) DeleteEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.serverErr(w, "email_accounts.get", err)
+		return
+	}
+	if !isAdmin && before.OwnerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
 	if err := emailaccounts.Delete(r.Context(), s.DB, id); err != nil {
@@ -436,13 +475,14 @@ func (s *Server) DeleteEmailAccount(w http.ResponseWriter, r *http.Request) {
 
 // ---------- test dial ----------
 
-// TestEmailAccount — POST /api/admin/email-accounts/{id}/test.
+// TestEmailAccount — POST /api/email-accounts/{id}/test.
 //
 // Dials the stored IMAP host, authenticates, logs out. Returns
 // {ok, message}. Never 500s on a connect / auth failure — that is user
 // data being wrong, not a server bug.
 func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	id, ok := s.pathID(w, r)
@@ -456,6 +496,10 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.serverErr(w, "email_accounts.get", err)
+		return
+	}
+	if !isAdmin && acc.OwnerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
 
@@ -556,9 +600,9 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 
 // ---------- oauth device-code ----------
 
-// StartEmailAccountOAuth — POST /api/admin/email-accounts/oauth/start.
+// StartEmailAccountOAuth — POST /api/email-accounts/oauth/start.
 func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if p, _ := s.requireCapability(w, r, authz.CapMailboxes); p == nil {
 		return
 	}
 	var body struct {
@@ -601,9 +645,10 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// CompleteEmailAccountOAuth — POST /api/admin/email-accounts/oauth/complete.
+// CompleteEmailAccountOAuth — POST /api/email-accounts/oauth/complete.
 func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	var body struct {
@@ -613,6 +658,20 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
+	}
+	// When a member targets an existing row via account_id we still
+	// enforce ownership existence-safely — otherwise a member could
+	// bind another user's mailbox to their own OAuth cache.
+	if body.AccountID != nil && !isAdmin {
+		existing, err := emailaccounts.Get(r.Context(), s.DB, *body.AccountID)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && existing.OwnerID != p.UserID) {
+			s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+			return
+		}
+		if err != nil {
+			s.serverErr(w, "email_accounts.get", err)
+			return
+		}
 	}
 	if body.FlowHandle == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_handle", "flow_handle is required")
@@ -707,14 +766,15 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// RevokeEmailAccountOAuth — POST /api/admin/email-accounts/{id}/oauth/revoke.
+// RevokeEmailAccountOAuth — POST /api/email-accounts/{id}/oauth/revoke.
 //
 // Clears the sealed token cache, drops the OAuth account id, flips auth
 // back to password, and disables the row. The account is unusable until
 // the operator either re-runs the OAuth flow or supplies a password via
 // PATCH.
 func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	id, ok := s.pathID(w, r)
@@ -728,6 +788,10 @@ func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request)
 	}
 	if err != nil {
 		s.serverErr(w, "email_accounts.get", err)
+		return
+	}
+	if !isAdmin && before.OwnerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
 

@@ -33,6 +33,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -111,11 +112,13 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
 }
 
-// CreateShareLink — POST /api/share_links/.
+// CreateShareLink — POST /api/share_links/. Gated by the
+// share_links capability — admin short-circuits, members need the
+// slug set on their users row. GET + DELETE stay unguarded so a
+// member can inventory + revoke their own links even after cap loss.
 func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
+	p, _ := s.requireCapability(w, r, authz.CapShareLinks)
 	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
 	var in ShareLinkCreate
