@@ -98,6 +98,43 @@ Both images can be forced to a specific OCR engine via `OCR_ENGINE`
 (`auto` | `tesseract` | `ocrmypdf`). See [supported file types](/formats)
 for the per-format matrix.
 
+## Bare-metal tooling
+
+If you're running the suchi binary directly (not the Docker image),
+the pipeline shells out to a handful of external binaries. Missing
+tools degrade features silently — the boot log emits
+`main.tools.missing` for anything not on PATH, along with an install
+hint per tool.
+
+**anydoc** — office document text extraction (docx, xlsx, pptx, odt,
+rtf, csv). Firecrawl publishes the source but no prebuilt binaries;
+suchi's GitHub Releases attach one built from the same source as the
+Docker image. One-liner install:
+
+```sh
+curl -sfL https://raw.githubusercontent.com/johnnybravo-xyz/suchi/main/hack/install-anydoc.sh | sh
+```
+
+Or, pin a specific release: `sh install-anydoc.sh --version v0.1.0`.
+Dry-run mode is `--dry-run`. The script verifies SHA256 against the
+release's `SHA256SUMS` before installing.
+
+**Other tools** — install via your OS package manager. Each is a
+strict dependency of one feature; suchi runs without them but the
+matching pipeline degrades:
+
+| Tool | Package | Feature that degrades |
+|------|---------|----------------------|
+| `qpdf` | `apt install qpdf` · `brew install qpdf` | PDF normalization + encrypted-PDF gate |
+| `pdftotext` + `pdftoppm` | `apt install poppler-utils` · `brew install poppler` | text-native PDF extraction; scanned-PDF rasterization; QR-split detection |
+| `tesseract` | `apt install tesseract-ocr` · `brew install tesseract` | OCR engine for scanned PDFs (tessocr path) |
+| `ocrmypdf` | `apt install ocrmypdf` · `brew install ocrmypdf` | OCR engine that produces searchable-PDF archives |
+| `djvutxt` | `apt install djvulibre-bin` · `brew install djvulibre` | DjVu text extraction |
+| `magick` / `convert` | `apt install imagemagick` · `brew install imagemagick` | HEIC → JPEG conversion for iPhone photos |
+| `msgconvert` | `apt install libemail-outlook-message-perl` | Outlook `.msg` → `.eml` conversion |
+
+Run `suchi doctor` for a one-shot summary of what's on PATH.
+
 ## Next steps
 
 - What suchi actually ingests: [supported file types](/formats)

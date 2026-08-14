@@ -32,6 +32,11 @@
 #   4. Rebuild slim; sanity-check `docker run --rm suchi:slim doctor`
 #      lists anydoc, and a smoke docx ingests to non-empty content
 FROM rust:1-alpine AS anydoc-build
+# ANYDOC_TAG is the single source of truth for both this image build
+# AND the standalone binary the release workflow attaches to GitHub
+# Releases. The workflow greps this ARG line so slim / full / bare-
+# metal never drift. Bump procedure: change the value here, run
+# hack/pin-bumper.sh (which understands this ARG pattern), commit.
 ARG ANYDOC_TAG=v0.1.3
 RUN apk add --no-cache git musl-dev pkgconfig
 WORKDIR /src
