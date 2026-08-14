@@ -28,7 +28,7 @@ func TestBuildPostIngestPayload_AllFieldsPresent(t *testing.T) {
 		},
 	}
 	raw, err := emailwatch.BuildPostIngestPayload(
-		"deadbeef", 1234, "message/rfc822", "invoice.eml", "INBOX", env, true,
+		"deadbeef", 1234, "message/rfc822", "invoice.eml", "INBOX", env, true, false,
 	)
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -67,7 +67,7 @@ func TestBuildPostIngestPayload_FirstFromAddressWins(t *testing.T) {
 			{MailboxName: "second", HostName: "b.example"},
 		},
 	}
-	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false)
+	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBuildPostIngestPayload_EmptyFromStaysEmpty(t *testing.T) {
 	// empty (and therefore omitted by omitempty) so matchers don't
 	// see a stray "@" or partial string.
 	env := &imap.Envelope{Subject: "hello", From: nil}
-	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false)
+	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestBuildPostIngestPayload_EmptyFromStaysEmpty(t *testing.T) {
 
 func TestBuildPostIngestPayload_NilEnvelope(t *testing.T) {
 	raw, err := emailwatch.BuildPostIngestPayload(
-		"cafef00d", 42, "message/rfc822", "orphan.eml", "Archive", nil, true,
+		"cafef00d", 42, "message/rfc822", "orphan.eml", "Archive", nil, true, false,
 	)
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -124,7 +124,7 @@ func TestBuildPostIngestPayload_HasAttachmentFalseIsEmitted(t *testing.T) {
 	// The bool must be present in JSON even when false — matchers
 	// need to distinguish "false" from "absent". This is why the
 	// struct tag omits `omitempty` for that one field only.
-	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", nil, false)
+	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", nil, false, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestBuildPostIngestPayload_SubjectPassthrough(t *testing.T) {
 	// verbatim.
 	subj := "=?utf-8?B?SGVsbG8gd29ybGQ=?="
 	env := &imap.Envelope{Subject: subj}
-	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false)
+	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestBuildPostIngestPayload_NilFromEntry(t *testing.T) {
 	// Defensive: some senders' envelopes come back with a nil entry
 	// in the From slice. The helper must not panic.
 	env := &imap.Envelope{From: []*imap.Address{nil}}
-	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false)
+	raw, err := emailwatch.BuildPostIngestPayload("s", 1, "m", "f", "INBOX", env, false, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

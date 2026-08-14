@@ -372,7 +372,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// parent doc, fan out one child doc per attachment. See
 	// core/pipeline/eml/ for the parser + docs/formats.mdx#email.
 	if eml.Recognized(mime) {
-		deduped, err := h.handleEmail(ctx, log, e.DocID, origBytes)
+		attachmentsOnly := emailAttachmentsOnlyFromPayload(e.Payload)
+		deduped, err := h.handleEmail(ctx, log, e.DocID, origBytes, attachmentsOnly)
 		if err != nil {
 			return fmt.Errorf("email: %w", err)
 		}
@@ -868,7 +869,14 @@ func slugify(name string) string {
 // handleEmail returns (deduped, err). When deduped=true the caller MUST
 // skip render / classify — the doc row has been soft-deleted because
 // another doc under the same owner already carries this Message-ID.
-func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID int64, raw []byte) (bool, error) {
+//
+// attachmentsOnly=true (email_accounts.attachments_only on the account
+// that produced this .eml) tells us to soft-delete the parent after
+// successful attachment fanout, and to enhance each child with the
+// email metadata that would otherwise have lived on the parent
+// (subject prefix on title, email Date on source_mtime, sender via
+// the existing correspondent inheritance).
+func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID int64, raw []byte, attachmentsOnly bool) (bool, error) {
 	parsed, err := eml.Parse(raw)
 	if err != nil {
 		log.Warn("post-ingest.email.parse_failed", "err", err.Error())
@@ -949,6 +957,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 		}
 	}
 
+	childrenCreated := 0
 	for i, att := range parsed.Attachments {
 		if att.Inline {
 			// Inline images referenced from HTML bodies aren't docs
@@ -956,11 +965,25 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 			// attachment or a filename+non-inline disposition.
 			continue
 		}
-		if err := h.createEmailAttachmentChild(ctx, log, parentID, ownerID, jdCategoryID, i+1, att); err != nil {
+		if err := h.createEmailAttachmentChild(ctx, log, parentID, ownerID, jdCategoryID, i+1, att, parsed, attachmentsOnly); err != nil {
 			log.Warn("post-ingest.email.attachment_failed",
 				"index", i+1, "filename", att.Filename, "err", err.Error())
 			continue
 		}
+		childrenCreated++
+	}
+	// attachments_only accounts: the operator only wanted the
+	// attachments filed. Retire the parent .eml row so it doesn't
+	// clutter the doc list. Guarded on childrenCreated > 0 so a
+	// misconfigured account (flag on but no attachments this poll,
+	// which shouldn't happen because the gate would drop) still
+	// leaves the operator with SOMETHING to look at rather than a
+	// silent no-op.
+	if attachmentsOnly && childrenCreated > 0 {
+		log.Info("post-ingest.email.parent_retired",
+			"parent_id", parentID, "children", childrenCreated,
+			"reason", "attachments_only")
+		return true, h.softDeleteParent(ctx, parentID)
 	}
 	return false, nil
 }
@@ -1048,7 +1071,13 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 // post-ingest job) triple for one attachment. Uses the parent's
 // owner + JD category as defaults; the pipeline (rules, LLM) can
 // reclassify later.
-func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logger, parentID, ownerID, jdCategoryID int64, index int, att eml.Attachment) error {
+//
+// parsed is the enclosing email — used for source_mtime (Date) and,
+// under attachmentsOnly, for the subject prefix on the child's title
+// (the parent .eml gets soft-deleted so subject would otherwise be
+// lost). email_parent_id is set to nil when attachmentsOnly so the
+// child doesn't dangle-point at a trashed row.
+func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logger, parentID, ownerID, jdCategoryID int64, index int, att eml.Attachment, parsed *eml.Email, attachmentsOnly bool) error {
 	ref, err := h.cas.Put(bytes.NewReader(att.Bytes))
 	if err != nil {
 		return fmt.Errorf("cas put: %w", err)
@@ -1057,9 +1086,33 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 	if title == "" {
 		title = fmt.Sprintf("attachment-%d", index)
 	}
+	// attachments_only: the parent row is about to be soft-deleted, so
+	// prefix the subject onto the child title so the operator can still
+	// see which email it came from. Skip if subject is empty or already
+	// equals the filename (e.g. "Invoice.pdf" mail with a "Invoice.pdf"
+	// attachment — the prefix would just double up).
+	if attachmentsOnly && parsed != nil && parsed.Subject != "" && parsed.Subject != title {
+		title = "[" + parsed.Subject + "] " + title
+	}
 	mime := att.ContentType
 	if mime == "" {
 		mime = "application/octet-stream"
+	}
+	// source_mtime = email Date. Cheap on the parent-lives path (child
+	// timeline reflects when the mail landed, not when the pipeline
+	// ran) and essential on the attachments_only path (the email row
+	// is gone, so this is the only surviving "when" signal).
+	var sourceMtime any
+	if parsed != nil && !parsed.Date.IsZero() {
+		sourceMtime = parsed.Date.Unix()
+	}
+	// Under attachmentsOnly the parent gets soft-deleted; a stored
+	// email_parent_id → trashed-row FK ref is dangling by design (the
+	// column is ON DELETE SET NULL) but writing NULL up-front is
+	// cleaner and keeps parent-scoped joins honest.
+	var parentRef any
+	if !attachmentsOnly {
+		parentRef = parentID
 	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
@@ -1067,10 +1120,10 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
-				email_parent_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				email_parent_id, source_mtime
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, ownerID, ref.SHA256, ref.Size, title, mime,
-			jdCategoryID, now, now, now, parentID)
+			jdCategoryID, now, now, now, parentRef, sourceMtime)
 		if err != nil {
 			return err
 		}
@@ -1508,6 +1561,28 @@ func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int
 		return
 	}
 	log.Info("post-ingest.thumb.written", "doc_id", docID, "sha", ref.SHA256, "size", len(res.PNG))
+}
+
+// emailAttachmentsOnlyFromPayload extracts the email_attachments_only
+// flag emailwatch stamps on its post-ingest payload. Dispatcher hands
+// the raw JSON as e.Payload["raw"] (see core/jobs/jobs.go), so we
+// unmarshal that string instead of reading a top-level map key.
+// Missing / non-string raw / non-email producer → false.
+func emailAttachmentsOnlyFromPayload(p map[string]any) bool {
+	if p == nil {
+		return false
+	}
+	raw, ok := p["raw"].(string)
+	if !ok || raw == "" {
+		return false
+	}
+	var pl struct {
+		EmailAttachmentsOnly bool `json:"email_attachments_only"`
+	}
+	if err := json.Unmarshal([]byte(raw), &pl); err != nil {
+		return false
+	}
+	return pl.EmailAttachmentsOnly
 }
 
 // consumptionContextFromPayload pulls the trigger-filter fields

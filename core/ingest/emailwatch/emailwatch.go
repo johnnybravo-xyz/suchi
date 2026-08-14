@@ -516,7 +516,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		return false, fmt.Errorf("inbox category: %w", err)
 	}
 
-	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment)
+	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment, w.account.AttachmentsOnly)
 	if err != nil {
 		// Marshal is effectively impossible on the payload shape, but
 		// don't swallow a real error — skip the enqueue and let the
