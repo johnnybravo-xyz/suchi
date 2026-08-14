@@ -1,9 +1,9 @@
 <script>
-  import { adminCreateUser, listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
+  import { adminCreateUser, adminListUsers, adminPatchUser,
+           listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
            listTags, listCorrespondents, listDocumentTypes, listStoragePaths,
            createTaxon, patchTaxon, deleteTaxon } from '../lib/api.js'
-  import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
   import { exportTaxonomy } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
@@ -12,16 +12,54 @@
   let tab = $state('users')
 
   // ---------- users ----------
-  let nu = $state({ email: '', display_name: '', password: '', role: 'member' })
-  let createdUsers = $state([])
+  // Grep-friendly whitelist — future capabilities land here (one line each)
+  // and every admin surface picks them up automatically.
+  const KNOWN_CAPS = ['mailboxes', 'share_links']
+
+  let nu = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })
+  let users = $state([])
+  let usersLoaded = $state(false)
+
+  async function loadUsers() {
+    try {
+      const r = await adminListUsers()
+      users = r?.results || []
+    } catch (ex) {
+      notify?.(ex.message || 'Could not load users')
+    } finally { usersLoaded = true }
+  }
+
   async function createUser(e) {
     e.preventDefault()
     try {
-      const res = await adminCreateUser({ ...nu })
-      createdUsers = [{ ...nu, id: res?.id }, ...createdUsers]
+      await adminCreateUser({ ...nu })
       notify?.(`Created ${nu.email}`)
-      nu = { email: '', display_name: '', password: '', role: 'member' }
+      nu = { email: '', display_name: '', password: '', role: 'member', capabilities: [] }
+      loadUsers()
     } catch (ex) { notify?.(ex.message || 'Could not create the user') }
+  }
+
+  function toggleNewCap(cap) {
+    const has = nu.capabilities.includes(cap)
+    nu.capabilities = has ? nu.capabilities.filter(c => c !== cap) : [...nu.capabilities, cap]
+  }
+
+  async function toggleUserCap(u, cap) {
+    const has = (u.capabilities || []).includes(cap)
+    const newCaps = has ? u.capabilities.filter(c => c !== cap) : [...(u.capabilities || []), cap]
+    try {
+      await adminPatchUser(u.id, { capabilities: newCaps })
+      notify?.(has ? `Revoked ${cap} from ${u.email}` : `Granted ${cap} to ${u.email}`)
+      loadUsers()
+    } catch (ex) { notify?.(ex.message || 'Could not update capabilities') }
+  }
+
+  async function toggleDisabled(u) {
+    try {
+      await adminPatchUser(u.id, { disabled: !u.disabled })
+      notify?.(!u.disabled ? `Disabled ${u.email}` : `Enabled ${u.email}`)
+      loadUsers()
+    } catch (ex) { notify?.(ex.message || 'Could not update user') }
   }
 
   // ---------- groups ----------
@@ -126,8 +164,12 @@
     catch (ex) { notify?.(ex.message || 'Could not delete (in use?)') }
   }
 
-  loadGroups(); loadFields(); loadTaxa()
+  loadUsers(); loadGroups(); loadFields(); loadTaxa()
   $effect(() => { taxon; loadTaxa() })
+  // Reload roster whenever the users tab regains focus — cheap and keeps
+  // capability chips in sync with anything the sidebar/mailboxes surface
+  // may have changed in the meantime.
+  $effect(() => { if (tab === 'users') loadUsers() })
 </script>
 
 <span class="seg admin-tabs">
@@ -135,7 +177,6 @@
   <button class:on={tab === 'groups'} onclick={() => (tab = 'groups')}>Groups</button>
   <button class:on={tab === 'fields'} onclick={() => (tab = 'fields')}>Custom fields</button>
   <button class:on={tab === 'taxonomy'} onclick={() => (tab = 'taxonomy')}>Taxonomy</button>
-  <button class:on={tab === 'mail'} onclick={() => (tab = 'mail')}>Mail intake</button>
 </span>
 
 {#if tab === 'users'}
@@ -155,17 +196,57 @@
           <select id="au-role" class="input" bind:value={nu.role}><option value="member">Member</option><option value="admin">Admin</option></select></div>
         <button class="btn primary sm" style="align-self:flex-end"><Icon name="plus" size={13} /> Create</button>
       </div>
+      {#if nu.role !== 'admin'}
+        <div class="field" style="margin-top:8px">
+          <span class="sub" style="font-size:.76rem;color:var(--muted);display:block;margin-bottom:4px">Capabilities</span>
+          <div class="toolbar" style="margin:0;gap:14px;flex-wrap:wrap">
+            {#each KNOWN_CAPS as cap}
+              <label style="display:flex;gap:6px;align-items:center;font-size:.84rem">
+                <input type="checkbox" checked={nu.capabilities.includes(cap)} onchange={() => toggleNewCap(cap)} />
+                {cap}
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </form>
-    {#if createdUsers.length}
-      <div class="index" style="margin-top:8px">
-        {#each createdUsers as u}
-          <div class="irow"><span class="dot ok"></span><span class="title grow">{u.email}</span><span class="pill">{u.role}</span></div>
+
+    <h3 style="margin-top:18px">Users</h3>
+    {#if !usersLoaded}
+      <p class="sub">Loading…</p>
+    {:else if users.length === 0}
+      <p class="sub">No users yet.</p>
+    {:else}
+      <div class="index">
+        {#each users as u (u.id)}
+          <div class="irow" style="flex-wrap:wrap;gap:8px">
+            <span class="dot" class:ok={!u.disabled} class:warn={u.disabled}></span>
+            <span class="grow">
+              <span class="title" style="font-weight:600">{u.email}</span>
+              {#if u.display_name}
+                <span class="sub" style="display:block;font-size:.78rem;color:var(--muted);margin-top:2px">{u.display_name}</span>
+              {/if}
+            </span>
+            <span class="pill">{u.role}</span>
+            {#if u.disabled}<span class="pill warn">disabled</span>{/if}
+            {#each (u.capabilities || []) as cap (cap)}
+              <span class="chip">{cap}</span>
+            {/each}
+            {#if u.role !== 'admin'}
+              {#each KNOWN_CAPS as cap}
+                <button class="btn sm" onclick={() => toggleUserCap(u, cap)}
+                        title={`Toggle ${cap} capability`}>
+                  {(u.capabilities || []).includes(cap) ? `revoke ${cap}` : `grant ${cap}`}
+                </button>
+              {/each}
+            {/if}
+            <button class="btn sm" onclick={() => toggleDisabled(u)}>
+              {u.disabled ? 'Enable' : 'Disable'}
+            </button>
+          </div>
         {/each}
       </div>
     {/if}
-    <p class="sub" style="color:var(--faint);font-size:.76rem;margin:12px 0 0">
-      Listing and disabling existing users needs <code>GET /api/admin/users</code> — backend task; this panel grows those controls when it lands.
-    </p>
   </div>
 
 {:else if tab === 'groups'}
@@ -262,13 +343,6 @@
     </div>
   </div>
 
-{:else if tab === 'mail'}
-  <div class="content-narrow" style="margin:0">
-    <p class="sub" style="color:var(--muted);font-size:.84rem;margin:0 0 14px">
-      suchi polls each mailbox on its own schedule and files what it finds. Credentials are stored server-side and never shown back.
-    </p>
-    <EmailAccounts {notify} />
-  </div>
 {/if}
 
 <svelte:window onkeydown={(e) => { if (taxImpOpen && e.key === 'Escape') taxImpOpen = false }} />

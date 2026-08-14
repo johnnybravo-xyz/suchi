@@ -36,7 +36,19 @@
   let err = $state('')
 
   // step-local form state
-  let user = $state({ email: '', password: '', display_name: '', role: 'member' })
+  // KNOWN_CAPS mirrors core/authz/capabilities.go. Admin-grantable
+  // feature switches on top of the "member" role; admins are implicitly
+  // capable of everything so the checkboxes only render for members.
+  const KNOWN_CAPS = [
+    { slug: 'mailboxes',   label: 'Manage own mailboxes' },
+    { slug: 'share_links', label: 'Create share links' },
+  ]
+  let user = $state({ email: '', password: '', display_name: '', role: 'member', capabilities: [] })
+  function toggleCap(slug) {
+    user.capabilities = user.capabilities.includes(slug)
+      ? user.capabilities.filter(s => s !== slug)
+      : [...user.capabilities, slug]
+  }
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false })
   let jdTab = $state('presets')
   let llm = $state({ endpoint_url: '', model: '', api_key: '', egress_ack: false })
@@ -121,6 +133,18 @@
           <option value="member">Member</option><option value="admin">Admin</option>
         </select>
       </div>
+      {#if user.role === 'member'}
+        <div class="field">
+          <span class="input-label">Capabilities</span>
+          {#each KNOWN_CAPS as c (c.slug)}
+            <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:4px">
+              <input type="checkbox" checked={user.capabilities.includes(c.slug)}
+                     onchange={() => toggleCap(c.slug)} />
+              {c.label}
+            </label>
+          {/each}
+        </div>
+      {/if}
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !user.email || !user.password}
                 onclick={() => saveAnd(() => adminCreateUser(user), 'User created')}>Create user</button>

@@ -5,10 +5,11 @@
   import { untrack } from 'svelte'
   import { createEmailAccount, patchEmailAccount, deleteEmailAccount,
            testEmailAccount, revokeEmailOAuth } from './api.js'
+  import { session } from './session.svelte.js'
   import Icon from './Icon.svelte'
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
 
-  let { mode, account, onClose, notify } = $props()
+  let { mode, account, onClose, notify, viewerRole = 'admin', users = [] } = $props()
 
   // Preset table mirrors core/ingest/emailwatch/providers.go.
   const presets = {
@@ -53,9 +54,14 @@
     ? unixToLocalInput(seed.sync_since)
     : unixToLocalInput(Math.floor(Date.now() / 1000))
 
+  // Members can't pick an owner — server forces owner_id to their own
+  // user id. Seed the form so the save-button guard passes without
+  // rendering the field.
+  const selfOwnerID = untrack(() => (viewerRole !== 'admin' ? (session.user?.user_id || session.user?.id || 0) : 0))
+
   let form = $state({
     name: seed.name || '',
-    owner_id: seed.owner_id || 0,
+    owner_id: seed.owner_id || selfOwnerID || 0,
     provider: seed.provider || 'custom',
     host: seed.host || '',
     port: seed.port || 993,
@@ -210,10 +216,17 @@
         <label for="ma-name">Name</label>
         <input id="ma-name" class="input" bind:value={form.name} placeholder="Household mailbox" />
       </div>
-      <div class="field" style="max-width:140px">
-        <label for="ma-owner">Owner user id</label>
-        <input id="ma-owner" class="input" type="number" min="1" bind:value={form.owner_id} />
-      </div>
+      {#if viewerRole === 'admin'}
+        <div class="field" style="max-width:260px">
+          <label for="ma-owner">Owner</label>
+          <select id="ma-owner" class="input" bind:value={form.owner_id}>
+            <option value={0} disabled>Select a user…</option>
+            {#each users as u (u.id)}
+              <option value={u.id}>{u.display_name ? `${u.display_name} <${u.email}>` : u.email}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
     </div>
 
     <div class="toolbar" style="margin-bottom:0">
@@ -368,7 +381,7 @@
     {/if}
 
     <div class="toolbar" style="margin:14px 0 0">
-      <button class="btn primary sm" disabled={busy || !form.name || !form.owner_id || !form.username} onclick={save}>
+      <button class="btn primary sm" disabled={busy || !form.name || (viewerRole === 'admin' && !form.owner_id) || !form.username} onclick={save}>
         {isEdit ? 'Save changes' : 'Create mailbox'}
       </button>
       {#if isEdit}
