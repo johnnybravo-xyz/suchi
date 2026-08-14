@@ -968,6 +968,11 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 // updateEmailParent writes the parsed header fields back onto the
 // documents row. created_at flips to the email's Date when present so
 // the timeline UI shows the message date, not the ingest time.
+//
+// pipeline_version_ocr is stamped at the current constant even though
+// no OCR ran — an .eml body is plain text and never will need OCR.
+// Leaving the column at 0 would cause the boot-time rescan detector
+// to flag every ingested email as "OCR stale" forever.
 func (h *Handler) updateEmailParent(ctx context.Context, docID int64, e *eml.Email, body string) error {
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
@@ -990,10 +995,11 @@ func (h *Handler) updateEmailParent(ctx context.Context, docID int64, e *eml.Ema
 			    created_at = ?,
 			    email_message_id = COALESCE(?, email_message_id),
 			    pipeline_version_content = ?,
+			    pipeline_version_ocr = ?,
 			    updated_at = ?
 			WHERE id = ?
 		`, body, titleArg, created, msgIDArg,
-			PipelineVersionContent,
+			PipelineVersionContent, PipelineVersionOCR,
 			now, docID)
 		return err
 	})
