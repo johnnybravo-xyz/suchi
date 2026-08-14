@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -307,14 +308,27 @@ const (
 	a2SaltLen = 16
 )
 
+// releaseArgon2Memory returns the 64 MiB argon2 working set to the OS.
+// Without this, Go's allocator retains the mmap for reuse and idle RSS
+// on a lightly loaded host stays inflated by ~60 MB after the first
+// hash. FreeOSMemory forces a GC + madvise; it is safe to call from
+// any goroutine and costs one GC cycle.
+func releaseArgon2Memory() { debug.FreeOSMemory() }
+
 // HashPassword hashes p with argon2id and returns the encoded form
 // $argon2id$v=19$m=,t=,p=$salt$hash used by verifyPassword.
+//
+// argon2 mmap-retains its 64 MiB working set at the Go runtime layer;
+// on lightly loaded hosts the OS never reclaims it, pinning ~60 MB of
+// idle RSS forever. releaseArgon2Memory forces a GC + madvise so the
+// working set returns to the kernel promptly.
 func HashPassword(pw string) (string, error) {
 	salt := make([]byte, a2SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
 	key := argon2.IDKey([]byte(pw), salt, a2Time, a2Memory, a2Threads, a2KeyLen)
+	releaseArgon2Memory()
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
 		a2Memory, a2Time, a2Threads,
 		hex.EncodeToString(salt),
@@ -341,6 +355,7 @@ func VerifyPassword(encoded, pw string) error {
 		return err
 	}
 	got := argon2.IDKey([]byte(pw), salt, uint32(t), uint32(m), uint8(par), uint32(len(want)))
+	releaseArgon2Memory()
 	if subtle.ConstantTimeCompare(got, want) != 1 {
 		return errors.New("password mismatch")
 	}
