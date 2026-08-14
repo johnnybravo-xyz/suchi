@@ -36,6 +36,16 @@ type Config struct {
 	AuditRetentionDays int
 	OCRLanguages       []string
 
+	// DevMode gates a small pile of DX conveniences intended for local
+	// iteration only: admin auto-provisioning, setup-token skip, and a
+	// login helper printed on boot. Never intended for production —
+	// gated by an explicit env var so it cannot be flipped by accident.
+	DevMode bool
+	// DevAdmin is the "email:password" pair auto-provisioned when DevMode
+	// is on. Empty falls back to dev@suchi.local / devdevdev. Password is
+	// argon2-hashed at boot; the plaintext never touches disk.
+	DevAdmin string
+
 	// OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 	OIDCIssuerURL    string
 	OIDCClientID     string
@@ -189,6 +199,8 @@ func Load() (*Config, error) {
 		TLSKeyFile:           env("TLS_KEY_FILE", ""),
 		IngestIMAPURL:        env("INGEST_IMAP_URL", ""),
 		IngestIMAPOwnerEmail: env("INGEST_IMAP_OWNER_EMAIL", ""),
+		DevMode:              env("SUCHI_DEV", "") == "1",
+		DevAdmin:             env("SUCHI_DEV_ADMIN", ""),
 		IngestFSDir:          env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:   env("INGEST_FS_OWNER_EMAIL", ""),
 		LLMEndpointURL:       env("LLM_ENDPOINT_URL", ""),

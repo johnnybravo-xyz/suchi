@@ -91,6 +91,41 @@ func (p *Plugin) mintSetupToken() error {
 // already initialized. Used by the /setup handler; also useful for tests.
 func (p *Plugin) SetupToken() string { return p.setupToken }
 
+// EnsureDevAdmin auto-provisions (or re-provisions) an admin user for
+// SUCHI_DEV=1 boots. Idempotent: if the email already exists, its
+// password_hash + role are rewritten so a forgotten dev password is
+// always recoverable by restarting with a fresh SUCHI_DEV_ADMIN. Burns
+// the setup token so /bootstrap redirects fall away.
+//
+// Never wired outside dev — main.go gates the call on cfg.DevMode.
+func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) error {
+	if email == "" || password == "" {
+		return errors.New("localauth: dev admin email and password required")
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("localauth: hash dev password: %w", err)
+	}
+	now := time.Now().Unix()
+	_, err = p.db.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
+		VALUES (?, ?, 'admin', ?, ?, ?)
+		ON CONFLICT(email) DO UPDATE SET
+			password_hash = excluded.password_hash,
+			role          = 'admin',
+			disabled      = 0,
+			updated_at    = excluded.updated_at
+	`, email, email, hash, now, now)
+	if err != nil {
+		return fmt.Errorf("localauth: seed dev admin: %w", err)
+	}
+	p.setupToken = ""
+	p.log.Warn("localauth.dev_admin.ready",
+		"email", email,
+		"msg", "SUCHI_DEV=1 — admin auto-provisioned; do not use in production")
+	return nil
+}
+
 // Name implements pluginapi.Authenticator.
 func (p *Plugin) Name() string { return Name }
 
