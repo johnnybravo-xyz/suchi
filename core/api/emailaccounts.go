@@ -84,6 +84,11 @@ type emailAccountInput struct {
 	// set. Watcher maps non-null values onto IMAP SEARCH SINCE.
 	SyncSince *int64 `json:"sync_since,omitempty"`
 	Enabled   *bool  `json:"enabled,omitempty"`
+	// MarkSeen opts into the pre-cursor behaviour: after each successful
+	// ingest the watcher STOREs +\Seen on the processed UIDs. Default
+	// off — the watcher never touches \Seen so the operator's mail
+	// client keeps its own read/unread state.
+	MarkSeen *bool `json:"mark_seen,omitempty"`
 }
 
 // ---------- list + get + create + patch + delete ----------
@@ -194,6 +199,9 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Enabled != nil {
 		acc.Enabled = *in.Enabled
+	}
+	if in.MarkSeen != nil {
+		acc.MarkSeen = *in.MarkSeen
 	}
 
 	// Provider preset auto-fill. User-supplied values already landed in
@@ -322,6 +330,7 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		FromAllowlist:   trimStringPtr(in.FromAllowlist),
 		SyncSince:       in.SyncSince,
 		Enabled:         in.Enabled,
+		MarkSeen:        in.MarkSeen,
 	}
 	if in.Provider != nil {
 		prov := emailaccounts.Provider(strings.TrimSpace(*in.Provider))
@@ -774,6 +783,7 @@ func accountAuditView(a *emailaccounts.Account) map[string]any {
 		"from_allowlist":    a.FromAllowlist,
 		"sync_since":        syncSinceAudit(a.SyncSince),
 		"enabled":           a.Enabled,
+		"mark_seen":         a.MarkSeen,
 	}
 }
 

@@ -218,8 +218,19 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// cycle runs one connect → fetch-unseen → ingest → mark-seen pass.
-// All errors are logged; the loop keeps ticking.
+// cycle runs one connect → search-by-UID-cursor → ingest → advance-
+// cursor pass. All errors are logged; the loop keeps ticking.
+//
+// Idempotency: LastUIDSeen is the high-water mark for the folder.
+// Search is `UID <cursor+1>:*` (plus SINCE <sync_since> for the
+// initial-sync horizon). Nothing STOREs \Seen unless the operator
+// asked for it via MarkSeen — the operator's mail client keeps its
+// own read/unread state.
+//
+// UIDVALIDITY drift: if the folder's current UIDVALIDITY differs
+// from what we last saw, we've been reconnected to a "different"
+// folder (recreated / mailbox reset) and old UIDs are meaningless.
+// Reset the cursor to 0 and re-sync from the SINCE horizon.
 func (w *Watcher) cycle(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
@@ -231,13 +242,23 @@ func (w *Watcher) cycle(ctx context.Context) {
 	}
 	defer func() { _ = c.Logout() }()
 
-	if _, err := c.Select(w.account.Folder, false); err != nil {
+	mbox, err := c.Select(w.account.Folder, false)
+	if err != nil {
 		w.log.Warn("emailwatch.select_failed", "folder", w.account.Folder, "err", err.Error())
 		return
 	}
+	uidValidity := mbox.UidValidity
+	lastUID := w.account.LastUIDSeen
+	if w.account.UIDValiditySeen != 0 && w.account.UIDValiditySeen != uidValidity {
+		w.log.Warn("emailwatch.uidvalidity_reset",
+			"was", w.account.UIDValiditySeen, "now", uidValidity)
+		lastUID = 0
+	}
 
 	criteria := imap.NewSearchCriteria()
-	criteria.WithoutFlags = []string{imap.SeenFlag}
+	uidSet := new(imap.SeqSet)
+	uidSet.AddRange(lastUID+1, 0) // "N:*"
+	criteria.Uid = uidSet
 	if ts := w.account.SyncSince; ts != nil && *ts > 0 {
 		criteria.Since = time.Unix(*ts, 0).UTC()
 	}
@@ -247,9 +268,19 @@ func (w *Watcher) cycle(ctx context.Context) {
 		return
 	}
 	if len(uids) == 0 {
+		// Even with no messages, persist a UIDVALIDITY stamp on first
+		// cycle so a future drift is detectable. Skip when nothing
+		// changed to avoid a pointless updated_at bump every poll.
+		if w.account.UIDValiditySeen != uidValidity {
+			if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, lastUID, uidValidity); err != nil {
+				w.log.Warn("emailwatch.cursor_persist_failed", "err", err.Error())
+			} else {
+				w.account.UIDValiditySeen = uidValidity
+			}
+		}
 		return
 	}
-	w.log.Info("emailwatch.unseen", "count", len(uids))
+	w.log.Info("emailwatch.new_messages", "count", len(uids), "cursor", lastUID)
 
 	// Fetch bodies + envelopes in one round-trip.
 	seqset := new(imap.SeqSet)
@@ -295,21 +326,44 @@ func (w *Watcher) cycle(ctx context.Context) {
 		return
 	}
 
-	// Mark processed messages. Either move to ProcessedFolder (when
-	// configured — the common "archive after ingest" convention) or
-	// set \Seen.
+	// Server-side bookkeeping for the processed UIDs.
+	//   - ProcessedFolder set   → move messages out (INBOX-tidy path)
+	//   - Else MarkSeen         → STORE +\Seen (operator-opt-in legacy
+	//                              path; hijacks the client's read state)
+	//   - Else                  → do nothing on the server; the local
+	//                              cursor below is what makes the poll
+	//                              idempotent
 	markSet := new(imap.SeqSet)
 	markSet.AddNum(seenUIDs...)
-	if w.account.ProcessedFolder != "" {
+	switch {
+	case w.account.ProcessedFolder != "":
 		if err := c.UidMove(markSet, w.account.ProcessedFolder); err != nil {
 			w.log.Warn("emailwatch.move_failed",
 				"to", w.account.ProcessedFolder, "err", err.Error())
 		}
-	} else {
+	case w.account.MarkSeen:
 		flags := []any{imap.SeenFlag}
 		if err := c.UidStore(markSet,
 			imap.FormatFlagsOp(imap.AddFlags, true), flags, nil); err != nil {
 			w.log.Warn("emailwatch.mark_seen_failed", "err", err.Error())
+		}
+	}
+
+	// Advance the cursor. Persist even if some UIDs failed to import —
+	// each failure was logged, and we don't want a single bad message
+	// to freeze the poller forever.
+	var maxUID uint32
+	for _, u := range seenUIDs {
+		if u > maxUID {
+			maxUID = u
+		}
+	}
+	if maxUID > lastUID || w.account.UIDValiditySeen != uidValidity {
+		if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, maxUID, uidValidity); err != nil {
+			w.log.Warn("emailwatch.cursor_persist_failed", "err", err.Error())
+		} else {
+			w.account.LastUIDSeen = maxUID
+			w.account.UIDValiditySeen = uidValidity
 		}
 	}
 }

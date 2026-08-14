@@ -68,6 +68,7 @@
     username: seed.username || '',
     password: '',
     attachments_only: seed.attachments_only ?? 0,
+    mark_seen: seed.mark_seen ?? false,
     from_allowlist: seed.from_allowlist || '',
     sync_since: seedSyncSince,
     oauth_account_id: seed.oauth_account_id || '',
@@ -118,6 +119,7 @@
         password: form.password,
         oauth_account_id: form.oauth_account_id,
         attachments_only: !!form.attachments_only,
+        mark_seen: !!form.mark_seen,
         from_allowlist: form.from_allowlist,
         enabled: !!form.enabled,
       }
@@ -334,6 +336,17 @@
         <input id="ma-att" type="checkbox" bind:checked={form.attachments_only} />
         Ingest attachments only (skip the message body)
       </label>
+    </div>
+
+    <div class="field">
+      <label for="ma-seen">After ingest</label>
+      <label style="display:flex;gap:6px;align-items:center">
+        <input id="ma-seen" type="checkbox" bind:checked={form.mark_seen} />
+        Mark messages as read on the server
+      </label>
+      <span class="sub" style="font-size:.76rem;color:var(--faint)">
+        Off (default) leaves your unread state untouched — suchi tracks a UID cursor so nothing is re-imported.
+      </span>
     </div>
 
     <div class="field">

@@ -75,10 +75,24 @@ type Account struct {
 	FromAllowlist   string     `json:"from_allowlist,omitempty"`
 	SyncSince       *int64     `json:"sync_since,omitempty"`
 	Enabled         bool       `json:"enabled"`
-	LastSyncAt      int64      `json:"last_sync_at,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
-	CreatedAt       int64      `json:"created_at"`
-	UpdatedAt       int64      `json:"updated_at"`
+	// MarkSeen preserves the pre-cursor behaviour on operator opt-in.
+	// Default false: the watcher never touches \Seen, so the operator's
+	// mail client keeps its own read/unread state. Idempotency comes
+	// from LastUIDSeen instead.
+	MarkSeen bool `json:"mark_seen"`
+	// LastUIDSeen is the high-water UID processed for Folder. Set to 0
+	// (default) means "start from the oldest UID matching SyncSince".
+	// Not settable via the API — the watcher owns it.
+	LastUIDSeen uint32 `json:"last_uid_seen,omitempty"`
+	// UIDValiditySeen is the last-observed folder UIDVALIDITY. On
+	// mismatch the watcher resets LastUIDSeen to 0 and re-starts the
+	// horizon (a UIDVALIDITY bump means the server considers old UIDs
+	// invalid, e.g. folder recreated). Also not API-settable.
+	UIDValiditySeen uint32 `json:"uidvalidity_seen,omitempty"`
+	LastSyncAt      int64  `json:"last_sync_at,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 
 // AccountPatch is a sparse update — nil pointer = leave the column
@@ -112,4 +126,5 @@ type AccountPatch struct {
 	// `*int64(0)` so the "clear" semantics are explicit at the wire.
 	SyncSince *int64 `json:"sync_since,omitempty"`
 	Enabled   *bool  `json:"enabled,omitempty"`
+	MarkSeen  *bool  `json:"mark_seen,omitempty"`
 }

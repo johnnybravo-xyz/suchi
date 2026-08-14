@@ -29,6 +29,7 @@ func listWhere(ctx context.Context, database *db.DB, where string, args []any) (
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), attachments_only,
 		       COALESCE(from_allowlist, ''), sync_since, enabled,
+		       mark_seen, last_uid_seen, uidvalidity_seen,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
 		FROM email_accounts ` + where + ` ORDER BY id`
@@ -56,6 +57,7 @@ func Get(ctx context.Context, database *db.DB, id int64) (*Account, error) {
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), attachments_only,
 		       COALESCE(from_allowlist, ''), sync_since, enabled,
+		       mark_seen, last_uid_seen, uidvalidity_seen,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
 		FROM email_accounts WHERE id = ?`, id)
@@ -73,13 +75,15 @@ type scanner interface {
 
 func scanAccount(s scanner) (Account, error) {
 	var a Account
-	var useTLS, attachOnly, enabled int
+	var useTLS, attachOnly, enabled, markSeen int
+	var lastUID, uidValidity int64
 	var syncSince sql.NullInt64
 	if err := s.Scan(&a.ID, &a.Name, &a.OwnerID, &a.Provider, &a.Host, &a.Port, &useTLS,
 		&a.TLSCAFile, &a.Folder, &a.ProcessedFolder,
 		&a.PollIntervalMin, &a.AuthMethod, &a.Username, &a.SealedSecret,
 		&a.OAuthAccountID, &attachOnly,
 		&a.FromAllowlist, &syncSince, &enabled,
+		&markSeen, &lastUID, &uidValidity,
 		&a.LastSyncAt, &a.LastError,
 		&a.CreatedAt, &a.UpdatedAt); err != nil {
 		return Account{}, err
@@ -87,6 +91,9 @@ func scanAccount(s scanner) (Account, error) {
 	a.UseTLS = useTLS == 1
 	a.AttachmentsOnly = attachOnly == 1
 	a.Enabled = enabled == 1
+	a.MarkSeen = markSeen == 1
+	a.LastUIDSeen = uint32(lastUID)
+	a.UIDValiditySeen = uint32(uidValidity)
 	if syncSince.Valid {
 		v := syncSince.Int64
 		a.SyncSince = &v
@@ -233,6 +240,9 @@ func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Acc
 	if p.Enabled != nil {
 		add("enabled", boolInt(*p.Enabled))
 	}
+	if p.MarkSeen != nil {
+		add("mark_seen", boolInt(*p.MarkSeen))
+	}
 	args = append(args, id)
 	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
@@ -256,6 +266,31 @@ func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Acc
 func Delete(ctx context.Context, database *db.DB, id int64) error {
 	return database.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM email_accounts WHERE id = ?`, id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
+}
+
+// UpdateUIDCursor advances the poll-loop's high-water mark after a
+// successful ingest cycle. Kept out of MarkSync so the writes stay
+// composable — a cycle that surfaces an error but did process SOME
+// messages still wants to persist the cursor for those.
+//
+// When the observed UIDVALIDITY differs from what we last saw, the
+// caller resets lastUID to 0 and stamps the new UIDVALIDITY; that's
+// modelled as "you decide the values, we just write them".
+func UpdateUIDCursor(ctx context.Context, database *db.DB, id int64, lastUID, uidValidity uint32) error {
+	return database.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE email_accounts
+			SET last_uid_seen = ?, uidvalidity_seen = ?, updated_at = ?
+			WHERE id = ?`,
+			int64(lastUID), int64(uidValidity), time.Now().Unix(), id)
 		if err != nil {
 			return err
 		}
