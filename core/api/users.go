@@ -412,6 +412,16 @@ func (s *Server) readAdminUser(ctx context.Context, id int64) (AdminUser, error)
 // PATCH /api/admin/users/{id}. Add an entry here to have a cap unwind
 // its side effects (disable dependent resources, revoke live tokens,
 // etc.) at the moment the admin flips it off.
+//
+// INVARIANT — revoke is terminal. There is no symmetric grantHooks
+// map by design: when the admin later re-grants the capability, the
+// previously-quarantined artefacts (disabled mailboxes, revoked share
+// links) MUST NOT be resurrected. The admin re-enables what they still
+// want, individually, via the resource's own PATCH surface. This
+// posture is pinned by TestPatchUser_regrant_does_not_resurrect_share_links
+// and TestPatchUser_regrant_does_not_reenable_mailboxes — do not add a
+// grant hook that clears revoked_at / re-enables rows without first
+// re-litigating that security tradeoff.
 var revokeHooks = map[authz.Capability]func(context.Context, *Server, int64) error{
 	authz.CapMailboxes:  revokeMailboxesFor,
 	authz.CapShareLinks: revokeShareLinksFor,

@@ -258,6 +258,108 @@ func TestPatchUser_revoke_sharelinks_cascade(t *testing.T) {
 	}
 }
 
+// TestPatchUser_regrant_does_not_resurrect_share_links pins the
+// invariant that once a share link is revoked (cascade or manual),
+// re-granting the share_links capability MUST NOT bring it back.
+// Revoke is terminal; regrant only permits creating new links.
+//
+// If a future change adds a grant-side hook that clears revoked_at,
+// this test fails loudly. Do not "fix" it by weakening the assertion —
+// the security posture is intentional (someone lost trust, their live
+// artefacts are quarantined; the operator individually re-enables what
+// they still want). Same rule applies to the mailbox cascade below.
+func TestPatchUser_regrant_does_not_resurrect_share_links(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `["share_links"]`)
+
+	for i := 0; i < 2; i++ {
+		if _, err := d.Write.ExecContext(context.Background(), `
+			INSERT INTO share_links(token, doc_ids_json, created_by, label, view_count, created_at)
+			VALUES (?, '[]', 2, '', 0, 0)
+		`, "token-"+strconv.Itoa(i)+"-"+strings.Repeat("a", 55)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Revoke → all links get revoked_at stamped.
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/2",
+		`{"capabilities":[]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Regrant → the previously-revoked links MUST stay revoked.
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/2",
+		`{"capabilities":["share_links"]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("regrant status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var live int
+	if err := d.Read.QueryRow(
+		`SELECT COUNT(*) FROM share_links WHERE created_by = 2 AND revoked_at IS NULL`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 0 {
+		t.Fatalf("share_links resurrected on regrant: %d still-live rows — revoke is terminal, do not add a grant-side hook", live)
+	}
+}
+
+// TestPatchUser_regrant_does_not_reenable_mailboxes pins the same
+// invariant on the mailbox cascade side. See the sibling test's
+// docstring for the security rationale.
+func TestPatchUser_regrant_does_not_reenable_mailboxes(t *testing.T) {
+	d := openTestDB(t)
+	k, err := crypto.LoadOrCreateKey(filepath.Join(t.TempDir(), ".decrypt-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		DB:             d,
+		Log:            slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		EmailwatchAEAD: k,
+	}
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `["mailboxes"]`)
+
+	sealed, _ := emailaccounts.SealPassword(k, "p")
+	for i := 0; i < 2; i++ {
+		if _, err := emailaccounts.Create(context.Background(), d, emailaccounts.Account{
+			Name: "m" + strconv.Itoa(i), OwnerID: 2, Provider: emailaccounts.ProviderCustom,
+			Host: "h", Port: 993, UseTLS: true,
+			AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
+			Enabled: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Revoke → cascade disables both mailboxes.
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/2",
+		`{"capabilities":[]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Regrant → the previously-disabled mailboxes MUST stay disabled.
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/2",
+		`{"capabilities":["mailboxes"]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("regrant status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var enabled int
+	if err := d.Read.QueryRow(
+		`SELECT COUNT(*) FROM email_accounts WHERE owner_id = 2 AND enabled = 1`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 {
+		t.Fatalf("mailboxes re-enabled on regrant: %d rows — revoke is terminal, do not add a grant-side hook", enabled)
+	}
+}
+
 func TestWhoami_capabilities(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
