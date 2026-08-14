@@ -145,6 +145,25 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .content { flex: 1; overflow-y: auto; padding: 20px 22px 40px; }
 .content-narrow { max-width: 980px; margin: 0 auto; }
+.settings-page { display: flex; flex-direction: column; gap: 16px; }
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+.settings-right { display: flex; flex-direction: column; gap: 16px; }
+.section-sep { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
+.vault-last-doc { color: var(--faint); font-size: .78rem; margin-top: 4px; }
+.vault-last-doc a { color: var(--accent); text-decoration: none; }
+.vault-last-doc a:hover { text-decoration: underline; }
+.vault-last-doc .linkish {
+  background: none; border: 0; padding: 0;
+  color: var(--faint); font: inherit; font-style: italic; cursor: pointer;
+}
+@media (max-width: 780px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ---------- the dotted index row (signature) ---------- */
 .index { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }

@@ -1339,8 +1339,10 @@ func (h *Handler) recordDecrypted(ctx context.Context, log *slog.Logger, docID i
 			src := sources[index]
 			if src.LearnedID != 0 {
 				if _, err := tx.ExecContext(ctx, `
-					UPDATE decryption_passwords SET last_used_at = ? WHERE id = ?
-				`, time.Now().Unix(), src.LearnedID); err != nil {
+					UPDATE decryption_passwords
+					SET last_used_at = ?, last_used_doc_id = ?
+					WHERE id = ?
+				`, time.Now().Unix(), docID, src.LearnedID); err != nil {
 					return err
 				}
 				log.Info("post-ingest.decrypt.learned_hit",

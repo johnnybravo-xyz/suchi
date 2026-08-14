@@ -354,11 +354,13 @@ func (s *Server) attemptDecrypt(r *http.Request, docID, ownerID int64, blobSHA s
 // server; there's no endpoint that returns the plaintext either
 // (recovering it would defeat the at-rest sealing).
 type DecryptionPasswordView struct {
-	ID         int64  `json:"id"`
-	OwnerID    int64  `json:"owner_id,omitempty"`
-	Label      string `json:"label,omitempty"`
-	CreatedAt  int64  `json:"created_at"`
-	LastUsedAt int64  `json:"last_used_at,omitempty"`
+	ID               int64  `json:"id"`
+	OwnerID          int64  `json:"owner_id,omitempty"`
+	Label            string `json:"label,omitempty"`
+	CreatedAt        int64  `json:"created_at"`
+	LastUsedAt       int64  `json:"last_used_at,omitempty"`
+	LastUsedDocID    int64  `json:"last_used_doc_id,omitempty"`
+	LastUsedDocTitle string `json:"last_used_doc_title,omitempty"`
 }
 
 // ListDecryptionPasswords — GET /api/decryption-passwords/.
@@ -370,14 +372,21 @@ func (s *Server) ListDecryptionPasswords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := auth.FromContext(r.Context())
-	q := `SELECT id, owner_id, COALESCE(label, ''), created_at, COALESCE(last_used_at, 0)
-	      FROM decryption_passwords WHERE owner_id = ?
-	      ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC`
+	// LEFT JOIN documents so a deleted-doc row still surfaces the id
+	// with an empty title — the SPA renders "(no longer available)"
+	// rather than throwing the entry off the list entirely.
+	base := `SELECT dp.id, dp.owner_id, COALESCE(dp.label, ''),
+	                dp.created_at, COALESCE(dp.last_used_at, 0),
+	                COALESCE(dp.last_used_doc_id, 0),
+	                COALESCE(d.title, '')
+	         FROM decryption_passwords AS dp
+	         LEFT JOIN documents AS d ON d.id = dp.last_used_doc_id
+	                                 AND d.trashed_at IS NULL`
+	q := base + ` WHERE dp.owner_id = ?
+	              ORDER BY COALESCE(dp.last_used_at, dp.created_at) DESC, dp.id DESC`
 	args := []any{p.UserID}
 	if p.Role == "admin" && r.URL.Query().Get("all") == "1" {
-		q = `SELECT id, owner_id, COALESCE(label, ''), created_at, COALESCE(last_used_at, 0)
-		     FROM decryption_passwords
-		     ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC`
+		q = base + ` ORDER BY COALESCE(dp.last_used_at, dp.created_at) DESC, dp.id DESC`
 		args = nil
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
@@ -389,7 +398,8 @@ func (s *Server) ListDecryptionPasswords(w http.ResponseWriter, r *http.Request)
 	out := []DecryptionPasswordView{}
 	for rows.Next() {
 		var v DecryptionPasswordView
-		if err := rows.Scan(&v.ID, &v.OwnerID, &v.Label, &v.CreatedAt, &v.LastUsedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.OwnerID, &v.Label, &v.CreatedAt,
+			&v.LastUsedAt, &v.LastUsedDocID, &v.LastUsedDocTitle); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 			return
 		}
