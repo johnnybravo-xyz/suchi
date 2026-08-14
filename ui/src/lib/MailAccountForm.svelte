@@ -108,7 +108,7 @@
         provider: form.provider,
         host: form.host,
         port: Number(form.port) || 993,
-        use_tls: form.use_tls ? 1 : 0,
+        use_tls: !!form.use_tls,
         tls_ca_file: form.tls_ca_file,
         folder: form.folder,
         processed_folder: form.processed_folder,
@@ -117,9 +117,9 @@
         username: form.username,
         password: form.password,
         oauth_account_id: form.oauth_account_id,
-        attachments_only: form.attachments_only ? 1 : 0,
+        attachments_only: !!form.attachments_only,
         from_allowlist: form.from_allowlist,
-        enabled: form.enabled ? 1 : 0,
+        enabled: !!form.enabled,
       }
       if (form.sealed_secret_b64) body.sealed_secret_b64 = form.sealed_secret_b64
       // Strip empty strings so PATCH stays sparse and POST doesn't send
