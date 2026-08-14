@@ -42,16 +42,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-// Defaults.
+// Defaults. Timeout is overridable via SUCHI_PAGEANALYZE_TIMEOUT.
 const (
 	DefaultBinary             = "pdftoppm"
-	DefaultTimeout            = 60 * time.Second
 	DefaultDPI                = 50    // low; we only care about intensity
 	DefaultWhitenessThreshold = 0.995 // mean pixel value / 255
 )
+
+// DefaultTimeout returns the effective per-invocation cap. Read at
+// call time so a config file loaded from main.runServe reaches it.
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_PAGEANALYZE_TIMEOUT", 60*time.Second)
+}
 
 // Options carries per-call knobs.
 type Options struct {
@@ -93,7 +99,7 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	dpi := opts.DPI
 	if dpi == 0 {

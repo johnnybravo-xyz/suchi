@@ -44,15 +44,22 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
-// Defaults.
+// Defaults. Per-attachment size cap is overridable via
+// SUCHI_EMAIL_MAX_ATTACH (byte-suffixed, e.g. "50M").
 const (
 	DefaultPollInterval = 5 * time.Minute
-	DefaultMaxAttach    = 25 * 1024 * 1024 // 25 MiB per attachment
-	PluginName          = "email-ingest"   // plugin_kv namespace for msg-id dedup
+	PluginName          = "email-ingest" // plugin_kv namespace for msg-id dedup
 )
+
+// DefaultMaxAttach returns the effective per-attachment cap. Read at
+// call time so a config file loaded from main.runServe reaches it.
+func DefaultMaxAttach() int64 {
+	return pipeconfig.Bytes("SUCHI_EMAIL_MAX_ATTACH", 25*1024*1024)
+}
 
 // AllowedMIMEs is the attachment-type allowlist. Kept tight on
 // purpose: an inbox is hostile input, and only types the downstream
@@ -147,7 +154,7 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 	}
 	maxAttach := cfg.MaxAttachBytes
 	if maxAttach == 0 {
-		maxAttach = DefaultMaxAttach
+		maxAttach = DefaultMaxAttach()
 	}
 
 	// Widen the trust pool with an operator-supplied CA when set —

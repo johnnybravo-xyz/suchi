@@ -43,16 +43,22 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-// Defaults.
+// Defaults. Timeout is overridable via SUCHI_PDFINSPECTOR_TIMEOUT.
 const (
 	DefaultBinary       = "pdftotext"
-	DefaultTimeout      = 30 * time.Second
 	DefaultMaxTextBytes = 8 * 1024 * 1024 // 8 MiB of extracted text
 	HasTextThreshold    = 32              // non-whitespace chars to trust extraction
 )
+
+// DefaultTimeout returns the effective per-invocation cap. Read at
+// call time so a config file loaded from main.runServe reaches it.
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_PDFINSPECTOR_TIMEOUT", 30*time.Second)
+}
 
 // Options carries per-call knobs. Zero-value uses the Default* above.
 type Options struct {
@@ -98,7 +104,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	maxText := opts.MaxTextBytes
 	if maxText == 0 {

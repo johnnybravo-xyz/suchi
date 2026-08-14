@@ -31,17 +31,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-// Default caps. The output cap is generous because legitimate PDFs
-// routinely exceed the sandbox default; the timeout accounts for
-// qpdf's linear-in-input cost on a busy VM.
-const (
-	DefaultBinary  = "qpdf"
-	DefaultTimeout = 30 * time.Second
-	DefaultMaxSize = 100 * 1024 * 1024 // 100 MiB
-)
+// Default caps. Overridable via SUCHI_QPDF_TIMEOUT / SUCHI_QPDF_MAX_SIZE
+// (Go duration / byte-suffix string, e.g. "2m", "250M"). Both are funcs,
+// not vars, so a config file loaded from main.runServe (which Setenv's
+// file keys before Load) reaches them — a package-init
+// `var = pipeconfig.…(…)` would capture env BEFORE LoadFile ran.
+const DefaultBinary = "qpdf"
+
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_QPDF_TIMEOUT", 30*time.Second)
+}
+func DefaultMaxSize() int64 {
+	return pipeconfig.Bytes("SUCHI_QPDF_MAX_SIZE", 100*1024*1024)
+}
 
 // Options carries the knobs. Zero-value fields use the Default* above.
 type Options struct {
@@ -116,11 +122,11 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	maxSize := opts.MaxSize
 	if maxSize == 0 {
-		maxSize = DefaultMaxSize
+		maxSize = DefaultMaxSize()
 	}
 
 	// Persist src to a temp file so qpdf can seek it. Placed under the
@@ -273,11 +279,11 @@ func SelectPages(ctx context.Context, pdfBytes []byte, pages []int, log *slog.Lo
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	maxSize := opts.MaxSize
 	if maxSize == 0 {
-		maxSize = DefaultMaxSize
+		maxSize = DefaultMaxSize()
 	}
 
 	dir, err := os.MkdirTemp("", "suchi-qpdf-select-")

@@ -37,18 +37,24 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-// Defaults.
+// Defaults. Timeout is overridable via SUCHI_TESSERACT_TIMEOUT.
 const (
 	DefaultPdftoppm     = "pdftoppm"
 	DefaultTesseract    = "tesseract"
-	DefaultTimeout      = 10 * time.Minute // whole-chain, matches ocrmypdf
-	DefaultRasterDPI    = 300              // matches ocrmypdf's default
+	DefaultRasterDPI    = 300 // matches ocrmypdf's default
 	DefaultLanguages    = "eng"
 	DefaultMaxTextBytes = 8 * 1024 * 1024 // 8 MiB, same cap as ocrmypdf's sidecar
 )
+
+// DefaultTimeout returns the effective per-invocation cap. Read at
+// call time so a config file loaded from main.runServe reaches it.
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_TESSERACT_TIMEOUT", 10*time.Minute)
+}
 
 // Options carries per-call knobs.
 type Options struct {
@@ -111,7 +117,7 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	dpi := opts.RasterDPI
 	if dpi == 0 {

@@ -40,15 +40,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
-// Defaults.
-const (
-	DefaultTimeout   = 5 * time.Minute
-	DefaultMaxStdout = 1 * 1024 * 1024   // 1 MiB JSON output ceiling
-	DefaultMaxOutput = 200 * 1024 * 1024 // 200 MiB for the modified doc bytes
-)
+// Defaults. Overrides read at call time so a config file loaded from
+// main.runServe reaches them — a package-init `var = pipeconfig.…(…)`
+// would capture env BEFORE LoadFile ran.
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_PRECONSUME_TIMEOUT", 5*time.Minute)
+}
+func DefaultMaxStdout() int64 {
+	return pipeconfig.Bytes("SUCHI_PRECONSUME_MAX_STDOUT", 1*1024*1024)
+}
+func DefaultMaxOutput() int64 {
+	return pipeconfig.Bytes("SUCHI_PRECONSUME_MAX_OUTPUT", 200*1024*1024)
+}
 
 // Options carries per-call knobs.
 type Options struct {
@@ -118,11 +125,11 @@ func Run(ctx context.Context, input []byte, docID int64, mime, ownerEmail string
 
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	maxOutput := opts.MaxOutput
 	if maxOutput == 0 {
-		maxOutput = DefaultMaxOutput
+		maxOutput = DefaultMaxOutput()
 	}
 
 	dir, err := os.MkdirTemp("", "suchi-preconsume-")
@@ -155,7 +162,7 @@ func Run(ctx context.Context, input []byte, docID int64, mime, ownerEmail string
 			"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		},
 		Timeout:   timeout,
-		MaxStdout: DefaultMaxStdout,
+		MaxStdout: DefaultMaxStdout(),
 		Dir:       dir,
 	})
 	dur := time.Since(start)

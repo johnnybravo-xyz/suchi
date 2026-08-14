@@ -36,18 +36,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
 // Defaults. OCR is slow — the timeout is minutes, not seconds. Output
-// cap sized for a full-image full-scan document.
+// cap sized for a full-image full-scan document. Timeout is
+// overridable via SUCHI_OCRMYPDF_TIMEOUT, searchable-PDF output cap
+// via SUCHI_OCRMYPDF_MAX_ARCHIVE. Sidecar text cap is driven by
+// PDF_MAX_CONTENT_BYTES at the caller site (postingest).
 const (
-	DefaultBinary     = "ocrmypdf"
-	DefaultTimeout    = 10 * time.Minute
-	DefaultMaxArchive = 200 * 1024 * 1024 // 200 MiB PDF output
-	DefaultMaxText    = 8 * 1024 * 1024   // 8 MiB sidecar text
-	DefaultLanguages  = "eng"
+	DefaultBinary    = "ocrmypdf"
+	DefaultMaxText   = 8 * 1024 * 1024 // 8 MiB sidecar text (caller-overridden)
+	DefaultLanguages = "eng"
 )
+
+// Overrides read at call time so a config file loaded from
+// main.runServe reaches them — a package-init `var = pipeconfig.…(…)`
+// would capture env BEFORE LoadFile ran.
+func DefaultTimeout() time.Duration {
+	return pipeconfig.Duration("SUCHI_OCRMYPDF_TIMEOUT", 10*time.Minute)
+}
+func DefaultMaxArchive() int64 {
+	return pipeconfig.Bytes("SUCHI_OCRMYPDF_MAX_ARCHIVE", 200*1024*1024)
+}
 
 // Options carries per-call knobs.
 type Options struct {
@@ -92,11 +104,11 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = DefaultTimeout
+		timeout = DefaultTimeout()
 	}
 	maxArchive := opts.MaxArchive
 	if maxArchive == 0 {
-		maxArchive = DefaultMaxArchive
+		maxArchive = DefaultMaxArchive()
 	}
 	maxText := opts.MaxText
 	if maxText == 0 {
