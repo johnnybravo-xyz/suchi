@@ -43,10 +43,11 @@ func main() {
 	sizeStr := flag.String("size", "", "target size (e.g. 100MB, 50KB, 1MiB, or bytes)")
 	outPath := flag.String("out", "", "output pdf path")
 	seed := flag.Int64("seed", 42, "random seed")
+	mode := flag.String("mode", "text", "text | scan  (scan emits image-XObject pages ~2 MB each — mirrors a real 100 MB scanned PDF)")
 	flag.Parse()
 
 	if *sizeStr == "" || *outPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: gen-pdf -size <human> -out <file> [-seed <int>]")
+		fmt.Fprintln(os.Stderr, "usage: gen-pdf -size <human> -out <file> [-seed <int>] [-mode text|scan]")
 		os.Exit(2)
 	}
 	target, err := parseSize(*sizeStr)
@@ -56,12 +57,24 @@ func main() {
 	}
 
 	rng := rand.New(rand.NewSource(*seed))
-	data, pages := buildPDF(rng, target)
+	var (
+		data  []byte
+		pages int
+	)
+	switch *mode {
+	case "text", "":
+		data, pages = buildPDF(rng, target)
+	case "scan":
+		data, pages = buildScanPDF(rng, target)
+	default:
+		fmt.Fprintln(os.Stderr, "-mode must be text or scan")
+		os.Exit(2)
+	}
 	if err := os.WriteFile(*outPath, data, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "wrote %s size=%d target=%d pages=%d\n", *outPath, len(data), target, pages)
+	fmt.Fprintf(os.Stderr, "wrote %s size=%d target=%d pages=%d mode=%s\n", *outPath, len(data), target, pages, *mode)
 }
 
 func parseSize(s string) (int64, error) {
@@ -208,6 +221,148 @@ func trimStream(s string, target int64) string {
 		cut = limit
 	}
 	return body[:cut+1] + end
+}
+
+// buildScanPDF emits an image-only PDF that mirrors a real "scanned invoice"
+// shape: ~50 pages of a full-page grayscale Image XObject each, so a 100 MB
+// target lands as ~50 image pages rather than 6000 text pages. Deterministic
+// per seed. The pipeline routes it through qpdf → pdftotext (finds no text)
+// → OCR — exercising the honest ingest path.
+func buildScanPDF(rng *rand.Rand, target int64) ([]byte, int) {
+	// Rough page budget: 2 MiB per page → 50 pages at 100 MB.
+	// Image geometry: W × H grayscale 8-bit → raw bytes = W*H.
+	const imgW = 1500
+	perPageBytes := int64(2 * 1024 * 1024)
+	if target < 4*1024*1024 {
+		perPageBytes = target / 4
+		if perPageBytes < 128*1024 {
+			perPageBytes = 128 * 1024
+		}
+	}
+	imgH := int(perPageBytes / imgW)
+	if imgH < 512 {
+		imgH = 512
+	}
+	imgBytesPerPage := int64(imgW * imgH)
+
+	const overhead = int64(4096)
+	pages := int((target-overhead)/(imgBytesPerPage+256)) + 1
+	if pages < 1 {
+		pages = 1
+	}
+
+	imgs := make([][]byte, pages)
+	for i := 0; i < pages; i++ {
+		imgs[i] = makeScanImage(rng, imgW, imgH)
+	}
+	buf := assembleScan(imgs, imgW, imgH)
+	// One-shot trim of the last image if we're materially over target.
+	if int64(len(buf))-target > target/50 && pages > 1 {
+		imgs = imgs[:pages-1]
+		pages--
+		buf = assembleScan(imgs, imgW, imgH)
+	}
+	return buf, pages
+}
+
+// makeScanImage returns a W*H grayscale byte buffer. Content is a mix of
+// bright background (~220) with periodic darker bands and pseudo-random
+// speckle — enough visual structure that a viewer sees "paper", no OCR
+// pretense.
+func makeScanImage(rng *rand.Rand, w, h int) []byte {
+	out := make([]byte, w*h)
+	for y := 0; y < h; y++ {
+		band := byte(210)
+		if y%37 < 3 {
+			band = 60
+		}
+		row := out[y*w : (y+1)*w]
+		for x := 0; x < w; x++ {
+			p := int(band) + rng.Intn(30) - 15
+			if p < 0 {
+				p = 0
+			} else if p > 255 {
+				p = 255
+			}
+			row[x] = byte(p)
+		}
+	}
+	return out
+}
+
+// assembleScan builds a PDF whose page tree references one Image XObject per
+// page. Object layout:
+//
+//	1 Catalog · 2 Pages · 3 Font (unused but harmless)
+//	4..4+N-1  Page objs
+//	4+N..4+2N-1  Image XObjects
+//	4+2N..4+3N-1  Content streams (draw the image)
+func assembleScan(imgs [][]byte, w, h int) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n")
+
+	n := len(imgs)
+	pageStart := 4
+	imgStart := pageStart + n
+	contStart := imgStart + n
+	offsets := make(map[int]int)
+
+	writeDict := func(obj int, body string) {
+		offsets[obj] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", obj, body)
+	}
+	writeStream := func(obj int, dictBody string, stream []byte) {
+		offsets[obj] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nstream\n", obj, dictBody)
+		buf.Write(stream)
+		buf.WriteString("\nendstream\nendobj\n")
+	}
+
+	writeDict(1, "<< /Type /Catalog /Pages 2 0 R >>")
+
+	var kids strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			kids.WriteByte(' ')
+		}
+		fmt.Fprintf(&kids, "%d 0 R", pageStart+i)
+	}
+	writeDict(2, fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 612 792] >>", kids.String(), n))
+	writeDict(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+	for i := 0; i < n; i++ {
+		body := fmt.Sprintf(
+			"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 3 0 R >> /XObject << /Im1 %d 0 R >> >> /Contents %d 0 R >>",
+			imgStart+i, contStart+i)
+		writeDict(pageStart+i, body)
+	}
+	for i, img := range imgs {
+		dict := fmt.Sprintf(
+			"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray /BitsPerComponent 8 /Length %d >>",
+			w, h, len(img))
+		writeStream(imgStart+i, dict, img)
+	}
+	for i := 0; i < n; i++ {
+		// Draw XObject scaled to full Letter page.
+		content := []byte("q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ\n")
+		dict := fmt.Sprintf("<< /Length %d >>", len(content))
+		writeStream(contStart+i, dict, content)
+	}
+
+	xrefOff := buf.Len()
+	size := contStart + n
+	fmt.Fprintf(&buf, "xref\n0 %d\n", size)
+	buf.WriteString("0000000000 65535 f \n")
+	for i := 1; i < size; i++ {
+		off, ok := offsets[i]
+		if !ok {
+			buf.WriteString("0000000000 65535 f \n")
+			continue
+		}
+		fmt.Fprintf(&buf, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", size, xrefOff)
+	return buf.Bytes()
 }
 
 func assemble(streams []string) []byte {

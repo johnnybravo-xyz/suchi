@@ -13,8 +13,8 @@ Snapshot: 2026-08-14 · commit `2765120` (pre-perf-work) · host CachyOS
 | 02 idle RAM | `VmRSS` min → max | 161.5 → 161.9 MB (flat) |
 | 02 idle CPU | median → p95 → max | 0.0 → 0.0 → 140 % (single-tick spike) |
 | 03 cold start | boot → first `/healthz` 200 | **69 ms** |
-| 04 100 MB PDF | ingest outcome | **postingest reached `dead` at 300 s per-job cap** (6427-page lorem PDF exceeds OCR budget) |
-| 04 100 MB PDF | peak `VmRSS` / peak CPU during window | **505 MB / 2660 %** (~26 cores pinned) |
+| 04 100 MB PDF (scan mode, 48 image pages) | ingest wall clock | **9.0 s** (upload → `jobs.state=done`, with tuned per-stage timeouts) |
+| 04 100 MB PDF (scan mode) | peak `VmRSS` / peak CPU | **531 MB / 2800 %** (~28 cores pinned during qpdf normalize) |
 | 06 10 users × 5 docs (200 KB) | wall + throughput + errors | **97 ms, 515 docs/s, 0/50 errors** |
 | 06 10 users × 5 docs (200 KB) | upload latency p50 / p95 / p99 | **5 / 11 / 13 ms** |
 | 06 10 users × 5 docs (200 KB) | peak `VmRSS` during burst + postingest | **45.9 MB** (only ~10 MB above idle) |
