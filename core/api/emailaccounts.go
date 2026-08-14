@@ -538,11 +538,17 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	defer c.Logout()
 
 	if err := authFn(c); err != nil {
+		// Persist the failure so the list-page dot reflects reality
+		// even if the poll loop hasn't run since.
+		_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, err.Error())
 		s.writeJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "message": "login: " + err.Error(),
 		})
 		return
 	}
+	// Success — clear any stale last_error and stamp a fresh sync
+	// time so the list-page indicator flips green.
+	_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, time.Now().Unix(), "")
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Connected — mailbox reachable.",
 	})
