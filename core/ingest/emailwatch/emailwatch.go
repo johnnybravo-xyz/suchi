@@ -238,6 +238,9 @@ func (w *Watcher) cycle(ctx context.Context) {
 
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = []string{imap.SeenFlag}
+	if ts := w.account.SyncSince; ts != nil && *ts > 0 {
+		criteria.Since = time.Unix(*ts, 0).UTC()
+	}
 	uids, err := c.UidSearch(criteria)
 	if err != nil {
 		w.log.Warn("emailwatch.search_failed", "err", err.Error())

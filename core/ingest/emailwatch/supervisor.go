@@ -215,6 +215,10 @@ func fingerprint(a *emailaccounts.Account) string {
 	b.WriteByte('\x1f')
 	b.WriteString(a.Username)
 	b.WriteByte('\x1f')
+	if a.SyncSince != nil {
+		b.WriteString(strconv.FormatInt(*a.SyncSince, 10))
+	}
+	b.WriteByte('\x1f')
 	b.WriteString(strconv.FormatInt(a.UpdatedAt, 10))
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])

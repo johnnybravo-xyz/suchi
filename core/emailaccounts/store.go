@@ -28,7 +28,7 @@ func listWhere(ctx context.Context, database *db.DB, where string, args []any) (
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), attachments_only,
-		       COALESCE(from_allowlist, ''), enabled,
+		       COALESCE(from_allowlist, ''), sync_since, enabled,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
 		FROM email_accounts ` + where + ` ORDER BY id`
@@ -55,7 +55,7 @@ func Get(ctx context.Context, database *db.DB, id int64) (*Account, error) {
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), attachments_only,
-		       COALESCE(from_allowlist, ''), enabled,
+		       COALESCE(from_allowlist, ''), sync_since, enabled,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
 		FROM email_accounts WHERE id = ?`, id)
@@ -74,11 +74,12 @@ type scanner interface {
 func scanAccount(s scanner) (Account, error) {
 	var a Account
 	var useTLS, attachOnly, enabled int
+	var syncSince sql.NullInt64
 	if err := s.Scan(&a.ID, &a.Name, &a.OwnerID, &a.Provider, &a.Host, &a.Port, &useTLS,
 		&a.TLSCAFile, &a.Folder, &a.ProcessedFolder,
 		&a.PollIntervalMin, &a.AuthMethod, &a.Username, &a.SealedSecret,
 		&a.OAuthAccountID, &attachOnly,
-		&a.FromAllowlist, &enabled,
+		&a.FromAllowlist, &syncSince, &enabled,
 		&a.LastSyncAt, &a.LastError,
 		&a.CreatedAt, &a.UpdatedAt); err != nil {
 		return Account{}, err
@@ -86,6 +87,10 @@ func scanAccount(s scanner) (Account, error) {
 	a.UseTLS = useTLS == 1
 	a.AttachmentsOnly = attachOnly == 1
 	a.Enabled = enabled == 1
+	if syncSince.Valid {
+		v := syncSince.Int64
+		a.SyncSince = &v
+	}
 	return a, nil
 }
 
@@ -110,14 +115,15 @@ func Create(ctx context.Context, database *db.DB, a Account) (*Account, error) {
 				name, owner_id, provider, host, port, use_tls, tls_ca_file,
 				folder, processed_folder, poll_interval_min, auth_method,
 				username, sealed_secret, oauth_account_id, attachments_only,
-				from_allowlist, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				from_allowlist, sync_since, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.Name, a.OwnerID, string(a.Provider), a.Host, a.Port, boolInt(a.UseTLS),
 			nullIfEmpty(a.TLSCAFile),
 			a.Folder, nullIfEmpty(a.ProcessedFolder), a.PollIntervalMin,
 			string(a.AuthMethod), a.Username, a.SealedSecret,
 			nullIfEmpty(a.OAuthAccountID), boolInt(a.AttachmentsOnly),
-			nullIfEmpty(a.FromAllowlist), boolInt(a.Enabled),
+			nullIfEmpty(a.FromAllowlist), nullIfZeroI64(a.SyncSince),
+			boolInt(a.Enabled),
 			now, now)
 		if err != nil {
 			return err
@@ -215,6 +221,15 @@ func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Acc
 	if p.FromAllowlist != nil {
 		add("from_allowlist", nullIfEmpty(*p.FromAllowlist))
 	}
+	if p.SyncSince != nil {
+		// wire `sync_since: 0` clears the column (NULL, sync-all);
+		// wire positive sets an explicit unix timestamp.
+		if *p.SyncSince <= 0 {
+			add("sync_since", nil)
+		} else {
+			add("sync_since", *p.SyncSince)
+		}
+	}
 	if p.Enabled != nil {
 		add("enabled", boolInt(*p.Enabled))
 	}
@@ -284,4 +299,11 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nullIfZeroI64(p *int64) any {
+	if p == nil || *p <= 0 {
+		return nil
+	}
+	return *p
 }

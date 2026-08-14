@@ -33,6 +33,26 @@
   // the state_referenced_locally warning without adding a dep.
   const isEdit = untrack(() => mode === 'edit')
   const seed = untrack(() => account || {})
+
+  // datetime-local expects "YYYY-MM-DDTHH:mm" in local time. Round-trip
+  // helpers: unix seconds ↔ input string. Empty string means "sync all
+  // history" (the wire uses `sync_since: 0` for that).
+  function unixToLocalInput(sec) {
+    if (!sec) return ''
+    const d = new Date(sec * 1000)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  function localInputToUnix(v) {
+    if (!v) return 0
+    const t = new Date(v).getTime()
+    return Number.isFinite(t) ? Math.floor(t / 1000) : 0
+  }
+  // Create → default to now. Edit → whatever the row already has.
+  const seedSyncSince = isEdit
+    ? unixToLocalInput(seed.sync_since)
+    : unixToLocalInput(Math.floor(Date.now() / 1000))
+
   let form = $state({
     name: seed.name || '',
     owner_id: seed.owner_id || 0,
@@ -49,6 +69,7 @@
     password: '',
     attachments_only: seed.attachments_only ?? 0,
     from_allowlist: seed.from_allowlist || '',
+    sync_since: seedSyncSince,
     oauth_account_id: seed.oauth_account_id || '',
     sealed_secret_b64: '',
     enabled: seed.enabled ?? 1,
@@ -107,6 +128,9 @@
         if (body[k] === '' || body[k] === null || body[k] === undefined) delete body[k]
       }
       if (!isEdit && !body.tls_ca_file) delete body.tls_ca_file
+      // sync_since is always sent (0 = "sync all"), otherwise a cleared
+      // input on PATCH would be indistinguishable from "leave alone".
+      body.sync_since = localInputToUnix(form.sync_since)
 
       if (isEdit) {
         await patchEmailAccount(account.id, body)
@@ -293,6 +317,15 @@
         <label for="ma-poll">Poll every (min)</label>
         <input id="ma-poll" class="input" type="number" min="1" bind:value={form.poll_interval_min} />
       </div>
+    </div>
+
+    <div class="field">
+      <label for="ma-since">Sync mail from</label>
+      <input id="ma-since" class="input" type="datetime-local"
+             bind:value={form.sync_since} />
+      <span class="sub" style="font-size:.76rem;color:var(--faint)">
+        Older messages are ignored. Clear this field to sync the whole archive.
+      </span>
     </div>
 
     <div class="field">

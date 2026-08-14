@@ -77,7 +77,13 @@ type emailAccountInput struct {
 	SealedSecretB64 *string `json:"sealed_secret_b64,omitempty"`
 	AttachmentsOnly *bool   `json:"attachments_only,omitempty"`
 	FromAllowlist   *string `json:"from_allowlist,omitempty"`
-	Enabled         *bool   `json:"enabled,omitempty"`
+	// SyncSince is the unix-seconds initial-sync horizon. On create,
+	// omit to default to time.Now() (SPA "add mailbox" only pulls fresh
+	// mail). Send 0 to explicitly opt out (sync all UNSEEN). On PATCH,
+	// omit = leave alone; 0 = clear (revert to sync-all); positive =
+	// set. Watcher maps non-null values onto IMAP SEARCH SINCE.
+	SyncSince *int64 `json:"sync_since,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 }
 
 // ---------- list + get + create + patch + delete ----------
@@ -175,6 +181,16 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.FromAllowlist != nil {
 		acc.FromAllowlist = strings.TrimSpace(*in.FromAllowlist)
+	}
+	// Initial-sync horizon. Omitted → "from now on"; explicit 0 →
+	// "sync all UNSEEN" (matches pre-change behaviour for operators
+	// who wanted the old default).
+	if in.SyncSince == nil {
+		nowTS := time.Now().Unix()
+		acc.SyncSince = &nowTS
+	} else if *in.SyncSince > 0 {
+		v := *in.SyncSince
+		acc.SyncSince = &v
 	}
 	if in.Enabled != nil {
 		acc.Enabled = *in.Enabled
@@ -304,6 +320,7 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		OAuthAccountID:  trimStringPtr(in.OAuthAccountID),
 		AttachmentsOnly: in.AttachmentsOnly,
 		FromAllowlist:   trimStringPtr(in.FromAllowlist),
+		SyncSince:       in.SyncSince,
 		Enabled:         in.Enabled,
 	}
 	if in.Provider != nil {
@@ -755,8 +772,20 @@ func accountAuditView(a *emailaccounts.Account) map[string]any {
 		"oauth_account_id":  a.OAuthAccountID,
 		"attachments_only":  a.AttachmentsOnly,
 		"from_allowlist":    a.FromAllowlist,
+		"sync_since":        syncSinceAudit(a.SyncSince),
 		"enabled":           a.Enabled,
 	}
+}
+
+// syncSinceAudit returns 0 for nil (== "sync all") and the unix
+// timestamp otherwise. The map value must be a plain int64 so audit
+// diffs stay stable across restarts (a *int64 pointer would render
+// as a pointer address).
+func syncSinceAudit(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func (s *Server) pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {

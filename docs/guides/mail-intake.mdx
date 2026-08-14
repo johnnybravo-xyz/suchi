@@ -56,11 +56,16 @@ enter host / port / TLS explicitly.
    **Poll interval** in minutes (default 5). Optionally set a
    **Processed folder** — messages get moved there after ingest
    instead of being marked `\Seen` in place.
-7. Optionally add per-account filters:
+7. Set the **Sync mail from** cutoff. The form pre-fills the current
+   date/time so "add mailbox" doesn't drown you in a decade of
+   history — only mail that arrives after this point is polled.
+   Clear the field to sync the whole archive; edit it later to
+   backfill up to an earlier point.
+8. Optionally add per-account filters:
    - **From allowlist** — one address or `@domain.tld` suffix per
      line. Empty = accept everything.
    - **Attachments only** — skip messages that carry no attachment.
-8. Save. The supervisor picks the new row up within a few seconds.
+9. Save. The supervisor picks the new row up within a few seconds.
    Click **Test connection** on the row to dial + auth + logout so
    you know the credentials are good before waiting on the first
    poll.
@@ -74,6 +79,31 @@ The panel's row layout, in prose:
 | [Test connection] [Edit] [Revoke sign-in] [Delete]           |
 +--------------------------------------------------------------+
 ```
+
+## Sync horizon
+
+`sync_since` is the initial-sync cutoff, stored as a unix timestamp
+per account. It maps directly onto the IMAP `SEARCH SINCE` predicate
+the poller hands the server, so filtering happens on the mail server
+— messages older than the cutoff never cross the wire.
+
+- **Default at create.** The SPA and the API both default to
+  `time.Now()` when you don't send a value, so a freshly-added
+  mailbox only pulls mail that arrives from that moment onward.
+  This is the "add mailbox without also importing 10 years of
+  history" default.
+- **Backfill later.** PATCH the field to any earlier timestamp and
+  the supervisor restarts the watcher; the next poll picks up
+  everything UNSEEN since the new cutoff.
+- **Sync everything.** PATCH `sync_since` to `0` — the poller falls
+  back to plain `UID SEARCH UNSEEN`, matching the pre-v0.1 behaviour.
+- **Timezones.** The wire is unix seconds (UTC). The SPA renders the
+  input in local time; conversion happens in the browser.
+
+Pausing suchi for a week doesn't cost you those seven days of mail —
+`sync_since` is an absolute floor, not a sliding window. If you want
+a "skip anything older than 30 days" cap on top, that's on the
+roadmap as a follow-up knob.
 
 ## Per-account filters
 

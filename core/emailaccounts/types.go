@@ -50,6 +50,11 @@ const (
 // TLSCAFile / ProcessedFolder / OAuthAccountID / FromAllowlist are
 // nullable columns represented as empty string on read.
 // LastSyncAt / LastError are 0 / "" until MarkSync writes them.
+//
+// SyncSince is *int64 (not int64) because 0 is a legitimate unix
+// timestamp — nil means "no SINCE filter, sync all UNSEEN" and is
+// visually distinct from an explicit epoch. Watcher maps non-nil onto
+// imap.SearchCriteria.Since.
 type Account struct {
 	ID              int64      `json:"id"`
 	Name            string     `json:"name"`
@@ -68,6 +73,7 @@ type Account struct {
 	OAuthAccountID  string     `json:"oauth_account_id,omitempty"`
 	AttachmentsOnly bool       `json:"attachments_only"`
 	FromAllowlist   string     `json:"from_allowlist,omitempty"`
+	SyncSince       *int64     `json:"sync_since,omitempty"`
 	Enabled         bool       `json:"enabled"`
 	LastSyncAt      int64      `json:"last_sync_at,omitempty"`
 	LastError       string     `json:"last_error,omitempty"`
@@ -100,5 +106,10 @@ type AccountPatch struct {
 	OAuthAccountID  *string     `json:"oauth_account_id,omitempty"`
 	AttachmentsOnly *bool       `json:"attachments_only,omitempty"`
 	FromAllowlist   *string     `json:"from_allowlist,omitempty"`
-	Enabled         *bool       `json:"enabled,omitempty"`
+	// SyncSince: nil = leave alone; non-nil pointer to 0 = clear the
+	// column (NULL, "sync all"); non-nil pointer to positive = set.
+	// The API PATCH decoder translates wire `sync_since: 0` into
+	// `*int64(0)` so the "clear" semantics are explicit at the wire.
+	SyncSince *int64 `json:"sync_since,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 }

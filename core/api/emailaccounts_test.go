@@ -143,6 +143,11 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	if out.ID == 0 || out.Host != "imap.fastmail.com" || out.Port != 993 || !out.UseTLS {
 		t.Fatalf("preset auto-fill missed: %+v", out)
 	}
+	// SyncSince defaults to ~time.Now() when the caller omits it —
+	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
+	if out.SyncSince == nil {
+		t.Fatalf("sync_since should default to now, got nil")
+	}
 	if strings.Contains(rec.Body.String(), "sealed_secret") {
 		t.Fatalf("sealed_secret must not appear in response body: %s", rec.Body.String())
 	}
