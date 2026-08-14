@@ -128,9 +128,14 @@ func Sweep(ctx context.Context, database *db.DB, cas *blob.CAS, ttl time.Duratio
 	var toDelete []string
 	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
 		// User IDs first — one query, small result.
+		//
+		// disabled=0 filter: an operator who manually quarantines a
+		// specific visitor row (rare, but a valid response to abuse)
+		// gets to hold onto the row + its docs for forensics. Without
+		// this filter, the next tick would silently reap the evidence.
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM users
-			 WHERE email LIKE ? AND created_at < ?
+			 WHERE email LIKE ? AND created_at < ? AND disabled = 0
 		`, ScratchEmailLike, cutoff)
 		if err != nil {
 			return fmt.Errorf("select scratch users: %w", err)

@@ -206,6 +206,48 @@ func TestSweep(t *testing.T) {
 	}
 }
 
+// TestSweep_SkipsDisabledVisitor pins the security guardrail added
+// alongside dev-mode's disabled-column stickiness: an operator who
+// manually quarantines a specific visitor row (rare, but a valid
+// response to abuse) should be able to keep the row + evidence past
+// TTL. Without this filter, the very next tick reaps the forensics.
+func TestSweep_SkipsDisabledVisitor(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	d, err := db.Open(ctx, filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	migs, _ := db.LoadMigrations(migrations.FS, ".")
+	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	cas, _ := blob.New(dir)
+
+	old := time.Now().Add(-2 * time.Hour).Unix()
+	var quarantined int64
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `INSERT INTO users(email, display_name, role, disabled, created_at, updated_at)
+			VALUES ('visitor-quarantined@demo.local', 'q', 'member', 1, ?, ?)`, old, old)
+		if err != nil {
+			return err
+		}
+		quarantined, _ = r.LastInsertId()
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, err := demo.Sweep(ctx, d, cas, 30*time.Minute, log); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if !userExists(t, d, quarantined) {
+		t.Fatal("disabled visitor was swept — quarantine broken")
+	}
+}
+
 func TestSweep_NothingToDo(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

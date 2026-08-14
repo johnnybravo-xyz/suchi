@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
@@ -126,6 +127,11 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Action:     "demo_session.mint",
+		ObjectKind: "demo_session",
+		After:      map[string]any{"remote_ip": r.RemoteAddr},
+	})
 	s.writeJSON(w, http.StatusOK, demoSessionResp{
 		Kind:        "anon",
 		Token:       token,
@@ -184,6 +190,12 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 	// bounds usability by sweeping the user row on its TTL. We don't
 	// emit an explicit ExpiresUnix because the client should be
 	// resilient to a 401 mid-flight and re-mint.
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		Action:     "demo_session.upgrade",
+		ObjectKind: "user",
+		ObjectID:   uid,
+		After:      map[string]any{"email": email, "remote_ip": r.RemoteAddr},
+	})
 	s.writeJSON(w, http.StatusOK, demoSessionResp{
 		Kind:   "scratch",
 		Token:  token,
