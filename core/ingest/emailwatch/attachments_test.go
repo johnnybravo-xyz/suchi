@@ -18,6 +18,26 @@ const emlPlainText = "From: a@example.com\r\n" +
 	"\r\n" +
 	"hello\r\n"
 
+// A text/plain attachment (Content-Disposition: attachment). Distinct
+// from emlPlainText — the latter is a body part, this is an actual
+// text file someone attached.
+const emlPlainTextAttachment = "From: a@example.com\r\n" +
+	"To: b@example.com\r\n" +
+	"Subject: notes\r\n" +
+	"MIME-Version: 1.0\r\n" +
+	"Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n" +
+	"\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/plain; charset=utf-8\r\n" +
+	"\r\n" +
+	"See attached notes.\r\n" +
+	"--BOUND\r\n" +
+	"Content-Type: text/plain; charset=utf-8\r\n" +
+	"Content-Disposition: attachment; filename=\"notes.txt\"\r\n" +
+	"\r\n" +
+	"the actual notes text\r\n" +
+	"--BOUND--\r\n"
+
 const emlOctetStream = "From: a@example.com\r\n" +
 	"To: b@example.com\r\n" +
 	"Subject: blob\r\n" +
@@ -102,12 +122,13 @@ func TestHasAllowlistedAttachment(t *testing.T) {
 		raw  string
 		want bool
 	}{
-		{"bare plain text is in allowlist", emlPlainText, true},
-		{"bare octet-stream is not", emlOctetStream, false},
+		{"bare text body is not an attachment", emlPlainText, false},
+		{"bare octet-stream attachment (type not in allowlist)", emlOctetStream, false},
 		{"bare pdf attachment", emlBarePDF, true},
 		{"multipart with pdf attachment", emlMultipartWithPDF, true},
-		{"multipart with inline pdf", emlMultipartInlinePDF, true},
-		{"multipart with only text parts (text/plain hits)", emlMultipartNoAttachments, true},
+		{"multipart with inline pdf (filename set)", emlMultipartInlinePDF, true},
+		{"multipart/alternative body-only, no attachments", emlMultipartNoAttachments, false},
+		{"text/plain attachment counts", emlPlainTextAttachment, true},
 		{"garbage input returns false, no panic", emlMalformed, false},
 		{"empty input returns false", "", false},
 	}
