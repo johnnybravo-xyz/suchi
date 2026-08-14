@@ -55,3 +55,8 @@ ui/dist/
 # bench harness results (regenerable, timestamped, sometimes multi-GB)
 /hack/bench/results/
 /hack/bench/tools/*/bin/
+# Also catch stray binaries built without -o bin/ (module dir == binary name)
+/hack/bench/tools/sampler/sampler
+/hack/bench/tools/gen-pdf/gen-pdf
+/hack/bench/tools/report/report
+/hack/bench/tools/pprof2collapsed/pprof2collapsed
