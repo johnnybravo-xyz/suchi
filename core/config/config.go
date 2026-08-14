@@ -56,11 +56,26 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// IMAP email ingest (Phase 2; parsed here so Phase 0 doctor can already
-	// report the egress surface honestly)
+	// IMAP email ingest.
+	// Seed-only: consumed once at first boot when email_accounts is
+	// empty; ignored thereafter. The email_accounts table is the
+	// source of truth; the admin API at /api/admin/email-accounts owns
+	// live mutation. Left in place so an operator can bootstrap a
+	// mailbox from env before ever opening the UI.
 	IngestIMAPURL        string
 	IngestIMAPPassword   string
 	IngestIMAPOwnerEmail string
+	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
+	// IngestIMAPOAuthClientIDMicrosoft overrides the default suchi Azure
+	// app registration with an operator-owned, tenant-scoped client ID.
+	// Empty falls back to oauth.DefaultClientID. Public-client device-
+	// code flow — no tenant / secret required.
+	IngestIMAPOAuthClientIDMicrosoft string
+	// IngestIMAPOAuthScopesMicrosoft is a comma-separated list of MSAL
+	// scopes. Empty falls back to oauth.DefaultScopes (IMAP + offline).
+	// Override when the app registration does not consent to
+	// offline_access (some corp tenants, well-known public client IDs).
+	IngestIMAPOAuthScopesMicrosoft string
 
 	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
@@ -187,25 +202,28 @@ type Config struct {
 // called exactly once at process start.
 func Load() (*Config, error) {
 	c := &Config{
-		PublicURL:            env("PUBLIC_URL", ""),
-		DataDir:              env("DATA_DIR", "/data"),
-		ListenAddr:           env("LISTEN_ADDR", ":8000"),
-		LogLevel:             env("LOG_LEVEL", "info"),
-		OCRLanguages:         splitCSV(env("OCR_LANGUAGES", "eng")),
-		OIDCIssuerURL:        env("OIDC_ISSUER_URL", ""),
-		OIDCClientID:         env("OIDC_CLIENT_ID", ""),
-		AdminEmail:           env("ADMIN_EMAIL", ""),
-		TLSCertFile:          env("TLS_CERT_FILE", ""),
-		TLSKeyFile:           env("TLS_KEY_FILE", ""),
-		IngestIMAPURL:        env("INGEST_IMAP_URL", ""),
-		IngestIMAPOwnerEmail: env("INGEST_IMAP_OWNER_EMAIL", ""),
-		DevMode:              env("SUCHI_DEV", "") == "1",
-		DevAdmin:             env("SUCHI_DEV_ADMIN", ""),
-		IngestFSDir:          env("INGEST_FS_DIR", ""),
-		IngestFSOwnerEmail:   env("INGEST_FS_OWNER_EMAIL", ""),
-		LLMEndpointURL:       env("LLM_ENDPOINT_URL", ""),
-		LLMModel:             env("LLM_MODEL", ""),
-		LLMEgressAck:         env("LLM_EGRESS_ACK", "") == "true",
+		PublicURL:                        env("PUBLIC_URL", ""),
+		DataDir:                          env("DATA_DIR", "/data"),
+		ListenAddr:                       env("LISTEN_ADDR", ":8000"),
+		LogLevel:                         env("LOG_LEVEL", "info"),
+		OCRLanguages:                     splitCSV(env("OCR_LANGUAGES", "eng")),
+		OIDCIssuerURL:                    env("OIDC_ISSUER_URL", ""),
+		OIDCClientID:                     env("OIDC_CLIENT_ID", ""),
+		AdminEmail:                       env("ADMIN_EMAIL", ""),
+		TLSCertFile:                      env("TLS_CERT_FILE", ""),
+		TLSKeyFile:                       env("TLS_KEY_FILE", ""),
+		IngestIMAPURL:                    env("INGEST_IMAP_URL", ""),
+		IngestIMAPOwnerEmail:             env("INGEST_IMAP_OWNER_EMAIL", ""),
+		IngestIMAPTLSCAFile:              env("INGEST_IMAP_TLS_CA_FILE", ""),
+		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
+		IngestIMAPOAuthScopesMicrosoft:   env("INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", ""),
+		DevMode:                          env("SUCHI_DEV", "") == "1",
+		DevAdmin:                         env("SUCHI_DEV_ADMIN", ""),
+		IngestFSDir:                      env("INGEST_FS_DIR", ""),
+		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
+		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),
+		LLMModel:                         env("LLM_MODEL", ""),
+		LLMEgressAck:                     env("LLM_EGRESS_ACK", "") == "true",
 	}
 	if c.IngestFSDir == "" && c.IngestFSOwnerEmail != "" {
 		c.IngestFSDir = filepath.Join(c.DataDir, "staging")

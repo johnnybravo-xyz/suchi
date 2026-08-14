@@ -37,9 +37,11 @@ const (
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
 
-	// Mail intake — the emailwatch IMAP poller. Written by the SPA
-	// Admin panel; read at boot by main.go (settings-first, env-
-	// fallback via ResolveEmailWatchConfig).
+	// Mail intake — legacy seed keys for the emailwatch IMAP poller.
+	// Consumed once by emailaccounts.MigrateFromLegacySettings to
+	// materialize a pre-multiaccount install as a single email_accounts
+	// row; the keys are then deleted. Live mutation goes through
+	// /api/admin/email-accounts.
 	KeyIMAPHost            = "ingest.imap_host"
 	KeyIMAPPort            = "ingest.imap_port"
 	KeyIMAPUsername        = "ingest.imap_username"
@@ -243,9 +245,9 @@ type EmailWatchConfig struct {
 
 // ResolveEmailWatchConfig merges settings over env fallback for the
 // mail-intake poller. Settings win when set; blank leaves the fb
-// value alone. Live-reload isn't wired — the watcher owns a
-// goroutine bound to a specific URL, so wizard writes take effect on
-// next boot. The handler surfaces this via {"restart_required": true}.
+// value alone. Kept for the seed-migration path in emailaccounts —
+// mutation of live mail intake now flows through the email_accounts
+// table via /api/admin/email-accounts.
 func ResolveEmailWatchConfig(ctx context.Context, database *db.DB, fb EmailWatchConfig) EmailWatchConfig {
 	out := fb
 	var s string

@@ -21,13 +21,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +37,10 @@ import (
 	imapclient "github.com/emersion/go-imap/client"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
+	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -50,60 +54,94 @@ const (
 	PluginName          = "email-ingest"   // plugin_kv namespace for msg-id dedup
 )
 
-// AllowedMIMEs is the initial attachment-type allowlist. Kept small
-// on purpose: an inbox is hostile input, and the ingest pipeline
-// only really has qpdf + pdf-inspector + ocrmypdf paths right now.
-// Widens as we ship more converters (exotic-file-types tasks).
+// AllowedMIMEs is the attachment-type allowlist. Kept tight on
+// purpose: an inbox is hostile input, and only types the downstream
+// pipeline can render + text-extract belong here. Currently: PDFs,
+// common raster images, plus the office-doc formats the converter
+// chain already handles (docx / xlsx / odt) and plain text.
 var AllowedMIMEs = map[string]bool{
 	"application/pdf": true,
 	"image/jpeg":      true,
 	"image/png":       true,
 	"image/tiff":      true,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":       true, // .xlsx
+	"application/vnd.oasis.opendocument.text":                                 true, // .odt
+	"text/plain": true,
 }
 
-// Config carries the knobs. Zero-value: everything empty → disabled.
+// shouldImport is the pre-ingest gate. Splitting it out of importOne
+// lets the unit tests exercise the drop paths without spinning up a
+// CAS + DB fixture.
+//
+// Returns:
+//   - hasAttachment: cached result of the AllowedMIMEs walk. importOne
+//     reuses this for the post-ingest payload so we don't parse the
+//     mime tree twice.
+//   - fromHeader:    the address we compared against the allowlist,
+//     surfaced so the caller can log it on drop.
+//   - drop:          "" means pass the gate. Non-empty is the reason
+//     tag: "from_allowlist" or "attachments_only".
+func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw []byte) (hasAttachment bool, fromHeader string, drop string) {
+	if envelope != nil && len(envelope.From) > 0 && envelope.From[0] != nil {
+		fromHeader = envelope.From[0].Address()
+	}
+	if !MatchFromAllowlist(fromHeader, account.FromAllowlist) {
+		return false, fromHeader, "from_allowlist"
+	}
+	hasAttachment = HasAllowlistedAttachment(raw, AllowedMIMEs)
+	if account.AttachmentsOnly && !hasAttachment {
+		return hasAttachment, fromHeader, "attachments_only"
+	}
+	return hasAttachment, fromHeader, ""
+}
+
+// Config carries process-wide knobs shared by every Watcher. Per-
+// account state lives on emailaccounts.Account.
 type Config struct {
-	URL             string // imaps://user@host/FOLDER
-	Password        string
-	OwnerEmail      string
-	PollInterval    time.Duration
-	ProcessedFolder string // move-to-folder on success; empty = mark \Seen
-	MaxAttachBytes  int64
+	MaxAttachBytes int64
 }
 
-// Watcher is what Run reads. Constructed by New; nil when idle.
+// Watcher polls one email account. Constructed by New from an
+// emailaccounts.Account row + the shared Config.
 type Watcher struct {
+	account *emailaccounts.Account
 	cfg     Config
 	db      *db.DB
 	cas     *blob.CAS
-	log     *slog.Logger
 	disp    *jobs.Dispatcher
-	ownerID int64
+	aead    *crypto.AEADKey
+	msal    *oauth.Client
+	log     *slog.Logger
 
-	host      string
-	user      string
-	folder    string
-	useTLS    bool
 	interval  time.Duration
 	maxAttach int64
+	rootCAs   *x509.CertPool // nil = use system roots only
 }
 
-// New validates cfg + resolves the owner. Returns (nil, nil) when the
-// producer is idle (empty URL/OwnerEmail) or the owner isn't
-// present yet — matches the fs-watch bootstrap-race behavior.
-func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, log *slog.Logger) (*Watcher, error) {
-	if cfg.URL == "" || cfg.OwnerEmail == "" {
-		log.Info("emailwatch.disabled", "reason", "INGEST_IMAP_URL or INGEST_IMAP_OWNER_EMAIL not set")
+// New builds a Watcher from an account row. Returns (nil, nil) when
+// the account is disabled or its owner has been removed — the
+// supervisor treats nil as "skip this row this cycle". Returns an
+// error only for hard-fails the operator needs to see (bad CA file);
+// password unseal is deferred to connect so a rotated/stale seal
+// doesn't block the whole supervisor at build time.
+func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Client, log *slog.Logger) (*Watcher, error) {
+	if account == nil || !account.Enabled {
 		return nil, nil
 	}
-	if cfg.Password == "" {
-		return nil, errors.New("emailwatch: INGEST_IMAP_PASSWORD is required")
-	}
-	host, user, folder, useTLS, err := ParseURL(cfg.URL)
+
+	var ownerCheck int64
+	err := d.Read.QueryRowContext(ctx,
+		`SELECT id FROM users WHERE id = ? AND disabled = 0`,
+		account.OwnerID).Scan(&ownerCheck)
 	if err != nil {
-		return nil, fmt.Errorf("emailwatch: %w", err)
+		log.Warn("emailwatch.disabled",
+			"reason", "owner not found or query failed",
+			"account_id", account.ID, "owner_id", account.OwnerID, "err", err.Error())
+		return nil, nil
 	}
-	interval := cfg.PollInterval
+
+	interval := time.Duration(account.PollIntervalMin) * time.Minute
 	if interval == 0 {
 		interval = DefaultPollInterval
 	}
@@ -112,22 +150,45 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		maxAttach = DefaultMaxAttach
 	}
 
-	var ownerID int64
-	err = d.Read.QueryRowContext(ctx,
-		`SELECT id FROM users WHERE email = ? AND disabled = 0`,
-		cfg.OwnerEmail).Scan(&ownerID)
-	if err != nil {
-		log.Warn("emailwatch.disabled",
-			"reason", "owner not found or query failed",
-			"email", cfg.OwnerEmail, "err", err.Error())
-		return nil, nil
+	// Widen the trust pool with an operator-supplied CA when set —
+	// Bridge, self-hosted Dovecot, homelab CAs, etc. System roots stay
+	// trusted; hard-fail rather than silently degrade if the file is
+	// unreadable or malformed.
+	var rootCAs *x509.CertPool
+	if account.TLSCAFile != "" {
+		pem, readErr := os.ReadFile(account.TLSCAFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("emailwatch: read tls_ca_file %q: %w", account.TLSCAFile, readErr)
+		}
+		var poolErr error
+		rootCAs, poolErr = x509.SystemCertPool()
+		if poolErr != nil || rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
+		if !rootCAs.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("emailwatch: no valid PEM certs in %q", account.TLSCAFile)
+		}
 	}
 
 	return &Watcher{
-		cfg: cfg, db: d, cas: cas, disp: disp, ownerID: ownerID,
-		log:  log.With("component", "emailwatch", "host", host, "user", user, "folder", folder),
-		host: host, user: user, folder: folder, useTLS: useTLS,
-		interval: interval, maxAttach: maxAttach,
+		account: account,
+		cfg:     cfg,
+		db:      d,
+		cas:     cas,
+		disp:    disp,
+		aead:    aead,
+		msal:    msal,
+		log: log.With(
+			"component", "emailwatch",
+			"account_id", account.ID,
+			"account", account.Name,
+			"host", account.Host,
+			"user", account.Username,
+			"folder", account.Folder,
+		),
+		interval:  interval,
+		maxAttach: maxAttach,
+		rootCAs:   rootCAs,
 	}, nil
 }
 
@@ -170,13 +231,16 @@ func (w *Watcher) cycle(ctx context.Context) {
 	}
 	defer func() { _ = c.Logout() }()
 
-	if _, err := c.Select(w.folder, false); err != nil {
-		w.log.Warn("emailwatch.select_failed", "folder", w.folder, "err", err.Error())
+	if _, err := c.Select(w.account.Folder, false); err != nil {
+		w.log.Warn("emailwatch.select_failed", "folder", w.account.Folder, "err", err.Error())
 		return
 	}
 
 	criteria := imap.NewSearchCriteria()
 	criteria.WithoutFlags = []string{imap.SeenFlag}
+	if ts := w.account.SyncSince; ts != nil && *ts > 0 {
+		criteria.Since = time.Unix(*ts, 0).UTC()
+	}
 	uids, err := c.UidSearch(criteria)
 	if err != nil {
 		w.log.Warn("emailwatch.search_failed", "err", err.Error())
@@ -236,10 +300,10 @@ func (w *Watcher) cycle(ctx context.Context) {
 	// set \Seen.
 	markSet := new(imap.SeqSet)
 	markSet.AddNum(seenUIDs...)
-	if w.cfg.ProcessedFolder != "" {
-		if err := c.UidMove(markSet, w.cfg.ProcessedFolder); err != nil {
+	if w.account.ProcessedFolder != "" {
+		if err := c.UidMove(markSet, w.account.ProcessedFolder); err != nil {
 			w.log.Warn("emailwatch.move_failed",
-				"to", w.cfg.ProcessedFolder, "err", err.Error())
+				"to", w.account.ProcessedFolder, "err", err.Error())
 		}
 	} else {
 		flags := []any{imap.SeenFlag}
@@ -250,13 +314,14 @@ func (w *Watcher) cycle(ctx context.Context) {
 	}
 }
 
-// connect dials, TLS-wraps if useTLS, and logs in. Bounded by ctx.
+// connect dials, TLS-wraps when the account row says so, and logs in.
+// Bounded by ctx.
 func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(30 * time.Second)
 	}
-	addr := fmt.Sprintf("%s:%s", w.host, defaultPort(w.host, w.useTLS))
+	addr := w.account.Host + ":" + strconv.Itoa(w.account.Port)
 	var (
 		c   *imapclient.Client
 		err error
@@ -265,8 +330,11 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		if w.useTLS {
-			c, err = imapclient.DialTLS(addr, &tls.Config{ServerName: w.host})
+		if w.account.UseTLS {
+			c, err = imapclient.DialTLS(addr, &tls.Config{
+				ServerName: w.account.Host,
+				RootCAs:    w.rootCAs, // nil => system roots only
+			})
 		} else {
 			c, err = imapclient.Dial(addr)
 		}
@@ -280,23 +348,66 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	if err := c.Login(w.user, w.cfg.Password); err != nil {
+
+	switch w.account.AuthMethod {
+	case emailaccounts.AuthPassword:
+		password, unsealErr := emailaccounts.OpenPassword(w.aead, w.account.SealedSecret)
+		if unsealErr != nil {
+			_ = c.Logout()
+			// Scrub the underlying error — it can contain ciphertext
+			// bytes in some crypto backends and there's nothing
+			// actionable about the specific failure mode.
+			w.log.Warn("emailwatch.unseal_failed", "account_id", w.account.ID)
+			return nil, errors.New("emailwatch: unseal password failed")
+		}
+		if err := c.Login(w.account.Username, password); err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("login %s@%s: %w", w.account.Username, w.account.Host, err)
+		}
+	case emailaccounts.AuthXOAuth2:
+		if w.msal == nil {
+			_ = c.Logout()
+			return nil, errors.New("emailwatch: xoauth2 client not configured")
+		}
+		cacheJSON, err := emailaccounts.OpenTokenCache(w.aead, w.account.SealedSecret)
+		if err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("emailwatch: unseal token cache: %w", err)
+		}
+		refreshed, err := w.msal.AcquireTokenSilent(ctx, cacheJSON, w.account.OAuthAccountID)
+		if err != nil {
+			_ = c.Logout()
+			if errors.Is(err, oauth.ErrCacheStale) {
+				// Surface the stale-token state via last_error so the
+				// UI can prompt the operator to re-run device code.
+				// MarkSync is the only write path for last_error;
+				// reuse it rather than adding a parallel one.
+				_ = emailaccounts.MarkSync(ctx, w.db, w.account.ID, w.account.LastSyncAt, err.Error())
+			}
+			return nil, fmt.Errorf("emailwatch: acquire token: %w", err)
+		}
+		if refreshed.Rotated {
+			sealed, sealErr := emailaccounts.SealTokenCache(w.aead, refreshed.CacheJSON)
+			if sealErr != nil {
+				_ = c.Logout()
+				return nil, fmt.Errorf("emailwatch: seal rotated cache: %w", sealErr)
+			}
+			if _, patchErr := emailaccounts.Patch(ctx, w.db, w.account.ID, emailaccounts.AccountPatch{SealedSecret: &sealed}); patchErr != nil {
+				// Persistence failure isn't fatal for this poll cycle
+				// — MSAL will re-rotate on the next AcquireTokenSilent
+				// — but log it.
+				w.log.Warn("emailwatch.cache_persist_failed", "err", patchErr, "account_id", w.account.ID)
+			}
+		}
+		if err := c.Authenticate(oauth.XOAUTH2Client(w.account.Username, refreshed.AccessToken)); err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("emailwatch: xoauth2 authenticate: %w", err)
+		}
+	default:
 		_ = c.Logout()
-		return nil, fmt.Errorf("login %s@%s: %w", w.user, w.host, err)
+		return nil, fmt.Errorf("emailwatch: unknown auth_method %q", string(w.account.AuthMethod))
 	}
 	return c, nil
-}
-
-// defaultPort strips a port from host if present, else picks the
-// scheme default. Users can override by embedding the port in the URL.
-func defaultPort(host string, useTLS bool) string {
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		return host[i+1:]
-	}
-	if useTLS {
-		return "993"
-	}
-	return "143"
 }
 
 // materialize reads the whole raw message body out of the imap.Message
@@ -326,18 +437,30 @@ func (w *Watcher) materialize(m *imap.Message, section *imap.BodySectionName) ([
 	return raw, msgID, nil
 }
 
-// importOne is the write side: dedup by Message-ID, put the raw
-// bytes into CAS, insert a documents row with mime=message/rfc822,
-// enqueue post-ingest (which fans out attachments as children via
+// importOne is the write side: pre-ingest gates (from-allowlist,
+// attachments-only) then dedup by Message-ID, put the raw bytes into
+// CAS, insert a documents row with mime=message/rfc822, and enqueue
+// post-ingest (which fans out attachments as children via
 // core/pipeline/eml).
 //
-// Returns (imported, err) where imported=false is either "already
-// known" (dedup hit) or "size cap tripped". err is only for hard
-// failures the outer loop should log.
+// Returns (imported, err) where imported=false is either "gate
+// dropped it", "already known" (dedup hit), or "size cap tripped".
+// err is only for hard failures the outer loop should log.
 func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *imap.Message) (bool, error) {
 	if len(raw) == 0 {
 		return false, errors.New("empty message body")
 	}
+
+	// Pre-ingest gates (from-allowlist + attachments-only). Extracted
+	// so unit tests can exercise the drop paths without a CAS + DB
+	// fixture; whatever `shouldImport` returns is the authoritative
+	// decision.
+	hasAttachment, fromHeader, drop := shouldImport(w.account, m.Envelope, raw)
+	if drop != "" {
+		w.log.Debug("emailwatch.gate_drop", "reason", drop, "from", fromHeader)
+		return false, nil
+	}
+
 	// Dedup: message-ID + owner scope. Same ID under a different
 	// owner is fine (household member forwarded it, etc.).
 	if msgID != "" {
@@ -346,7 +469,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 			SELECT id FROM documents
 			WHERE owner_id = ? AND email_message_id = ?
 			LIMIT 1
-		`, w.ownerID, msgID).Scan(&existing)
+		`, w.account.OwnerID, msgID).Scan(&existing)
 		if err == nil {
 			w.log.Debug("emailwatch.dedup", "msg_id", msgID, "existing", existing)
 			return false, nil
@@ -366,7 +489,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	err = w.db.Read.QueryRowContext(ctx, `
 		SELECT id FROM documents
 		WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
-	`, w.ownerID, ref.SHA256).Scan(&existingID)
+	`, w.account.OwnerID, ref.SHA256).Scan(&existingID)
 	if err == nil {
 		w.log.Debug("emailwatch.blob_dedup", "existing", existingID, "sha", ref.SHA256)
 		return false, nil
@@ -393,6 +516,15 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		return false, fmt.Errorf("inbox category: %w", err)
 	}
 
+	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment)
+	if err != nil {
+		// Marshal is effectively impossible on the payload shape, but
+		// don't swallow a real error — skip the enqueue and let the
+		// operator see it.
+		w.log.Warn("emailwatch.payload_marshal_failed", "err", err.Error())
+		return false, nil
+	}
+
 	if err := w.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(ctx, `
@@ -401,7 +533,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 				jd_category_id, added_at, created_at, updated_at,
 				email_message_id
 			) VALUES (?, ?, ?, ?, 'message/rfc822', ?, ?, ?, ?, ?)
-		`, w.ownerID, ref.SHA256, ref.Size, title,
+		`, w.account.OwnerID, ref.SHA256, ref.Size, title,
 			inbox, now, created, now,
 			nullOrString(msgID))
 		if err != nil {
@@ -411,15 +543,6 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		if err != nil {
 			return err
 		}
-		// Consumption-trigger context. mail_rule_id stays 0 until a
-		// mail-rules feature lands (Phase 6); filename mirrors the
-		// subject so filter_filename automations can pattern-match.
-		payload, _ := json.Marshal(map[string]any{
-			"sha256":    ref.SHA256,
-			"size":      ref.Size,
-			"mime_type": "message/rfc822",
-			"filename":  title,
-		})
 		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
 	}); err != nil {
 		return false, fmt.Errorf("db write: %w", err)

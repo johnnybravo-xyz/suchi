@@ -3,7 +3,7 @@
            saveLLMSettings, savePreferences, saveIngestSettings, listJDPresets } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
-  import MailForm from '../lib/MailForm.svelte'
+  import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
 
   let { notify, onDone } = $props()
@@ -181,9 +181,10 @@
 
     {:else if cur === 'mail'}
       <h3>Email intake</h3>
-      <p class="wiz-p">Point suchi at a mailbox and forwarded documents file themselves. Credentials stay server-side; the password field never reads back.</p>
-      <MailForm {notify} onSaved={() => mark('done')} />
+      <p class="wiz-p">Point suchi at one or more mailboxes and forwarded documents file themselves. Credentials stay server-side; the password field never reads back.</p>
+      <EmailAccounts {notify} />
       <div class="toolbar" style="margin-top:12px">
+        <button class="btn primary sm" onclick={() => mark('done')}>Continue</button>
         <button class="btn sm" onclick={() => mark('skipped')}>Skip for now</button>
       </div>
 

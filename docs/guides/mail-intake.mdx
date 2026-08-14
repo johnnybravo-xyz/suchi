@@ -1,136 +1,192 @@
 ---
-title: "Mail ingest via mail-intake"
-description: "Run johnnybravo-xyz/mail-intake alongside suchi to pull IMAP attachments straight into your archive."
+title: "Mail intake — connect a mailbox"
+description: "Poll IMAP mailboxes into your archive. Provider presets for Outlook, Gmail, Fastmail, iCloud, Zoho, Proton Bridge, or a custom host."
 ---
 
-You already run an IMAP mailbox (Proton, Fastmail, Gmail with app
-password, etc.) and want its attachments to land in suchi. Two
-transports work today:
+Mail intake is one of suchi's three canonical ingest paths (alongside
+fs-watch and API upload). Point suchi at an IMAP mailbox and it will
+poll on a schedule, apply optional per-account filters, ingest each
+message as an `.eml` document, fan out attachments as child docs,
+and hand every new document to the automations engine for
+correspondent / tag / discard rules.
 
-1. **This recipe — mail-intake.** A small Go daemon that polls IMAP,
-   extracts attachments matching a MIME allowlist, and drops them
-   into a consume directory with a per-attachment JSON sidecar.
-   suchi's `fs-watch` picks up both. **Clean cred separation:** the
-   mail service never sees suchi; suchi never sees the mailbox.
-2. Direct IMAP polling via `INGEST_IMAP_URL` — no external tools; see
-   [config](/config).
+You can attach any number of mailboxes — one per row in the
+`email_accounts` table. Every row runs its own poller under the
+supervisor, so a broken mailbox never wedges the others.
 
-Pick one. This page covers option 1.
+## Provider presets
 
-## Prerequisites
+Pick a provider in the add-mailbox modal and suchi fills in the
+connection knobs so you only enter identity + credential. Presets
+today:
 
-- Proton Mail Bridge (or any IMAP endpoint) reachable from the
-  mail-intake container.
-- A shared volume both mail-intake and suchi can write / read.
-  Recommended: a bind mount off `/mnt/homelab/mail-intake/consume`.
+| Provider | Host | Port | TLS | Auth path |
+|----------|------|------|-----|-----------|
+| `microsoft` | `outlook.office365.com` | 993 | on | OAuth device-code (basic auth is being retired) |
+| `gmail` | `imap.gmail.com` | 993 | on | Google app password (IMAP + 2FA required) |
+| `fastmail` | `imap.fastmail.com` | 993 | on | Fastmail app password |
+| `icloud` | `imap.mail.me.com` | 993 | on | Apple app-specific password |
+| `zoho` | `imap.zoho.com` | 993 | on | Zoho app password |
+| `proton` | `protonmail-bridge` | 1143 | on | Bridge-generated password + local CA |
+| `custom` | you fill in | you fill in | you choose | password or OAuth (Microsoft) |
 
-## docker-compose
+Pick `custom` for Dovecot, mailcow, Yahoo, or anything else. You'll
+enter host / port / TLS explicitly.
 
-```yaml docker-compose.yml
-services:
-  mail-intake:
-    image: ghcr.io/johnnybravo-xyz/mail-intake:latest
-    restart: unless-stopped
-    volumes:
-      - ./mail-intake/config.yaml:/app/config.yaml:ro
-      - /mnt/homelab/mail-intake/consume:/consume
-      - /mnt/homelab/mail-intake/state:/state    # dedup DB
-    env_file: [.env]
+## Add a mailbox
 
-  suchi:
-    image: ghcr.io/johnnybravo-xyz/suchi:latest
-    restart: unless-stopped
-    depends_on: [mail-intake]
-    volumes:
-      - /mnt/homelab/suchi/data:/data
-      # Mount the SAME consume dir mail-intake writes to.
-      - /mnt/homelab/mail-intake/consume:/ingest:ro
-    environment:
-      PUBLIC_URL: http://127.0.0.1:8000
-      INGEST_FS_DIR: /ingest
-      INGEST_FS_OWNER_EMAIL: you@example.com
-    ports: ["8000:8000"]
+1. Open **Admin → Mail intake**. The panel lists every configured
+   mailbox with owner, provider, poll cadence, last-poll timestamp,
+   and last error.
+2. Click **Add mailbox**.
+3. Pick your **Provider** in the dropdown. Host / port / TLS /
+   default auth method auto-fill.
+4. Fill:
+   - **Name** — a human label ("Work Outlook", "Bills mailbox").
+   - **Owner** — the suchi user who owns the imported docs.
+   - **Username** — the mailbox address.
+5. Choose your auth path:
+   - **Password / app password** — enter it in the Password field.
+     For Gmail / iCloud / Fastmail / Zoho this is an app-specific
+     password, not your account password.
+   - **OAuth (Microsoft)** — click **Sign in with Microsoft** and
+     follow the device-code walkthrough
+     ([see the OAuth guide](/guides/mail-intake-oauth)).
+6. Pick the **Folder** to poll (default `INBOX`) and the
+   **Poll interval** in minutes (default 5). Optionally set a
+   **Processed folder** — messages get moved there after ingest
+   instead of being marked `\Seen` in place.
+7. Set the **Sync mail from** cutoff. The form pre-fills the current
+   date/time so "add mailbox" doesn't drown you in a decade of
+   history — only mail that arrives after this point is polled.
+   Clear the field to sync the whole archive; edit it later to
+   backfill up to an earlier point.
+8. Optionally add per-account filters:
+   - **From allowlist** — one address or `@domain.tld` suffix per
+     line. Empty = accept everything.
+   - **Attachments only** — skip messages that carry no attachment.
+9. Save. The supervisor picks the new row up within a few seconds.
+   Click **Test connection** on the row to dial + auth + logout so
+   you know the credentials are good before waiting on the first
+   poll.
+
+The panel's row layout, in prose:
+
+```
++--------------------------------------------------------------+
+| Work Outlook          you@example.com    Microsoft   5 min   |
+| owner: alice          folder: INBOX      last poll: 09:14    |
+| [Test connection] [Edit] [Revoke sign-in] [Delete]           |
++--------------------------------------------------------------+
 ```
 
-## mail-intake config.yaml
+## Sync horizon
 
-```yaml
-imap:
-  host: protonmail-bridge
-  port: 143
-folders:
-  - Inbox
-  - "Archive/Bills"
-mime_allowlist:
-  - application/pdf
-  - image/jpeg
-  - image/png
-target:
-  consume_dir: /consume
-  emit_metadata_sidecar: true
-  extra_tags: ["source:email"]
-```
+`sync_since` is the initial-sync cutoff, stored as a unix timestamp
+per account. It maps directly onto the IMAP `SEARCH SINCE` predicate
+the poller hands the server, so filtering happens on the mail server
+— messages older than the cutoff never cross the wire.
 
-## Sidecar compatibility
+- **Default at create.** The SPA and the API both default to
+  `time.Now()` when you don't send a value, so a freshly-added
+  mailbox only pulls mail that arrives from that moment onward.
+  This is the "add mailbox without also importing 10 years of
+  history" default.
+- **Backfill later.** PATCH the field to any earlier timestamp and
+  the supervisor restarts the watcher; the next poll picks up
+  everything UNSEEN since the new cutoff.
+- **Sync everything.** PATCH `sync_since` to `0` — the poller falls
+  back to plain `UID SEARCH UNSEEN`, matching the pre-v0.1 behaviour.
+- **Timezones.** The wire is unix seconds (UTC). The SPA renders the
+  input in local time; conversion happens in the browser.
 
-mail-intake emits flat-shape JSON:
+Pausing suchi for a week doesn't cost you those seven days of mail —
+`sync_since` is an absolute floor, not a sliding window. If you want
+a "skip anything older than 30 days" cap on top, that's on the
+roadmap as a follow-up knob.
 
-```json
-{
-  "title": "Electricity bill March 2026",
-  "created": "2026-03-02T00:00:00Z",
-  "correspondent": "BESCOM Billing <bills@bescom.co.in>",
-  "tags": ["utilities","source:email"]
-}
-```
+## Per-account filters
 
-suchi's sidecar spec normally requires `"suchi_sidecar": 1`, but
-`core/ingest/sidecar` transparently accepts the flat-shape JSON —
-no producer patch needed. `"Name <address>"` correspondent strings
-are peeled to just the display name; `created` accepts RFC-3339 or
-`YYYY-MM-DD`.
+`from_allowlist` and `attachments_only` exist so you can pull a
+personal mailbox into suchi without vacuuming up newsletters,
+receipts you don't care about, or two-factor prompts.
 
-If you're writing your own producer, you can EITHER emit the
-flat-shape JSON (portable) OR the versioned suchi-native form
-(access to `jd_category`, `custom_fields`, multi-role correspondents,
-etc. — see [sidecar spec](/formats#json-sidecar-spec)).
+- **from_allowlist** — a list of sender addresses (`bills@bescom.co.in`)
+  or domain suffixes (`@invoice.stripe.com`). A message is polled
+  only if its `From:` matches at least one entry. Empty list =
+  accept every sender.
+- **attachments_only** — when true, the pre-ingest gate reads the
+  message headers, checks for at least one attachment part, and
+  drops the whole message on the floor if there is none. Nothing
+  hits the CAS; nothing shows up in your document list.
 
-## What you'll see
+Both filters run **before** the message is stored, so a mailbox
+you rarely want to hear from doesn't spend disk. Automations
+still run on whatever survives the gate, so you can layer
+correspondent / tag rules on top.
 
-For each attachment mail-intake extracts, suchi's fs-watch:
+## Attachments-only mode
 
-1. Sees the file drop into `/ingest/`.
-2. Reads the sidecar (`filename.json`).
-3. Creates a document row owned by `INGEST_FS_OWNER_EMAIL`.
-4. Enqueues `post-ingest` — qpdf → OCR → ZUGFeRD → rules → render.
-5. Applies sidecar-derived title, created, correspondent (as sender),
-   tags.
+`attachments_only` is a coarse spam filter for mailboxes that
+mostly deliver bills / statements / receipts as PDFs. In that
+mode the poller never creates a parent `.eml` document at all
+when the message has no attachment part — it goes straight to
+`\Seen` (or the processed folder) and is forgotten. When there
+**is** an attachment, ingest proceeds normally: parent `.eml`,
+child docs per attachment, dedup by `Message-ID`.
 
-**What this path DOESN'T give you:** the raw `.eml` as its own suchi
-doc. If you want the email body indexed alongside the attachments
-(so a full-text search hits "hi, please see attached" in the body),
-either:
+## Automations for routing
 
-- Configure mail-intake to also drop the raw message alongside its
-  attachments (upstream feature request, or write a small wrapper),
-  OR
-- Use suchi's direct IMAP polling (`INGEST_IMAP_URL`). That path
-  ingests the `.eml` first, then fans out its attachments as child
-  docs via `email_parent_id`.
+Suchi's automations engine sees every ingested email doc with
+the following facts populated so you can write routing rules
+without special-casing the mail path:
 
-## Testing locally
+- `email_from` — sender address.
+- `email_subject` — subject line.
+- `email_folder` — the folder that produced the message.
+- `email_has_attachment` — boolean.
 
-The fastest way to kick the tires without touching your real mailbox:
+Write correspondent / tag / discard rules against those in
+**Admin → Automations** ([guide](/automations)). Typical patterns:
+set the correspondent from the sender domain; auto-tag by folder;
+discard promotional mail that slipped past the allowlist.
 
-```sh
-# 1. Start Bridge (see Proton docs) — exposes IMAP on port 143.
-# 2. In the mail-intake repo:
-docker compose run --rm mail-intake --one-shot
-# 3. Verify /consume/ now has attachments + .json sidecars.
-# 4. Boot suchi:
-docker compose up -d suchi
-# 5. In another terminal, tail logs:
-docker compose logs -f suchi | grep -E "fswatch|post-ingest"
-```
+## Sidecar producers (advanced)
 
-Each attachment lands within a few seconds of appearing in `/consume/`.
+Prefer to run the IMAP polling loop in a separate process and hand
+suchi finished files? That's the "sidecar producer" pattern. A
+small daemon polls IMAP, extracts attachments (or drops the raw
+`.eml`), and writes them into a directory the suchi fs-watcher owns.
+Clean cred separation, and suchi never learns the mailbox exists.
+
+The mbsync recipe under `deploy/mail-mbsync/` is the reference
+producer — see the [mbsync guide](/guides/mail-mbsync) for the
+compose bundle, provider notes (Proton Bridge, Gmail, Fastmail,
+generic), and the sidecar-JSON shape it emits. Use this path when
+you want a local Maildir mirror or already run mbsync for another
+tool.
+
+## Troubleshooting
+
+**"Login is disabled in current state" (Microsoft).** Basic auth
+is turned off for the account or tenant. Switch the row to
+`auth_method=xoauth2` and sign in via the
+[OAuth device-code flow](/guides/mail-intake-oauth).
+
+**Gmail: "Application-specific password required".** Google
+requires 2FA + an app password for IMAP. Enable 2FA, create an
+app password at
+[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
+and paste it into the Password field.
+
+**Some messages never appear.** Check the row's `from_allowlist`
+— a message from an unlisted sender is skipped silently. If
+`attachments_only` is on and the message is a plain-text body,
+that's also expected. Turn one or both off to widen the intake.
+
+**Edits don't take effect.** The supervisor watches the
+`email_accounts` table and reloads within seconds — no restart
+needed. If a row's `last_error` never clears, tail the server
+logs for `emailwatch.supervisor` entries; those log the reload
+event and the reason a poller refused to start (bad host, sealed
+secret unwrap failure, missing OAuth cache).
