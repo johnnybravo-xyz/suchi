@@ -123,15 +123,15 @@ release's `SHA256SUMS` before installing.
 strict dependency of one feature; suchi runs without them but the
 matching pipeline degrades:
 
-| Tool | Package | Feature that degrades |
-|------|---------|----------------------|
-| `qpdf` | `apt install qpdf` · `brew install qpdf` | PDF normalization + encrypted-PDF gate |
-| `pdftotext` + `pdftoppm` | `apt install poppler-utils` · `brew install poppler` | text-native PDF extraction; scanned-PDF rasterization; QR-split detection |
-| `tesseract` | `apt install tesseract-ocr` · `brew install tesseract` | OCR engine for scanned PDFs (tessocr path) |
-| `ocrmypdf` | `apt install ocrmypdf` · `brew install ocrmypdf` | OCR engine that produces searchable-PDF archives |
-| `djvutxt` | `apt install djvulibre-bin` · `brew install djvulibre` | DjVu text extraction |
-| `magick` / `convert` | `apt install imagemagick` · `brew install imagemagick` | HEIC → JPEG conversion for iPhone photos |
-| `msgconvert` | `apt install libemail-outlook-message-perl` | Outlook `.msg` → `.eml` conversion |
+| Tool                     | Package                                                | Feature that degrades                                                     |
+| ------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `qpdf`                   | `apt install qpdf` · `brew install qpdf`               | PDF normalization + encrypted-PDF gate                                    |
+| `pdftotext` + `pdftoppm` | `apt install poppler-utils` · `brew install poppler`   | text-native PDF extraction; scanned-PDF rasterization; QR-split detection |
+| `tesseract`              | `apt install tesseract-ocr` · `brew install tesseract` | OCR engine for scanned PDFs (tessocr path)                                |
+| `ocrmypdf`               | `apt install ocrmypdf` · `brew install ocrmypdf`       | OCR engine that produces searchable-PDF archives                          |
+| `djvutxt`                | `apt install djvulibre-bin` · `brew install djvulibre` | DjVu text extraction                                                      |
+| `magick` / `convert`     | `apt install imagemagick` · `brew install imagemagick` | HEIC → JPEG conversion for iPhone photos                                  |
+| `msgconvert`             | `apt install libemail-outlook-message-perl`            | Outlook `.msg` → `.eml` conversion                                        |
 
 Run `suchi doctor` for a one-shot summary of what's on PATH.
 

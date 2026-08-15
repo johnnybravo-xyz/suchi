@@ -17,7 +17,7 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
 
 - A running suchi instance you can reach at some URL. Local dev
   (`http://127.0.0.1:8000`) works.
-- A scoped API token. **Do NOT use an admin token.** Mint one via:
+- A scoped API token. **Do NOT use an admin token.** Generate one via:
 
   ```bash
   # If you have a session cookie (browser login), curl through the
@@ -29,7 +29,7 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
   # → {"token":"...", "name":"mcp-desktop", "scopes":"..."}
   ```
 
-  Or mint by username+password (mobile-compat, one-shot):
+  Or generate by username+password (mobile-compat, one-shot):
 
   ```bash
   curl -sS -X POST http://127.0.0.1:8000/api/token/ \
@@ -60,7 +60,7 @@ Add a `mcpServers` entry:
     "suchi": {
       "command": "suchi-mcp",
       "env": {
-        "SUCHI_URL":   "http://127.0.0.1:8000",
+        "SUCHI_URL": "http://127.0.0.1:8000",
         "SUCHI_TOKEN": "0123abcd…"
       }
     }
@@ -90,7 +90,7 @@ Cursor's MCP config lives in Settings → Features → MCP or in
     "suchi": {
       "command": "suchi-mcp",
       "env": {
-        "SUCHI_URL":   "http://127.0.0.1:8000",
+        "SUCHI_URL": "http://127.0.0.1:8000",
         "SUCHI_TOKEN": "0123abcd…"
       }
     }
@@ -136,8 +136,8 @@ INFO api.search      method=GET  status=200  q="insurance"  actor=user:5
 ```
 
 If you see `401 unauthorized` — token is wrong, or wasn't set in
-the env. If you see `403 forbidden` — token was minted with
-insufficient scopes; mint a new one with `documents:read` and
+the env. If you see `403 forbidden` — token was generated with
+insufficient scopes; generate a new one with `documents:read` and
 `documents:write`.
 
 ## Revoking access

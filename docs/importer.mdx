@@ -10,13 +10,78 @@ safe to re-run against a nightly export during a shadow window.
 
 ## Prerequisites
 
-- A completed export bundle at `/path/to/export`. Use whatever
-  exporter your current DMS ships with; suchi reads the resulting
-  directory tree directly.
+- A completed export bundle at `/path/to/export` produced by
+  `document_exporter` (or an equivalent that emits the same
+  `manifest.json` + `originals/` + `archive/` + `json/` tree).
 - A running suchi instance with at least one user (usually the admin
   from `/setup`).
 - Enough free disk for the CAS to absorb every unique document
   blob (originals + optional archive PDFs).
+
+## Getting the dump out of paperless-ngx
+
+Paperless-ngx ships `document_exporter`, a management command that
+writes the exact tree suchi's importer reads.
+
+For a docker-compose deployment:
+
+```bash
+docker compose exec webserver \
+    document_exporter -p -sm /usr/src/paperless/export
+```
+
+For a bare or systemd install:
+
+```bash
+sudo -u paperless python manage.py \
+    document_exporter -p -sm /path/to/export
+```
+
+Both flags matter:
+
+- `-p` — folder-prefixed layout. Produces `originals/`, `archive/`,
+  `thumbnails/`, `json/` under the export root instead of a flat dump.
+- `-sm` — split manifest. Writes one JSON sidecar per document under
+  `json/` instead of one huge `manifest.json`. Suchi reads either
+  shape, but the split form is faster on large corpora and lets the
+  export resume incrementally.
+
+If paperless is in a container, copy the export off so the suchi host
+can see it:
+
+```bash
+docker cp \
+    "$(docker compose ps -q webserver):/usr/src/paperless/export" \
+    ./paperless-export
+```
+
+Bare-metal installs skip the copy — point `--from` at the export path
+directly.
+
+The resulting bundle looks like:
+
+```
+paperless-export/
+  manifest.json    # workflows, saved views, users, groups, custom fields
+  json/            # per-document sidecars (present when -sm was used)
+  originals/       # source files
+  archive/         # OCR'd PDFs (when paperless has produced them)
+  thumbnails/      # optional, ignored by suchi
+```
+
+Two caveats worth knowing before you run the exporter:
+
+- **Version.** Suchi's importer targets **paperless-ngx v3.0.5**
+  (see [Migration target version](#migration-target-version)).
+  Newer minor versions are not a supported compatibility surface —
+  the report will flag unknown shapes as `Failed` with reason
+  "paperless version drift" so you can decide what to do.
+- **Duration.** `document_exporter` reads every original + every
+  archive PDF end-to-end. On corpora over a few thousand docs, run
+  it during a maintenance window; the exporter is safe to interrupt
+  and re-run.
+
+Once the bundle is on disk, continue with the one-liner below.
 
 ## The one-liner
 
@@ -59,6 +124,7 @@ visible, bulk-reassignable, never lost. Three flags override:
     ```bash
     suchi import --from ./export --owner-email you@ex.com --flat
     ```
+
   </Tab>
   <Tab title="--map-jd">
     Apply first-match user rules. Rules live in a YAML file:
@@ -80,6 +146,7 @@ visible, bulk-reassignable, never lost. Three flags override:
     ```
 
     Unmatched docs → inbox.
+
   </Tab>
   <Tab title="--auto-jd">
     Apply the built-in heuristics — deterministic keyword matches
@@ -94,12 +161,11 @@ visible, bulk-reassignable, never lost. Three flags override:
     Bias: **high precision over recall**. A miss lands in inbox;
     silently mis-filing to the wrong category is worse than
     under-classifying.
+
   </Tab>
 </Tabs>
 
-<Info>
-The three flags are mutually exclusive — pick one strategy.
-</Info>
+<Info>The three flags are mutually exclusive — pick one strategy.</Info>
 
 ## Migration target version
 
@@ -123,39 +189,39 @@ table.
 
 **Trigger type mapping** (source `workflowtrigger.type`):
 
-| Source | Target trigger | Outcome |
-|--------|----------------|---------|
-| 1 CONSUMPTION | `consumption` | Full |
-| 2 DOCUMENT_ADDED | `document_added` | Full |
-| 3 DOCUMENT_UPDATED | `document_updated` | Full |
-| 4 SCHEDULED | — | Failed — suchi has no scheduled automations |
+| Source             | Target trigger     | Outcome                                     |
+| ------------------ | ------------------ | ------------------------------------------- |
+| 1 CONSUMPTION      | `consumption`      | Full                                        |
+| 2 DOCUMENT_ADDED   | `document_added`   | Full                                        |
+| 3 DOCUMENT_UPDATED | `document_updated` | Full                                        |
+| 4 SCHEDULED        | —                  | Failed — suchi has no scheduled automations |
 
 **Action type mapping** (source `workflowaction.type`):
 
-| Source | Target action(s) | Outcome |
-|--------|------------------|---------|
-| 1 ASSIGNMENT | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field | Full |
-| 2 REMOVAL | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_owner` / `remove_custom_field` | Full (Partial when multi-value inputs truncate) |
-| 3 EMAIL | — | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
-| 4 WEBHOOK | — | Partial — no `webhook` verb yet |
-| 5 PASSWORD_REMOVAL | — | Partial — no analog |
-| 6 MOVE_TO_TRASH | `discard` | Partial — `discard` skips the doc rather than soft-deleting |
+| Source             | Target action(s)                                                                                                                                                                | Outcome                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 1 ASSIGNMENT       | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field | Full                                                                                |
+| 2 REMOVAL          | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_owner` / `remove_custom_field`                                    | Full (Partial when multi-value inputs truncate)                                     |
+| 3 EMAIL            | —                                                                                                                                                                               | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
+| 4 WEBHOOK          | —                                                                                                                                                                               | Partial — no `webhook` verb yet                                                     |
+| 5 PASSWORD_REMOVAL | —                                                                                                                                                                               | Partial — no analog                                                                 |
+| 6 MOVE_TO_TRASH    | `discard`                                                                                                                                                                       | Partial — `discard` skips the doc rather than soft-deleting                         |
 
 **Trigger filter mapping**:
 
-| Source field | Target | Outcome |
-|--------------|--------|---------|
-| `filter_filename` | `filename` | Full |
-| `filter_path` | `path` | Full |
-| `filter_mailrule` | `mailrule_id` | Full |
-| `filter_has_tags` (first) | `tag_id` | Full |
-| `filter_has_tags` (>1) | first only | Partial — "any-of tags list truncated to first" |
-| `filter_has_correspondent` | `corr_id` | Full |
-| `filter_has_document_type` | `doctype_id` | Full |
-| `filter_has_storage_path` | — | Partial — no storage-path trigger filter |
-| `filter_has_all_tags`, `filter_has_not_tags` | — | Partial — no negation / all-of semantics |
-| `filter_custom_field_query` | — | Partial |
-| `matching_algorithm` (LITERAL/REGEX/FUZZY) | — | `match` dropped, Partial |
+| Source field                                 | Target        | Outcome                                         |
+| -------------------------------------------- | ------------- | ----------------------------------------------- |
+| `filter_filename`                            | `filename`    | Full                                            |
+| `filter_path`                                | `path`        | Full                                            |
+| `filter_mailrule`                            | `mailrule_id` | Full                                            |
+| `filter_has_tags` (first)                    | `tag_id`      | Full                                            |
+| `filter_has_tags` (>1)                       | first only    | Partial — "any-of tags list truncated to first" |
+| `filter_has_correspondent`                   | `corr_id`     | Full                                            |
+| `filter_has_document_type`                   | `doctype_id`  | Full                                            |
+| `filter_has_storage_path`                    | —             | Partial — no storage-path trigger filter        |
+| `filter_has_all_tags`, `filter_has_not_tags` | —             | Partial — no negation / all-of semantics        |
+| `filter_custom_field_query`                  | —             | Partial                                         |
+| `matching_algorithm` (LITERAL/REGEX/FUZZY)   | —             | `match` dropped, Partial                        |
 
 ## Saved views
 
@@ -171,29 +237,29 @@ zero rules map — the view row is skipped and reported.
 
 **Rule-type mapping** (source `rule_type` int → target filter_json):
 
-| Source enum | Target | Outcome |
-|-------------|--------|---------|
-| 0 title contains | `q` | Full |
-| 1 content contains | `q` | Partial (q matches title+content combined) |
-| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt | — | Failed — suchi has no ASN |
-| 3 correspondent is | `correspondents__id__in` | Full |
-| 4 document type is | `document_type__id` | Full (multi → last wins, Partial) |
-| 5 is in inbox | — | Partial — suchi surfaces Inbox natively |
-| 6 has tag | `tags__id__in` | Full |
-| 7 has any tag / 22 has tags in | `tags__id__in` | Full |
-| 8-16 date filters (created/added/modified before/after) | — | Failed — no date filter yet |
-| 17 does not have tag | — | Failed — no negation |
-| 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q` | Full |
-| 21 more like this | — | Failed |
-| 25 storage path is / 30 has storage path in | `q` text search | Partial |
-| 26 has correspondent in | `correspondents__id__in` | Full |
-| 27, 29, 31 negative "in" filters | — | Failed |
-| 28 has document type in | `document_type__id` first | Partial |
-| 32-35 owner filters | — | Failed |
-| 36, 38-42 custom-field filters | — | Failed |
-| 37 is shared by me | — | Failed |
-| 43-46 created/added to/from | — | Failed |
-| 47 mime type is | — | Failed |
+| Source enum                                                          | Target                    | Outcome                                    |
+| -------------------------------------------------------------------- | ------------------------- | ------------------------------------------ |
+| 0 title contains                                                     | `q`                       | Full                                       |
+| 1 content contains                                                   | `q`                       | Partial (q matches title+content combined) |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | —                         | Failed — suchi has no ASN                  |
+| 3 correspondent is                                                   | `correspondents__id__in`  | Full                                       |
+| 4 document type is                                                   | `document_type__id`       | Full (multi → last wins, Partial)          |
+| 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively    |
+| 6 has tag                                                            | `tags__id__in`            | Full                                       |
+| 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                       |
+| 8-16 date filters (created/added/modified before/after)              | —                         | Failed — no date filter yet                |
+| 17 does not have tag                                                 | —                         | Failed — no negation                       |
+| 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q`                       | Full                                       |
+| 21 more like this                                                    | —                         | Failed                                     |
+| 25 storage path is / 30 has storage path in                          | `q` text search           | Partial                                    |
+| 26 has correspondent in                                              | `correspondents__id__in`  | Full                                       |
+| 27, 29, 31 negative "in" filters                                     | —                         | Failed                                     |
+| 28 has document type in                                              | `document_type__id` first | Partial                                    |
+| 32-35 owner filters                                                  | —                         | Failed                                     |
+| 36, 38-42 custom-field filters                                       | —                         | Failed                                     |
+| 37 is shared by me                                                   | —                         | Failed                                     |
+| 43-46 created/added to/from                                          | —                         | Failed                                     |
+| 47 mime type is                                                      | —                         | Failed                                     |
 
 Display mode: `TABLE` → `table`, `SMALL_CARDS` and `LARGE_CARDS` →
 `card`. Icons are dropped (suchi doesn't render view icons).
@@ -281,12 +347,12 @@ The recommended cutover for cautious operators:
     Point it at the same backup pipeline.
   </Step>
   <Step title="Every night, verify">
-    Run your DMS's exporter on the source side and
-    `suchi import --verify` on the suchi side.
+    Run your DMS's exporter on the source side and `suchi import --verify` on
+    the suchi side.
   </Step>
   <Step title="Watch the diffs settle">
-    Any long-standing Differ or Orphan entries are the real migration
-    surface to investigate.
+    Any long-standing Differ or Orphan entries are the real migration surface to
+    investigate.
   </Step>
   <Step title="Cut over">
     When diffs are boring, do a full `--auto-jd` (or `--map-jd`) import.

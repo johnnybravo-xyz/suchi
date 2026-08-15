@@ -88,7 +88,8 @@ failure surfaces to the operator via the same "reconnect" flow.
 ### 4. XOAUTH2 wire format
 
 Identical to Microsoft — `base64("user=" + email + "^Aauth=Bearer "
-+ token + "^A^A")` where `^A` is `\x01`. The existing helper at
+
+- token + "^A^A")`where`^A`is`\x01`. The existing helper at
 `oauth/xoauth2.go` is provider-neutral and gets reused unchanged.
 
 ### 5. UI

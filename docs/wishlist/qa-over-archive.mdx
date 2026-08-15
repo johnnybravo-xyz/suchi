@@ -1,6 +1,6 @@
 ---
 title: "Wishlist — natural-language Q&A over the archive"
-description: "Plan for a suchi.ask surface that answers questions like \"when is my car insurance due?\" using the LLM classifier + FTS5 the archive already carries."
+description: 'Plan for a suchi.ask surface that answers questions like "when is my car insurance due?" using the LLM classifier + FTS5 the archive already carries.'
 ---
 
 The archive already stores every document's text (`documents.content`)
@@ -33,7 +33,7 @@ That's enough for the first shape.
 
 For richer semantic recall ("insurance renewal" matches "policy
 expires"), pair with `sqlite-vec` embeddings (already tracked as
-#128 sweep-2 C3). Same LLM endpoint provides the vectors — no new
+# 128 sweep-2 C3). Same LLM endpoint provides the vectors — no new
 egress surface. When the extension isn't loaded, degrade to FTS5-
 only. Zero-egress installs get less recall but not less privacy.
 
@@ -61,8 +61,8 @@ Return JSON: {answer, cited_doc_ids, confidence}.
   path's FTS5 highlight. Keeps prompts small + hides the rest of
   the archive from the LLM even when the operator's endpoint is
   their own local Ollama.
-- **Cited doc ids.** The response *must* name the docs it read.
-  Answers without citations get discarded. This is the load-bearing
+- **Cited doc ids.** The response _must_ name the docs it read.
+  Answers without citations get discarded. This is the main
   hallucination-check.
 - **Confidence field.** Low-confidence answers ("< 0.5") render as
   "I found some possibly-related docs; check them yourself" with the

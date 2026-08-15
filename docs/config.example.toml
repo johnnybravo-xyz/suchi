@@ -35,10 +35,10 @@ public_url = "http://127.0.0.1:8000"
 # Storage & runtime
 # --------------------------------------------------------------------
 
-data_dir     = "/data"          # CAS blobs, rendered view, backups all under here
-listen_addr  = ":8000"          # ip:port; ":8000" listens on all interfaces
-log_level    = "info"           # debug | info | warn | error
-body_limit   = "100M"           # multipart cap (e.g. "20M", "1G")
+data_dir = "/data"    # CAS blobs, rendered view, backups all under here
+listen_addr = ":8000" # ip:port; ":8000" listens on all interfaces
+log_level = "info"    # debug | info | warn | error
+body_limit = "100M"   # multipart cap (e.g. "20M", "1G")
 
 # Session-cookie signing key. Absent = generated + persisted under
 # $DATA_DIR/.session-key on first boot. Override only for restore-
@@ -82,9 +82,9 @@ audit_retention_days = 20
 # OCR + ingest limits
 # --------------------------------------------------------------------
 
-ocr_languages          = ["eng"]    # array; CSV form ("eng,deu") also works
-ocr_engine             = "auto"     # auto | tesseract | ocrmypdf
-pdf_max_content_bytes  = "8M"
+ocr_languages = ["eng"]        # array; CSV form ("eng,deu") also works
+ocr_engine = "auto"            # auto | tesseract | ocrmypdf
+pdf_max_content_bytes = "8M"
 epub_max_content_bytes = "32M"
 djvu_max_content_bytes = "32M"
 
@@ -163,7 +163,7 @@ djvu_max_content_bytes = "32M"
 # mail_setup_docker_sock = "/var/run/docker.sock"
 
 # --------------------------------------------------------------------
-# LLM classifier (Phase 3, opt-in)
+# LLM classifier (opt-in)
 # --------------------------------------------------------------------
 #
 # Empty endpoint = classifier disabled. The SPA Admin panel can also

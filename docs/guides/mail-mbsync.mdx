@@ -14,13 +14,13 @@ Docker stack that:
 
 Providers wired: **Proton Mail** (via Bridge, running as a sibling
 container), **Gmail**, **Fastmail**, and a **generic** IMAPS/IMAP
-escape hatch (iCloud, Yahoo, Zoho, Dovecot, etc.).
+option (iCloud, Yahoo, Zoho, Dovecot, etc.).
 
 ## When to use this vs. built-in IMAP polling
 
 Suchi already speaks IMAP directly via `INGEST_IMAP_URL` — see
 [config#email-ingest-imap-polling](/config#email-ingest-imap-polling).
-That's fewer moving parts and enough for most operators.
+That's fewer components and enough for most operators.
 
 Reach for the mbsync recipe when you want:
 
@@ -40,8 +40,9 @@ cd deploy/mail-mbsync
 
 The wizard asks for provider, credentials, folders, and port; it writes
 `config/.env` (container-side vars) and `.env` (compose profiles + port
-+ your UID/GID) and points `templates/mbsyncrc.tmpl` at the matching
-provider template.
+
+- your UID/GID) and points `templates/mbsyncrc.tmpl` at the matching
+  provider template.
 
 For **Proton**, do the interactive Bridge login first:
 
@@ -76,14 +77,14 @@ docker compose logs -f mbsync suchi
 
 ## Where things live on the host
 
-| Path | Contents |
-|------|----------|
-| `config/.env` | Container-side env (IMAP creds, suchi runtime vars). 600. |
-| `.env` | Compose-level env (profile, port, UID/GID). |
-| `maildir/` | mbsync's Maildir tree. |
-| `ingest/` | Handoff between mbsync and suchi. Ephemeral — suchi deletes files after successful ingest. |
-| `suchi-data/` | Suchi's `suchi.db`, blob CAS, backups. |
-| `bridge-data/` | Proton Bridge vault (Proton only). |
+| Path           | Contents                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| `config/.env`  | Container-side env (IMAP creds, suchi runtime vars). 600.                                  |
+| `.env`         | Compose-level env (profile, port, UID/GID).                                                |
+| `maildir/`     | mbsync's Maildir tree.                                                                     |
+| `ingest/`      | Handoff between mbsync and suchi. Ephemeral — suchi deletes files after successful ingest. |
+| `suchi-data/`  | Suchi's `suchi.db`, blob CAS, backups.                                                     |
+| `bridge-data/` | Proton Bridge vault (Proton only).                                                         |
 
 ## Rotating credentials
 
@@ -94,7 +95,7 @@ and `docker compose restart mbsync`.
 
 The server-rendered `/admin/mail-setup` wizard retired with the SPA
 promotion; the equivalent in-app settings panel is tracked (task
-#141 — needs `GET/PUT /api/admin/settings/mail` and a connection-
+# 141 — needs `GET/PUT /api/admin/settings/mail` and a connection-
 test endpoint). Until it lands, edit `config/.env` directly and
 `docker compose restart mbsync`.
 
@@ -108,11 +109,11 @@ panel will use:
   `/containers/suchi-mail-mbsync/restart` to reload mbsync.
 
 <Warning>
-Mounting `docker.sock` grants suchi root-equivalent access to the host
-Docker daemon. Suchi only uses it to restart the sibling mbsync
-container, but the socket permits arbitrary daemon calls. Comment
-out the mount + unset `MAIL_SETUP_DOCKER_SOCK` if you'd rather
-`docker compose restart mbsync` yourself after a wizard save.
+  Mounting `docker.sock` grants suchi root-equivalent access to the host Docker
+  daemon. Suchi only uses it to restart the sibling mbsync container, but the
+  socket permits arbitrary daemon calls. Comment out the mount + unset
+  `MAIL_SETUP_DOCKER_SOCK` if you'd rather `docker compose restart mbsync`
+  yourself after a wizard save.
 </Warning>
 
 ## Smoke test

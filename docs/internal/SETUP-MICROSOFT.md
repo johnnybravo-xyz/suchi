@@ -10,7 +10,7 @@ Read the user-facing walkthrough in
 
 Steps:
 
-1. Sign in to https://portal.azure.com → **Microsoft Entra ID** →
+1. Sign in to <https://portal.azure.com> → **Microsoft Entra ID** →
    **App registrations** → **New registration**.
 2. **Name**: `suchi`.
 3. **Supported account types**: **Accounts in any organizational
@@ -25,7 +25,7 @@ Steps:
    **Allow public client flows** → **Yes** → **Save**. Without
    this, MSAL device-code returns
    `AADSTS7000218: The request body must contain the following
-   parameter: 'client_assertion' or 'client_secret'`.
+parameter: 'client_assertion' or 'client_secret'`.
 7. **API permissions** → **Add a permission**. Do **not** pick
    Microsoft Graph — Graph's IMAP scope does not authorize
    `outlook.office365.com` IMAP. Instead choose **APIs my

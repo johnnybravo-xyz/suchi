@@ -1,0 +1,111 @@
+---
+title: "Similar documents"
+description: "How the doc-detail page finds and ranks documents like the one you're reading."
+---
+
+Every document detail page in suchi carries a "Similar documents"
+card in the sidebar — a short list of other documents in your
+archive that share vocabulary with the one you're viewing. Click any
+row to jump; the card is deliberately quiet when nothing meaningful
+overlaps.
+
+## What ranking looks at
+
+The pipeline runs entirely inside SQLite against the same FTS5 index
+your searches use. Given a source document:
+
+1. **Tokenize.** Take the document's title plus the first ~4 KiB of
+   its extracted content. Split on non-alphanumeric characters, keep
+   runs of length ≥ 4, case-fold, drop a tiny stopword list
+   (`this`, `with`, `will`, …).
+2. **Pick the top 10** tokens by frequency. Ties break alphabetically
+   for determinism.
+3. **FTS5 `MATCH` query.** OR-join those tokens as double-quoted
+   phrases, e.g. `"electricity" OR "utility" OR "invoice"`.
+4. **BM25 rank**, with the same weights the search endpoint uses:
+   **title × 3**, **content × 1**. A document whose title shares
+   your tokens is a stronger similarity signal than one that only
+   mentions them in body text.
+5. **Score floor.** Drop any row whose score falls below
+   `similar.MinScore` (see [Score floor](#score-floor) below). This
+   filters the noise band where a single incidental token — a shared
+   calendar year, for instance — was the only thing recruiting the
+   row.
+6. **Visibility splice.** Non-admin callers get the ACL fragment
+   spliced into the WHERE clause so results respect object
+   permissions. The source doc is always excluded from its own
+   results.
+
+No recency term — "similar" is about content, not freshness.
+
+## Score floor
+
+FTS5's BM25 returns tiny magnitudes: a real-world corpus
+consistently ranked genuine similarity in the 0.3–2.0 band, and
+incidental single-token matches on calendar-year strings around
+`1e-6`. The default floor in
+[`core/similar/similar.go`](https://github.com/johnnybravo-xyz/suchi/blob/main/core/similar/similar.go)
+is:
+
+```go
+const MinScore = 0.001
+```
+
+Anything below is dropped before the response reaches the client.
+The automations `apply_from_similar` action keeps its own per-rule
+`min_score` because heuristics work best with an operator-tunable
+floor; the human-facing endpoint uses this constant instead.
+
+## The title-only warning
+
+Every response carries `matched_on_title_only: bool`. When the
+source doc's extracted content is empty — a scanned image without a
+successful OCR run, a format the pipeline couldn't extract text from,
+or a pre-migration doc that predates content extraction — the
+tokenizer only sees the title. The result set is much noisier because
+titles tend to be short and dominated by generic tokens
+(dates, categories, formats), so we render a **`title-only match`**
+pill on the results card so you know to be skeptical.
+
+If you're seeing this often, the most useful fix is usually a
+reingest of the source doc: newer pipeline versions extract content
+for many more MIME types than older ones. Any document mutation
+(refile, rename, retag) triggers a fresh pass; a direct
+`POST /api/documents/{id}/refile` with the current category also
+does it.
+
+## What the SPA does with the response
+
+The `Similar documents` card on `/#/doc/{id}`:
+
+- Shows up to six results ordered by score (best first).
+- Displays each row's JD category chip and creation date next to the
+  title.
+- Renders the ranking backend as a small pill (`fts` today).
+- Adds the `title-only match` warning pill when the endpoint reports
+  `matched_on_title_only: true`.
+- Hides the whole card when the endpoint returns zero results — no
+  awkward "no similar documents" placeholder.
+
+## What isn't done here
+
+- **No semantic recall.** Two documents that mean the same thing but
+  share few words won't surface. That's the planned
+  [sqlite-vec upgrade](/wishlist/similar-documents) — the endpoint's
+  `method` field will flip from `"fts"` to `"vec"` once it lands, and
+  the FTS5 path stays as the always-on fallback for instances
+  without the vec extension loaded.
+- **No IDF-aware token selection.** Currently every token has equal
+  priority regardless of how many docs it appears in. A future pass
+  could weight rare tokens higher so calendar years and repeated
+  boilerplate don't dominate the query. The score floor already
+  catches the worst offenders.
+- **No cross-owner recall.** Similar-docs stays within visibility.
+  A sysadmin browsing as themselves sees every doc; a regular user
+  sees the same subset they'd see on the main list.
+
+## Related
+
+- [API — `GET /api/documents/{id}/similar`](/api#get-apidocumentsid-similar)
+- [Wishlist — semantic similar via sqlite-vec](/wishlist/similar-documents)
+- [Automations — `apply_from_similar` action](/automations)

@@ -20,15 +20,15 @@ Pick a provider in the add-mailbox modal and suchi fills in the
 connection knobs so you only enter identity + credential. Presets
 today:
 
-| Provider | Host | Port | TLS | Auth path |
-|----------|------|------|-----|-----------|
-| `microsoft` | `outlook.office365.com` | 993 | on | OAuth device-code (basic auth is being retired) |
-| `gmail` | `imap.gmail.com` | 993 | on | Google app password (IMAP + 2FA required) |
-| `fastmail` | `imap.fastmail.com` | 993 | on | Fastmail app password |
-| `icloud` | `imap.mail.me.com` | 993 | on | Apple app-specific password |
-| `zoho` | `imap.zoho.com` | 993 | on | Zoho app password |
-| `proton` | `protonmail-bridge` | 1143 | on | Bridge-generated password + local CA |
-| `custom` | you fill in | you fill in | you choose | password or OAuth (Microsoft) |
+| Provider    | Host                    | Port        | TLS        | Auth path                                       |
+| ----------- | ----------------------- | ----------- | ---------- | ----------------------------------------------- |
+| `microsoft` | `outlook.office365.com` | 993         | on         | OAuth device-code (basic auth is being retired) |
+| `gmail`     | `imap.gmail.com`        | 993         | on         | Google app password (IMAP + 2FA required)       |
+| `fastmail`  | `imap.fastmail.com`     | 993         | on         | Fastmail app password                           |
+| `icloud`    | `imap.mail.me.com`      | 993         | on         | Apple app-specific password                     |
+| `zoho`      | `imap.zoho.com`         | 993         | on         | Zoho app password                               |
+| `proton`    | `protonmail-bridge`     | 1143        | on         | Bridge-generated password + local CA            |
+| `custom`    | you fill in             | you fill in | you choose | password or OAuth (Microsoft)                   |
 
 Pick `custom` for Dovecot, mailcow, Yahoo, or anything else. You'll
 enter host / port / TLS explicitly.

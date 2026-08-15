@@ -1,7 +1,7 @@
 package ui
 
 // Regression guard for the preview CSP header. The security posture
-// spelled out in SECURITY.md and docs/reference-architecture.mdx §11
+// spelled out in SECURITY.md and docs/design-decisions.mdx §11
 // claims two things about the preview response:
 //
 //   - `sandbox` is applied so previewed hostile HTML runs in an opaque

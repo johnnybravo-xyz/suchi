@@ -11,15 +11,15 @@ shows up.
 
 ## Format matrix
 
-| MIME | What happens | Binary needed | Slim image | Full image |
-|------|--------------|---------------|:----------:|:----------:|
-| `application/pdf` | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction | `qpdf`, `pdftotext`, tessocr (`pdftoppm`+`tesseract`) OR `ocrmypdf` | ✅ full PDF chain (no OCR'd archive) | ✅ full PDF chain (with OCR'd archive) |
-| `image/*` (PNG, JPEG, GIF, TIFF, WebP) | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens | none (pure-Go via gozxing) | ✅ | ✅ |
-| `application/epub+zip`, `application/epub` | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs. | none | ✅ | ✅ |
-| `image/vnd.djvu`, `image/x-djvu` | `djvutxt` extracts the embedded OCR text layer | `djvutxt` (djvulibre-bin) | ❌ (no binary) | ✅ |
-| `image/heic`, `image/heif` (`.heic`, `.heif`) | ImageMagick converts to single-page PDF; the standard OCR path then produces a searchable archive — a photograph of a receipt becomes full-text searchable | `magick` (ImageMagick) with HEIF delegate | ✅ | ✅ |
-| `message/rfc822` (`.eml` files) | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id` | none (pure Go) | ✅ | ✅ |
-| `application/vnd.ms-outlook` (`.msg` files) | `msgconvert` transforms the CFB binary into RFC 822; falls through to the `.eml` path so Message-Id dedup + attachment fanout + correspondent inheritance work unchanged | `msgconvert` (libemail-outlook-message-perl) | ❌ (no binary) | ✅ |
+| MIME                                          | What happens                                                                                                                                                             | Binary needed                                                       |              Slim image              |               Full image               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | :----------------------------------: | :------------------------------------: |
+| `application/pdf`                             | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction                                                                                    | `qpdf`, `pdftotext`, tessocr (`pdftoppm`+`tesseract`) OR `ocrmypdf` | ✅ full PDF chain (no OCR'd archive) | ✅ full PDF chain (with OCR'd archive) |
+| `image/*` (PNG, JPEG, GIF, TIFF, WebP)        | QR / DataMatrix / Aztec barcodes decoded into `documents.content` as `barcode:<value>` tokens                                                                            | none (pure-Go via gozxing)                                          |                  ✅                  |                   ✅                   |
+| `application/epub+zip`, `application/epub`    | Pure-Go zip walker → OPF → spine → concatenated XHTML text into `documents.content`. Title + authors captured in logs.                                                   | none                                                                |                  ✅                  |                   ✅                   |
+| `image/vnd.djvu`, `image/x-djvu`              | `djvutxt` extracts the embedded OCR text layer                                                                                                                           | `djvutxt` (djvulibre-bin)                                           |            ❌ (no binary)            |                   ✅                   |
+| `image/heic`, `image/heif` (`.heic`, `.heif`) | ImageMagick converts to single-page PDF; the standard OCR path then produces a searchable archive — a photograph of a receipt becomes full-text searchable               | `magick` (ImageMagick) with HEIF delegate                           |                  ✅                  |                   ✅                   |
+| `message/rfc822` (`.eml` files)               | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id`                       | none (pure Go)                                                      |                  ✅                  |                   ✅                   |
+| `application/vnd.ms-outlook` (`.msg` files)   | `msgconvert` transforms the CFB binary into RFC 822; falls through to the `.eml` path so Message-Id dedup + attachment fanout + correspondent inheritance work unchanged | `msgconvert` (libemail-outlook-message-perl)                        |            ❌ (no binary)            |                   ✅                   |
 
 Anything else lands as a doc with empty content — the original bytes
 are safe in the CAS, dedup + metadata still work, but there's no text
@@ -56,10 +56,10 @@ Detail per step (matching the boxes above):
 
 - **preconsume** — operator-defined script; see [preconsume](/preconsume).
 - **qpdf** — normalize, strip restrictions, decrypt using empty password
-  + candidates from the passwords file + learned passwords for this
-  owner. If all attempts fail: mark `encryption_state='encrypted'` and
-  halt — operator supplies a password via
-  `POST /api/documents/{id}/decrypt` to resume.
+  - candidates from the passwords file + learned passwords for this
+    owner. If all attempts fail: mark `encryption_state='encrypted'` and
+    halt — operator supplies a password via
+    `POST /api/documents/{id}/decrypt` to resume.
 - **docsplit** — opt-in QR-scan pass. When separators fire, fan out one
   child doc per segment, soft-delete the parent, and exit (children
   carry the chain).
@@ -85,11 +85,11 @@ bytes as-is (encrypted PDFs will then fail downstream).
 
 Two engines are supported and picked at boot via `OCR_ENGINE`:
 
-| `OCR_ENGINE` | Engine | Binaries | Extras |
-|--------------|--------|----------|--------|
-| `auto` (default) | prefers **tesseract**, falls back to **ocrmypdf** | pdftoppm + tesseract, OR ocrmypdf | zero-config |
-| `tesseract` | in-process pdftoppm → tesseract chain (`core/pipeline/tessocr`) | pdftoppm (poppler-utils) + tesseract | slim image default |
-| `ocrmypdf` | ocrmypdf CLI wrapper (`core/pipeline/ocrmypdf`) | ocrmypdf + tesseract | full image default |
+| `OCR_ENGINE`     | Engine                                                          | Binaries                             | Extras             |
+| ---------------- | --------------------------------------------------------------- | ------------------------------------ | ------------------ |
+| `auto` (default) | prefers **tesseract**, falls back to **ocrmypdf**               | pdftoppm + tesseract, OR ocrmypdf    | zero-config        |
+| `tesseract`      | in-process pdftoppm → tesseract chain (`core/pipeline/tessocr`) | pdftoppm (poppler-utils) + tesseract | slim image default |
+| `ocrmypdf`       | ocrmypdf CLI wrapper (`core/pipeline/ocrmypdf`)                 | ocrmypdf + tesseract                 | full image default |
 
 `tesseract` is the smaller path (~4× less Docker image size vs ocrmypdf's
 Python stack) but does not produce a searchable-PDF archive —
@@ -192,15 +192,19 @@ a specific payload — and fan out one document per segment.
 **Setup:**
 
 1. Generate a separator sheet:
+
    ```sh
    qrencode -s 20 -o separator.png SUCHI-SPLIT
    ```
+
    Print several copies. Any QR encoder works; the default token is
    `SUCHI-SPLIT` (override via `SCAN_SPLIT_TOKEN`).
 2. Enable in the environment:
+
    ```sh
    export SCAN_SPLIT_ENABLED=on
    ```
+
 3. Insert a separator between each document in your feeder stack and
    scan the whole pile as one PDF. Upload as usual.
 
@@ -226,16 +230,16 @@ page. QR is explicit — the user prints separator sheets on purpose.
 PDF/A-3 documents with an embedded Cross-Industry Invoice XML get
 their structured data extracted and written to custom fields:
 
-| Custom field | CII source | Type |
-|--------------|-----------|------|
-| `invoice_number` | `ExchangedDocument/ID` (BT-1) | text |
-| `invoice_date` | `ExchangedDocument/IssueDateTime` (BT-2) | date |
-| `invoice_currency` | `InvoiceCurrencyCode` (BT-5) | text |
-| `invoice_total_gross` | `GrandTotalAmount` (BT-112) | monetary |
-| `invoice_total_net` | `LineTotalAmount` (BT-109) | monetary |
-| `invoice_seller` | `SellerTradeParty/Name` (BT-27) | text |
-| `invoice_seller_vat` | `SellerTradeParty/SpecifiedTaxRegistration[VA]` (BT-31) | text |
-| `invoice_buyer` | `BuyerTradeParty/Name` (BT-44) | text |
+| Custom field          | CII source                                              | Type     |
+| --------------------- | ------------------------------------------------------- | -------- |
+| `invoice_number`      | `ExchangedDocument/ID` (BT-1)                           | text     |
+| `invoice_date`        | `ExchangedDocument/IssueDateTime` (BT-2)                | date     |
+| `invoice_currency`    | `InvoiceCurrencyCode` (BT-5)                            | text     |
+| `invoice_total_gross` | `GrandTotalAmount` (BT-112)                             | monetary |
+| `invoice_total_net`   | `LineTotalAmount` (BT-109)                              | monetary |
+| `invoice_seller`      | `SellerTradeParty/Name` (BT-27)                         | text     |
+| `invoice_seller_vat`  | `SellerTradeParty/SpecifiedTaxRegistration[VA]` (BT-31) | text     |
+| `invoice_buyer`       | `BuyerTradeParty/Name` (BT-44)                          | text     |
 
 The custom field rows are created lazily on the first successful
 extraction — a stock install without any e-invoices doesn't clutter
@@ -282,7 +286,8 @@ text layer (unusual), the extraction returns empty content — suchi
 does not OCR DjVu itself; convert to PDF upstream if needed.
 
 Output cap: `DJVU_MAX_CONTENT_BYTES` (default 32 MiB). Same silent-truncate
-+ Warn behaviour as EPUB.
+
+- Warn behaviour as EPUB.
 
 ## Office documents
 
@@ -293,14 +298,14 @@ OCR'd PDF text.
 
 Supported MIMEs (routed by `core/pipeline/anydoc.Recognized`):
 
-| Family | Extensions |
-|---|---|
-| Word | `.doc`, `.docx`, `.docm` |
-| PowerPoint | `.ppt`, `.pptx`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot` |
-| Excel | `.xls`, `.xlsx`, `.xlsm`, `.xlsb` |
-| OpenDocument | `.odt`, `.ods`, `.odp` |
-| Rich Text Format | `.rtf` |
-| CSV | `.csv` |
+| Family           | Extensions                                                 |
+| ---------------- | ---------------------------------------------------------- |
+| Word             | `.doc`, `.docx`, `.docm`                                   |
+| PowerPoint       | `.ppt`, `.pptx`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot` |
+| Excel            | `.xls`, `.xlsx`, `.xlsm`, `.xlsb`                          |
+| OpenDocument     | `.odt`, `.ods`, `.odp`                                     |
+| Rich Text Format | `.rtf`                                                     |
+| CSV              | `.csv`                                                     |
 
 PDF and EPUB are deliberately NOT routed through anydoc — the PDF path
 (qpdf → pdf-inspector → ocrmypdf) and the pure-Go EPUB extractor own
@@ -308,9 +313,9 @@ those MIMEs. anydoc's own coverage of them isn't used.
 
 Missing anydoc binary = documents in these formats still land, they
 just don't get their content indexed. Same posture as missing
-`ocrmypdf`. Both Docker images (slim and full) bundle anydoc as of
-Phase 3.5; bare-metal installs need to place an `anydoc` executable
-on PATH themselves — see [source caveats](#anydoc-source-caveats) below.
+`ocrmypdf`. Both Docker images (slim and full) bundle anydoc;
+bare-metal installs need to place an `anydoc` executable on PATH
+themselves — see [source caveats](#anydoc-source-caveats) below.
 
 ### anydoc source caveats
 
@@ -348,7 +353,7 @@ Dockerfile comment — is:
 
 **Alternative if the CLI drift becomes painful:** vendor the `convert`
 example into suchi's tree, stripping the language wrappers, and pin
-the anydoc *library* directly. Not done today because
+the anydoc _library_ directly. Not done today because
 `examples/convert.rs` has been stable in shape since the crate's first
 release and the maintenance burden isn't worth it yet.
 
@@ -363,12 +368,12 @@ Every existing extractor is a template.
 
 ## Per-format tuning
 
-| Env var | Default | Meaning |
-|---------|---------|---------|
-| `PDF_MAX_CONTENT_BYTES` | `8M` | Cap on `pdftotext` output length. |
-| `EPUB_MAX_CONTENT_BYTES` | `32M` | Cap on concatenated XHTML text. Ebooks routinely exceed the PDF-oriented default. |
-| `DJVU_MAX_CONTENT_BYTES` | `32M` | Cap on `djvutxt` output. |
-| `OCR_LANGUAGES` | `eng` | Comma-separated Tesseract language codes. `eng,deu,hin` etc. |
+| Env var                  | Default | Meaning                                                                           |
+| ------------------------ | ------- | --------------------------------------------------------------------------------- |
+| `PDF_MAX_CONTENT_BYTES`  | `8M`    | Cap on `pdftotext` output length.                                                 |
+| `EPUB_MAX_CONTENT_BYTES` | `32M`   | Cap on concatenated XHTML text. Ebooks routinely exceed the PDF-oriented default. |
+| `DJVU_MAX_CONTENT_BYTES` | `32M`   | Cap on `djvutxt` output.                                                          |
+| `OCR_LANGUAGES`          | `eng`   | Comma-separated Tesseract language codes. `eng,deu,hin` etc.                      |
 
 All accept `K`/`M`/`G` suffixes or raw byte counts. Truncation is
 silent + logged at Warn — the doc still lands, FTS still indexes what
@@ -385,31 +390,31 @@ a version bump; a required-field change bumps `suchi_sidecar`.
 ```json
 {
   "suchi_sidecar": 1,
-  "title":         "Electricity bill Mar 2026",
-  "created":       "2026-03-02",
+  "title": "Electricity bill Mar 2026",
+  "created": "2026-03-02",
   "correspondent": "BESCOM",
   "correspondents": [
-    { "name": "BESCOM",       "role": "sender"    },
-    { "name": "Ritesh S.",    "role": "recipient" }
+    { "name": "BESCOM", "role": "sender" },
+    { "name": "Ritesh S.", "role": "recipient" }
   ],
-  "tags":          ["utilities", "source:fs-watch"],
-  "jd_category":   31,
-  "notes":         "auto-picked-up",
+  "tags": ["utilities", "source:fs-watch"],
+  "jd_category": 31,
+  "notes": "auto-picked-up",
   "custom_fields": { "amount_inr": "1420", "billing_period": "March" }
 }
 ```
 
-| Field | Type | Semantics |
-|-------|------|-----------|
-| `suchi_sidecar` | int | Must equal `1`. Producers that omit it get the flat-JSON compat path (title/created/correspondent/tags only). |
-| `title` | string | Overrides the filename-derived title. |
-| `created` | string (ISO 8601) | Source date. Stored as `documents.added_at` — the date the doc was created upstream, not the moment suchi ingested it. |
-| `correspondent` | string | Singular sender name. Backwards-compat with pre-Phase-2 producers. When `correspondents[]` is also set, the array wins. |
-| `correspondents[]` | array | Multi-party form. Each entry is `{name, role}`; role is `sender \| recipient \| cc \| other` (`sender` when omitted). Applied via `document_correspondents`. |
-| `tags[]` | array | Tag slugs. Auto-created on ingest. |
-| `jd_category` | int | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved. |
-| `notes` | string | Free-form; stored on the document row. |
-| `custom_fields` | object | Map of custom-field name → value. Field must exist (`/api/custom_fields/`); type coercion follows the field's declared type. |
+| Field              | Type              | Semantics                                                                                                                                                    |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `suchi_sidecar`    | int               | Must equal `1`. Producers that omit it get the flat-JSON compat path (title/created/correspondent/tags only).                                                |
+| `title`            | string            | Overrides the filename-derived title.                                                                                                                        |
+| `created`          | string (ISO 8601) | Source date. Stored as `documents.added_at` — the date the doc was created upstream, not the moment suchi ingested it.                                       |
+| `correspondent`    | string            | Singular sender name (legacy shape). When `correspondents[]` is also set, the array wins.                                                                    |
+| `correspondents[]` | array             | Multi-party form. Each entry is `{name, role}`; role is `sender \| recipient \| cc \| other` (`sender` when omitted). Applied via `document_correspondents`. |
+| `tags[]`           | array             | Tag slugs. Auto-created on ingest.                                                                                                                           |
+| `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
+| `notes`            | string            | Free-form; stored on the document row.                                                                                                                       |
+| `custom_fields`    | object            | Map of custom-field name → value. Field must exist (`/api/custom_fields/`); type coercion follows the field's declared type.                                 |
 
 **Source of truth**: `core/ingest/sidecar/sidecar.go`. Parser accepts
 the native shape and a flat-JSON compat shape (no `suchi_sidecar` key,
@@ -419,20 +424,20 @@ file moves to `<dir>/errors/` with a `.err` companion.
 
 ## Docker image matrix
 
-| Feature | Slim image | Full image |
-|---------|:----------:|:----------:|
-| Text-native PDF via `pdftotext` | ✅ | ✅ |
-| Scanned PDF via **tessocr** (pdftoppm + tesseract) | ✅ | ✅ |
-| Scanned PDF via **ocrmypdf** (writes text layer inside the PDF) | ❌ | ✅ |
-| PDF normalization via `qpdf` | ✅ | ✅ |
-| ZUGFeRD attachment extraction | ✅ | ✅ |
-| Image barcode decoding | ✅ | ✅ |
-| EPUB extraction | ✅ | ✅ |
-| Office documents via **anydoc** (docx, xlsx, pptx, odt, rtf, csv) | ✅ | ✅ |
-| DjVu extraction | ❌ | ✅ |
-| Outlook `.msg` extraction | ❌ | ✅ |
-| Image size (approx) | ~80 MB | ~400 MB |
-| Default `OCR_ENGINE` | `tesseract` | `ocrmypdf` |
+| Feature                                                           | Slim image  | Full image |
+| ----------------------------------------------------------------- | :---------: | :--------: |
+| Text-native PDF via `pdftotext`                                   |     ✅      |     ✅     |
+| Scanned PDF via **tessocr** (pdftoppm + tesseract)                |     ✅      |     ✅     |
+| Scanned PDF via **ocrmypdf** (writes text layer inside the PDF)   |     ❌      |     ✅     |
+| PDF normalization via `qpdf`                                      |     ✅      |     ✅     |
+| ZUGFeRD attachment extraction                                     |     ✅      |     ✅     |
+| Image barcode decoding                                            |     ✅      |     ✅     |
+| EPUB extraction                                                   |     ✅      |     ✅     |
+| Office documents via **anydoc** (docx, xlsx, pptx, odt, rtf, csv) |     ✅      |     ✅     |
+| DjVu extraction                                                   |     ❌      |     ✅     |
+| Outlook `.msg` extraction                                         |     ❌      |     ✅     |
+| Image size (approx)                                               |   ~80 MB    |  ~400 MB   |
+| Default `OCR_ENGINE`                                              | `tesseract` | `ocrmypdf` |
 
 The slim image is the recommended default — it covers PDF end-to-end
 including OCR of scanned pages, plus office document text extraction

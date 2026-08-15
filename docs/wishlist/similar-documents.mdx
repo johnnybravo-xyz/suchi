@@ -1,6 +1,6 @@
 ---
 title: "Wishlist — similar documents via sqlite-vec"
-description: "Plan for a Detail-page \"similar documents\" strip + optional semantic search mode, backed by sqlite-vec embeddings."
+description: 'Plan for a Detail-page "similar documents" strip + optional semantic search mode, backed by sqlite-vec embeddings.'
 ---
 
 A "similar documents" affordance on a doc's detail page is a
@@ -71,7 +71,7 @@ New pipeline step under `core/pipeline/embed/`:
 4. On success:
    - `INSERT OR REPLACE INTO document_embeddings(...)`.
    - `INSERT OR REPLACE INTO vec_documents(rowid, embedding) VALUES
-     (doc_id, ?)` — only when vec0 loaded; skip otherwise.
+(doc_id, ?)` — only when vec0 loaded; skip otherwise.
 5. On endpoint failure: log Warn, skip. Doc still ingests.
 
 Backfill for pre-migration docs: `suchi embeddings --backfill`,

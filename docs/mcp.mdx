@@ -19,7 +19,7 @@ Add this to your agent's MCP config:
     "suchi": {
       "command": "suchi-mcp",
       "env": {
-        "SUCHI_URL":   "http://localhost:8000",
+        "SUCHI_URL": "http://localhost:8000",
         "SUCHI_TOKEN": "<paste from POST /api/token/>"
       }
     }
@@ -54,10 +54,10 @@ curl -X POST http://localhost:8000/api/token/ \
 
 ## Transports
 
-| Flag | Transport | Use when |
-|---|---|---|
-| (default, no flag) | stdio | Local agent hosts (Claude Desktop, Cursor, OpenCode) |
-| `--http :8100` | HTTP+SSE | Remote agents, browser-hosted UIs, MCP inspectors |
+| Flag               | Transport | Use when                                             |
+| ------------------ | --------- | ---------------------------------------------------- |
+| (default, no flag) | stdio     | Local agent hosts (Claude Desktop, Cursor, OpenCode) |
+| `--http :8100`     | HTTP+SSE  | Remote agents, browser-hosted UIs, MCP inspectors    |
 
 `--url` and `--token` flags override `SUCHI_URL` / `SUCHI_TOKEN` env
 if you'd rather not export them.
@@ -72,6 +72,7 @@ sees in tool-discovery.
 Full-text search over title + content.
 
 Args:
+
 - `query` (string, required) — the search terms
 - `page_size` (int, optional; default 10, max 25)
 
@@ -87,6 +88,7 @@ Full projection of one document — title, extracted content, tags,
 correspondents, custom fields, MIME, blob refs.
 
 Args:
+
 - `id` (int, required)
 
 Backs `GET /api/documents/{id}`. Trashed docs are visible with
@@ -107,6 +109,7 @@ response is what a "review this" agent flow would iterate.
 Resolve an approval task with the given choice.
 
 Args:
+
 - `task_id` (int, required)
 - `choice` (string, required) — one of the task's declared choices (e.g. `approve`, `reject`)
 - `note` (string, optional) — operator note attached to the resolution
@@ -119,6 +122,7 @@ the approval-run advancement outcome.
 Create an expiring share link over one or more documents.
 
 Args:
+
 - `doc_ids` (array of ints, required) — 1..200 docs the caller owns
 - `label` (string, optional)
 - `expires_in_sec` (int, optional; 0 = never)

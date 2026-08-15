@@ -21,7 +21,7 @@ log_level: "info"
 body_limit: "100M"
 backup_interval: "24h"
 
-ocr_languages: ["eng"]      # or "eng,deu" as a plain string
+ocr_languages: ["eng"] # or "eng,deu" as a plain string
 ocr_engine: "auto"
 pdf_max_content_bytes: "8M"
 epub_max_content_bytes: "32M"

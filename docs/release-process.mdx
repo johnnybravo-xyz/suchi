@@ -22,16 +22,16 @@ Every commit message MUST follow [Conventional Commits](https://www.conventional
 
 **Types** (all lowercase):
 
-| Type | When |
-| ---- | ---- |
-| `feat` | Adds a user-visible feature |
-| `fix` | Fixes a user-visible bug |
-| `perf` | User-visible speedup with no behavior change |
-| `refactor` | Internal restructure, zero user-visible change |
-| `docs` | Documentation only — README, `docs/*.mdx`, code comments |
-| `test` | Adds or fixes tests |
-| `build` | Build/CI/toolchain changes (Dockerfile, workflow files) |
-| `chore` | Everything else — bump deps, tidy, housekeeping |
+| Type       | When                                                     |
+| ---------- | -------------------------------------------------------- |
+| `feat`     | Adds a user-visible feature                              |
+| `fix`      | Fixes a user-visible bug                                 |
+| `perf`     | User-visible speedup with no behavior change             |
+| `refactor` | Internal restructure, zero user-visible change           |
+| `docs`     | Documentation only — README, `docs/*.mdx`, code comments |
+| `test`     | Adds or fixes tests                                      |
+| `build`    | Build/CI/toolchain changes (Dockerfile, workflow files)  |
+| `chore`    | Everything else — bump deps, tidy, housekeeping          |
 
 **Scopes** are packages (`authz`, `automations`, `ui`, `api`, `db`,
 `refile`, `mcp`, `deploy`, `docs`) — greppable, not fancy.
@@ -52,9 +52,9 @@ Concrete examples from the log:
 
 ```
 feat(refile): "come back and change your mind" — bulk re-run rules + re-render across the corpus
-feat(authz): Phase 6 batch 2 — enforce document ACLs
+feat(authz): enforce document ACLs on read + write paths
 feat(automations): wire consumption trigger from upload + intake paths
-docs: full-codebase sweep covering Phase 4–6 delivery
+docs: full-codebase sweep — align claims with what actually shipped
 ```
 
 ## Changelog
@@ -114,11 +114,12 @@ Once the `[Unreleased]` block has enough shipped to justify a tag
    ## [0.5.0] - 2026-08-10
 
    ### Added
+
    ...
    ```
 
    Reset `[Unreleased]` to an empty stub. Commit as `chore: release
-   0.5.0` (no `!` — the tag is the artifact, the commit isn't
+0.5.0` (no `!` — the tag is the artifact, the commit isn't
    breaking).
 
 5. **Tag.** Signed and annotated:
@@ -128,14 +129,30 @@ Once the `[Unreleased]` block has enough shipped to justify a tag
    git push origin v0.5.0
    ```
 
-6. **Publish the release notes.** Copy the new CHANGELOG section
-   into a GitHub release attached to the tag. Attach:
-   - The two Docker images (`suchi:0.5.0` and `suchi:0.5.0-full`
-     — built and pushed by the release workflow)
-   - Linux amd64 + arm64 binaries (from the release workflow)
-   - macOS + Windows binaries
-   - `sbom.spdx.json` + `sbom.cyclonedx.json` for each artifact
-   - Cosign signatures alongside every image tag
+   Pushing the tag does **not** trigger the release pipeline —
+   there's no `on: push: tags` handler. This is deliberate: a
+   tag-push should never turn into a published GitHub Release
+   by accident.
+
+6. **Trigger the release pipeline manually.** Either:
+
+   ```sh
+   just release VERSION=v0.5.0
+   # or
+   make release VERSION=v0.5.0
+   ```
+
+   Both call `gh workflow run release.yml --ref v0.5.0 -f publish=true`
+   under the hood. Alternatively, click "Run workflow" on
+   `.github/workflows/release.yml` in the GitHub UI and pick the
+   `v0.5.0` ref. The workflow builds both Docker images, pushes to
+   ghcr, builds cross-platform binaries, generates SBOM + cosign
+   signatures, and (when `publish=true`) attaches everything to a
+   GitHub Release using the CHANGELOG section as the notes body.
+
+   Smoke-test the pipeline without publishing by passing `PUBLISH=false`
+   (or `publish=false` in the UI) — same build, artifacts stay in the
+   workflow-run tab, no release row appears.
 
 7. **Announce.** Once we're public: a short GitHub Discussions post
    with the changelog highlights. Nothing more.
@@ -146,10 +163,12 @@ Once the `[Unreleased]` block has enough shipped to justify a tag
   on every push and PR.
 - **`.github/workflows/smoke.yml`** — full-image ingest smoke on
   every push and PR.
-- **`.github/workflows/release.yml`** (arrives with the repo flip)
-  — triggered on `v*` tag: builds both Docker images, pushes to
-  ghcr, builds cross-platform binaries, generates SBOM + cosign
-  signatures, attaches everything to the GitHub release.
+- **`.github/workflows/release.yml`** — **manual-dispatch only**.
+  `just release VERSION=v0.5.0` (or the GitHub UI) fires it against
+  an existing v\* tag. Builds both Docker images, pushes to ghcr,
+  builds cross-platform binaries, generates SBOM + cosign
+  signatures, attaches everything to the GitHub release when
+  `publish=true`.
 
 ## Deprecation policy
 

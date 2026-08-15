@@ -53,7 +53,7 @@ The SPA has **no dependency on the server-rendered UI pages**:
 
 - **Setup wizard is in-app** (`#/setup`) — all eight steps over the setup
   API (`/api/admin/setup/state|step/{name}|complete`, `/api/admin/users`,
-  `/api/admin/setup/jd-preset`, `/api/admin/settings/llm|preferences|ingest`),
+  `/api/admin/setup/preset`, `/api/admin/settings/llm|preferences|ingest`),
   every step optional/skippable, egress-ack enforced client-side for
   non-local LLM endpoints exactly like the server wizard does.
 - **Previews and downloads are authenticated fetches** → object URLs, not
