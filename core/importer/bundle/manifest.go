@@ -66,9 +66,10 @@ func LoadManifests(root string) (Manifest, error) {
 	}
 
 	// Split-manifest sidecars: `<root>/*.json` other than manifest.json.
-	// Newer the exporter writes them under `documents/`; older versions
-	// keep them at root. Look in both.
-	dirs := []string{root, filepath.Join(root, "documents")}
+	// paperless v3 with -p writes them under `json/`; v2 -sm without -p
+	// wrote them under `documents/`; older versions kept them at root.
+	// Look in all three.
+	dirs := []string{root, filepath.Join(root, "documents"), filepath.Join(root, "json")}
 	for _, d := range dirs {
 		entries, err := os.ReadDir(d)
 		if err != nil {
@@ -172,17 +173,72 @@ type StoragePathFields struct {
 }
 
 // CustomFieldFields is one field DEFINITION. Values live in CustomFieldInstance rows.
+//
+// paperless v3 emits data_type as a string enum ("text"/"monetary"/etc.);
+// v2 used ints. We accept both via json.RawMessage and normalize at
+// upsert time.
 type CustomFieldFields struct {
 	Name      string          `json:"name"`
-	DataType  int             `json:"data_type"` // source enum
+	DataType  json.RawMessage `json:"data_type"`
 	ExtraData json.RawMessage `json:"extra_data,omitempty"`
 }
 
 type CustomFieldInstance struct {
 	Document int64 `json:"document"`
 	Field    int64 `json:"field"`
-	// value is polymorphic in the source; we keep the raw and decode per-type at write time.
-	Value json.RawMessage `json:"value"`
+	// v2 packed the value into a single polymorphic `value` field. v3 uses
+	// separate typed columns — exactly one is non-null per row. Accept
+	// both shapes and normalize at write time.
+	Value          json.RawMessage `json:"value,omitempty"`
+	ValueText      *string         `json:"value_text,omitempty"`
+	ValueLongText  *string         `json:"value_long_text,omitempty"`
+	ValueBool      *bool           `json:"value_bool,omitempty"`
+	ValueURL       *string         `json:"value_url,omitempty"`
+	ValueDate      *string         `json:"value_date,omitempty"`
+	ValueInt       *int64          `json:"value_int,omitempty"`
+	ValueFloat     *float64        `json:"value_float,omitempty"`
+	ValueMonetary  *string         `json:"value_monetary,omitempty"`
+	ValueSelect    json.RawMessage `json:"value_select,omitempty"`
+	ValueDocuments json.RawMessage `json:"value_document_ids,omitempty"`
+}
+
+// EffectiveValue returns the JSON encoding of whichever v2/v3 value slot
+// carries data. Returns nil (nil, nil) when the row is empty.
+func (c CustomFieldInstance) EffectiveValue() json.RawMessage {
+	if len(c.Value) > 0 && string(c.Value) != "null" {
+		return c.Value
+	}
+	switch {
+	case c.ValueText != nil:
+		b, _ := json.Marshal(*c.ValueText)
+		return b
+	case c.ValueLongText != nil:
+		b, _ := json.Marshal(*c.ValueLongText)
+		return b
+	case c.ValueBool != nil:
+		b, _ := json.Marshal(*c.ValueBool)
+		return b
+	case c.ValueURL != nil:
+		b, _ := json.Marshal(*c.ValueURL)
+		return b
+	case c.ValueDate != nil:
+		b, _ := json.Marshal(*c.ValueDate)
+		return b
+	case c.ValueInt != nil:
+		b, _ := json.Marshal(*c.ValueInt)
+		return b
+	case c.ValueFloat != nil:
+		b, _ := json.Marshal(*c.ValueFloat)
+		return b
+	case c.ValueMonetary != nil:
+		b, _ := json.Marshal(*c.ValueMonetary)
+		return b
+	case len(c.ValueSelect) > 0:
+		return c.ValueSelect
+	case len(c.ValueDocuments) > 0:
+		return c.ValueDocuments
+	}
+	return nil
 }
 
 // NoteFields matches documents.note rows.
@@ -227,19 +283,62 @@ const (
 	ModelDocument      = "documents.document"
 	ModelNote          = "documents.note"
 	ModelUser          = "auth.user"
+
+	ModelSavedView           = "documents.savedview"
+	ModelSavedViewFilterRule = "documents.savedviewfilterrule"
 )
 
 // FilePaths resolves the location of a document's original + archive
-// files on disk relative to the bundle root. the exporter names files
-// deterministically from the document's title + correspondent + date;
-// the manifest carries `original_filename` + `archive_filename` fields
-// that we simply concatenate with the well-known subdirs.
+// files on disk relative to the bundle root.
+//
+// paperless v2 without `-p` writes files at `<root>/{original_filename}`.
+// paperless v3 with `-p` names files as `originals/{date} {correspondent}
+// {original_filename}.{ext}` (the "storage template") — no clean 1:1
+// with original_filename. We try in order:
+//
+//  1. originals/{original_filename}          -- v2 & v3 without -p
+//  2. root-level match: {original_filename}  -- older exporters
+//  3. originals/ scan for a file whose name contains original_filename
+//     -- v3 with -p
+//
+// The archive path uses the same fallback chain.
 func FilePaths(root string, d DocumentFields) (original string, archive string) {
-	original = filepath.Join(root, "originals", d.OriginalFilename)
+	original = resolveExportedFile(root, "originals", d.OriginalFilename)
 	if d.ArchiveFilename != nil && *d.ArchiveFilename != "" {
-		archive = filepath.Join(root, "archive", *d.ArchiveFilename)
+		archive = resolveExportedFile(root, "archive", *d.ArchiveFilename)
 	}
 	return
+}
+
+// resolveExportedFile searches for a file matching name in the given
+// subdirectory (and root). Returns the first existing path, or the
+// nominal one so the caller can report a clean "no such file" error.
+func resolveExportedFile(root, subdir, name string) string {
+	if name == "" {
+		return ""
+	}
+	direct := filepath.Join(root, subdir, name)
+	if _, err := os.Stat(direct); err == nil {
+		return direct
+	}
+	fallback := filepath.Join(root, name)
+	if _, err := os.Stat(fallback); err == nil {
+		return fallback
+	}
+	// v3 -p scan: files named like "{created} {correspondent} {name}.{ext}".
+	subdirPath := filepath.Join(root, subdir)
+	entries, err := os.ReadDir(subdirPath)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if strings.Contains(e.Name(), name) {
+				return filepath.Join(subdirPath, e.Name())
+			}
+		}
+	}
+	return direct
 }
 
 // FirstExisting is a small helper for "here or there" file lookups; some

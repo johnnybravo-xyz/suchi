@@ -30,6 +30,7 @@ func runImport(args []string) int {
 		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping bundle metadata → JD code")
 		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
 		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
+		reportPath = fs.String("report", "./import-report.md", "write a FULL/PARTIAL/FAILED markdown report of the migration to this path")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -46,6 +47,7 @@ func runImport(args []string) int {
 		fmt.Fprintf(os.Stderr, "load --map-jd: %v\n", err)
 		return 2
 	}
+	mrep := bundle.NewMigrationReport(*from, "")
 	opts := bundle.Options{
 		BundleRoot: *from,
 		OwnerEmail: *ownerEmail,
@@ -53,6 +55,7 @@ func runImport(args []string) int {
 		Flat:       *flat,
 		MapJD:      mapping,
 		AutoJD:     *autoJD,
+		Report:     mrep,
 	}
 	// Delegate cross-field validation to Options.Validate() so the CLI
 	// and every programmatic caller share one rulebook.
@@ -137,6 +140,20 @@ Import complete (dry_run=%v).
 		for _, w := range rep.Warnings {
 			fmt.Fprintf(os.Stderr, "  ! %s\n", w)
 		}
+	}
+	if *reportPath != "" && !*dryRun {
+		f, err := os.Create(*reportPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open --report %s: %v\n", *reportPath, err)
+			return 1
+		}
+		if err := mrep.Emit(f); err != nil {
+			f.Close()
+			fmt.Fprintf(os.Stderr, "write --report %s: %v\n", *reportPath, err)
+			return 1
+		}
+		f.Close()
+		fmt.Fprintf(os.Stderr, "Migration report written to %s\n", *reportPath)
 	}
 	return 0
 }

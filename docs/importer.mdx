@@ -101,6 +101,154 @@ visible, bulk-reassignable, never lost. Three flags override:
 The three flags are mutually exclusive — pick one strategy.
 </Info>
 
+## Migration target version
+
+The importer targets **paperless-ngx v3.0.5** and is not intended
+to track that project's release train. Migration is a one-shot event —
+picking a stable target once, freezing there, and treating anything
+newer as "please tell us if you need it" is deliberately simpler than
+maintaining a compatibility surface across paperless minor versions.
+
+Unknown workflow trigger types, action types, or saved-view rule types
+land as `FAILED` entries in the migration report with reason
+"paperless version drift"; the report's follow-ups section lists each
+kind so a future maintainer can decide whether the delta is worth a
+bump.
+
+## Workflows → automations
+
+Paperless workflows migrate into suchi's [automations](/automations)
+engine. Triggers, actions, and filter fields all map through a fixed
+table.
+
+**Trigger type mapping** (source `workflowtrigger.type`):
+
+| Source | Target trigger | Outcome |
+|--------|----------------|---------|
+| 1 CONSUMPTION | `consumption` | Full |
+| 2 DOCUMENT_ADDED | `document_added` | Full |
+| 3 DOCUMENT_UPDATED | `document_updated` | Full |
+| 4 SCHEDULED | — | Failed — suchi has no scheduled automations |
+
+**Action type mapping** (source `workflowaction.type`):
+
+| Source | Target action(s) | Outcome |
+|--------|------------------|---------|
+| 1 ASSIGNMENT | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field | Full |
+| 2 REMOVAL | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_owner` / `remove_custom_field` | Full (Partial when multi-value inputs truncate) |
+| 3 EMAIL | — | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
+| 4 WEBHOOK | — | Partial — no `webhook` verb yet |
+| 5 PASSWORD_REMOVAL | — | Partial — no analog |
+| 6 MOVE_TO_TRASH | `discard` | Partial — `discard` skips the doc rather than soft-deleting |
+
+**Trigger filter mapping**:
+
+| Source field | Target | Outcome |
+|--------------|--------|---------|
+| `filter_filename` | `filename` | Full |
+| `filter_path` | `path` | Full |
+| `filter_mailrule` | `mailrule_id` | Full |
+| `filter_has_tags` (first) | `tag_id` | Full |
+| `filter_has_tags` (>1) | first only | Partial — "any-of tags list truncated to first" |
+| `filter_has_correspondent` | `corr_id` | Full |
+| `filter_has_document_type` | `doctype_id` | Full |
+| `filter_has_storage_path` | — | Partial — no storage-path trigger filter |
+| `filter_has_all_tags`, `filter_has_not_tags` | — | Partial — no negation / all-of semantics |
+| `filter_custom_field_query` | — | Partial |
+| `matching_algorithm` (LITERAL/REGEX/FUZZY) | — | `match` dropped, Partial |
+
+## Saved views
+
+Paperless saved views migrate into suchi's `saved_views` — with a
+lossy translation from paperless's 50-way `filter_rules.rule_type`
+enum onto suchi's allow-listed `filter_json` keys (`q`, `tags__id__in`,
+`correspondents__id__in`, `document_type__id`, `jd_category_id`,
+`sensitivity`, `ordering`).
+
+A view is `Full` when every rule maps 1:1; `Partial` when at least one
+rule degrades (e.g., storage-path rule → text search); `Failed` when
+zero rules map — the view row is skipped and reported.
+
+**Rule-type mapping** (source `rule_type` int → target filter_json):
+
+| Source enum | Target | Outcome |
+|-------------|--------|---------|
+| 0 title contains | `q` | Full |
+| 1 content contains | `q` | Partial (q matches title+content combined) |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt | — | Failed — suchi has no ASN |
+| 3 correspondent is | `correspondents__id__in` | Full |
+| 4 document type is | `document_type__id` | Full (multi → last wins, Partial) |
+| 5 is in inbox | — | Partial — suchi surfaces Inbox natively |
+| 6 has tag | `tags__id__in` | Full |
+| 7 has any tag / 22 has tags in | `tags__id__in` | Full |
+| 8-16 date filters (created/added/modified before/after) | — | Failed — no date filter yet |
+| 17 does not have tag | — | Failed — no negation |
+| 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q` | Full |
+| 21 more like this | — | Failed |
+| 25 storage path is / 30 has storage path in | `q` text search | Partial |
+| 26 has correspondent in | `correspondents__id__in` | Full |
+| 27, 29, 31 negative "in" filters | — | Failed |
+| 28 has document type in | `document_type__id` first | Partial |
+| 32-35 owner filters | — | Failed |
+| 36, 38-42 custom-field filters | — | Failed |
+| 37 is shared by me | — | Failed |
+| 43-46 created/added to/from | — | Failed |
+| 47 mime type is | — | Failed |
+
+Display mode: `TABLE` → `table`, `SMALL_CARDS` and `LARGE_CARDS` →
+`card`. Icons are dropped (suchi doesn't render view icons).
+
+## JD categorization tiers
+
+`--auto-jd` runs a five-tier resolution per document. Higher tiers
+win; the terminal fallback is inbox (`49`).
+
+1. `--map-jd` — explicit user rules from YAML. Always `Full`.
+2. `--auto-jd` **confident** — an unambiguous heuristic match from
+   `heuristics.yaml` (e.g., `tag:tax` → 22). `Full`.
+3. `--auto-jd` **ambiguous** — fuzzy match (Levenshtein ≤ 2) or a
+   multi-target tag set (doc has both `tax` and `insurance`).
+   Staged as a proposal in the [approvals](/approvals) surface.
+   `Partial`.
+4. `--jd-tags` — flat-mode fallback. When the target is
+   `jd.ModeFlat`, allocate one JD code in the 10-19 band per distinct
+   source-side tag (first-seen wins). `Partial`.
+5. Inbox — safe fallback. `Failed` in the report so the doc surfaces
+   for manual routing without silently vanishing.
+
+The proposal queue in tier 3 is capped at **7 items** (raise with
+`--jd-approvals-max=<n>`). Beyond the cap, lower-impact proposals are
+suppressed silently and the report notes the count as
+"N proposals suppressed to keep queue ≤ 7 — raise with
+`--jd-approvals-max` to see the rest". Ranking is by "docs affected"
+(broadest-impact first), not by confidence.
+
+## Migration report
+
+Every non-dry-run import writes a markdown report to `--report
+./import-report.md` (default). The report has these sections:
+
+- **Header** — timestamp, source bundle root, target datadir,
+  duration, active JD strategy.
+- **Summary** — rows per model class (Documents / Tags /
+  Correspondents / Document types / Storage paths / Custom fields /
+  Notes / Workflows / Saved views / Approval proposals), columns Full
+  / Partial / Failed.
+- **JD categorization** — docs matched to the built-in tree, docs
+  deferred to Approvals, docs to Inbox, docs placed in the 10-19
+  band (flat-user-tags only).
+- **Approvals queued** — table of proposals surfaced for user review
+  (source tag, docs affected, suggested JD code, confidence signal).
+- **Partial migrations** — one row per Partial with source, target,
+  reason.
+- **Failed migrations** — one row per Failed with source, reason.
+- **Follow-ups suggested** — aggregated feature gaps by blocker
+  count, sorted descending. Reads like a roadmap prompt: paperless
+  users who care about `notify_email` show up here.
+
+The report is **the migration's system of record** — silent lossy
+migrations feel like betrayal; every drop appears here with a reason.
+
 ## Verify (dry-diff)
 
 The shadow-window primitive: diff a nightly export against the live

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -44,6 +45,11 @@ type Options struct {
 	Flat   bool
 	MapJD  *Mapping
 	AutoJD bool
+
+	// Report accumulates FULL / PARTIAL / FAILED entries per model class.
+	// Optional — Run allocates one when nil. Callers pass in their own when
+	// they want to write it to a file afterwards (see the --report CLI flag).
+	Report *MigrationReport
 }
 
 // Validate returns an error if opts violates any invariant. Callers
@@ -118,6 +124,11 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 	}
 	log = log.With("component", "import.bundle", "bundle", opts.BundleRoot, "dry_run", opts.DryRun, "map_source", source)
 	rep := &Report{}
+	mrep := opts.Report
+	if mrep == nil {
+		mrep = NewMigrationReport(opts.BundleRoot, "")
+	}
+	mrep.SetStrategy(source)
 
 	// Resolve owner up front so we fail fast on a bad --owner-email.
 	var ownerID int64
@@ -186,6 +197,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		tagMap[o.PK] = id
 		names.tags[o.PK] = f.Name
 		rep.Tags++
+		mrep.Full(KindTag, f.Name, f.Name)
 	}
 	for _, o := range buckets[ModelCorrespondent] {
 		var f CorrespondentFields
@@ -199,6 +211,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		corMap[o.PK] = id
 		names.correspondents[o.PK] = f.Name
 		rep.Correspondents++
+		mrep.Full(KindCorrespondent, f.Name, f.Name)
 	}
 	for _, o := range buckets[ModelDocumentType] {
 		var f DocumentTypeFields
@@ -212,6 +225,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		dtMap[o.PK] = id
 		names.documentTypes[o.PK] = f.Name
 		rep.DocumentTypes++
+		mrep.Full(KindDocumentType, f.Name, f.Name)
 	}
 	for _, o := range buckets[ModelStoragePath] {
 		var f StoragePathFields
@@ -225,6 +239,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		spMap[o.PK] = id
 		names.storagePaths[o.PK] = f.Name
 		rep.StoragePaths++
+		mrep.Full(KindStoragePath, f.Name, f.Name)
 	}
 	for _, o := range buckets[ModelCustomField] {
 		var f CustomFieldFields
@@ -237,6 +252,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		}
 		cfMap[o.PK] = id
 		rep.CustomFields++
+		mrep.Full(KindCustomField, f.Name, f.Name)
 	}
 
 	// Index custom-field instances by document PK for phase-2 lookup.
@@ -307,6 +323,10 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			if mapped {
 				rep.MappedByRule++
 			}
+			mrep.Full(KindDocument, f.Title, f.Title)
+			for i := 0; i < res.notes; i++ {
+				mrep.Full(KindNote, fmt.Sprintf("note on %q", f.Title), f.Title)
+			}
 		case docSkipped:
 			rep.DocumentsSkipped++
 		}
@@ -314,6 +334,17 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			rep.Warnings = append(rep.Warnings, res.warn)
 		}
 	}
+
+	// ---------- phase 3: workflows + saved views ----------
+
+	if _, err := ImportWorkflows(ctx, d, log, objs, opts.DryRun, tagMap, corMap, dtMap, spMap, cfMap, mrep); err != nil {
+		return nil, fmt.Errorf("import workflows: %w", err)
+	}
+	if _, err := ImportSavedViews(ctx, d, log, objs, opts.DryRun, ownerID, tagMap, corMap, dtMap, mrep); err != nil {
+		return nil, fmt.Errorf("import saved views: %w", err)
+	}
+
+	mrep.Finalize()
 
 	log.Info("import.bundle.done",
 		"tags", rep.Tags,
@@ -525,17 +556,18 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 			if !ok {
 				continue
 			}
-			if err := writeCustomFieldValue(ctx, tx, docID, fieldID, cfi.Value); err != nil {
+			if err := writeCustomFieldValue(ctx, tx, docID, fieldID, cfi.EffectiveValue()); err != nil {
 				return err
 			}
 		}
 
 		// Notes. user is optional; NULL is fine.
 		for _, n := range in.Notes {
-			var userID any
-			if n.User != nil {
-				userID = *n.User
-			}
+			// The source-side user PK does not remap to a suchi user row; the
+			// simplest correct behaviour is to attribute the note to the
+			// import's OwnerID so the FOREIGN KEY constraint holds. If the
+			// note carries no user at all, use OwnerID for the same reason.
+			userID := in.OwnerID
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO notes(document_id, user_id, note, created_at)
 				VALUES (?, ?, ?, ?)
@@ -623,7 +655,7 @@ func upsertTag(ctx context.Context, d *db.DB, dry bool, f TagFields) (int64, err
 				is_insensitive = excluded.is_insensitive,
 				is_inbox_tag = excluded.is_inbox_tag,
 				updated_at = excluded.updated_at
-		`, f.Name, f.Slug, defaultString(f.Color, "#a6cee3"),
+		`, f.Name, defaultSlug(f.Slug, f.Name), defaultString(f.Color, "#a6cee3"),
 			f.MatchAlg, f.Match, boolInt(f.Insensitive), boolInt(f.IsInboxTag), now, now); err != nil {
 			return err
 		}
@@ -648,7 +680,7 @@ func upsertCorrespondent(ctx context.Context, d *db.DB, dry bool, f Corresponden
 				match = excluded.match,
 				is_insensitive = excluded.is_insensitive,
 				updated_at = excluded.updated_at
-		`, f.Name, f.Slug, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+		`, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT id FROM correspondents WHERE name = ?`, f.Name).Scan(&id)
@@ -672,7 +704,7 @@ func upsertDocumentType(ctx context.Context, d *db.DB, dry bool, f DocumentTypeF
 				match = excluded.match,
 				is_insensitive = excluded.is_insensitive,
 				updated_at = excluded.updated_at
-		`, f.Name, f.Slug, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+		`, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT id FROM document_types WHERE name = ?`, f.Name).Scan(&id)
@@ -697,7 +729,7 @@ func upsertStoragePath(ctx context.Context, d *db.DB, dry bool, f StoragePathFie
 				match = excluded.match,
 				is_insensitive = excluded.is_insensitive,
 				updated_at = excluded.updated_at
-		`, f.Name, f.Slug, f.Path, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+		`, f.Name, defaultSlug(f.Slug, f.Name), f.Path, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT id FROM storage_paths WHERE name = ?`, f.Name).Scan(&id)
@@ -705,8 +737,9 @@ func upsertStoragePath(ctx context.Context, d *db.DB, dry bool, f StoragePathFie
 	return id, err
 }
 
-// source data_type enum → suchi data_type string.
-var bundleCFDataType = map[int]string{
+// source data_type enum → suchi data_type string. paperless v2 used ints;
+// v3 emits string enums directly.
+var bundleCFDataTypeInt = map[int]string{
 	1: "text",
 	2: "date",
 	3: "bool",
@@ -717,13 +750,38 @@ var bundleCFDataType = map[int]string{
 	8: "select",
 }
 
+var bundleCFDataTypeString = map[string]string{
+	"string":       "text",
+	"text":         "text",
+	"date":         "date",
+	"boolean":      "bool",
+	"bool":         "bool",
+	"integer":      "number",
+	"float":        "number",
+	"number":       "number",
+	"monetary":     "monetary",
+	"documentlink": "documentlink",
+	"url":          "url",
+	"select":       "select",
+}
+
 func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFields) (int64, error) {
 	if dry {
 		return 0, nil
 	}
-	dt, ok := bundleCFDataType[f.DataType]
-	if !ok {
-		dt = "text" // best-effort fallback
+	dt := "text"
+	if len(f.DataType) > 0 {
+		var s string
+		var i int
+		if err := json.Unmarshal(f.DataType, &s); err == nil {
+			if v, ok := bundleCFDataTypeString[s]; ok {
+				dt = v
+			}
+		} else if err := json.Unmarshal(f.DataType, &i); err == nil {
+			if v, ok := bundleCFDataTypeInt[i]; ok {
+				dt = v
+			}
+		}
 	}
 	extra := "{}"
 	if len(f.ExtraData) > 0 {
@@ -773,6 +831,42 @@ func defaultString(v, d string) string {
 		return d
 	}
 	return v
+}
+
+// slugify returns a lowercase-hyphenated version of name. Used when the
+// source manifest omits a slug (paperless v3 emits slug=null) — suchi
+// tables carry NOT NULL UNIQUE slug columns, so we need a deterministic
+// derivation. Match paperless's own slugify (django's default): lowercase,
+// non-alphanumeric → hyphen, collapse consecutive hyphens.
+func slugify(name string) string {
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	s := b.String()
+	s = strings.TrimRight(s, "-")
+	if s == "" {
+		return "unnamed"
+	}
+	return s
+}
+
+// defaultSlug uses the slug when non-empty, otherwise derives from name.
+func defaultSlug(slug, name string) string {
+	if slug != "" {
+		return slug
+	}
+	return slugify(name)
 }
 
 func boolInt(b bool) int {
