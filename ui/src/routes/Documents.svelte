@@ -1,6 +1,7 @@
 <script>
   import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
   import { route } from '../lib/router.svelte.js'
+  import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -200,7 +201,10 @@
 
   loadFacets()
   loadJDCats()
-  $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; load() })
+  // uploadBus.revision bumps when UploadBox lands a doc — visibilitychange
+  // won't fire when the upload finishes in the same-tab modal, so this
+  // is what keeps the list in sync with a still-open modal.
+  $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
   // uploads finish in the background — refetch when the tab comes back
   $effect(() => {
     const fn = () => { if (document.visibilityState === 'visible') load() }

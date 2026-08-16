@@ -1,12 +1,19 @@
 <script>
-  import { uploadDocument, getDocument } from '../lib/api.js'
+  import { uploadDocument, getDocument, patchDocument, listJDCategories } from '../lib/api.js'
   import { fmtBytes } from '../lib/format.js'
+  import { markUploaded } from '../lib/upload_bus.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
   let over = $state(false)
   let queue = $state([])
   let fileInput
+
+  // JD categories power the "File under…" picker in the details panel.
+  // Fetched once per modal open; tags stay a free-text input so we skip
+  // the extra facet call.
+  let jdCats = $state([])
+  listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
 
   // Poll the fresh document a few times so the panel fills in as the
   // pipeline enriches it (title, JD, OCR text). Stops early once filed.
@@ -24,13 +31,14 @@
 
   async function send(files) {
     for (const f of files) {
-      const entry = $state({ name: f.name, size: f.size, status: 'uploading', doc: null, processing: false })
+      const entry = $state({ name: f.name, size: f.size, status: 'uploading', doc: null, processing: false, expanded: false })
       queue = [entry, ...queue]
       try {
         const res = await uploadDocument(f)
         entry.id = res?.id
         entry.status = 'done'
         entry.processing = true
+        markUploaded()
         hydrate(entry)
       } catch (ex) {
         if (ex.status === 409 && ex.data?.matched?.id) {
@@ -53,6 +61,20 @@
   function onDrop(e) {
     e.preventDefault(); over = false
     send([...e.dataTransfer.files])
+  }
+
+  // Sparse-PATCH helper for the details panel's editable fields (JD
+  // + sensitivity). Tags are read-only here — full editing lives on
+  // /#/doc/{id} where the vocab autocomplete lives too. Keeping the
+  // vocab decisions in one place avoids drift (tax vs taxes vs Tax).
+  async function patch(q, body, msg) {
+    if (!q.id) return
+    try {
+      await patchDocument(q.id, body)
+      q.doc = await getDocument(q.id)
+      markUploaded()
+      if (msg) notify?.(msg)
+    } catch (ex) { notify?.(ex.message || 'Update failed') }
   }
 </script>
 
@@ -105,8 +127,42 @@
               {#if q.doc?.title && q.doc.title !== q.name}<span class="sub">filed as “{q.doc.title}”</span>{/if}
               {#if q.doc?.sensitivity}<span class="pill" class:warn={q.doc.sensitivity === 'internal'} class:danger={q.doc.sensitivity === 'confidential'}>{q.doc.sensitivity}</span>{/if}
               <span class="spacer"></span>
+              <button class="btn sm" onclick={() => (q.expanded = !q.expanded)}>{q.expanded ? 'Hide' : 'Details'}</button>
               <a class="btn sm" href={`#/doc/${q.id}`}>Open</a>
             </div>
+            {#if q.expanded}
+              <div class="up-detail" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px" role="group" aria-label="Uploaded document details">
+                <div style="display:flex;gap:12px;align-items:center">
+                  <label class="sub" style="min-width:100px" for={`up-jd-${q.id}`}>File under</label>
+                  <select id={`up-jd-${q.id}`} class="input" style="max-width:220px"
+                          onchange={(e) => patch(q, { jd_category_id: Number(e.target.value) }, 'Filed')}
+                          value={q.doc?.jd_category_id ?? ''}>
+                    {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+                  </select>
+                </div>
+                {#if q.doc?.tags?.length}
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <span class="sub" style="min-width:100px">Tags</span>
+                    {#each q.doc.tags as t}<span class="pill">{t}</span>{/each}
+                  </div>
+                {/if}
+                <div style="display:flex;gap:12px;align-items:center">
+                  <label class="sub" style="min-width:100px" for={`up-sens-${q.id}`}>Sensitivity</label>
+                  <select id={`up-sens-${q.id}`} class="input" style="max-width:170px"
+                          value={q.doc?.sensitivity ?? ''}
+                          onchange={(e) => patch(q, { sensitivity: e.target.value }, 'Sensitivity set')}>
+                    <option value="">unset</option>
+                    <option value="public">public</option>
+                    <option value="internal">internal</option>
+                    <option value="confidential">confidential</option>
+                    <option value="restricted">restricted</option>
+                  </select>
+                </div>
+                {#if q.doc?.correspondents?.length}
+                  <div class="sub"><b style="min-width:100px;display:inline-block">Correspondent</b>{q.doc.correspondents.map(c => c.name || c).join(', ')}</div>
+                {/if}
+              </div>
+            {/if}
           {/if}
         </div>
       {/each}
