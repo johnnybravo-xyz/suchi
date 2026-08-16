@@ -4,7 +4,7 @@
 // full walkthrough.
 //
 // The selling point: "you can always come back to change this."
-// Swap JD presets, edit storage-path templates, tune rules — then
+// Swap Suchi Presets, edit storage-path templates, tune rules — then
 // hit this to make the change stick across the existing corpus.
 
 package api

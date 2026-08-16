@@ -1,6 +1,6 @@
 <script>
-  import { setupState, setupStep, setupComplete, adminCreateUser, applyJDPreset,
-           saveLLMSettings, savePreferences, saveIngestSettings, listJDPresets } from '../lib/api.js'
+  import { setupState, setupStep, setupComplete, adminCreateUser, applyPreset,
+           saveLLMSettings, savePreferences, saveIngestSettings, listPresets } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
@@ -18,7 +18,7 @@
     { name: 'rules',       label: 'Rules' },
     { name: 'preferences', label: 'OCR & backups' },
   ]
-  // Server is the source of truth (GET /api/jd/presets/); this list is
+  // Server is the source of truth (GET /api/presets/); this list is
   // only the offline fallback so the step never renders empty.
   const FALLBACK_PRESETS = [
     { id: 'solo', name: 'Solo', description: 'One person: life admin, money, health, home.', areas: [] },
@@ -28,7 +28,7 @@
     { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
   ]
   let presets = $state(FALLBACK_PRESETS)
-  listJDPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
+  listPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
 
   let steps = $state({})          // name -> 'done' | 'skipped'
   let cur = $state('welcome')
@@ -185,7 +185,7 @@
         Refile existing documents into the new tree now.</label>
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
-                onclick={() => saveAnd(() => applyJDPreset(preset), 'Filing tree applied')}>Apply preset</button>
+                onclick={() => saveAnd(() => applyPreset(preset), 'Filing tree applied')}>Apply preset</button>
         <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
       </div>
       {/if}

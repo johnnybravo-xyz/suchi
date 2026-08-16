@@ -1,6 +1,6 @@
 // Package refile is the "come back and change your mind" primitive.
 //
-// Operators can swap JD presets, edit storage-path templates, add or
+// Operators can swap Suchi Presets, edit storage-path templates, add or
 // tune classifier rules — but those changes don't retroactively rearrange
 // documents that were ingested under the old configuration. Refile
 // closes that loop:

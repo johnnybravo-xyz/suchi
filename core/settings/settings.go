@@ -29,7 +29,7 @@ const (
 	KeyLLMAPIKeySealed = "llm.api_key_sealed"
 	KeyLLMEgressAck    = "llm.egress_ack"
 
-	KeyJDPreset = "jd.preset"
+	KeyPreset = "preset"
 
 	KeyBackupIntervalHours = "backup.interval_hours"
 	KeyOCRLanguages        = "ocr.languages" // JSON array of ISO codes

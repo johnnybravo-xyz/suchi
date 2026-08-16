@@ -5,7 +5,7 @@
 // jd_category_id ints with no way to look up what they mean.
 //
 // Read-only on purpose. Categories are created via preset swap
-// (POST /api/admin/setup/jd-preset), not per-row insert. Individual
+// (POST /api/admin/setup/preset), not per-row insert. Individual
 // mutation of an existing row's name/description is admin config
 // territory not yet wired.
 
@@ -21,22 +21,22 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
-// jdPresetsView projects jd.Presets() into the wire shape. Kept out
+// presetsView projects jd.Presets() into the wire shape. Kept out
 // of the handler so a unit test can pin the projection without a
 // server harness.
-func jdPresetsView() []JDPresetRow {
+func presetsView() []PresetRow {
 	src := jd.Presets()
-	out := make([]JDPresetRow, 0, len(src))
+	out := make([]PresetRow, 0, len(src))
 	for _, p := range src {
-		row := JDPresetRow{
+		row := PresetRow{
 			ID:          p.ID,
 			Name:        p.Label,
 			Description: p.Description,
 			Blank:       p.Blank,
-			Areas:       make([]JDPresetArea, 0, len(p.Tree.Areas)),
+			Areas:       make([]PresetArea, 0, len(p.Tree.Areas)),
 		}
 		for _, a := range p.Tree.Areas {
-			row.Areas = append(row.Areas, JDPresetArea{
+			row.Areas = append(row.Areas, PresetArea{
 				Code:          a.Start,
 				Name:          a.Name,
 				CategoryCount: len(a.Categories),
@@ -166,32 +166,32 @@ func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
 // conditional import chain.
 var _ = sql.ErrNoRows
 
-// JDPresetRow is one row of the /api/jd/presets/ listing. The
-// wizard renders the areas + category counts as a tree preview so
-// the operator sees what a preset actually looks like before
+// PresetRow is one row of the /api/presets/ listing. The wizard
+// renders the areas + category counts as a tree preview so the
+// operator sees what a Suchi Preset actually looks like before
 // committing to it.
-type JDPresetRow struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Blank       bool           `json:"blank,omitempty"`
-	Areas       []JDPresetArea `json:"areas"`
+type PresetRow struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description,omitempty"`
+	Blank       bool         `json:"blank,omitempty"`
+	Areas       []PresetArea `json:"areas"`
 }
 
-// JDPresetArea is the area-level summary the wizard needs — code
+// PresetArea is the area-level summary the wizard needs — code
 // range for the header, name for the label, category_count so it
 // can show "12 categories" without hydrating the whole tree.
-type JDPresetArea struct {
+type PresetArea struct {
 	Code          int    `json:"code"`
 	Name          string `json:"name"`
 	CategoryCount int    `json:"category_count"`
 }
 
-// ListJDPresets — GET /api/jd/presets/. Admin only. Sourced from
+// ListPresets — GET /api/presets/. Admin only. Sourced from
 // core/jd.Presets() so a new preset appears in the wizard with no
 // SPA release. No envelope — the population is bounded (currently
 // five rows) and pagination would just add noise.
-func (s *Server) ListJDPresets(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ListPresets(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
@@ -201,6 +201,5 @@ func (s *Server) ListJDPresets(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "admin only")
 		return
 	}
-	presets := jdPresetsView()
-	s.writeJSON(w, http.StatusOK, presets)
+	s.writeJSON(w, http.StatusOK, presetsView())
 }

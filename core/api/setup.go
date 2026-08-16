@@ -47,7 +47,7 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
-	mux.HandleFunc("POST /api/admin/setup/jd-preset", s.ApplyJDPreset)
+	mux.HandleFunc("POST /api/admin/setup/preset", s.ApplyPreset)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
 	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
@@ -207,12 +207,15 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------- JD preset ----------
+// ---------- Suchi Preset ----------
 
-// ApplyJDPreset swaps the JD tree to one of the curated presets. Body:
+// ApplyPreset swaps the JD tree to one of the curated presets. Body:
 // {"preset_id":"solo","confirm_blank":false}. Refuses blank without
 // confirm_blank=true.
-func (s *Server) ApplyJDPreset(w http.ResponseWriter, r *http.Request) {
+//
+// A Suchi Preset is a preset following Suchi's Johnny.Decimal taxonomy —
+// the starter tree plus its seeded rules/automations.
+func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
@@ -250,7 +253,7 @@ func (s *Server) ApplyJDPreset(w http.ResponseWriter, r *http.Request) {
 				err.Error()+` (re-post with "refile": true to accept the refile)`)
 			return
 		}
-		s.serverErr(w, "jdpreset.apply", err)
+		s.serverErr(w, "preset.apply", err)
 		return
 	}
 	if body.Refile {
@@ -259,17 +262,17 @@ func (s *Server) ApplyJDPreset(w http.ResponseWriter, r *http.Request) {
 		// /api/admin/refile endpoint instead for the background flavor.
 		stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{})
 		if err != nil {
-			s.Log.Warn("jdpreset.refile.err", "err", err.Error())
+			s.Log.Warn("preset.refile.err", "err", err.Error())
 		}
 		if s.Jobs != nil {
 			s.Jobs.Nudge()
 		}
 		_ = stats // captured in the log; response stays minimal for now
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyJDPreset, body.PresetID); err != nil {
+	if err := settings.Set(r.Context(), s.DB, settings.KeyPreset, body.PresetID); err != nil {
 		// Non-fatal: the tree is applied; the preset-name record is a
 		// nicety for the wizard's recap page.
-		s.Log.Warn("jdpreset.record", "err", err.Error())
+		s.Log.Warn("preset.record", "err", err.Error())
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"preset_id": body.PresetID})
 }
