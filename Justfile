@@ -170,6 +170,29 @@ check:
     just lint
     just test
 
+# --- release ---
+
+# Trigger the release workflow manually (requires `gh` + the tag to
+# already exist on origin). `just release VERSION=v0.1.0` builds and
+# publishes; `just release VERSION=v0.1.0 PUBLISH=false` runs the
+# artifacts-only smoke path. There is no auto-trigger — a human still
+# has to run this command or click "Run workflow" in the GitHub UI.
+release VERSION PUBLISH="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v gh >/dev/null; then
+        echo "gh CLI is required (https://cli.github.com)" >&2; exit 1
+    fi
+    if ! git rev-parse --verify "refs/tags/{{VERSION}}" >/dev/null 2>&1; then
+        echo "tag {{VERSION}} not found locally — create it first:" >&2
+        echo "  git tag -s {{VERSION}} -m 'suchi ${VERSION#v}'" >&2
+        echo "  git push origin {{VERSION}}" >&2
+        exit 1
+    fi
+    gh workflow run release.yml --ref {{VERSION}} -f publish={{PUBLISH}}
+    echo "dispatched release.yml at {{VERSION}} (publish={{PUBLISH}})"
+    echo "watch: gh run watch --workflow release.yml"
+
 # --- housekeeping ---
 
 # Kill any suchi process listening on the given port.

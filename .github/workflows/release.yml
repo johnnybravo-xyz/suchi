@@ -1,27 +1,24 @@
 name: release
 
-# Fires on every v* tag. Cutting a release is a two-command dance:
+# Manual-only trigger. `git push --tags` does NOT fire this workflow —
+# a human still has to click "Run workflow" in the GitHub UI or run
+# `just release VERSION=vX.Y.Z` locally. The two-step cut:
 #
-#   git tag -s vX.Y.Z -m "suchi X.Y.Z"
-#   git push origin vX.Y.Z
+#   1. git tag -s vX.Y.Z -m "suchi X.Y.Z"; git push origin vX.Y.Z
+#   2. click "Run workflow" against ref=vX.Y.Z (or `just release
+#      VERSION=vX.Y.Z`)
 #
-# See docs/release-process.mdx for the full runbook. Everything below
-# is unattended.
+# The tag has to exist on origin first — the dispatch uses `ref` to
+# check out the commit so every step downstream sees `github.ref_name
+# = vX.Y.Z`. See docs/release-process.mdx for the full runbook.
 
 on:
-  push:
-    tags: [ 'v*' ]
-  # workflow_dispatch lets us smoke-test the anydoc-binaries job (and
-  # the rest of the release pipeline) against a branch without cutting
-  # a real v* tag. The build runs, uploads artifacts, but the release
-  # publish step is skipped when the ref is not a tag — see the
-  # per-step conditions in the `collect` job.
   workflow_dispatch:
     inputs:
       publish:
         description: 'Publish a GitHub Release (true) or artifacts-only smoke test (false)'
         required: false
-        default: 'false'
+        default: 'true'
 
 permissions:
   contents: write   # write to the GitHub release
@@ -327,11 +324,11 @@ jobs:
             SHA256SUMS
 
       - name: publish release
-        # Tag pushes always publish. workflow_dispatch publishes only
-        # when the operator explicitly asks (`publish: true`) — the
-        # default is artifacts-only so a smoke run can't accidentally
-        # create a GitHub Release.
-        if: github.event_name == 'push' || inputs.publish == 'true'
+        # Manual dispatch only — publish when the operator explicitly
+        # asks (`publish: true`, which is the default from the "Run
+        # workflow" button). Set publish=false for artifacts-only
+        # smoke runs against a branch.
+        if: inputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: suchi ${{ github.ref_name }}

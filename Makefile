@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean bench-check
+.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean bench-check release
 
 BIN := $(PWD)/dist/suchi
 MODULES := plugin-api core plugins/local-auth plugins/oidc distro
@@ -39,6 +39,19 @@ run: build
 
 clean:
 	rm -rf dist
+
+# Manually trigger the release workflow. Requires `gh` and an existing
+# origin tag (create with `git tag -s v0.1.0 && git push origin v0.1.0`).
+# `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` runs
+# the artifacts-only smoke path. Mirrors `just release`.
+release:
+	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
+	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)
+	@git rev-parse --verify "refs/tags/$(VERSION)" >/dev/null 2>&1 || \
+	  (echo "tag $(VERSION) not found locally — create it first: git tag -s $(VERSION) && git push origin $(VERSION)"; exit 1)
+	gh workflow run release.yml --ref $(VERSION) -f publish=$(or $(PUBLISH),true)
+	@echo "dispatched release.yml at $(VERSION) (publish=$(or $(PUBLISH),true))"
+	@echo "watch: gh run watch --workflow release.yml"
 
 # Build the Svelte SPA and refresh core/ui/spa/dist (embedded into the
 # Go binary). Prefers bun; falls back to npm. Contributors who don't
