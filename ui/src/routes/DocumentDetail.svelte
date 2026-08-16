@@ -269,21 +269,37 @@
         </div>
       {/if}
 
-      {#if similar?.results?.length}
+      {#if similar}
         <div class="card">
           <h3 style="display:flex;align-items:center;gap:8px">Similar documents
             <span class="pill" title={similar.method === 'fts' ? 'lexical (FTS5 more-like-this)' : 'semantic'}>{similar.method}</span>
+            {#if similar.matched_on_title_only && similar.results?.length}
+              <span class="pill warn"
+                    title="This document has no extracted text; matches are based on title alone and may be noisy.">
+                title-only match
+              </span>
+            {/if}
           </h3>
-          <div class="index" style="border:0">
-            {#each similar.results.slice(0, 6) as sd (sd.id)}
-              <a class="irow" href={`#/doc/${sd.id}`} style="padding:8px 4px">
-                <span class="dot"></span>
-                {#if sd.jd_category_id}<span class="chip">jd</span>{/if}
-                <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
-                <span class="sub">{fmtDate(sd.created_at)}</span>
-              </a>
-            {/each}
-          </div>
+          {#if similar.results?.length}
+            <div class="index" style="border:0">
+              {#each similar.results.slice(0, 6) as sd (sd.id)}
+                <a class="irow" href={`#/doc/${sd.id}`} style="padding:8px 4px">
+                  <span class="dot"></span>
+                  {#if sd.jd_category_id}<span class="chip">jd</span>{/if}
+                  <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
+                  <span class="sub">{fmtDate(sd.created_at)}</span>
+                </a>
+              {/each}
+            </div>
+          {:else}
+            <p class="sub" style="margin:8px 4px 0;font-style:italic;opacity:.75;font-size:.8rem">
+              {#if similar.matched_on_title_only}
+                Nothing overlaps the title strongly enough. Reingesting this document so its text is extracted will usually surface more.
+              {:else}
+                Nothing in the archive overlaps this document's vocabulary yet.
+              {/if}
+            </p>
+          {/if}
         </div>
       {/if}
 

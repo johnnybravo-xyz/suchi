@@ -22,6 +22,11 @@ import (
 type SimilarResponse struct {
 	Results []similar.Doc `json:"results"`
 	Method  string        `json:"method"` // "fts" today; "vec" when sqlite-vec ships
+	// MatchedOnTitleOnly signals that the source document had no
+	// extracted content — the pipeline compared only its title. The
+	// SPA renders a warning so the operator knows results are noisier
+	// than usual.
+	MatchedOnTitleOnly bool `json:"matched_on_title_only"`
 }
 
 // GetSimilarDocuments serves GET /api/documents/{id}/similar?limit=10.
@@ -77,8 +82,36 @@ func (s *Server) GetSimilarDocuments(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "similar.query", err)
 		return
 	}
+	// Score floor: single-token calendar-year matches (e.g. "2026")
+	// score in the ~1e-6 band while real similarities land orders of
+	// magnitude higher. Applied here rather than inside TopDocs so
+	// the automations path keeps its per-rule configurable floor.
+	kept := out[:0]
+	for _, d := range out {
+		if d.Score >= similar.MinScore {
+			kept = append(kept, d)
+		}
+	}
+	out = kept
 	if out == nil {
 		out = []similar.Doc{}
 	}
-	s.writeJSON(w, http.StatusOK, SimilarResponse{Results: out, Method: "fts"})
+
+	// A source doc with no extracted content forces the tokenizer to
+	// work off the title alone — the caller should render the result
+	// set with a warning pill.
+	var titleOnly bool
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		`SELECT LENGTH(COALESCE(content,'')) = 0
+		   FROM documents WHERE id = ? AND trashed_at IS NULL`,
+		id).Scan(&titleOnly); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.serverErr(w, "similar.check_content", err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, SimilarResponse{
+		Results:            out,
+		Method:             "fts",
+		MatchedOnTitleOnly: titleOnly,
+	})
 }

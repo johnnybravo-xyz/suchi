@@ -42,6 +42,16 @@ const MaxTokens = 10
 // the whole 8MB pdftotext output would blow tokens on boilerplate.
 const MaxContentBytes = 4096
 
+// MinScore is the recommended BM25 score floor for callers that
+// surface results to humans. SQLite's BM25 returns tiny magnitudes:
+// a calendar-year-only match (e.g. "2026") in a real corpus scores
+// around 1e-6, while genuine overlap on multiple discriminative
+// tokens scores several orders of magnitude higher. A caller
+// filtering below this floor drops the noise band. The API endpoint
+// applies it; the automations `apply_from_similar` path keeps its
+// per-rule configurable floor for finer control.
+const MinScore = 0.001
+
 // Principal is the caller's identity used for the visibility splice.
 // Nil = anonymous. Role="admin" bypasses the WHERE fragment.
 type Principal struct {

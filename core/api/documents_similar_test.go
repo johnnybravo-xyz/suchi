@@ -94,6 +94,15 @@ func TestSimilarDocuments_NotFound(t *testing.T) {
 
 func TestSimilarDocuments_FindsOverlappingDocs(t *testing.T) {
 	s := newSimilarServer(t)
+	// Seed enough unrelated docs to give BM25 meaningful IDF math —
+	// with just three docs, every term is "common" and rank magnitudes
+	// collapse toward zero. Production corpora are larger; the test
+	// mirrors that so MinScore behaves the same way here.
+	for i := 0; i < 15; i++ {
+		seedSimilarDoc(t, s, 1,
+			"Recipe notebook page "+strconv.Itoa(i),
+			"Ingredients pasta tomato basil olive garlic salt pepper simmer twenty minutes serve four")
+	}
 	src := seedSimilarDoc(t, s, 1, "March electricity bill",
 		"Electricity utility charge for March 2026 covering residential consumption at 220kWh")
 	near := seedSimilarDoc(t, s, 1, "April electricity bill",
@@ -107,6 +116,9 @@ func TestSimilarDocuments_FindsOverlappingDocs(t *testing.T) {
 	}
 	if body.Method != "fts" {
 		t.Errorf("method = %q, want fts", body.Method)
+	}
+	if body.MatchedOnTitleOnly {
+		t.Errorf("MatchedOnTitleOnly = true for a doc with content, want false")
 	}
 	// Source doc must never appear in its own results.
 	for _, r := range body.Results {
@@ -143,6 +155,48 @@ func TestSimilarDocuments_EmptyContentReturnsEmpty(t *testing.T) {
 	}
 	if len(body.Results) != 0 {
 		t.Errorf("empty-content doc returned %d results, want 0", len(body.Results))
+	}
+}
+
+func TestSimilarDocuments_TitleOnlyFlag(t *testing.T) {
+	s := newSimilarServer(t)
+	// Source doc: title carries the discriminative vocab; content is
+	// empty (typical for a raw markdown blob whose extractor hasn't
+	// run yet). Second doc mentions one of the source's title tokens
+	// in its body so the pipeline actually finds a match.
+	src := seedSimilarDoc(t, s, 1, "invoice November payment", "")
+	seedSimilarDoc(t, s, 1, "Statement",
+		"Recap of November invoice payment items for the month")
+
+	code, body := doSimilar(t, s, src, adminPrincipal(1))
+	if code != 200 {
+		t.Fatalf("status=%d", code)
+	}
+	if !body.MatchedOnTitleOnly {
+		t.Errorf("MatchedOnTitleOnly = false, want true (source has empty content)")
+	}
+}
+
+func TestSimilarDocuments_ScoreFloor(t *testing.T) {
+	s := newSimilarServer(t)
+	// Source doc has distinctive vocab. The candidate shares only one
+	// generic token ("update") which alone should score in the noise
+	// band (~1e-6) — well below similar.MinScore (0.05). The floor
+	// should drop it from the response.
+	src := seedSimilarDoc(t, s, 1, "Quantum entanglement mesoscopic",
+		"Discussion of quantum entanglement across mesoscopic conductors")
+	seedSimilarDoc(t, s, 1, "Weekly update",
+		"Weekly team update for the sprint on the shipping project")
+
+	code, body := doSimilar(t, s, src, adminPrincipal(1))
+	if code != 200 {
+		t.Fatalf("status=%d", code)
+	}
+	for _, r := range body.Results {
+		if r.Score < similar.MinScore {
+			t.Errorf("result %d has score %f below the floor %f",
+				r.ID, r.Score, similar.MinScore)
+		}
 	}
 }
 
