@@ -413,7 +413,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		// When OCR skipped (no engine on PATH), the converted PDF still
 		// deserves to be the archive — otherwise the detail page's PDF
-		// preview has nothing to render.
+		// preview has nothing to render. Log the state so the operator
+		// sees that the archive carries no text layer.
 		if archiveBlob == "" {
 			ref, cerr := h.cas.Put(bytes.NewReader(res.PDF))
 			if cerr != nil {
@@ -421,6 +422,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 			archiveBlob = ref.SHA256
 			archiveSize = ref.Size
+			log.Warn("post-ingest.route.heic.archive_no_ocr",
+				"doc_id", e.DocID,
+				"reason", "OCR engine not available; archive is a plain wrapper without a searchable text layer",
+				"hint", "install tesseract (slim) or ocrmypdf (full), then reingest")
 		}
 		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
 			return err
@@ -464,7 +469,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		// When OCR skipped (no engine on PATH), the wrapped PDF still
 		// deserves to be the archive so the detail page's PDF preview
-		// has something to render.
+		// has something to render — but log the state so the operator
+		// sees that the archive carries no text layer.
 		if archiveBlob == "" {
 			ref, cerr := h.cas.Put(bytes.NewReader(pdfRes.PDF))
 			if cerr != nil {
@@ -472,6 +478,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 			archiveBlob = ref.SHA256
 			archiveSize = ref.Size
+			log.Warn("post-ingest.route.image.archive_no_ocr",
+				"mime", mime, "doc_id", e.DocID,
+				"reason", "OCR engine not available; archive is a plain wrapper without a searchable text layer",
+				"hint", "install tesseract (slim) or ocrmypdf (full), then reingest")
 		}
 		content := ocrContent
 		if barcodeTokens != "" {

@@ -215,7 +215,12 @@
             <dd>{fmtDate(doc.source_mtime)}</dd>
           {/if}
           <dt>Original</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
-          {#if doc.archive_blob}<dt>Archive</dt><dd>searchable PDF · {fmtBytes(doc.archive_size)}</dd>{/if}
+          {#if doc.archive_blob}
+            <dt>Archive</dt>
+            <dd title={doc.content ? 'Full-text searchable — OCR / extraction populated documents.content' : 'PDF wrapper only — no OCR layer. Install tesseract or ocrmypdf and rescan to make this searchable.'}>
+              {doc.content ? 'searchable PDF' : 'PDF preview (no OCR)'} · {fmtBytes(doc.archive_size)}
+            </dd>
+          {/if}
           {#if doc.tags?.length}
             <dt>Tags</dt><dd>{#each doc.tags as t}<span class="pill" style="margin-right:5px">{t}</span>{/each}</dd>
           {/if}
