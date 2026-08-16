@@ -503,6 +503,26 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
+	// Text sources — plain text, markdown, HTML. The blob IS the content;
+	// no external tool is needed. Populating documents.content here means
+	// FTS, list snippets, and similar-docs all work for these files
+	// instead of matching on titles alone.
+	if isTextMIME(mime) {
+		const cap = 1 << 20 // 1 MiB — generous for markdown/html; caps runaway logs
+		text := string(origBytes)
+		truncated := false
+		if len(text) > cap {
+			text = text[:cap]
+			truncated = true
+		}
+		log.Info("post-ingest.route.text",
+			"mime", mime, "bytes", len(origBytes), "truncated", truncated)
+		if err := h.updateDoc(ctx, e.DocID, text, "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
 	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
 		log.Info("post-ingest.skip.non_pdf", "mime", mime)
 		return nil
@@ -1666,6 +1686,22 @@ func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob str
 			time.Now().Unix(), id)
 		return err
 	})
+}
+
+// isTextMIME reports whether the MIME type identifies a text source
+// whose bytes are already the extracted content (plain, markdown,
+// HTML). Charset parameters are tolerated: `text/plain; charset=utf-8`
+// matches.
+func isTextMIME(mime string) bool {
+	m := strings.ToLower(mime)
+	if idx := strings.IndexByte(m, ';'); idx > 0 {
+		m = strings.TrimSpace(m[:idx])
+	}
+	switch m {
+	case "text/plain", "text/markdown", "text/html":
+		return true
+	}
+	return false
 }
 
 func firstNonEmpty(a, b string) string {
