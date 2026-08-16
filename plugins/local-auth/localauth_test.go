@@ -44,9 +44,9 @@ func TestEnsureDevAdmin_Refusals(t *testing.T) {
 		password string
 		wantErr  string
 	}{
-		{"empty_email", "", "devdevdev", "email and password required"},
-		{"empty_password", "dev@suchi.local", "", "email and password required"},
-		{"short_password", "dev@suchi.local", "1234567", "at least 8 chars"},
+		{"empty_email", "", DevAdminPassword, "email and password required"},
+		{"empty_password", DevAdminEmail, "", "email and password required"},
+		{"short_password", DevAdminEmail, "1234567", "at least 8 chars"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestEnsureDevAdmin_RefusesRoleCollision(t *testing.T) {
 	`, "victim@suchi.local"); err != nil {
 		t.Fatal(err)
 	}
-	err := p.EnsureDevAdmin(ctx, "victim@suchi.local", "devdevdev")
+	err := p.EnsureDevAdmin(ctx, "victim@suchi.local", DevAdminPassword)
 	if err == nil || !strings.Contains(err.Error(), "role") {
 		t.Fatalf("want role-collision refusal, got %v", err)
 	}
@@ -84,6 +84,59 @@ func TestEnsureDevAdmin_RefusesRoleCollision(t *testing.T) {
 	}
 }
 
+// TestEnsureDevAdmin_RefusesOtherAdmin locks in the accidental-prod
+// lateral-takeover guard: an operator with a legit admin who boots with
+// SUCHI_DEV=1 + loopback PUBLIC_URL must not gain a second admin row
+// carrying the public default credentials.
+func TestEnsureDevAdmin_RefusesOtherAdmin(t *testing.T) {
+	ctx := context.Background()
+	p := openTestPlugin(t)
+	if _, err := p.db.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, created_at, updated_at)
+		VALUES (?, 'owner', 'admin', 0, 0)
+	`, "owner@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword)
+	if err == nil || !strings.Contains(err.Error(), "other admin") {
+		t.Fatalf("want other-admin refusal, got %v", err)
+	}
+	// Verify dev@suchi.local was NOT inserted.
+	var count int
+	if err := p.db.Read.QueryRowContext(ctx,
+		`SELECT count(*) FROM users WHERE email = ?`, DevAdminEmail).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("dev admin row created despite refusal — takeover path is open")
+	}
+}
+
+// TestEnsureDevAdmin_AllowsMemberSideBySide confirms multi-account
+// testing survives the new refusal — only OTHER admins block dev-mode;
+// member accounts (Alice, Bob) do not.
+func TestEnsureDevAdmin_AllowsMemberSideBySide(t *testing.T) {
+	ctx := context.Background()
+	p := openTestPlugin(t)
+	if _, err := p.db.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, created_at, updated_at)
+		VALUES (?, 'alice', 'member', 0, 0)
+	`, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatalf("EnsureDevAdmin refused despite only a member peer: %v", err)
+	}
+	var role string
+	if err := p.db.Read.QueryRowContext(ctx,
+		`SELECT role FROM users WHERE email = ?`, DevAdminEmail).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	if role != "admin" {
+		t.Fatalf("want admin, got %q", role)
+	}
+}
+
 func TestEnsureDevAdmin_HappyPathInsertsAndBurnsToken(t *testing.T) {
 	ctx := context.Background()
 	p := openTestPlugin(t)
@@ -91,7 +144,7 @@ func TestEnsureDevAdmin_HappyPathInsertsAndBurnsToken(t *testing.T) {
 	if p.SetupToken() == "" {
 		t.Fatal("expected setup token to be minted on fresh DB")
 	}
-	if err := p.EnsureDevAdmin(ctx, "dev@suchi.local", "devdevdev"); err != nil {
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword); err != nil {
 		t.Fatal(err)
 	}
 	if p.SetupToken() != "" {
@@ -99,7 +152,7 @@ func TestEnsureDevAdmin_HappyPathInsertsAndBurnsToken(t *testing.T) {
 	}
 	var role string
 	if err := p.db.Read.QueryRowContext(ctx,
-		`SELECT role FROM users WHERE email = ?`, "dev@suchi.local").Scan(&role); err != nil {
+		`SELECT role FROM users WHERE email = ?`, DevAdminEmail).Scan(&role); err != nil {
 		t.Fatal(err)
 	}
 	if role != "admin" {
@@ -114,15 +167,15 @@ func TestEnsureDevAdmin_DoesNotResurrectDisabledAdmin(t *testing.T) {
 	if _, err := p.db.Write.ExecContext(ctx, `
 		INSERT INTO users(email, display_name, role, disabled, created_at, updated_at)
 		VALUES (?, 'quarantined', 'admin', 1, 0, 0)
-	`, "dev@suchi.local"); err != nil {
+	`, DevAdminEmail); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.EnsureDevAdmin(ctx, "dev@suchi.local", "devdevdev"); err != nil {
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword); err != nil {
 		t.Fatal(err)
 	}
 	var disabled int
 	if err := p.db.Read.QueryRowContext(ctx,
-		`SELECT disabled FROM users WHERE email = ?`, "dev@suchi.local").Scan(&disabled); err != nil {
+		`SELECT disabled FROM users WHERE email = ?`, DevAdminEmail).Scan(&disabled); err != nil {
 		t.Fatal(err)
 	}
 	if disabled != 1 {
@@ -133,20 +186,20 @@ func TestEnsureDevAdmin_DoesNotResurrectDisabledAdmin(t *testing.T) {
 func TestEnsureDevAdmin_IdempotentPasswordReset(t *testing.T) {
 	ctx := context.Background()
 	p := openTestPlugin(t)
-	if err := p.EnsureDevAdmin(ctx, "dev@suchi.local", "devdevdev"); err != nil {
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword); err != nil {
 		t.Fatal(err)
 	}
 	var firstHash string
 	if err := p.db.Read.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = ?`, "dev@suchi.local").Scan(&firstHash); err != nil {
+		`SELECT password_hash FROM users WHERE email = ?`, DevAdminEmail).Scan(&firstHash); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.EnsureDevAdmin(ctx, "dev@suchi.local", "rotatedrotated"); err != nil {
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, "rotatedrotated"); err != nil {
 		t.Fatal(err)
 	}
 	var secondHash string
 	if err := p.db.Read.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = ?`, "dev@suchi.local").Scan(&secondHash); err != nil {
+		`SELECT password_hash FROM users WHERE email = ?`, DevAdminEmail).Scan(&secondHash); err != nil {
 		t.Fatal(err)
 	}
 	if firstHash == secondHash {

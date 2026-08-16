@@ -41,10 +41,6 @@ type Config struct {
 	// login helper printed on boot. Never intended for production —
 	// gated by an explicit env var so it cannot be flipped by accident.
 	DevMode bool
-	// DevAdmin is the "email:password" pair auto-provisioned when DevMode
-	// is on. Empty falls back to dev@suchi.local / devdevdev. Password is
-	// argon2-hashed at boot; the plaintext never touches disk.
-	DevAdmin string
 
 	// OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 	OIDCIssuerURL    string
@@ -220,7 +216,6 @@ func Load() (*Config, error) {
 		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
 		IngestIMAPOAuthScopesMicrosoft:   env("INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", ""),
 		DevMode:                          env("SUCHI_DEV", "") == "1",
-		DevAdmin:                         env("SUCHI_DEV_ADMIN", ""),
 		IngestFSDir:                      env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
 		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),

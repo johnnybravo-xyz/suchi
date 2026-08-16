@@ -97,18 +97,32 @@ func (p *Plugin) SetupToken() string { return p.setupToken }
 // password-quality checks that apply elsewhere.
 const DevAdminMinPasswordLen = 8
 
-// EnsureDevAdmin auto-provisions (or re-provisions) an admin user for
-// SUCHI_DEV=1 boots. Idempotent: if the email already exists AND is
-// already an admin, its password hash is rewritten so a forgotten
-// dev password is always recoverable by restarting with a fresh
-// SUCHI_DEV_ADMIN. Burns the setup token so /bootstrap redirects
-// fall away.
+// DevAdminEmail and DevAdminPassword are the fixed credentials the
+// SUCHI_DEV=1 boot auto-provisions. Fixed by design: dev-mode is gated
+// to a local PUBLIC_URL, the "secret" is public, and a memorable
+// constant means the dev never has to grep the log to sign in via the
+// browser. The password is argon2-hashed at boot; the plaintext lives
+// only in this constant and in the one boot-log line.
+const (
+	DevAdminEmail    = "dev@suchi.local"
+	DevAdminPassword = "devdevdev"
+)
+
+// EnsureDevAdmin auto-provisions the fixed dev admin (see DevAdminEmail
+// / DevAdminPassword) for SUCHI_DEV=1 boots. Idempotent: if the row
+// already exists with role=admin, only the password hash is rewritten,
+// so a forgotten dev password is always recoverable by restarting.
+// Burns the setup token so /bootstrap redirects fall away.
 //
-// Guardrails (never wired outside dev — main.go gates on cfg.DevMode
-// AND the local-URL check):
+// Guardrails (all live here so main.go stays a thin gate):
 //   - Rejects passwords shorter than DevAdminMinPasswordLen.
 //   - Rejects if the email exists with a non-admin role (would
 //     silently promote a real member account).
+//   - Rejects if any OTHER admin (email != DevAdminEmail) already
+//     exists. Prevents accidental-prod lateral takeover: an operator
+//     with a legit admin who happens to boot with SUCHI_DEV=1 plus a
+//     loopback PUBLIC_URL would otherwise get a second admin row with
+//     public default credentials.
 //   - Never resets the `disabled` column on UPDATE — an operator who
 //     quarantined the admin manually keeps the quarantine across dev
 //     restarts.
@@ -119,6 +133,15 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	if len(password) < DevAdminMinPasswordLen {
 		return fmt.Errorf("localauth: dev password must be at least %d chars", DevAdminMinPasswordLen)
 	}
+	var otherAdmins int
+	if err := p.db.Read.QueryRowContext(ctx,
+		`SELECT count(*) FROM users WHERE role = 'admin' AND email != ?`,
+		email).Scan(&otherAdmins); err != nil {
+		return fmt.Errorf("localauth: count other admins: %w", err)
+	}
+	if otherAdmins > 0 {
+		return fmt.Errorf("localauth: refusing to arm dev-mode — %d other admin(s) already exist; unset SUCHI_DEV or drop the other admin(s) first", otherAdmins)
+	}
 	var existingRole string
 	err := p.db.Read.QueryRowContext(ctx,
 		`SELECT role FROM users WHERE email = ?`, email).Scan(&existingRole)
@@ -128,7 +151,7 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	case err != nil:
 		return fmt.Errorf("localauth: lookup dev admin: %w", err)
 	case existingRole != "admin":
-		return fmt.Errorf("localauth: dev admin email %q already exists with role %q; refusing to promote (change SUCHI_DEV_ADMIN or fix the row manually)", email, existingRole)
+		return fmt.Errorf("localauth: dev admin email %q already exists with role %q; refusing to promote", email, existingRole)
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
