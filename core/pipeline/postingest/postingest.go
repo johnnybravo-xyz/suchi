@@ -47,6 +47,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/heic"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pageanalyze"
@@ -427,11 +428,68 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	// Image path: skip qpdf/pdf-inspector/ocrmypdf (they'd fail on
-	// non-PDF input), run barcode decode against the raw bytes, and
-	// hand off to rules + rendered-view + classify like a PDF would.
-	// QR/DataMatrix/Aztec values land in documents.content as
-	// `barcode:<value>` tokens the FTS trigger picks up.
+	// Raster image path: wrap to a single-page PDF, run OCR, and merge
+	// with barcode tokens. Same "wrap → OCR" pattern as HEIC — slim
+	// (tessocr) and full (ocrmypdf) both work; the archive PDF stays
+	// as the preview when the OCR engine is absent. When magick is
+	// missing entirely, falls through to barcode-only content, which
+	// matches the pre-change behavior for these MIME types.
+	if imgpdf.Recognized(mime) {
+		bcs, berr := barcode.DecodeBytes(origBytes)
+		if berr != nil {
+			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
+		}
+		barcodeTokens := barcode.TokensFor(bcs)
+
+		pdfRes, perr := imgpdf.Convert(ctx, bytes.NewReader(origBytes), log,
+			imgpdf.Options{Ext: imgpdf.ExtFromMIME(mime)})
+		if perr != nil {
+			return fmt.Errorf("imgpdf: %w", perr)
+		}
+		if pdfRes.Skipped || len(pdfRes.PDF) == 0 {
+			log.Info("post-ingest.route.image.imgpdf_skipped",
+				"mime", mime, "reason", pdfRes.StderrTail)
+			if err := h.updateDoc(ctx, e.DocID, barcodeTokens, "", 0); err != nil {
+				return err
+			}
+			return h.postContentSteps(ctx, log, e.DocID)
+		}
+		log.Info("post-ingest.route.image.wrapped",
+			"mime", mime, "pdf_bytes", len(pdfRes.PDF),
+			"took", pdfRes.Duration.String())
+
+		ocrContent, archiveBlob, archiveSize, err := h.runOCR(ctx, log, pdfRes.PDF)
+		if err != nil {
+			return fmt.Errorf("image.ocr: %w", err)
+		}
+		// When OCR skipped (no engine on PATH), the wrapped PDF still
+		// deserves to be the archive so the detail page's PDF preview
+		// has something to render.
+		if archiveBlob == "" {
+			ref, cerr := h.cas.Put(bytes.NewReader(pdfRes.PDF))
+			if cerr != nil {
+				return fmt.Errorf("image.cas: %w", cerr)
+			}
+			archiveBlob = ref.SHA256
+			archiveSize = ref.Size
+		}
+		content := ocrContent
+		if barcodeTokens != "" {
+			if content != "" {
+				content += "\n"
+			}
+			content += barcodeTokens
+		}
+		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
+	}
+
+	// Fallback image path — any image/* type imgpdf doesn't handle
+	// (SVG, x-icon, etc.) still gets a barcode decode pass so QR
+	// values land in content. No OCR here — these formats either
+	// don't rasterize well (SVG) or don't come with printable text.
 	if barcode.Recognized(mime) {
 		bcs, berr := barcode.DecodeBytes(origBytes)
 		if berr != nil {
