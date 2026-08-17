@@ -126,3 +126,23 @@ name = "Family life"
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
     jd_category_code = 51
+
+  [[seeds.automations]]
+  name = "File insurance documents"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)insurance policy|premium|sum insured|policyholder|policy number"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 14
+
+  [[seeds.automations]]
+  name = "File pet care documents"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)vaccination|veterinary|vet clinic|deworming"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 52

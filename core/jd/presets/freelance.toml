@@ -116,3 +116,23 @@ name = "Portfolio & marketing"
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
     jd_category_code = 13
+
+  [[seeds.automations]]
+  name = "File business expenses"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)expense report|reimbursement|receipt.*payment|paid by"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 32
+
+  [[seeds.automations]]
+  name = "File self-employment tax"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)self[- ]?employment tax|schedule c|1099[- ]?nec|itr[- ]?4|advance tax"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 33

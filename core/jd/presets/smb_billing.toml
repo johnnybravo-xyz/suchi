@@ -136,3 +136,13 @@ name = "Compliance & tax"
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
     jd_category_code = 52
+
+  [[seeds.automations]]
+  name = "File payslips"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)payslip|salary slip|earnings statement|net pay"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 32

@@ -49,7 +49,7 @@
       ? user.capabilities.filter(s => s !== slug)
       : [...user.capabilities, slug]
   }
-  let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false })
+  let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
   let jdTab = $state('presets')
   let llm = $state({ endpoint_url: '', model: '', api_key: '', egress_ack: false })
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
@@ -181,6 +181,8 @@
         <label class="wiz-check"><input type="checkbox" bind:checked={preset.confirm_blank} />
           I understand documents will pile up in the inbox until I build categories.</label>
       {/if}
+      <label class="wiz-check"><input type="checkbox" bind:checked={preset.include_seeds} />
+        Install the preset's starter filing rules and automations (recommended). Turn off if you want to start from scratch — you can still add them by re-picking the preset later.</label>
       <label class="wiz-check"><input type="checkbox" bind:checked={preset.refile} />
         Refile existing documents into the new tree now.</label>
       <div class="toolbar">

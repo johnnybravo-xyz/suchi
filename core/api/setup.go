@@ -219,6 +219,11 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
+	// IncludeSeeds is a pointer so we can distinguish "field omitted"
+	// (default true — the wizard's on-by-default toggle state) from
+	// "explicitly false" (operator opted out of starter rules +
+	// automations). *bool + a nil check keeps the wire shape backward
+	// compatible with the pre-toggle body.
 	var body struct {
 		PresetID     string `json:"preset_id"`
 		ConfirmBlank bool   `json:"confirm_blank"`
@@ -226,7 +231,8 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		// they get parked on the new inbox and a refile sweep is
 		// triggered afterwards (re-run rules + enqueue re-render).
 		// Selling point: "you can always come back to change this."
-		Refile bool `json:"refile"`
+		Refile       bool  `json:"refile"`
+		IncludeSeeds *bool `json:"include_seeds,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -243,11 +249,11 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 			"blank preset requires confirm_blank=true; it's harder to migrate away from")
 		return
 	}
-	applyFn := jd.ApplyPreset
-	if body.Refile {
-		applyFn = jd.ApplyPresetWithRefile
+	opts := jd.ApplyPresetOpts{
+		AllowRefile: body.Refile,
+		SkipSeeds:   body.IncludeSeeds != nil && !*body.IncludeSeeds,
 	}
-	if err := applyFn(r.Context(), s.DB, s.Log, body.PresetID); err != nil {
+	if err := jd.ApplyPreset(r.Context(), s.DB, s.Log, body.PresetID, opts); err != nil {
 		if errors.Is(err, jd.ErrDocumentsExist) {
 			s.writeError(w, http.StatusConflict, "documents_filed",
 				err.Error()+` (re-post with "refile": true to accept the refile)`)

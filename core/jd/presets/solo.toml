@@ -104,3 +104,23 @@ name = "System"
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
     jd_category_code = 23
+
+  [[seeds.automations]]
+  name = "File insurance documents"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)insurance policy|premium|sum insured|policyholder|policy number"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 13
+
+  [[seeds.automations]]
+  name = "File prescriptions and medical bills"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)prescription|rx no|dispensed|pharmacy|hospital bill|discharge summary"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 32
