@@ -38,6 +38,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
 func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +124,23 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
+	// Fail-safe: the apply_llm_title built-in fires on document_updated
+	// but does nothing without the LLM classifier writing title
+	// proposals. Silently succeeding on enable would trap operators
+	// ("toggled on but nothing happens"). Reject the enable when no LLM
+	// endpoint is configured (env-time OR wizard-set — both resolve
+	// through settings) and point at the fix.
+	if patch.Enabled != nil && *patch.Enabled {
+		if slug, err := store.SystemSlugByID(r.Context(), id); err == nil && slug == automations.SystemSlugApplyLLMTitle {
+			var endpoint string
+			_ = settings.Get(r.Context(), s.DB, settings.KeyLLMEndpointURL, &endpoint)
+			if endpoint == "" {
+				s.writeError(w, http.StatusBadRequest, "llm_not_configured",
+					"Configure an LLM endpoint before enabling Apply LLM title suggestions — the automation reads title proposals the LLM classifier writes.")
+				return
+			}
+		}
+	}
 	atm, err := store.Update(r.Context(), id, patch)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
