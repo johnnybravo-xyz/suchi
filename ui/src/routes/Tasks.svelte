@@ -93,7 +93,7 @@
   }
 
   function fieldLabel(field) {
-    return { jd_category: 'JD', correspondent: 'From', document_type: 'Type', tag: 'Tag' }[field] || field
+    return { jd_category: 'JD', correspondent: 'From', document_type: 'Type', tag: 'Tag', title: 'Title' }[field] || field
   }
 
   // Cmd/Ctrl+Enter resolves the top task with its first (primary) choice.

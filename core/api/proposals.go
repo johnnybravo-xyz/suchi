@@ -218,19 +218,20 @@ func (s *Server) resolveProposal(ctx context.Context, p *pluginapi.Principal, do
 	var (
 		field      string
 		valueID    sql.NullInt64
+		valueJSON  string
 		confidence float64
 	)
 	if err := s.DB.Read.QueryRowContext(ctx, `
-		SELECT field, value_id, confidence
+		SELECT field, value_id, value_json, confidence
 		  FROM document_proposals
 		 WHERE id = ? AND document_id = ? AND resolved_at IS NULL
-	`, proposalID, docID).Scan(&field, &valueID, &confidence); err != nil {
+	`, proposalID, docID).Scan(&field, &valueID, &valueJSON, &confidence); err != nil {
 		return nil, err
 	}
 
 	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		if action == "apply" {
-			if err := applyProposalField(ctx, tx, docID, field, valueID.Int64); err != nil {
+			if err := applyProposalField(ctx, tx, docID, field, valueID.Int64, valueJSON); err != nil {
 				return err
 			}
 		}
@@ -264,7 +265,9 @@ func (s *Server) resolveProposal(ctx context.Context, p *pluginapi.Principal, do
 // applyProposalField is the "apply" write. Uses the same
 // UPDATE-with-null-guard the automation action does — if a user
 // filled the field between propose and apply, we keep their write.
-func applyProposalField(ctx context.Context, tx *sql.Tx, docID int64, field string, valueID int64) error {
+// Title is the exception: the operator hitting Apply on a title
+// proposal is deliberately overwriting whatever's there.
+func applyProposalField(ctx context.Context, tx *sql.Tx, docID int64, field string, valueID int64, valueJSON string) error {
 	now := time.Now().Unix()
 	switch field {
 	case "jd_category":
@@ -286,6 +289,22 @@ func applyProposalField(ctx context.Context, tx *sql.Tx, docID int64, field stri
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
 			docID, valueID)
+		return err
+	case "title":
+		var cache struct {
+			Label string `json:"label"`
+		}
+		if err := json.Unmarshal([]byte(valueJSON), &cache); err != nil {
+			return fmt.Errorf("proposals: title value_json: %w", err)
+		}
+		if cache.Label == "" {
+			return errors.New("proposals: empty title label")
+		}
+		// Overwrite whatever's there — the operator's Apply click IS
+		// the intent to replace. No null-guard.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE documents SET title = ?, updated_at = ? WHERE id = ?`,
+			cache.Label, now, docID)
 		return err
 	}
 	return fmt.Errorf("proposals: unknown field %q", field)

@@ -3,11 +3,18 @@
 // stable system_slug, INSERT ... ON CONFLICT DO NOTHING guarantees a
 // re-run is a no-op.
 //
-// A system automation is toggleable (enabled/disabled) and editable
-// (rename, tune action params) but not deletable. The delete guard
-// lives in store.Delete; the "editable" property just means we don't
-// gate PATCH — power users tuning thresholds shouldn't need to leave
-// the tenant.
+// Built-in contract:
+//   - toggleable (enabled/disabled)
+//   - the action's params are the ONE user-tunable surface (thresholds,
+//     top-k, etc.) — everything else is locked (name, trigger,
+//     action kind, filters). Enforcement of that lock lives in the
+//     store's PATCH path; the seed here defines the shape.
+//   - undeletable (guard in store.Delete).
+//
+// Every built-in's slug + tuning defaults live in this file so a
+// maintainer sees the full inventory at a glance — no cross-file
+// indirection. Action semantics live in the corresponding runApply*
+// files.
 
 package automations
 
@@ -22,19 +29,34 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
-// SystemSlugAutoFile is the stable identifier of the "Auto-file from
-// archive" seed — a document_added trigger with one
-// apply_from_similar action. See docs/automations.mdx for what it
-// does and why the default thresholds are what they are.
-const SystemSlugAutoFile = "auto_file_from_archive"
+// System slugs — stable identifiers for the built-in automations.
+// Keep in sync with the seed factory below of the same name.
+const (
+	SystemSlugAutoFile      = "auto_file_from_archive"
+	SystemSlugApplyLLMTitle = "apply_llm_title"
+)
+
+// Default tuning knobs for the built-ins. Exposed as constants (not
+// magic numbers in the factory) so tests and docs can reference them.
+const (
+	DefaultLLMTitleThreshold = 0.7
+)
 
 // Seed inserts every built-in system automation the current binary
 // ships with. Safe to call on every boot — collisions on system_slug
 // are ignored. Not safe to run concurrently with itself; boot is a
 // single-writer moment so this is fine.
-func Seed(ctx context.Context, d *db.DB, log *slog.Logger) error {
+//
+// llmEnabled reflects whether the LLM classifier plugin is registered
+// at boot. The apply_llm_title seed uses it as its default enabled
+// value so a stock install with no LLM ships with the automation
+// disabled (nothing to react to); an install with LLM configured
+// ships enabled. Both cases seed the row so the operator can toggle
+// later from Settings without a re-seed.
+func Seed(ctx context.Context, d *db.DB, log *slog.Logger, llmEnabled bool) error {
 	seeds := []systemSeed{
 		autoFileFromArchiveSeed(),
+		applyLLMTitleSeed(llmEnabled),
 	}
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
 		for _, s := range seeds {
@@ -57,6 +79,11 @@ type systemSeed struct {
 	actions []Action
 }
 
+// autoFileFromArchiveSeed is the first built-in: on every ingest, ask
+// the archive for top-K similar docs and apply their consensus
+// metadata (jd_category, correspondent, document_type, tags) or drop
+// weaker signals into document_proposals for the Tasks inbox. See
+// apply_from_similar.go for the action semantics.
 func autoFileFromArchiveSeed() systemSeed {
 	return systemSeed{
 		slug:    SystemSlugAutoFile,
@@ -73,6 +100,26 @@ func autoFileFromArchiveSeed() systemSeed {
 				"threshold_autoapply": 0.9,
 				"threshold_propose":   0.5,
 				"tag_frequency_min":   0.3,
+			},
+		}},
+	}
+}
+
+// applyLLMTitleSeed is the second built-in: reads pending title
+// proposals written by the LLM handler and applies them when
+// confidence >= threshold. See apply_llm_title.go for the action
+// semantics.
+func applyLLMTitleSeed(enabled bool) systemSeed {
+	return systemSeed{
+		slug:    SystemSlugApplyLLMTitle,
+		name:    "Apply LLM title suggestions",
+		trigger: TriggerDocumentUpdated,
+		enabled: enabled,
+		actions: []Action{{
+			OrderIndex: 0,
+			Kind:       "apply_llm_title",
+			Params: map[string]any{
+				"threshold": DefaultLLMTitleThreshold,
 			},
 		}},
 	}

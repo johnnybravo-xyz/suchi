@@ -3,6 +3,7 @@ package llmclassifier
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,6 +73,7 @@ type dbHandle interface {
 	WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) error
 	ReadQueryRow(ctx context.Context, query string, args ...any) *sql.Row
 	ReadQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	SiblingTitles(ctx context.Context, docID int64, limit int) ([]string, error)
 }
 
 // NewHandler wraps a Plugin as a Subscriber. Returns nil when the
@@ -130,7 +132,18 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Warn("llm-classifier.jd_load_error", "err", err.Error())
 	}
 
-	res, err := h.plugin.Classify(ctx, title, content, jdCats)
+	// Fetch sibling titles for few-shot title stability — the model
+	// mirrors the pattern of previously-accepted titles instead of
+	// inventing new phrasings ("Electricity bill - August 2026" vs
+	// "Utilities:electricity bill - 10/2026"). One-classify-per-doc
+	// invariant means we inject them into THIS call, not a follow-up.
+	// Empty slice on read error is a clean no-op.
+	siblings, err := h.db.SiblingTitles(ctx, e.DocID, 5)
+	if err != nil {
+		log.Warn("llm-classifier.siblings_load_error", "err", err.Error())
+	}
+
+	res, err := h.plugin.Classify(ctx, title, content, jdCats, siblings)
 	if err != nil {
 		// Best-effort classification — a transient LLM error goes
 		// through the outbox retry path via a returned err. When it
@@ -167,16 +180,34 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			return upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now)
 		}
 
-		// Update title only when currently empty — respect operator
-		// edits and rules-engine picks.
+		// Title has two paths:
+		//   - Current title is empty → apply the suggestion directly.
+		//     A filename-derived title ("invoice.pdf") is nothing to
+		//     preserve; the LLM suggestion is strictly better. Fast
+		//     path, no proposal, no automation round-trip.
+		//   - Current title is non-empty AND differs from the
+		//     suggestion → write a document_proposals row. The
+		//     `apply_llm_title` system automation (second built-in)
+		//     reads pending title proposals on document_updated and
+		//     either auto-applies above its threshold or leaves them
+		//     in the Tasks inbox. Toggle the automation off to keep
+		//     LLM suggestions surfaced but never auto-applied.
 		if res.Title != "" {
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE documents
-				SET title = CASE WHEN title = '' THEN ? ELSE title END,
-				    updated_at = ?
-				WHERE id = ?
-			`, res.Title, now, e.DocID); err != nil {
+			var currentTitle string
+			if err := tx.QueryRowContext(ctx,
+				`SELECT title FROM documents WHERE id = ?`, e.DocID).Scan(&currentTitle); err != nil {
 				return err
+			}
+			if currentTitle == "" {
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE documents SET title = ?, updated_at = ? WHERE id = ?
+				`, res.Title, now, e.DocID); err != nil {
+					return err
+				}
+			} else if currentTitle != res.Title {
+				if err := insertTitleProposal(ctx, tx, e.DocID, res.Title, res.Confidence, now); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -334,6 +365,29 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// insertTitleProposal writes a document_proposals row surfacing the
+// LLM's title suggestion when the doc already has a title. The Tasks
+// inbox renders it as a chip; the operator hits Apply to overwrite
+// the current title. INSERT OR IGNORE'd via a UNIQUE index would be
+// nicer but the schema doesn't have one for (document_id, field);
+// callers duplicate-suppress by not re-classifying done docs.
+func insertTitleProposal(ctx context.Context, tx *sql.Tx, docID int64, title string, confidence float64, now int64) error {
+	valueJSON, err := json.Marshal(map[string]any{
+		"label":      title,
+		"supporters": []int64{},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO document_proposals(
+			document_id, field, value_id, value_json,
+			confidence, based_on, created_at
+		) VALUES (?, 'title', NULL, ?, ?, '[]', ?)
+	`, docID, string(valueJSON), confidence, now)
+	return err
 }
 
 func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {

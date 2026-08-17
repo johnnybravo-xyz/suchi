@@ -88,6 +88,19 @@ type JDCat struct {
 	Name string
 }
 
+// Invariant: exactly ONE Classify call per doc in the ingestion
+// pipeline. LLM turns dominate ingestion wall-clock + spend; a
+// second-round refine call doubles both. Any feature that needs
+// richer prompt context (sibling-doc titles for stable naming, boot
+// examples, JD-cat table) MUST pre-fetch that context from the DB or
+// existing indexes and inject it into the single call.
+//
+// Enforced structurally by the ingestion topology: Classify is
+// called from exactly one site — the post-classify Subscriber
+// (plugins/llm-classifier/handler.go). No loops, no retries at the
+// plugin layer (the outbox handles retries at the job layer). A test
+// grep guards the invariant (see llm_test.go / TestClassifyCallSites).
+
 // Result is what a classify call returns after parsing the model's JSON.
 // Consumers apply the suggested fields when Confidence >= threshold.
 type Result struct {
@@ -219,17 +232,20 @@ func (p *Plugin) Config() Config {
 // Classify runs the model against title + content, returns the parsed
 // suggestion. jdCats is the installation's user-facing Johnny-Decimal
 // categories; pass nil or an empty slice when unknown (the model will
-// fall back to guessing rather than blocking classification). Errors
-// are wrapped with the endpoint host so an operator can grep them
-// across logs.
-func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []JDCat) (*Result, error) {
+// fall back to guessing rather than blocking classification).
+// siblingTitles are recent titles of similar docs — the model uses
+// them as few-shot examples so titles across sibling docs stay
+// consistent instead of drifting per-request. Nil / empty is
+// harmless. Errors are wrapped with the endpoint host so an operator
+// can grep them across logs.
+func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []JDCat, siblingTitles []string) (*Result, error) {
 	// Snapshot the config once at the top so a concurrent SetConfig
 	// doesn't split this call across two configurations.
 	cfg := p.rt.Load().cfg
 	if len(content) > cfg.MaxContentChars {
 		content = content[:cfg.MaxContentChars] + "\n… [truncated]"
 	}
-	body := buildRequestBody(cfg.Model, title, content, jdCats)
+	body := buildRequestBody(cfg.Model, title, content, jdCats, siblingTitles)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",
 		bytes.NewReader(body))
@@ -277,7 +293,7 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 // the system prompt). JD categories go in the user message so the
 // static system prompt stays cacheable server-side; only the
 // per-installation taxonomy varies per request.
-func buildRequestBody(model, title, content string, jdCats []JDCat) []byte {
+func buildRequestBody(model, title, content string, jdCats []JDCat, siblingTitles []string) []byte {
 	var cats strings.Builder
 	if len(jdCats) > 0 {
 		cats.WriteString("\n\nAvailable Johnny-Decimal categories (pick one code from this list only; return 0 if none fit):\n")
@@ -285,11 +301,18 @@ func buildRequestBody(model, title, content string, jdCats []JDCat) []byte {
 			fmt.Fprintf(&cats, "%d – %s\n", c.Code, c.Name)
 		}
 	}
+	var siblings strings.Builder
+	if len(siblingTitles) > 0 {
+		siblings.WriteString("\n\nRecent titles for similar documents in this archive — mirror this phrasing when appropriate so titles across sibling docs stay consistent:\n")
+		for _, t := range siblingTitles {
+			fmt.Fprintf(&siblings, "  • %s\n", t)
+		}
+	}
 	msg := []map[string]any{
 		{"role": "system", "content": systemPrompt},
 		{"role": "user", "content": fmt.Sprintf(
-			"Title: %s\n\nContent:\n%s%s\n\nRespond with a single JSON object matching the schema. No prose.",
-			title, content, cats.String())},
+			"Title: %s\n\nContent:\n%s%s%s\n\nRespond with a single JSON object matching the schema. No prose.",
+			title, content, cats.String(), siblings.String())},
 	}
 	payload := map[string]any{
 		"model":       model,
