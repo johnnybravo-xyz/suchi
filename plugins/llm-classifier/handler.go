@@ -30,6 +30,14 @@ const PipelineVersionLLM = 1
 // engine).
 type OnFallbackFn func(ctx context.Context, docID int64) error
 
+// OnUpdatedFn is the "kick document_updated automations" hook main.go
+// wires. Called after every successful classify — the LLM's writes
+// (title, correspondent, jd_category, tags) are indistinguishable from
+// a user PATCH as far as automations are concerned, so operators
+// building "when the doc becomes Utilities, add tag monthly-bill" get
+// a natural trigger point. Nil = no automations engine wired.
+type OnUpdatedFn func(ctx context.Context, docID int64) error
+
 // Handler is the durable-outbox Subscriber that runs the classifier
 // on `post-classify` jobs. Registered by main.go only when the plugin
 // is enabled; otherwise post-classify jobs go to a dead-letter which
@@ -54,6 +62,7 @@ type Handler struct {
 	db         dbHandle
 	log        *slog.Logger
 	onFallback OnFallbackFn
+	onUpdated  OnUpdatedFn
 }
 
 // dbHandle mirrors the small surface of *core/db.DB that Handler
@@ -82,6 +91,16 @@ func NewHandler(p *Plugin, db dbHandle, log *slog.Logger) *Handler {
 func (h *Handler) WithFallback(fn OnFallbackFn) *Handler {
 	if h != nil {
 		h.onFallback = fn
+	}
+	return h
+}
+
+// WithOnUpdated wires the document_updated automations hook. Called
+// after every successful classify so operators can build automations
+// that chain onto LLM output.
+func (h *Handler) WithOnUpdated(fn OnUpdatedFn) *Handler {
+	if h != nil {
+		h.onUpdated = fn
 	}
 	return h
 }
@@ -265,6 +284,16 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if lowConfidence && h.onFallback != nil {
 		if err := h.onFallback(ctx, e.DocID); err != nil {
 			log.Warn("llm-classifier.fallback.error", "err", err.Error())
+		}
+	}
+
+	// document_updated automations hook. Fires after the write commits
+	// on both high- and low-confidence paths (low-conf still tagged
+	// needs-review — that's a mutation an operator may want to chain).
+	// Nil hook = no automations engine wired.
+	if h.onUpdated != nil {
+		if err := h.onUpdated(ctx, e.DocID); err != nil {
+			log.Warn("llm-classifier.updated.error", "err", err.Error())
 		}
 	}
 	return nil
