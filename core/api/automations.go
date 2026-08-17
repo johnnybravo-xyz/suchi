@@ -38,7 +38,6 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
-	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
 func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +95,32 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 	store := automations.New(s.DB)
 	atm, err := store.Create(r.Context(), body)
 	if err != nil {
+		var dup *automations.ErrDuplicateRule
+		if errors.As(err, &dup) {
+			s.writeDuplicateRule(w, dup)
+			return
+		}
 		s.writeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, atm)
+}
+
+// writeDuplicateRule shapes the 409 response every save path uses
+// when the store refuses because a content-equivalent rule already
+// exists. The match block carries just enough for the SPA to render
+// an "Enable existing" or "Open existing" affordance without a
+// follow-up GET.
+func (s *Server) writeDuplicateRule(w http.ResponseWriter, dup *automations.ErrDuplicateRule) {
+	s.writeJSON(w, http.StatusConflict, map[string]any{
+		"code":  "duplicate_rule",
+		"error": dup.Error(),
+		"match": map[string]any{
+			"id":      dup.ExistingID,
+			"name":    dup.ExistingName,
+			"enabled": dup.ExistingEnabled,
+		},
+	})
 }
 
 // UpdateAutomation handles PATCH /api/automations/{id} with sparse
@@ -124,17 +145,18 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
-	// Fail-safe: the apply_llm_title built-in fires on document_updated
-	// but does nothing without the LLM classifier writing title
-	// proposals. Silently succeeding on enable would trap operators
-	// ("toggled on but nothing happens"). Reject the enable when no LLM
-	// endpoint is configured (env-time OR wizard-set — both resolve
-	// through settings) and point at the fix.
-	if patch.Enabled != nil && *patch.Enabled {
+	// Fail-safe: apply_llm_title needs the LLM classifier plugin to be
+	// wired at boot; without it, enabling the automation is a silent
+	// no-op trap. Block the transition disabled→enabled only. Full-edit
+	// saves on an already-enabled row carry patch.Enabled=true too;
+	// those should pass because the previous boot already set up the
+	// plugin (LLMReloader is nil when disabled at process start).
+	if patch.Enabled != nil && *patch.Enabled && s.LLMReloader == nil {
 		if slug, err := store.SystemSlugByID(r.Context(), id); err == nil && slug == automations.SystemSlugApplyLLMTitle {
-			var endpoint string
-			_ = settings.Get(r.Context(), s.DB, settings.KeyLLMEndpointURL, &endpoint)
-			if endpoint == "" {
+			var enabled int
+			_ = s.DB.Read.QueryRowContext(r.Context(),
+				`SELECT enabled FROM automations WHERE id = ?`, id).Scan(&enabled)
+			if enabled == 0 {
 				s.writeError(w, http.StatusBadRequest, "llm_not_configured",
 					"Configure an LLM endpoint before enabling Apply LLM title suggestions — the automation reads title proposals the LLM classifier writes.")
 				return
@@ -147,6 +169,11 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		var dup *automations.ErrDuplicateRule
+		if errors.As(err, &dup) {
+			s.writeDuplicateRule(w, dup)
+			return
+		}
 		s.writeError(w, http.StatusBadRequest, "update_failed", err.Error())
 		return
 	}
