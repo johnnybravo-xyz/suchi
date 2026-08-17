@@ -131,6 +131,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		now := time.Now().Unix()
 
 		if lowConfidence {
+			// Intentional: low-confidence docs keep pipeline_version_llm=0
+			// so `suchi rescan --stale llm` re-tries them after prompt/model
+			// tweaks. Bumping here would freeze the outcome at the current
+			// version and hide the retry opportunity.
 			return upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now)
 		}
 
