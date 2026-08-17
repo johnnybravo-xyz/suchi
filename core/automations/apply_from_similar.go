@@ -198,10 +198,13 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 		}
 	}
 	neighbours = kept
+	log.Info("apply_from_similar.considered",
+		"doc_id", docID,
+		"neighbours", len(neighbours),
+		"min_score", p.MinScore)
 	if len(neighbours) < 3 {
-		// Not enough signal. Silent no-op — no proposals row, no
-		// slog line at info level. Operators auditing why heuristics
-		// didn't propose can still find this branch by tracing docID.
+		// Not enough signal. The considered log above is the only trace
+		// operators auditing "why didn't heuristics propose?" can grep for.
 		return nil
 	}
 
@@ -278,6 +281,8 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 		skip["document_type"] = true
 	}
 
+	autoapplied, proposed := 0, 0
+
 	for _, field := range []string{"jd_category", "correspondent", "document_type"} {
 		if !p.wants(field) || skip[field] {
 			continue
@@ -315,10 +320,13 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 					"based_on":   supporters,
 				},
 			})
+			autoapplied++
 		} else {
 			if err := insertProposal(ctx, tx, docID, field, winnerID, payload, confidence, supporters); err != nil {
 				log.Warn("apply_from_similar.propose.write", "field", field, "err", err.Error())
+				continue
 			}
+			proposed++
 		}
 	}
 
@@ -363,14 +371,21 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 						"based_on":   supporters,
 					},
 				})
+				autoapplied++
 			} else {
 				if err := insertProposal(ctx, tx, docID, "tag", tagID, payload, confidence, supporters); err != nil {
 					log.Warn("apply_from_similar.propose.tag", "tag_id", tagID, "err", err.Error())
+					continue
 				}
+				proposed++
 			}
 		}
 	}
 
+	log.Info("apply_from_similar.wrote",
+		"doc_id", docID,
+		"autoapplied", autoapplied,
+		"proposed", proposed)
 	return nil
 }
 
