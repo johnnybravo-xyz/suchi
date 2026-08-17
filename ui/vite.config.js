@@ -15,6 +15,19 @@ export default defineConfig({
   build: {
     target: 'es2020',
     assetsInlineLimit: 8192,        // favicon + icons inline into the bundle
-    rollupOptions: { output: { manualChunks: undefined } } // one JS file
+    cssCodeSplit: false,            // one CSS file; dist/ is committed,
+                                     // per-chunk CSS would just be more
+                                     // hashed files to churn in git
+    rollupOptions: {
+      output: {
+        // Stable, unhashed names. dist/ is embedded and committed
+        // (see Justfile), so a build that only touches one file
+        // should show as one modified file in git, not an
+        // add/delete pair from a changed content hash.
+        entryFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: 'assets/[name].[ext]',
+      },
+    },
   }
 })

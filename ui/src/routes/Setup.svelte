@@ -14,7 +14,7 @@
     { name: 'jd',          label: 'Filing tree' },
     { name: 'sources',     label: 'Ingest sources' },
     { name: 'mail',        label: 'Email intake' },
-    { name: 'llm',         label: 'Classification' },
+    { name: 'llm',         label: 'Classification (LLM)' },
     { name: 'rules',       label: 'Rules' },
     { name: 'preferences', label: 'OCR & backups' },
   ]

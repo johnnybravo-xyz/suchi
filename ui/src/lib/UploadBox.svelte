@@ -31,7 +31,7 @@
 
   async function send(files) {
     for (const f of files) {
-      const entry = $state({ name: f.name, size: f.size, status: 'uploading', doc: null, processing: false, expanded: false })
+      const entry = $state({ name: f.name, size: f.size, status: 'uploading', doc: null, processing: false })
       queue = [entry, ...queue]
       try {
         const res = await uploadDocument(f)
@@ -55,7 +55,7 @@
         else { entry.status = 'error'; entry.msg = ex.message }
       }
     }
-    notify?.('Upload finished — the pipeline is processing')
+    notify?.('Upload finished. The pipeline is processing')
   }
 
   function onDrop(e) {
@@ -88,7 +88,7 @@
        onkeydown={(e) => e.key === 'Enter' && fileInput.click()}>
     <Icon name="upload" size={44} />
     <p style="margin:12px 0 4px;font-size:1.05rem"><b>Drop documents here</b> or click to choose</p>
-    <p style="margin:0;font-size:.8rem">PDF, office docs, images, email files — the pipeline sorts out the rest</p>
+    <p style="margin:0;font-size:.8rem">PDF, office docs, images, email files. The pipeline sorts out the rest</p>
     <input bind:this={fileInput} type="file" multiple hidden onchange={(e) => send([...e.target.files])} />
   </div>
 
@@ -118,51 +118,37 @@
               {#if q.id}<a class="btn sm" href={`#/doc/${q.id}`} target="_blank" rel="noopener">Open in new tab</a>{/if}
             </div>
           {:else if q.status === 'done'}
-            <div class="up-detail">
-              {#if q.doc?.jd_category_code}
-                <span class="chip" title={q.doc.jd_category_name}>{q.doc.jd_category_code}</span>
-              {:else if q.processing}
+            <div class="up-detail" style="flex-wrap:wrap;row-gap:8px">
+              {#if q.processing && !q.doc?.jd_category_code}
                 <span class="pill">processing<span class="ellip"></span></span>
               {/if}
               {#if q.doc?.title && q.doc.title !== q.name}<span class="sub">filed as “{q.doc.title}”</span>{/if}
-              {#if q.doc?.sensitivity}<span class="pill" class:warn={q.doc.sensitivity === 'internal'} class:danger={q.doc.sensitivity === 'confidential'}>{q.doc.sensitivity}</span>{/if}
+              {#if q.doc?.tags?.length}
+                {#each q.doc.tags.slice(0, 3) as t}<span class="pill">{t}</span>{/each}
+              {/if}
+              {#if q.doc?.correspondents?.length}
+                <span class="sub">from {q.doc.correspondents.map(c => c.name || c).join(', ')}</span>
+              {/if}
               <span class="spacer"></span>
-              <button class="btn sm" onclick={() => (q.expanded = !q.expanded)}>{q.expanded ? 'Hide' : 'Details'}</button>
+              <select class="input" style="max-width:180px;padding:5px 8px;font-size:.8rem"
+                      aria-label="File under"
+                      onchange={(e) => e.target.value && patch(q, { jd_category_id: Number(e.target.value) }, 'Filed')}
+                      value={q.doc?.jd_category_id ?? ''}>
+                <option value="" disabled>file under…</option>
+                {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+              </select>
+              <select class="input" style="max-width:140px;padding:5px 8px;font-size:.8rem"
+                      aria-label="Sensitivity"
+                      value={q.doc?.sensitivity ?? ''}
+                      onchange={(e) => patch(q, { sensitivity: e.target.value }, 'Sensitivity set')}>
+                <option value="">sensitivity…</option>
+                <option value="public">public</option>
+                <option value="internal">internal</option>
+                <option value="confidential">confidential</option>
+                <option value="restricted">restricted</option>
+              </select>
               <a class="btn sm" href={`#/doc/${q.id}`}>Open</a>
             </div>
-            {#if q.expanded}
-              <div class="up-detail" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px" role="group" aria-label="Uploaded document details">
-                <div style="display:flex;gap:12px;align-items:center">
-                  <label class="sub" style="min-width:100px" for={`up-jd-${q.id}`}>File under</label>
-                  <select id={`up-jd-${q.id}`} class="input" style="max-width:220px"
-                          onchange={(e) => patch(q, { jd_category_id: Number(e.target.value) }, 'Filed')}
-                          value={q.doc?.jd_category_id ?? ''}>
-                    {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
-                  </select>
-                </div>
-                {#if q.doc?.tags?.length}
-                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                    <span class="sub" style="min-width:100px">Tags</span>
-                    {#each q.doc.tags as t}<span class="pill">{t}</span>{/each}
-                  </div>
-                {/if}
-                <div style="display:flex;gap:12px;align-items:center">
-                  <label class="sub" style="min-width:100px" for={`up-sens-${q.id}`}>Sensitivity</label>
-                  <select id={`up-sens-${q.id}`} class="input" style="max-width:170px"
-                          value={q.doc?.sensitivity ?? ''}
-                          onchange={(e) => patch(q, { sensitivity: e.target.value }, 'Sensitivity set')}>
-                    <option value="">unset</option>
-                    <option value="public">public</option>
-                    <option value="internal">internal</option>
-                    <option value="confidential">confidential</option>
-                    <option value="restricted">restricted</option>
-                  </select>
-                </div>
-                {#if q.doc?.correspondents?.length}
-                  <div class="sub"><b style="min-width:100px;display:inline-block">Correspondent</b>{q.doc.correspondents.map(c => c.name || c).join(', ')}</div>
-                {/if}
-              </div>
-            {/if}
           {/if}
         </div>
       {/each}
