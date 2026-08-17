@@ -68,31 +68,84 @@ dashboard, or the tenant admin invalidated the consent — the row's
 **Test connection** returns the same error. Fix it by revoking the
 row (below) and signing in again from scratch.
 
-## Bring your own Azure app
+## For Entra tenant admins (optional)
 
-Suchi ships with a default public-client Application (client) ID.
-That's enough for personal accounts and small tenants, but you may
-want your own for two reasons:
+**Skip this whole section if you're using suchi personally.** The
+default `Suchi - Microsoft OAuth` app the project ships with handles
+sign-in for personal Microsoft accounts, free Outlook.com, Hotmail,
+and small tenants out of the box — no Azure work on your side.
+
+Register your own Entra app instead of using the default only when:
 
 - **Tenant scoping.** Your Entra tenant admin can grant admin
-  consent to your app registration once, so users never see the
-  Microsoft consent prompt.
+  consent to your app registration once, so users in the tenant
+  never see the Microsoft consent prompt individually.
 - **Trust display.** The Microsoft consent screen shows the app
   name registered in Azure. Users are more likely to approve a
-  prompt from `acme-suchi` than from a generic default app.
+  prompt from `Suchi - Acme` than from the ships-in-the-box
+  default.
 
-To bring your own:
+### Register the Azure app
 
-1. Follow the maintainer setup steps in
-   `docs/internal/SETUP-MICROSOFT.md` — same procedure, but you
-   register the app under your own tenant instead of the suchi
-   project's account.
-2. Copy the Application (client) ID from the Azure portal.
-3. Set `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT=<your-client-id>`
+One-time checklist under your own tenant.
+
+1. Sign in to <https://portal.azure.com> → **Microsoft Entra ID** →
+   **App registrations** → **New registration**.
+2. **Name**: `Suchi - <your deployment nickname>` — e.g.
+   `Suchi - Acme` or `Suchi - Home`. Every operator-visible
+   identifier suchi emits to external systems uses the
+   `Suchi - <nickname>` shape (source of truth:
+   `plugin-api.BrandPrefix`, referenced by `DefaultAppName` in
+   `core/ingest/emailwatch/oauth/microsoft.go`) so a tenant admin
+   auditing OAuth grants can grep one predictable prefix to spot
+   every suchi-owned entry across their console.
+3. **Supported account types**: **Accounts in any organizational
+   directory (any Microsoft Entra ID tenant — Multitenant) and
+   personal Microsoft accounts (e.g., Skype, Xbox)**. This is the
+   `AzureADandPersonalMicrosoftAccount` audience. Anything narrower
+   locks out personal `@outlook.com` / `@hotmail.com` users.
+4. **Redirect URI**: leave empty. Device-code flow is a public
+   client and does not use a redirect.
+5. Click **Register**.
+6. In the new app: **Authentication** → **Advanced settings** →
+   **Allow public client flows** → **Yes** → **Save**. Without
+   this, MSAL device-code returns
+   `AADSTS7000218: The request body must contain the following
+parameter: 'client_assertion' or 'client_secret'`.
+7. **API permissions** → **Add a permission**. Do **not** pick
+   Microsoft Graph — Graph's IMAP scope does not authorize
+   `outlook.office365.com` IMAP. Instead choose **APIs my
+   organization uses**, search for **Office 365 Exchange Online**,
+   pick it, then **Delegated permissions** → check
+   **IMAP.AccessAsUser.All** → **Add permissions**.
+8. Same **Add a permission** flow: **Microsoft Graph** →
+   **Delegated permissions** → check **offline_access** → add.
+   This is what lets MSAL refresh silently on every poll instead
+   of prompting the user every hour.
+9. (Optional, tenant deployments only.) Click **Grant admin
+   consent for <tenant>**. Personal-account users don't need this
+   — they'll consent individually when they hit the device-code
+   screen — but granting it once suppresses the prompt for every
+   user in your tenant.
+10. Back on the app's **Overview** page, copy the **Application
+    (client) ID** GUID.
+
+The client ID is a public identifier, not a secret — device-code
+flow never uses a client secret.
+
+### Point suchi at your app
+
+1. Set `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT=<your-client-id>`
    in the suchi environment and restart. New OAuth flows now
    run against your app registration. Rows already signed in
    with the default app keep working until their refresh token
    expires (typically 90 days).
+2. (Maintainer-only.) If you're updating the project-shipped
+   default, paste the new GUID into
+   `core/ingest/emailwatch/oauth/microsoft.go` as the value of
+   `DefaultClientID`. The `DefaultAppName` constant right below
+   composes the display name from `pluginapi.BrandPrefix` — leave
+   it as-is unless you're also changing the nickname.
 
 ## Revoking access
 
@@ -107,8 +160,8 @@ To sign a row out from suchi:
    invalidate Microsoft-side (so the refresh token can't be
    re-used elsewhere), visit
    [mysignins.microsoft.com/security-info](https://mysignins.microsoft.com/security-info)
-   and remove the "suchi" (or your app registration name) entry
-   from the list of signed-in apps.
+   and remove the `Suchi - <nickname>` entry from the list of
+   signed-in apps.
 
 Do both if you're rotating for a credential-leak scare — clearing
 `sealed_secret` alone leaves the refresh token valid upstream.

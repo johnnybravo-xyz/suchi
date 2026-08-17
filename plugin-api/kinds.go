@@ -16,3 +16,11 @@ const (
 	KindConvert  = "convert"
 	KindBarcode  = "barcode"
 )
+
+// BrandPrefix is the hardcoded prefix suchi puts in front of every
+// operator-visible display identifier it emits to external systems
+// (Entra OAuth app names today; webhook display names, third-party
+// integration labels tomorrow). Composed as `BrandPrefix + <operator
+// nickname>`. Lives here so any module in the tree — core or plugin —
+// inherits the same convention without a fresh package.
+const BrandPrefix = "Suchi - "
