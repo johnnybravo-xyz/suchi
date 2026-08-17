@@ -80,6 +80,14 @@ type Config struct {
 	MaxContentChars int
 }
 
+// JDCat is one Johnny-Decimal category exposed to the model as a valid
+// classification target. Handler injects these per-installation so the
+// model sees real codes + names instead of a bare "integer 10-99" hint.
+type JDCat struct {
+	Code int
+	Name string
+}
+
 // Result is what a classify call returns after parsing the model's JSON.
 // Consumers apply the suggested fields when Confidence >= threshold.
 type Result struct {
@@ -209,16 +217,19 @@ func (p *Plugin) Config() Config {
 }
 
 // Classify runs the model against title + content, returns the parsed
-// suggestion. Errors are wrapped with the endpoint host so an
-// operator can grep them across logs.
-func (p *Plugin) Classify(ctx context.Context, title, content string) (*Result, error) {
+// suggestion. jdCats is the installation's user-facing Johnny-Decimal
+// categories; pass nil or an empty slice when unknown (the model will
+// fall back to guessing rather than blocking classification). Errors
+// are wrapped with the endpoint host so an operator can grep them
+// across logs.
+func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []JDCat) (*Result, error) {
 	// Snapshot the config once at the top so a concurrent SetConfig
 	// doesn't split this call across two configurations.
 	cfg := p.rt.Load().cfg
 	if len(content) > cfg.MaxContentChars {
 		content = content[:cfg.MaxContentChars] + "\n… [truncated]"
 	}
-	body := buildRequestBody(cfg.Model, title, content)
+	body := buildRequestBody(cfg.Model, title, content, jdCats)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",
 		bytes.NewReader(body))
@@ -263,13 +274,22 @@ func (p *Plugin) Classify(ctx context.Context, title, content string) (*Result, 
 // JSON-schema-constrained response format (works on OpenAI + Ollama
 // modern versions; earlier local runners downgrade to
 // response_format: {type: json_object} which is still enforced by
-// the system prompt).
-func buildRequestBody(model, title, content string) []byte {
+// the system prompt). JD categories go in the user message so the
+// static system prompt stays cacheable server-side; only the
+// per-installation taxonomy varies per request.
+func buildRequestBody(model, title, content string, jdCats []JDCat) []byte {
+	var cats strings.Builder
+	if len(jdCats) > 0 {
+		cats.WriteString("\n\nAvailable Johnny-Decimal categories (pick one code from this list only; return 0 if none fit):\n")
+		for _, c := range jdCats {
+			fmt.Fprintf(&cats, "%d – %s\n", c.Code, c.Name)
+		}
+	}
 	msg := []map[string]any{
 		{"role": "system", "content": systemPrompt},
 		{"role": "user", "content": fmt.Sprintf(
-			"Title: %s\n\nContent:\n%s\n\nRespond with a single JSON object matching the schema. No prose.",
-			title, content)},
+			"Title: %s\n\nContent:\n%s%s\n\nRespond with a single JSON object matching the schema. No prose.",
+			title, content, cats.String())},
 	}
 	payload := map[string]any{
 		"model":       model,
@@ -284,14 +304,17 @@ func buildRequestBody(model, title, content string) []byte {
 }
 
 // systemPrompt is deliberately terse — every token is context-window
-// cost on every classify request.
+// cost on every classify request. Kept static so upstream providers can
+// cache the tokenization; per-installation taxonomy varies in the user
+// message instead.
 const systemPrompt = `You classify archival documents.
 
 Respond with a JSON object:
   title: 5-8 word document title (empty string if unclear)
   correspondent: sender/issuer name (empty if unclear)
   tags: 0-5 short lowercase labels like ["utilities","invoice"]
-  jd_category: Johnny-Decimal category code (integer 10-99, 0 if unclear)
+  jd_category: pick the code from the list of Johnny-Decimal categories
+               the user provides; return 0 if no listed code fits
   confidence: 0.0-1.0 self-assessed confidence
   reasoning: one short sentence explaining low confidence, else empty
   language: dominant language as an ISO-639-1 code ("en","de","kn"),

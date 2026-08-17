@@ -136,7 +136,8 @@ func TestClassifyHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := p.Classify(context.Background(),
-		"March invoice", "total due 4523 rupees")
+		"March invoice", "total due 4523 rupees",
+		[]JDCat{{Code: 31, Name: "Utilities"}, {Code: 22, Name: "Tax"}})
 	if err != nil {
 		t.Fatalf("classify: %v", err)
 	}
@@ -157,6 +158,72 @@ func TestClassifyHappyPath(t *testing.T) {
 	}
 	if gotBody["model"] != "gpt-4o-mini" {
 		t.Errorf("model=%v", gotBody["model"])
+	}
+}
+
+// TestClassifyInjectsJDCatsIntoUserMessage: the per-installation
+// Johnny-Decimal categories must land in the user message so the
+// model has real codes to pick from — a bare "10-99" hint produces
+// confidently-wrong classifications (see the E2E finding).
+func TestClassifyInjectsJDCatsIntoUserMessage(t *testing.T) {
+	var gotUser string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, m := range body.Messages {
+			if m.Role == "user" {
+				gotUser = m.Content
+			}
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"{\"jd_category\":31,\"confidence\":0.9}"}}]}`))
+	}))
+	defer srv.Close()
+
+	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
+	_, err := p.Classify(context.Background(), "invoice", "body",
+		[]JDCat{{Code: 31, Name: "Utilities"}, {Code: 22, Name: "Tax"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"31 – Utilities", "22 – Tax", "Available Johnny-Decimal"} {
+		if !strings.Contains(gotUser, want) {
+			t.Errorf("user message missing %q; got: %s", want, gotUser)
+		}
+	}
+}
+
+// Empty jdCats slice must not inject any category header — the model
+// falls back to guessing rather than seeing an empty list.
+func TestClassifyOmitsHeaderWhenJDCatsEmpty(t *testing.T) {
+	var gotUser string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, m := range body.Messages {
+			if m.Role == "user" {
+				gotUser = m.Content
+			}
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"{\"jd_category\":0,\"confidence\":0.3}"}}]}`))
+	}))
+	defer srv.Close()
+
+	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
+	if _, err := p.Classify(context.Background(), "t", "c", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotUser, "Available Johnny-Decimal") {
+		t.Errorf("empty jdCats must omit header; got: %s", gotUser)
 	}
 }
 
@@ -183,7 +250,7 @@ func TestClassifyPropagatesHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
-	_, err := p.Classify(context.Background(), "t", "c")
+	_, err := p.Classify(context.Background(), "t", "c", nil)
 	if err == nil {
 		t.Fatal("500 should propagate as error")
 	}
@@ -209,7 +276,7 @@ func TestClassifyWrapsHTTP4xxAsTerminal(t *testing.T) {
 			defer srv.Close()
 
 			p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
-			_, err := p.Classify(context.Background(), "t", "c")
+			_, err := p.Classify(context.Background(), "t", "c", nil)
 			if err == nil {
 				t.Fatalf("HTTP %d should propagate as error", code)
 			}
@@ -230,7 +297,7 @@ func TestClassify429StaysRetryable(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
-	_, err := p.Classify(context.Background(), "t", "c")
+	_, err := p.Classify(context.Background(), "t", "c", nil)
 	if err == nil {
 		t.Fatal("429 should propagate as error")
 	}

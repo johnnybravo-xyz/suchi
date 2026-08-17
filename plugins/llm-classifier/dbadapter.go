@@ -22,3 +22,6 @@ func (a *dbAdapter) WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) erro
 func (a *dbAdapter) ReadQueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return a.inner.Read.QueryRowContext(ctx, query, args...)
 }
+func (a *dbAdapter) ReadQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return a.inner.Read.QueryContext(ctx, query, args...)
+}

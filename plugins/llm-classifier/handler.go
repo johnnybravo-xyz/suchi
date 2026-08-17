@@ -62,6 +62,7 @@ type Handler struct {
 type dbHandle interface {
 	WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) error
 	ReadQueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	ReadQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // NewHandler wraps a Plugin as a Subscriber. Returns nil when the
@@ -101,7 +102,16 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return nil
 	}
 
-	res, err := h.plugin.Classify(ctx, title, content)
+	// Load the installation's JD categories so the model gets real
+	// codes + names instead of a bare "integer 10-99" hint. Empty
+	// slice on read error keeps classify best-effort — the model
+	// falls back to guessing rather than blocking on a taxonomy read.
+	jdCats, err := h.loadJDCategories(ctx)
+	if err != nil {
+		log.Warn("llm-classifier.jd_load_error", "err", err.Error())
+	}
+
+	res, err := h.plugin.Classify(ctx, title, content, jdCats)
 	if err != nil {
 		// Best-effort classification — a transient LLM error goes
 		// through the outbox retry path via a returned err. When it
@@ -273,6 +283,28 @@ func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content string,
 		content = contentNull.String
 	}
 	return
+}
+
+// loadJDCategories returns the operator's user-facing JD categories in
+// code order. System-only rows (Inbox and its siblings) are excluded —
+// the LLM should never pick them as a suggested classification, and
+// dropping them from the prompt cuts token cost.
+func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
+	rows, err := h.db.ReadQuery(ctx,
+		`SELECT code, name FROM jd_categories WHERE system = 0 ORDER BY code`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JDCat
+	for rows.Next() {
+		var c JDCat
+		if err := rows.Scan(&c.Code, &c.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {
