@@ -3,12 +3,15 @@ package llmclassifier
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
 func silentLog() *slog.Logger {
@@ -180,9 +183,58 @@ func TestClassifyPropagatesHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
-	if _, err := p.Classify(context.Background(), "t", "c"); err == nil {
-		t.Error("500 should propagate as error")
-	} else if !strings.Contains(err.Error(), "500") {
+	_, err := p.Classify(context.Background(), "t", "c")
+	if err == nil {
+		t.Fatal("500 should propagate as error")
+	}
+	if !strings.Contains(err.Error(), "500") {
 		t.Errorf("err missing 500: %v", err)
+	}
+	if errors.Is(err, jobs.ErrTerminal) {
+		t.Error("500 must remain retryable; ErrTerminal is 4xx-only")
+	}
+}
+
+// 4xx from an LLM endpoint is terminal: retrying a bad model name or a
+// forbidden project never turns into success. The plugin wraps the
+// jobs.ErrTerminal sentinel so the dispatcher short-circuits to dead
+// on the first failure.
+func TestClassifyWrapsHTTP4xxAsTerminal(t *testing.T) {
+	for _, code := range []int{400, 401, 403, 404} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+				w.Write([]byte(`{"error":"nope"}`))
+			}))
+			defer srv.Close()
+
+			p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
+			_, err := p.Classify(context.Background(), "t", "c")
+			if err == nil {
+				t.Fatalf("HTTP %d should propagate as error", code)
+			}
+			if !errors.Is(err, jobs.ErrTerminal) {
+				t.Errorf("HTTP %d must wrap jobs.ErrTerminal; got %v", code, err)
+			}
+		})
+	}
+}
+
+// 429 rate-limit is retryable — the outbox backoff waits it out. Assert
+// it does NOT wrap ErrTerminal.
+func TestClassify429StaysRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":"rate limit exceeded"}`))
+	}))
+	defer srv.Close()
+
+	p, _ := New(Config{EndpointURL: srv.URL, Model: "x"}, silentLog())
+	_, err := p.Classify(context.Background(), "t", "c")
+	if err == nil {
+		t.Fatal("429 should propagate as error")
+	}
+	if errors.Is(err, jobs.ErrTerminal) {
+		t.Error("429 must stay retryable")
 	}
 }

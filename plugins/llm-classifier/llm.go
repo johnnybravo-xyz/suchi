@@ -48,6 +48,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
 // Kind is the job kind the classifier subscribes to. Post-ingest
@@ -237,6 +239,16 @@ func (p *Plugin) Classify(ctx context.Context, title, content string) (*Result, 
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("llm-classifier: read body: %w", err)
+	}
+	if resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests {
+		// 4xx from the LLM endpoint (except 429) is terminal: bad model
+		// name (404), bad API key (401), forbidden project (403),
+		// malformed request (400). Retrying burns MaxAttempts on
+		// outcomes that never become success. 429 stays retryable — the
+		// outbox backoff waits out a rate limit. Wrap jobs.ErrTerminal
+		// so the dispatcher short-circuits to dead on first failure.
+		return nil, fmt.Errorf("%w: llm-classifier: HTTP %d: %s",
+			jobs.ErrTerminal, resp.StatusCode, truncate(string(rb), 200))
 	}
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("llm-classifier: HTTP %d: %s", resp.StatusCode, truncate(string(rb), 200))
