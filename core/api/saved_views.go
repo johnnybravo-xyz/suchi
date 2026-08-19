@@ -61,7 +61,7 @@ func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	includeShared := r.URL.Query().Get("include") == "shared"
+	includeShared := r.URL.Query().Get("include") == "shared" || p.Kind == PrincipalKindDemoAnon
 	where := "owner_id = ?"
 	args := []any{p.UserID}
 	if includeShared {
@@ -134,7 +134,7 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	}
 	filterJSON := "{}"
 	if in.FilterJSON != nil && strings.TrimSpace(*in.FilterJSON) != "" {
-		if err := validateFilterJSON(*in.FilterJSON); err != nil {
+		if err := ValidateSavedViewFilterJSON(*in.FilterJSON); err != nil {
 			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
 			return
 		}
@@ -213,7 +213,7 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 		args = append(args, strings.TrimSpace(*in.Name))
 	}
 	if in.FilterJSON != nil {
-		if err := validateFilterJSON(*in.FilterJSON); err != nil {
+		if err := ValidateSavedViewFilterJSON(*in.FilterJSON); err != nil {
 			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
 			return
 		}
@@ -441,10 +441,8 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
 }
 
-// savedViewAllowedKeys is the allow-list of document-list filter
-// params a saved_view can persist. Anything outside this set is a
-// client bug we'd rather surface loudly than store forever. Extend
-// only when the documents-list endpoint learns to honor the new key.
+const savedViewFilterMaxBytes = 2048
+
 var savedViewAllowedKeys = map[string]bool{
 	"q":                      true,
 	"tags__id__in":           true,
@@ -455,61 +453,38 @@ var savedViewAllowedKeys = map[string]bool{
 	"ordering":               true,
 }
 
-// filterJSONMaxBytes bounds one filter_json payload. 2KB is more than
-// enough for any realistic filter combination the documents-list
-// endpoint can honor; a payload above this is either an attacker
-// probing storage limits or a client dumping unrelated state.
-const filterJSONMaxBytes = 2048
-
-// validateFilterJSON checks a saved_view.filter_json payload. Rules:
-//   - valid JSON object (no arrays / scalars at the top level)
-//   - length <= filterJSONMaxBytes
-//   - every key in savedViewAllowedKeys
-//   - values are strings, numbers, bools, or arrays of scalars —
-//     no nested objects (a saved view is a flat query surface)
-//
-// Returns a message naming the first offending key so client bugs
-// surface with actionable text.
-func validateFilterJSON(raw string) error {
-	if len(raw) > filterJSONMaxBytes {
-		return errFilterTooLarge
+// ValidateSavedViewFilterJSON accepts the flat document-list query shape persisted by clients.
+func ValidateSavedViewFilterJSON(raw string) error {
+	if len(raw) > savedViewFilterMaxBytes {
+		return &savedViewFilterError{message: "filter_json exceeds 2KB"}
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil {
-		return errFilterNotObject
+	var filter map[string]any
+	if err := dec.Decode(&filter); err != nil || filter == nil {
+		return &savedViewFilterError{message: "filter_json must be a JSON object"}
 	}
-	if m == nil {
-		return errFilterNotObject
-	}
-	for k, v := range m {
-		if !savedViewAllowedKeys[k] {
-			return &filterErr{msg: "unknown filter key: " + k}
+	for key, value := range filter {
+		if !savedViewAllowedKeys[key] {
+			return &savedViewFilterError{message: "unknown filter key: " + key}
 		}
-		switch vv := v.(type) {
+		switch typed := value.(type) {
 		case string, json.Number, bool, nil:
-			// scalar — fine
 		case []any:
-			for _, item := range vv {
+			for _, item := range typed {
 				switch item.(type) {
 				case string, json.Number, bool, nil:
 				default:
-					return &filterErr{msg: "filter key " + k + " has a non-scalar array element"}
+					return &savedViewFilterError{message: "filter key " + key + " has a non-scalar array element"}
 				}
 			}
 		default:
-			return &filterErr{msg: "filter key " + k + " is not a scalar or array of scalars"}
+			return &savedViewFilterError{message: "filter key " + key + " is not a scalar or array of scalars"}
 		}
 	}
 	return nil
 }
 
-type filterErr struct{ msg string }
+type savedViewFilterError struct{ message string }
 
-func (e *filterErr) Error() string { return e.msg }
-
-var (
-	errFilterTooLarge  = &filterErr{msg: "filter_json exceeds 2KB"}
-	errFilterNotObject = &filterErr{msg: "filter_json must be a JSON object"}
-)
+func (e *savedViewFilterError) Error() string { return e.message }

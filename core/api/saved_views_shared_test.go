@@ -107,3 +107,18 @@ func TestSavedViews_SharedVisibleWithIncludeFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestSavedViews_DemoAnonSeesSharedViewsByDefault(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedSavedView(t, d, 1, "private", false)
+	sharedID := seedSavedView(t, d, 1, "shared", true)
+
+	views := doListViews(t, s, "/api/saved_views/", &pluginapi.Principal{
+		Kind: PrincipalKindDemoAnon,
+		Role: "member",
+	})
+	if len(views) != 1 || views[0].ID != sharedID || views[0].OwnerID != 1 {
+		t.Fatalf("demo anonymous views = %+v, want shared view %d", views, sharedID)
+	}
+}

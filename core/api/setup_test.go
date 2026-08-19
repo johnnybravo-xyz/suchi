@@ -6,7 +6,20 @@ package api
 // deploy/mail-mbsync/smoke-test.sh).
 
 import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
+	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func TestIsNonLocal(t *testing.T) {
@@ -25,8 +38,8 @@ func TestIsNonLocal(t *testing.T) {
 		{"172.32.0.1", true}, // out of RFC-1918 range
 		{"172.15.0.1", true},
 		{"host.local", false},
-		{"lab.internal", false},
-		{"my.lan", false},
+		{"lab.internal", true},
+		{"my.lan", true},
 		{"api.openai.com", true},
 		{"claude.anthropic.com", true},
 		{"[::1]", false},
@@ -34,8 +47,8 @@ func TestIsNonLocal(t *testing.T) {
 		{"api.openai.com:443", true},
 	}
 	for _, tc := range cases {
-		if got := isNonLocal(tc.host); got != tc.want {
-			t.Errorf("isNonLocal(%q) = %v, want %v", tc.host, got, tc.want)
+		if got := !netutil.IsLocalHost(tc.host); got != tc.want {
+			t.Errorf("non-local(%q) = %v, want %v", tc.host, got, tc.want)
 		}
 	}
 }
@@ -67,28 +80,70 @@ func TestModelSafe(t *testing.T) {
 		"gpt-4o-mini", "llama3.1:8b", "claude-3-5-sonnet-20241022",
 		"microsoft/DialoGPT", "mistral/mistral-large",
 	}
-	// modelSafe rejects colons — Ollama tags use them. Update the
-	// pattern if that becomes a real limitation.
 	badKnown := []string{
 		"", "has space", "has;semi", "has$dollar",
 		"has|pipe", "has`tick", "has'quote",
 	}
-	// The colon-in-tag issue is real, so verify explicitly:
-	if modelSafe.MatchString("llama3.1:8b") {
-		// Fine — pattern currently rejects colons; update this test
-		// alongside the pattern when we start allowing them.
-		t.Log("modelSafe accepts colon; update golden list")
-	}
 	for _, m := range good {
 		if !modelSafe.MatchString(m) {
-			// Skip colon-containing entries — expected reject today.
-			continue
+			t.Errorf("expected valid: %q", m)
 		}
 	}
 	for _, m := range badKnown {
 		if modelSafe.MatchString(m) {
 			t.Errorf("expected invalid: %q", m)
 		}
+	}
+}
+
+func TestSaveLLMSettings_SealsKeyAndReportsRestart(t *testing.T) {
+	d := openTestDB(t)
+	key, err := suchicrypto.LoadOrCreateKey(filepath.Join(t.TempDir(), "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		DB:      d,
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLMAEAD: key,
+	}
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
+		Kind: "user", UserID: 1, Role: "admin",
+	}))
+	rec := httptest.NewRecorder()
+
+	s.SaveLLMSettings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		RestartRequired bool `json:"restart_required"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.RestartRequired {
+		t.Fatal("first-time activation must report restart_required")
+	}
+
+	var stored map[string]any
+	if err := settings.Get(req.Context(), d, settings.KeyLLMAPIKeySealed, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rec.Body.String(), "top-secret") {
+		t.Fatal("response exposed API key")
+	}
+	resolved, err := settings.ResolveLLMConfig(req.Context(), d, settings.LLMConfig{}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "top-secret" || resolved.Model != "qwen2.5:7b" {
+		t.Fatalf("resolved config = %#v", resolved)
+	}
+	if _, ok := stored["ciphertext"]; !ok {
+		t.Fatalf("stored key is not a sealed envelope: %#v", stored)
 	}
 }
 

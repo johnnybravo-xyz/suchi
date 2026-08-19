@@ -4,12 +4,6 @@
 // cfg.BackupKeep so the backups dir can't grow unboundedly and fill
 // the volume `suchi.db` itself lives on (which is how "we've had
 // backups all along" turns into "the disk is full and nothing writes").
-//
-// The docs have promised automatic snapshots since Phase 0; the
-// implementation was missing until the first code review flagged it.
-// This file closes that gap. See docs/backup-restore.mdx for the
-// operator-facing story.
-
 package backup
 
 import (

@@ -77,3 +77,15 @@ func TestShareLinks_cap_gate(t *testing.T) {
 		t.Fatalf("cap-holder should not see 403, got body=%s", rec.Body.String())
 	}
 }
+
+func TestRenderShareHTMLIncludesFavicon(t *testing.T) {
+	rec := httptest.NewRecorder()
+	renderShareHTML(rec, http.StatusOK, shareHTMLData{Title: "Shared documents"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `href="/assets/brand/favicon.svg"`) {
+		t.Errorf("share page should declare the branded favicon")
+	}
+}

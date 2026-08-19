@@ -13,16 +13,13 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
 )
 
 // Refile — POST /api/admin/refile. Admin-only. Body is a JSON blob
 // mirroring refile.Options.
 func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {

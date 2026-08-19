@@ -530,6 +530,8 @@ const shareHTMLDoctype = `<!doctype html>`
 const shareHTMLShell = `<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+<link rel="alternate icon" type="image/x-icon" href="/assets/brand/favicon.ico">
 <title>%[1]s · suchi share</title>
 <style>
 :root { --bg:#FAFAF8; --surface:#FFF; --ink:#17181A; --muted:#6A7079;

@@ -1,8 +1,4 @@
-// /api/groups/* — CRUD over authz's `groups` table + membership.
-// Admin-only writes; any authed user can list/get.
-//
-// Grants live at /api/acls/ (separate file — different resource
-// shape).
+// Group and membership CRUD. Writes require an admin.
 
 package api
 
@@ -13,15 +9,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
-// ---------- groups CRUD ----------
-
 func (s *Server) ListGroups(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	store := authz.NewStore(s.DB)
@@ -35,8 +27,7 @@ func (s *Server) ListGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetGroup(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -57,9 +48,7 @@ func (s *Server) GetGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body authz.Group
@@ -76,9 +65,7 @@ func (s *Server) CreateGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) UpdateGroup(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -104,9 +91,7 @@ func (s *Server) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) DeleteGroup(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -118,18 +103,14 @@ func (s *Server) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "group not found")
 		return
 	} else if err != nil {
-		// Distinguish "still has grants" from a real DB error.
 		s.writeError(w, http.StatusConflict, "delete_conflict", err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ---------- membership ----------
-
 func (s *Server) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -146,9 +127,7 @@ func (s *Server) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) AddGroupMember(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -171,9 +150,7 @@ func (s *Server) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")

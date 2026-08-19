@@ -12,6 +12,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
 // TagView is the JSON projection of a tags row. ParentID + ChildCount
@@ -36,8 +37,7 @@ type TagView struct {
 // Response is the DRF pagination envelope so mobile clients paginate
 // naturally.
 func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	where := ""
@@ -120,7 +120,7 @@ type tagUpsert struct {
 // CreateTag — POST /api/tags/. Admin-only. Body: tagUpsert.
 // Returns {"id": <int>} on 201. 409 on unique-name/slug collision.
 func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var in tagUpsert
@@ -133,12 +133,12 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(*in.Name)
-	slug := ""
+	sl := ""
 	if in.Slug != nil {
-		slug = strings.TrimSpace(*in.Slug)
+		sl = strings.TrimSpace(*in.Slug)
 	}
-	if slug == "" {
-		slug = slugFromName(name)
+	if sl == "" {
+		sl = slug.Make(name)
 	}
 	now := time.Now().Unix()
 
@@ -152,12 +152,12 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 			res, err = tx.ExecContext(r.Context(),
 				`INSERT INTO tags(name, slug, color, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?)`,
-				name, slug, strings.TrimSpace(*in.Color), now, now)
+				name, sl, strings.TrimSpace(*in.Color), now, now)
 		} else {
 			res, err = tx.ExecContext(r.Context(),
 				`INSERT INTO tags(name, slug, created_at, updated_at)
 				 VALUES (?, ?, ?, ?)`,
-				name, slug, now, now)
+				name, sl, now, now)
 		}
 		if err != nil {
 			return err
@@ -179,7 +179,7 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 		Action:     "tag.create",
 		ObjectKind: "tag",
 		ObjectID:   id,
-		After:      map[string]any{"name": name, "slug": slug},
+		After:      map[string]any{"name": name, "slug": sl},
 	})
 	s.writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
@@ -189,7 +189,7 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 // moves live on /api/tags/{id}/parent — that endpoint owns the
 // cycle-check invariant and is not duplicated here.
 func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -266,7 +266,7 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 // ON DELETE SET NULL — the nested-tag migration set that up so a
 // deleted parent doesn't orphan its subtree.
 func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

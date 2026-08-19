@@ -7,15 +7,68 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
+
+func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 5)
+	seedUser(t, d, 6)
+	if _, err := d.Write.ExecContext(context.Background(), `
+		UPDATE users SET role = 'member' WHERE id IN (5, 6);
+		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (40, 49, 'System', 0);
+		INSERT INTO jd_categories(id, area_start, code, name, system) VALUES (49, 40, 49, 'Inbox', 1);
+		INSERT INTO documents(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (101, 5, 'sha-101', 1, 'Mine', 49, 0, 0),
+		       (102, 6, 'sha-102', 1, 'Theirs', 49, 0, 0);
+		INSERT INTO jobs(id, kind, doc_id, state, next_run_at, created_at, updated_at, last_error)
+		VALUES (201, 'post-ingest', 101, 'pending', 0, 1, 1, NULL),
+		       (202, 'post-ingest', 102, 'dead', 0, 2, 2, 'private failure'),
+		       (203, 'maintenance', NULL, 'dead', 0, 3, 3, 'operator only');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest("GET", "/api/tasks/", nil)
+	request = request.WithContext(auth.WithPrincipal(request.Context(), memberPrincipal(5)))
+	recorder := httptest.NewRecorder()
+	s.ListTasks(recorder, request)
+	if recorder.Code != 200 {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var member TasksResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &member); err != nil {
+		t.Fatal(err)
+	}
+	if len(member.Results) != 1 || member.Results[0].DocID != 101 {
+		t.Fatalf("member jobs = %+v", member.Results)
+	}
+	if member.Counts["pending"] != 1 || member.Counts["dead"] != 0 {
+		t.Fatalf("member counts = %+v", member.Counts)
+	}
+
+	request = httptest.NewRequest("GET", "/api/tasks/", nil)
+	request = request.WithContext(auth.WithPrincipal(request.Context(), adminPrincipal(1)))
+	recorder = httptest.NewRecorder()
+	s.ListTasks(recorder, request)
+	var admin TasksResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &admin); err != nil {
+		t.Fatal(err)
+	}
+	if len(admin.Results) != 3 || admin.Counts["dead"] != 2 {
+		t.Fatalf("admin tasks = %+v counts=%+v", admin.Results, admin.Counts)
+	}
+}
 
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()

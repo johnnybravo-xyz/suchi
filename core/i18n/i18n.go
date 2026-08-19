@@ -6,9 +6,8 @@
 // so gaps show up in the UI instead of silently rendering blank —
 // exactly the opposite behavior of most i18n libs, on purpose.
 //
-// Phase-1 ships English only. Adding a locale is a data problem: drop
-// strings/fr.yaml under this package and pick it at Locale-load time.
-// No template refactor.
+// English is the only bundled locale. Additional catalogs can be added
+// under strings/ without changing templates.
 package i18n
 
 import (

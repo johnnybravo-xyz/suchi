@@ -1,17 +1,6 @@
 package api
 
-// Approvals engine HTTP surface — routing/sign-off state machines,
-// distinct from the trigger→conditions→actions automations engine
-// exposed at /api/automations/ (see core/api/automations.go and
-// core/automations/). Admin gates on def-registration and cancel;
-// any authenticated member can start a run or resolve a task they own
-// (or an admin can override). Every string that reaches SQL rides
-// ExecContext with ?-placeholders — no dynamic SQL here; the
-// approvals package owns that.
-//
-// URLs live under /api/approvals/*; the Go package stays
-// core/approvals/ because renaming it would touch dozens of files for
-// no functional gain.
+// Approval state machines are separate from trigger-action automations.
 
 import (
 	"encoding/json"
@@ -25,16 +14,13 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
-// slugPattern constrains a approval-flow slug to identifier-ish
-// tokens. Keeps URLs safe + specs greppable.
+// Approval slugs are stable URL identifiers.
 var slugPattern = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,63}$`)
 
-// registerApprovals wires the /api/approvals/* routes. Called from
-// Register().
 func (s *Server) registerApprovals(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/approvals", s.ApprovalRegister)
-	mux.HandleFunc("GET /api/approvals/{slug}", s.ApprovalGetDef)
-	mux.HandleFunc("POST /api/approvals/{slug}/start", s.ApprovalStart)
+	mux.HandleFunc("POST /api/approvals/definitions", s.ApprovalRegister)
+	mux.HandleFunc("GET /api/approvals/definitions/{slug}", s.ApprovalGetDef)
+	mux.HandleFunc("POST /api/approvals/definitions/{slug}/start", s.ApprovalStart)
 	mux.HandleFunc("GET /api/approvals/runs/{id}", s.ApprovalGetRun)
 	mux.HandleFunc("POST /api/approvals/tasks/{task_id}/resolve", s.ApprovalResolveTask)
 	mux.HandleFunc("POST /api/approvals/runs/{id}/cancel", s.ApprovalCancel)
@@ -43,7 +29,7 @@ func (s *Server) registerApprovals(mux *http.ServeMux) {
 // ApprovalRegister persists a Spec at a new version for the given
 // slug. Body: {"slug":"...", "spec": {...}}.
 func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	if approvals.Default() == nil {
@@ -96,8 +82,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 
 // ApprovalGetDef returns the current active spec for slug.
 func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	slug := strings.ToLower(r.PathValue("slug"))
@@ -181,8 +166,7 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 
 // ApprovalGetRun returns run + transitions + open tasks.
 func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	if approvals.Default() == nil {
@@ -280,7 +264,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 // ApprovalCancel stops a running run. Admin-only for now — cancelling
 // someone else's approval run is a privileged action.
 func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	if approvals.Default() == nil {

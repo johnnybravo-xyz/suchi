@@ -2,7 +2,7 @@ package api
 
 // CRUD roundtrip for POST/PATCH/DELETE /api/tags/. The list endpoint
 // already has broader coverage; this pins the write verbs so a
-// refactor of the shared helpers (slugFromName, isUniqueViolation)
+// refactor of the shared helpers (slug.Make, isUniqueViolation)
 // can't silently break them.
 
 import (

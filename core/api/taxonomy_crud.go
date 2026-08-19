@@ -26,6 +26,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
 // kindForTable maps a taxonomy table name to the authz.Kind used by
@@ -129,8 +130,7 @@ func isSafeTable(t string) bool {
 }
 
 func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table string, withPath bool) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	if !isSafeTable(table) {
@@ -195,7 +195,7 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 }
 
 func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table string, withPath bool) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	if !isSafeTable(table) {
@@ -216,12 +216,12 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	name := strings.TrimSpace(*in.Name)
-	var slug string
+	var sl string
 	if in.Slug != nil {
-		slug = strings.TrimSpace(*in.Slug)
+		sl = strings.TrimSpace(*in.Slug)
 	}
-	if slug == "" {
-		slug = slugFromName(name)
+	if sl == "" {
+		sl = slug.Make(name)
 	}
 	matchingAlgo := 0
 	if in.MatchingAlgorithm != nil {
@@ -245,13 +245,13 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 			res, err = tx.ExecContext(r.Context(),
 				`INSERT INTO storage_paths(name, slug, path, matching_algorithm, match, is_insensitive, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				name, slug, strings.TrimSpace(*in.Path),
+				name, sl, strings.TrimSpace(*in.Path),
 				matchingAlgo, match, isInsens, now, now)
 		} else {
 			res, err = tx.ExecContext(r.Context(),
 				"INSERT INTO "+table+`(name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				name, slug, matchingAlgo, match, isInsens, now, now)
+				name, sl, matchingAlgo, match, isInsens, now, now)
 		}
 		if err != nil {
 			return err

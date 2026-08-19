@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 // CustomFieldRow is the JSON projection of a custom_fields row.
@@ -52,8 +50,7 @@ var customFieldTypes = map[string]bool{
 
 // ListCustomFieldDefs — GET /api/custom_fields/.
 func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	var total int
@@ -99,7 +96,7 @@ func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
 
 // CreateCustomFieldDef — POST /api/custom_fields/. Admin-only.
 func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var in CustomFieldUpsert
@@ -155,7 +152,7 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 // expected to know what they're doing (or delete the field and
 // recreate).
 func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -233,7 +230,7 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 // DeleteCustomFieldDef — DELETE /api/custom_fields/{id}. Admin-only.
 // Cascades to document_custom_field_values via schema FK.
 func (s *Server) DeleteCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 )
 
@@ -37,8 +36,7 @@ type LanguagesResponse struct {
 // hoop-jumping for a small aggregation. At the archive sizes
 // suchi targets (< 1M docs), this is fine.
 func (s *Server) ListLanguages(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), `

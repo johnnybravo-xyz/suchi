@@ -1,17 +1,6 @@
 package api
 
-// Admin taxonomy import + export — the two endpoints backing the
-// wizard's "Import a file" tab and Admin > Taxonomy > Import/Export.
-//
-// Import accepts a `suchi-taxonomy/v1` file (HuML/TOML/YAML), parses
-// it, and applies via the same core/jd/importer that powers the
-// built-in preset picker. Replace mode fires on an empty archive;
-// merge mode fires when documents already exist (additive-only per
-// spec §3 — no rename, no delete). Dry-run is the default: apply
-// only when the caller sets `apply: true`.
-//
-// Export dumps the current tree + preset-owned seeds back into a
-// valid `suchi-taxonomy/v1` file, format selectable via query.
+// Admin import/export for suchi-taxonomy/v1 files.
 
 import (
 	"bytes"
@@ -29,12 +18,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 	huml "github.com/huml-lang/go-huml"
-	"gopkg.in/yaml.v3"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // TaxonomyImportReq is the POST body.
@@ -85,9 +73,8 @@ type TaxonomyColl struct {
 
 // ImportTaxonomy — POST /api/admin/taxonomy/import.
 func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	var req TaxonomyImportReq
@@ -100,7 +87,12 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pf, err := presetfile.Parse([]byte(req.Content), presetfile.SerFormat(req.Format))
+	format, ok := taxonomyAuthoringFormat(req.Format, "")
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "bad_format", "format must be huml or toml")
+		return
+	}
+	pf, err := presetfile.Parse([]byte(req.Content), format)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "parse", err.Error())
 		return
@@ -108,7 +100,7 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 
 	// Compute the diff. Mode = replace when the archive has no non-
 	// inbox docs; merge otherwise.
-	mode, err := chooseImportMode(r.Context(), s)
+	mode, err := taxonomy.ImportMode(r.Context(), s.DB)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
@@ -247,17 +239,16 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 
 // ExportTaxonomy — GET /api/admin/taxonomy/export.
 func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
-	format := presetfile.SerFormat(strings.ToLower(r.URL.Query().Get("format")))
-	if format == "" {
-		format = presetfile.FormatHuML
+	format, ok := taxonomyAuthoringFormat(r.URL.Query().Get("format"), presetfile.FormatHuML)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "bad_format", "format must be huml or toml")
+		return
 	}
 
-	pf, err := buildExportPresetFile(r.Context(), s)
+	pf, err := taxonomy.BuildExport(r.Context(), s.DB)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
@@ -275,16 +266,6 @@ func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, suffix = b, "huml"
-	case presetfile.FormatYAML:
-		var buf bytes.Buffer
-		enc := yaml.NewEncoder(&buf)
-		enc.SetIndent(2)
-		if err := enc.Encode(pf); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "encode", err.Error())
-			return
-		}
-		_ = enc.Close()
-		body, suffix = buf.Bytes(), "yaml"
 	case presetfile.FormatTOML:
 		var buf bytes.Buffer
 		if err := toml.NewEncoder(&buf).Encode(pf); err != nil {
@@ -292,9 +273,6 @@ func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, suffix = buf.Bytes(), "toml"
-	default:
-		s.writeError(w, http.StatusBadRequest, "bad_format", "format must be huml/toml/yaml")
-		return
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition",
@@ -302,22 +280,17 @@ func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, bytes.NewReader(body))
 }
 
-// chooseImportMode returns "replace" if the archive is empty of
-// non-inbox docs, else "merge".
-func chooseImportMode(ctx context.Context, s *Server) (string, error) {
-	var stray int
-	err := s.DB.Read.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM documents d
-		JOIN jd_categories c ON c.id = d.jd_category_id
-		WHERE d.trashed_at IS NULL AND c.system = 0
-	`).Scan(&stray)
-	if err != nil {
-		return "", err
+func taxonomyAuthoringFormat(raw string, fallback presetfile.SerFormat) (presetfile.SerFormat, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return fallback, true
+	case "huml":
+		return presetfile.FormatHuML, true
+	case "toml":
+		return presetfile.FormatTOML, true
+	default:
+		return "", false
 	}
-	if stray == 0 {
-		return "replace", nil
-	}
-	return "merge", nil
 }
 
 // detectMergeCollisions walks the incoming PresetFile against the
@@ -383,91 +356,6 @@ func nextFreeInDecade(code int, taken map[int]bool) int {
 		}
 	}
 	return 0
-}
-
-// buildExportPresetFile reads jd_areas + jd_categories + preset-owned
-// rules + preset-owned automations and produces a *PresetFile ready
-// for encoding. Keywords are reconstructed from content_contains rules
-// whose then_kind is set_jd_category — that's a stable projection of
-// the seeded shape.
-func buildExportPresetFile(ctx context.Context, s *Server) (*presetfile.PresetFile, error) {
-	pf := &presetfile.PresetFile{
-		Format:  presetfile.Format,
-		ID:      "exported",
-		Version: 1,
-		Name:    "Exported taxonomy",
-		Story:   "Round-tripped from the running instance. Review before sharing.",
-	}
-	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT code_start, name FROM jd_areas ORDER BY position, code_start
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var code int
-		var name string
-		if err := rows.Scan(&code, &name); err != nil {
-			return nil, err
-		}
-		pf.Areas = append(pf.Areas, presetfile.Area{Code: code, Name: name})
-	}
-
-	// Attach categories to areas.
-	for i := range pf.Areas {
-		a := &pf.Areas[i]
-		crows, err := s.DB.Read.QueryContext(ctx, `
-			SELECT code, name, COALESCE(description, ''), system
-			FROM jd_categories WHERE area_start = ? ORDER BY code
-		`, a.Code)
-		if err != nil {
-			return nil, err
-		}
-		for crows.Next() {
-			var c presetfile.Category
-			var sys int
-			if err := crows.Scan(&c.Code, &c.Name, &c.Description, &sys); err != nil {
-				crows.Close()
-				return nil, err
-			}
-			if sys == 1 {
-				pf.Inbox = c.Code
-			}
-			// Reconstruct keywords: content_contains rules with
-			// then_value == this category code and preset_slug set.
-			kwRows, err := s.DB.Read.QueryContext(ctx, `
-				SELECT if_value FROM rules
-				WHERE if_kind = 'content_contains'
-				  AND then_kind = 'set_jd_category'
-				  AND then_value = ?
-				  AND preset_slug IS NOT NULL
-				ORDER BY if_value
-			`, fmt.Sprintf("%d", c.Code))
-			if err != nil {
-				crows.Close()
-				return nil, err
-			}
-			for kwRows.Next() {
-				var kw string
-				if err := kwRows.Scan(&kw); err != nil {
-					kwRows.Close()
-					crows.Close()
-					return nil, err
-				}
-				c.Keywords = append(c.Keywords, kw)
-			}
-			kwRows.Close()
-			a.Categories = append(a.Categories, c)
-		}
-		crows.Close()
-	}
-
-	// TODO: include preset-owned seeds.automations in export. Not
-	// wired yet — seeding round-trip works one-way (import → apply)
-	// today. The next revision fills in the export side.
-
-	return pf, nil
 }
 
 func sha256hex(s string) string {

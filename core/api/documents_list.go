@@ -1,12 +1,5 @@
 // GET /api/documents/ — paginated ACL-scoped list.
 //
-// The SPA (and every third-party client) walks the archive through
-// this endpoint. It sat unregistered from Phase 1 through the sweep
-// batches — POST-upload + GET-by-id were wired, but no list. The
-// sidebar counter reads /api/stats/ (direct COUNT), so an operator
-// sees "1 in Inbox" while the /inbox and /documents pages come back
-// empty. This handler closes that gap.
-//
 // Query params (all optional):
 //
 //   page, page_size           — DRF-style; ParsePageParams caps.

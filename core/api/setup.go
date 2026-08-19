@@ -1,26 +1,20 @@
 package api
 
-// Setup wizard endpoints. Admin-only. Every payload is JSON; every
-// string that lands in SQL rides a parameterized query (default via
-// database/sql); every string that reaches a shell (mail wizard,
-// docker.sock) is regex-validated at the boundary. Enum-like inputs
-// are matched against explicit allowlists — no reflection, no dynamic
-// dispatch on user-supplied names.
+// Admin-only setup wizard endpoints.
 
 import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
@@ -57,7 +51,7 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 
 // SetupState returns the wizard's progress.
 func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	st, err := settings.LoadSetupState(r.Context(), s.DB)
@@ -70,7 +64,7 @@ func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 
 // SetupStep records a step as done or skipped. Body: {"status":"done"|"skipped"}.
 func (s *Server) SetupStep(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	name := r.PathValue("name")
@@ -104,7 +98,7 @@ func (s *Server) SetupStep(w http.ResponseWriter, r *http.Request) {
 
 // SetupComplete stamps the wizard-finished timestamp.
 func (s *Server) SetupComplete(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	if err := settings.MarkSetupComplete(r.Context(), s.DB); err != nil {
@@ -125,7 +119,7 @@ var emailPattern = regexp.MustCompile(`^[^\s@<>"'\\;]+@[^\s@<>"'\\;]+\.[^\s@<>"'
 // local-auth's argon2id helper (imported lazily via a hook set from
 // main.go — see Server.PasswordHasher).
 func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	if s.PasswordHasher == nil {
@@ -216,7 +210,7 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 // A Suchi Preset is a preset following Suchi's Johnny.Decimal taxonomy —
 // the starter tree plus its seeded rules/automations.
 func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	// IncludeSeeds is a pointer so we can distinguish "field omitted"
@@ -285,15 +279,10 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 
 // ---------- LLM settings ----------
 
-// modelSafe accepts common OpenAI-compatible model names — vendor,
-// slash, dot, dash, digit, letter.
-var modelSafe = regexp.MustCompile(`^[A-Za-z0-9._/\-]{1,64}$`)
+var modelSafe = regexp.MustCompile(`^[A-Za-z0-9._/:\-]{1,128}$`)
 
-// SaveLLMSettings persists LLM classifier config. The plugin still
-// reads env at boot today; this write is for the wizard's record and
-// future runtime-reconfig. Documented "restart required" in the UI.
 func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
@@ -314,7 +303,7 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "bad_url", "endpoint_url must be an http(s):// URL")
 			return
 		}
-		if isNonLocal(u.Host) && !body.EgressAck {
+		if !netutil.IsLocalHost(u.Host) && !body.EgressAck {
 			s.writeError(w, http.StatusBadRequest, "egress_ack_required",
 				"non-local endpoint — set egress_ack=true to confirm document text will leave the box")
 			return
@@ -324,45 +313,34 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_model", "model has forbidden characters")
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyLLMEndpointURL, body.EndpointURL); err != nil {
-		s.serverErr(w, "settings.llm.endpoint", err)
+	if body.APIKey != "" && s.LLMAEAD == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "secret_storage_unavailable",
+			"LLM API keys cannot be stored until secret storage is initialized")
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyLLMModel, body.Model); err != nil {
-		s.serverErr(w, "settings.llm.model", err)
+	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
+		EndpointURL: body.EndpointURL,
+		Model:       body.Model,
+		EgressAck:   body.EgressAck,
+	}, s.LLMAEAD, body.APIKey); err != nil {
+		s.serverErr(w, "settings.llm.save", err)
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyLLMEgressAck, body.EgressAck); err != nil {
-		s.serverErr(w, "settings.llm.egress", err)
+	if s.LLMReloader == nil {
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"saved":            true,
+			"restart_required": true,
+		})
 		return
 	}
-	// The API key is sensitive. Persist only when explicitly supplied;
-	// blank leaves the previous value alone. Sealed at rest via the
-	// existing decrypt-key AEAD (same as PDF passwords) — plumbed in a
-	// follow-up commit; today we store as plaintext to unblock the
-	// wizard flow with a WARN log.
-	if body.APIKey != "" {
-		s.Log.Warn("settings.llm.key.plaintext",
-			"note", "storing plaintext until AEAD seal wired; back up DATA_DIR wholesale")
-		if err := settings.Set(r.Context(), s.DB, settings.KeyLLMAPIKeySealed, body.APIKey); err != nil {
-			s.serverErr(w, "settings.llm.key", err)
-			return
-		}
-	}
-	// Live-reload: signal the running classifier to re-read settings.
-	// Nil hook (tests, disabled classifier) → skip silently. A reload
-	// failure is warn-only: the settings are saved, the operator can
-	// restart to apply.
-	if s.LLMReloader != nil {
-		if err := s.LLMReloader(r.Context()); err != nil {
-			s.Log.Warn("settings.llm.reload_failed", "err", err.Error())
-			s.writeJSON(w, http.StatusOK, map[string]any{
-				"saved":        true,
-				"reload_error": err.Error(),
-				"restart_hint": "settings saved; restart suchi to apply since live-reload failed",
-			})
-			return
-		}
+	if err := s.LLMReloader(r.Context()); err != nil {
+		s.Log.Warn("settings.llm.reload_failed", "err", err.Error())
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"saved":            true,
+			"restart_required": true,
+			"reload_error":     err.Error(),
+		})
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -373,7 +351,7 @@ var langCode = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?$`)
 
 // SavePreferences persists backup interval + OCR languages.
 func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
@@ -423,7 +401,7 @@ var fsPath = regexp.MustCompile(`^/[A-Za-z0-9 ._\-/]{0,255}$`)
 // SaveIngestSettings persists fs-watch dir + owner. Runtime picks
 // these up on next boot; documented "restart required" in the UI.
 func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
@@ -467,19 +445,6 @@ func decodeJSON(r *http.Request, into any) error {
 	return dec.Decode(into)
 }
 
-func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
-		return false
-	}
-	if p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin role required")
-		return false
-	}
-	return true
-}
-
 func (s *Server) serverErr(w http.ResponseWriter, tag string, err error) {
 	s.Log.Error("api."+tag, "err", err.Error())
 	s.writeError(w, http.StatusInternalServerError, "internal", "server error")
@@ -495,43 +460,4 @@ func isUniqueViolation(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") ||
 		strings.Contains(msg, "(2067)")
-}
-
-// isNonLocal reports whether h is an off-box address. Loopback + link-
-// local + private RFC-1918 count as local. We keep the check literal —
-// tunnels and NAT can hide egress, but honest operators run local
-// models on 127.0.0.1 / 192.168.* / 10.* / *.local so this catches
-// the common case + forces an ack for anything else.
-func isNonLocal(host string) bool {
-	// Strip port. Bracketed IPv6 → strip up to `]`. Bare host — only
-	// strip when there's exactly one colon (else it's IPv6-shaped and
-	// the whole thing is the host).
-	if strings.HasPrefix(host, "[") {
-		if end := strings.Index(host, "]"); end != -1 {
-			host = host[1:end]
-		}
-	} else if strings.Count(host, ":") == 1 {
-		host = host[:strings.Index(host, ":")]
-	}
-	h := strings.ToLower(host)
-	switch h {
-	case "localhost", "127.0.0.1", "::1", "":
-		return false
-	}
-	if strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") ||
-		strings.HasSuffix(h, ".lan") {
-		return false
-	}
-	if strings.HasPrefix(h, "10.") || strings.HasPrefix(h, "192.168.") {
-		return false
-	}
-	// 172.16.0.0/12 — only the first octet check is worth it here.
-	if strings.HasPrefix(h, "172.") {
-		var second int
-		fmt.Sscanf(h, "172.%d.", &second)
-		if second >= 16 && second <= 31 {
-			return false
-		}
-	}
-	return true
 }

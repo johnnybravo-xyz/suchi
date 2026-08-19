@@ -37,11 +37,6 @@
 //     otherwise need a title lookup per row. The privacy invariant
 //     from docs/privacy.mdx applies: summary contains titles and
 //     kinds only, never document content or OCR text.
-//
-//   - Phase 2 (SSE) is not implemented here. When it lands, this
-//     handler stays and the streaming version calls the same
-//     projection helpers.
-
 package api
 
 import (

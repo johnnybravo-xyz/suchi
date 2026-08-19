@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 // RuleView is the JSON projection of a rules row for the API.
@@ -47,11 +46,8 @@ type RuleUpsert struct {
 	Enabled     *bool   `json:"enabled,omitempty"`
 }
 
-// ListRules — GET /api/rules/. Every authenticated user can read; only
-// admins can write (see the mutating handlers).
 func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	var total int
@@ -106,11 +102,9 @@ func (s *Server) ListRules(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
 }
 
-// CreateRule — POST /api/rules/. Requires admin.
 func (s *Server) CreateRule(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	var req RuleUpsert
@@ -178,9 +172,8 @@ func (s *Server) CreateRule(w http.ResponseWriter, r *http.Request) {
 // same preset later won't resurrect the hidden rule; the user's
 // disabled fork wins.
 func (s *Server) DeleteRule(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -329,9 +322,8 @@ func (s *Server) maybeForkPresetRule(ctx context.Context, id int64, patch RuleUp
 // applied and soft-disables the preset original. Returned id is the
 // new (or existing, if already user-owned) row.
 func (s *Server) UpdateRule(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
@@ -397,6 +399,41 @@ func TestEmailAccounts_OAuth_Complete_UnknownHandle(t *testing.T) {
 		`{"flow_handle":"does-not-exist"}`, adminPrincipal(1))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
+	now := time.Now()
+	var store oauthFlowStore
+	for i := 0; i < maxOAuthFlows; i++ {
+		handle := strconv.Itoa(i)
+		if !store.put(handle, oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+			t.Fatalf("flow %d rejected before limit", i)
+		}
+	}
+	if store.put("overflow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+		t.Fatal("flow store exceeded its limit")
+	}
+	if !store.put("after-expiry", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now.Add(2*time.Minute)) {
+		t.Fatal("expired flows were not pruned")
+	}
+}
+
+func TestOAuthFlowStoreAllowsOneCompletion(t *testing.T) {
+	now := time.Now()
+	var store oauthFlowStore
+	if !store.put("flow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+		t.Fatal("put failed")
+	}
+	if _, err := store.begin("flow", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.begin("flow", now); !errors.Is(err, errOAuthFlowActive) {
+		t.Fatalf("second completion error = %v", err)
+	}
+	store.release("flow")
+	if _, err := store.begin("flow", now); err != nil {
+		t.Fatalf("retry after release: %v", err)
 	}
 }
 

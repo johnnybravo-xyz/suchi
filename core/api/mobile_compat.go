@@ -16,8 +16,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 // wireVersionTag is the version this compat surface reports. It's
@@ -43,8 +41,7 @@ const suchiVersionTag = "0.1.0"
 // "suchi" field is unambiguous provenance for operators reading
 // diagnostics.
 func (s *Server) RemoteVersion(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
@@ -65,8 +62,7 @@ func (s *Server) RemoteVersion(w http.ResponseWriter, r *http.Request) {
 // Body is a bare integer (no JSON wrapping) — matches what mobile
 // clients expect from this endpoint shape.
 func (s *Server) NextASN(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	var maxASN sql.NullInt64

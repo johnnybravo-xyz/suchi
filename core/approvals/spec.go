@@ -8,7 +8,7 @@ import (
 
 // Spec is the parsed, normalized approval-flow definition stored in
 // approval_defs.spec_json. Keep the shape flat and self-describing —
-// this JSON is what admins POST via /api/approvals.
+// this JSON is what admins POST via /api/approvals/definitions.
 type Spec struct {
 	Start  string           `json:"start"`  // state key to enter on Start()
 	States map[string]State `json:"states"` // key -> node

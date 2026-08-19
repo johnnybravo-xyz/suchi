@@ -12,6 +12,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
 // Roles for document_correspondents. Kept as constants + a small
@@ -89,7 +90,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO correspondents(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, req.Name, slugFromName(req.Name), now, now); err != nil {
+		`, req.Name, slug.Make(req.Name), now, now); err != nil {
 			return err
 		}
 		if err := tx.QueryRowContext(r.Context(),
@@ -254,30 +255,6 @@ func validRole(r string) bool {
 		return true
 	}
 	return false
-}
-
-// slugFromName mirrors the importer's/fs-watch's slug convention so
-// upserts by name land the same row across producers.
-func slugFromName(name string) string {
-	var out []rune
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			out = append(out, r)
-		case r >= 'A' && r <= 'Z':
-			out = append(out, r+('a'-'A'))
-		default:
-			out = append(out, '-')
-		}
-	}
-	s := string(out)
-	for len(s) > 0 && s[0] == '-' {
-		s = s[1:]
-	}
-	for len(s) > 0 && s[len(s)-1] == '-' {
-		s = s[:len(s)-1]
-	}
-	return s
 }
 
 // Sentinels for the correspondent handlers — returned by the closure so

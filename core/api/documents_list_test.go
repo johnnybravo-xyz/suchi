@@ -1,7 +1,6 @@
 package api
 
-// GET /api/documents/ was missing since Phase 1. These tests pin the
-// load-bearing contract:
+// GET /api/documents/ contract:
 //   - anonymous → 401
 //   - happy-path returns seeded docs with DRF envelope
 //   - jd_category_id filter narrows

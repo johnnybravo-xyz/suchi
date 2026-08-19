@@ -11,9 +11,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
-	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
@@ -99,6 +99,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if err != nil || sniffed == "" {
 		sniffed = "application/octet-stream"
 	}
+	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
 	title := deriveTitle(header.Filename)
 	if title == "Untitled" && prevTitle != "" {
 		// Carry the predecessor title forward when the uploader didn't
@@ -106,8 +107,6 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// "resubmitted contract" uploads via mobile clients.
 		title = prevTitle
 	}
-	_ = jd.InboxCategoryID // reserved for future JD-refresh on version
-
 	// Category: default to the predecessor's category, not inbox — a
 	// version of a filed doc stays in the same category.
 	catID := prevJDCatID

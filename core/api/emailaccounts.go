@@ -41,19 +41,82 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 )
 
-// oauthFlowTTL bounds how long a device-code flow lives in memory
-// before the next lookup evicts it. Microsoft's own default is 15 min;
-// we clamp shorter because a stalled operator can always start over.
-const oauthFlowTTL = 5 * time.Minute
+const (
+	oauthFlowTTL  = 5 * time.Minute
+	maxOAuthFlows = 64
+)
 
 type oauthFlowEntry struct {
 	flow      *oauth.Flow
 	expiresAt time.Time
+	active    bool
 }
 
-// oauthFlows is process-global on purpose: /start and /complete run in
-// separate requests and must see the same map.
-var oauthFlows sync.Map
+var (
+	errOAuthFlowMissing = errors.New("oauth flow missing")
+	errOAuthFlowExpired = errors.New("oauth flow expired")
+	errOAuthFlowActive  = errors.New("oauth flow completion already active")
+)
+
+type oauthFlowStore struct {
+	mu      sync.Mutex
+	entries map[string]oauthFlowEntry
+}
+
+func (s *oauthFlowStore) put(handle string, entry oauthFlowEntry, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = make(map[string]oauthFlowEntry)
+	}
+	for key, candidate := range s.entries {
+		if !candidate.expiresAt.After(now) {
+			delete(s.entries, key)
+		}
+	}
+	if _, exists := s.entries[handle]; !exists && len(s.entries) >= maxOAuthFlows {
+		return false
+	}
+	s.entries[handle] = entry
+	return true
+}
+
+func (s *oauthFlowStore) begin(handle string, now time.Time) (oauthFlowEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[handle]
+	if !ok {
+		return oauthFlowEntry{}, errOAuthFlowMissing
+	}
+	if !entry.expiresAt.After(now) {
+		delete(s.entries, handle)
+		return oauthFlowEntry{}, errOAuthFlowExpired
+	}
+	if entry.active {
+		return oauthFlowEntry{}, errOAuthFlowActive
+	}
+	entry.active = true
+	s.entries[handle] = entry
+	return entry, nil
+}
+
+func (s *oauthFlowStore) release(handle string) {
+	s.mu.Lock()
+	entry, ok := s.entries[handle]
+	if ok {
+		entry.active = false
+		s.entries[handle] = entry
+	}
+	s.mu.Unlock()
+}
+
+func (s *oauthFlowStore) delete(handle string) {
+	s.mu.Lock()
+	delete(s.entries, handle)
+	s.mu.Unlock()
+}
+
+var oauthFlows oauthFlowStore
 
 // emailAccountInput is the wire shape for POST + PATCH bodies. Every
 // mutable field is optional; the plaintext Password is server-sealed on
@@ -622,20 +685,26 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 			"microsoft oauth client not configured")
 		return
 	}
-	flow, err := s.EmailwatchMSAL.DeviceCodeStart(r.Context())
-	if err != nil {
-		s.serverErr(w, "email_accounts.oauth.start", err)
-		return
-	}
 	handle, err := newFlowHandle()
 	if err != nil {
 		s.serverErr(w, "email_accounts.oauth.handle", err)
 		return
 	}
-	oauthFlows.Store(handle, oauthFlowEntry{
-		flow:      flow,
-		expiresAt: time.Now().Add(oauthFlowTTL),
-	})
+	now := time.Now()
+	entry := oauthFlowEntry{expiresAt: now.Add(oauthFlowTTL)}
+	if !oauthFlows.put(handle, entry, now) {
+		s.writeError(w, http.StatusTooManyRequests, "too_many_flows",
+			"too many Microsoft sign-ins are already pending")
+		return
+	}
+	flow, err := s.EmailwatchMSAL.DeviceCodeStart(r.Context())
+	if err != nil {
+		oauthFlows.delete(handle)
+		s.serverErr(w, "email_accounts.oauth.start", err)
+		return
+	}
+	entry.flow = flow
+	oauthFlows.put(handle, entry, now)
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"flow_handle":      handle,
 		"user_code":        flow.UserCode,
@@ -683,19 +752,23 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	raw, ok := oauthFlows.Load(body.FlowHandle)
-	if !ok {
+	entry, err := oauthFlows.begin(body.FlowHandle, time.Now())
+	if errors.Is(err, errOAuthFlowMissing) {
 		s.writeError(w, http.StatusNotFound, "flow_gone",
 			"flow_handle unknown or already consumed")
 		return
 	}
-	entry := raw.(oauthFlowEntry)
-	if time.Now().After(entry.expiresAt) {
-		oauthFlows.Delete(body.FlowHandle)
+	if errors.Is(err, errOAuthFlowExpired) {
 		s.writeError(w, http.StatusNotFound, "flow_expired",
 			"flow_handle expired; start a new flow")
 		return
 	}
+	if errors.Is(err, errOAuthFlowActive) {
+		s.writeError(w, http.StatusConflict, "flow_active",
+			"flow completion is already in progress")
+		return
+	}
+	defer oauthFlows.release(body.FlowHandle)
 
 	completed, err := s.EmailwatchMSAL.DeviceCodeComplete(r.Context(), entry.flow)
 	if err != nil {
@@ -733,7 +806,7 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 			s.serverErr(w, "email_accounts.oauth.patch", err)
 			return
 		}
-		oauthFlows.Delete(body.FlowHandle)
+		oauthFlows.delete(body.FlowHandle)
 		audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 			Actor:      auth.FromContext(r.Context()),
 			Action:     "email_account.oauth_complete",
@@ -757,7 +830,7 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 
 	// No account_id: return the sealed bytes so a follow-up POST create
 	// can consume them. Wire is JSON so we base64 the bytes.
-	oauthFlows.Delete(body.FlowHandle)
+	oauthFlows.delete(body.FlowHandle)
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                true,
 		"username":          completed.PreferredUsername,

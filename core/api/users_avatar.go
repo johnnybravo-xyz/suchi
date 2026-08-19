@@ -21,8 +21,6 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"image"
 	_ "image/jpeg" // registers jpeg decoder
@@ -138,7 +136,7 @@ func (s *Server) PostSelfAvatar(w http.ResponseWriter, r *http.Request) {
 	_ = s.DB.Read.QueryRowContext(r.Context(),
 		"SELECT COALESCE(avatar_sha, '') FROM users WHERE id = ?", p.UserID).Scan(&old)
 
-	if _, err := s.DB.Write.ExecContext(r.Context(),
+	if _, err := s.DB.ExecWrite(r.Context(),
 		"UPDATE users SET avatar_sha = ?, updated_at = unixepoch() WHERE id = ?",
 		ref.SHA256, p.UserID); err != nil {
 		s.serverErr(w, "avatar.write", err)
@@ -168,8 +166,7 @@ func (s *Server) PostSelfAvatar(w http.ResponseWriter, r *http.Request) {
 // max-age=31536000 + strong ETag lets browsers cache aggressively and
 // invalidate automatically on the next upload.
 func (s *Server) GetUserAvatar(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	rawID := r.PathValue("id")
@@ -215,10 +212,3 @@ func (s *Server) GetUserAvatar(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("avatar.copy", "err", err.Error())
 	}
 }
-
-// _ = hex.EncodeToString is a compile-time reference kept out of the
-// hot path — used indirectly via CAS.Put -> BlobRef.SHA256.
-var _ = hex.EncodeToString
-
-// _ = sha256.New — same reason; CAS handles the hashing.
-var _ = sha256.New

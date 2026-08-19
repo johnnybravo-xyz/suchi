@@ -22,7 +22,6 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
-	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
 func newBulkServer(t *testing.T) *Server {
@@ -34,9 +33,6 @@ func newBulkServer(t *testing.T) *Server {
 		Authz: authz.ACLAuthorizer{DB: d},
 	}
 }
-
-// silence "imported and not used" — db package pulled for future test helpers.
-var _ = (*db.DB)(nil)
 
 func doBulkEdit(t *testing.T, s *Server, body any, p *pluginapi.Principal) (int, BulkEditResponse) {
 	t.Helper()

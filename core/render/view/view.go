@@ -2,9 +2,8 @@
 // file tree at $DATA_DIR/rendered/... that mirrors documents onto
 // storage-path-templated symlink targets in the CAS.
 //
-// One design principle: **rendered files are regenerable**. They never
-// hold data the DB + CAS don't. A `rm -rf rendered/ && suchi reindex`
-// (post-Phase-2) reconstructs the whole tree.
+// Rendered files are regenerable and never hold data absent from the DB
+// and CAS.
 //
 // Mechanism: symlink on Unix. Copy-mode (for Windows and SMB shares
 // where symlinks are painful) is deferred until we ship a Windows

@@ -1,31 +1,4 @@
-// /api/automations/ — CRUD over the trigger→conditions→actions engine
-// in core/automations. Distinct from the routing/sign-off state
-// machines at /api/approvals/ (backed by core/approvals).
-//
-// POST body (create) — every field required:
-//
-//	{
-//	  "name": "route insurance",
-//	  "order": 10,
-//	  "enabled": true,
-//	  "triggers": [
-//	    { "type": 2, "filter_has_correspondent": 4 }
-//	  ],
-//	  "actions": [
-//	    { "type": "assign_tags", "params": {"tag_ids": [7]} },
-//	    { "type": "assign_owner", "params": {"owner_id": 2} }
-//	  ]
-//	}
-//
-// PATCH body (update) is sparse — send only the fields you want to
-// change. `{"enabled": false}` flips just the enabled flag; sending
-// `triggers`/`actions` replaces those child rows wholesale.
-//
-// Trigger `type` accepts the integer code
-// (1=consumption, 2=document_added, 3=document_updated) or the enum
-// string form ("consumption", "document_added", "document_updated").
-//
-// Admin-only for writes; any authed user can list/get.
+// Automation CRUD. Writes require an admin; PATCH is sparse.
 
 package api
 
@@ -36,13 +9,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 )
 
 func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	store := automations.New(s.DB)
@@ -59,8 +30,7 @@ func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -82,9 +52,7 @@ func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body automations.Automation
@@ -129,9 +97,7 @@ func (s *Server) writeDuplicateRule(w http.ResponseWriter, dup *automations.ErrD
 // name+order+enabled+triggers+actions. Triggers/actions replace their
 // child rows wholesale when their key is present.
 func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")
@@ -181,9 +147,7 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	id, ok := parsePathID(r, "id")

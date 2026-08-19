@@ -1,20 +1,5 @@
-// User profile — /api/users/me endpoints.
-//
-// Two-step rollout per the sweep-2 review:
-//
-//   1. display_name (this file). Trim, cap at 120 chars, plain text.
-//      Reject email + password changes with a clear error so the SPA
-//      knows the field lives, just isn't wired.
-//   2. Avatar upload + serve (follows in a later commit).
-//
-// email is deliberately gated: it's the local-auth identifier, and
-// changing it requires the current password + an audit event. Ship
-// it once the flow is designed, not on the same PR as the trivial
-// display_name change.
-//
-// /api/whoami now runs through Whoami here (was inlined in main.go)
-// so the shape is one type instead of a hand-formatted string. Old
-// fields (kind, user_id, email, role, authn_by) are unchanged.
+// User profile endpoints. Email changes stay disabled until they can
+// require the current password and emit an audit event.
 
 package api
 
@@ -36,11 +21,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 )
 
-// UserSelf is what GET /api/whoami and PATCH /api/users/me return.
-// Superset of the older whoami inline shape — new fields are
-// display_name (now surfaced), avatar_url (populated when
-// users.avatar_sha is set; empty until the avatar endpoint lands),
-// and capabilities (admin-granted per-user feature switches).
+// UserSelf is returned by GET /api/whoami and PATCH /api/users/me.
 type UserSelf struct {
 	Kind         string   `json:"kind"`
 	UserID       int64    `json:"user_id"`
@@ -168,7 +149,7 @@ type AdminUser struct {
 // row in users, ordered by id, wrapped in {results:[]} to match the
 // shape groups / group-members / tokens use.
 func (s *Server) ListUsers(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(),
@@ -210,7 +191,7 @@ func (s *Server) ListUsers(w http.ResponseWriter, r *http.Request) {
 // the corresponding revoke hooks run for each removed slug, and one
 // audit event is emitted per granted / revoked slug.
 func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

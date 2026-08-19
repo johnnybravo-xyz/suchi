@@ -37,18 +37,6 @@ func seedMember(t *testing.T, s *Server, id int64, capsJSON string) {
 	}
 }
 
-// setAdminCaps seeds an admin row so nobody has to remember the SQL.
-// The role=admin short-circuit means capabilities is ignored; kept
-// consistent for symmetry with seedMember.
-func setUserCaps(t *testing.T, s *Server, id int64, capsJSON string) {
-	t.Helper()
-	_, err := s.DB.Write.ExecContext(context.Background(),
-		`UPDATE users SET capabilities = ? WHERE id = ?`, capsJSON, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func usersMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
@@ -387,7 +375,3 @@ func TestWhoami_capabilities(t *testing.T) {
 		t.Fatalf("empty caps must serialize as []; got %s", rec.Body.String())
 	}
 }
-
-// Silence the setUserCaps helper if the file trims down later — it's
-// held in place because it may come back for a future test.
-var _ = setUserCaps

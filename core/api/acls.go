@@ -1,18 +1,4 @@
-// /api/acls/* — object-permission grants (rows in `object_acls`).
-//
-// Two shapes:
-//
-//   GET  /api/acls/{kind}/{id}                list grants on one object
-//   PUT  /api/acls/{kind}/{id}                upsert one grant (idempotent)
-//   DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
-//                                             revoke a specific grant
-//
-// The grant is per (object, principal) — re-PUT with different bits
-// overwrites, not accumulates. Admin-only writes; owner OR admin can
-// list.
-//
-// Enforcement wiring lives in the individual resource handlers
-// (batch 2 for documents). This endpoint just manages the rows.
+// Object-permission grant CRUD. Writes require an admin.
 
 package api
 
@@ -21,14 +7,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
-// ListGrants — GET /api/acls/{kind}/{id}.
 func (s *Server) ListGrants(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 	kind, id, ok := parseAclPath(w, s, r)
@@ -47,9 +30,8 @@ func (s *Server) ListGrants(w http.ResponseWriter, r *http.Request) {
 // Body: {"principal_kind":"user|group", "principal_id":N, "perm_bits":N}.
 // Idempotent upsert on the (object, principal) tuple.
 func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	kind, id, ok := parseAclPath(w, s, r)
@@ -89,9 +71,7 @@ func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGrant — DELETE /api/acls/{kind}/{id}?principal_kind=…&principal_id=…
 func (s *Server) DeleteGrant(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil || p.Role != "admin" {
-		s.writeError(w, http.StatusForbidden, "forbidden", "admin required")
+	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	kind, id, ok := parseAclPath(w, s, r)

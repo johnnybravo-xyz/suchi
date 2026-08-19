@@ -74,8 +74,7 @@ type JDCategory struct {
 // shared vocabulary; grants on the taxonomy layer would cover write
 // operations if we ever add them.
 func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
-	if auth.FromContext(r.Context()) == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 
