@@ -8,86 +8,68 @@ on:
 permissions:
   contents: read
 
+# One runner per job walks the full module / target list sequentially.
+# Fanning these out as matrices caused codeload.github.com to 429 on
+# parallel setup-go downloads (12 concurrent fetches of the same tarball).
+# Sequential in-runner loops keep total wall-clock similar while cutting
+# the setup-go download count from 12 to 3.
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        module:
-          - plugin-api
-          - core
-          - plugins/local-auth
-          - plugins/oidc
-          - distro
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-          cache-dependency-path: |
-            **/go.sum
-      - name: go vet
-        working-directory: ${{ matrix.module }}
-        run: go vet ./...
-      - name: go test
-        working-directory: ${{ matrix.module }}
-        # -race would be nice but modernc/sqlite is pure-Go by design;
-        # enabling CGO for race just to test SQLite defeats the point.
-        run: go test -count=1 -timeout 60s ./...
+          cache-dependency-path: '**/go.sum'
+      - run: make vet
+      - run: make test
 
-  staticcheck:
+  build-cross:
+    # Prove the code compiles for every shipping OS/arch. linux/amd64 is
+    # already exercised by the `test` job (which builds distro), so we
+    # skip it here.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.work
-      - run: go install honnef.co/go/tools/cmd/staticcheck@latest
-      - name: staticcheck across all modules
-        # go.work makes staticcheck see every module in one pass.
-        run: staticcheck ./plugin-api/... ./core/... ./plugins/local-auth/... ./plugins/oidc/... ./distro/...
-
-  gofmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
-      - name: gofmt -d must be empty
-        run: |
-          out=$(gofmt -d $(find . -type f -name '*.go' -not -path './*/vendor/*'))
-          if [ -n "$out" ]; then
-            echo "$out"
-            exit 1
-          fi
-
-  build-matrix:
-    # Cross-compile every OS/arch combo we ship. Cross-compile only — this
-    # job proves the code compiles for every target; images/signing happen
-    # in release.yml.
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux,   goarch: amd64 }
-          - { goos: linux,   goarch: arm64 }
-          - { goos: darwin,  goarch: amd64 }
-          - { goos: darwin,  goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
-      - name: build suchi
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          cache-dependency-path: '**/go.sum'
+      - name: cross-compile
         working-directory: distro
         run: |
-          go build -trimpath -ldflags="-s -w" -o /tmp/suchi ./cmd/suchi
-          ls -la /tmp/suchi
+          set -e
+          targets="linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+          for t in $targets; do
+            export GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0
+            echo "::group::$GOOS/$GOARCH"
+            go build -trimpath -ldflags="-s -w" -o /tmp/suchi-$GOOS-$GOARCH ./cmd/suchi
+            ls -la /tmp/suchi-$GOOS-$GOARCH
+            echo "::endgroup::"
+          done
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: make ui-check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+      - run: make fmt-check
+      - name: OpenAPI index is current
+        run: make schema-check
+      - run: make lint

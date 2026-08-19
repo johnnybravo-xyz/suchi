@@ -33,21 +33,35 @@ jobs:
   # -------------------------------------------------------------------
   # notes: pull the section for this version out of CHANGELOG.md so
   # the release page carries the same prose as the file. Prerelease
-  # tags (vX.Y.Z-rc.N, vX.Y.Z-beta.N) also mark the release as
-  # prerelease + skip the `latest` docker tag.
+  # Prereleases skip `latest`; beta and RC releases receive their own
+  # moving channel tags.
   # -------------------------------------------------------------------
   notes:
     runs-on: ubuntu-latest
     outputs:
       body:       ${{ steps.extract.outputs.body }}
       prerelease: ${{ steps.extract.outputs.prerelease }}
+      channel:    ${{ steps.extract.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
+      - name: verify shipped Microsoft OAuth registration
+        if: inputs.publish == 'true'
+        run: |
+          if grep -q 'DefaultClientID = "00000000-0000-0000-0000-000000000000"' \
+            core/ingest/emailwatch/oauth/microsoft.go; then
+            echo '::error::Register the shipped Entra app and replace DefaultClientID before releasing.'
+            exit 1
+          fi
       - id: extract
         run: |
           set -euo pipefail
           ver=${GITHUB_REF_NAME#v}
           echo "prerelease=$([[ "$ver" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          case "$ver" in
+            *-beta*) echo "channel=beta" >> "$GITHUB_OUTPUT" ;;
+            *-rc*)   echo "channel=rc" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "channel=stable" >> "$GITHUB_OUTPUT" ;;
+          esac
 
           # Pull the section matching this version from CHANGELOG.md.
           # Falls through to the [Unreleased] block if a version-named
@@ -68,22 +82,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------
-  # images: build slim + full for linux/amd64,arm64. Push to ghcr with
-  # both the version tag and the `latest`/`latest-slim` alias (skipped
-  # on prereleases). Sign with cosign (keyless via OIDC). Generate SBOM
-  # in both SPDX and CycloneDX formats.
+  # Build and sign both image variants for linux/amd64 and linux/arm64.
   # -------------------------------------------------------------------
   images:
     runs-on: ubuntu-latest
     needs: notes
     outputs:
-      slim_digest: ${{ steps.slim.outputs.digest }}
+      standard_digest: ${{ steps.standard.outputs.digest }}
       full_digest: ${{ steps.full.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: inputs.publish == 'true'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -91,38 +103,41 @@ jobs:
       - uses: sigstore/cosign-installer@v3
       - uses: anchore/sbom-action/download-syft@v0
 
-      # ---- slim ------------------------------------------------------
-      - id: slim_tags
+      # The standard image owns the unsuffixed tags.
+      - id: standard_tags
         run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-slim"
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-slim"
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.channel }}"
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
-      - name: build + push slim
-        id: slim
+      - name: build + push standard
+        id: standard
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          target: slim
+          target: standard
           platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: mode=max      # SLSA provenance attestation
-          sbom: true                # buildx-native SBOM
-          tags: ${{ steps.slim_tags.outputs.tags }}
+          push: ${{ inputs.publish == 'true' }}
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.standard_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=AGPL-3.0
 
-      # ---- full ------------------------------------------------------
       - id: full_tags
         run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-full"
           if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-full"
+          elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
+            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.channel }}-full"
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
@@ -134,7 +149,7 @@ jobs:
           file: Dockerfile
           target: full
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
           tags: ${{ steps.full_tags.outputs.tags }}
@@ -143,25 +158,26 @@ jobs:
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=AGPL-3.0
 
-      # ---- sign ------------------------------------------------------
       - name: cosign sign images (keyless)
+        if: inputs.publish == 'true'
         run: |
           cosign sign --yes \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.slim.outputs.digest }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.standard.outputs.digest }}
           cosign sign --yes \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.full.outputs.digest }}
 
-      # ---- SBOMs -----------------------------------------------------
       - name: SBOM (SPDX + CycloneDX)
+        if: inputs.publish == 'true'
         run: |
-          slim=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-slim
-          full=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-          syft "$slim" -o spdx-json --file suchi-slim.spdx.json
-          syft "$slim" -o cyclonedx-json --file suchi-slim.cyclonedx.json
+          standard=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          full=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-full
+          syft "$standard" -o spdx-json --file suchi-standard.spdx.json
+          syft "$standard" -o cyclonedx-json --file suchi-standard.cyclonedx.json
           syft "$full" -o spdx-json --file suchi-full.spdx.json
           syft "$full" -o cyclonedx-json --file suchi-full.cyclonedx.json
 
       - uses: actions/upload-artifact@v4
+        if: inputs.publish == 'true'
         with:
           name: sboms
           path: suchi-*.json
@@ -214,13 +230,13 @@ jobs:
   # -------------------------------------------------------------------
   # anydoc-binaries: build the anydoc CLI from firecrawl/anydoc for the
   # bare-metal shipping matrix and attach the tarballs to the release.
-  # The Dockerfile already builds this for the container images (slim
+  # The Dockerfile already builds this for the container images (standard
   # + full both COPY --from=anydoc-build) — this job produces the same
   # binary as a standalone artifact so users installing suchi from the
   # Go release binary can grab a matching anydoc.
   #
-  # ANYDOC_TAG is grepped from the Dockerfile ARG so there is one
-  # pin-of-record; hack/pin-bumper.sh updates it, both stay in sync.
+  # The anydoc tag, audited commit, and build image are grepped from the
+  # Dockerfile so the container and standalone artifacts share one pin record.
   # -------------------------------------------------------------------
   anydoc-binaries:
     runs-on: ubuntu-latest
@@ -236,19 +252,25 @@ jobs:
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
-      - name: read ANYDOC_TAG from Dockerfile
+      - name: read anydoc pins from Dockerfile
         id: pin
         run: |
           set -euo pipefail
           tag=$(grep -oP 'ARG ANYDOC_TAG=\K[^\s]+' Dockerfile)
-          if [ -z "$tag" ]; then
-            echo "could not find ANYDOC_TAG in Dockerfile" >&2
+          commit=$(grep -oP 'ARG ANYDOC_COMMIT=\K[^\s]+' Dockerfile)
+          rust_image=$(grep -oP 'ARG RUST_IMAGE=\K[^\s]+' Dockerfile)
+          if [ -z "$tag" ] || [ -z "$commit" ] || [ -z "$rust_image" ]; then
+            echo "could not find anydoc pins in Dockerfile" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "rust_image=$rust_image" >> "$GITHUB_OUTPUT"
       - name: build anydoc for ${{ matrix.platform }}
         env:
           ANYDOC_TAG: ${{ steps.pin.outputs.tag }}
+          ANYDOC_COMMIT: ${{ steps.pin.outputs.commit }}
+          RUST_IMAGE: ${{ steps.pin.outputs.rust_image }}
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
@@ -259,11 +281,16 @@ jobs:
           docker run --rm --platform ${{ matrix.platform }} \
             -v "$PWD/out:/host/out" \
             -e ANYDOC_TAG \
-            rust:1-alpine sh -c '
+            -e ANYDOC_COMMIT \
+            "$RUST_IMAGE" sh -c '
               set -eux
               apk add --no-cache git musl-dev pkgconfig
               mkdir /src && cd /src
-              git clone --depth 1 --branch "$ANYDOC_TAG" https://github.com/firecrawl/anydoc.git .
+              git init .
+              git remote add origin https://github.com/firecrawl/anydoc.git
+              git fetch --depth 1 origin "$ANYDOC_COMMIT"
+              git checkout --detach FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "$ANYDOC_COMMIT"
               cargo build --release --example convert
               strip target/release/examples/convert
               cp target/release/examples/convert /host/out/anydoc
@@ -274,13 +301,11 @@ jobs:
           # MIT binary.
           cat > out/NOTICE <<EOF
           This anydoc build is redistributed from firecrawl/anydoc
-          ${ANYDOC_TAG} under the MIT license. Source and full license
+          ${ANYDOC_TAG} (${ANYDOC_COMMIT}) under the MIT license. Source and full license
           text: https://github.com/firecrawl/anydoc
           EOF
           # Package tarball; version stamp comes from the release ref.
-          ref="${GITHUB_REF_NAME}"
-          [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && ref="dispatch-${GITHUB_SHA::7}"
-          bin="anydoc-${ref}-linux-${ARCH}"
+          bin="anydoc-${GITHUB_REF_NAME}-linux-${ARCH}"
           mkdir -p "$RUNNER_TEMP/$bin"
           mv out/* "$RUNNER_TEMP/$bin/"
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/${bin}.tar.gz" "$bin"
@@ -340,8 +365,8 @@ jobs:
             /tmp/artifacts/anydoc-*.tar.gz
             /tmp/artifacts/SHA256SUMS
             /tmp/artifacts/SHA256SUMS.cosign.bundle
-            /tmp/artifacts/suchi-slim.spdx.json
-            /tmp/artifacts/suchi-slim.cyclonedx.json
+            /tmp/artifacts/suchi-standard.spdx.json
+            /tmp/artifacts/suchi-standard.cyclonedx.json
             /tmp/artifacts/suchi-full.spdx.json
             /tmp/artifacts/suchi-full.cyclonedx.json
 

@@ -1,0 +1,22 @@
+name: suchi
+
+services:
+  suchi:
+    image: ${SUCHI_IMAGE:-ghcr.io/johnnybravo-xyz/suchi:beta}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+    ports:
+      - "${SUCHI_PORT:-8000}:8000"
+    volumes:
+      - suchi-data:/data
+
+volumes:
+  suchi-data:

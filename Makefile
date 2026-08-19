@@ -1,7 +1,8 @@
-.PHONY: build test vet lint fmt tidy run clean smoke install-hooks ui ui-clean bench-check release
+.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke install-hooks ui ui-check ui-clean schema schema-check bench-check release
 
 BIN := $(PWD)/dist/suchi
-MODULES := plugin-api core plugins/local-auth plugins/oidc distro
+MODULES := plugin-api core plugins/local-auth plugins/oidc plugins/llm-classifier distro hack/emlfixtures hack/transcript
+STATICCHECK_VERSION := v0.7.0
 
 build:
 	@mkdir -p dist
@@ -15,14 +16,29 @@ vet:
 	@for m in $(MODULES); do echo "=== vet $$m ==="; ( cd $$m && go vet ./... ) || exit 1; done
 
 lint:
-	@command -v staticcheck >/dev/null || go install honnef.co/go/tools/cmd/staticcheck@latest
-	staticcheck ./plugin-api/... ./core/... ./plugins/local-auth/... ./plugins/oidc/... ./distro/...
+	@tool="$$(command -v staticcheck || printf '%s/bin/staticcheck' "$$(go env GOPATH)")"; \
+	  test -x "$$tool" || go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
+	  for m in $(MODULES); do echo "=== lint $$m ==="; \
+	    ( cd "$$m" && "$$tool" ./... ) || exit 1; \
+	  done
 
 fmt:
 	gofmt -w $$(find . -type f -name '*.go' -not -path './*/vendor/*')
 
+fmt-check:
+	@test -z "$$(gofmt -l $$(find . -type f -name '*.go' -not -path './*/vendor/*'))" || \
+	  (gofmt -l $$(find . -type f -name '*.go' -not -path './*/vendor/*'); exit 1)
+
 tidy:
 	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd $$m && go mod tidy ) || exit 1; done
+
+schema:
+	cd core && go run ./cmd/openapi-sync
+
+schema-check:
+	cd core && go run ./cmd/openapi-sync --check
+
+check: fmt-check vet test lint schema-check ui-check
 
 # Convenience: build + smoke-test the running server.
 smoke: build
@@ -67,9 +83,15 @@ ui:
 	@cp -r ui/dist core/ui/spa/dist
 	@echo "embedded $$(du -sh core/ui/spa/dist | cut -f1) — commit core/ui/spa/dist"
 
-# Wipe the embedded SPA (rebuilt on next `make ui`). The Go build
-# still works after this — spa.go returns a 503 with a "run make ui"
-# hint if the embed tree is empty.
+ui-check:
+	@cd ui && \
+	  if command -v bun >/dev/null 2>&1; then \
+	    bun install --frozen-lockfile && bun run check && bun test && bun run build; \
+	  else \
+	    npm ci && npm run check && npm test && npm run build; \
+	  fi
+	@diff -qr ui/dist core/ui/spa/dist
+
 ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
 

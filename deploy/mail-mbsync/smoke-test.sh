@@ -95,7 +95,7 @@ echo
 echo "== drop 9 synthetic fixtures =="
 go run ../../hack/emlfixtures -out ./ingest 2>&1 | tail -1
 
-# Also drop a HEIC fixture when the host has ImageMagick — the slim
+# Also drop a HEIC fixture when the host has ImageMagick — the standard
 # image ships imagemagick-heic and the HEIC route feeds converted PDFs
 # into OCR, so exercising it here proves that whole path end-to-end.
 # When magick isn't on the host we skip and drop the HEIC assertion.

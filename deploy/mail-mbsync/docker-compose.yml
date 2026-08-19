@@ -47,8 +47,8 @@ services:
   suchi:
     build:
       context: ../..
-      target: slim
-    image: suchi:local-slim
+      target: standard
+    image: suchi:local-standard
     container_name: suchi
     restart: unless-stopped
     depends_on:

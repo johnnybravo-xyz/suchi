@@ -1,23 +1,6 @@
 name: smoke
 
-# End-to-end validation of both Docker image targets against real
-# binaries. Two lanes (matrix):
-#
-#   full  — debian-slim + ocrmypdf; OCR_ENGINE=ocrmypdf.
-#           Tests the classic path + searchable-PDF archive.
-#   slim  — alpine + tessocr (pdftoppm + tesseract); OCR_ENGINE=tesseract.
-#           Tests the lightweight path; no archive_blob expected.
-#
-# Each lane:
-#   1) Builds its Dockerfile target.
-#   2) Boots the container.
-#   3) Uploads a text-native PDF; asserts `pdftotext` extraction worked.
-#   4) Uploads a scanned-PDF (rasterized via ghostscript); asserts the
-#      OCR engine extracted the seed word.
-#
-# Unit tests already cover the sandbox contract with fake binaries;
-# these are the only jobs that catch a wrapper-vs-real-binary mismatch
-# and — for the slim lane — a musl-vs-glibc surprise.
+# End-to-end validation of the standard and full images against real tools.
 
 on:
   push:
@@ -39,8 +22,8 @@ jobs:
           - lane: full
             target: full
             port: "8001"
-          - lane: slim
-            target: slim
+          - lane: standard
+            target: standard
             port: "8002"
     env:
       # Each lane binds a different host port so the matrix jobs can
@@ -100,6 +83,11 @@ jobs:
           done
           curl -sf http://127.0.0.1:$HOST_PORT/readyz | tee /tmp/readyz.json
 
+      - name: Assert shared format tools
+        run: |
+          docker exec suchi-smoke-$LANE sh -c \
+            'command -v anydoc && command -v djvutxt && command -v msgconvert'
+
       - name: Bootstrap admin via /setup
         run: |
           TOKEN=$(docker logs suchi-smoke-$LANE 2>&1 | grep 'token_minted' \
@@ -122,7 +110,7 @@ jobs:
               | grep -oP '"token":"\K[^"]+')
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 
-      - name: Upload text-native + scanned PDFs
+      - name: Upload PDF and Outlook fixtures
         run: |
           for f in text-native scanned; do
               curl -sf -X POST "http://127.0.0.1:$HOST_PORT/api/documents/" \
@@ -132,18 +120,23 @@ jobs:
               echo "== upload $f =="; cat /tmp/upload-$f.json; echo
           done
 
-          # Wait until BOTH docs (id=1, id=2) show up under state=done.
+          curl -sf -X POST "http://127.0.0.1:$HOST_PORT/api/documents/" \
+              -H "Authorization: Token $API_TOKEN" \
+              -F "document=@core/pipeline/msg/testdata/plain_unsent.msg" \
+              -o /tmp/upload-msg.json
+          echo "== upload msg =="; cat /tmp/upload-msg.json; echo
+
           for i in $(seq 1 120); do
               CNT=$(curl -sf "http://127.0.0.1:$HOST_PORT/api/tasks/?state=done" \
                   -H "Authorization: Token $API_TOKEN" \
                   | python3 -c "import json,sys; d=json.load(sys.stdin); r=d.get('results') or []; print(len([x for x in r if x.get('kind')=='post-ingest']))")
-              if [ "$CNT" -ge 2 ]; then
-                  echo "both post-ingest jobs done on attempt $i"
+              if [ "$CNT" -ge 3 ]; then
+                  echo "all post-ingest jobs done on attempt $i"
                   break
               fi
               sleep 1
           done
-          if [ "$CNT" -lt 2 ]; then
+          if [ "$CNT" -lt 3 ]; then
               echo "post-ingest jobs incomplete (done=$CNT)"
               docker logs suchi-smoke-$LANE | tail -80
               exit 1
@@ -170,7 +163,6 @@ jobs:
               docker logs suchi-smoke-$LANE | tail -80
               exit 1
           fi
-          # ocrmypdf lane must produce an archive blob; tessocr lane must not.
           HAS_ARCHIVE=$(python3 -c "import json; d=json.load(open('/tmp/doc2.json')); print('1' if d.get('archive_blob') else '0')")
           case "$LANE" in
             full)
@@ -178,12 +170,20 @@ jobs:
                   echo "full lane: expected archive_blob to be present after ocrmypdf"
                   exit 1
               fi ;;
-            slim)
+            standard)
               if [ "$HAS_ARCHIVE" != "0" ]; then
-                  echo "slim lane: tessocr should NOT produce archive_blob"
+                  echo "standard lane: tessocr should NOT produce archive_blob"
                   exit 1
               fi ;;
           esac
+
+      - name: Assert Outlook MSG extraction
+        run: |
+          curl -sf "http://127.0.0.1:$HOST_PORT/api/documents/3" \
+              -H "Authorization: Token $API_TOKEN" -o /tmp/doc3.json
+          echo "== doc 3 =="; cat /tmp/doc3.json; echo
+          python3 -c "import json,sys; c=(json.load(open('/tmp/doc3.json')).get('content') or '').lower(); sys.exit(0 if 'body is in plain text' in c else 1)" \
+            || (echo "Outlook MSG extraction failed"; docker logs suchi-smoke-$LANE | tail -80; exit 1)
 
       - name: Sanity-check list endpoints return arrays
         run: |

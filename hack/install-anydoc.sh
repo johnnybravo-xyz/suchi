@@ -11,7 +11,7 @@
 #   --dry-run  print what would be downloaded and exit 0
 #   --version <tag>  pin a specific release (default: latest)
 #
-# Docker users don't need this — anydoc is baked into both slim and
+# Docker users don't need this — anydoc is baked into both standard and
 # full images (see Dockerfile:anydoc-build). This script is for bare-
 # metal / go-run installs.
 

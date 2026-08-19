@@ -1,127 +1,102 @@
-# suchi — two-stage build with -slim and full targets.
-#
-# slim: alpine + qpdf + poppler-utils + tesseract + anydoc. Covers the
-#   entire PDF ingest path (text-native shortcut, tessocr scanned path,
-#   qpdf normalization, ZUGFeRD invoice extraction) plus office document
-#   text extraction (docx, xlsx, pptx, odt, rtf, csv). No searchable-PDF
-#   archive on scanned PDFs — that comes with ocrmypdf, which lives in
-#   the full image. Approx ~80 MB.
-#
-# full: adds ocrmypdf (searchable-PDF archives = text-selectable scanned
-#   PDFs) + djvulibre-bin (DjVu text extraction) + msgconvert (Outlook
-#   .msg → .eml). Approx ~400 MB.
+# `standard` supports every format; `full` adds OCRmyPDF archives.
 
-# ---------- anydoc build stage (Phase 3.5) ----------
-# Firecrawl publishes anydoc as a Rust library on crates.io + Node/Python
-# bindings, but not as a standalone CLI binary. The CLI lives in the
-# repo as `examples/convert.rs`. We compile the example as a static musl
-# binary and rename it "anydoc" — same pattern the pin-bumper script
-# understands. Approx ~10 MB output; both slim and full copy it in.
-#
-# Interface stability CAVEAT: examples/ is not upstream-guaranteed as a
-# stable CLI. Argv shape is `<file> [-f <fmt>] [-o <out>] [--assets dir]`
-# as of v0.1.3; if a future bump changes this shape, the extractor in
-# core/pipeline/anydoc/ needs a matching update. `hack/pin-bumper.sh`
-# calls this out at every bump.
-#
-# Bump procedure:
-#   1. hack/pin-bumper.sh reports "BUMP suggested: vX → vY"
-#   2. Read the upstream compare link it prints; scan for argv changes
-#      in examples/convert.rs
-#   3. Update ANYDOC_TAG below
-#   4. Rebuild slim; sanity-check `docker run --rm suchi:slim doctor`
-#      lists anydoc, and a smoke docx ingests to non-empty content
-FROM rust:1-alpine AS anydoc-build
-# ANYDOC_TAG is the single source of truth for both this image build
-# AND the standalone binary the release workflow attaches to GitHub
-# Releases. The workflow greps this ARG line so slim / full / bare-
-# metal never drift. Bump procedure: change the value here, run
-# hack/pin-bumper.sh (which understands this ARG pattern), commit.
+ARG RUST_IMAGE=rust:1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
+ARG ALPINE_IMAGE=alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+ARG GO_IMAGE=golang:1.26-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+
+FROM ${RUST_IMAGE} AS anydoc-build
 ARG ANYDOC_TAG=v0.1.3
+ARG ANYDOC_COMMIT=6eac2b2774df8707d83a3d8b19223d7718469254
 RUN apk add --no-cache git musl-dev pkgconfig
 WORKDIR /src
-RUN git clone --depth 1 --branch "${ANYDOC_TAG}" \
-      https://github.com/firecrawl/anydoc.git .
-# rust:1-alpine's toolchain is musl-native, so the default target is
-# already static musl — no --target flag needed. LTO + strip via the
-# release profile in anydoc's own Cargo.toml.
+RUN git init . && \
+    git remote add origin https://github.com/firecrawl/anydoc.git && \
+    git fetch --depth 1 origin "${ANYDOC_COMMIT}" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "${ANYDOC_COMMIT}"
 RUN cargo build --release --example convert
 RUN cp target/release/examples/convert /out-anydoc && strip /out-anydoc
 
-# ---------- build stage ----------
-FROM golang:1.26-alpine AS build
+FROM ${ALPINE_IMAGE} AS msgconvert-build
+ARG MSGCONVERT_VERSION=0.921
+ARG MSGCONVERT_SHA256=fb4abeea14cda51c1e60bc211cf9521bbbaae74b84118ca6d58f0a7223680388
+RUN apk add --no-cache ca-certificates
+WORKDIR /src
+RUN wget -q -O source.tar.gz \
+      "https://cpan.metacpan.org/authors/id/M/MV/MVZ/Email-Outlook-Message-${MSGCONVERT_VERSION}.tar.gz" && \
+    echo "${MSGCONVERT_SHA256}  source.tar.gz" | sha256sum -c - && \
+    tar -xzf source.tar.gz && \
+    mkdir -p /out && \
+    cp -R "Email-Outlook-Message-${MSGCONVERT_VERSION}/lib/Email/Outlook" /out/Outlook
+
+FROM ${GO_IMAGE} AS build
 WORKDIR /src
 COPY go.work go.work.sum* ./
 COPY plugin-api plugin-api
 COPY core core
 COPY plugins plugins
 COPY distro distro
-# hack/ holds local dev tools referenced from go.work (fixture generator,
-# ingest driver). Not built into the binary — just needs to be present so
-# `go build` can load the workspace without complaining about missing modules.
 COPY hack hack
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     cd distro && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/suchi ./cmd/suchi
 
-# ---------- slim stage (PDF pipeline: tessocr, not ocrmypdf) ----------
-# Alpine so we can apt-install the four binaries the PDF chain needs
-# (qpdf, pdftotext, pdftoppm, tesseract) at ~70 MB total. musl-safe:
-# the Go binary is built CGO_ENABLED=0 so it runs identically under
-# musl and glibc.
-FROM alpine:3 AS slim
+FROM ${DEBIAN_IMAGE} AS full
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      djvulibre-bin \
+      imagemagick \
+      libemail-address-perl \
+      libemail-outlook-message-perl \
+      libheif1 \
+      ocrmypdf \
+      poppler-utils \
+      qpdf \
+      tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<policy domain="coder" rights="none" pattern="HEIF" />||g' /etc/ImageMagick-6/policy.xml || true
+RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi && \
+    mkdir -p /data && chown 65532:65532 /data
+COPY --from=build /out/suchi /usr/local/bin/suchi
+COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
+RUN ln -s suchi /usr/local/bin/suchi-mcp
+USER 65532:65532
+EXPOSE 8000
+VOLUME ["/data"]
+ENV DATA_DIR=/data LISTEN_ADDR=:8000 OCR_ENGINE=ocrmypdf
+ENTRYPOINT ["/usr/local/bin/suchi"]
+CMD ["serve"]
+HEALTHCHECK --interval=30s --retries=3 CMD ["/usr/local/bin/suchi", "healthcheck"]
+
+# Keep this last so an unqualified `docker build .` produces the default image.
+FROM ${ALPINE_IMAGE} AS standard
 RUN apk add --no-cache \
       ca-certificates \
-      qpdf \
-      poppler-utils \
-      tesseract-ocr \
-      tesseract-ocr-data-eng \
+      djvulibre \
       imagemagick \
-      imagemagick-heic
+      imagemagick-heic \
+      perl \
+      perl-email-mime \
+      perl-io-string \
+      perl-ole-storage_lite \
+      poppler-utils \
+      qpdf \
+      tesseract-ocr \
+      tesseract-ocr-data-eng
 RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 COPY --from=build /out/suchi /usr/local/bin/suchi
 COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
-# Argv[0] dispatch: `suchi-mcp` invokes the MCP subcommand. Ships the
-# ergonomic name for local agent configs (`command: "suchi-mcp"`).
+COPY --from=msgconvert-build /out/Outlook /usr/local/share/perl5/site_perl/Email/Outlook
+COPY packaging/msgconvert/msgconvert /usr/local/bin/msgconvert
+COPY packaging/msgconvert/NOTICE /usr/local/share/doc/suchi-msgconvert/NOTICE
 RUN ln -s suchi /usr/local/bin/suchi-mcp
 USER 65532:65532
 EXPOSE 8000
 VOLUME ["/data"]
 ENV DATA_DIR=/data LISTEN_ADDR=:8000 OCR_ENGINE=tesseract
-ENTRYPOINT ["/usr/local/bin/suchi"]
-CMD ["serve"]
-HEALTHCHECK --interval=30s --retries=3 CMD ["/usr/local/bin/suchi", "healthcheck"]
-
-# ---------- full stage (adds OCR + office deps) ----------
-# Debian slim so we can apt-install tesseract/qpdf/etc. Still one process.
-FROM debian:bookworm-slim AS full
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      tesseract-ocr \
-      ocrmypdf \
-      qpdf \
-      poppler-utils \
-      djvulibre-bin \
-      imagemagick \
-      libheif1 \
-      libemail-outlook-message-perl \
-      ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-# Debian's ImageMagick policy.xml blocks HEIC by default. Enable it —
-# we only need HEIC decode for photograph-of-document ingestion.
-RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<policy domain="coder" rights="none" pattern="HEIF" />||g' /etc/ImageMagick-6/policy.xml || true
-RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi
-COPY --from=build /out/suchi /usr/local/bin/suchi
-COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
-# Argv[0] dispatch: `suchi-mcp` invokes the MCP subcommand. Ships the
-# ergonomic name for local agent configs (`command: "suchi-mcp"`).
-RUN ln -s suchi /usr/local/bin/suchi-mcp
-RUN mkdir -p /data && chown 65532:65532 /data
-USER 65532:65532
-EXPOSE 8000
-VOLUME ["/data"]
-ENV DATA_DIR=/data LISTEN_ADDR=:8000 OCR_ENGINE=ocrmypdf
 ENTRYPOINT ["/usr/local/bin/suchi"]
 CMD ["serve"]
 HEALTHCHECK --interval=30s --retries=3 CMD ["/usr/local/bin/suchi", "healthcheck"]

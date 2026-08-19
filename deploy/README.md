@@ -7,11 +7,12 @@ and storage locations before you paste them into production.
 
 | Directory | What it is |
 | --------- | ---------- |
+| [`compose.yaml`](../compose.yaml) | Minimal single-container Compose deployment. Start here when you want editable mounts, networks, or image pins. |
 | [`systemd/`](systemd/suchi.service) | Unit file for a bare-binary install on a Linux host. Runs suchi as an unprivileged user with the usual defense-in-depth sandboxing. |
 | [`caddy/`](caddy/Caddyfile) | Reverse-proxy snippet for Caddy. Auto-TLS via Let's Encrypt when the site block uses a real hostname. |
 | [`nginx/`](nginx/suchi.conf) | Server block for nginx. Assumes certificates already exist at the paths shown — provision them however you already do. |
-| [`traefik/`](traefik/suchi.yml) | Dynamic-config snippet for Traefik. Assumes an existing `websecure` entrypoint and cert resolver. |
-| [`k8s/`](k8s/suchi.yaml) | Single-replica Deployment + PVC + ClusterIP Service. **SQLite is single-writer** — do not scale replicas up. |
+| [`traefik/`](traefik/) | Dynamic-config snippet for Traefik. Assumes an existing `websecure` entrypoint and cert resolver. |
+| [`k8s/`](k8s/) | Single-replica Deployment + PVC + ClusterIP Service. **SQLite is single-writer** — do not scale replicas up. |
 | [`mail-mbsync/`](mail-mbsync/) | The mail-intake sidecar reference deployment (Phase 2). Docker-compose flavor. |
 
 All shapes assume the same two env vars are set on suchi:

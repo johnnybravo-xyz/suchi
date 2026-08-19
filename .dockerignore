@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.codex
+dist
+ui
+docs
+deploy
+hooks
+hack/bench/results
+hack/bench/tools
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+data
+tmp

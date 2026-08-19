@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # hack/smoke-anydoc-docx.sh — end-to-end verify that a docx ingest hits
-# anydoc and lands non-empty content. Builds the slim image, boots a
+# anydoc and lands non-empty content. Builds the standard image, boots a
 # throwaway container against /tmp/suchi-smoke-anydoc, bootstraps the
 # admin, uploads a hand-crafted minimal docx, waits for post-ingest,
 # and asserts documents.content is non-empty and contains the marker
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="${IMAGE:-suchi:slim}"
+IMAGE="${IMAGE:-suchi:standard}"
 DATA_DIR="${DATA_DIR:-/tmp/suchi-smoke-anydoc}"
 PORT="${PORT:-8765}"
 BASE="http://127.0.0.1:$PORT"
@@ -24,7 +24,7 @@ MARKER="RUSTIC_FLAMINGO_QUANTUM_TROMBONE"  # unlikely-to-hit-elsewhere marker
 trap 'docker rm -f suchi-smoke-anydoc >/dev/null 2>&1 || true' EXIT
 
 echo "== build =="
-docker build --target slim -t "$IMAGE" "$ROOT"
+docker build --target standard -t "$IMAGE" "$ROOT"
 
 echo
 echo "== fresh DATA_DIR =="
@@ -32,7 +32,7 @@ rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
 echo
-echo "== boot slim =="
+echo "== boot standard =="
 docker rm -f suchi-smoke-anydoc >/dev/null 2>&1 || true
 # Run as the host UID so writes to the bind-mounted DATA_DIR succeed.
 # The image bakes UID 65532 for named volumes; host bind-mounts don't
@@ -46,7 +46,7 @@ docker run -d --name suchi-smoke-anydoc \
   -v "$DATA_DIR:/data" \
   "$IMAGE" >/dev/null
 
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -sf "$BASE/healthz" >/dev/null; then break; fi
   sleep 0.5
 done
@@ -151,7 +151,7 @@ fi
 
 echo
 echo "== wait for post-ingest to drain =="
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   # Check the jobs table via the API — nothing pending on this doc?
   PENDING=$(curl -sf "$BASE/api/tasks/?doc_id=$DOC_ID&state=pending" \
     -H "Authorization: Token $API_TOKEN" | grep -c '"kind"' || true)
