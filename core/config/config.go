@@ -146,27 +146,6 @@ type Config struct {
 	// docs/preconsume.mdx and core/pipeline/preconsume for the contract.
 	PreConsumeScript string
 
-	// Mail-setup wizard admin UI. Leave MailSetupEnvPath empty (default)
-	// to disable the wizard entirely — the admin route 404s.
-	//
-	//   MailSetupEnvPath    — writable path to config/.env that the
-	//     wizard rewrites when an admin submits the form. Typically
-	//     bind-mounted from the compose recipe's ./config/.env.
-	//   MailSetupContainer  — name of the mbsync container to kick via
-	//     docker.sock after a successful rewrite. Empty disables the
-	//     restart step — the wizard still writes the file and the
-	//     operator restarts manually.
-	//   MailSetupDockerSock — Docker Engine socket for restart POSTs.
-	//     Default "/var/run/docker.sock". Ignored when MailSetupContainer
-	//     is empty.
-	//
-	// Security note: writing to MailSetupEnvPath overwrites credentials
-	// on disk. Restart requires the socket to be bind-mounted into the
-	// suchi container. Both are opt-in and admin-only.
-	MailSetupEnvPath    string
-	MailSetupContainer  string
-	MailSetupDockerSock string
-
 	// DemoMode toggles public-showcase behaviour. When set:
 	//   - the SPA renders a persistent "resets daily" banner + the
 	//     /app/#/demo landing panel;
@@ -304,10 +283,6 @@ func Load() (*Config, error) {
 	c.IngestPasswordsFile = env("INGEST_PASSWORDS_FILE", "")
 	c.DecryptKeyPath = env("DECRYPT_KEY_FILE", filepath.Join(c.DataDir, ".decrypt-key"))
 	c.PreConsumeScript = env("PRE_CONSUME_SCRIPT", "")
-
-	c.MailSetupEnvPath = env("MAIL_SETUP_ENV_PATH", "")
-	c.MailSetupContainer = env("MAIL_SETUP_CONTAINER", "suchi-mail-mbsync")
-	c.MailSetupDockerSock = env("MAIL_SETUP_DOCKER_SOCK", "/var/run/docker.sock")
 
 	c.UIDisabled = env("SUCHI_UI_DISABLED", "") == "true" ||
 		env("SUCHI_UI_DISABLED", "") == "1"

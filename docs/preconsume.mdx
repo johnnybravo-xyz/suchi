@@ -31,8 +31,9 @@ $PRE_CONSUME_SCRIPT <input_path>
 | Var            | Meaning                                                                                 |
 | -------------- | --------------------------------------------------------------------------------------- |
 | `DOC_ID`       | Numeric document id in the SQLite `documents` table.                                    |
+| `FILENAME`     | Original upload or watched-file basename, when the producer supplied one.              |
 | `MIME_TYPE`    | Server-sniffed MIME (e.g. `application/pdf`).                                           |
-| `OWNER_EMAIL`  | Uploader's email, or empty when unknown.                                                |
+| `OWNER_EMAIL`  | Document owner's email.                                                                 |
 | `SUCHI_OUTPUT` | A pre-touched scratch path. Write your modified bytes here to replace the working copy. |
 | `PATH`         | `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`                          |
 
@@ -103,7 +104,7 @@ export PRE_CONSUME_SCRIPT=/home/suchi/hooks/decrypt.sh
 
 ```bash
 #!/bin/bash
-if [[ "$1" == *bescom* ]]; then
+if [[ "$FILENAME" == *bescom* ]]; then
   echo '{"tags":["utilities","bescom"]}'
 fi
 exit 0
@@ -115,11 +116,8 @@ exit 0
   UID has — set `chown` on secret files defensively.
 - Runs in `core/sandbox`: empty env (beyond the vars above), hard
   timeout, bounded output, process-group kill on timeout.
-- **No network** by default — the sandbox doesn't drop egress but
-  suchi's principle-8 posture assumes your reverse proxy / firewall
-  blocks per-container outbound. If you need outbound (webhook, remote
-  KMS), route it via a sidecar service the script `curl`s to on
-  localhost.
+- The sandbox does not isolate network access. Deny container or host egress
+  when the script must be offline; expose intentional services explicitly.
 
 ## Why not just use plugins?
 
@@ -127,3 +125,8 @@ The plugin surface (`plugin-api/`) is Go interfaces + Go builds — great
 for suchi maintainers, painful for operators. `PRE_CONSUME_SCRIPT` is
 the classic shell-script hook: "here's a script, run it." Meets
 operators where they are.
+
+This hook runs before text extraction. It can call an external model itself,
+but it is not a typed post-extraction LLM step and Suchi cannot validate or
+apply arbitrary model output from it. The built-in classifier owns v0.1 LLM
+classification. Typed custom extractors are post-v0.1 work.

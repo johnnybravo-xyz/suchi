@@ -1,11 +1,10 @@
 ---
-title: "Importing an export bundle"
-description: "suchi import — point --from at your existing DMS's export bundle. Verbatim metadata, dedup, --map-jd, --auto-jd, --verify."
+title: "Importing a Paperless-ngx export"
+description: "Review and import a Paperless-ngx export from the Suchi host or a one-shot Docker Compose container."
 ---
 
-`suchi import --from ./export-bundle` consumes an export bundle from
-your current DMS — the widely-used JSON-manifest + `originals/` +
-`archive/` layout. Migration is one command and is idempotent —
+`suchi import --from ./export-bundle` consumes a Paperless-ngx export in its
+JSON-manifest + `originals/` + `archive/` layout. The import is idempotent and
 safe to re-run against a nightly export during a shadow window.
 
 ## Prerequisites
@@ -81,12 +80,53 @@ Two caveats worth knowing before you run the exporter:
   it during a maintenance window; the exporter is safe to interrupt
   and re-run.
 
-Once the bundle is on disk, continue with the one-liner below.
+Once the bundle is on disk, review it before starting the import.
 
-## The one-liner
+## Review, then import
+
+Run a dry review first. It parses the manifest, verifies that each required
+original exists, and reports what would be imported without writing to Suchi:
 
 ```bash
-suchi import --from /path/to/export --owner-email you@example.com
+suchi import --from /path/to/export --dry-run
+```
+
+Then run the confirmed import:
+
+```bash
+suchi import --from /path/to/export \
+  --owner-email you@example.com \
+  --report ./import-report.md
+```
+
+The running web app sees imported rows immediately; neither command requires a
+Suchi restart.
+
+### Docker Compose
+
+Use a one-shot container so a large export never passes through the browser or
+reverse proxy. It shares Suchi's data volume and mounts the export read-only;
+the running web container stays online:
+
+```bash
+export EXPORT_DIR=/absolute/path/to/paperless-export
+
+docker compose run --rm --no-deps \
+  -v "$EXPORT_DIR:/imports/paperless:ro" \
+  suchi import --from /imports/paperless --dry-run
+
+docker compose run --rm --no-deps \
+  -v "$EXPORT_DIR:/imports/paperless:ro" \
+  suchi import --from /imports/paperless \
+    --owner-email you@example.com \
+    --report /data/import-report.md
+```
+
+The report remains in the `suchi-data` volume at
+`/data/import-report.md`. Read it without restarting the service:
+
+```bash
+docker compose exec suchi cat /data/import-report.md
 ```
 
 The importer:
@@ -127,14 +167,24 @@ visible, bulk-reassignable, never lost. Three flags override:
 
   </Tab>
   <Tab title="--map-jd">
-    Apply first-match user rules. Rules live in a YAML file:
+    Apply first-match user rules. Rules live in a TOML file:
 
-    ```yaml mapping.yaml
-    rules:
-      - if: tag:tax          ; category: 22
-      - if: storage_path:Insurance ; category: 23
-      - if: document_type:Utility  ; category: 31
-      - if: correspondent:Landlord ; category: 32
+    ```toml title="mapping.toml"
+    [[rules]]
+    if = "tag:tax"
+    category = 22
+
+    [[rules]]
+    if = "storage_path:Insurance"
+    category = 23
+
+    [[rules]]
+    if = "document_type:Utility"
+    category = 31
+
+    [[rules]]
+    if = "correspondent:Landlord"
+    category = 32
     ```
 
     `if` is `<kind>:<name>` where kind is `tag`, `correspondent`,
@@ -142,7 +192,7 @@ visible, bulk-reassignable, never lost. Three flags override:
 
     ```bash
     suchi import --from ./export --owner-email you@ex.com \
-        --map-jd mapping.yaml
+        --map-jd mapping.toml
     ```
 
     Unmatched docs → inbox.
@@ -264,30 +314,18 @@ zero rules map — the view row is skipped and reported.
 Display mode: `TABLE` → `table`, `SMALL_CARDS` and `LARGE_CARDS` →
 `card`. Icons are dropped (suchi doesn't render view icons).
 
-## JD categorization tiers
+## JD categorization
 
-`--auto-jd` runs a five-tier resolution per document. Higher tiers
-win; the terminal fallback is inbox (`49`).
+Choose at most one category strategy:
 
-1. `--map-jd` — explicit user rules from YAML. Always `Full`.
-2. `--auto-jd` **confident** — an unambiguous heuristic match from
-   `heuristics.yaml` (e.g., `tag:tax` → 22). `Full`.
-3. `--auto-jd` **ambiguous** — fuzzy match (Levenshtein ≤ 2) or a
-   multi-target tag set (doc has both `tax` and `insurance`).
-   Staged as a proposal in the [approvals](/approvals) surface.
-   `Partial`.
-4. `--jd-tags` — flat-mode fallback. When the target is
-   `jd.ModeFlat`, allocate one JD code in the 10-19 band per distinct
-   source-side tag (first-seen wins). `Partial`.
-5. Inbox — safe fallback. `Failed` in the report so the doc surfaces
-   for manual routing without silently vanishing.
+- `--flat` sends every imported document to the inbox.
+- `--map-jd <file>` applies the first matching HuML or TOML rule.
+- `--auto-jd` uses the bundled deterministic keyword mapping.
 
-The proposal queue in tier 3 is capped at **7 items** (raise with
-`--jd-approvals-max=<n>`). Beyond the cap, lower-impact proposals are
-suppressed silently and the report notes the count as
-"N proposals suppressed to keep queue ≤ 7 — raise with
-`--jd-approvals-max` to see the rest". Ranking is by "docs affected"
-(broadest-impact first), not by confidence.
+An unmatched rule or a rule targeting a category absent from the active tree
+falls back to the inbox. Invalid targets are also listed in the import
+warnings. The importer does not perform fuzzy matching or create approval
+proposals.
 
 ## Migration report
 
@@ -298,19 +336,12 @@ Every non-dry-run import writes a markdown report to `--report
   duration, active JD strategy.
 - **Summary** — rows per model class (Documents / Tags /
   Correspondents / Document types / Storage paths / Custom fields /
-  Notes / Workflows / Saved views / Approval proposals), columns Full
-  / Partial / Failed.
-- **JD categorization** — docs matched to the built-in tree, docs
-  deferred to Approvals, docs to Inbox, docs placed in the 10-19
-  band (flat-user-tags only).
-- **Approvals queued** — table of proposals surfaced for user review
-  (source tag, docs affected, suggested JD code, confidence signal).
+  Notes / Workflows / Saved views), columns Full / Partial / Failed.
 - **Partial migrations** — one row per Partial with source, target,
   reason.
 - **Failed migrations** — one row per Failed with source, reason.
 - **Follow-ups suggested** — aggregated feature gaps by blocker
-  count, sorted descending. Reads like a roadmap prompt: paperless
-  users who care about `notify_email` show up here.
+  count, sorted descending, so unsupported source behavior is explicit.
 
 The report is **the migration's system of record** — silent lossy
 migrations feel like betrayal; every drop appears here with a reason.

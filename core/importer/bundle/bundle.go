@@ -159,8 +159,8 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		buckets[o.Model] = append(buckets[o.Model], o)
 	}
 
-	// PK-remap tables: source PK → suchi PK. Populated by phase 1
-	// (reference tables), consumed by phase 2 (documents).
+	// PK-remap tables: source PK → suchi PK. Populated by the reference-table
+	// pass and consumed by the document pass.
 	tagMap := map[int64]int64{}
 	corMap := map[int64]int64{}
 	dtMap := map[int64]int64{}
@@ -183,7 +183,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		return nil, fmt.Errorf("load jd code map: %w", err)
 	}
 
-	// ---------- phase 1: reference tables (upsert-verbatim) ----------
+	// ---------- reference tables (upsert-verbatim) ----------
 
 	for _, o := range buckets[ModelTag] {
 		var f TagFields
@@ -255,7 +255,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		mrep.Full(KindCustomField, f.Name, f.Name)
 	}
 
-	// Index custom-field instances by document PK for phase-2 lookup.
+	// Index custom-field instances by document PK for the document pass.
 	instancesByDoc := map[int64][]CustomFieldInstance{}
 	for _, o := range buckets[ModelFieldInstance] {
 		var f CustomFieldInstance
@@ -274,7 +274,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		notesByDoc[f.Document] = append(notesByDoc[f.Document], f)
 	}
 
-	// ---------- phase 2: documents ----------
+	// ---------- documents ----------
 
 	for _, o := range buckets[ModelDocument] {
 		var f DocumentFields
@@ -335,7 +335,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		}
 	}
 
-	// ---------- phase 3: workflows + saved views ----------
+	// ---------- workflows + saved views ----------
 
 	if _, err := ImportWorkflows(ctx, d, log, objs, opts.DryRun, tagMap, corMap, dtMap, spMap, cfMap, mrep); err != nil {
 		return nil, fmt.Errorf("import workflows: %w", err)

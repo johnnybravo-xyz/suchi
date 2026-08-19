@@ -1,303 +1,161 @@
 ---
 title: "LLM classifier"
-description: "Optional plugin that uses an OpenAI-compatible chat model to fill in title, correspondent, tags, and JD category for freshly ingested documents."
+description: "Optional local or hosted classification for newly ingested documents."
 ---
 
-suchi's default classifier is deterministic and boring: filename, MIME,
-whatever the [similar-docs](/similar-docs) engine can corroborate. The
-**LLM classifier** is an optional plugin you can turn on to get a
-richer first pass — the model reads the extracted text and proposes a
-title, correspondent, tags, and a Johnson-Decimal category.
+Suchi ships deterministic filing rules and archive-based heuristics. The
+optional LLM classifier adds one fixed post-extraction model call for title,
+correspondent, tags, Johnny.Decimal category, confidence, and language.
 
-It talks the OpenAI `/v1/chat/completions` shape, so it works with
-Ollama, llama.cpp, OpenAI, Google Gemini's OpenAI-compat endpoint, and
-Azure OpenAI without any provider-specific code path. Local endpoints
-just work; anything reaching the public internet needs an explicit
-egress ack (see [The egress gate](#the-egress-gate)).
+It uses the OpenAI-compatible chat-completions API and supports local servers
+such as Ollama or llama.cpp and compatible hosted providers. The plugin is
+compiled into Suchi and can be enabled or reconfigured from the web interface.
 
-The plugin lives under `plugins/llm-classifier/` and is compiled into
-the binary — no separate install.
+## Configure in the web app
 
-## What it does
+Open **Settings > LLM classifier** during or after setup and choose:
 
-For every newly ingested document the classifier can fill in:
+- **Local model** for Ollama or another endpoint on the trusted network
+- **Hosted endpoint** for a provider on the public internet
 
-- **Title** — two paths:
-  - _Empty title_ (typical upload with a filename-derived title like
-    `invoice.pdf` — actually stored as empty at ingest): the LLM's
-    suggestion applies directly during the classify write. Fast
-    path, no round-trip.
-  - _Non-empty title that differs from the LLM suggestion_: the
-    plugin writes a `document_proposals` row (`field=title`,
-    `confidence=res.Confidence`). The **`apply_llm_title`** built-in
-    automation reads that proposal on `document_updated` and either
-    auto-applies it (`confidence ≥ threshold`, default 0.7) or
-    leaves it as a Title chip in the Tasks inbox for the operator to
-    accept.
-- **Correspondent** — only when unset.
-- **Tags** — merged with whatever else the pipeline attached; the
-  classifier only adds, never removes.
-- **JD category** — only when the doc is still sitting in the inbox
-  category. A doc that has already been refiled by a human or a rule
-  is left alone.
+Configure endpoint, model, optional API key, confidence threshold, and enabled
+state. Hosted mode also requires an explicit egress acknowledgement.
 
-Every result comes back with a self-assessed `confidence` between 0.0
-and 1.0. Above the plugin's confidence threshold (default **0.7**) the
-non-title fields land per the rules above; the title path uses the
-`apply_llm_title` automation's own threshold (also 0.7 by default, but
-separately tunable via that automation's action params). Below the
-plugin threshold, source fields stay untouched, the doc gets the
-**`needs-review`** tag, and the similar-docs heuristics fire as a
-fallback for a corroborating second opinion.
+API keys are sealed before entering SQLite. Leaving the key field blank keeps
+the stored value; **Clear the stored API key** removes it and prevents an
+environment fallback from silently returning.
 
-**Cross-sibling title stability.** Before the classify call, the
-plugin pre-fetches up to 5 titles of FTS-similar docs from the
-archive (ACL-scoped to the doc owner) and injects them as few-shot
-examples in the same request. That's how "Electricity bill - August
-2026" and "Electricity bill - September 2026" stay parallel across
-months instead of drifting to "Utilities:electricity bill - 09/2026".
-No second LLM round-trip — the plugin enforces the one-classify-
-per-doc invariant with a call-site guard test.
+## Local Ollama
 
-The result contract is captured in
-[`plugins/llm-classifier/llm.go`](https://github.com/johnnybravo-xyz/suchi/blob/main/plugins/llm-classifier/llm.go):
+The shipped Compose network maps `host.suchi.local` to the host, so the default
+works when Ollama listens on port 11434:
 
-```
-title, correspondent, tags[], jd_category (10-99),
-confidence 0.0-1.0, reasoning, language (ISO-639-1)
+```text
+Endpoint: http://host.suchi.local:11434/v1
+Model:    qwen2.5:7b
 ```
 
-## Quick start — Ollama on the same box
+When Suchi runs directly on the same host, use
+`http://127.0.0.1:11434/v1`. A local endpoint needs no key or egress
+acknowledgement.
 
-The zero-egress default. Pull a small instruct model, point suchi at
-Ollama's OpenAI-compat port, restart:
+Equivalent environment fallback:
 
-```
-LLM_ENDPOINT_URL=http://localhost:11434/v1
-LLM_MODEL=llama3
-```
-
-No API key. No egress ack. Because the host is loopback, the plugin
-skips the egress gate entirely.
-
-On boot, look for the post-classify handler in the dispatcher log
-line — something like:
-
-```
-dispatcher.register kinds=[...,post-classify,...]
+```sh
+LLM_ENDPOINT_URL=http://host.suchi.local:11434/v1
+LLM_MODEL=qwen2.5:7b
+LLM_CONFIDENCE_THRESHOLD=0.70
 ```
 
-That's the signal the plugin loaded. You will **not** see the
-`llm-classifier.egress` warning line — that one only fires for
-non-local hosts.
+## Hosted providers
 
-## Cloud provider setup
+Hosted endpoints require `LLM_EGRESS_ACK=true` or the matching web checkbox.
 
-All four cloud recipes below require `LLM_EGRESS_ACK=true`. That flag
-is your explicit acknowledgement that the extracted OCR text of every
-classified document will be sent to a third party. See
-[The egress gate](#the-egress-gate) for what does and doesn't leave.
+| Provider | Base URL | Model value |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | Provider model name |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini model name |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/v1` | Deployment name |
+| llama.cpp | `http://127.0.0.1:8080/v1` | Descriptive label accepted by the server |
 
-### OpenAI
+Gemini must use its OpenAI-compatible endpoint. Azure uses the deployment name
+as the model. Set `LLM_API_KEY` or mount a key file through
+`LLM_API_KEY_FILE` for unattended startup.
 
-```
-LLM_ENDPOINT_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o-mini
-LLM_API_KEY=sk-...
-LLM_EGRESS_ACK=true
-```
+## Egress boundary
 
-### Google Gemini (via the OpenAI-compat shim)
+For a hosted classification, Suchi sends:
 
-```
-LLM_ENDPOINT_URL=https://generativelanguage.googleapis.com/v1beta/openai
-LLM_MODEL=gemini-flash-latest
-LLM_API_KEY=AIza...
-LLM_EGRESS_ACK=true
-```
+- extracted text from the current document
+- bounded filing context and a small set of similar-document titles
+- the requested structured-output instructions
 
-Gemini's native REST (`:generateContent`) is **not** supported. Use
-the OpenAI-compat shim URL above.
+It does not send original PDF or image bytes, unrelated archive content,
+ownership, ACLs, storage paths, or backup information.
 
-### Azure OpenAI
+Loopback, private-network, link-local, `.local`, and `.localhost` hosts are
+treated as local. Every other host requires acknowledgement and appears in the
+redacted egress inventory and boundary logs.
 
-```
-LLM_ENDPOINT_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>
-LLM_MODEL=<deployment-name>
-LLM_API_KEY=<key>
-LLM_EGRESS_ACK=true
-```
+## Validation and confidence
 
-### llama.cpp server (local, no ack)
+Suchi accepts only a validated JSON object. Text lengths, tag count, language
+shape, confidence range, and JD code are bounded before any write. Invalid
+provider output fails the durable job without exposing raw output or document
+text in logs or API errors.
 
-```
-LLM_ENDPOINT_URL=http://localhost:8080/v1
-LLM_MODEL=any-string
-```
+The confidence threshold ranges from `0.50` to `0.95` in `0.05` steps and
+defaults to `0.70`.
 
-llama.cpp accepts any model string — it serves whichever GGUF you
-launched it with — so `LLM_MODEL` is a label for suchi's logs, not a
-selector.
+At or above the threshold:
 
-### API keys from a file
+- an empty title can be filled
+- an unset correspondent can be filled
+- tags are added, never removed
+- the JD category changes only while the document remains in the inbox
 
-For docker/k8s secret mounts, use `LLM_API_KEY_FILE` instead of
-`LLM_API_KEY`. suchi reads the file at startup and treats its
-contents as the key.
+A changed non-empty title becomes a proposal. The built-in
+`apply_llm_title` automation applies it only above that automation's threshold;
+otherwise it remains in Tasks for review.
 
-## The egress gate
+Below the classifier threshold, source fields stay unchanged, Suchi adds the
+`needs-review` tag, and archive-based filing may offer a corroborating proposal.
 
-Any endpoint whose host is **not** local refuses to boot without
-`LLM_EGRESS_ACK=true`. This is a deliberate speed bump so a
-misconfigured URL can't leak documents on the first restart.
+## Test and live reload
 
-"Local" is defined literally by
-[`isLocalHost`](https://github.com/johnnybravo-xyz/suchi/blob/main/plugins/llm-classifier/llm.go):
+**Test connection** sends fixed synthetic text and validates the response with
+the production parser. It returns latency and sanitized synthetic fields only.
+It does not save settings, send archive content, or reveal raw provider output.
 
-- `localhost`, `*.local`, `*.localhost`
-- IPv4 loopback `127.0.0.0/8`, IPv6 `::1`
-- RFC1918 private: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
-- Link-local `169.254.0.0/16`
+Saving enabled state, endpoint, model, key, timeout, acknowledgement, or
+confidence applies to the running process immediately. No Suchi restart is
+required.
 
-Everything else is non-local and needs the ack. On boot, each
-non-local host produces one WARN line:
+Activation affects new ingests. A settings change never starts an automatic
+archive-wide backfill. Select older documents in **Documents** and use
+**Rescan** when you want the current configuration applied to them.
 
-```
-llm-classifier.egress host=api.openai.com
-```
+Stored web settings take precedence over environment fallbacks. Prefer one
+management path per deployment so partial overrides remain easy to reason
+about.
 
-Every classification emits one INFO line at the boundary so you can
-audit what got sent where.
+## Pipeline versions and rescans
 
-### What leaves the box
+Each classification records `pipeline_version_llm`. A code, output-schema, or
+prompt revision can bump that version and create a stale-results proposal.
+Changing endpoint, model, key, timeout, or threshold does not mark the archive
+stale.
 
-- The document's extracted text (OCR output for scans, extracted text
-  for PDFs/office docs).
-- The generated title candidate, in the model's reply.
+For version-driven command-line rescans:
 
-### What does not leave the box
-
-- The original blob. The plugin never uploads PDFs, images, or any
-  binary payload.
-- Any other document metadata: owner, permissions, tags from other
-  sources, timestamps, storage paths, backup URLs.
-- Anything from documents that failed the egress gate — a boot with a
-  non-local URL and no ack refuses to register the plugin.
-
-## Confidence threshold and needs-review
-
-The default cutoff is **0.7**, hardcoded in
-[`plugins/llm-classifier/llm.go`](https://github.com/johnnybravo-xyz/suchi/blob/main/plugins/llm-classifier/llm.go)
-as `Config.ConfidenceThreshold`. It is not currently exposed via env
-or settings — overriding it means editing the constant and
-recompiling.
-
-The needs-review workflow when the model returns a low-confidence
-result:
-
-1. Source fields (title, correspondent, JD category) stay exactly as
-   they were.
-2. The doc gets the **`needs-review`** tag.
-3. The built-in `apply_from_similar` automation fires as a
-   corroboration pass. If similar-docs finds a confident neighbour,
-   its fields get applied normally.
-4. You triage `needs-review` from the tag filter in the SPA when it's
-   convenient.
-
-Bumping the threshold makes the classifier more conservative (more
-docs land in `needs-review`); lowering it makes it more eager (more
-fields get filled based on guesses the model wasn't sure about).
-
-## Live-reload from the setup wizard
-
-The same four keys — endpoint, model, API key, egress ack — are
-editable from the setup wizard at **Settings → LLM classifier**. A
-save writes to the sealed `settings` table and reloads the plugin
-in-place. There is no restart, no dropped in-flight work.
-
-The one thing that does **not** hot-swap is the HTTP client timeout;
-it's set at plugin construction. In practice you won't notice unless
-you're actively tuning it.
-
-Env vars still win at boot: on startup, env values populate settings.
-That means a compose file with `LLM_ENDPOINT_URL` set will overwrite
-whatever the wizard last saved. Pick one source of truth per
-deployment.
-
-## Rescan after a model or prompt change
-
-Every classification records the `pipeline_version_llm` it ran under.
-The current version is **1**
-([`plugins/llm-classifier/handler.go`](https://github.com/johnnybravo-xyz/suchi/blob/main/plugins/llm-classifier/handler.go)).
-
-When you change model, prompt, or bump the plugin version, older docs
-are still on the previous version. The rescan detector picks them up:
-
-```
+```sh
 suchi rescan --stale llm --dry-run
-suchi rescan --stale llm --apply
+suchi rescan --stale llm
 ```
 
-The `--dry-run` prints how many docs would be re-classified. If the
-number looks right, drop `--dry-run` and re-run with `--apply`.
+For an operator configuration change, explicitly select the desired documents
+in the UI and rescan them. [Refile](/refile) reruns deterministic filing but
+does not call the LLM.
 
-Note that plain [refile](/refile) does **not** re-run the LLM by
-default — pass `--include-llm` if you specifically want a refile to
-re-classify.
+## Current scope
 
-## Cost and rate limits
-
-- **Ollama / llama.cpp** — free, runs on your hardware, but first
-  token can be slow on cold GPU. Fine for small archives; painful on
-  a bulk backfill of 10k docs.
-- **OpenAI / Gemini / Azure** — metered by tokens. A typical
-  single-page document is a few hundred input tokens; long PDFs can
-  run into the tens of thousands. Free tiers on Gemini and OpenAI
-  hit 429s under sustained backfill load.
-- **Retries.** Classification runs through the outbox, so a 429 or
-  transient network error is a retry, not a data-loss event. The
-  worst case is slower classification while the outbox catches up.
-
-For a first-time backfill of a large archive on a metered API, run
-`suchi rescan --stale llm --apply` off-hours or throttle at the
-provider side.
+v0.1 provides fixed document classification. It does not provide custom prompt
+steps, typed custom-field extractors, arbitrary code in the ingest pipeline,
+or archive question answering. Typed extraction and citation-bound archive Q&A
+belong to later releases rather than this classifier contract.
 
 ## Troubleshooting
 
-**`llm-classifier.disabled` on boot.** The plugin refused to register.
-Common reasons:
+- **Disabled:** configure both endpoint and model. Hosted endpoints also need
+  egress acknowledgement and usually a key.
+- **401 or 403:** verify the provider key, Azure deployment, or endpoint base
+  URL.
+- **Invalid result:** use an instruction-tuned model that reliably returns one
+  JSON object. Suchi intentionally rejects explanatory prose.
+- **Low confidence:** use a stronger model, improve deterministic filing rules,
+  or keep the conservative threshold and review proposals.
+- **No classification:** inspect LLM status in Settings and durable tasks for a
+  dead `post-classify` job.
 
-- `LLM_ENDPOINT_URL` is empty — the plugin treats that as "off" and
-  logs disabled. This is the intended default.
-- Non-local URL without `LLM_EGRESS_ACK=true`. Set the ack, restart.
-- Empty API key against a provider that requires one. OpenAI, Gemini,
-  and Azure all 401 immediately.
-
-**`decode result (raw: ...)` errors.** The model returned something
-that wasn't valid JSON. The parser strips ` ```json ` fences and
-plain ` ``` ` fences but not arbitrary prose. Symptoms usually
-point at:
-
-- A base model instead of an instruct/chat model. Switch to an
-  instruct variant.
-- A model too small to follow the JSON-only instruction. Try a larger
-  size or bump the temperature down at the provider.
-- A provider that wraps responses in prose we don't strip. File an
-  issue with the raw payload attached.
-
-**Confidence stuck below 0.7 on obviously classifiable docs.**
-Usually a prompt-fit or model-size problem. Local 3B-parameter
-models struggle with the JD taxonomy; step up to a 7B+ instruct
-model or a hosted small model like `gpt-4o-mini`.
-
-**Nothing happens on ingest.** Check the boot log — the dispatcher's
-registered `kinds` list should include `post-classify`. If it doesn't,
-the plugin didn't register (see `llm-classifier.disabled` above).
-
-## Related
-
-- [Privacy](/privacy) — the wider picture on what leaves the box.
-- [Similar documents](/similar-docs) — the fallback that fires under
-  the LLM on low confidence.
-- [Automations](/automations) — how `apply_from_similar` is wired.
-- [Refile](/refile) — and the `--include-llm` flag.
+See [Privacy](/privacy), [Automations](/automations), and
+[Pipeline versions](/pipeline-versions).

@@ -119,7 +119,7 @@ func Sweep(ctx context.Context, database *db.DB, cas *blob.CAS, ttl time.Duratio
 	var stats SweepStats
 	cutoff := time.Now().Add(-ttl).Unix()
 
-	// Two-phase: (1) inside the txn, collect blob hashes owned only by
+	// Two steps: (1) inside the txn, collect blob hashes owned only by
 	// expired scratch users, delete their docs, delete the users. (2)
 	// outside the txn, CAS.Delete each collected hash — filesystem work
 	// stays off the write lock.

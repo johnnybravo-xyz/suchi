@@ -40,7 +40,6 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 			return fmt.Errorf("create UI server: %w", err)
 		}
 		uiServer.LoginSubmit = la.LoginFormHandler
-		uiServer.MailSetupEnabled = cfg.MailSetupEnvPath != ""
 		uiServer.SetupPendingFn = func() bool {
 			return !cfg.DemoMode && la.SetupToken() != ""
 		}

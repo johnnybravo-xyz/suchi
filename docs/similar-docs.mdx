@@ -89,12 +89,8 @@ The `Similar documents` card on `/#/doc/{id}`:
 
 ## What isn't done here
 
-- **No semantic recall.** Two documents that mean the same thing but
-  share few words won't surface. That's the planned
-  [sqlite-vec upgrade](/wishlist/similar-documents) — the endpoint's
-  `method` field will flip from `"fts"` to `"vec"` once it lands, and
-  the FTS5 path stays as the always-on fallback for instances
-  without the vec extension loaded.
+- **No semantic recall.** Two documents that mean the same thing but share few
+  words may not surface. v0.1 does not ship embeddings or a vector extension.
 - **No IDF-aware token selection.** Currently every token has equal
   priority regardless of how many docs it appears in. A future pass
   could weight rare tokens higher so calendar years and repeated
@@ -107,5 +103,4 @@ The `Similar documents` card on `/#/doc/{id}`:
 ## Related
 
 - [API — `GET /api/documents/{id}/similar`](/api#get-apidocumentsid-similar)
-- [Wishlist — semantic similar via sqlite-vec](/wishlist/similar-documents)
 - [Automations — `apply_from_similar` action](/automations)

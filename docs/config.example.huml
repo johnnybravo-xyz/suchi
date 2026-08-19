@@ -26,6 +26,7 @@ data_dir: "/data"
 listen_addr: ":8000"
 log_level: "info"
 body_limit: "100M"
+# trusted_proxy_cidrs: "127.0.0.1/32,::1/128"
 backup_interval: "24h"
 
 # --------------------------------------------------------------------
@@ -35,7 +36,7 @@ backup_interval: "24h"
 ocr_languages:: "eng"
 ocr_engine: "auto"
 pdf_max_content_bytes: "8M"
-epub_max_content_bytes: "32M"
+anydoc_max_content_bytes: "32M"
 djvu_max_content_bytes: "32M"
 
 # --------------------------------------------------------------------

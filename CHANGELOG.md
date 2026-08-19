@@ -23,6 +23,11 @@ changes that require a restart, etc.).
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+### Fixed
+
+- Taxonomy CLI imports now honor flags after the input filename, apply merge-mode imports with explicit collision remaps, and export the same portable seeds as the admin API.
+- Beta and release-candidate images now receive documented moving channel tags instead of leaving prerelease quick-start commands pointed at an unpublished `latest` image.
+
 ---
 
 ## Release history

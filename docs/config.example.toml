@@ -39,6 +39,7 @@ data_dir = "/data"    # CAS blobs, rendered view, backups all under here
 listen_addr = ":8000" # ip:port; ":8000" listens on all interfaces
 log_level = "info"    # debug | info | warn | error
 body_limit = "100M"   # multipart cap (e.g. "20M", "1G")
+# trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 # Session-cookie signing key. Absent = generated + persisted under
 # $DATA_DIR/.session-key on first boot. Override only for restore-
@@ -85,7 +86,7 @@ audit_retention_days = 20
 ocr_languages = ["eng"]        # array; CSV form ("eng,deu") also works
 ocr_engine = "auto"            # auto | tesseract | ocrmypdf
 pdf_max_content_bytes = "8M"
-epub_max_content_bytes = "32M"
+anydoc_max_content_bytes = "32M"
 djvu_max_content_bytes = "32M"
 
 # --------------------------------------------------------------------
@@ -148,19 +149,6 @@ djvu_max_content_bytes = "32M"
 # url           = "imaps://you@mail.example.com/INBOX"
 # password_file = "/run/secrets/imap-password"
 # owner_email   = "you@example.com"
-
-# --------------------------------------------------------------------
-# Mail-mbsync sidecar (separate compose bundle — NOT the poller above)
-# --------------------------------------------------------------------
-#
-# When the Docker compose bundle in deploy/mail-mbsync/ is in play,
-# these knobs let suchi rewrite the sidecar's .env and restart the
-# container over the docker socket. Empty MAIL_SETUP_ENV_PATH keeps
-# the whole surface disabled.
-
-# mail_setup_env_path    = "/etc/suchi/mail-config/.env"
-# mail_setup_container   = "suchi-mail-mbsync"
-# mail_setup_docker_sock = "/var/run/docker.sock"
 
 # --------------------------------------------------------------------
 # LLM classifier (opt-in)

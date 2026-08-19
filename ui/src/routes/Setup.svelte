@@ -445,8 +445,8 @@
 
     {:else if cur === 'rules'}
       <h3>Rules</h3>
-      <p class="wiz-p">Your preset already ships a starter set of filing rules and automations — the ones under the "Owned by <em>&lt;preset&gt;</em> filing tree" pill. Editing or disabling any of them forks a user-owned copy; re-picking the same preset never touches your edits.</p>
-      <p class="wiz-p">Full editor for both engines lives in <a href="#/automations">Automations</a>; nothing more to decide here during setup.</p>
+      <p class="wiz-p">Your preset can install starter filing rules and automations. Preset-owned automations appear under the "Owned by <em>&lt;preset&gt;</em> filing tree" pill; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
+      <p class="wiz-p">Automations have a visual editor. Flat rule management is API-only in v0.1.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
         <button class="btn sm" onclick={() => mark('done')}>Done</button>

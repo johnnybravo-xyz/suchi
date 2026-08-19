@@ -76,12 +76,6 @@ setup.users.field.display_name: Display name (optional)
 setup.users.field.role: Role
 setup.users.submit: Create user
 
-setup.mail.title: Mail ingest
-setup.mail.body: Pull attachments and message bodies from an IMAP mailbox. Runs alongside filesystem-watch and API uploads.
-setup.mail.open: Open the mail wizard
-setup.mail.disabled: The mail wizard is disabled. Set MAIL_SETUP_ENV_PATH (see the deploy recipe) to enable.
-setup.mail.done: Done with mail
-
 setup.llm.title: LLM classifier
 setup.llm.body: An optional plugin that classifies documents via an OpenAI-compatible endpoint (Ollama, LM Studio, cloud vendors, etc.).
 setup.llm.field.endpoint: Endpoint URL
@@ -117,36 +111,6 @@ setup.preferences.save: Save
 setup.done.title: Setup complete
 setup.done.body: Nothing else to do. Come back via /admin/setup to reconfigure any step.
 setup.done.home_link: Back to documents
-
-# Mail setup wizard (admin-only)
-mailsetup.title: Mail ingest
-mailsetup.subtitle: Point suchi at an IMAP mailbox. Attachments arrive as documents; the raw message is indexed too.
-mailsetup.disabled: Mail wizard is disabled — set MAIL_SETUP_ENV_PATH to enable.
-mailsetup.section.provider: Provider
-mailsetup.section.endpoint: IMAP endpoint
-mailsetup.section.credentials: Credentials
-mailsetup.section.what: What to sync
-mailsetup.provider.proton: Proton Mail (via Bridge)
-mailsetup.provider.gmail: Gmail
-mailsetup.provider.fastmail: Fastmail
-mailsetup.provider.generic: Other IMAP/IMAPS
-mailsetup.field.host: Host
-mailsetup.field.port: Port
-mailsetup.field.ssl: SSL
-mailsetup.field.user: IMAP username
-mailsetup.field.password: IMAP password
-mailsetup.field.folders: Folders
-mailsetup.field.max_messages: Max messages per folder
-mailsetup.field.max_size: Max attachment size
-mailsetup.field.sync_interval: Sync interval (seconds)
-mailsetup.submit: Save and restart mbsync
-mailsetup.saving: Saving…
-mailsetup.done.wrote: Wrote config to disk.
-mailsetup.done.restarted: mbsync container restarted.
-mailsetup.done.no_restart: File written. Run `docker compose restart mbsync` to apply.
-mailsetup.help.proton: For Proton, use the Bridge IMAP password from `bridge --cli` → `info` — NOT your Proton account password.
-mailsetup.help.gmail: Gmail needs an app password (Google account → Security → 2-step verification → App passwords) with IMAP enabled.
-mailsetup.help.fastmail: Fastmail needs an app password with IMAP scope (Settings → Password & Security → App passwords).
 
 # Upload page
 upload.title: Upload a document

@@ -1,7 +1,7 @@
 // hack/transcript is a recording reverse proxy: point a client at it
 // with --target set to a live upstream, and every request/response
-// pair lands in --out as a golden fixture. The Phase-4 primary use
-// case is that the compat surface can be replayed as contract tests —
+// pair lands in --out as a golden fixture. The primary use case is
+// replaying the compatibility surface as contract tests —
 // but the tool is target-agnostic.
 //
 // Fixtures land in --out with names like:
@@ -96,7 +96,7 @@ type recorder struct {
 }
 
 // fixture is one recorded request/response pair. Kept flat + declarative
-// so the replay harness (Phase 4) can json.Unmarshal it straight into a
+// so the replay harness can json.Unmarshal it straight into a
 // struct and drive httptest.NewRequest / Server.ServeHTTP.
 type fixture struct {
 	Seq        int64             `json:"seq"`

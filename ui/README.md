@@ -8,7 +8,7 @@ are committed under `core/ui/spa/dist/` and embedded in the Go binary.
 Run the backend from the repository root, then start Vite:
 
 ```sh
-just serve
+make run
 cd ui
 npm ci
 npm run dev

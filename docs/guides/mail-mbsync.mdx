@@ -1,149 +1,78 @@
 ---
-title: "Mail ingest via mbsync"
-description: "A one-command Docker stack that polls IMAP with mbsync and hands every message to suchi as .eml."
+title: "Mail intake with mbsync"
+description: "Mirror IMAP into Maildir and hand EML files to Suchi's watched folder."
 ---
 
-You want IMAP mail landing in suchi. This recipe stands up a small
-Docker stack that:
+The `deploy/mail-mbsync/` Compose recipe runs mbsync beside Suchi. mbsync
+mirrors selected folders into Maildir and fans new messages into Suchi's
+watched directory. Suchi then ingests EML and attachment documents through its
+normal pipeline.
 
-1. Pulls mail from your provider into a local Maildir (`mbsync`).
-2. Fans every message into suchi's ingest dir as `<sha>.eml`.
-3. Suchi ingests it via fs-watch — parses the `.eml`, fans out
-   attachments as child docs, populates correspondents from `From:`,
-   dedups by `Message-Id`.
+Prefer the built-in [Mail intake](/guides/mail-intake) poller unless you need a
+local Maildir mirror, already operate mbsync, or want mailbox credentials kept
+outside Suchi.
 
-Providers wired: **Proton Mail** (via Bridge, running as a sibling
-container), **Gmail**, **Fastmail**, and a **generic** IMAPS/IMAP
-option (iCloud, Yahoo, Zoho, Dovecot, etc.).
-
-## When to use this vs. built-in IMAP polling
-
-Suchi already speaks IMAP directly via `INGEST_IMAP_URL` — see
-[config#email-ingest-imap-polling](/config#email-ingest-imap-polling).
-That's fewer components and enough for most operators.
-
-Reach for the mbsync recipe when you want:
-
-- A **local Maildir mirror** you can grep, back up, or hand off to
-  another tool independently of suchi.
-- **Proton Mail Bridge** in the loop (suchi's direct IMAP works against
-  Bridge too; the recipe just bundles Bridge into the same stack).
-- **Multi-folder / weird-provider** support that suchi's direct IMAP
-  doesn't cover yet.
-
-## Boot it
+## Configure and start
 
 ```sh
 cd deploy/mail-mbsync
 ./setup.sh
-```
-
-The wizard asks for provider, credentials, folders, and port; it writes
-`config/.env` (container-side vars) and `.env` (compose profiles + port
-
-- your UID/GID) and points `templates/mbsyncrc.tmpl` at the matching
-  provider template.
-
-For **Proton**, do the interactive Bridge login first:
-
-```sh
-docker compose --profile proton run --rm -it bridge init
->>> login       # your Proton email + password + 2FA
->>> info        # copy the "IMAP Password" — that's what setup.sh wants
->>> exit
-```
-
-Then bring up the stack:
-
-```sh
 docker compose up -d
 docker compose logs -f mbsync suchi
 ```
 
-## What each container does
+`setup.sh` asks for provider, credentials, folders, limits, and local UID/GID.
+It writes `config/.env` for container settings and `.env` for Compose settings.
 
-- **bridge** (Proton only, `proton` compose profile) — [shenxn/protonmail-bridge](https://github.com/shenxn/protonmail-bridge-docker)
-  with libfido2 layered on for Bridge 3.25+. Listens on
-  `protonmail-bridge:143` inside the compose network. State (encrypted
-  vault) lives in `./bridge-data/`.
-- **mbsync** — Debian slim + isync + gettext. Renders the mbsyncrc
-  template from env, polls every `SYNC_INTERVAL` seconds (default 300),
-  writes Maildir to `./maildir/`, then fans new files into `./ingest/`
-  as `<sha>.eml`. Idempotent via a `.fanned-marker` timestamp file —
-  each cycle only touches Maildir entries newer than the last fan.
-- **suchi** — built from the repo root Dockerfile (`slim` target).
-  fs-watches `/ingest`, ingests every `.eml`, runs the full
-  post-ingest pipeline including attachment fanout.
-
-## Where things live on the host
-
-| Path           | Contents                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------ |
-| `config/.env`  | Container-side env (IMAP creds, suchi runtime vars). 600.                                  |
-| `.env`         | Compose-level env (profile, port, UID/GID).                                                |
-| `maildir/`     | mbsync's Maildir tree.                                                                     |
-| `ingest/`      | Handoff between mbsync and suchi. Ephemeral — suchi deletes files after successful ingest. |
-| `suchi-data/`  | Suchi's `suchi.db`, blob CAS, backups.                                                     |
-| `bridge-data/` | Proton Bridge vault (Proton only).                                                         |
-
-## Rotating credentials
-
-Re-run `./setup.sh` — it's idempotent. Or edit `config/.env` directly
-and `docker compose restart mbsync`.
-
-## Mail wizard (in-browser)
-
-The server-rendered `/admin/mail-setup` wizard retired with the SPA
-promotion; the equivalent in-app settings panel is tracked (task
-# 141 — needs `GET/PUT /api/admin/settings/mail` and a connection-
-test endpoint). Until it lands, edit `config/.env` directly and
-`docker compose restart mbsync`.
-
-The compose recipe still ships the two mounts the future in-app
-panel will use:
-
-- `./config → /etc/suchi/mail-config` (RW) so suchi can rewrite the
-  file. Directory mount, not a single-file bind — atomic rename
-  requires this.
-- `/var/run/docker.sock` so suchi can POST
-  `/containers/suchi-mail-mbsync/restart` to reload mbsync.
-
-<Warning>
-  Mounting `docker.sock` grants suchi root-equivalent access to the host Docker
-  daemon. Suchi only uses it to restart the sibling mbsync container, but the
-  socket permits arbitrary daemon calls. Comment out the mount + unset
-  `MAIL_SETUP_DOCKER_SOCK` if you'd rather `docker compose restart mbsync`
-  yourself after a wizard save.
-</Warning>
-
-## Smoke test
-
-`./smoke-test.sh` drives the whole recipe end-to-end with the `generic`
-provider + dummy creds and asserts fs-watch → post-ingest → attachment
-fanout produces the expected doc counts. Run it before shipping any
-change to the recipe. Needs Docker; takes ~90s; cleans up after itself.
-
-## Teardown
+For Proton, initialize the Bridge profile first and use the Bridge-generated
+IMAP password:
 
 ```sh
-docker compose down
-# then, if you also want the mail + state gone:
-rm -rf maildir ingest suchi-data bridge-data
+docker compose --profile proton run --rm -it bridge init
 ```
 
-## Gotchas
+## Persistent paths
 
-- **First run pulls up to `MAIL_MAX_MESSAGES` messages per folder.**
-  Default is 200. Bump / lower in `config/.env`; mbsync keeps track
-  of what it's pulled via `.mbsyncstate` files inside the Maildir,
-  so subsequent runs are incremental.
-- **Attachments over `MAIL_MAX_SIZE`** (default 25 MB) are silently
-  skipped by mbsync. If you're waiting on a huge PDF that never
-  arrives, that's the knob.
-- **Proton labels ↔ folders.** Bridge maps Proton labels to IMAP
-  folders. `Patterns` in the mbsyncrc is what you tell mbsync to
-  pull; add `"Archive"` or `"Bills"` etc. in `MAIL_FOLDERS`.
-- **Gmail's `All Mail`.** Gmail exposes every message under
-  `[Gmail]/All Mail`. If you set `MAIL_FOLDERS="*"` you'll get every
-  message twice (once from INBOX, once from All Mail). Prefer
-  `MAIL_FOLDERS="INBOX \"[Gmail]/Sent Mail\""` — explicit is safer.
+| Path | Contents |
+| --- | --- |
+| `config/.env` | IMAP and Suchi settings; contains credentials |
+| `.env` | Compose profile, port, and UID/GID |
+| `maildir/` | mbsync state and local message mirror |
+| `ingest/` | Temporary handoff to Suchi |
+| `suchi-data/` | Database, blobs, keys, and snapshots |
+| `bridge-data/` | Proton Bridge state when enabled |
+
+Back up `config/.env`, `.env`, Maildir state when needed, and the complete
+`suchi-data/` directory. Restrict credentials to the deployment user.
+
+## Configuration changes
+
+Re-run `./setup.sh` or edit `config/.env`, then reload the external mbsync
+container:
+
+```sh
+docker compose restart mbsync
+```
+
+This is not a Suchi restart. Built-in mailbox settings use live supervisor
+reload and do not need either command.
+
+The reference Compose file does not mount the Docker socket. Avoid adding that
+root-equivalent capability merely to automate a sidecar reload.
+
+## Verification
+
+`./smoke-test.sh` exercises the generic provider handoff, EML ingest, and
+attachment fanout with synthetic data. It requires Docker and cleans up its
+test containers.
+
+Common issues:
+
+- The first sync is bounded by `MAIL_MAX_MESSAGES`; later runs are incremental.
+- `MAIL_MAX_SIZE` skips oversized messages.
+- Proton labels appear as IMAP folders through Bridge.
+- Gmail's All Mail overlaps Inbox; select explicit folders to avoid duplicate
+  local copies.
+
+Stop containers with `docker compose down`. Remove local directories only when
+you intend to delete credentials, mirrored mail, and the Suchi archive.

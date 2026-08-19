@@ -1,178 +1,93 @@
-# suchi bench harness
+# Suchi benchmark harness
 
-Repeatable, single-machine benchmarks for a single suchi binary. Every
-scenario boots a fresh temp datadir, exercises one axis (binary size,
-idle RAM, cold start, single large ingest, corpus ingest, or concurrent
-users), and drops JSONL samples + a per-scenario `*.summary.json` into a
-timestamped results directory. A Go reporter then rolls the artefacts up
-into a single Markdown summary.
+This directory contains repeatable Linux benchmarks for one Suchi binary. Raw
+runs are written to ignored timestamped directories; accepted release evidence
+lives in `latest-published/`.
 
-## How to run
+## Guardrail check
 
+```sh
+make bench-check
 ```
+
+This rebuilds Suchi and checks binary size, idle memory, cold start, and
+goroutine count against `thresholds.json`.
+
+| Metric | Target | Hard limit |
+| --- | ---: | ---: |
+| Idle median RSS | 40 MB | 100 MB |
+| Cold start | 100 ms | 1 s |
+| Idle goroutines | 15 | 100 |
+| Binary size | 30 MB | 60 MB |
+
+The hard limits catch regressions. Public claims must use an accepted measured
+run, not these limits.
+
+## Full harness
+
+```sh
 make build
-cd hack/bench
-./bench.sh
+./hack/bench/bench.sh
+./hack/bench/bench.sh --scenario 06
 ```
 
-The driver:
+Use `--keep` to retain a scenario's temporary data directory. Scenario 06
+accepts `USERS` and `DOCS_PER_USER`; for example:
 
-1. Creates `hack/bench/results/YYYYMMDD-HHMMSS/`.
-2. Builds the sampler / gen-pdf / report Go tools into
-   `hack/bench/tools/*/bin/` (skipped when the binary is newer than
-   `main.go`).
-3. Runs each scenario in its own subshell, in order.
-4. Runs `report -dir <results> -out summary.md` at the end.
-
-### Common flags
-
-- `./bench.sh --scenario 04` — run only `04-single-100mb.sh`.
-- `./bench.sh --keep` — skip datadir cleanup after each scenario;
-  useful for post-mortem inspection of the SQLite DB or logs.
-- `./bench.sh --no-dev` — accepted for backward compat; no effect. The
-  harness scrapes the setup token from the log at `LOG_LEVEL=warn` and
-  never depends on dev mode.
-
-### Scenario-specific env
-
-- Scenario 06: `USERS` (default 10), `DOCS_PER_USER` (default 20).
-
-## What each scenario measures
-
-| # | Name                 | Measures                                                                 |
-|---|----------------------|--------------------------------------------------------------------------|
-| 01| binary-size          | `dist/suchi` byte size and embedded SPA byte size.                        |
-| 02| idle-ram             | 60s of RSS/CPU/threads on an empty, freshly-bootstrapped instance.        |
-| 03| cold-start           | Wall time from `serve` fork to first 200 on `/healthz`.                   |
-| 04| single-100mb         | End-to-end upload + postingest for one 100 MB PDF; peak RSS during.       |
-| 05| 1k-corpus            | Ingest throughput for 1000 x 50KB PDFs, plus five `/api/documents/` timings.|
-| 06| concurrent-users     | N users x K uploads in parallel; p50/p95/p99 upload latency + throughput. |
-| 07| mem-profile          | Heap + goroutine pprof at idle and after a 10 x 200KB burst; top-10 allocators + flame-graph SVGs. |
-
-### Scenario 07 flame-graph outputs
-
-For each of the two heap snapshots (idle, post-burst), scenario 07 renders
-two interactive flame-graph SVGs into `results/<ts>/`:
-
-- `07-flame-idle-inuse.svg` — live objects at idle steady-state.
-- `07-flame-idle-alloc.svg` — cumulative allocation bytes since process start,
-  captured at idle. Useful for spotting churn even when in-use is small.
-- `07-flame-postburst-inuse.svg` — live objects after the 10 x 200KB burst
-  has drained through post-ingest.
-- `07-flame-postburst-alloc.svg` — cumulative allocation bytes across the
-  full boot + burst window.
-
-Diffing the two `inuse` graphs isolates ingest-path resident allocations
-from the always-on baseline; diffing the two `alloc` graphs highlights
-which ingest call sites churn the most bytes.
-
-## Latest published numbers
-
-The accepted v0.1 beta audit snapshot is in `latest-published/summary.md`.
-
-| Scenario       | Metric                         | Value   |
-| -------------- | ------------------------------ | ------- |
-| 01 binary-size | stripped binary                | 27.7 MB |
-| 02 idle-ram    | steady-state RSS median        | 36.0 MB |
-| 03 cold-start  | time to `/healthz`              | 87 ms   |
-| 06 concurrent  | 10 users × 5 uploads throughput | 454.5/s |
-| 06 concurrent  | upload p95 / peak RSS           | 17 ms / 53.3 MB |
-
-## Hardware fingerprint
-
-Before quoting any number publicly, capture the host it came from:
-
-```
-uname -a
-head -1 /proc/cpuinfo
-grep MemTotal /proc/meminfo
+```sh
+USERS=10 DOCS_PER_USER=5 ./hack/bench/bench.sh --scenario 06
 ```
 
-Paste all three lines alongside the number.
+| Scenario | Measures |
+| --- | --- |
+| 01 | Stripped binary and embedded SPA size |
+| 02 | Idle RSS, CPU, and threads |
+| 03 | Process start to `/healthz` |
+| 04 | One 100 MB PDF ingest and peak RSS |
+| 05 | 1,000-document ingest and API reads |
+| 06 | Concurrent upload latency and throughput |
+| 07 | Heap, goroutines, top allocators, and flame graphs |
 
-## Notes
+## Accepted v0.1 snapshot
 
-- **Linux-only sampler.** The Go sampler reads `/proc/<pid>/stat` and
-  `/proc/<pid>/status`. It won't produce meaningful output on macOS or
-  Windows. Everything else in the harness is portable bash, but leave
-  the numbers to Linux hosts.
-- **Teardown is safe.** Every scenario boots into an `mktemp -d` under
-  `/tmp/`. Teardown hard-asserts the path starts with `/tmp/` before
-  any `rm -rf`. Signals target the captured `SUCHI_PID` only — never a
-  bare `pkill suchi`.
-- **No CI integration.** These benchmarks are for maintainer-run
-  sanity checks and public claims. They exercise a real network stack,
-  a real SQLite DB, and a real Go binary — they're not fast or
-  hermetic enough for per-PR gating, and that's on purpose.
-- **Scenario isolation.** Each scenario runs in a `( subshell )` and
-  owns its own boot + teardown pair. A failure in scenario N does not
-  prevent scenario N+1 from running.
-- **Scenario 07 prerequisites.** Requires `SUCHI_PPROF=1` (the script
-  exports it before boot, so the runtime must honour that env var to
-  expose `/debug/pprof/*`) and `go` on `PATH` for the `go tool pprof`
-  post-processing step.
+The current report is [`latest-published/summary.md`](latest-published/summary.md),
+measured on 2026-08-18 and 2026-08-19 on an Intel Core Ultra 7 265U.
 
-## Flame graphs
+| Metric | Result |
+| --- | ---: |
+| Stripped binary | 27.7 MB |
+| Idle median RSS | 36.0 MB |
+| Cold start | 87 ms |
+| 10 users x 5 uploads | 50/50 successful |
+| Upload throughput / p95 | 454.5 documents/s / 17 ms |
+| Upload peak RSS | 53.3 MB |
+| Idle / post-burst goroutines | 12 / 12 |
 
-Scenario 07 renders each heap pprof into an interactive SVG flame graph.
-Open the file in a browser (or click through on the GitHub blob view):
-each box is a stack frame, width is proportional to the sample metric
-(in-use bytes for `-inuse`, cumulative allocated bytes for `-alloc`),
-click a box to zoom into that subtree, hover for the fully-qualified
-symbol, `Ctrl-F` searches.
+These are measurements from one host, not universal guarantees. Record
+`uname -a`, the CPU model, and total memory beside any newly accepted run.
 
-Published sample flame graph (curated snapshot at
-`latest-published/`, refreshed by hand when a maintainer accepts a
-run — the timestamped `results/` tree is gitignored so links from
-docs would 404):
+## Profiling output
 
-![idle heap flame — in-use](latest-published/07-flame-idle-inuse.svg)
+Scenario 07 emits heap profiles, allocator tables, and interactive SVG flame
+graphs. Inspect a profile directly with:
 
-Also on disk in `latest-published/`:
-- `07-flame-idle-alloc.svg` — cumulative allocation bytes at idle
-  (bigger view; shows churn even after GC).
-- `07-flame-postburst-inuse.svg` — live heap after ingesting 10 x
-  200 KB PDFs; used to spot allocations retained beyond the burst.
-
-## Alternative: local interactive exploration
-
-Skip the SVG pipeline entirely — Go ships an interactive pprof
-web UI with a native flame-graph view (Menu → VIEW → Flame Graph):
-
-```
-go tool pprof -http=:0 hack/bench/results/<ts>/07-heap-idle.pprof
+```sh
+go tool pprof -http=:0 hack/bench/results/<timestamp>/07-heap-idle.pprof
 ```
 
-Zero vendored deps, official Go tooling, better for one-off dev
-sessions. The SVG pipeline is what feeds embeddable snapshots into
-docs; the `-http` flow is what you reach for when actually
-investigating a regression.
+The SVG renderer uses Brendan Gregg's `flamegraph.pl`, vendored with its
+CDDL-1.0 license under `tools/flamegraph/`. Without Perl, the scenario still
+produces pprof files and allocator tables.
 
-For sharing a profile: drop the `.pprof` into
-[`speedscope.app`](https://speedscope.app) — client-side JS, no
-uploads leave the browser, best UX for handing a snapshot to a
-teammate.
+## Known costs
 
-Rendering pipeline:
+- The SQLite read pool is capped at four connections. Higher caps performed
+  worse in the recorded CPU-bound mixed-search benchmark.
+- Argon2id briefly uses 64 MiB during password hashing, above idle memory.
+- QR support initializes `gozxing` tables even when barcode detection is off.
+- Scenario 04 is intentionally outside the fast commit guardrail. Run it for
+  changes to PDF normalization, OCR, blank-page analysis, or splitting.
 
-1. `curl /debug/pprof/heap` → `.pprof` binary (already captured by
-   scenario 07).
-2. `pprof2collapsed -in <pprof> -sample_index <col>` — vendored Go tool
-   in `tools/pprof2collapsed/`; folds pprof samples into Brendan Gregg's
-   collapsed-stack format (`func1;func2;func3 <bytes>`).
-3. `flamegraph.pl` — vendored under `tools/flamegraph/`; consumes the
-   collapsed stream and emits interactive SVG.
-
-Perl is a soft dep: if `perl` isn't on `PATH` (or either vendored piece
-is missing), scenario 07 skips the SVG step and still emits pprof + top-N
-tables. To pre-build the tools without running a scenario:
-
-```
-source hack/bench/lib.sh
-bench_build_flame_deps
-bench_render_flame results/<ts>/07-heap-idle.pprof /tmp/flame.svg inuse_space "idle heap"
-```
-
-Attribution: flame graphs are rendered by Brendan Gregg's
-[`flamegraph.pl`](https://github.com/brendangregg/FlameGraph) (CDDL-1.0,
-vendored under `tools/flamegraph/`; see `tools/flamegraph/LICENSE-flamegraph`).
+The harness reads Linux `/proc`, so its memory and process measurements are not
+portable to macOS or Windows. Each scenario owns a temporary directory and
+process, and teardown verifies the temporary path before removal.

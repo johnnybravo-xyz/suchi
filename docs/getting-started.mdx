@@ -1,143 +1,94 @@
 ---
 title: "Getting started"
-description: "Five-minute quickstart. Docker Compose, bare binary, or NAS."
+description: "Install Suchi and complete the first-run setup."
 ---
 
-Pick the deployment shape that fits.
+## Docker
 
-## Docker Compose (canonical)
+The standard beta image is the recommended starting point:
 
-```yaml docker-compose.yml
-services:
-  suchi:
-    image: ghcr.io/johnnybravo-xyz/suchi:latest
-    restart: unless-stopped
-    user: "1000:1000"
-    read_only: true
-    tmpfs: [/tmp]
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    volumes:
-      - ./data:/data
-    ports:
-      - "8000:8000"
-    environment:
-      PUBLIC_URL: https://docs.example.com
+```sh
+docker volume create suchi-data
+docker run -d --name suchi --restart unless-stopped \
+  --read-only --tmpfs /tmp --security-opt no-new-privileges --cap-drop ALL \
+  -p 8000:8000 \
+  -e PUBLIC_URL=http://127.0.0.1:8000 \
+  -v suchi-data:/data \
+  ghcr.io/johnnybravo-xyz/suchi:beta
+docker logs suchi 2>&1 | grep token_minted
 ```
 
-```bash
+Open `http://127.0.0.1:8000`, enter the one-time setup token from the log, and
+create the first administrator.
+
+The setup wizard then asks what you are organizing:
+
+| Choice | Recommended filing tree |
+| --- | --- |
+| Personal | Personal filing |
+| Household | Household |
+| Freelance | Freelance / consultant |
+| Small business | Small-business billing |
+| Choose myself | Full preset catalog |
+
+The recommendation changes the default, not the available setup steps. You can
+compare all filing trees, skip starter rules and automations, and change the
+tree later.
+
+## Docker Compose
+
+The repository includes a minimal `compose.yaml`:
+
+```sh
 docker compose up -d
-docker compose logs suchi | grep 'setup.token'
+docker compose logs suchi | grep token_minted
 ```
 
-Copy the token from the log and POST it to `/setup`:
+Set `PUBLIC_URL`, `SUCHI_PORT`, or `SUCHI_IMAGE` in `.env` before starting.
+Edit the volume and network definitions when integrating an existing reverse
+proxy or storage layout.
 
-```bash
-curl -X POST http://localhost:8000/setup \
-    -H 'Content-Type: application/json' \
-    -d '{"token":"<the token>","email":"you@example.com","password":"..."}'
-```
+## Direct binary
 
-Then hit `http://localhost:8000/` in a browser and sign in.
+Download the binary for your platform from
+[GitHub Releases](https://github.com/johnnybravo-xyz/suchi/releases), then run:
 
-## Bare binary + systemd
-
-Download the `suchi` binary for your OS/arch from the
-[releases page](https://github.com/johnnybravo-xyz/suchi/releases).
-
-```bash
+```sh
 install -m 0755 suchi /usr/local/bin/suchi
-mkdir -p /var/lib/suchi
+mkdir -p "$HOME/.local/share/suchi"
+PUBLIC_URL=http://127.0.0.1:8000 \
+DATA_DIR="$HOME/.local/share/suchi" \
 suchi serve
 ```
 
-Ready-to-copy templates for the four common self-host shapes live
-under [`deploy/`](https://github.com/johnnybravo-xyz/suchi/tree/main/deploy)
-in the repo:
+Production templates for systemd, Caddy, nginx, Traefik, Kubernetes, and the
+optional mbsync helper live under
+[`deploy/`](https://github.com/johnnybravo-xyz/suchi/tree/main/deploy).
+Use one application replica because SQLite has one writer.
 
-- `deploy/systemd/suchi.service` — systemd unit with a hardened
-  sandbox and the two required env vars pre-set.
-- `deploy/caddy/Caddyfile` — Caddy reverse-proxy block (auto-TLS).
-- `deploy/nginx/suchi.conf` — nginx server block (bring your own
-  certs).
-- `deploy/traefik/suchi.yml` — Traefik dynamic-config snippet.
-- `deploy/k8s/suchi.yaml` — single-replica Deployment + PVC + Service.
-  SQLite is single-writer; do not scale up.
+## Image choice
 
-Every template documents the placeholders you need to edit before
-paste.
+- `beta` is the standard Alpine image. It indexes scanned PDFs with Tesseract
+  and includes the supported office, email, image, and archive extractors.
+- `beta-full` adds OCRmyPDF so scanned PDF downloads can retain a searchable
+  text layer.
 
-## What just happened?
+The Suchi application is otherwise the same. See [Supported formats](/formats)
+for exact routing, image sizes, and direct-install dependencies.
 
-- On first boot, suchi ran embedded migrations up to the current
-  schema version.
-- It auto-loaded the Johnny.Decimal starter tree (four areas: Life
-  admin, Money, Home, System). See [JD](/jd) for the shape.
-- It printed a one-time setup token to the log at WARN level.
-- `/healthz` is process-alive; `/readyz` is DB-reachable + schema
-  current.
-- `/metrics` exposes Prometheus counters (idle counts, HTTP latency
-  histogram, job pipeline gauges).
-
-## Picking an image: slim vs full
-
-The `ghcr.io/johnnybravo-xyz/suchi:latest` tag is the **slim** image
-(~70 MB, Alpine + qpdf + pdftotext + tesseract). It covers the whole
-PDF pipeline including OCR of scanned pages via the in-process
-`tessocr` engine (pdftoppm → tesseract). Image barcodes, EPUBs, and
-office documents (docx, xlsx, pptx, odt, rtf, csv via anydoc) work
-out of the box. **What it doesn't ship:** the ocrmypdf wrapper (so
-no text-selectable scanned-PDF archives — the extracted text still
-lands in `documents.content` and FTS indexes it), DjVu, and Outlook
-`.msg` parsing.
-
-For those, pull the **full** image (~400 MB):
-`ghcr.io/johnnybravo-xyz/suchi:latest-full`. Same binary, extra runtime deps.
-
-Both images can be forced to a specific OCR engine via `OCR_ENGINE`
-(`auto` | `tesseract` | `ocrmypdf`). See [supported file types](/formats)
-for the per-format matrix.
-
-## Bare-metal tooling
-
-If you're running the suchi binary directly (not the Docker image),
-the pipeline shells out to a handful of external binaries. Missing
-tools degrade features silently — the boot log emits
-`main.tools.missing` for anything not on PATH, along with an install
-hint per tool.
-
-**anydoc** — office document text extraction (docx, xlsx, pptx, odt,
-rtf, csv). Firecrawl publishes the source but no prebuilt binaries;
-suchi's GitHub Releases attach one built from the same source as the
-Docker image. One-liner install:
+## First checks
 
 ```sh
-curl -sfL https://raw.githubusercontent.com/johnnybravo-xyz/suchi/main/hack/install-anydoc.sh | sh
+curl -fsS http://127.0.0.1:8000/healthz
+curl -fsS http://127.0.0.1:8000/readyz
+suchi doctor
 ```
 
-Or, pin a specific release: `sh install-anydoc.sh --version v0.1.0`.
-Dry-run mode is `--dry-run`. The script verifies SHA256 against the
-release's `SHA256SUMS` before installing.
+`/healthz` confirms the process is alive. `/readyz` also checks database and
+schema readiness. `suchi doctor` reports the schema, filesystem, optional
+tools, taxonomy, job health, and configured egress without exposing secrets.
 
-**Other tools** — install via your OS package manager. Each is a
-strict dependency of one feature; suchi runs without them but the
-matching pipeline degrades:
-
-| Tool                     | Package                                                | Feature that degrades                                                     |
-| ------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `qpdf`                   | `apt install qpdf` · `brew install qpdf`               | PDF normalization + encrypted-PDF gate                                    |
-| `pdftotext` + `pdftoppm` | `apt install poppler-utils` · `brew install poppler`   | text-native PDF extraction; scanned-PDF rasterization; QR-split detection |
-| `tesseract`              | `apt install tesseract-ocr` · `brew install tesseract` | OCR engine for scanned PDFs (tessocr path)                                |
-| `ocrmypdf`               | `apt install ocrmypdf` · `brew install ocrmypdf`       | OCR engine that produces searchable-PDF archives                          |
-| `djvutxt`                | `apt install djvulibre-bin` · `brew install djvulibre` | DjVu text extraction                                                      |
-| `magick` / `convert`     | `apt install imagemagick` · `brew install imagemagick` | HEIC → JPEG conversion for iPhone photos                                  |
-| `msgconvert`             | `apt install libemail-outlook-message-perl`            | Outlook `.msg` → `.eml` conversion                                        |
-
-Run `suchi doctor` for a one-shot summary of what's on PATH.
-
-## Next steps
-
-- What suchi actually ingests: [supported file types](/formats)
-- Import an existing archive bundle: [importer](/importer)
-- Tune the running instance: [config](/config)
-- Add OIDC for team sign-in: [config#oidc](/config#oidc)
+Before storing important documents, configure TLS, create a complete backup,
+and test a restore. Continue with [Mail intake](/guides/mail-intake),
+[Configuration](/config), [Backup and restore](/backup-restore), or
+[Importing from Paperless-ngx](/importer).

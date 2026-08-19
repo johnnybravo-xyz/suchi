@@ -1,7 +1,7 @@
 # Latest published benchmark artefacts
 
 These are the SVG flame graphs and summary text referenced from the
-top-level `PERF-PLAN.md` and `README.md`. They are hand-copied here
+benchmark guide and `README.md`. They are hand-copied here
 from `hack/bench/results/<timestamp>/` after a maintainer accepts
 the run. Do NOT edit these files directly — regenerate with
 `make bench-check` (or `./hack/bench/bench.sh --scenario 07`), then

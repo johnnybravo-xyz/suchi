@@ -4,11 +4,8 @@ A recording reverse proxy. Point it at any HTTP upstream with `--target`,
 and every request/response pair the proxy sees lands in `--out` as a
 golden fixture (JSON header block + sidecar blobs for binary bodies).
 
-## Why
-
-Golden transcripts are the honest way to know two implementations
-speak the same wire protocol. It's a generic `net/http/httputil.ReverseProxy`
-with a tee to disk. Use it against any upstream you want to characterize.
+It is a small `net/http/httputil.ReverseProxy` with a recorder, intended for
+capturing synthetic wire examples while investigating client behavior.
 
 ## Build
 
@@ -113,11 +110,5 @@ deleted, not committed.
   against a scratch with synthetic docs. `hack/emlfixtures`
   ships PDFs suitable for the upload path.
 
-## Roadmap
-
-- **Replay** side is Phase-4 work: reads the fixture set, hits suchi's
-  compat surface, diffs against recorded responses. Placeholder home
-  will be `core/compat/contract_test.go`.
-- Optional TLS on `--listen` for iOS clients that refuse plaintext
-  (mkcert + `--tls-cert` / `--tls-key`).
-- `--filter` to skip paths (e.g. `/api/logs/` polling noise).
+The tool records only. It does not replay fixtures, terminate TLS, or filter
+paths.
