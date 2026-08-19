@@ -5,10 +5,9 @@
 //
 // Built-in contract:
 //   - toggleable (enabled/disabled)
-//   - the action's params are the ONE user-tunable surface (thresholds,
-//     top-k, etc.) — everything else is locked (name, trigger,
-//     action kind, filters). Enforcement of that lock lives in the
-//     store's PATCH path; the seed here defines the shape.
+//   - exactly one confidence threshold is user-tunable; everything else is
+//     locked (name, trigger, action kind, filters, and supporting params).
+//     Enforcement of that lock lives in the store's PATCH path.
 //   - undeletable (guard in store.Delete).
 //
 // Every built-in's slug + tuning defaults live in this file so a

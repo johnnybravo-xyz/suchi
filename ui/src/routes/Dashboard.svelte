@@ -115,7 +115,7 @@
       </div>
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
-        No custom views yet. Create one in <a href="#/settings">Settings</a> — a saved filter
+        No custom views yet. Create one in <a href="#/views">Views</a> — a saved filter
         (say, <i>“confidential in 22 Tax”</i>) shows up here with a live count.
       </div>
     {/if}

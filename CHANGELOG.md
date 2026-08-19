@@ -23,6 +23,10 @@ changes that require a restart, etc.).
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+### Changed
+
+- Built-in automations now use plain-language tuning views and confidence sliders while keeping their fixed workflow structure read-only.
+
 ### Fixed
 
 - Taxonomy CLI imports now honor flags after the input filename, apply merge-mode imports with explicit collision remaps, and export the same portable seeds as the admin API.

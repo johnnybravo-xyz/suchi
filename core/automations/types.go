@@ -69,10 +69,9 @@ func TriggerToCode(t TriggerType) int {
 //
 // System = true marks an automation that suchi seeded on first boot
 // ("Auto-file from archive" is the first of these). System rows are
-// undeletable but otherwise identical: the operator can toggle
-// enabled, rename them, and tune their action params. SystemSlug is
-// the seed's stable identifier; the seeder INSERT ... ON CONFLICT's
-// on it so re-runs are no-ops.
+// undeletable and structurally fixed: the operator can toggle enabled and tune
+// the one threshold exposed for that built-in. SystemSlug is the seed's stable
+// identifier; the seeder INSERT ... ON CONFLICT's on it so re-runs are no-ops.
 //
 // PresetSlug marks an automation seeded by a taxonomy preset. Empty =
 // user-owned or system-owned; non-empty = preset singleton. PATCH or
