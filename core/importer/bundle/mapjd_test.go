@@ -2,6 +2,8 @@ package bundle_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/importer/bundle"
@@ -16,6 +18,40 @@ func TestAutoMappingParses(t *testing.T) {
 	}
 	if len(m.Rules) == 0 {
 		t.Fatal("no rules in embedded heuristics")
+	}
+}
+
+func TestLoadMappingDocumentedFormats(t *testing.T) {
+	tests := []struct {
+		name string
+		ext  string
+		body string
+	}{
+		{
+			name: "toml",
+			ext:  ".toml",
+			body: "[[rules]]\nif = \"tag:tax\"\ncategory = 22\n",
+		},
+		{
+			name: "huml",
+			ext:  ".huml",
+			body: "rules::\n  - ::\n    if: \"tag:tax\"\n    category: 22\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mapping"+tt.ext)
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m, err := bundle.LoadMapping(path)
+			if err != nil {
+				t.Fatalf("LoadMapping: %v", err)
+			}
+			if len(m.Rules) != 1 || m.Rules[0].If != "tag:tax" || m.Rules[0].Category != 22 {
+				t.Fatalf("unexpected mapping: %+v", m.Rules)
+			}
+		})
 	}
 }
 

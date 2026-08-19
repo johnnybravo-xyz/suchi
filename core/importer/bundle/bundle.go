@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
 // Options carries CLI flags to Run. Every field is documented; see
@@ -833,40 +833,12 @@ func defaultString(v, d string) string {
 	return v
 }
 
-// slugify returns a lowercase-hyphenated version of name. Used when the
-// source manifest omits a slug (paperless v3 emits slug=null) — suchi
-// tables carry NOT NULL UNIQUE slug columns, so we need a deterministic
-// derivation. Match paperless's own slugify (django's default): lowercase,
-// non-alphanumeric → hyphen, collapse consecutive hyphens.
-func slugify(name string) string {
-	var b strings.Builder
-	prevHyphen := false
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			prevHyphen = false
-		default:
-			if !prevHyphen && b.Len() > 0 {
-				b.WriteByte('-')
-				prevHyphen = true
-			}
-		}
-	}
-	s := b.String()
-	s = strings.TrimRight(s, "-")
-	if s == "" {
-		return "unnamed"
-	}
-	return s
-}
-
 // defaultSlug uses the slug when non-empty, otherwise derives from name.
-func defaultSlug(slug, name string) string {
-	if slug != "" {
-		return slug
+func defaultSlug(s, name string) string {
+	if s != "" {
+		return s
 	}
-	return slugify(name)
+	return slug.Make(name)
 }
 
 func boolInt(b bool) int {

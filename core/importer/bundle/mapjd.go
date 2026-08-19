@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/BurntSushi/toml"
+	huml "github.com/huml-lang/go-huml"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,19 +31,13 @@ func AutoMapping() (*Mapping, error) {
 	return &m, nil
 }
 
-// Mapping is a first-match ruleset from source metadata → JD code.
+// Mapping is a first-match ruleset from source metadata to a JD code.
 //
-// YAML shape (documented in docs/import.md when that lands):
+// TOML shape:
 //
-//	rules:
-//	  - if: tag:tax
-//	    category: 22
-//	  - if: storage_path:Insurance
-//	    category: 23
-//	  - if: document_type:Bill
-//	    category: 31
-//	  - if: correspondent:Landlord
-//	    category: 32
+//	[[rules]]
+//	if = "tag:tax"
+//	category = 22
 //
 // "if" is `<kind>:<name>`. Supported kinds: tag, storage_path,
 // document_type, correspondent. Comparison is case-insensitive on the
@@ -49,17 +46,18 @@ func AutoMapping() (*Mapping, error) {
 // category is the JD code (integer). Must resolve at import time to a
 // row in jd_categories.code. Unmapped docs fall through to the inbox.
 type Mapping struct {
-	Rules []Rule `yaml:"rules"`
+	Rules []Rule `huml:"rules" toml:"rules" yaml:"rules"`
 }
 
 // Rule is one line of the ruleset.
 type Rule struct {
-	If       string `yaml:"if"`
-	Category int    `yaml:"category"`
+	If       string `huml:"if" toml:"if" yaml:"if"`
+	Category int    `huml:"category" toml:"category" yaml:"category"`
 }
 
-// LoadMapping reads a YAML file into a Mapping and validates its shape.
-// Empty path returns a nil *Mapping — the caller treats that as
+// LoadMapping reads a HuML or TOML mapping and validates its shape.
+// YAML remains an extension-selected compatibility parser. Empty path
+// returns nil; the caller treats that as
 // "no mapping" and falls through to the inbox for every doc.
 func LoadMapping(path string) (*Mapping, error) {
 	if path == "" {
@@ -70,8 +68,23 @@ func LoadMapping(path string) (*Mapping, error) {
 		return nil, fmt.Errorf("read mapping: %w", err)
 	}
 	var m Mapping
-	if err := yaml.Unmarshal(b, &m); err != nil {
-		return nil, fmt.Errorf("parse mapping: %w", err)
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".huml":
+		if err := huml.Unmarshal(b, &m); err != nil {
+			return nil, fmt.Errorf("parse HUML mapping: %w", err)
+		}
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(b, &m); err != nil {
+			return nil, fmt.Errorf("parse legacy mapping: %w", err)
+		}
+	default:
+		md, err := toml.Decode(string(b), &m)
+		if err != nil {
+			return nil, fmt.Errorf("parse TOML mapping: %w", err)
+		}
+		if undecoded := md.Undecoded(); len(undecoded) > 0 {
+			return nil, fmt.Errorf("parse TOML mapping: unknown field %q", undecoded[0])
+		}
 	}
 	if err := validateRules(m.Rules); err != nil {
 		return nil, err

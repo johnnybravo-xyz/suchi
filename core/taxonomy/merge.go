@@ -1,9 +1,8 @@
 // Package taxonomy is admin tooling over the reference tables — tags,
 // correspondents, document_types.
 //
-// The only operation Phase 2 ships is Merge: given two rows of the
-// same kind, rewrite every reference from the source to the target
-// and delete the source. Idempotent when target and source names
+// Merge rewrites every reference from a source row to the target
+// and deletes the source. Idempotent when target and source names
 // differ only by case ("BESCOM" vs "Bescom") — a recurring source of
 // admin pain in DMS deployments.
 package taxonomy
@@ -129,6 +128,10 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 	}
 
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+		tableName, err := table.sqlName()
+		if err != nil {
+			return err
+		}
 		// Snapshot the affected doc IDs BEFORE mutating so we can enqueue
 		// render jobs afterward. For tag merges the source is the
 		// junction; for FK merges the source is documents.<fkcol>.
@@ -189,7 +192,7 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		}
 		// Finally drop the source row.
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM `+table+` WHERE id = ?`, fromID); err != nil {
+			`DELETE FROM `+tableName+` WHERE id = ?`, fromID); err != nil {
 			return err
 		}
 		return nil
@@ -197,16 +200,16 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 	return res, err
 }
 
-func tableFor(kind string) (table, junction string, err error) {
+func tableFor(kind string) (table NamedTable, junction string, err error) {
 	switch kind {
 	case KindTag:
-		return "tags", "document_tags", nil
+		return TableTags, "document_tags", nil
 	case KindCorrespondent:
-		return "correspondents", "", nil
+		return TableCorrespondents, "", nil
 	case KindDocumentType:
-		return "document_types", "", nil
+		return TableDocumentTypes, "", nil
 	}
-	return "", "", fmt.Errorf("taxonomy: unknown kind %q (want tag|correspondent|document_type)", kind)
+	return 0, "", fmt.Errorf("taxonomy: unknown kind %q (want tag|correspondent|document_type)", kind)
 }
 
 func fkColFor(kind string) string {
@@ -219,10 +222,14 @@ func fkColFor(kind string) string {
 	return ""
 }
 
-func lookupByName(ctx context.Context, d *db.DB, table, name string) (int64, error) {
+func lookupByName(ctx context.Context, d *db.DB, table NamedTable, name string) (int64, error) {
+	tableName, err := table.sqlName()
+	if err != nil {
+		return 0, err
+	}
 	var id int64
-	err := d.Read.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, table),
+	err = d.Read.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, tableName),
 		name).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, fmt.Errorf("no row named %q", name)

@@ -1,15 +1,4 @@
-// Package bundle: MigrationReport accumulates per-entry FULL / PARTIAL /
-// FAILED outcomes during an import and emits a human-readable markdown
-// report at the end.
-//
-// Why this exists (why-not-what): the existing Report struct in bundle.go
-// only carries row counts — good for logs, useless for "did my workflow
-// actually make it across?". The maintainer wants explicit per-entry
-// accounting so a post-import review can answer three questions per model
-// class: what came over intact, what came over with caveats, what did not
-// come at all. MigrationReport is that ledger. It lives alongside Report
-// (not a replacement) so the numeric summary path stays untouched while
-// the qualitative one grows here.
+// Package bundle imports portable DMS exports and reports lossy conversions.
 package bundle
 
 import (
@@ -44,7 +33,6 @@ const (
 	KindNote
 	KindWorkflow
 	KindSavedView
-	KindApprovalProposal
 )
 
 // Entry is one row of the ledger.
@@ -74,15 +62,6 @@ type MigrationReport struct {
 	finishedAt time.Time
 
 	strategy string
-
-	jdMatched     int
-	jdInbox       int
-	jdApprovals   int
-	jdSuppressed  int
-	jdFlatTagBand int
-
-	approvalQueued     int
-	approvalSuppressed int
 
 	entries   []Entry
 	followups map[string]int
@@ -139,32 +118,6 @@ func (r *MigrationReport) SetStrategy(s string) {
 	r.strategy = s
 }
 
-// SetJDStats records the per-strategy tallies.
-func (r *MigrationReport) SetJDStats(matched, inbox, approvals, suppressed, flatTagBand int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.jdMatched = matched
-	r.jdInbox = inbox
-	r.jdApprovals = approvals
-	r.jdSuppressed = suppressed
-	r.jdFlatTagBand = flatTagBand
-}
-
-// ApprovalQueued bumps and returns the current queued-approval count.
-func (r *MigrationReport) ApprovalQueued() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.approvalQueued++
-	return r.approvalQueued
-}
-
-// ApprovalSuppressed bumps the suppressed-approval count.
-func (r *MigrationReport) ApprovalSuppressed() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.approvalSuppressed++
-}
-
 // Finalize stamps finishedAt. Safe to call more than once (last wins).
 func (r *MigrationReport) Finalize() {
 	r.mu.Lock()
@@ -186,7 +139,6 @@ var summaryOrder = []struct {
 	{KindNote, "Notes"},
 	{KindWorkflow, "Workflows"},
 	{KindSavedView, "Saved views"},
-	{KindApprovalProposal, "Approval proposals"},
 }
 
 // escapePipe keeps user-supplied reason strings from breaking markdown tables.
@@ -254,14 +206,6 @@ func (r *MigrationReport) Emit(w io.Writer) error {
 		fmt.Fprintf(&b, "| %-16s | %d | %d | %d |\n", row.label, t.full, t.partial, t.failed)
 	}
 	b.WriteString("\n")
-
-	// JD categorization.
-	fmt.Fprintf(&b, "## JD categorization\n\n")
-	fmt.Fprintf(&b, "- Strategy: %s\n", r.strategy)
-	fmt.Fprintf(&b, "- Docs matched to built-in JD tree (confident): %d\n", r.jdMatched)
-	fmt.Fprintf(&b, "- Docs deferred as proposals in Approvals queue: %d (suppressed: %d)\n", r.jdApprovals, r.jdSuppressed)
-	fmt.Fprintf(&b, "- Docs to inbox (49): %d\n", r.jdInbox)
-	fmt.Fprintf(&b, "- Docs placed in flat-mode tag bands (10-19): %d\n\n", r.jdFlatTagBand)
 
 	// Partials.
 	fmt.Fprintf(&b, "## Partial migrations\n\n")

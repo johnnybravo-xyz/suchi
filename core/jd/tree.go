@@ -125,7 +125,7 @@ func (t Tree) Validate() error {
 		return errors.New("jd tree needs at least one system category (the inbox)")
 	}
 	if systems > 1 {
-		return errors.New("jd tree has more than one system category — Phase-1 supports exactly one (the inbox)")
+		return errors.New("jd tree has more than one system category; exactly one inbox is required")
 	}
 	return nil
 }

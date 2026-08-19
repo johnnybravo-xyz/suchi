@@ -1,8 +1,8 @@
 # suchi Johnny.Decimal starter tree.
 #
-# Deliberately boring. First-boot loads this so a new install has a
-# working tree on first ingest. Edit freely (`suchi jd import` — arrives
-# post-Phase-1) or ignore in favor of flat mode.
+# Deliberately boring. First boot loads this so a new install has a
+# working tree on first ingest. Import another tree with
+# `suchi taxonomy import`, or use flat mode.
 #
 # The 40-49 System area is reserved. Its 49 Inbox category is
 # system=true — the UI/API refuse to delete it because low-confidence

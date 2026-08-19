@@ -3,6 +3,7 @@ package importer_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -52,6 +53,21 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 	}
 	if resolved != 1 {
 		t.Fatalf("resolved actions: got %d, want 1", resolved)
+	}
+	var rawParams string
+	if err := d.Read.QueryRowContext(context.Background(),
+		`SELECT params_json FROM automation_actions LIMIT 1`).Scan(&rawParams); err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(rawParams), &params); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := params["tags"]; exists {
+		t.Fatalf("symbolic tags leaked into stored params: %s", rawParams)
+	}
+	if _, exists := params["tag_ids"]; !exists {
+		t.Fatalf("resolved tag_ids missing from stored params: %s", rawParams)
 	}
 }
 
@@ -143,6 +159,7 @@ func smallPreset() *presetfile.PresetFile {
 					Kind: "assign_jd_category",
 					Params: map[string]any{
 						"jd_category_code": 11,
+						"tags":             []string{"Tax"},
 					},
 				}},
 			}},

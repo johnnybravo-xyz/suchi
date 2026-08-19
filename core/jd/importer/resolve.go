@@ -3,12 +3,11 @@ package importer
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // resolveActionParams walks the symbolic params of one seed action and
@@ -39,7 +38,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 
 	// tag / tags names → tag_ids.
 	if name, ok := stringField(out, "tag"); ok {
-		id, err := upsertByName(ctx, tx, "tags", name)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -49,18 +48,19 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 	if names, ok := stringSliceField(out, "tags"); ok {
 		ids := make([]int64, 0, len(names))
 		for _, n := range names {
-			id, err := upsertByName(ctx, tx, "tags", n)
+			id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, n, time.Now().Unix())
 			if err != nil {
 				return nil, err
 			}
 			ids = append(ids, id)
 		}
+		delete(out, "tags")
 		out["tag_ids"] = ids
 	}
 
 	// document_type name → document_type_id.
 	if name, ok := stringField(out, "document_type"); ok {
-		id, err := upsertByName(ctx, tx, "document_types", name)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableDocumentTypes, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 
 	// correspondent name → correspondent_id.
 	if name, ok := stringField(out, "correspondent"); ok {
-		id, err := upsertByName(ctx, tx, "correspondents", name)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -79,48 +79,6 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 	}
 
 	return out, nil
-}
-
-// upsertByName is a small clone of the same-named helper in
-// core/classify/rules — kept private here to avoid pulling that
-// package into the importer's import graph.
-func upsertByName(ctx context.Context, tx *sql.Tx, table, name string) (int64, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return 0, errors.New("empty name")
-	}
-	slug := slugify(name)
-	now := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-	`, table), name, slug, now, now); err != nil {
-		return 0, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, table), name).Scan(&id); err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-func slugify(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	s := b.String()
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
 }
 
 // intField / stringField / stringSliceField extract typed values from
