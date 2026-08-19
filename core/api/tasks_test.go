@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -67,6 +68,86 @@ func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
 	}
 	if len(admin.Results) != 3 || admin.Counts["dead"] != 2 {
 		t.Fatalf("admin tasks = %+v counts=%+v", admin.Results, admin.Counts)
+	}
+}
+
+func TestRetryDeadJob(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO jobs(id, kind, doc_id, state, attempts, next_run_at, last_error, created_at, updated_at)
+		VALUES (301, 'post-classify', 14, 'dead', 4, 0, 'bad model', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/301/retry", nil)
+	req.SetPathValue("id", "301")
+	req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+	rec := httptest.NewRecorder()
+	s.RetryDeadJob(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var state, lastError string
+	var attempts int
+	if err := d.Read.QueryRowContext(context.Background(), `
+		SELECT state, attempts, COALESCE(last_error, '') FROM jobs WHERE id = 301
+	`).Scan(&state, &attempts, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending" || attempts != 0 || lastError != "" {
+		t.Fatalf("retried row = state:%s attempts:%d error:%q", state, attempts, lastError)
+	}
+}
+
+func TestDismissDeadJob(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO jobs(id, kind, state, attempts, next_run_at, last_error, created_at, updated_at)
+		VALUES (302, 'maintenance', 'dead', 0, 0, 'expected test failure', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/302/dismiss", nil)
+	req.SetPathValue("id", "302")
+	req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+	rec := httptest.NewRecorder()
+	s.DismissDeadJob(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var count int
+	if err := d.Read.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM jobs WHERE id = 302`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("dismissed job still exists")
+	}
+	var action string
+	if err := d.Read.QueryRowContext(context.Background(), `
+		SELECT action FROM audit_events WHERE object_kind = 'job' AND object_id = 302
+	`).Scan(&action); err != nil {
+		t.Fatal(err)
+	}
+	if action != "job.dismiss" {
+		t.Fatalf("audit action = %q", action)
+	}
+}
+
+func TestDeadJobActionsRequireAdmin(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/1/retry", nil)
+	req.SetPathValue("id", "1")
+	req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+	rec := httptest.NewRecorder()
+	s.RetryDeadJob(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("member retry status=%d, want 403", rec.Code)
 	}
 }
 

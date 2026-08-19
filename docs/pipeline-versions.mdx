@@ -1,181 +1,83 @@
 ---
 title: "Pipeline versions"
-description: "When the binary bumps a version, what heuristics and proposals fire on your archive, and how to steer the rescan-proposal card that appears on your Tasks page."
+description: "How Suchi identifies outdated processing results and offers controlled rescans."
 ---
 
-Every document in suchi carries three version numbers next to its
-content: `pipeline_version_ocr`, `pipeline_version_content`, and
-`pipeline_version_llm`. Each records "which release of that
-extraction step was this doc last processed by." The suchi binary
-carries the current version for each; on boot, a detector compares
-the two and offers to bring stale docs up to date.
+Every document records the processing revision that successfully completed for
+OCR, content extraction, and optional LLM classification:
 
-This page explains what the numbers mean, when the version bumps,
-what heuristics and proposals fire around each event, and how to use
-the approval card that surfaces when there's stale work to do.
+- `pipeline_version_ocr`
+- `pipeline_version_content`
+- `pipeline_version_llm`
 
-## The three pipelines
+The binary carries the current revision for each pipeline. Maintainers bump a
+revision when code, a prompt, an output schema, or another processing contract
+changes enough that older results may be worth regenerating.
 
-| Column | Bumped when | Runs on rescan |
-|---|---|---|
-| `pipeline_version_ocr` | The OCR extractor changes (tesseract flags, ocrmypdf flags, a new archive-PDF encoder). | Re-OCRs the original blob. |
-| `pipeline_version_content` | Content extraction changes (text/plain path added, HTML-to-text rewritten, PDF text layer parser swapped). | Re-runs the extractor and rewrites `documents.content`. |
-| `pipeline_version_llm` | The LLM prompt template, JSON schema, or default model changes. | Re-runs the classifier. Only relevant when the LLM plugin is enabled. |
+## Version zero
 
-The columns live on every `documents` row and default to `0` at
-insert time. A doc that comes in via ingestion moves to the current
-version as soon as its handler runs successfully. A rescan brings
-older docs forward.
+Version `0` means the pipeline has never completed successfully for that
+document. A failed LLM request therefore remains at `0`. A valid
+low-confidence response is still a completed classification: Suchi adds the
+`needs-review` tag and records the current LLM revision without applying its
+uncertain metadata.
 
-## The rescan-proposal approval card
+This distinction matters when the LLM is first enabled. Existing version-zero
+documents are not automatically presented as outdated LLM results because
+they have no prior LLM result to upgrade. Select the documents in **Documents**
+and use **Rescan** when you want to classify them.
 
-At boot, suchi checks each pipeline. If any docs sit below the
-binary's current version for that pipeline, a `rescan-proposal`
-approval-run opens and shows up on your Tasks page:
+## Automatic proposals
 
-```
-Pipeline rescan available — approve to re-run the extraction chain
-against stale documents.
+On boot, Suchi compares stored revisions with the binary's current revisions.
+When previously processed results are older, it opens one admin approval per
+affected pipeline.
 
-Pipeline llm · 11 documents stale (v2 → v3)
+For LLM classification, automatic proposals only include documents with a
+successful earlier revision (`pipeline_version_llm >= 1`). Enabling the LLM or
+changing its endpoint, model, key, timeout, threshold, or egress setting does
+not create a proposal. Those configuration changes require an explicit
+selected rescan.
 
-[ approve_all ]   [ approve_sample ]   [ dismiss ]
-```
+The Tasks card reports the pipeline, target revision, and matching document
+count. Its actions are:
 
-The three choices come from the approval definition itself
-(`core/rescan/spec.go`). They're not hard-coded in the SPA — the
-buttons are whatever `choices` the state machine offers.
+- **Rescan all N**: enqueue every matching document.
+- **Try 20 first**: enqueue up to 20 random matches. This only appears when
+  more than 20 documents match.
+- **Dismiss**: close this proposal without enqueuing work.
 
-- **`approve_all`** — enqueue a post-ingest job for every stale doc
-  in that pipeline. Full re-processing. Sensible for OCR/content
-  version bumps where the cost is deterministic (CPU + storage).
-- **`approve_sample`** — enqueue jobs for a random 20 stale docs.
-  The cost-safety hatch. Only meaningful for the LLM pipeline where
-  each rescan hits the classifier plugin and — for cloud endpoints —
-  costs real money per token. Sample first to sanity-check that the
-  new prompt or model actually improves classifications before you
-  commit the whole archive to it.
-- **`dismiss`** — close the run without action. Next boot will not
-  re-open it unless the version bumps again or new stale docs appear.
+The underlying approval choices remain `approve_all`, `approve_sample`, and
+`dismiss`; the web app presents human labels. Rescans use the same durable
+`post-ingest` path as new uploads, so a process interruption does not lose the
+work.
 
-### When the card appears "again"
+Dismissed proposals stay closed for that target revision. A later code revision
+can create a new proposal. If another rescan brings the matching count to zero,
+the detector cancels the obsolete open proposal on the next boot.
 
-The detector reconciles on every boot. If you bump the binary's
-`PipelineVersionLLM` a second time (say v2 → v3 during development),
-the old v1 → v2 run is cancelled and a fresh v2 → v3 run opens. Same
-UX, different underlying run row. This is intentional: the operator
-should never see a stale approval pointing at an old version target.
+## Explicit rescans
 
-## What fires alongside
+Use the Documents selection controls for ordinary operator-driven rescans. The
+CLI provides narrower filters and dry runs:
 
-Rescan is the operator-controlled surface. Two built-in automations
-react to pipeline output automatically. Both are toggleable from the
-Automations page; you can't rename them, change their trigger, or add
-filters — the ONE tunable knob per built-in is its action's threshold,
-exposed on the automation edit card as a slider.
-
-### Built-in #1: `auto_file_from_archive` (`apply_from_similar` action)
-
-Fires on `document_added`. Runs when:
-
-- The LLM plugin is disabled — heuristics classify directly.
-- The LLM plugin returns low confidence
-  (`confidence < threshold`, default 0.7) — heuristics fire as a
-  fallback so the archive corroborates or supplements the LLM's
-  best guess.
-
-Looks for `top-K` FTS-similar docs, aggregates votes for
-`jd_category`, `correspondent`, `document_type`, and tags, and either
-autoapplies (`confidence >= threshold_autoapply`, default 0.9) or
-writes a `document_proposals` row (`>= threshold_propose`, default
-0.5). Every run logs two lines — `apply_from_similar.considered`
-(neighbours count) and `apply_from_similar.wrote` (autoapplied +
-proposed counts) — so you can grep per doc.
-
-### Built-in #2: `apply_llm_title` (LLM title suggestions)
-
-Fires on `document_updated` — emitted by the LLM handler after every
-successful classify. Seeded enabled=true when the LLM plugin is
-registered at boot, disabled otherwise (still seeded, so toggling it
-on later doesn't require a re-seed).
-
-Reads pending title proposals for the doc:
-
-- If the proposal's confidence `>= threshold` (default 0.7): apply
-  and resolve the proposal.
-- Otherwise: leave it pending — the operator sees a Title chip in the
-  Tasks inbox and clicks Apply to accept.
-
-Toggle the automation off to keep LLM title suggestions surfaced in
-the Tasks inbox but stop auto-apply entirely. The empty-current-title
-fast path lives in the LLM plugin itself — it applies the suggestion
-directly without going through the automation, since there's no
-existing title to preserve.
-
-### Proposals (Tasks inbox chips)
-
-The Tasks page renders a proposals card per doc that has pending
-suggestions. Chips carry a field label, the suggested value, a
-confidence percentage, and Apply/Skip buttons. Sources today:
-
-- Heuristics via `apply_from_similar` — jd_category, correspondent,
-  document_type, tag.
-- LLM classifier — a `title` proposal that the `apply_llm_title`
-  automation either auto-applies (above threshold) or leaves for the
-  operator to accept from the chip.
-
-Applying a proposal audit-logs a `heuristics.applied` (for
-apply_from_similar) or `apply_llm_title.applied` event and mutates
-the doc with the standard null-guard (for FK fields) or a direct
-overwrite (for title).
-
-## Low-confidence LLM outcomes stay at `pipeline_version_llm=0`
-
-Intentional. When the LLM returns a low-confidence verdict, the
-handler tags `needs-review` and skips the version bump. That way
-`suchi rescan --stale llm` picks the doc up again after any prompt
-or model tweak — you get another shot at classifying it without
-having to reset a column.
-
-If you're comfortable freezing the low-confidence outcome, apply the
-`needs-review` tag manually or bump the doc's version via a
-one-shot SQL update. The default behavior favors "let the operator
-try a better prompt" over "silently accept whatever came back first."
-
-## Manual rescan from the CLI
-
-The approval card is the friendly surface; the CLI does the same
-thing with more filters:
-
-```bash
-# Preview what would run.
+```sh
 suchi rescan --stale llm --dry-run
-
-# Same set, actually enqueue.
-suchi rescan --stale llm --yes
-
-# Sample 5 docs from a single JD category.
-suchi rescan --stale llm --jd 7 --sample 5 --yes
-
-# Cost estimate before firing.
-suchi rescan --stale llm --estimate
-
-# Only rescan docs whose post-ingest job died on the last attempt.
-suchi rescan --stale llm --only-failed --yes
+suchi rescan --stale llm --jd 20 --sample 5 --yes
+suchi rescan --stale ocr --estimate
 ```
 
-`--stale` accepts `ocr`, `llm`, or `content`. The rescan re-enqueues
-a `post-ingest` job, which re-runs the whole extraction chain (OCR,
-content, LLM in order). Version markers bump on success; failed jobs
-land in the dead-jobs list on the Tasks page.
+Unlike automatic LLM upgrade proposals, `--stale llm` includes version-zero
+documents. This is intentional because the command is an explicit operator
+decision.
 
-## What isn't documented in the columns
+## Failures
 
-Only version drift — the columns don't track what changed. A boot
-detector for "the LLM prompt changed" would be nice but is out of
-scope today. If you want a curated audit trail of what each version
-bump means, keep it in `CHANGELOG.md` alongside the release note.
+Exhausted or terminal jobs appear under **Dead jobs** in Tasks. Correct the
+underlying problem, then choose **Retry** to reset the same durable row and run
+it again. Choose **Dismiss** when the failure was expected or no longer needs
+attention. Both actions are administrator-only and audited; dismissing a job
+does not delete its document.
 
-Related pages: [LLM classifier](/llm-classifier),
-[Similar documents](/similar-docs), [Automations](/automations),
-[Approvals](/approvals).
+Related pages: [LLM classifier](/llm-classifier), [Approvals](/approvals),
+[CLI](/cli), and [Automations](/automations).

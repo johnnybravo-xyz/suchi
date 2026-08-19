@@ -77,6 +77,9 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 		LLMVersion:     h.versions.LLM,
 		ContentVersion: h.versions.Content,
 	}
+	if kind == "llm" {
+		opts.MinimumVersion = 1
+	}
 	enqueued, err := Enqueue(ctx, h.db, opts)
 	if err != nil {
 		return approvals.HandlerResult{

@@ -131,6 +131,30 @@ func TestCountStale_MatchesLagBehindCurrent(t *testing.T) {
 	}
 }
 
+func TestCountProposalStale_LLMExcludesNeverProcessed(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	seedDoc(t, ctx, d, owner, "sha-never", 0)
+	older := seedDoc(t, ctx, d, owner, "sha-older", 0)
+	current := seedDoc(t, ctx, d, owner, "sha-current", 0)
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET pipeline_version_llm = 1 WHERE id = ?`, older); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET pipeline_version_llm = 2 WHERE id = ?`, current); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := rescan.CountProposalStale(ctx, d, "llm", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("LLM proposal stale count = %d, want only prior successful version", got)
+	}
+}
+
 func TestEnqueue_StaleOCR(t *testing.T) {
 	ctx := context.Background()
 	d, owner := setupDB(t)
@@ -172,6 +196,35 @@ func TestEnqueue_SampleCap(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("SampleSize=3 with 10 stale docs: got %d, want 3", n)
+	}
+}
+
+func TestEnqueue_MinimumPipelineVersion(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	never := seedDoc(t, ctx, d, owner, "sha-never", 0)
+	older := seedDoc(t, ctx, d, owner, "sha-older", 0)
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET pipeline_version_llm = 1 WHERE id = ?`, older); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := rescan.Enqueue(ctx, d, rescan.Options{
+		Stale: "llm", LLMVersion: 2, MinimumVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("minimum-version enqueue = %d, want 1", n)
+	}
+	var docID int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT doc_id FROM jobs WHERE kind = 'post-ingest'`).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if docID == never || docID != older {
+		t.Fatalf("enqueued doc %d, want prior successful doc %d", docID, older)
 	}
 }
 

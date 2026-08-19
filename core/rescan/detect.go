@@ -57,7 +57,7 @@ func EnsureProposals(ctx context.Context, d *db.DB, engine *approvals.Engine, ve
 			}
 			continue
 		}
-		stale, err := CountStale(ctx, d, kind, current)
+		stale, err := CountProposalStale(ctx, d, kind, current)
 		if err != nil {
 			return fmt.Errorf("rescan.detect: count stale %s: %w", kind, err)
 		}

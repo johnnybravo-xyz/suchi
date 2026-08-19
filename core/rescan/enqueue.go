@@ -48,6 +48,11 @@ type Options struct {
 	OnlyFailed    bool
 	OnlyNoOCR     bool
 	SampleSize    int // 0 = no cap; otherwise cap the matched set to N random picks
+	// MinimumVersion narrows a stale-pipeline selection to documents that
+	// have already completed at least this pipeline version. Automatic LLM
+	// upgrade proposals set this to 1 so enabling the classifier does not
+	// reinterpret never-classified documents as stale results.
+	MinimumVersion int
 
 	// Pipeline version constants at the caller's binary. Passed in
 	// so this package doesn't import postingest or the LLM plugin.
@@ -181,6 +186,10 @@ func buildFilters(opts Options) (string, []any) {
 	if col, cur, ok := staleColumn(opts); ok {
 		b.WriteString(" AND d." + col + " < ?")
 		args = append(args, cur)
+		if opts.MinimumVersion > 0 {
+			b.WriteString(" AND d." + col + " >= ?")
+			args = append(args, opts.MinimumVersion)
+		}
 	}
 	if len(opts.IDs) > 0 {
 		// Explicit id list — used by the SPA's rescan bulk action.
@@ -245,13 +254,32 @@ func staleColumn(opts Options) (string, int, bool) {
 // behind the given current version. Used by the boot-time detector
 // in detect.go — the tasks-inbox proposal only surfaces when > 0.
 func CountStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
+	return countStale(ctx, d, kind, current, 0)
+}
+
+// CountProposalStale counts results eligible for an automatic upgrade
+// proposal. LLM version 0 means no successful classifier run, not an older
+// result, so it remains an explicit selected-rescan decision.
+func CountProposalStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
+	minimum := 0
+	if kind == "llm" {
+		minimum = 1
+	}
+	return countStale(ctx, d, kind, current, minimum)
+}
+
+func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int) (int, error) {
 	col, _, ok := staleColumn(Options{Stale: kind})
 	if !ok {
 		return 0, fmt.Errorf("rescan: unknown kind %q", kind)
 	}
+	query := `SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL AND ` + col + ` < ?`
+	args := []any{current}
+	if minimum > 0 {
+		query += ` AND ` + col + ` >= ?`
+		args = append(args, minimum)
+	}
 	var n int
-	err := d.Read.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL AND `+col+` < ?`,
-		current).Scan(&n)
+	err := d.Read.QueryRowContext(ctx, query, args...).Scan(&n)
 	return n, err
 }

@@ -126,6 +126,12 @@ prompt revision can bump that version and create a stale-results proposal.
 Changing endpoint, model, key, timeout, or threshold does not mark the archive
 stale.
 
+Version `0` means classification never completed. Valid low-confidence results
+receive the current version plus `needs-review`; they are completed results,
+not failed or unprocessed documents. Automatic upgrade proposals exclude
+version-zero documents, while an explicit selected or CLI rescan may include
+them.
+
 For version-driven command-line rescans:
 
 ```sh

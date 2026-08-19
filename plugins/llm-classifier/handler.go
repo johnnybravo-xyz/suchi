@@ -185,11 +185,20 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		now := time.Now().Unix()
 
 		if lowConfidence {
-			// Intentional: low-confidence docs keep pipeline_version_llm=0
-			// so `suchi rescan --stale llm` re-tries them after prompt/model
-			// tweaks. Bumping here would freeze the outcome at the current
-			// version and hide the retry opportunity.
-			return upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now)
+			if err := upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now); err != nil {
+				return err
+			}
+			// Confidence controls whether suggestions apply, not whether the
+			// classifier completed. Stamp the successful revision so version 0
+			// remains an unambiguous "never completed" marker.
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE documents
+				SET pipeline_version_llm = ?, updated_at = ?
+				WHERE id = ?
+			`, PipelineVersionLLM, now, e.DocID); err != nil {
+				return err
+			}
+			return view.EnqueueMove(ctx, tx, e.DocID)
 		}
 
 		// Title has two paths:

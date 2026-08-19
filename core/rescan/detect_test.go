@@ -156,3 +156,16 @@ func TestDetect_NoOp_WhenNothingStale(t *testing.T) {
 		t.Fatalf("no-stale: expected 0 runs, got %d", got)
 	}
 }
+
+func TestDetect_LLMDoesNotProposeNeverProcessedDocuments(t *testing.T) {
+	ctx := context.Background()
+	e, d, owner := newDetectorEngine(t)
+	seedDoc(t, ctx, d, owner, "sha-never-classified", 0)
+
+	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{LLM: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
+		t.Fatalf("version-zero LLM docs opened %d proposal runs, want 0", got)
+	}
+}

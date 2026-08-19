@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/db"
+	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -179,6 +182,82 @@ func TestClassifyHappyPath(t *testing.T) {
 	}
 	if gotBody["model"] != "gpt-4o-mini" {
 		t.Errorf("model=%v", gotBody["model"])
+	}
+}
+
+func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, silentLog()); err != nil {
+		t.Fatal(err)
+	}
+	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, created_at, updated_at)
+		VALUES ('owner@example.com', 'Owner', 'admin', 0, 0)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID, _ := res.LastInsertId()
+	inboxID, err := jd.InboxCategoryID(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = d.Write.ExecContext(ctx, `
+		INSERT INTO documents(owner_id, original_blob, original_size, title, content,
+		                      jd_category_id, created_at, updated_at)
+		VALUES (?, 'sha-low-confidence', 10, 'Original title', 'ambiguous text', ?, 0, 0)
+	`, ownerID, inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, _ := res.LastInsertId()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2}"}}]}`))
+	}))
+	defer srv.Close()
+	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(p, Adapt(d), silentLog())
+	if err := h.Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+		t.Fatal(err)
+	}
+
+	var title string
+	var version int
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT title, pipeline_version_llm FROM documents WHERE id = ?`, docID).
+		Scan(&title, &version); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Original title" || version != PipelineVersionLLM {
+		t.Fatalf("low-confidence doc = title:%q version:%d", title, version)
+	}
+	var reviewTags int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM document_tags dt
+		JOIN tags t ON t.id = dt.tag_id
+		WHERE dt.document_id = ? AND t.name = 'needs-review'
+	`, docID).Scan(&reviewTags); err != nil {
+		t.Fatal(err)
+	}
+	if reviewTags != 1 {
+		t.Fatalf("needs-review tags = %d, want 1", reviewTags)
 	}
 }
 
