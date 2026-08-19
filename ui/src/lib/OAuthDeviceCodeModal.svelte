@@ -1,7 +1,4 @@
 <script>
-  // Device-code flow modal. Polls /oauth/complete on a 3s cadence until
-  // the user finishes signing in on the verification URL, or the code
-  // expires. The flow_handle is one-shot server-side.
   import { startEmailOAuth, completeEmailOAuth } from './api.js'
   import Icon from './Icon.svelte'
 
@@ -12,8 +9,8 @@
   let expired = $state(false)
   let now = $state(Math.floor(Date.now() / 1000))
   let starting = $state(false)
-  let pollHandle = null
   let tickHandle = null
+  let controller = null
 
   async function begin() {
     starting = true; err = ''; expired = false
@@ -29,6 +26,7 @@
 
   function schedule() {
     stop()
+    controller = new AbortController()
     tickHandle = setInterval(() => {
       now = Math.floor(Date.now() / 1000)
       if (flow && now >= flow.expires_at) {
@@ -36,18 +34,19 @@
         stop()
       }
     }, 1000)
-    pollHandle = setInterval(poll, 3000)
+    complete(controller.signal)
   }
 
   function stop() {
-    if (pollHandle) { clearInterval(pollHandle); pollHandle = null }
     if (tickHandle) { clearInterval(tickHandle); tickHandle = null }
+    if (controller) { controller.abort(); controller = null }
   }
 
-  async function poll() {
+  async function complete(signal) {
     if (!flow || expired) return
     try {
-      const r = await completeEmailOAuth(flow.flow_handle)
+      const r = await completeEmailOAuth(flow.flow_handle, { signal })
+      if (signal.aborted || expired) return
       if (r?.ok) {
         stop()
         onSuccess?.({
@@ -58,15 +57,9 @@
         onClose?.(true)
       }
     } catch (ex) {
-      // 404 flow_gone / flow_expired = user hasn't finished yet, or the
-      // flow died. Keep polling until expires_at; then flip the UI.
-      if (ex.status === 404) {
-        if (ex.data?.code === 'flow_expired' || ex.data?.code === 'flow_gone') {
-          expired = true
-          stop()
-        }
-      }
-      // Anything else (500, network) — surface once, keep polling.
+      if (signal.aborted) return
+      err = ex.data?.message || ex.message || 'Microsoft sign-in failed.'
+      stop()
     }
   }
 

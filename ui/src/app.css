@@ -77,7 +77,6 @@ input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- app shell ---------- */
 .shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
-@media (max-width: 860px) { .shell { grid-template-columns: 1fr; } .sidebar { display: none; } }
 
 .sidebar {
   border-right: 1px solid var(--line);
@@ -86,6 +85,7 @@ input, select, textarea { font: inherit; color: inherit; }
   padding: 14px 10px;
   overflow-y: auto;
 }
+.mobile-menu, .mobile-nav-veil { display: none; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 14px; }
 .brand svg { width: 24px; height: 24px; }
 .brand b { font-weight: 700; font-size: 1.02rem; letter-spacing: -.02em; }
@@ -132,6 +132,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .topbar h1 { font-size: 1.05rem; font-weight: 700; }
 .topbar > .omni { margin-left: auto; }
+.topbar-upload { padding: 8px 16px; }
 .searchbox {
   margin-left: auto;
   display: flex; align-items: center; gap: 8px;
@@ -144,6 +145,38 @@ input, select, textarea { font: inherit; color: inherit; }
   border: 1px solid var(--line); border-radius: 5px; padding: 0 5px;
 }
 .content { flex: 1; overflow-y: auto; padding: 20px 22px 40px; }
+
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar {
+    display: none;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 95;
+    width: min(300px, 86vw);
+    box-shadow: var(--shadow);
+  }
+  .sidebar.mobile-open { display: flex; }
+  .mobile-menu { display: inline-flex; padding: 8px 11px; }
+  .mobile-nav-veil {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    border: 0;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--ink) 24%, transparent);
+  }
+}
+
+@media (max-width: 700px) {
+  .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .topbar h1 { margin-right: auto; }
+  .topbar > .omni { order: 10; flex-basis: 100%; max-width: none; margin-left: 0; }
+  .topbar-upload { padding: 8px 11px; }
+  .topbar-upload span { display: none; }
+  .content { padding: 16px 14px 32px; }
+}
 .content-narrow { max-width: 980px; margin: 0 auto; }
 .settings-page { display: flex; flex-direction: column; gap: 16px; }
 .settings-grid {

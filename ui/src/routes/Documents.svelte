@@ -22,9 +22,7 @@
   const pageSize = 50
   const isInbox = $derived(inbox != null)
   const jdFilter = $derived(route.query.get('jd') || '')
-  // Mirrors core/api.IsHighSensitivity — used to blur thumbnails and
-  // pass ?reveal=1 to the thumb endpoint (which now sensitivity-gates
-  // the same way /preview/{id} does).
+  // Keep thumbnail reveal behavior aligned with core/api.IsHighSensitivity.
   const isHigh = (s) => s === 'confidential' || s === 'restricted'
 
   async function loadFacets() {
@@ -91,7 +89,6 @@
   }
   function clearSel() { sel = new Set(); lastIdx = -1 }
 
-  // One request, one transaction, one audit event — per-id results back.
   async function bulk(label, method, parameters) {
     bulkBusy = true
     try {
@@ -119,13 +116,7 @@
     bulkBusy = false
   }
 
-  // ---- inline unlock ----
-  // Encrypted docs live in Inbox (they land there when postingest can't
-  // read them). The row shows an inline lock chip + password field
-  // instead of the usual "File under…" dropdown. Success optimistically
-  // flips encryption_state to 'decrypted' so the affordance disappears
-  // right away; the doc's postingest re-enqueue fills in category/thumb
-  // on the next refresh.
+  // The postingest retry fills metadata after this optimistic unlock state.
   let unlockPw = $state({})           // { [id]: string }
   let unlockErr = $state({})          // { [id]: string }
   let unlockBusy = $state(new Set())  // ids in flight
@@ -148,17 +139,10 @@
     }
   }
 
-  // Bulk unlock: one password across every selected row that's still
-  // encrypted. Modal opens from the bulk bar. The endpoint filters the
-  // set to encrypted docs server-side; we just pass every selected id.
   let bulkDecOpen = $state(false)
   let bulkDecPw = $state('')
   let bulkDecBusy = $state(false)
   let bulkDecInput = $state()
-  // Autofocus the password field when the modal opens. Done via
-  // $effect + .focus() so the a11y linter doesn't flag a bare
-  // `autofocus` attribute (which is fine here — the input only
-  // exists when the modal is open — but the linter can't tell).
   $effect(() => { if (bulkDecOpen && bulkDecInput) bulkDecInput.focus() })
   const anyLockedSelected = $derived(
     [...sel].some(id => docs.find(d => d.id === id)?.encryption_state === 'encrypted')
@@ -184,8 +168,7 @@
 
   // ---- keyboard: j/k move, x select, Enter open ----
   function onKey(e) {
-    // Escape closes the bulk-decrypt modal even if focus is on its
-    // password input — special-case it before the input-guard below.
+    // Handle modal Escape before ignoring focused inputs.
     if (bulkDecOpen && e.key === 'Escape') { bulkDecOpen = false; return }
     if (e.target.closest('input,select,textarea') || e.metaKey || e.ctrlKey) return
     if (e.key === 'j' || e.key === 'k') {
@@ -201,11 +184,7 @@
 
   loadFacets()
   loadJDCats()
-  // uploadBus.revision bumps when UploadBox lands a doc — visibilitychange
-  // won't fire when the upload finishes in the same-tab modal, so this
-  // is what keeps the list in sync with a still-open modal.
   $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
-  // uploads finish in the background — refetch when the tab comes back
   $effect(() => {
     const fn = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', fn)

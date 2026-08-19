@@ -1,6 +1,7 @@
 <script>
   import { setupState, setupStep, setupComplete, adminCreateUser, applyPreset,
            saveLLMSettings, savePreferences, saveIngestSettings, listPresets } from '../lib/api.js'
+  import { isLocalEndpoint } from '../lib/net.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
@@ -18,6 +19,7 @@
     { name: 'rules',       label: 'Rules' },
     { name: 'preferences', label: 'OCR & backups' },
   ]
+  const ENABLE_SETUP_TAXONOMY_IMPORT = false
   // Server is the source of truth (GET /api/presets/); this list is
   // only the offline fallback so the step never renders empty.
   const FALLBACK_PRESETS = [
@@ -71,7 +73,11 @@
 
   async function saveAnd(fn, label) {
     err = ''; busy = true
-    try { await fn(); notify?.(label); await mark('done') }
+    try {
+      const result = await fn()
+      notify?.(typeof label === 'function' ? label(result) : label)
+      await mark('done')
+    }
     catch (ex) { err = ex.message || 'The server rejected that.' }
     finally { busy = false }
   }
@@ -86,12 +92,7 @@
     finally { busy = false }
   }
 
-  const llmIsRemote = $derived((() => {
-    try {
-      const h = new URL(llm.endpoint_url).hostname
-      return !['localhost', '127.0.0.1', '::1', ''].includes(h)
-    } catch { return false }
-  })())
+  const llmIsRemote = $derived(!isLocalEndpoint(llm.endpoint_url))
 </script>
 
 <div class="wizard">
@@ -154,11 +155,13 @@
     {:else if cur === 'jd'}
       <h3>Pick a filing tree</h3>
       <p class="wiz-p">Johnny.Decimal areas and categories, tailored to how you'll use the archive. You can always switch later — refile moves every document to the closest match in the new tree.</p>
-      <span class="seg" style="margin-bottom:14px">
-        <button class:on={jdTab === 'presets'} onclick={() => (jdTab = 'presets')}>Presets</button>
-        <button class:on={jdTab === 'import'} onclick={() => (jdTab = 'import')}>Import a file</button>
-      </span>
-      {#if jdTab === 'import'}
+      {#if ENABLE_SETUP_TAXONOMY_IMPORT}
+        <span class="seg" style="margin-bottom:14px">
+          <button class:on={jdTab === 'presets'} onclick={() => (jdTab = 'presets')}>Presets</button>
+          <button class:on={jdTab === 'import'} onclick={() => (jdTab = 'import')}>Import a file</button>
+        </span>
+      {/if}
+      {#if ENABLE_SETUP_TAXONOMY_IMPORT && jdTab === 'import'}
         <TaxonomyImport {notify} onApplied={() => mark('done')} />
         <div class="toolbar" style="margin-top:10px">
           <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
@@ -229,7 +232,10 @@
       {/if}
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !llm.endpoint_url || (llmIsRemote && !llm.egress_ack)}
-                onclick={() => saveAnd(() => saveLLMSettings(llm), 'Classifier configured')}>Save classifier</button>
+                onclick={() => saveAnd(
+                  () => saveLLMSettings(llm),
+                  r => r?.restart_required ? 'Classifier saved; restart Suchi to enable it' : 'Classifier configured'
+                )}>Save classifier</button>
         <button class="btn sm" onclick={() => mark('skipped')}>Rules only</button>
       </div>
 

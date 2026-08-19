@@ -1,9 +1,5 @@
 <script>
-  // The topbar centerpiece: search + command palette folded together.
-  // On focus (even empty) it shows Commands. Typing filters commands +
-  // pages by label and fetches document hits via /api/autocomplete/.
-  // Enter opens the highlighted row, or falls back to full search.
-  // Cmd/Ctrl+K focuses it from anywhere.
+  // Combined command palette and document autocomplete.
   import { autocomplete } from './api.js'
   import Icon from './Icon.svelte'
 
@@ -19,14 +15,10 @@
     return !s || label.toLowerCase().includes(s)
   }
 
-  // On empty focus we show ALL commands + all pages (Commands are the
-  // headline — that's the palette). Typing filters both. Documents
-  // section only appears when we have hits from autocomplete.
   const commandHits = $derived(commands.filter(c => matches(c.label)).slice(0, 6))
   const pageHits = $derived(pages.filter(p => matches(p.label)).slice(0, q.trim() ? 3 : 5))
 
-  // Flat, keyboard-navigable order matches the render order below:
-  //   commands → documents → pages → "search everything" tail
+  // Keyboard order must match the rendered groups.
   const items = $derived([
     ...commandHits.map((c, i) => ({ kind: 'cmd', i, run: c.run })),
     ...docs.map((d) => ({ kind: 'doc', href: `#/doc/${d.id}` })),
@@ -70,8 +62,6 @@
   }
   function outside(e) { if (box && !box.contains(e.target)) close() }
 
-  // Absolute index into `items` for the palette-order (commands first,
-  // then documents, then pages). Keeps the render loops readable.
   const docsBase = $derived(commandHits.length)
   const pagesBase = $derived(commandHits.length + docs.length)
 </script>

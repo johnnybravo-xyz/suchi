@@ -1,11 +1,4 @@
-// Curates rows from GET /api/events/ for the Activity drawer.
-// The audit log stays complete on the server; this module decides
-// what actually reaches the drawer chrome — hide side-effect kinds
-// the operator just performed in the UI, humanize the ones worth
-// showing, and collapse rapid same-kind runs into one row.
-
-// Greppable + reviewable. Add a kind here to silence it in the drawer
-// without touching the audit table.
+// Curate the complete audit stream into concise Activity drawer rows.
 export const HIDDEN_KINDS = new Set([
   'documents.bulk_edit',
   'heuristics.autoapply',
@@ -14,11 +7,7 @@ export const HIDDEN_KINDS = new Set([
   'backup.pruned',
 ])
 
-// Kind → sentence. Templates receive the raw EventRow so they can
-// splice ev.summary in when the server already produced a useful
-// string. Anything not in this table falls through to a readable
-// form of the kind so new backend kinds degrade to English, not to
-// blank drawer rows.
+// Unknown kinds fall back to readable text instead of blank rows.
 const TEMPLATES = {
   'email_account.update':  () => 'Mail account settings updated',
   'dev_admin.provision':   () => 'Dev instance provisioned',
@@ -55,9 +44,7 @@ export function presentEvent(ev) {
   if (HIDDEN_KINDS.has(ev.kind)) return null
   if (ev.kind.endsWith('.list') || ev.kind.endsWith('.get')) return null
 
-  // ingest.* rows already ship a good server-side summary
-  // ("Ingested Foo Bar.pdf"). Pass through so newly-added
-  // ingest.<pipeline> kinds inherit the behaviour.
+  // New ingest pipelines inherit server summaries without UI changes.
   if (ev.kind.startsWith('ingest.')) {
     const text = ev.summary || fallbackFromKind(ev.kind)
     return shape(ev, text)
@@ -66,18 +53,12 @@ export function presentEvent(ev) {
   const tpl = TEMPLATES[ev.kind]
   if (tpl) return shape(ev, tpl(ev))
 
-  // Prefer a server-provided summary over the auto-generated fallback
-  // when we don't have a template — the summary is usually more
-  // specific than "Document update".
   return shape(ev, ev.summary || fallbackFromKind(ev.kind))
 }
 
 const COLLAPSE_WINDOW_SEC = 600
 
-// Applies presentEvent to each row, drops nulls, then collapses
-// consecutive same-kind rows within 10 minutes into a single row
-// with a count field. Input order is preserved (drawer feeds
-// newest-first).
+// Collapse adjacent same-kind events within ten minutes, preserving order.
 export function curateEvents(events) {
   if (!Array.isArray(events)) return []
   const out = []

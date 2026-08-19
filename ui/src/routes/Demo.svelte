@@ -1,10 +1,5 @@
 <script>
-  // /app/#/demo — landing panel for the public demo instance. Only
-  // reachable when the backend reports demo mode enabled; App.svelte
-  // hides the link otherwise. No forced tour: each card is one line of
-  // copy + one link into a real SPA view that already works. The point
-  // is to shortcut a first-time visitor into a populated state so they
-  // see suchi doing something in ~30 seconds.
+  // Public demo shortcuts into populated SPA views; App hides this route elsewhere.
 
   import Icon from '../lib/Icon.svelte'
 

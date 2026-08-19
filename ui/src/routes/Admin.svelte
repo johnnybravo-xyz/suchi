@@ -321,7 +321,7 @@
       <select class="input" style="max-width:86px;padding:5px 8px;font-size:.76rem"
               onchange={(e) => { if (e.target.value) { doExport(e.target.value); e.target.value = '' } }}
               aria-label="Export as">
-        <option value="">as…</option><option value="huml">huml</option><option value="toml">toml</option><option value="yaml">yaml</option>
+        <option value="">as…</option><option value="huml">huml</option><option value="toml">toml</option>
       </select>
     </div>
     <form class="toolbar" onsubmit={addTaxon}>
