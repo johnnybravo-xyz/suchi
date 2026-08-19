@@ -1,6 +1,6 @@
 <?xml version="1.0" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg version="1.1" width="1200" height="654" onload="init(evt)" viewBox="0 0 1200 654" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg version="1.1" width="1200" height="366" onload="init(evt)" viewBox="0 0 1200 366" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
 <!-- NOTES:  -->
 <defs>
@@ -422,370 +422,162 @@
 	}
 ]]>
 </script>
-<rect x="0.0" y="0" width="1200.0" height="654.0" fill="url(#background)"  />
+<rect x="0.0" y="0" width="1200.0" height="366.0" fill="url(#background)"  />
 <text id="title" x="600.00" y="24" >post-burst heap (in-use)</text>
-<text id="subtitle" x="600.00" y="48" >suchi 2765120</text>
-<text id="details" x="10.00" y="637" > </text>
+<text id="subtitle" x="600.00" y="48" >suchi 9b4375f</text>
+<text id="details" x="10.00" y="349" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
 <text id="ignorecase" x="1174.00" y="24" >ic</text>
-<text id="matched" x="1090.00" y="637" > </text>
+<text id="matched" x="1090.00" y="349" > </text>
 <g id="frames">
 <g >
-<title>internal/sync.newEntryNode[go.shape.interface {},go.shape.interface {}] (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="61" width="90.3" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
-<text  x="284.07" y="71.5" >internal/s..</text>
+<title>runtime.park_m (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="285" width="196.9" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
+<text  x="602.91" y="295.5" >runtime.park_m</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="509" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="519.5" >net/http.H..</text>
+<title>text/template/parse.(*Tree).Parse (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="141" width="196.7" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="406.21" y="151.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>main.runServe.(*RateLimit).Middleware.func28 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="525" width="90.3" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
-<text  x="284.07" y="535.5" >main.runSe..</text>
+<title>runtime.wakep (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="237" width="196.9" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="602.91" y="247.5" >runtime.wakep</text>
 </g>
 <g >
-<title>runtime.mstart0 (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="573" width="181.0" height="15.0" fill="rgb(210,25,6)" rx="2" ry="2" />
-<text  x="921.57" y="583.5" >runtime.mstart0</text>
+<title>runtime.main (1,049,536 inuse_space, 33.34%)</title><rect x="206.5" y="301" width="393.4" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
+<text  x="209.53" y="311.5" >runtime.main</text>
 </g>
 <g >
-<title>net/http.serverHandler.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="573" width="90.3" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
-<text  x="284.07" y="583.5" >net/http.s..</text>
+<title>main.runServe (1,049,536 inuse_space, 33.34%)</title><rect x="206.5" y="269" width="393.4" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="209.53" y="279.5" >main.runServe</text>
 </g>
 <g >
-<title>runtime.startm (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="509" width="90.5" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
-<text  x="650.00" y="519.5" >runtime.st..</text>
+<title>runtime.newm (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="205" width="196.9" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="602.91" y="215.5" >runtime.newm</text>
 </g>
 <g >
-<title>runtime.newproc1 (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="557" width="90.4" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
-<text  x="1102.61" y="567.5" >runtime.ne..</text>
+<title>html/template.parseFS (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="221" width="196.7" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="406.21" y="231.5" >html/template.parseFS</text>
 </g>
 <g >
-<title>github.com/johnnybravo-xyz/suchi/core/approvals.init (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="541" width="91.2" height="15.0" fill="rgb(246,188,45)" rx="2" ry="2" />
-<text  x="468.34" y="551.5" >github.com..</text>
+<title>text/template/parse.(*Tree).textOrAction (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="77" width="196.7" height="15.0" fill="rgb(232,124,29)" rx="2" ry="2" />
+<text  x="406.21" y="87.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>runtime.allocm (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="461" width="181.0" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
-<text  x="921.57" y="471.5" >runtime.allocm</text>
+<title>runtime.malg (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="253" width="393.2" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="799.80" y="263.5" >runtime.malg</text>
 </g>
 <g >
-<title>runtime.doInit (1,599,256 inuse_space, 23.35%)</title><rect x="371.4" y="573" width="275.6" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
-<text  x="374.42" y="583.5" >runtime.doInit</text>
+<title>runtime.resetspinning (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="253" width="196.9" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="602.91" y="263.5" >runtime.resetspinning</text>
 </g>
 <g >
-<title>runtime.newm (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="493" width="181.1" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
-<text  x="740.52" y="503.5" >runtime.newm</text>
+<title>text/template/parse.Parse (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="157" width="196.7" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="406.21" y="167.5" >text/template/parse.Parse</text>
 </g>
 <g >
-<title>internal/sync.(*entry[go.shape.interface {},go.shape.interface {}]).swap (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="77" width="90.3" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
-<text  x="284.07" y="87.5" >internal/s..</text>
+<title>text/template.(*Template).Parse (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="173" width="196.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="406.21" y="183.5" >text/template.(*Template)..</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="477" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="487.5" >net/http.H..</text>
+<title>github.com/prometheus/client_golang/prometheus/collectors.NewGoCollector (524,736 inuse_space, 16.67%)</title><rect x="206.5" y="237" width="196.7" height="15.0" fill="rgb(224,87,20)" rx="2" ry="2" />
+<text  x="209.53" y="247.5" >github.com/prometheus/cli..</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="381" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="391.5" >net/http.H..</text>
+<title>github.com/johnnybravo-xyz/suchi/core/ui.New (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="253" width="196.7" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="406.21" y="263.5" >github.com/johnnybravo-xy..</text>
 </g>
 <g >
-<title>runtime.startm (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="509" width="181.1" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
-<text  x="740.52" y="519.5" >runtime.startm</text>
+<title>runtime.newproc.func1 (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="285" width="393.2" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="799.80" y="295.5" >runtime.newproc.func1</text>
 </g>
 <g >
-<title>runtime.newm (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="493" width="90.5" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
-<text  x="650.00" y="503.5" >runtime.newm</text>
+<title>runtime.mcall (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="301" width="196.9" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="602.91" y="311.5" >runtime.mcall</text>
 </g>
 <g >
-<title>main.runServe.BodyLimit.func25.1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="397" width="90.3" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
-<text  x="284.07" y="407.5" >main.runSe..</text>
+<title>runtime.systemstack (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="301" width="393.2" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="799.80" y="311.5" >runtime.systemstack</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="349" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="359.5" >net/http.H..</text>
+<title>runtime.mallocgc (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="221" width="393.2" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
+<text  x="799.80" y="231.5" >runtime.mallocgc</text>
 </g>
 <g >
-<title>regexp.compile (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="493" width="93.9" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
-<text  x="374.42" y="503.5" >regexp.comp..</text>
+<title>all (3,148,248 inuse_space, 100%)</title><rect x="10.0" y="317" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="327.5" ></text>
 </g>
 <g >
-<title>github.com/johnnybravo-xyz/suchi/core/httpx.SecurityHeaders.func1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="461" width="90.3" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
-<text  x="284.07" y="471.5" >github.com..</text>
+<title>runtime.newproc1 (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="269" width="393.2" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="799.80" y="279.5" >runtime.newproc1</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="541" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="551.5" >net/http.H..</text>
+<title>runtime.newobject (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="173" width="196.9" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
+<text  x="602.91" y="183.5" >runtime.newobject</text>
 </g>
 <g >
-<title>regexp.Compile (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="509" width="91.2" height="15.0" fill="rgb(205,0,0)" rx="2" ry="2" />
-<text  x="468.34" y="519.5" >regexp.Com..</text>
+<title>modernc.org/sqlite.interruptOnDone.func1 (524,344 inuse_space, 16.66%)</title><rect x="10.0" y="301" width="196.5" height="15.0" fill="rgb(229,110,26)" rx="2" ry="2" />
+<text  x="13.00" y="311.5" >modernc.org/sqlite.interr..</text>
 </g>
 <g >
-<title>runtime.wakep (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="525" width="181.1" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
-<text  x="740.52" y="535.5" >runtime.wakep</text>
+<title>github.com/prometheus/client_golang/prometheus.NewGoCollector (524,736 inuse_space, 16.67%)</title><rect x="206.5" y="221" width="196.7" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="209.53" y="231.5" >github.com/prometheus/cli..</text>
 </g>
 <g >
-<title>runtime.mallocgc (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="445" width="181.1" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
-<text  x="740.52" y="455.5" >runtime.mallocgc</text>
+<title>runtime.schedule (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="269" width="196.9" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
+<text  x="602.91" y="279.5" >runtime.schedule</text>
 </g>
 <g >
-<title>regexp.compileOnePass (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="477" width="91.2" height="15.0" fill="rgb(245,187,44)" rx="2" ry="2" />
-<text  x="468.34" y="487.5" >regexp.com..</text>
+<title>main.main (1,049,536 inuse_space, 33.34%)</title><rect x="206.5" y="285" width="393.4" height="15.0" fill="rgb(227,101,24)" rx="2" ry="2" />
+<text  x="209.53" y="295.5" >main.main</text>
 </g>
 <g >
-<title>runtime.resetspinning (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="525" width="181.0" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="921.57" y="535.5" >runtime.resetspinning</text>
+<title>html/template.(*Template).ParseFS (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="237" width="196.7" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="406.21" y="247.5" >html/template.(*Template)..</text>
 </g>
 <g >
-<title>all (6,847,690 inuse_space, 100%)</title><rect x="10.0" y="605" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
-<text  x="13.00" y="615.5" ></text>
+<title>html/template.parseFiles (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="205" width="196.7" height="15.0" fill="rgb(228,110,26)" rx="2" ry="2" />
+<text  x="406.21" y="215.5" >html/template.parseFiles</text>
 </g>
 <g >
-<title>runtime.mstart (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="589" width="181.0" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
-<text  x="921.57" y="599.5" >runtime.mstart</text>
+<title>text/template/parse.(*Tree).parseDefinition (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="109" width="196.7" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="406.21" y="119.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>encoding/json.(*encodeState).reflectValue (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="173" width="90.3" height="15.0" fill="rgb(239,156,37)" rx="2" ry="2" />
-<text  x="284.07" y="183.5" >encoding/j..</text>
+<title>runtime.startm (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="221" width="196.9" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="602.91" y="231.5" >runtime.startm</text>
 </g>
 <g >
-<title>regexp.MustCompile (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="525" width="93.9" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
-<text  x="374.42" y="535.5" >regexp.Must..</text>
+<title>github.com/johnnybravo-xyz/suchi/core/httpx.NewMetrics (524,736 inuse_space, 16.67%)</title><rect x="206.5" y="253" width="196.7" height="15.0" fill="rgb(228,108,25)" rx="2" ry="2" />
+<text  x="209.53" y="263.5" >github.com/johnnybravo-xy..</text>
 </g>
 <g >
-<title>runtime.mallocgc (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="509" width="90.4" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
-<text  x="1102.61" y="519.5" >runtime.ma..</text>
+<title>runtime.newobject (1,049,056 inuse_space, 33.32%)</title><rect x="796.8" y="237" width="393.2" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
+<text  x="799.80" y="247.5" >runtime.newobject</text>
 </g>
 <g >
-<title>regexp.onePassCopy (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="461" width="91.2" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
-<text  x="468.34" y="471.5" >regexp.one..</text>
+<title>text/template/parse.(*Tree).itemList (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="93" width="196.7" height="15.0" fill="rgb(224,87,21)" rx="2" ry="2" />
+<text  x="406.21" y="103.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>main.runServe.NormalizeAPITrailingSlash.func23 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="269" width="90.3" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
-<text  x="284.07" y="279.5" >main.runSe..</text>
+<title>runtime.mallocgc (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="157" width="196.9" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
+<text  x="602.91" y="167.5" >runtime.mallocgc</text>
 </g>
 <g >
-<title>internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Store (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="109" width="90.3" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
-<text  x="284.07" y="119.5" >internal/s..</text>
+<title>text/template/parse.(*Tree).newText (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="61" width="196.7" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="406.21" y="71.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>regexp.MustCompile (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="525" width="91.2" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
-<text  x="468.34" y="535.5" >regexp.Mus..</text>
+<title>runtime.allocm (525,312 inuse_space, 16.69%)</title><rect x="599.9" y="189" width="196.9" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
+<text  x="602.91" y="199.5" >runtime.allocm</text>
 </g>
 <g >
-<title>runtime.newobject (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="525" width="90.4" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
-<text  x="1102.61" y="535.5" >runtime.ne..</text>
+<title>text/template/parse.(*Tree).parse (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="125" width="196.7" height="15.0" fill="rgb(237,151,36)" rx="2" ry="2" />
+<text  x="406.21" y="135.5" >text/template/parse.(*Tre..</text>
 </g>
 <g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="317" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="327.5" >net/http.H..</text>
-</g>
-<g >
-<title>regexp.onePassCopy (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="461" width="93.9" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
-<text  x="374.42" y="471.5" >regexp.oneP..</text>
-</g>
-<g >
-<title>runtime.wakep (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="525" width="90.5" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
-<text  x="650.00" y="535.5" >runtime.wa..</text>
-</g>
-<g >
-<title>runtime.mallocgc (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="445" width="90.5" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
-<text  x="650.00" y="455.5" >runtime.ma..</text>
-</g>
-<g >
-<title>runtime.main (1,599,256 inuse_space, 23.35%)</title><rect x="371.4" y="589" width="275.6" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
-<text  x="374.42" y="599.5" >runtime.main</text>
-</g>
-<g >
-<title>net/http.(*ServeMux).ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="557" width="90.3" height="15.0" fill="rgb(239,158,38)" rx="2" ry="2" />
-<text  x="284.07" y="567.5" >net/http.(..</text>
-</g>
-<g >
-<title>runtime.schedule (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="557" width="90.5" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
-<text  x="650.00" y="567.5" >runtime.sc..</text>
-</g>
-<g >
-<title>runtime.startm (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="493" width="181.0" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
-<text  x="921.57" y="503.5" >runtime.startm</text>
-</g>
-<g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="445" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="455.5" >net/http.H..</text>
-</g>
-<g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="285" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="295.5" >net/http.H..</text>
-</g>
-<g >
-<title>github.com/johnnybravo-xyz/suchi/core/api.init (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="541" width="93.9" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
-<text  x="374.42" y="551.5" >github.com/..</text>
-</g>
-<g >
-<title>runtime.schedule (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="557" width="181.1" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
-<text  x="740.52" y="567.5" >runtime.schedule</text>
-</g>
-<g >
-<title>runtime.resetspinning (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="541" width="90.5" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="650.00" y="551.5" >runtime.re..</text>
-</g>
-<g >
-<title>runtime.goexit0 (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="573" width="90.5" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
-<text  x="650.00" y="583.5" >runtime.go..</text>
-</g>
-<g >
-<title>github.com/johnnybravo-xyz/suchi/core/httpx.SecFetchSite.func1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="301" width="90.3" height="15.0" fill="rgb(211,30,7)" rx="2" ry="2" />
-<text  x="284.07" y="311.5" >github.com..</text>
-</g>
-<g >
-<title>runtime.resetspinning (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="541" width="181.1" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
-<text  x="740.52" y="551.5" >runtime.resetspinning</text>
-</g>
-<g >
-<title>github.com/johnnybravo-xyz/suchi/core/httpx.RequestID.func1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="493" width="90.3" height="15.0" fill="rgb(247,197,47)" rx="2" ry="2" />
-<text  x="284.07" y="503.5" >github.com..</text>
-</g>
-<g >
-<title>runtime.mallocgc (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="429" width="181.0" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
-<text  x="921.57" y="439.5" >runtime.mallocgc</text>
-</g>
-<g >
-<title>runtime.newobject (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="461" width="181.1" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
-<text  x="740.52" y="471.5" >runtime.newobject</text>
-</g>
-<g >
-<title>runtime.newobject (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="461" width="90.5" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
-<text  x="650.00" y="471.5" >runtime.ne..</text>
-</g>
-<g >
-<title>encoding/json.(*Encoder).Encode (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="205" width="90.3" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
-<text  x="284.07" y="215.5" >encoding/j..</text>
-</g>
-<g >
-<title>regexp.Compile (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="509" width="93.9" height="15.0" fill="rgb(205,0,0)" rx="2" ry="2" />
-<text  x="374.42" y="519.5" >regexp.Comp..</text>
-</g>
-<g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="413" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="423.5" >net/http.H..</text>
-</g>
-<g >
-<title>main.runServe.CtxTimeout.func26.1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="365" width="90.3" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
-<text  x="284.07" y="375.5" >main.runSe..</text>
-</g>
-<g >
-<title>net/http.(*ServeMux).ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="253" width="90.3" height="15.0" fill="rgb(239,158,38)" rx="2" ry="2" />
-<text  x="284.07" y="263.5" >net/http.(..</text>
-</g>
-<g >
-<title>regexp.compile (529,038 inuse_space, 7.73%)</title><rect x="465.3" y="493" width="91.2" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
-<text  x="468.34" y="503.5" >regexp.com..</text>
-</g>
-<g >
-<title>github.com/nikolalohinski/gonja/v2/tokens.map.init.0 (525,184 inuse_space, 7.67%)</title><rect x="556.5" y="525" width="90.5" height="15.0" fill="rgb(252,220,52)" rx="2" ry="2" />
-<text  x="559.50" y="535.5" >github.com..</text>
-</g>
-<g >
-<title>runtime.newm (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="477" width="181.0" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
-<text  x="921.57" y="487.5" >runtime.newm</text>
-</g>
-<g >
-<title>main.runServe.Authenticate.func27.1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="333" width="90.3" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
-<text  x="284.07" y="343.5" >main.runSe..</text>
-</g>
-<g >
-<title>runtime.systemstack (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="589" width="90.4" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
-<text  x="1102.61" y="599.5" >runtime.sy..</text>
-</g>
-<g >
-<title>runtime.mstart1 (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="557" width="181.0" height="15.0" fill="rgb(254,225,53)" rx="2" ry="2" />
-<text  x="921.57" y="567.5" >runtime.mstart1</text>
-</g>
-<g >
-<title>sync.(*Map).Store (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="125" width="90.3" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
-<text  x="284.07" y="135.5" >sync.(*Map..</text>
-</g>
-<g >
-<title>github.com/johnnybravo-xyz/suchi/plugins/local-auth.(*Plugin).SetupHandler (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="221" width="90.3" height="15.0" fill="rgb(249,203,48)" rx="2" ry="2" />
-<text  x="284.07" y="231.5" >github.com..</text>
-</g>
-<g >
-<title>runtime.malg (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="541" width="90.4" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
-<text  x="1102.61" y="551.5" >runtime.malg</text>
-</g>
-<g >
-<title>runtime.newobject (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="445" width="181.0" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
-<text  x="921.57" y="455.5" >runtime.newobject</text>
-</g>
-<g >
-<title>runtime.park_m (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="573" width="181.1" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
-<text  x="740.52" y="583.5" >runtime.park_m</text>
-</g>
-<g >
-<title>encoding/json.typeEncoder (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="141" width="90.3" height="15.0" fill="rgb(232,128,30)" rx="2" ry="2" />
-<text  x="284.07" y="151.5" >encoding/j..</text>
-</g>
-<g >
-<title>runtime.allocm (1,050,625 inuse_space, 15.34%)</title><rect x="737.5" y="477" width="181.1" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
-<text  x="740.52" y="487.5" >runtime.allocm</text>
-</g>
-<g >
-<title>runtime.doInit1 (1,599,256 inuse_space, 23.35%)</title><rect x="371.4" y="557" width="275.6" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
-<text  x="374.42" y="567.5" >runtime.doInit1</text>
-</g>
-<g >
-<title>main.runServe.AccessLog.func24.1 (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="429" width="90.3" height="15.0" fill="rgb(211,31,7)" rx="2" ry="2" />
-<text  x="284.07" y="439.5" >main.runSe..</text>
-</g>
-<g >
-<title>runtime.mcall (1,575,937 inuse_space, 23.01%)</title><rect x="647.0" y="589" width="271.6" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
-<text  x="650.00" y="599.5" >runtime.mcall</text>
-</g>
-<g >
-<title>runtime.allocm (525,312 inuse_space, 7.67%)</title><rect x="647.0" y="477" width="90.5" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
-<text  x="650.00" y="487.5" >runtime.al..</text>
-</g>
-<g >
-<title>github.com/nikolalohinski/gonja/v2/tokens.init (525,184 inuse_space, 7.67%)</title><rect x="556.5" y="541" width="90.5" height="15.0" fill="rgb(211,29,7)" rx="2" ry="2" />
-<text  x="559.50" y="551.5" >github.com..</text>
-</g>
-<g >
-<title>runtime.wakep (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="509" width="181.0" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
-<text  x="921.57" y="519.5" >runtime.wakep</text>
-</g>
-<g >
-<title>internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Swap (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="93" width="90.3" height="15.0" fill="rgb(228,106,25)" rx="2" ry="2" />
-<text  x="284.07" y="103.5" >internal/s..</text>
-</g>
-<g >
-<title>encoding/json.(*encodeState).marshal (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="189" width="90.3" height="15.0" fill="rgb(207,12,3)" rx="2" ry="2" />
-<text  x="284.07" y="199.5" >encoding/j..</text>
-</g>
-<g >
-<title>modernc.org/sqlite.interruptOnDone.func1 (1,573,032 inuse_space, 22.97%)</title><rect x="10.0" y="589" width="271.1" height="15.0" fill="rgb(229,110,26)" rx="2" ry="2" />
-<text  x="13.00" y="599.5" >modernc.org/sqlite.interruptOnDone.f..</text>
-</g>
-<g >
-<title>net/http.HandlerFunc.ServeHTTP (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="237" width="90.3" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
-<text  x="284.07" y="247.5" >net/http.H..</text>
-</g>
-<g >
-<title>encoding/json.valueEncoder (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="157" width="90.3" height="15.0" fill="rgb(245,184,44)" rx="2" ry="2" />
-<text  x="284.07" y="167.5" >encoding/j..</text>
-</g>
-<g >
-<title>regexp.compileOnePass (545,034 inuse_space, 7.96%)</title><rect x="371.4" y="477" width="93.9" height="15.0" fill="rgb(245,187,44)" rx="2" ry="2" />
-<text  x="374.42" y="487.5" >regexp.comp..</text>
-</g>
-<g >
-<title>runtime.newproc.func1 (524,528 inuse_space, 7.66%)</title><rect x="1099.6" y="573" width="90.4" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
-<text  x="1102.61" y="583.5" >runtime.ne..</text>
-</g>
-<g >
-<title>net/http.(*conn).serve (524,312 inuse_space, 7.66%)</title><rect x="281.1" y="589" width="90.3" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
-<text  x="284.07" y="599.5" >net/http.(..</text>
-</g>
-<g >
-<title>runtime.schedule (1,050,625 inuse_space, 15.34%)</title><rect x="918.6" y="541" width="181.0" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
-<text  x="921.57" y="551.5" >runtime.schedule</text>
+<title>html/template.(*Template).Parse (524,800 inuse_space, 16.67%)</title><rect x="403.2" y="189" width="196.7" height="15.0" fill="rgb(218,62,14)" rx="2" ry="2" />
+<text  x="406.21" y="199.5" >html/template.(*Template)..</text>
 </g>
 </g>
 </svg>

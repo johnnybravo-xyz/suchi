@@ -115,11 +115,24 @@ bench_render_flame() {
     echo "flame → $svg" >&2
 }
 
-# ---------------------------------------------------------------------------
-# bench_boot_suchi — mktemp a DATA_DIR under /tmp/, spawn `suchi serve`,
-# wait for /healthz, export SUCHI_PID/SUCHI_PORT/DATA_DIR/SUCHI_LOG.
-# Any failure prints tail of the log to stderr.
-# ---------------------------------------------------------------------------
+bench_start_suchi() {
+    PUBLIC_URL="http://127.0.0.1:$SUCHI_PORT" \
+    LISTEN_ADDR=":$SUCHI_PORT" \
+    DATA_DIR="$DATA_DIR" \
+    LOG_LEVEL=warn \
+    SUCHI_DEV=0 \
+    SUCHI_DEMO_MODE=0 \
+    OIDC_ISSUER_URL='' \
+    INGEST_IMAP_URL='' \
+    INGEST_FS_DIR='' \
+    INGEST_FS_OWNER_EMAIL='' \
+    LLM_ENDPOINT_URL='' \
+    "$SUCHI_BIN" serve > "$SUCHI_LOG" 2>&1 &
+    SUCHI_PID=$!
+    export SUCHI_PID
+}
+
+# Spawn a clean instance and wait for its health endpoint.
 bench_boot_suchi() {
     SUCHI_PORT="${SUCHI_PORT:-$PORT}"
     DATA_DIR="$(mktemp -d -t suchi-bench-XXXXXXXX)"
@@ -129,17 +142,9 @@ bench_boot_suchi() {
     esac
     SUCHI_LOG="$DATA_DIR/suchi.log"
     export SUCHI_PORT DATA_DIR SUCHI_LOG
+    bench_start_suchi
 
-    PUBLIC_URL="http://127.0.0.1:$SUCHI_PORT" \
-    LISTEN_ADDR=":$SUCHI_PORT" \
-    DATA_DIR="$DATA_DIR" \
-    LOG_LEVEL=warn \
-    "$SUCHI_BIN" serve > "$SUCHI_LOG" 2>&1 &
-    SUCHI_PID=$!
-    export SUCHI_PID
-
-    local i
-    for i in $(seq 1 80); do
+    for _ in $(seq 1 80); do
         if curl -sfS "http://127.0.0.1:$SUCHI_PORT/healthz" >/dev/null 2>&1; then
             echo "suchi up on :$SUCHI_PORT (pid=$SUCHI_PID data=$DATA_DIR)" >&2
             return 0
@@ -163,8 +168,7 @@ bench_bootstrap_admin() {
     export ADMIN_EMAIL
 
     local token=""
-    local i
-    for i in $(seq 1 40); do
+    for _ in $(seq 1 40); do
         token="$(grep 'localauth.setup.token_minted' "$SUCHI_LOG" 2>/dev/null \
             | grep -oP '"token":"\K[^"]+' | head -1 || true)"
         if [ -n "$token" ]; then break; fi
@@ -229,8 +233,12 @@ bench_teardown() {
         fi
         SUCHI_PID=""
     fi
-    if [ -n "${DATA_DIR:-}" ] && [ -d "$DATA_DIR" ]; then
-        case "$DATA_DIR" in
+	if [ -n "${DATA_DIR:-}" ] && [ -d "$DATA_DIR" ]; then
+		if [ "${BENCH_KEEP:-0}" = "1" ]; then
+			echo "kept DATA_DIR=$DATA_DIR" >&2
+			return 0
+		fi
+		case "$DATA_DIR" in
             /tmp/*) rm -rf "$DATA_DIR" ;;
             *) echo "bench_teardown: refusing rm -rf $DATA_DIR (not under /tmp/)" >&2 ;;
         esac
@@ -245,14 +253,17 @@ bench_teardown() {
 bench_wait_jobs_drain() {
     local timeout="${1:-300}"
     local db="$DATA_DIR/suchi.db"
-    local i n
-    for i in $(seq 1 "$timeout"); do
-        n="$(sqlite3 "$db" "SELECT COUNT(*) FROM jobs WHERE state IN ('pending','running')" 2>/dev/null || echo 999)"
+    local n
+    for _ in $(seq 1 "$timeout"); do
+		n="$(sqlite3 "$db" "SELECT COUNT(*) FROM jobs WHERE state = 'running' OR (state = 'pending' AND next_run_at <= unixepoch())" 2>/dev/null || echo 999)"
         if [ "$n" = "0" ]; then return 0; fi
         sleep 1
-    done
-    echo "bench_wait_jobs_drain: timeout after ${timeout}s, still $n job(s) in flight" >&2
-    return 1
+	done
+	echo "bench_wait_jobs_drain: timeout after ${timeout}s, still $n job(s) in flight" >&2
+	sqlite3 -header -column "$db" \
+		"SELECT id, kind, state, attempts, last_error FROM jobs WHERE state = 'running' OR (state = 'pending' AND next_run_at <= unixepoch())" >&2 || true
+	tail -50 "$SUCHI_LOG" >&2 || true
+	return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -263,8 +274,8 @@ bench_wait_job_done() {
     local doc_id="$1"
     local timeout="${2:-300}"
     local db="$DATA_DIR/suchi.db"
-    local i state
-    for i in $(seq 1 "$timeout"); do
+    local state
+    for _ in $(seq 1 "$timeout"); do
         state="$(sqlite3 "$db" "SELECT state FROM jobs WHERE doc_id=$doc_id AND kind='post-ingest' ORDER BY id DESC LIMIT 1" 2>/dev/null || echo "")"
         case "$state" in
             done) return 0 ;;

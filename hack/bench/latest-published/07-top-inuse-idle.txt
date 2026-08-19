@@ -1,25 +1,25 @@
 File: suchi
-Build ID: 6d42fbc8007c308a2e01ea7da70a5f88a650fae9
+Build ID: ed5551477e4a26b45f815a4200db7d19fa50d091
 Type: inuse_space
-Time: 2026-08-14 19:07:01 IST
-Showing nodes accounting for 5.03MB, 100% of 5.03MB total
+Time: 2026-08-18 18:58:47 IST
+Showing nodes accounting for 3MB, 100% of 3MB total
       flat  flat%   sum%        cum   cum%
-       2MB 39.84% 39.84%        2MB 39.84%  runtime.mallocgc
-    1.02MB 20.37% 60.21%     1.02MB 20.37%  regexp.onePassCopy
-    0.50MB  9.96% 70.17%     0.50MB  9.96%  github.com/nikolalohinski/gonja/v2/tokens.map.init.0
-    0.50MB  9.94% 80.12%     0.50MB  9.94%  net/http.readRequest
-    0.50MB  9.94% 90.06%     0.50MB  9.94%  modernc.org/sqlite.interruptOnDone.func1
-    0.50MB  9.94%   100%     0.50MB  9.94%  internal/sync.newEntryNode[go.shape.interface {},go.shape.interface {}] (inline)
-         0     0%   100%     0.50MB  9.94%  encoding/json.(*Encoder).Encode
-         0     0%   100%     0.50MB  9.94%  encoding/json.(*encodeState).marshal
-         0     0%   100%     0.50MB  9.94%  encoding/json.(*encodeState).reflectValue
-         0     0%   100%     0.50MB  9.94%  encoding/json.typeEncoder
-         0     0%   100%     0.50MB  9.94%  encoding/json.valueEncoder
-         0     0%   100%     0.52MB 10.34%  github.com/johnnybravo-xyz/suchi/core/api.init
-         0     0%   100%     0.50MB 10.03%  github.com/johnnybravo-xyz/suchi/core/approvals.init
-         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.RequestID.func1
-         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.SecFetchSite.func1
-         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/core/httpx.SecurityHeaders.func1
-         0     0%   100%     0.50MB  9.94%  github.com/johnnybravo-xyz/suchi/plugins/local-auth.(*Plugin).SetupHandler
-         0     0%   100%     0.50MB  9.96%  github.com/nikolalohinski/gonja/v2/tokens.init
-         0     0%   100%     0.50MB  9.94%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).Store (inline)
+    1.50MB 50.01% 50.01%     1.50MB 50.01%  runtime.mallocgc
+    0.50MB 16.67% 66.68%     0.50MB 16.67%  text/template/parse.(*Tree).newText (inline)
+    0.50MB 16.67% 83.34%     0.50MB 16.67%  github.com/prometheus/client_golang/prometheus.NewGoCollector
+    0.50MB 16.66%   100%     0.50MB 16.66%  modernc.org/sqlite.interruptOnDone.func1
+         0     0%   100%     0.50MB 16.67%  github.com/johnnybravo-xyz/suchi/core/httpx.NewMetrics
+         0     0%   100%     0.50MB 16.67%  github.com/johnnybravo-xyz/suchi/core/ui.New
+         0     0%   100%     0.50MB 16.67%  github.com/prometheus/client_golang/prometheus/collectors.NewGoCollector (inline)
+         0     0%   100%     0.50MB 16.67%  html/template.(*Template).Parse
+         0     0%   100%     0.50MB 16.67%  html/template.(*Template).ParseFS (inline)
+         0     0%   100%     0.50MB 16.67%  html/template.parseFS
+         0     0%   100%     0.50MB 16.67%  html/template.parseFiles
+         0     0%   100%        1MB 33.34%  main.main
+         0     0%   100%        1MB 33.34%  main.runServe
+         0     0%   100%     0.50MB 16.69%  runtime.allocm
+         0     0%   100%        1MB 33.34%  runtime.main
+         0     0%   100%        1MB 33.32%  runtime.malg
+         0     0%   100%     0.50MB 16.69%  runtime.mcall
+         0     0%   100%     0.50MB 16.69%  runtime.newm
+         0     0%   100%     1.50MB 50.01%  runtime.newobject

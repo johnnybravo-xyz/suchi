@@ -19,11 +19,12 @@ tracked snapshot for docs.
   total churn since start, not just live objects).
 - `07-flame-postburst-inuse.svg` — heap in-use after ingesting 10 x
   200 KB PDFs; used to spot allocations retained beyond the burst.
+- `07-flame-postburst-alloc.svg` — allocation-space profile after the burst.
 - `07-top-inuse-idle.txt` — `go tool pprof -top` text summary of the
   same idle heap.
 - `summary.md` — the full report tool output for this run.
 
 ## Snapshot
 
-Captured 2026-08-14 · commit `2765120` + local R1 (argon2
-`FreeOSMemory` fix). Host: CachyOS 7.1.5-1, Go 1.22.
+Captured 2026-08-18 during the v0.1 beta audit. Host details and scalar
+results are recorded in `summary.md`.

@@ -25,16 +25,10 @@ export SUCHI_PORT DATA_DIR SUCHI_LOG
 
 t0_ns="$(date +%s%N)"
 
-PUBLIC_URL="http://127.0.0.1:$SUCHI_PORT" \
-LISTEN_ADDR=":$SUCHI_PORT" \
-DATA_DIR="$DATA_DIR" \
-LOG_LEVEL=warn \
-"$SUCHI_BIN" serve > "$SUCHI_LOG" 2>&1 &
-SUCHI_PID=$!
-export SUCHI_PID
+bench_start_suchi
 
 cold_ms=""
-for i in $(seq 1 200); do
+for _ in $(seq 1 200); do
     if curl -sfS "http://127.0.0.1:$SUCHI_PORT/healthz" >/dev/null 2>&1; then
         t1_ns="$(date +%s%N)"
         cold_ms=$(( (t1_ns - t0_ns) / 1000000 ))

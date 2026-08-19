@@ -46,7 +46,7 @@ for f in "$burst_dir"/*.pdf; do
 done
 
 echo "07-mem-profile: waiting for jobs to drain" >&2
-bench_wait_jobs_drain 300
+bench_wait_jobs_drain "${JOB_DRAIN_TIMEOUT:-300}"
 
 heap_post="$RESULTS_DIR/07-heap-postburst.pprof"
 goro_post="$RESULTS_DIR/07-goroutine-postburst.txt"
@@ -66,8 +66,8 @@ go tool pprof -top -sample_index=inuse_space -unit=mb "$heap_post" 2>/dev/null \
 go tool pprof -top -sample_index=alloc_space -unit=mb "$heap_post" 2>/dev/null \
     | head -25 > "$RESULTS_DIR/07-top-alloc-postburst.txt"
 
-goroutines_idle="$(grep -c '^goroutine ' "$goro_idle" || echo 0)"
-goroutines_postburst="$(grep -c '^goroutine ' "$goro_post" || echo 0)"
+goroutines_idle="$(head -1 "$goro_idle" | sed -n 's/.*total \([0-9][0-9]*\).*/\1/p')"
+goroutines_postburst="$(head -1 "$goro_post" | sed -n 's/.*total \([0-9][0-9]*\).*/\1/p')"
 
 # Interactive flame graphs. Soft-skips if perl or the vendored pieces are
 # missing (bench_render_flame handles the guard) so scenario 07 still yields

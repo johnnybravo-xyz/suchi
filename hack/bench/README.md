@@ -68,20 +68,15 @@ which ingest call sites churn the most bytes.
 
 ## Latest published numbers
 
-Run the harness, then paste values here. TBD rows exist so the shape is
-obvious.
+The accepted v0.1 beta audit snapshot is in `latest-published/summary.md`.
 
-| Scenario         | Metric                    | Value | Date       | Host        |
-|------------------|---------------------------|-------|------------|-------------|
-| 01 binary-size   | `dist/suchi` bytes        | TBD   | TBD        | TBD         |
-| 01 binary-size   | SPA embedded bytes        | TBD   | TBD        | TBD         |
-| 02 idle-ram      | steady-state RSS (KB)     | TBD   | TBD        | TBD         |
-| 03 cold-start    | ms to `/healthz` 200      | TBD   | TBD        | TBD         |
-| 04 single-100mb  | upload + process (ms)     | TBD   | TBD        | TBD         |
-| 04 single-100mb  | peak RSS during (KB)      | TBD   | TBD        | TBD         |
-| 05 1k-corpus     | list-query p50 (ms)       | TBD   | TBD        | TBD         |
-| 06 concurrent    | p95 upload latency (ms)   | TBD   | TBD        | TBD         |
-| 06 concurrent    | throughput (docs/s)       | TBD   | TBD        | TBD         |
+| Scenario       | Metric                         | Value   |
+| -------------- | ------------------------------ | ------- |
+| 01 binary-size | stripped binary                | 27.7 MB |
+| 02 idle-ram    | steady-state RSS median        | 36.0 MB |
+| 03 cold-start  | time to `/healthz`              | 87 ms   |
+| 06 concurrent  | 10 users × 5 uploads throughput | 454.5/s |
+| 06 concurrent  | upload p95 / peak RSS           | 17 ms / 53.3 MB |
 
 ## Hardware fingerprint
 

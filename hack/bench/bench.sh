@@ -110,24 +110,30 @@ else
     done < <(find "$BENCH_DIR/scenarios" -maxdepth 1 -type f -name '*.sh' -print0 | sort -z)
 fi
 
+SCENARIO_FAILURES=0
 for scenario in "${scenarios[@]}"; do
     name="$(basename "$scenario" .sh)"
     echo
     echo "===== scenario: $name ====="
     # Each scenario runs in an isolated subshell so its boot/teardown,
     # trap, and env vars can't bleed into siblings.
+    set +e
     (
-        set -euo pipefail
+		set -euo pipefail
         # shellcheck source=./lib.sh
         source "$BENCH_DIR/lib.sh"
         # Re-export the outer results dir explicitly — mktemp'd DATA_DIRs
         # are scenario-local, but the results dir is shared.
         export RESULTS_DIR
         # shellcheck source=/dev/null
-        source "$scenario"
-    ) || {
-        echo "===== scenario $name FAILED (continuing) ====="
-    }
+		source "$scenario"
+	)
+	scenario_rc=$?
+	set -e
+	if [ "$scenario_rc" -ne 0 ]; then
+		echo "===== scenario $name FAILED (continuing) ====="
+		SCENARIO_FAILURES=1
+	fi
 done
 
 echo
@@ -152,5 +158,10 @@ if [ "$CHECK_THRESHOLDS" = "1" ]; then
     bench_check_thresholds "$RESULTS_DIR"
     THRESHOLD_RC=$?
     set -e
-    exit "$THRESHOLD_RC"
+	if [ "$SCENARIO_FAILURES" -ne 0 ]; then
+		exit 1
+	fi
+	exit "$THRESHOLD_RC"
 fi
+
+exit "$SCENARIO_FAILURES"
