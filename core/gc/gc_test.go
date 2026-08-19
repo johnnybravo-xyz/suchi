@@ -120,6 +120,48 @@ func TestGCGraceSparesFresh(t *testing.T) {
 	}
 }
 
+func TestCollectReferencesIncludesDerivedBlobsAndAvatars(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	d, _ := setupDB(t, ctx, tmp)
+	cas, err := blob.New(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := cas.Put(bytes.NewReader([]byte("original")))
+	archive, _ := cas.Put(bytes.NewReader([]byte("archive")))
+	decrypted, _ := cas.Put(bytes.NewReader([]byte("decrypted")))
+	thumb, _ := cas.Put(bytes.NewReader([]byte("thumb")))
+	avatar, _ := cas.Put(bytes.NewReader([]byte("avatar")))
+
+	seedFKGraph(t, ctx, d)
+	insertDoc(t, ctx, d, original.SHA256, archive.SHA256)
+	if _, err := d.ExecWrite(ctx, `
+		UPDATE documents SET decrypted_blob = ?, thumb_sha = ?
+	`, decrypted.SHA256, thumb.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(ctx, `UPDATE users SET avatar_sha = ? WHERE id = 1`, avatar.SHA256); err != nil {
+		t.Fatal(err)
+	}
+
+	references, err := gc.CollectReferences(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{
+		original.SHA256,
+		archive.SHA256,
+		decrypted.SHA256,
+		thumb.SHA256,
+		avatar.SHA256,
+	} {
+		if !references[ref] {
+			t.Errorf("reference %s was omitted", ref)
+		}
+	}
+}
+
 // --- helpers ---
 
 func setupDB(t *testing.T, ctx context.Context, dir string) (*db.DB, *slog.Logger) {

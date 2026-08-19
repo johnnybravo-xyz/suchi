@@ -22,8 +22,7 @@ type Metrics struct {
 	JobsDead     *prometheus.CounterVec
 }
 
-// NewMetrics registers the Phase-0 counter set. Later phases add histograms
-// per OCR/classify subprocess call.
+// NewMetrics creates an isolated process registry.
 func NewMetrics() *Metrics {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector())

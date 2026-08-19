@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -24,5 +25,18 @@ func TestReportToolAvailability(t *testing.T) {
 		if !strings.Contains(out, "main.tools.missing") {
 			t.Fatalf("summary listed missing tools but no WARN line fired:\n%s", out)
 		}
+	}
+}
+
+func TestResolvePipelineToolUsesFallback(t *testing.T) {
+	tool := pipelineTool{name: "magick", fallbacks: []string{"convert"}}
+	got, ok := resolvePipelineTool(tool, func(name string) (string, error) {
+		if name == "convert" {
+			return "/usr/bin/convert", nil
+		}
+		return "", errors.New("not found")
+	})
+	if !ok || got != "convert" {
+		t.Fatalf("resolvePipelineTool() = %q, %v; want convert, true", got, ok)
 	}
 }

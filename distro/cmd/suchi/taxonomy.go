@@ -3,18 +3,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	huml "github.com/huml-lang/go-huml"
-	"gopkg.in/yaml.v3"
 
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -25,14 +28,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
-// runTaxonomy is `suchi taxonomy <subcommand>`.
-//
-// Subcommands:
-//   - validate <file>                  Silent success (rc=0); positioned errors on stderr (rc=1)
-//   - import   <file> [--apply] [--skip-seeds] [--format huml|toml|yaml]
-//   - export   [--format huml|toml|yaml]     Dumps to stdout
-//   - merge    --kind ... --from-name ... --into-name ... [--apply]
-//     Entity merges (tag/correspondent/document_type)
 func runTaxonomy(args []string) int {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy <subcommand> [flags]")
@@ -54,8 +49,6 @@ func runTaxonomy(args []string) int {
 	}
 }
 
-// runTaxonomyValidate is the presets-repo CI entry point. Silent on
-// success; positioned errors on stderr; rc=1 on any failure.
 func runTaxonomyValidate(args []string) int {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy validate <file>")
@@ -74,23 +67,20 @@ func runTaxonomyValidate(args []string) int {
 	return 0
 }
 
-// runTaxonomyImport applies a taxonomy file to the local instance.
-// Dry-run by default; --apply writes.
 func runTaxonomyImport(args []string) int {
 	fs := flag.NewFlagSet("suchi taxonomy import", flag.ContinueOnError)
+	remaps := taxonomyRemaps{}
 	var (
 		apply     = fs.Bool("apply", false, "actually write. Default is dry-run.")
 		skipSeeds = fs.Bool("skip-seeds", false, "only touch the JD tree, no rules or automations")
-		format    = fs.String("format", "", "override auto-detect: huml|toml|yaml")
+		format    = fs.String("format", "", "override auto-detect: huml|toml")
 	)
-	if err := fs.Parse(args); err != nil {
+	fs.Var(&remaps, "remap", "merge collision as incoming:target or incoming:skip; repeatable")
+	path, err := parseTaxonomyImportArgs(fs, args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy import <file> [--apply] [--skip-seeds] [--format huml|toml|yaml]")
-		return 2
-	}
-	path := fs.Arg(0)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
@@ -98,7 +88,12 @@ func runTaxonomyImport(args []string) int {
 	}
 	var pf *presetfile.PresetFile
 	if *format != "" {
-		pf, err = presetfile.Parse(b, presetfile.SerFormat(*format))
+		f, formatErr := preferredTaxonomyFormat(*format)
+		if formatErr != nil {
+			fmt.Fprintln(os.Stderr, formatErr)
+			return 2
+		}
+		pf, err = presetfile.Parse(b, f)
 	} else {
 		pf, err = presetfile.ParseFromExt(b, filepath.Ext(path))
 	}
@@ -127,19 +122,10 @@ func runTaxonomyImport(args []string) int {
 		return 1
 	}
 
-	// Diff: count-only summary for both dry-run and apply.
-	var stray int
-	if err := d.Read.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM documents d
-		JOIN jd_categories c ON c.id = d.jd_category_id
-		WHERE d.trashed_at IS NULL AND c.system = 0
-	`).Scan(&stray); err != nil {
-		fmt.Fprintf(os.Stderr, "count non-inbox docs: %v\n", err)
+	mode, err := taxonomy.ImportMode(ctx, d)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "choose import mode: %v\n", err)
 		return 1
-	}
-	mode := "replace"
-	if stray > 0 {
-		mode = "merge"
 	}
 
 	var seedKw, seedAuto int
@@ -167,11 +153,18 @@ func runTaxonomyImport(args []string) int {
 		fmt.Fprintln(os.Stderr, "\nDry-run — pass --apply to write.")
 		return 0
 	}
-	if mode == "merge" {
-		fmt.Fprintln(os.Stderr, "merge apply lands with the admin taxonomy screen; not wired in CLI yet")
-		return 1
-	}
+	hash := sha256.Sum256(b)
+	contentSHA := hex.EncodeToString(hash[:])
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if mode == "merge" {
+			if _, err := importer.ApplyMerge(ctx, tx, log, pf, importer.Options{
+				SkipSeeds: *skipSeeds,
+				Remaps:    remaps,
+			}); err != nil {
+				return err
+			}
+			return importer.WriteImportProvenance(ctx, tx, pf.ID, pf.Version, contentSHA)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE documents SET jd_category_id = (
 				SELECT id FROM jd_categories WHERE system = 1 LIMIT 1
@@ -194,12 +187,23 @@ func runTaxonomyImport(args []string) int {
 			`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `
+		if _, err = tx.ExecContext(ctx, `
 			UPDATE documents SET jd_category_id = ? WHERE trashed_at IS NULL
-		`, newInbox)
-		return err
+		`, newInbox); err != nil {
+			return err
+		}
+		return importer.WriteImportProvenance(ctx, tx, pf.ID, pf.Version, contentSHA)
 	})
 	if err != nil {
+		var unresolved *importer.UnresolvedCollisionsError
+		if errors.As(err, &unresolved) {
+			for _, collision := range unresolved.Items {
+				fmt.Fprintf(os.Stderr,
+					"collision %d: existing %q, incoming %q; use --remap %d:skip or --remap %d:<free-code>\n",
+					collision.Code, collision.Existing, collision.Incoming, collision.Code, collision.Code)
+			}
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
 	}
@@ -207,12 +211,15 @@ func runTaxonomyImport(args []string) int {
 	return 0
 }
 
-// runTaxonomyExport dumps the current tree to stdout in the requested
-// format.
 func runTaxonomyExport(args []string) int {
 	fs := flag.NewFlagSet("suchi taxonomy export", flag.ContinueOnError)
-	format := fs.String("format", "huml", "output format: huml|toml|yaml")
+	format := fs.String("format", "huml", "output format: huml|toml")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	outputFormat, err := preferredTaxonomyFormat(*format)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	cfg, err := config.Load()
@@ -230,89 +237,38 @@ func runTaxonomyExport(args []string) int {
 	}
 	defer d.Close()
 
-	pf, err := readTaxonomyTree(ctx, d)
+	pf, err := taxonomy.BuildExport(ctx, d)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read: %v\n", err)
 		return 1
 	}
 
-	switch strings.ToLower(*format) {
-	case "huml":
+	switch outputFormat {
+	case presetfile.FormatHuML:
 		b, err := huml.Marshal(pf)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "encode huml: %v\n", err)
 			return 1
 		}
 		_, _ = io.Copy(os.Stdout, bytes.NewReader(b))
-	case "toml":
+	case presetfile.FormatTOML:
 		if err := toml.NewEncoder(os.Stdout).Encode(pf); err != nil {
 			fmt.Fprintf(os.Stderr, "encode toml: %v\n", err)
 			return 1
 		}
-	case "yaml":
-		enc := yaml.NewEncoder(os.Stdout)
-		enc.SetIndent(2)
-		if err := enc.Encode(pf); err != nil {
-			fmt.Fprintf(os.Stderr, "encode yaml: %v\n", err)
-			return 1
-		}
-		_ = enc.Close()
-	default:
-		fmt.Fprintf(os.Stderr, "--format must be huml/toml/yaml, got %q\n", *format)
-		return 2
 	}
 	return 0
 }
 
-// readTaxonomyTree reads jd_areas + jd_categories + preset-owned
-// keyword rules into a PresetFile ready for encoding. Mirrors the
-// server-side buildExportPresetFile, kept local to avoid dragging
-// the api pkg into the CLI import graph.
-func readTaxonomyTree(ctx context.Context, d *db.DB) (*presetfile.PresetFile, error) {
-	pf := &presetfile.PresetFile{
-		Format:  presetfile.Format,
-		ID:      "exported",
-		Version: 1,
-		Name:    "Exported taxonomy",
-		Story:   "Round-tripped from the running instance.",
+func preferredTaxonomyFormat(raw string) (presetfile.SerFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "huml":
+		return presetfile.FormatHuML, nil
+	case "toml":
+		return presetfile.FormatTOML, nil
+	default:
+		return "", fmt.Errorf("--format must be huml or toml, got %q", raw)
 	}
-	rows, err := d.Read.QueryContext(ctx,
-		`SELECT code_start, name FROM jd_areas ORDER BY position, code_start`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var a presetfile.Area
-		if err := rows.Scan(&a.Code, &a.Name); err != nil {
-			return nil, err
-		}
-		pf.Areas = append(pf.Areas, a)
-	}
-	for i := range pf.Areas {
-		a := &pf.Areas[i]
-		crows, err := d.Read.QueryContext(ctx, `
-			SELECT code, name, COALESCE(description, ''), system
-			FROM jd_categories WHERE area_start = ? ORDER BY code
-		`, a.Code)
-		if err != nil {
-			return nil, err
-		}
-		for crows.Next() {
-			var c presetfile.Category
-			var sys int
-			if err := crows.Scan(&c.Code, &c.Name, &c.Description, &sys); err != nil {
-				crows.Close()
-				return nil, err
-			}
-			if sys == 1 {
-				pf.Inbox = c.Code
-			}
-			a.Categories = append(a.Categories, c)
-		}
-		crows.Close()
-	}
-	return pf, nil
 }
 
 func runTaxonomyMerge(args []string) int {
@@ -372,4 +328,48 @@ taxonomy merge (kind=%s, apply=%v).
 		fmt.Fprintln(os.Stderr, "\nDry-run — pass --apply to actually merge.")
 	}
 	return 0
+}
+
+type taxonomyRemaps map[int]int
+
+func (r *taxonomyRemaps) String() string { return "" }
+
+func (r *taxonomyRemaps) Set(value string) error {
+	incoming, target, ok := strings.Cut(value, ":")
+	if !ok {
+		return fmt.Errorf("remap %q must be incoming:target or incoming:skip", value)
+	}
+	from, err := strconv.Atoi(incoming)
+	if err != nil || from <= 0 {
+		return fmt.Errorf("remap source %q must be a positive category code", incoming)
+	}
+	to := 0
+	if target != "skip" {
+		to, err = strconv.Atoi(target)
+		if err != nil || to <= 0 {
+			return fmt.Errorf("remap target %q must be a positive category code or skip", target)
+		}
+	}
+	(*r)[from] = to
+	return nil
+}
+
+func parseTaxonomyImportArgs(fs *flag.FlagSet, args []string) (string, error) {
+	usage := "usage: suchi taxonomy import <file> [--apply] [--skip-seeds] [--format huml|toml] [--remap incoming:target]"
+	path := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		path, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if path == "" && fs.NArg() == 1 {
+		path = fs.Arg(0)
+	} else if fs.NArg() != 0 {
+		return "", errors.New(usage)
+	}
+	if path == "" {
+		return "", errors.New(usage)
+	}
+	return path, nil
 }

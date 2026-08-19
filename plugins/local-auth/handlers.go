@@ -159,8 +159,7 @@ func setupErrStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// LoginRequest is the payload for POST /api/login (also used by the
-// mobile-compat endpoint /api/token/ in Phase 4). Accepts both
+// LoginRequest is shared by POST /api/login and /api/token/. Accepts both
 // `username` (mobile-legacy) and `email` (SPA); when both present,
 // `email` wins.
 type LoginRequest struct {

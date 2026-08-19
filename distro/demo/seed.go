@@ -8,17 +8,30 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/johnnybravo-xyz/suchi/core/api"
 )
 
 // Manifest is the schema written to corpus/manifest.json in the sibling
 // suchi-demo repo. Kept intentionally flat — the demo corpus is
 // human-authored and this struct is the only contract.
 type Manifest struct {
-	Version  string                     `json:"version"`
-	Notes    string                     `json:"notes,omitempty"`
-	Personas []string                   `json:"personas,omitempty"`
-	Clusters map[string]ManifestCluster `json:"clusters,omitempty"`
-	Fixtures []ManifestFixture          `json:"fixtures"`
+	Version    string                     `json:"version"`
+	Notes      string                     `json:"notes,omitempty"`
+	Personas   []string                   `json:"personas,omitempty"`
+	Clusters   map[string]ManifestCluster `json:"clusters,omitempty"`
+	Fixtures   []ManifestFixture          `json:"fixtures"`
+	SavedViews []ManifestSavedView        `json:"saved_views,omitempty"`
+}
+
+// ManifestSavedView is one demo dashboard view owned by the seed user.
+type ManifestSavedView struct {
+	Name       string          `json:"name"`
+	FilterJSON json.RawMessage `json:"filter_json"`
+	Display    string          `json:"display,omitempty"`
+	Position   int             `json:"position,omitempty"`
+	Shared     bool            `json:"shared,omitempty"`
 }
 
 // ManifestCluster describes a family of related documents that should
@@ -76,6 +89,10 @@ type SeedOptions struct {
 	// and for the MVP-corpus period where the manifest names clusters
 	// but has no fixtures yet.
 	FixtureIngest func(ctx context.Context, f ManifestFixture, path string) error
+
+	// SavedViewIngest returns true when it inserted a new row and false when
+	// an existing user-edited view was preserved.
+	SavedViewIngest func(ctx context.Context, view ManifestSavedView) (bool, error)
 }
 
 // SeedFromManifest walks the corpus manifest and hands each fixture to
@@ -95,7 +112,8 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 	log.Info("demo.seed.manifest",
 		"version", m.Version,
 		"clusters", len(m.Clusters),
-		"fixtures", len(m.Fixtures))
+		"fixtures", len(m.Fixtures),
+		"saved_views", len(m.SavedViews))
 
 	fixDir := filepath.Join(opts.CorpusDir, "fixtures")
 	for _, f := range m.Fixtures {
@@ -116,13 +134,48 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		}
 		s.Seeded++
 	}
+	for _, view := range m.SavedViews {
+		view.Name = strings.TrimSpace(view.Name)
+		if view.Name == "" {
+			log.Warn("demo.seed.view.invalid", "reason", "name is required")
+			s.ViewsFailed++
+			continue
+		}
+		if len(view.FilterJSON) == 0 || strings.TrimSpace(string(view.FilterJSON)) == "null" {
+			view.FilterJSON = json.RawMessage(`{}`)
+		}
+		if err := api.ValidateSavedViewFilterJSON(string(view.FilterJSON)); err != nil {
+			log.Warn("demo.seed.view.invalid", "name", view.Name, "err", err.Error())
+			s.ViewsFailed++
+			continue
+		}
+		if opts.SavedViewIngest == nil {
+			s.ViewsWouldSeed++
+			continue
+		}
+		created, err := opts.SavedViewIngest(ctx, view)
+		if err != nil {
+			log.Warn("demo.seed.view.err", "name", view.Name, "err", err.Error())
+			s.ViewsFailed++
+			continue
+		}
+		if created {
+			s.ViewsSeeded++
+		} else {
+			s.ViewsExisting++
+		}
+	}
 	return s, nil
 }
 
 // Stats summarize a seed run.
 type Stats struct {
-	Seeded    int // fixtures successfully stored
-	Skipped   int // fixture named in manifest but missing on disk
-	Failed    int // ingest callback returned error
-	WouldSeed int // FixtureIngest was nil (dry run / fetch-only)
+	Seeded         int // fixtures successfully stored
+	Skipped        int // fixture named in manifest but missing on disk
+	Failed         int // ingest callback returned error
+	WouldSeed      int // FixtureIngest was nil (dry run / fetch-only)
+	ViewsSeeded    int
+	ViewsExisting  int
+	ViewsFailed    int
+	ViewsWouldSeed int
 }

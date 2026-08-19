@@ -14,10 +14,6 @@
 // per-put temp file in the same sharded directory (so the rename is
 // same-device). Duplicate puts are cheap: same hash → same path → we
 // keep the existing file and return the ref.
-//
-// Interface stays concrete for Phase 1. When a second backend arrives
-// (S3, blob-crypt), we lift Put/Get/Stat/Delete into plugin-api and
-// promote this to plugins/fs-cas.
 package blob
 
 import (
@@ -106,8 +102,8 @@ func (c *CAS) Put(r io.Reader) (pluginapi.BlobRef, error) {
 	// separate scrub tool, not a Put-time check.
 	if fi, statErr := os.Stat(dst); statErr == nil {
 		if fi.Size() == n {
-			tmpName = "" // don't remove temp — actually we still want to remove
 			_ = os.Remove(tmp.Name())
+			tmpName = ""
 			return pluginapi.BlobRef{SHA256: sum, Size: n}, nil
 		}
 		// Fall through — rename below will replace the corrupt one.

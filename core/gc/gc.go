@@ -4,8 +4,8 @@
 // references it. Everything else is a candidate. gc is deliberately
 // simple:
 //
-//  1. Collect every referenced sha from documents.original_blob +
-//     documents.archive_blob.
+//  1. Collect every referenced sha from document content, previews,
+//     decrypted copies, and user avatars.
 //  2. Walk the CAS via CAS.List().
 //  3. Anything in the CAS that isn't in the reference set is a
 //     candidate for deletion.
@@ -80,7 +80,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, casRoot string, log *slog
 	}
 	log = log.With("component", "gc", "apply", opts.Apply, "grace", opts.Grace.String())
 
-	ref, err := collectReferences(ctx, d)
+	ref, err := CollectReferences(ctx, d)
 	if err != nil {
 		return nil, fmt.Errorf("collect references: %w", err)
 	}
@@ -139,11 +139,9 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, casRoot string, log *slog
 	return rep, nil
 }
 
-// collectReferences walks the documents table (including trashed rows)
-// and returns the set of every sha still referenced. Two queries — one
-// per column — because SQLite doesn't like UNION with distinct-across-
-// nullables as much as separate scans.
-func collectReferences(ctx context.Context, d *db.DB) (map[string]bool, error) {
+// CollectReferences returns every CAS key still referenced by the database.
+// Trashed documents remain live until their rows are purged.
+func CollectReferences(ctx context.Context, d *db.DB) (map[string]bool, error) {
 	ref := map[string]bool{}
 	scan := func(q string) error {
 		rows, err := d.Read.QueryContext(ctx, q)
@@ -162,11 +160,17 @@ func collectReferences(ctx context.Context, d *db.DB) (map[string]bool, error) {
 		}
 		return rows.Err()
 	}
-	if err := scan(`SELECT original_blob FROM documents`); err != nil {
-		return nil, err
+	queries := []string{
+		`SELECT original_blob FROM documents`,
+		`SELECT archive_blob FROM documents WHERE archive_blob IS NOT NULL`,
+		`SELECT decrypted_blob FROM documents WHERE decrypted_blob IS NOT NULL`,
+		`SELECT thumb_sha FROM documents WHERE thumb_sha IS NOT NULL`,
+		`SELECT avatar_sha FROM users WHERE avatar_sha IS NOT NULL`,
 	}
-	if err := scan(`SELECT archive_blob FROM documents WHERE archive_blob IS NOT NULL`); err != nil {
-		return nil, err
+	for _, query := range queries {
+		if err := scan(query); err != nil {
+			return nil, err
+		}
 	}
 	return ref, nil
 }

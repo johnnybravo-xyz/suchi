@@ -3,10 +3,8 @@
 // public showcase instance cannot accumulate visitor state.
 //
 // Scratch users are identified by email pattern: `visitor-*@demo.local`.
-// The pattern is load-bearing — the ticker will not touch a real user,
-// even one whose created_at is well past the TTL. The scratch-user mint
-// endpoint (POST /api/demo/session, follow-up commit) must use the same
-// pattern.
+// The pattern is load-bearing: the ticker will not touch a real user,
+// even one whose created_at is well past the TTL.
 //
 // Seed rows (documents.original_blob LIKE 'demo:%', users seeded by
 // `suchi demo`) are ignored by construction — they don't match the

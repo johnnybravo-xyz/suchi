@@ -27,7 +27,7 @@ func runImport(args []string) int {
 		ownerEmail = fs.String("owner-email", "", "email of the user that will own imported documents (required unless --dry-run)")
 		dryRun     = fs.Bool("dry-run", false, "parse the bundle and report counts without writing")
 		flat       = fs.Bool("flat", false, "force every imported doc to the inbox category — skip JD resolution")
-		mapJD      = fs.String("map-jd", "", "path to a rules YAML mapping bundle metadata → JD code")
+		mapJD      = fs.String("map-jd", "", "path to a HuML or TOML rules mapping from bundle metadata to JD code")
 		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
 		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
 		reportPath = fs.String("report", "./import-report.md", "write a FULL/PARTIAL/FAILED markdown report of the migration to this path")

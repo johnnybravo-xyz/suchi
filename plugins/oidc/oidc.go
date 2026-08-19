@@ -214,7 +214,6 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
-	// Redirect somewhere sensible. Phase 0 has no UI, so a friendly page.
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

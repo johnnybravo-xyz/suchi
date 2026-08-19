@@ -6,20 +6,13 @@ import (
 	"sort"
 )
 
-// pipelineTool describes one external binary the pipeline shells out
-// to. impact + install are user-facing text — kept flat here (not
-// pulled from each pipeline package) so the whole diagnostic reads
-// from one file at code-review time.
 type pipelineTool struct {
-	name    string
-	impact  string
-	install string
+	name      string
+	fallbacks []string
+	impact    string
+	install   string
 }
 
-// pipelineTools mirrors the list `suchi doctor` walks so the two
-// diagnostics agree. Order is intentional: PDF-plane tools first
-// (most common ingest), then office (anydoc), then peripheral
-// converters (HEIC, msg).
 var pipelineTools = []pipelineTool{
 	{
 		name:    "qpdf",
@@ -57,9 +50,10 @@ var pipelineTools = []pipelineTool{
 		install: "https://github.com/johnnybravo-xyz/suchi/releases (anydoc-<os>-<arch>) or `bash <(curl -sfL .../install-anydoc.sh)`",
 	},
 	{
-		name:    "magick",
-		impact:  "HEIC → JPEG conversion for iPhone photo ingest (convert also accepted as legacy alias)",
-		install: "apt install imagemagick • brew install imagemagick",
+		name:      "magick",
+		fallbacks: []string{"convert"},
+		impact:    "HEIC → JPEG conversion for iPhone photo ingest",
+		install:   "apt install imagemagick • brew install imagemagick",
 	},
 	{
 		name:    "msgconvert",
@@ -68,21 +62,12 @@ var pipelineTools = []pipelineTool{
 	},
 }
 
-// reportToolAvailability walks the pipeline binary list and logs the
-// state at boot: one INFO summary with present/missing lists, then one
-// WARN per missing tool carrying the impact + install hint. Never
-// fails boot — missing tools degrade features, they don't break the
-// server.
-//
-// Wired from runServe() right after logEgressSurface — same shape as
-// the egress diagnostic, and lands in the log stream operators
-// already grep for boot-time info.
 func reportToolAvailability(log *slog.Logger) {
 	var present, missing []string
 	details := make(map[string]pipelineTool, len(pipelineTools))
 	for _, t := range pipelineTools {
-		if _, err := exec.LookPath(t.name); err == nil {
-			present = append(present, t.name)
+		if binary, ok := resolvePipelineTool(t, exec.LookPath); ok {
+			present = append(present, binary)
 		} else {
 			missing = append(missing, t.name)
 			details[t.name] = t
@@ -100,4 +85,13 @@ func reportToolAvailability(log *slog.Logger) {
 			"impact", t.impact,
 			"install", t.install)
 	}
+}
+
+func resolvePipelineTool(t pipelineTool, lookPath func(string) (string, error)) (string, bool) {
+	for _, name := range append([]string{t.name}, t.fallbacks...) {
+		if _, err := lookPath(name); err == nil {
+			return name, true
+		}
+	}
+	return "", false
 }

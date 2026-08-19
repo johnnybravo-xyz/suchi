@@ -11,7 +11,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -203,7 +205,9 @@ func SecFetchSite(next http.Handler) http.Handler {
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if auth.FromContext(r.Context()) == nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"auth required","code":"unauthorized"}`))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -215,41 +219,39 @@ func RequireAuth(next http.Handler) http.Handler {
 // clients that follow the trailing-slash convention work against
 // suchi without caring about the slash. Only paths under `/api/`
 // are affected; the browser UI keeps its stricter matching.
-//
-// Strategy: leave the mux registrations untouched. When a request
-// under `/api/` ends in `/` and the mux has no registered pattern for
-// it, look up the same request with the trailing slash stripped; if
-// THAT matches, rewrite r.URL.Path and dispatch. All other paths pass
-// through with zero cost (one mux.Handler call, no ServeHTTP retry).
-//
-// Why not auto-register both forms per route? Go 1.22 ServeMux treats
-// a pattern ending in `/` as a subtree matcher. Registering
-// `/api/documents/{id}/` alongside `/api/documents/{id}` would catch
-// stray tails like `/api/documents/1/garbage/` as `/api/documents/1`,
-// masking real 404s. The check-then-retry middleware avoids that
-// footgun.
 func NormalizeAPITrailingSlash(mux *http.ServeMux) http.Handler {
 	const prefix = "/api/"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, prefix) &&
-			strings.HasSuffix(p, "/") &&
-			len(p) > len(prefix) {
-			// The UI registers `GET /` (and similar bare-root patterns)
-			// as the browser catch-all. mux.Handler() returns these for
-			// anything without a more specific match — including
-			// `/api/foo/N/` — which would let the browser handler
-			// swallow an API request. Treat any match whose registered
-			// path is just "/" as "no API route matched, try strip".
-			_, pat := mux.Handler(r)
+		if !strings.HasPrefix(p, prefix) {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		_, pat := mux.Handler(r)
+		if strings.HasSuffix(p, "/") && len(p) > len(prefix) {
 			if isCatchAll(pat) {
-				r2 := r.Clone(r.Context())
-				r2.URL.Path = strings.TrimSuffix(p, "/")
-				if _, pat2 := mux.Handler(r2); !isCatchAll(pat2) {
-					mux.ServeHTTP(w, r2)
-					return
-				}
+				pat = ""
 			}
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = strings.TrimSuffix(p, "/")
+			r2.URL.RawPath = ""
+			if _, pat2 := mux.Handler(r2); pat2 != pat &&
+				!isCatchAll(pat2) && !isSubtreeFallback(pat2, r2.URL.Path) {
+				mux.ServeHTTP(w, r2)
+				return
+			}
+		} else if strings.HasSuffix(muxPatternPath(pat), "/") &&
+			!isSubtreeFallback(pat, p) {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = p + "/"
+			r2.URL.RawPath = ""
+			mux.ServeHTTP(w, r2)
+			return
+		}
+		if isCatchAll(pat) || isSubtreeFallback(pat, p) {
+			http.NotFound(w, r)
+			return
 		}
 		mux.ServeHTTP(w, r)
 	})
@@ -263,14 +265,33 @@ func isCatchAll(pat string) bool {
 	if pat == "" {
 		return true
 	}
-	// Patterns can be "/", "GET /", "POST /", "example.com/", etc.
-	// Take the path portion — after the last space if a method prefix
-	// is present — and compare.
-	path := pat
-	if i := strings.LastIndex(pat, " "); i >= 0 {
-		path = pat[i+1:]
+	return muxPatternPath(pat) == "/"
+}
+
+// ServeMux patterns ending in a slash also match every deeper path.
+// Reject those accidental matches so collection handlers cannot swallow
+// item routes or unknown API tails.
+func isSubtreeFallback(pat, requestPath string) bool {
+	path := muxPatternPath(pat)
+	if !strings.HasSuffix(path, "/") {
+		return false
 	}
-	return path == "/"
+	return pathDepth(requestPath) > pathDepth(path)
+}
+
+func muxPatternPath(pat string) string {
+	if i := strings.LastIndex(pat, " "); i >= 0 {
+		return pat[i+1:]
+	}
+	return pat
+}
+
+func pathDepth(path string) int {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return 0
+	}
+	return strings.Count(path, "/") + 1
 }
 
 // BodyLimit caps request bodies to n bytes using http.MaxBytesReader.
@@ -292,15 +313,20 @@ func BodyLimit(n int64) Middleware {
 	}
 }
 
-// RateLimit is a naive per-IP token bucket, intentionally kept in-process
-// for MVP. Applied to auth-sensitive endpoints (login, setup, token
-// issuance) at ~5 req/s with a small burst — plenty for humans, painful
-// for password sprays. Not a substitute for a WAF, and not designed to.
+const (
+	defaultRateLimitEntries = 4096
+	defaultRateLimitIdle    = 10 * time.Minute
+)
+
+// RateLimit is an in-process token bucket keyed by a verified client address.
 type RateLimit struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
-	rate    float64 // tokens per second
+	rate    float64
 	burst   float64
+	max     int
+	idle    time.Duration
+	trusted []netip.Prefix
 }
 
 type bucket struct {
@@ -308,15 +334,22 @@ type bucket struct {
 	last   time.Time
 }
 
-// NewRateLimit returns a bucket-per-remote limiter.
-func NewRateLimit(perSecond, burst float64) *RateLimit {
-	return &RateLimit{buckets: map[string]*bucket{}, rate: perSecond, burst: burst}
+// NewRateLimit returns a bucket-per-client limiter. Forwarded addresses are
+// considered only when the direct peer matches one of trustedProxies.
+func NewRateLimit(perSecond, burst float64, trustedProxies ...netip.Prefix) *RateLimit {
+	return &RateLimit{
+		buckets: map[string]*bucket{},
+		rate:    perSecond,
+		burst:   burst,
+		max:     defaultRateLimitEntries,
+		idle:    defaultRateLimitIdle,
+		trusted: append([]netip.Prefix(nil), trustedProxies...),
+	}
 }
 
-// Middleware form.
 func (r *RateLimit) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !r.allow(clientIP(req)) {
+		if !r.allow(r.clientIP(req)) {
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 			return
 		}
@@ -330,6 +363,7 @@ func (r *RateLimit) allow(key string) bool {
 	now := time.Now()
 	b, ok := r.buckets[key]
 	if !ok {
+		r.makeRoom(now)
 		r.buckets[key] = &bucket{tokens: r.burst - 1, last: now}
 		return true
 	}
@@ -343,22 +377,67 @@ func (r *RateLimit) allow(key string) bool {
 	return true
 }
 
-// clientIP prefers X-Forwarded-For's leftmost entry (behind a trusted
-// proxy) but falls back to r.RemoteAddr. This is a lie when there is no
-// trusted proxy in front — operators running without a proxy get real
-// remote addrs by default.
-func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if i := strings.Index(v, ","); i > 0 {
-			return strings.TrimSpace(v[:i])
+func (r *RateLimit) makeRoom(now time.Time) {
+	if len(r.buckets) < r.max {
+		return
+	}
+	for key, b := range r.buckets {
+		if now.Sub(b.last) >= r.idle {
+			delete(r.buckets, key)
 		}
-		return strings.TrimSpace(v)
 	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
+	if len(r.buckets) < r.max {
+		return
 	}
-	return host
+
+	var oldestKey string
+	var oldest time.Time
+	for key, b := range r.buckets {
+		if oldestKey == "" || b.last.Before(oldest) {
+			oldestKey, oldest = key, b.last
+		}
+	}
+	delete(r.buckets, oldestKey)
+}
+
+func (r *RateLimit) clientIP(req *http.Request) string {
+	direct := clientIP(req)
+	directAddr, err := netip.ParseAddr(direct)
+	if err != nil || !containsIP(r.trusted, directAddr.Unmap()) {
+		return direct
+	}
+
+	forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		candidate, err := netip.ParseAddr(strings.TrimSpace(forwarded[i]))
+		if err != nil {
+			return direct
+		}
+		candidate = candidate.Unmap()
+		if !containsIP(r.trusted, candidate) {
+			return candidate.String()
+		}
+	}
+	return direct
+}
+
+func containsIP(prefixes []netip.Prefix, addr netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP returns only the direct peer. Forwarded headers are handled by the
+// limiter after it verifies that this address belongs to a trusted proxy.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 // CtxTimeout wraps requests in a hard timeout to bound handler work.

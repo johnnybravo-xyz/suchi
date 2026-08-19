@@ -53,6 +53,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
 )
@@ -247,17 +248,20 @@ func runDemo(args []string) int {
 			return 1
 		}
 		ingest := makeFixtureIngest(d, cas, demoUser, now, log)
+		viewIngest := makeSavedViewIngest(d, demoUser, now)
 		stats, err := demo.SeedFromManifest(ctx, demo.SeedOptions{
-			CorpusDir:     corpusDir,
-			Log:           log,
-			FixtureIngest: ingest,
+			CorpusDir:       corpusDir,
+			Log:             log,
+			FixtureIngest:   ingest,
+			SavedViewIngest: viewIngest,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "manifest seed: %v\n", err)
 			return 1
 		}
-		fmt.Printf("manifest seed: seeded=%d skipped=%d failed=%d would-seed=%d\n",
-			stats.Seeded, stats.Skipped, stats.Failed, stats.WouldSeed)
+		fmt.Printf("manifest seed: seeded=%d skipped=%d failed=%d would-seed=%d views=%d existing-views=%d views-failed=%d\n",
+			stats.Seeded, stats.Skipped, stats.Failed, stats.WouldSeed,
+			stats.ViewsSeeded, stats.ViewsExisting, stats.ViewsFailed)
 	}
 
 	fmt.Println("demo seed complete — start `suchi serve` and browse the doc list.")
@@ -297,7 +301,7 @@ func seedTaxonomy(ctx context.Context, tx *sql.Tx, now int64) error {
 			INSERT INTO correspondents(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO NOTHING
-		`, c, slugify(c), now, now); err != nil {
+		`, c, slug.Make(c), now, now); err != nil {
 			return err
 		}
 	}
@@ -307,7 +311,7 @@ func seedTaxonomy(ctx context.Context, tx *sql.Tx, now int64) error {
 			INSERT INTO document_types(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO NOTHING
-		`, dt, slugify(dt), now, now); err != nil {
+		`, dt, slug.Make(dt), now, now); err != nil {
 			return err
 		}
 	}
@@ -365,7 +369,7 @@ func seedDocs(ctx context.Context, tx *sql.Tx, now int64, owner int64) error {
 
 		// Sentinel blob key so re-runs are idempotent via the unique
 		// (owner_id, original_blob) partial index.
-		blobKey := fmt.Sprintf("demo:%d:%s", owner, slugify(d.title))
+		blobKey := fmt.Sprintf("demo:%d:%s", owner, slug.Make(d.title))
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(owner_id, original_blob, original_size,
 			                      title, content, correspondent_id,
@@ -437,34 +441,6 @@ func seedAutomationAndRule(ctx context.Context, tx *sql.Tx, now int64) error {
 		return err
 	}
 	return nil
-}
-
-// slugify — lowercase + replace non-alphanumeric with '-'. Duplicates
-// the classifier's helper because pulling that in would add a
-// dependency for four lines of code.
-func slugify(s string) string {
-	out := make([]byte, 0, len(s))
-	prevDash := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'A' && c <= 'Z':
-			out = append(out, c+32)
-			prevDash = false
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-			out = append(out, c)
-			prevDash = false
-		default:
-			if !prevDash && len(out) > 0 {
-				out = append(out, '-')
-				prevDash = true
-			}
-		}
-	}
-	if len(out) > 0 && out[len(out)-1] == '-' {
-		out = out[:len(out)-1]
-	}
-	return string(out)
 }
 
 // makeFixtureIngest builds the demo.SeedFromManifest callback. Each
@@ -587,9 +563,6 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *s
 	}
 }
 
-// upsertCorrespondent finds or creates a correspondent row by exact
-// name (empty name => NULL). Returns the id wrapped in NullInt64 so
-// the caller can splice it directly into an INSERT.
 func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
 	if name == "" {
 		return sql.NullInt64{}, nil
@@ -598,7 +571,7 @@ func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64
 		INSERT INTO correspondents(name, slug, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(name) DO NOTHING
-	`, name, slugify(name), now, now); err != nil {
+	`, name, slug.Make(name), now, now); err != nil {
 		return sql.NullInt64{}, err
 	}
 	var id int64
@@ -609,8 +582,6 @@ func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64
 	return sql.NullInt64{Int64: id, Valid: true}, nil
 }
 
-// upsertDocumentType — same shape as upsertCorrespondent, for
-// document_types.
 func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
 	if name == "" {
 		return sql.NullInt64{}, nil
@@ -619,7 +590,7 @@ func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64)
 		INSERT INTO document_types(name, slug, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(name) DO NOTHING
-	`, name, slugify(name), now, now); err != nil {
+	`, name, slug.Make(name), now, now); err != nil {
 		return sql.NullInt64{}, err
 	}
 	var id int64
@@ -630,8 +601,6 @@ func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64)
 	return sql.NullInt64{Int64: id, Valid: true}, nil
 }
 
-// upsertTag returns 0 (not an error) for an empty name so the caller
-// can skip cleanly.
 func upsertTag(ctx context.Context, tx *sql.Tx, name string, now int64) (int64, error) {
 	if name == "" {
 		return 0, nil
@@ -640,7 +609,7 @@ func upsertTag(ctx context.Context, tx *sql.Tx, name string, now int64) (int64, 
 		INSERT INTO tags(name, slug, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(name) DO NOTHING
-	`, name, slugify(name), now, now); err != nil {
+	`, name, slug.Make(name), now, now); err != nil {
 		return 0, err
 	}
 	var id int64
@@ -675,4 +644,32 @@ func nullString(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+func makeSavedViewIngest(d *db.DB, ownerID, now int64) func(context.Context, demo.ManifestSavedView) (bool, error) {
+	return func(ctx context.Context, view demo.ManifestSavedView) (bool, error) {
+		display := view.Display
+		if display == "" {
+			display = "list"
+		}
+		shared := 0
+		if view.Shared {
+			shared = 1
+		}
+		var created bool
+		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(owner_id, name) DO NOTHING
+			`, ownerID, view.Name, string(view.FilterJSON), display, view.Position, shared, now, now)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			created = n == 1
+			return err
+		})
+		return created, err
+	}
 }

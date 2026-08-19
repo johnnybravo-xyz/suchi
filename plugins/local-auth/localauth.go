@@ -158,7 +158,7 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 		return fmt.Errorf("localauth: hash dev password: %w", err)
 	}
 	now := time.Now().Unix()
-	_, err = p.db.Write.ExecContext(ctx, `
+	_, err = p.db.ExecWrite(ctx, `
 		INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
 		VALUES (?, ?, 'admin', ?, ?, ?)
 		ON CONFLICT(email) DO UPDATE SET
@@ -253,11 +253,8 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 		return nil, errors.New("token revoked")
 	}
 	// Best-effort last_used_at update — a write error here must not fail auth.
-	_ = p.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			"UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?", tokenID)
-		return err
-	})
+	_, _ = p.db.ExecWrite(ctx,
+		"UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?", tokenID)
 
 	return &pluginapi.Principal{
 		Kind:    "token",
