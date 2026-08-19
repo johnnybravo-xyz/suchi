@@ -237,6 +237,20 @@ func TestEmailAccounts_List_OmitsSealedSecret(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "sealed_secret") {
 		t.Fatalf("list leaked sealed_secret: %s", rec.Body.String())
 	}
+	var listed struct {
+		Capabilities struct {
+			MicrosoftOAuth struct {
+				Ready  bool   `json:"ready"`
+				Reason string `json:"reason"`
+			} `json:"microsoft_oauth"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Capabilities.MicrosoftOAuth.Ready || listed.Capabilities.MicrosoftOAuth.Reason == "" {
+		t.Fatalf("missing OAuth readiness: %#v", listed.Capabilities.MicrosoftOAuth)
+	}
 }
 
 func TestEmailAccounts_Get_404(t *testing.T) {
@@ -344,7 +358,10 @@ func TestEmailAccounts_Delete(t *testing.T) {
 func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
-	sealed, _ := emailaccounts.SealTokenCache(s.EmailwatchAEAD, []byte(`{"unused":true}`))
+	sealed, _ := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+		emailaccounts.MicrosoftOAuthCredential{
+			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte(`{"unused":true}`),
+		})
 	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,
@@ -360,7 +377,7 @@ func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "oauth client not configured") {
+	if !strings.Contains(rec.Body.String(), "unavailable") {
 		t.Fatalf("expected msal-missing message; got %s", rec.Body.String())
 	}
 }
@@ -390,11 +407,11 @@ func TestEmailAccounts_OAuth_Complete_UnknownHandle(t *testing.T) {
 	// The complete handler bails on missing MSAL before the flow lookup.
 	// A default-options client is enough here: the flow-map miss returns
 	// 404 before any MSAL method fires.
-	c, err := oauth.New(oauth.Options{})
+	m, err := oauth.NewManager("11111111-1111-1111-1111-111111111111", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.EmailwatchMSAL = c
+	s.EmailwatchMSAL = m
 	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
 		`{"flow_handle":"does-not-exist"}`, adminPrincipal(1))
 	if rec.Code != http.StatusNotFound {
@@ -442,7 +459,10 @@ func TestOAuthFlowStoreAllowsOneCompletion(t *testing.T) {
 func TestEmailAccounts_OAuth_Revoke_ClearsAndDisables(t *testing.T) {
 	s, reloads := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
-	sealed, _ := emailaccounts.SealTokenCache(s.EmailwatchAEAD, []byte("cache"))
+	sealed, _ := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+		emailaccounts.MicrosoftOAuthCredential{
+			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte("cache"),
+		})
 	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,

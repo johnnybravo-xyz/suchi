@@ -17,8 +17,8 @@ import (
 )
 
 // PipelineVersionLLM is the "when did this doc last see the LLM
-// classifier?" marker. Bump when the model, prompt template, or
-// JSON schema changes so `suchi rescan --stale llm` picks the doc
+// classifier?" marker. Bump when the prompt template, validation contract, or
+// result schema changes so `suchi rescan --stale llm` picks the doc
 // up. Exported so main.go can read it into the version snapshot
 // it hands to core/rescan (which doesn't import this plugin to
 // keep the dep graph flat).
@@ -40,11 +40,9 @@ type OnFallbackFn func(ctx context.Context, docID int64) error
 // a natural trigger point. Nil = no automations engine wired.
 type OnUpdatedFn func(ctx context.Context, docID int64) error
 
-// Handler is the durable-outbox Subscriber that runs the classifier
-// on `post-classify` jobs. Registered by main.go only when the plugin
-// is enabled; otherwise post-classify jobs go to a dead-letter which
-// is what we want ("someone enqueued this but nobody's configured to
-// serve it").
+// Handler is the durable-outbox Subscriber that runs the classifier on
+// `post-classify` jobs. Main registers it in a disabled state at boot so the
+// first settings save can activate classification without restarting.
 //
 // The plumbing is deliberately thin. Everything the Plugin needs to
 // know about a doc is loaded here and passed into Classify(). Result
@@ -114,6 +112,11 @@ func (h *Handler) Kinds() []string { return []string{Kind} }
 // Handle is the Subscriber entrypoint.
 func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	log := h.log.With("doc_id", e.DocID)
+	startRuntime := h.plugin.rt.Load()
+	if startRuntime == nil {
+		log.Debug("llm-classifier.skip.disabled")
+		return h.runFallback(ctx, e.DocID)
+	}
 
 	title, content, err := h.loadDoc(ctx, e.DocID)
 	if err != nil {
@@ -146,11 +149,21 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	res, err := h.plugin.Classify(ctx, title, content, jdCats, siblings)
 	if err != nil {
+		if errors.Is(err, ErrDisabled) {
+			return h.runFallback(ctx, e.DocID)
+		}
 		// Best-effort classification — a transient LLM error goes
 		// through the outbox retry path via a returned err. When it
 		// hits attempts=5 it lands in state=dead and shows up in
 		// /api/tasks/.
 		return fmt.Errorf("classify: %w", err)
+	}
+	if current := h.plugin.rt.Load(); current != startRuntime {
+		if current == nil {
+			log.Info("llm-classifier.result.discarded", "reason", "disabled during request")
+			return h.runFallback(ctx, e.DocID)
+		}
+		return errors.New("classifier configuration changed during request")
 	}
 	log.Info("llm-classifier.result",
 		"confidence", res.Confidence,
@@ -162,7 +175,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Low-confidence path: apply only the needs-review tag so an
 	// operator sees the doc in the review queue. Leaves title,
 	// correspondent, jd_category untouched.
-	threshold := h.plugin.Config().ConfidenceThreshold
+	threshold := startRuntime.cfg.ConfidenceThreshold
 	lowConfidence := res.Confidence < threshold
 	if lowConfidence {
 		log.Info("llm-classifier.low_confidence", "threshold", threshold)
@@ -325,6 +338,16 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if err := h.onUpdated(ctx, e.DocID); err != nil {
 			log.Warn("llm-classifier.updated.error", "err", err.Error())
 		}
+	}
+	return nil
+}
+
+func (h *Handler) runFallback(ctx context.Context, docID int64) error {
+	if h.onFallback == nil {
+		return nil
+	}
+	if err := h.onFallback(ctx, docID); err != nil {
+		return fmt.Errorf("disabled classifier fallback: %w", err)
 	}
 	return nil
 }

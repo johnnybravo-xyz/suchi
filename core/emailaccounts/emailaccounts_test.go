@@ -242,24 +242,34 @@ func TestSealRoundTripAndBadKey(t *testing.T) {
 		t.Fatalf("password round-trip mismatch: %q", pw)
 	}
 
-	cache := []byte(`{"account":"abc","refresh_token":"xyz"}`)
-	sealedCache, err := emailaccounts.SealTokenCache(k1, cache)
-	if err != nil {
-		t.Fatal(err)
-	}
-	openedCache, err := emailaccounts.OpenTokenCache(k1, sealedCache)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(openedCache, cache) {
-		t.Fatalf("token cache round-trip mismatch")
-	}
-
 	// Wrong key must fail (AEAD auth tag mismatch).
 	if _, err := emailaccounts.OpenPassword(k2, sealed); err == nil {
 		t.Fatal("open with foreign key must fail")
 	}
-	if _, err := emailaccounts.OpenTokenCache(k2, sealedCache); err == nil {
-		t.Fatal("open cache with foreign key must fail")
+}
+
+func TestMicrosoftOAuthCredentialEnvelope(t *testing.T) {
+	k := newAEAD(t)
+	clientID := "11111111-1111-1111-1111-111111111111"
+	cache := []byte(`{"account":"abc","refresh_token":"xyz"}`)
+	sealed, err := emailaccounts.SealMicrosoftOAuthCredential(k, emailaccounts.MicrosoftOAuthCredential{
+		ClientID: clientID, CacheJSON: cache,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := emailaccounts.OpenMicrosoftOAuthCredential(k, sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.ClientID != clientID || !bytes.Equal(opened.CacheJSON, cache) {
+		t.Fatalf("opened credential = %#v", opened)
+	}
+	legacySeal, err := k.Seal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := emailaccounts.OpenMicrosoftOAuthCredential(k, legacySeal); err == nil {
+		t.Fatal("raw token cache should require reauthentication")
 	}
 }

@@ -56,15 +56,6 @@ func TestRouteFromPlusAddress(t *testing.T) {
 	}
 }
 
-func TestAllowedMIMEs(t *testing.T) {
-	if !emailwatch.AllowedMIMEs["application/pdf"] {
-		t.Error("PDF must be in the allowlist")
-	}
-	if emailwatch.AllowedMIMEs["application/x-executable"] {
-		t.Error("Executable must NOT be in the allowlist")
-	}
-}
-
 func TestSidecarFromMessage(t *testing.T) {
 	s := emailwatch.SidecarFromMessage(emailwatch.MessageHeader{
 		From:        "BESCOM <billing@bescom.co.in>",

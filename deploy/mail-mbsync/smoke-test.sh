@@ -80,11 +80,19 @@ curl -sf -X POST "http://127.0.0.1:$PORT/setup" \
 echo "  admin created"
 
 echo
-echo "== restart suchi to activate fs-watch =="
-docker compose restart suchi >/dev/null
+echo "== activate fs-watch live =="
+API_TOKEN=$(curl -sf -X POST "http://127.0.0.1:$PORT/api/login" \
+    -H 'Accept: application/json' -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+    | grep -oP '"token":"\K[^"]+')
+curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
+    -H "Authorization: Token $API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "{\"fs_watch_dir\":\"/ingest\",\"fs_watch_owner_email\":\"$EMAIL\"}" \
+    >/dev/null
 for i in $(seq 1 30); do
     if docker compose logs suchi 2>&1 | grep -q 'fswatch.start'; then
-        echo "  fs-watch active after ${i}s"
+        echo "  fs-watch active after ${i}s without restarting suchi"
         break
     fi
     sleep 1

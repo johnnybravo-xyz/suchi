@@ -1,11 +1,15 @@
 package emailaccounts
 
-import "github.com/johnnybravo-xyz/suchi/core/crypto"
+import (
+	"encoding/json"
+	"errors"
 
-// SealPassword AEAD-seals a plaintext IMAP password. Thin wrapper over
-// crypto.AEADKey.Seal — the type-split (vs SealTokenCache) is what
-// makes callsites read as "this seal holds a password" without a
-// comment.
+	"github.com/johnnybravo-xyz/suchi/core/crypto"
+)
+
+// SealPassword AEAD-seals a plaintext IMAP password. Keeping password and
+// Microsoft OAuth credential helpers separate makes the payload type obvious
+// at every callsite.
 func SealPassword(k *crypto.AEADKey, password string) ([]byte, error) {
 	return k.Seal([]byte(password))
 }
@@ -21,15 +25,49 @@ func OpenPassword(k *crypto.AEADKey, sealed []byte) (string, error) {
 	return string(pt), nil
 }
 
-// SealTokenCache AEAD-seals an MSAL token cache (opaque JSON bytes).
-// Same crypto as SealPassword; the split is documentation, not a
-// separate algorithm. The MSAL library round-trips the cache as bytes,
-// so callers keep it opaque here too.
-func SealTokenCache(k *crypto.AEADKey, cache []byte) ([]byte, error) {
-	return k.Seal(cache)
+const microsoftOAuthCredentialKind = "suchi.microsoft-oauth"
+
+// MicrosoftOAuthCredential binds an opaque MSAL cache to the public-client
+// registration that issued it. Existing caches stay usable when an admin
+// changes the registration used for new sign-ins.
+type MicrosoftOAuthCredential struct {
+	ClientID  string
+	CacheJSON []byte
 }
 
-// OpenTokenCache reverses SealTokenCache.
-func OpenTokenCache(k *crypto.AEADKey, sealed []byte) ([]byte, error) {
-	return k.Open(sealed)
+type microsoftOAuthEnvelope struct {
+	Kind      string `json:"kind"`
+	Version   int    `json:"version"`
+	ClientID  string `json:"client_id"`
+	CacheJSON []byte `json:"cache_json"`
+}
+
+func SealMicrosoftOAuthCredential(k *crypto.AEADKey, credential MicrosoftOAuthCredential) ([]byte, error) {
+	if k == nil || credential.ClientID == "" || len(credential.CacheJSON) == 0 {
+		return nil, errors.New("emailaccounts: incomplete Microsoft OAuth credential")
+	}
+	payload, err := json.Marshal(microsoftOAuthEnvelope{
+		Kind: microsoftOAuthCredentialKind, Version: 1,
+		ClientID: credential.ClientID, CacheJSON: credential.CacheJSON,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return k.Seal(payload)
+}
+
+func OpenMicrosoftOAuthCredential(k *crypto.AEADKey, sealed []byte) (MicrosoftOAuthCredential, error) {
+	if k == nil {
+		return MicrosoftOAuthCredential{}, errors.New("emailaccounts: secret storage unavailable")
+	}
+	payload, err := k.Open(sealed)
+	if err != nil {
+		return MicrosoftOAuthCredential{}, err
+	}
+	var envelope microsoftOAuthEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Kind != microsoftOAuthCredentialKind ||
+		envelope.Version != 1 || envelope.ClientID == "" || len(envelope.CacheJSON) == 0 {
+		return MicrosoftOAuthCredential{}, errors.New("emailaccounts: invalid Microsoft OAuth credential")
+	}
+	return MicrosoftOAuthCredential{ClientID: envelope.ClientID, CacheJSON: envelope.CacheJSON}, nil
 }

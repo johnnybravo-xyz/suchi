@@ -106,24 +106,14 @@ const emlMultipartNoAttachments = "From: a@example.com\r\n" +
 
 const emlMalformed = "this is not a mail message\r\nno headers, no nothing\r\n"
 
-func TestHasAllowlistedAttachment(t *testing.T) {
-	// Mirror of the production allowlist — kept local so the test
-	// doesn't drift silently if AllowedMIMEs widens later. The
-	// contract we're testing is HasAllowlistedAttachment's walk logic,
-	// not the specific set.
-	allow := map[string]bool{
-		"application/pdf": true,
-		"image/jpeg":      true,
-		"text/plain":      true,
-	}
-
+func TestHasAttachment(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
 		want bool
 	}{
 		{"bare text body is not an attachment", emlPlainText, false},
-		{"bare octet-stream attachment (type not in allowlist)", emlOctetStream, false},
+		{"bare octet-stream attachment is preserved", emlOctetStream, true},
 		{"bare pdf attachment", emlBarePDF, true},
 		{"multipart with pdf attachment", emlMultipartWithPDF, true},
 		{"multipart with inline pdf (filename set)", emlMultipartInlinePDF, true},
@@ -134,22 +124,10 @@ func TestHasAllowlistedAttachment(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := emailwatch.HasAllowlistedAttachment([]byte(c.raw), allow)
+			got := emailwatch.HasAttachment([]byte(c.raw))
 			if got != c.want {
 				t.Errorf("want %v, got %v", c.want, got)
 			}
 		})
-	}
-}
-
-func TestHasAllowlistedAttachment_EmptyAllowlist(t *testing.T) {
-	// Empty allowlist should never return true, even for a well-formed
-	// message with attachments. Invariant matters because a
-	// mis-initialized allowlist would otherwise fail-open.
-	if emailwatch.HasAllowlistedAttachment([]byte(emlBarePDF), map[string]bool{}) {
-		t.Fatal("empty allowlist should return false")
-	}
-	if emailwatch.HasAllowlistedAttachment([]byte(emlBarePDF), nil) {
-		t.Fatal("nil allowlist should return false")
 	}
 }

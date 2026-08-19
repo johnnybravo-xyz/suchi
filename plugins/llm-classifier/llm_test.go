@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func silentLog() *slog.Logger {
@@ -102,6 +104,22 @@ func TestNewDisabledOnEmptyURL(t *testing.T) {
 func TestNewRequiresModel(t *testing.T) {
 	if _, err := New(Config{EndpointURL: "http://localhost/v1"}, silentLog()); err == nil {
 		t.Error("missing model should error")
+	}
+}
+
+func TestNewRejectsMalformedEndpointBases(t *testing.T) {
+	for _, endpoint := range []string{
+		"ftp://localhost/v1",
+		"http://user:secret@localhost/v1",
+		"http://localhost/v1?api-key=secret",
+		"http://localhost/v1#fragment",
+		"/v1",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			if _, err := New(Config{EndpointURL: endpoint, Model: "x"}, silentLog()); err == nil {
+				t.Fatal("expected invalid endpoint to fail")
+			}
+		})
 	}
 }
 
@@ -292,6 +310,114 @@ func TestParseChatCompletionDoesNotEchoMalformedModelOutput(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), sensitive) {
 		t.Fatalf("error exposed model output: %v", err)
+	}
+}
+
+func TestParseChatCompletionValidatesAndNormalizesResult(t *testing.T) {
+	content, err := json.Marshal(map[string]any{
+		"title": "  March\n invoice  ", "correspondent": "  ACME   Corp ",
+		"tags":        []string{" Utilities ", "utilities", " TAX "},
+		"jd_category": 31, "confidence": 0.8, "language": "EN, de",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{"content": string(content)},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parseChatCompletion(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Title != "March invoice" || r.Correspondent != "ACME Corp" {
+		t.Fatalf("text was not normalized: %#v", r)
+	}
+	if len(r.Tags) != 2 || r.Tags[0] != "utilities" || r.Tags[1] != "tax" {
+		t.Fatalf("tags were not normalized and deduplicated: %#v", r.Tags)
+	}
+	if r.Language != "en,de" {
+		t.Fatalf("language = %q, want en,de", r.Language)
+	}
+}
+
+func TestParseChatCompletionRejectsUnsafeResultShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "confidence", content: `{"confidence":1.1}`},
+		{name: "category", content: `{"confidence":0.8,"jd_category":1000}`},
+		{name: "too many tags", content: `{"confidence":0.8,"tags":["a","b","c","d","e","f"]}`},
+		{name: "bad language", content: `{"confidence":0.8,"language":"not-a-language"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envelope, err := json.Marshal(map[string]any{
+				"choices": []any{map[string]any{
+					"message": map[string]any{"content": tt.content},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseChatCompletion(envelope); err == nil {
+				t.Fatal("expected invalid model result to fail")
+			}
+		})
+	}
+}
+
+func TestDisableStopsClassifyUntilSetConfig(t *testing.T) {
+	p, err := New(Config{EndpointURL: "http://localhost:11434/v1", Model: "x"}, silentLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Disable()
+	if p.Enabled() {
+		t.Fatal("plugin remained enabled")
+	}
+	if _, err := p.Classify(context.Background(), "title", "content", nil, nil); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("Classify error = %v, want ErrDisabled", err)
+	}
+	if err := p.SetConfig(Config{EndpointURL: "http://localhost:11434/v1", Model: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.Enabled() {
+		t.Fatal("SetConfig did not re-enable plugin")
+	}
+	if got := p.rt.Load().client.Timeout; got != 60*time.Second {
+		t.Fatalf("default timeout after live activation = %s, want 60s", got)
+	}
+	if err := p.SetConfig(Config{
+		EndpointURL: "http://localhost:11434/v1", Model: "x", Timeout: 17 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.rt.Load().client.Timeout; got != 17*time.Second {
+		t.Fatalf("live timeout = %s, want 17s", got)
+	}
+}
+
+func TestDisabledHandlerRunsFallback(t *testing.T) {
+	p := NewDisabled(silentLog())
+	called := false
+	h := NewHandler(p, nil, silentLog()).WithFallback(func(_ context.Context, docID int64) error {
+		called = true
+		if docID != 42 {
+			t.Fatalf("fallback docID = %d, want 42", docID)
+		}
+		return nil
+	})
+	if err := h.Handle(context.Background(), pluginapi.Event{DocID: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("disabled classifier did not run heuristics fallback")
 	}
 }
 

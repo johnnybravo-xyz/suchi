@@ -111,18 +111,16 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
-	// Fail-safe: apply_llm_title needs the LLM classifier plugin to be
-	// wired at boot; without it, enabling the automation is a silent
-	// no-op trap. Block the transition disabled→enabled only. Full-edit
-	// saves on an already-enabled row carry patch.Enabled=true too;
-	// those should pass because the previous boot already set up the
-	// plugin (LLMReloader is nil when disabled at process start).
-	if patch.Enabled != nil && *patch.Enabled && s.LLMReloader == nil {
+	// Fail-safe: apply_llm_title needs a configured classifier; without
+	// one, enabling the automation is a silent no-op trap. Block only the
+	// disabled-to-enabled transition; configured classifiers apply live.
+	if patch.Enabled != nil && *patch.Enabled {
 		if slug, err := store.SystemSlugByID(r.Context(), id); err == nil && slug == automations.SystemSlugApplyLLMTitle {
 			var enabled int
 			_ = s.DB.Read.QueryRowContext(r.Context(),
 				`SELECT enabled FROM automations WHERE id = ?`, id).Scan(&enabled)
-			if enabled == 0 {
+			status, statusErr := s.loadLLMSettingsStatus(r.Context())
+			if enabled == 0 && (statusErr != nil || !status.Enabled) {
 				s.writeError(w, http.StatusBadRequest, "llm_not_configured",
 					"Configure an LLM endpoint before enabling Apply LLM title suggestions — the automation reads title proposals the LLM classifier writes.")
 				return

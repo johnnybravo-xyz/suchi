@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
@@ -44,6 +45,39 @@ type Config struct {
 	AuditRetentionDays int
 }
 
+// Scheduler owns the periodic timer and accepts live configuration updates.
+// A single Run goroutine performs snapshots, so changing the interval cannot
+// overlap two VACUUM operations.
+type Scheduler struct {
+	mu      sync.RWMutex
+	cfg     Config
+	version uint64
+	changed chan struct{}
+}
+
+func NewScheduler(cfg Config) *Scheduler {
+	return &Scheduler{cfg: cfg, changed: make(chan struct{}, 1)}
+}
+
+// Update replaces the complete schedule and wakes Run. Repeated updates are
+// coalesced; Run always reads the newest snapshot after waking.
+func (s *Scheduler) Update(cfg Config) {
+	s.mu.Lock()
+	s.cfg = cfg
+	s.version++
+	s.mu.Unlock()
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Scheduler) config() (Config, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg, s.version
+}
+
 // Loop runs snapshots until ctx is cancelled. Intended to be spawned
 // once at boot:
 //
@@ -53,19 +87,41 @@ type Config struct {
 // one Interval after start so a boot storm doesn't slam the disk.
 func Loop(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger) {
 	if cfg.Interval <= 0 {
-		log.Info("backup.disabled", "reason", "BACKUP_INTERVAL <= 0")
+		log.Info("backup.disabled", "reason", "backup interval <= 0")
 		return
 	}
-	log = log.With("component", "backup", "interval", cfg.Interval, "keep", cfg.Keep)
-	log.Info("backup.loop.start")
-	t := time.NewTicker(cfg.Interval)
-	defer t.Stop()
+	NewScheduler(cfg).Run(ctx, database, log)
+}
+
+// Run blocks until ctx is cancelled and applies Update calls without a process
+// restart. The first snapshot under each configuration still occurs one full
+// interval after activation.
+func (s *Scheduler) Run(ctx context.Context, database *db.DB, log *slog.Logger) {
+	log = log.With("component", "backup")
 	for {
+		cfg, version := s.config()
+		var timer *time.Timer
+		var tick <-chan time.Time
+		if cfg.Interval > 0 {
+			log.Info("backup.loop.active", "interval", cfg.Interval, "keep", cfg.Keep)
+			timer = time.NewTimer(cfg.Interval)
+			tick = timer.C
+		} else {
+			log.Info("backup.disabled", "reason", "backup interval <= 0")
+		}
 		select {
 		case <-ctx.Done():
+			stopTimer(timer)
 			log.Info("backup.loop.stop")
 			return
-		case <-t.C:
+		case <-s.changed:
+			stopTimer(timer)
+			continue
+		case <-tick:
+			_, latestVersion := s.config()
+			if latestVersion != version {
+				continue
+			}
 			if err := Snapshot(ctx, cfg, database, log); err != nil {
 				log.Warn("backup.snapshot.err", "err", err.Error())
 			}
@@ -79,6 +135,16 @@ func Loop(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger) {
 				}
 			}
 		}
+	}
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 

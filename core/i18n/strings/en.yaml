@@ -105,7 +105,7 @@ setup.sources.title: Ingest sources
 setup.sources.body: Filesystem-watch drops any file into a folder and suchi ingests it — great for scanners.
 setup.sources.field.dir: Watch directory (absolute path)
 setup.sources.field.owner: Owner email
-setup.sources.note: Runtime picks these up on next restart.
+setup.sources.note: Changes apply to the running watcher immediately.
 setup.sources.save: Save
 
 setup.preferences.title: Preferences

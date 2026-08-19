@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
@@ -32,17 +33,12 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/similar"
 )
 
-// heuristicsSkip is set by main.go at boot when the LLM plugin is
-// wired. When true, the apply_from_similar action returns a no-op —
-// LLM is authoritative in the current stack. On LLM terminal
-// failure, the LLM handler re-invokes with ForceHeuristics on the
-// context so the action ignores the flag.
-var heuristicsSkip bool
+// heuristicsSkip follows the live LLM state. It is atomic because an admin can
+// now disable or re-enable an already-loaded classifier while ingestion jobs
+// are running.
+var heuristicsSkip atomic.Bool
 
-// SetHeuristicsSkip is called from main.go once at boot. Not
-// intended to be called from anywhere else — no locking. The flag
-// only flips at process startup.
-func SetHeuristicsSkip(v bool) { heuristicsSkip = v }
+func SetHeuristicsSkip(v bool) { heuristicsSkip.Store(v) }
 
 // forceHeuristicsKey is a request-scoped override the LLM handler
 // uses to re-run heuristics after terminal LLM failure.
@@ -110,7 +106,7 @@ func (p *applyFromSimilarParams) wants(field string) bool {
 // runApplyFromSimilar is the action handler. Called from apply.go's
 // runAction switch inside the automations WriteTx.
 func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logger, docID int64, a Action) error {
-	if heuristicsSkip && !isForcedHeuristics(ctx) {
+	if heuristicsSkip.Load() && !isForcedHeuristics(ctx) {
 		return nil
 	}
 

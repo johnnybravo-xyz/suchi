@@ -14,7 +14,7 @@ import (
 // exercised by the existing emailwatch_test.go suite.
 func TestShouldImport(t *testing.T) {
 	// A minimal multipart/mixed message with one PDF attachment. Enough
-	// for HasAllowlistedAttachment to return true. Line endings are CRLF
+	// for HasAttachment to return true. Line endings are CRLF
 	// per RFC 5322.
 	withPDF := []byte(
 		"From: sender@example.com\r\n" +
@@ -33,7 +33,7 @@ func TestShouldImport(t *testing.T) {
 			"%PDF-1.4 stub\r\n" +
 			"--BOUND--\r\n",
 	)
-	// A plain-text-only message — no attachment the allowlist accepts.
+	// A plain-text-only message with no attachment.
 	textOnly := []byte(
 		"From: sender@example.com\r\n" +
 			"Subject: note\r\n" +
@@ -81,7 +81,7 @@ func TestShouldImport(t *testing.T) {
 			wantHasAttch: false,
 		},
 		{
-			name: "attachments-only with no allowlisted attachment drops",
+			name: "attachments-only with no attachment drops",
 			account: &emailaccounts.Account{
 				FromAllowlist:   "",
 				AttachmentsOnly: true,

@@ -17,7 +17,8 @@
 //     one INFO log line with the endpoint host — visible in
 //     main.egress.surface + per-doc audit.
 //
-// Response contract with the LLM: JSON-schema-constrained output.
+// Response contract with the LLM: a JSON object validated by the application
+// before any field can reach persistence.
 //
 //	{
 //	  "title":          "Electricity bill March 2026",
@@ -40,13 +41,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 )
 
@@ -55,6 +59,10 @@ import (
 // the OCR text. Kept as a literal string equal to
 // postingest.PostClassifyKind to avoid a circular import.
 const Kind = "post-classify"
+
+// ErrDisabled handles the narrow race where an admin disables the plugin
+// after a worker starts a job but before it snapshots the runtime config.
+var ErrDisabled = errors.New("llm-classifier: disabled")
 
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
@@ -118,20 +126,29 @@ type Result struct {
 	Language string `json:"language,omitempty"`
 }
 
-// Plugin holds the resolved config + an HTTP client. The config is
-// stored under an atomic pointer so live-reload from the setup
+// Plugin holds an atomic runtime snapshot so live reload from the setup
 // wizard (see SetConfig) never races an in-flight Classify.
 type Plugin struct {
-	rt     atomic.Pointer[runtime]
-	log    *slog.Logger
-	client *http.Client
+	rt  atomic.Pointer[runtime]
+	log *slog.Logger
 }
 
 // runtime is the swappable snapshot the plugin reads on every call.
 // Kept internal so callers can't mutate a live pointer.
 type runtime struct {
-	cfg   Config
-	local bool // true when endpoint host is loopback / private
+	cfg    Config
+	client *http.Client
+	host   string
+	local  bool // true when endpoint host is loopback / private
+}
+
+// NewDisabled returns a live-reloadable plugin shell with no active endpoint.
+// Main registers its durable handler at boot, then SetConfig can activate the
+// classifier immediately when an admin saves settings for the first time.
+func NewDisabled(log *slog.Logger) *Plugin {
+	return &Plugin{
+		log: log.With("component", "llm-classifier"),
+	}
 }
 
 // New validates cfg + returns (nil, nil) when disabled OR when a
@@ -139,6 +156,8 @@ type runtime struct {
 // keeps booting; the classifier just stays off.
 func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	log = log.With("component", "llm-classifier")
+	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
+	cfg.Model = strings.TrimSpace(cfg.Model)
 
 	if cfg.EndpointURL == "" {
 		log.Info("llm-classifier.disabled", "reason", "LLM_ENDPOINT_URL not set")
@@ -147,9 +166,9 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("llm-classifier: LLM_MODEL is required when LLM_ENDPOINT_URL is set")
 	}
-	u, err := url.Parse(cfg.EndpointURL)
+	u, err := parseEndpointURL(cfg.EndpointURL)
 	if err != nil {
-		return nil, fmt.Errorf("llm-classifier: parse endpoint: %w", err)
+		return nil, err
 	}
 	local := netutil.IsLocalHost(u.Hostname())
 	if !local && !cfg.EgressAck {
@@ -161,6 +180,9 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	}
 	if cfg.ConfidenceThreshold == 0 {
 		cfg.ConfidenceThreshold = 0.7
+	}
+	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
+		return nil, errors.New("llm-classifier: confidence threshold must be between 0 and 1")
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 60 * time.Second
@@ -174,32 +196,31 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 			"host", u.Hostname(),
 			"msg", "OCR text of every classified document leaves the box")
 	}
-	p := &Plugin{
-		log:    log,
-		client: &http.Client{Timeout: cfg.Timeout},
-	}
-	p.rt.Store(&runtime{cfg: cfg, local: local})
+	p := &Plugin{log: log}
+	p.rt.Store(&runtime{
+		cfg: cfg, client: &http.Client{Timeout: cfg.Timeout},
+		host: u.Hostname(), local: local,
+	})
 	return p, nil
 }
 
 // SetConfig atomically swaps the plugin's runtime config. Same
 // validation as New(); on failure the old config stays live. Called by
 // the setup wizard's /api/admin/settings/llm handler so an operator
-// doesn't have to restart to try a different endpoint.
-//
-// The HTTP client keeps its original Timeout — a timeout swap needs
-// a new client and is rare enough to warrant a restart. Everything
-// else (endpoint URL, model, key, egress ack) hot-swaps.
+// doesn't have to restart to try a different endpoint. The complete runtime,
+// including the request timeout, swaps as one snapshot.
 func (p *Plugin) SetConfig(cfg Config) error {
+	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
+	cfg.Model = strings.TrimSpace(cfg.Model)
 	if cfg.EndpointURL == "" {
 		return errors.New("llm-classifier: endpoint URL required")
 	}
 	if cfg.Model == "" {
 		return errors.New("llm-classifier: model required")
 	}
-	u, err := url.Parse(cfg.EndpointURL)
+	u, err := parseEndpointURL(cfg.EndpointURL)
 	if err != nil {
-		return fmt.Errorf("llm-classifier: parse endpoint: %w", err)
+		return err
 	}
 	local := netutil.IsLocalHost(u.Hostname())
 	if !local && !cfg.EgressAck {
@@ -208,10 +229,19 @@ func (p *Plugin) SetConfig(cfg Config) error {
 	if cfg.ConfidenceThreshold == 0 {
 		cfg.ConfidenceThreshold = 0.7
 	}
+	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
+		return errors.New("llm-classifier: confidence threshold must be between 0 and 1")
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 60 * time.Second
+	}
 	if cfg.MaxContentChars == 0 {
 		cfg.MaxContentChars = 8000
 	}
-	p.rt.Store(&runtime{cfg: cfg, local: local})
+	p.rt.Store(&runtime{
+		cfg: cfg, client: &http.Client{Timeout: cfg.Timeout},
+		host: u.Hostname(), local: local,
+	})
 	if !local {
 		p.log.Warn("llm-classifier.reload.egress",
 			"endpoint", cfg.EndpointURL, "host", u.Hostname())
@@ -221,10 +251,29 @@ func (p *Plugin) SetConfig(cfg Config) error {
 	return nil
 }
 
+// Disable atomically stops new classify calls. The durable subscriber stays
+// registered so this same process can be re-enabled with SetConfig.
+func (p *Plugin) Disable() {
+	if p == nil {
+		return
+	}
+	p.rt.Store(nil)
+	p.log.Info("llm-classifier.disabled", "reason", "disabled in settings")
+}
+
+func (p *Plugin) Enabled() bool { return p != nil && p.rt.Load() != nil }
+
 // Config returns a snapshot of the current runtime config. Handy for
 // callers that need to know the resolved endpoint (e.g. status pages).
 func (p *Plugin) Config() Config {
-	return p.rt.Load().cfg
+	if p == nil {
+		return Config{}
+	}
+	rt := p.rt.Load()
+	if rt == nil {
+		return Config{}
+	}
+	return rt.cfg
 }
 
 // Classify runs the model against title + content, returns the parsed
@@ -239,7 +288,17 @@ func (p *Plugin) Config() Config {
 func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []JDCat, siblingTitles []string) (*Result, error) {
 	// Snapshot the config once at the top so a concurrent SetConfig
 	// doesn't split this call across two configurations.
-	cfg := p.rt.Load().cfg
+	if p == nil {
+		return nil, ErrDisabled
+	}
+	rt := p.rt.Load()
+	if rt == nil {
+		return nil, ErrDisabled
+	}
+	cfg := rt.cfg
+	if !rt.local {
+		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
+	}
 	if len(content) > cfg.MaxContentChars {
 		content = content[:cfg.MaxContentChars] + "\n… [truncated]"
 	}
@@ -255,7 +314,7 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := rt.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("llm-classifier: POST: %w", err)
 	}
@@ -283,11 +342,9 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 
 // ---------- helpers, kept unexported + testable ----------
 
-// buildRequestBody assembles the /v1/chat/completions payload with a
-// JSON-schema-constrained response format (works on OpenAI + Ollama
-// modern versions; earlier local runners downgrade to
-// response_format: {type: json_object} which is still enforced by
-// the system prompt). JD categories go in the user message so the
+// buildRequestBody assembles the /v1/chat/completions payload with a JSON
+// object response format. The application validates the decoded object before
+// it can reach persistence. JD categories go in the user message so the
 // static system prompt stays cacheable server-side; only the
 // per-installation taxonomy varies per request.
 func buildRequestBody(model, title, content string, jdCats []JDCat, siblingTitles []string) []byte {
@@ -371,5 +428,77 @@ func parseChatCompletion(body []byte) (*Result, error) {
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
 		return nil, fmt.Errorf("decode result: %w", err)
 	}
+	if err := validateResult(&r); err != nil {
+		return nil, fmt.Errorf("validate result: %w", err)
+	}
 	return &r, nil
+}
+
+func validateResult(r *Result) error {
+	if r == nil {
+		return errors.New("empty result")
+	}
+	if math.IsNaN(r.Confidence) || math.IsInf(r.Confidence, 0) || r.Confidence < 0 || r.Confidence > 1 {
+		return errors.New("confidence must be between 0 and 1")
+	}
+	if r.JDCategory != 0 && (r.JDCategory < 10 || r.JDCategory > 99) {
+		return errors.New("jd_category must be 0 or between 10 and 99")
+	}
+	var err error
+	if r.Title, err = cleanResultText(r.Title, 300, "title"); err != nil {
+		return err
+	}
+	if r.Correspondent, err = cleanResultText(r.Correspondent, 200, "correspondent"); err != nil {
+		return err
+	}
+	if r.Reasoning, err = cleanResultText(r.Reasoning, 500, "reasoning"); err != nil {
+		return err
+	}
+	if len(r.Tags) > 5 {
+		return errors.New("tags must contain at most 5 entries")
+	}
+	seen := make(map[string]bool, len(r.Tags))
+	tags := make([]string, 0, len(r.Tags))
+	for _, tag := range r.Tags {
+		tag, err = cleanResultText(strings.ToLower(tag), 64, "tag")
+		if err != nil {
+			return err
+		}
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	r.Tags = tags
+	if strings.TrimSpace(r.Language) != "" {
+		formatted := lang.Format(r.Language)
+		languages := lang.Parse(formatted)
+		if len(languages) == 0 || len(languages) > 3 {
+			return errors.New("language must contain 1 to 3 ISO language codes")
+		}
+		r.Language = strings.Join(languages, ",")
+	} else {
+		r.Language = ""
+	}
+	return nil
+}
+
+func cleanResultText(value string, maxRunes int, field string) (string, error) {
+	value = strings.Join(strings.Fields(value), " ")
+	if utf8.RuneCountInString(value) > maxRunes {
+		return "", fmt.Errorf("%s exceeds %d characters", field, maxRunes)
+	}
+	return value, nil
+}
+
+func parseEndpointURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return nil, errors.New("llm-classifier: endpoint must be an http(s) base URL without credentials")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("llm-classifier: endpoint base URL cannot contain a query string or fragment")
+	}
+	return u, nil
 }

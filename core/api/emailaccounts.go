@@ -48,6 +48,8 @@ const (
 
 type oauthFlowEntry struct {
 	flow      *oauth.Flow
+	client    *oauth.Client
+	clientID  string
 	expiresAt time.Time
 	active    bool
 }
@@ -145,7 +147,8 @@ type emailAccountInput struct {
 	FromAllowlist   *string `json:"from_allowlist,omitempty"`
 	// SyncSince is the unix-seconds initial-sync horizon. On create,
 	// omit to default to time.Now() (SPA "add mailbox" only pulls fresh
-	// mail). Send 0 to explicitly opt out (sync all UNSEEN). On PATCH,
+	// mail). Send 0 to explicitly opt out (sync all UIDs after the durable
+	// cursor). On PATCH,
 	// omit = leave alone; 0 = clear (revert to sync-all); positive =
 	// set. Watcher maps non-null values onto IMAP SEARCH SINCE.
 	SyncSince *int64 `json:"sync_since,omitempty"`
@@ -181,7 +184,19 @@ func (s *Server) ListEmailAccounts(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []emailaccounts.Account{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"accounts": rows})
+	oauthReady := s.EmailwatchMSAL != nil && s.EmailwatchMSAL.Ready()
+	oauthReason := ""
+	if !oauthReady {
+		oauthReason = "The Suchi Microsoft sign-in registration is not available on this build."
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"accounts": rows,
+		"capabilities": map[string]any{
+			"microsoft_oauth": map[string]any{
+				"ready": oauthReady, "reason": oauthReason,
+			},
+		},
+	})
 }
 
 // GetEmailAccount — GET /api/email-accounts/{id}.
@@ -275,9 +290,8 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if in.FromAllowlist != nil {
 		acc.FromAllowlist = strings.TrimSpace(*in.FromAllowlist)
 	}
-	// Initial-sync horizon. Omitted → "from now on"; explicit 0 →
-	// "sync all UNSEEN" (matches pre-change behaviour for operators
-	// who wanted the old default).
+	// Initial-sync horizon. Omitted → "from now on"; explicit 0 → no
+	// date floor (all UIDs after the durable cursor).
 	if in.SyncSince == nil {
 		nowTS := time.Now().Unix()
 		acc.SyncSince = &nowTS
@@ -328,6 +342,11 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_sealed_secret",
 				"sealed_secret_b64 is not valid base64")
+			return
+		}
+		if _, err := emailaccounts.OpenMicrosoftOAuthCredential(s.EmailwatchAEAD, sealed); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential",
+				"OAuth credential was not issued by this server")
 			return
 		}
 		acc.SealedSecret = sealed
@@ -569,7 +588,7 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if acc.AuthMethod == emailaccounts.AuthXOAuth2 && s.EmailwatchMSAL == nil {
 		s.writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      false,
-			"message": "microsoft oauth client not configured",
+			"message": "Microsoft OAuth is unavailable on this server",
 		})
 		return
 	}
@@ -594,7 +613,7 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		authFn = func(c *imapclient.Client) error { return c.Login(acc.Username, pw) }
 	case emailaccounts.AuthXOAuth2:
-		cache, err := emailaccounts.OpenTokenCache(s.EmailwatchAEAD, acc.SealedSecret)
+		credential, err := emailaccounts.OpenMicrosoftOAuthCredential(s.EmailwatchAEAD, acc.SealedSecret)
 		if err != nil {
 			s.writeJSON(w, http.StatusOK, map[string]any{
 				"ok":      false,
@@ -602,13 +621,28 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		refreshed, err := s.EmailwatchMSAL.AcquireTokenSilent(r.Context(), cache, acc.OAuthAccountID)
+		client, err := s.EmailwatchMSAL.ClientFor(credential.ClientID)
+		if err != nil {
+			s.writeJSON(w, http.StatusOK, map[string]any{
+				"ok": false, "message": "resolve OAuth client: " + err.Error(),
+			})
+			return
+		}
+		refreshed, err := client.AcquireTokenSilent(r.Context(), credential.CacheJSON, acc.OAuthAccountID)
 		if err != nil {
 			s.writeJSON(w, http.StatusOK, map[string]any{
 				"ok":      false,
 				"message": "acquire token: " + err.Error(),
 			})
 			return
+		}
+		if refreshed.Rotated {
+			sealed, sealErr := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+				emailaccounts.MicrosoftOAuthCredential{ClientID: credential.ClientID, CacheJSON: refreshed.CacheJSON})
+			if sealErr == nil {
+				_, _ = emailaccounts.Patch(r.Context(), s.DB, acc.ID,
+					emailaccounts.AccountPatch{SealedSecret: &sealed})
+			}
 		}
 		token := refreshed.AccessToken
 		authFn = func(c *imapclient.Client) error {
@@ -682,7 +716,13 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 	}
 	if s.EmailwatchMSAL == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "no_msal",
-			"microsoft oauth client not configured")
+			"Microsoft OAuth is unavailable on this server")
+		return
+	}
+	client, clientID, ready := s.EmailwatchMSAL.Active()
+	if !ready {
+		s.writeError(w, http.StatusServiceUnavailable, "no_msal",
+			"The Suchi Microsoft sign-in registration is not available on this build")
 		return
 	}
 	handle, err := newFlowHandle()
@@ -691,13 +731,13 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	entry := oauthFlowEntry{expiresAt: now.Add(oauthFlowTTL)}
+	entry := oauthFlowEntry{client: client, clientID: clientID, expiresAt: now.Add(oauthFlowTTL)}
 	if !oauthFlows.put(handle, entry, now) {
 		s.writeError(w, http.StatusTooManyRequests, "too_many_flows",
 			"too many Microsoft sign-ins are already pending")
 		return
 	}
-	flow, err := s.EmailwatchMSAL.DeviceCodeStart(r.Context())
+	flow, err := client.DeviceCodeStart(r.Context())
 	if err != nil {
 		oauthFlows.delete(handle)
 		s.serverErr(w, "email_accounts.oauth.start", err)
@@ -748,7 +788,7 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 	}
 	if s.EmailwatchMSAL == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "no_msal",
-			"microsoft oauth client not configured")
+			"Microsoft OAuth is unavailable on this server")
 		return
 	}
 
@@ -770,7 +810,11 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 	}
 	defer oauthFlows.release(body.FlowHandle)
 
-	completed, err := s.EmailwatchMSAL.DeviceCodeComplete(r.Context(), entry.flow)
+	if entry.client == nil || entry.clientID == "" {
+		s.writeError(w, http.StatusNotFound, "flow_gone", "OAuth flow has no issuing registration")
+		return
+	}
+	completed, err := entry.client.DeviceCodeComplete(r.Context(), entry.flow)
 	if err != nil {
 		s.serverErr(w, "email_accounts.oauth.complete", err)
 		return
@@ -781,7 +825,8 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 			"server AEAD key not configured")
 		return
 	}
-	sealed, err := emailaccounts.SealTokenCache(s.EmailwatchAEAD, completed.CacheJSON)
+	sealed, err := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+		emailaccounts.MicrosoftOAuthCredential{ClientID: entry.clientID, CacheJSON: completed.CacheJSON})
 	if err != nil {
 		s.serverErr(w, "email_accounts.oauth.seal", err)
 		return

@@ -44,17 +44,17 @@ const (
 // Account mirrors one row in email_accounts.
 //
 // SealedSecret is the raw AEAD-sealed blob — do NOT log it, do NOT
-// return it on the API. Callers unseal via OpenPassword /
-// OpenTokenCache at the moment of use.
+// return it on the API. Callers unseal via OpenPassword or
+// OpenMicrosoftOAuthCredential at the moment of use.
 //
 // TLSCAFile / ProcessedFolder / OAuthAccountID / FromAllowlist are
 // nullable columns represented as empty string on read.
 // LastSyncAt / LastError are 0 / "" until MarkSync writes them.
 //
 // SyncSince is *int64 (not int64) because 0 is a legitimate unix
-// timestamp — nil means "no SINCE filter, sync all UNSEEN" and is
-// visually distinct from an explicit epoch. Watcher maps non-nil onto
-// imap.SearchCriteria.Since.
+// timestamp — nil means "no SINCE filter" and is visually distinct from an
+// explicit epoch. Watcher maps non-nil onto imap.SearchCriteria.Since; the UID
+// cursor, not server read state, controls incremental polling.
 type Account struct {
 	ID              int64      `json:"id"`
 	Name            string     `json:"name"`

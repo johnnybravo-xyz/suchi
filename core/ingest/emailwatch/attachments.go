@@ -11,25 +11,25 @@ import (
 	gomail "github.com/emersion/go-message/mail"
 )
 
-// HasAllowlistedAttachment reports whether raw (an RFC-822 message)
-// carries at least one leaf part that is an attachment (not the
-// message body) whose Content-Type main type is a key in allowed.
-// It's a cheap prefilter used by the poll loop to skip messages
-// that would only produce zero-attachment eml fanouts.
+// HasAttachment reports whether raw (an RFC-822 message) carries at least one
+// leaf part explicitly marked as an attachment rather than a message body.
+// The downstream EML pipeline preserves unsupported formats as opaque child
+// documents, so filtering by media type here would silently discard source
+// files that suchi can safely archive.
 //
 // A leaf counts only when Content-Disposition marks it as an
 // attachment: either explicit `attachment`, or `inline` with a
 // filename (senders that inline PDFs still set a filename). A
 // body part (no Content-Disposition, or `inline` without filename)
-// never counts, even if its media type is in the allowlist — that
-// would misfire on every multipart/alternative because text/plain
-// is a legitimate attachment type but also every email's body.
+// never counts. Treating media type alone as the signal would misfire
+// on every multipart/alternative because text/plain is both a common
+// attachment format and nearly every email's body.
 //
 // Robust to malformed input: on any parse error, returns false. A
 // message we can't parse is a message we can't extract attachments
 // from — better to skip than to import a body with no children.
-func HasAllowlistedAttachment(raw []byte, allowed map[string]bool) bool {
-	if len(raw) == 0 || len(allowed) == 0 {
+func HasAttachment(raw []byte) bool {
+	if len(raw) == 0 {
 		return false
 	}
 	mr, err := gomail.CreateReader(bytes.NewReader(raw))
@@ -49,24 +49,12 @@ func HasAllowlistedAttachment(raw []byte, allowed map[string]bool) bool {
 		if p == nil {
 			continue
 		}
-		ct := p.Header.Get("Content-Type")
-		if ct == "" {
-			_, _ = io.Copy(io.Discard, p.Body)
-			continue
-		}
 		if !isAttachmentPart(p.Header.Get("Content-Disposition")) {
 			_, _ = io.Copy(io.Discard, p.Body)
 			continue
 		}
-		mediaType, _, perr := mime.ParseMediaType(ct)
-		if perr == nil {
-			mediaType = strings.ToLower(strings.TrimSpace(mediaType))
-			if allowed[mediaType] {
-				_, _ = io.Copy(io.Discard, p.Body)
-				return true
-			}
-		}
 		_, _ = io.Copy(io.Discard, p.Body)
+		return true
 	}
 }
 

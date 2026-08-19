@@ -70,24 +70,13 @@ API_TOKEN=$(curl -s -X POST "http://127.0.0.1:$PORT/api/login" \
     | grep -oP '"token":"\K[^"]+')
 echo "admin created, API token acquired"
 
-# fs-watch is idle until the owner user exists (which it now does).
-# Kick it by restarting suchi with the same env — simpler than
-# poking an internal reload knob.
-kill "$SUCHI_PID"; wait "$SUCHI_PID" 2>/dev/null || true
 echo
-echo "== restart to pick up the owner =="
-PUBLIC_URL="http://127.0.0.1:$PORT" \
-LISTEN_ADDR=":$PORT" \
-DATA_DIR="$DATA_DIR" \
-INGEST_FS_DIR="$INGEST_DIR" \
-INGEST_FS_OWNER_EMAIL="$ADMIN_EMAIL" \
-LOG_LEVEL=info \
-"$ROOT/dist/suchi" serve >> "$DATA_DIR/suchi.log" 2>&1 &
-SUCHI_PID=$!
-for i in $(seq 1 40); do
-    if curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null; then break; fi
-    sleep 0.25
-done
+echo "== activate fs-watch live =="
+curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
+    -H "Authorization: Token $API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "{\"fs_watch_dir\":\"$INGEST_DIR\",\"fs_watch_owner_email\":\"$ADMIN_EMAIL\"}" \
+    >/dev/null
 
 echo
 echo "== drop fixtures into ingest =="

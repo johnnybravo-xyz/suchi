@@ -53,6 +53,36 @@ func TestNewCustomClientID(t *testing.T) {
 	}
 }
 
+func TestManagerLiveOverrideKeepsPriorClient(t *testing.T) {
+	first := "11111111-1111-1111-1111-111111111111"
+	second := "22222222-2222-2222-2222-222222222222"
+	m, err := NewManager(first, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstClient, firstID, ready := m.Active()
+	if !ready || firstID != first || firstClient == nil {
+		t.Fatalf("first active = %q ready=%v client=%v", firstID, ready, firstClient)
+	}
+	if err := m.SetActive(second); err != nil {
+		t.Fatal(err)
+	}
+	_, activeID, ready := m.Active()
+	if !ready || activeID != second {
+		t.Fatalf("second active = %q ready=%v", activeID, ready)
+	}
+	retained, err := m.ClientFor(first)
+	if err != nil || retained != firstClient {
+		t.Fatalf("prior client not retained: client=%v err=%v", retained, err)
+	}
+	if err := m.SetActive(DefaultClientID); err != nil {
+		t.Fatal(err)
+	}
+	if m.Ready() {
+		t.Fatal("sentinel client id should disable new sign-ins")
+	}
+}
+
 func TestClientCreatesIsolatedCaches(t *testing.T) {
 	c, err := New(Options{})
 	if err != nil {

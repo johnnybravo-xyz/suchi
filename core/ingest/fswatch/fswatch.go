@@ -59,6 +59,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
+var ErrOwnerNotFound = errors.New("fswatch: owner not found")
+
 // Config carries the knobs Run needs.
 type Config struct {
 	// Dir is the staging directory. Created if missing.
@@ -119,15 +121,7 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		`SELECT id FROM users WHERE email = ? AND disabled = 0`,
 		cfg.OwnerEmail).Scan(&ownerID)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Owner not yet created (fresh install pre-/setup, or user
-		// deleted). Disable rather than crash — the server still
-		// boots and serves. Operator can restart after creating the
-		// user.
-		log.Warn("fswatch.disabled",
-			"reason", "owner not found",
-			"email", cfg.OwnerEmail,
-			"msg", "restart suchi after creating this user to activate fs-watch")
-		return nil, nil
+		return nil, fmt.Errorf("%w: %s", ErrOwnerNotFound, cfg.OwnerEmail)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fswatch: resolve owner %q: %w", cfg.OwnerEmail, err)
@@ -228,6 +222,9 @@ func (w *Watcher) handleEvent(ctx context.Context, ev fsnotify.Event) {
 // file to errors/ with a companion .err note; success deletes it (or
 // leaves it in place if KeepOnSuccess).
 func (w *Watcher) handleFile(ctx context.Context, path string) {
+	if ctx.Err() != nil {
+		return
+	}
 	// Skip if the file has vanished (rapid create + delete).
 	fi, err := os.Stat(path)
 	if err != nil || fi.IsDir() {
@@ -275,6 +272,11 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 
 	docID, deduped, err := w.ingest(ctx, path, side)
 	if err != nil {
+		// A live reload cancels the old watcher before the replacement drains
+		// the directory. Leave an interrupted file in place for that drain.
+		if ctx.Err() != nil {
+			return
+		}
 		w.moveToErrors(path, sidecarPath, err)
 		return
 	}
@@ -358,7 +360,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 	var docID int64
 	var deduped bool
 	err = w.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		// Alive dedup — owner-scoped, matches phase-2(dedup).
+		// Alive dedup is owner-scoped, matching the ingestion deduplication behavior.
 		var aliveID int64
 		errAlive := tx.QueryRowContext(ctx,
 			`SELECT id FROM documents

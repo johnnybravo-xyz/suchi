@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
@@ -148,6 +149,24 @@ func TestSetupState_EmptyIsPendingEverywhere(t *testing.T) {
 	}
 }
 
+func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeySetupIntent: "household",
+		settings.KeyPreset:      "household",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := settings.LoadSetupState(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Intent != "household" || s.CurrentPreset != "household" {
+		t.Fatalf("setup state = %#v", s)
+	}
+}
+
 func TestRecordStep_DoneThenSkipped(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
@@ -201,10 +220,11 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	envFB := settings.LLMConfig{
-		EndpointURL: "http://env.example/v1",
-		Model:       "env-model",
-		APIKey:      "env-key",
-		EgressAck:   false,
+		EndpointURL:         "http://env.example/v1",
+		Model:               "env-model",
+		APIKey:              "env-key",
+		EgressAck:           false,
+		ConfidenceThreshold: 0.7,
 	}
 	// No settings written yet — should be identical to env.
 	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
@@ -229,6 +249,35 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 	}
 	if !got.EgressAck {
 		t.Errorf("egress_ack should follow settings, got false")
+	}
+}
+
+func TestResolveLLMConfig_DisabledOverridesEnvironment(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	envFB := settings.LLMConfig{
+		EndpointURL: "https://api.example.com/v1",
+		Model:       "env-model",
+		APIKey:      "env-key",
+		EgressAck:   true,
+	}
+	if err := settings.SaveLLMConfig(ctx, d, settings.LLMConfig{
+		EndpointURL: envFB.EndpointURL,
+		Model:       envFB.Model,
+		EgressAck:   true,
+		Disabled:    true,
+	}, testSecretBox{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Disabled {
+		t.Fatal("stored disabled state must override an enabled environment fallback")
+	}
+	if got.EndpointURL != envFB.EndpointURL || got.Model != envFB.Model {
+		t.Fatalf("disabled config should retain its connection fields: %#v", got)
 	}
 }
 
@@ -261,11 +310,13 @@ func TestSaveLLMConfig_UpdatesOneSnapshot(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	want := settings.LLMConfig{
-		EndpointURL: "http://localhost:11434/v1",
-		Model:       "qwen2.5:7b",
-		EgressAck:   true,
+		EndpointURL:         "http://localhost:11434/v1",
+		Model:               "qwen2.5:7b",
+		EgressAck:           true,
+		ConfidenceThreshold: 0.75,
 	}
-	if err := settings.SaveLLMConfig(ctx, d, want, testSecretBox{}, "secret-key"); err != nil {
+	apiKey := "secret-key"
+	if err := settings.SaveLLMConfig(ctx, d, want, testSecretBox{}, &apiKey); err != nil {
 		t.Fatal(err)
 	}
 
@@ -276,6 +327,24 @@ func TestSaveLLMConfig_UpdatesOneSnapshot(t *testing.T) {
 	want.APIKey = "secret-key"
 	if got != want {
 		t.Fatalf("resolved config = %#v, want %#v", got, want)
+	}
+}
+
+func TestSaveLLMConfig_ExplicitEmptyKeyOverridesEnvironment(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	empty := ""
+	if err := settings.SaveLLMConfig(ctx, d, settings.LLMConfig{
+		EndpointURL: "http://127.0.0.1:11434/v1", Model: "local",
+	}, testSecretBox{}, &empty); err != nil {
+		t.Fatal(err)
+	}
+	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{APIKey: "environment-key"}, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "" {
+		t.Fatalf("API key = %q, want explicit empty override", got.APIKey)
 	}
 }
 
@@ -313,5 +382,26 @@ func TestResolveFSWatchConfig_SettingsOverrideEnv(t *testing.T) {
 	}
 	if got.OwnerEmail != "env@e.com" {
 		t.Errorf("unset owner should stay env, got %q", got.OwnerEmail)
+	}
+}
+
+func TestResolveRuntimePreferences_SettingsOverrideFallback(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeyBackupIntervalHours: 0,
+		settings.KeyOCRLanguages:        []string{"deu", "eng"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := settings.ResolveRuntimePreferences(ctx, d, settings.RuntimePreferences{
+		BackupInterval: 24 * time.Hour,
+		OCRLanguages:   []string{"fra"},
+	})
+	if got.BackupInterval != 0 {
+		t.Fatalf("backup interval = %s, want disabled", got.BackupInterval)
+	}
+	if len(got.OCRLanguages) != 2 || got.OCRLanguages[0] != "deu" || got.OCRLanguages[1] != "eng" {
+		t.Fatalf("OCR languages = %#v", got.OCRLanguages)
 	}
 }

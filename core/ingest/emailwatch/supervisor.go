@@ -31,7 +31,7 @@ type Supervisor struct {
 	cas  *blob.CAS
 	disp *jobs.Dispatcher
 	aead *crypto.AEADKey
-	msal *oauth.Client
+	msal *oauth.Manager
 	log  *slog.Logger
 
 	mu      sync.Mutex
@@ -53,7 +53,7 @@ type watcherHandle struct {
 //
 // msal may be nil — password-only deployments don't need an MSAL
 // client; XOAUTH2 accounts will surface a clear error at connect time.
-func NewSupervisor(cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Client, log *slog.Logger) *Supervisor {
+func NewSupervisor(cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Manager, log *slog.Logger) *Supervisor {
 	return &Supervisor{
 		cfg:     cfg,
 		db:      d,
@@ -197,6 +197,10 @@ func (s *Supervisor) stopAll() {
 // a benign restart in that case — fine).
 func fingerprint(a *emailaccounts.Account) string {
 	var b strings.Builder
+	b.WriteString(strconv.FormatInt(a.OwnerID, 10))
+	b.WriteByte('\x1f')
+	b.WriteString(string(a.Provider))
+	b.WriteByte('\x1f')
 	b.WriteString(a.Host)
 	b.WriteByte('\x1f')
 	b.WriteString(strconv.Itoa(a.Port))
@@ -207,7 +211,11 @@ func fingerprint(a *emailaccounts.Account) string {
 		b.WriteByte('0')
 	}
 	b.WriteByte('\x1f')
+	b.WriteString(a.TLSCAFile)
+	b.WriteByte('\x1f')
 	b.WriteString(a.Folder)
+	b.WriteByte('\x1f')
+	b.WriteString(a.ProcessedFolder)
 	b.WriteByte('\x1f')
 	b.WriteString(strconv.Itoa(a.PollIntervalMin))
 	b.WriteByte('\x1f')
@@ -215,11 +223,27 @@ func fingerprint(a *emailaccounts.Account) string {
 	b.WriteByte('\x1f')
 	b.WriteString(a.Username)
 	b.WriteByte('\x1f')
+	b.WriteString(a.OAuthAccountID)
+	b.WriteByte('\x1f')
+	b.Write(a.SealedSecret)
+	b.WriteByte('\x1f')
+	if a.AttachmentsOnly {
+		b.WriteByte('1')
+	} else {
+		b.WriteByte('0')
+	}
+	b.WriteByte('\x1f')
+	b.WriteString(a.FromAllowlist)
+	b.WriteByte('\x1f')
+	if a.MarkSeen {
+		b.WriteByte('1')
+	} else {
+		b.WriteByte('0')
+	}
+	b.WriteByte('\x1f')
 	if a.SyncSince != nil {
 		b.WriteString(strconv.FormatInt(*a.SyncSince, 10))
 	}
-	b.WriteByte('\x1f')
-	b.WriteString(strconv.FormatInt(a.UpdatedAt, 10))
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }

@@ -68,10 +68,9 @@ type Config struct {
 	IngestIMAPPassword   string
 	IngestIMAPOwnerEmail string
 	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
-	// IngestIMAPOAuthClientIDMicrosoft overrides the default suchi Azure
-	// app registration with an operator-owned, tenant-scoped client ID.
-	// Empty falls back to oauth.DefaultClientID. Public-client device-
-	// code flow — no tenant / secret required.
+	// IngestIMAPOAuthClientIDMicrosoft is the operator's Entra public-client
+	// application ID for Outlook / M365 device-code auth. Empty leaves
+	// Microsoft OAuth disabled; public clients carry no client secret.
 	IngestIMAPOAuthClientIDMicrosoft string
 	// IngestIMAPOAuthScopesMicrosoft is a comma-separated list of MSAL
 	// scopes. Empty falls back to oauth.DefaultScopes (IMAP + offline).
@@ -88,10 +87,11 @@ type Config struct {
 	// Non-local endpoint requires LLMEgressAck=true; the classifier
 	// plugin refuses to enable otherwise. Ollama-on-box is the
 	// zero-egress recommended default.
-	LLMEndpointURL string
-	LLMModel       string
-	LLMAPIKey      string
-	LLMEgressAck   bool
+	LLMEndpointURL         string
+	LLMModel               string
+	LLMAPIKey              string
+	LLMEgressAck           bool
+	LLMConfidenceThreshold float64
 
 	// Per-format documents.content caps. Truncation is logged and ingest
 	// continues with the content that fit.
@@ -290,6 +290,15 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SCAN_SPLIT_DPI: want integer in [72,600], got %q", s)
 		}
 		c.ScanSplitDPI = n
+	}
+
+	c.LLMConfidenceThreshold = 0.7
+	if s := env("LLM_CONFIDENCE_THRESHOLD", ""); s != "" {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || f < 0.5 || f > 0.95 {
+			return nil, fmt.Errorf("LLM_CONFIDENCE_THRESHOLD: want float in [0.50,0.95], got %q", s)
+		}
+		c.LLMConfidenceThreshold = f
 	}
 
 	c.IngestPasswordsFile = env("INGEST_PASSWORDS_FILE", "")

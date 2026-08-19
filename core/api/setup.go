@@ -3,6 +3,7 @@ package api
 // Admin-only setup wizard endpoints.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
@@ -33,17 +35,32 @@ var StepNames = map[string]bool{
 	"done":        true,
 }
 
+var setupIntentPresets = map[string]string{
+	"personal":       "solo",
+	"household":      "household",
+	"freelance":      "freelance",
+	"small_business": "smb_billing",
+	"custom":         "",
+}
+
 // registerSetup wires the wizard's routes. Called from Register().
 func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/setup/state", s.SetupState)
+	mux.HandleFunc("POST /api/admin/setup/intent", s.SaveSetupIntent)
 	mux.HandleFunc("POST /api/admin/setup/step/{name}", s.SetupStep)
 	mux.HandleFunc("POST /api/admin/setup/complete", s.SetupComplete)
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
 	mux.HandleFunc("POST /api/admin/setup/preset", s.ApplyPreset)
+	mux.HandleFunc("GET /api/admin/settings/llm", s.GetLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
+	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
+	mux.HandleFunc("GET /api/admin/settings/microsoft-oauth", s.GetMicrosoftOAuthSettings)
+	mux.HandleFunc("POST /api/admin/settings/microsoft-oauth", s.SaveMicrosoftOAuthSettings)
+	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
+	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
 	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
 }
 
@@ -59,7 +76,37 @@ func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "setup.state", err)
 		return
 	}
+	st.RecommendedPreset = setupIntentPresets[st.Intent]
 	s.writeJSON(w, http.StatusOK, st)
+}
+
+// SaveSetupIntent records the operator's onboarding goal. It only guides the
+// filing-tree recommendation; it never hides features or sends telemetry.
+func (s *Server) SaveSetupIntent(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	var body struct {
+		Intent string `json:"intent"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	body.Intent = strings.TrimSpace(body.Intent)
+	recommended, ok := setupIntentPresets[body.Intent]
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "bad_intent",
+			"intent must be one of: personal, household, freelance, small_business, custom")
+		return
+	}
+	if err := settings.Set(r.Context(), s.DB, settings.KeySetupIntent, body.Intent); err != nil {
+		s.serverErr(w, "setup.intent", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"intent": body.Intent, "recommended_preset": recommended,
+	})
 }
 
 // SetupStep records a step as done or skipped. Body: {"status":"done"|"skipped"}.
@@ -281,68 +328,307 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 
 var modelSafe = regexp.MustCompile(`^[A-Za-z0-9._/:\-]{1,128}$`)
 
+type llmSettingsInput struct {
+	Enabled             *bool    `json:"enabled,omitempty"`
+	EndpointURL         string   `json:"endpoint_url"`
+	Model               string   `json:"model"`
+	APIKey              string   `json:"api_key"`
+	ClearAPIKey         bool     `json:"clear_api_key"`
+	EgressAck           bool     `json:"egress_ack"`
+	ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
+}
+
+func (in *llmSettingsInput) normalize() {
+	in.EndpointURL = strings.TrimSpace(in.EndpointURL)
+	in.Model = strings.TrimSpace(in.Model)
+}
+
+func (in llmSettingsInput) wantsEnabled() bool {
+	if in.Enabled != nil {
+		return *in.Enabled
+	}
+	return in.EndpointURL != ""
+}
+
+func (s *Server) validateLLMSettings(w http.ResponseWriter, in llmSettingsInput, required bool) bool {
+	if required && in.EndpointURL == "" {
+		s.writeError(w, http.StatusBadRequest, "endpoint_required", "endpoint_url is required")
+		return false
+	}
+	if in.EndpointURL != "" {
+		if len(in.EndpointURL) > 2048 {
+			s.writeError(w, http.StatusBadRequest, "bad_url", "endpoint_url is too long")
+			return false
+		}
+		u, err := url.Parse(in.EndpointURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_url", "endpoint_url must be an http(s):// URL without credentials")
+			return false
+		}
+		if u.RawQuery != "" || u.Fragment != "" {
+			s.writeError(w, http.StatusBadRequest, "bad_url", "endpoint_url must be a base URL without a query string or fragment")
+			return false
+		}
+		if !netutil.IsLocalHost(u.Host) && !in.EgressAck {
+			s.writeError(w, http.StatusBadRequest, "egress_ack_required",
+				"non-local endpoint - set egress_ack=true to confirm document text will leave the box")
+			return false
+		}
+	}
+	if required && in.Model == "" {
+		s.writeError(w, http.StatusBadRequest, "model_required", "model is required")
+		return false
+	}
+	if in.Model != "" && !modelSafe.MatchString(in.Model) {
+		s.writeError(w, http.StatusBadRequest, "bad_model", "model has forbidden characters")
+		return false
+	}
+	if len(in.APIKey) > 8192 {
+		s.writeError(w, http.StatusBadRequest, "bad_api_key", "api_key is too long")
+		return false
+	}
+	if in.APIKey != "" && in.ClearAPIKey {
+		s.writeError(w, http.StatusBadRequest, "api_key_conflict", "api_key and clear_api_key cannot be set together")
+		return false
+	}
+	if in.ConfidenceThreshold != nil && (*in.ConfidenceThreshold < 0.5 || *in.ConfidenceThreshold > 0.95) {
+		s.writeError(w, http.StatusBadRequest, "bad_confidence_threshold",
+			"confidence_threshold must be between 0.50 and 0.95")
+		return false
+	}
+	return true
+}
+
+func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
+	if s.LLMStatusReader != nil {
+		return s.LLMStatusReader(ctx)
+	}
+	cfg, err := settings.ResolveLLMConfig(ctx, s.DB, settings.LLMConfig{}, s.LLMAEAD)
+	if err != nil {
+		return LLMSettingsStatus{}, err
+	}
+	enabled := !cfg.Disabled && cfg.EndpointURL != ""
+	return LLMSettingsStatus{
+		Enabled:             enabled,
+		Active:              false,
+		EndpointURL:         cfg.EndpointURL,
+		Model:               cfg.Model,
+		EgressAck:           cfg.EgressAck,
+		HasAPIKey:           cfg.APIKey != "",
+		ConfidenceThreshold: cfg.ConfidenceThreshold,
+	}, nil
+}
+
+func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	status, err := s.loadLLMSettingsStatus(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.llm.status", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
+}
+
 func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
+	var body llmSettingsInput
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	body.normalize()
+	enabled := body.wantsEnabled()
+	if !s.validateLLMSettings(w, body, enabled) {
+		return
+	}
+	var apiKeyUpdate *string
+	if body.APIKey != "" || body.ClearAPIKey {
+		apiKeyUpdate = &body.APIKey
+	}
+	if apiKeyUpdate != nil && s.LLMAEAD == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "secret_storage_unavailable",
+			"LLM API keys cannot be stored until secret storage is initialized")
+		return
+	}
+	current, err := settings.ResolveLLMConfig(r.Context(), s.DB, settings.LLMConfig{}, s.LLMAEAD)
+	if err != nil {
+		s.serverErr(w, "settings.llm.resolve", err)
+		return
+	}
+	confidence := current.ConfidenceThreshold
+	if body.ConfidenceThreshold != nil {
+		confidence = *body.ConfidenceThreshold
+	}
+	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
+		EndpointURL:         body.EndpointURL,
+		Model:               body.Model,
+		EgressAck:           body.EgressAck,
+		ConfidenceThreshold: confidence,
+		Disabled:            !enabled,
+	}, s.LLMAEAD, apiKeyUpdate); err != nil {
+		s.serverErr(w, "settings.llm.save", err)
+		return
+	}
+	if s.LLMReloader != nil {
+		if err := s.LLMReloader(r.Context()); err != nil {
+			s.Log.Warn("settings.llm.reload_failed", "err", err.Error())
+			s.writeError(w, http.StatusInternalServerError, "apply_failed",
+				"settings were saved but could not be applied; try again")
+			return
+		}
+	}
+	status, err := s.loadLLMSettingsStatus(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.llm.status_after_save", err)
+		return
+	}
+	response := map[string]any{
+		"saved":  true,
+		"active": status.Active,
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	var body llmSettingsInput
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	body.normalize()
+	if !s.validateLLMSettings(w, body, true) {
+		return
+	}
+	if s.LLMTester == nil {
+		s.writeError(w, http.StatusNotImplemented, "llm_test_unavailable", "classifier connection testing is unavailable")
+		return
+	}
+	confidence := 0.7
+	if body.ConfidenceThreshold != nil {
+		confidence = *body.ConfidenceThreshold
+	}
+	result, err := s.LLMTester(r.Context(), LLMTestConfig{
+		EndpointURL:         body.EndpointURL,
+		Model:               body.Model,
+		APIKey:              body.APIKey,
+		ClearAPIKey:         body.ClearAPIKey,
+		EgressAck:           body.EgressAck,
+		ConfidenceThreshold: confidence,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusBadGateway, "llm_test_failed", err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "message": "Classifier responded with a valid result.", "result": result,
+	})
+}
+
+// ---------- Microsoft OAuth registration ----------
+
+var microsoftClientIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+type microsoftOAuthSettingsStatus struct {
+	Ready             bool   `json:"ready"`
+	EffectiveClientID string `json:"effective_client_id,omitempty"`
+	OverrideClientID  string `json:"override_client_id,omitempty"`
+	Source            string `json:"source"`
+}
+
+func (s *Server) microsoftOAuthStatus(ctx context.Context) (microsoftOAuthSettingsStatus, error) {
+	var override string
+	if err := settings.Get(ctx, s.DB, settings.KeyMicrosoftOAuthID, &override); err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return microsoftOAuthSettingsStatus{}, err
+	}
+	effective := strings.TrimSpace(override)
+	source := "settings"
+	if effective == "" {
+		effective = strings.TrimSpace(s.MicrosoftOAuthFallbackID)
+		source = s.MicrosoftOAuthFallbackSource
+		if source == "" {
+			source = "built_in"
+		}
+	}
+	return microsoftOAuthSettingsStatus{
+		Ready:             oauth.UsableClientID(effective) && s.EmailwatchMSAL != nil && s.EmailwatchMSAL.Ready(),
+		EffectiveClientID: effective, OverrideClientID: override, Source: source,
+	}, nil
+}
+
+func (s *Server) GetMicrosoftOAuthSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	s.microsoftOAuthSettingsMu.Lock()
+	defer s.microsoftOAuthSettingsMu.Unlock()
+	status, err := s.microsoftOAuthStatus(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.microsoft_oauth.status", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) SaveMicrosoftOAuthSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	s.microsoftOAuthSettingsMu.Lock()
+	defer s.microsoftOAuthSettingsMu.Unlock()
+	if s.EmailwatchMSAL == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "oauth_manager_unavailable",
+			"Microsoft OAuth runtime is unavailable")
+		return
+	}
 	var body struct {
-		EndpointURL string `json:"endpoint_url"`
-		Model       string `json:"model"`
-		APIKey      string `json:"api_key"`
-		EgressAck   bool   `json:"egress_ack"`
+		OverrideClientID string `json:"override_client_id"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	body.EndpointURL = strings.TrimSpace(body.EndpointURL)
-	body.Model = strings.TrimSpace(body.Model)
-	if body.EndpointURL != "" {
-		u, err := url.Parse(body.EndpointURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			s.writeError(w, http.StatusBadRequest, "bad_url", "endpoint_url must be an http(s):// URL")
+	body.OverrideClientID = strings.TrimSpace(body.OverrideClientID)
+	if body.OverrideClientID != "" {
+		if !microsoftClientIDPattern.MatchString(body.OverrideClientID) || !oauth.UsableClientID(body.OverrideClientID) {
+			s.writeError(w, http.StatusBadRequest, "bad_client_id",
+				"override_client_id must be a non-zero Microsoft application id GUID")
 			return
 		}
-		if !netutil.IsLocalHost(u.Host) && !body.EgressAck {
-			s.writeError(w, http.StatusBadRequest, "egress_ack_required",
-				"non-local endpoint — set egress_ack=true to confirm document text will leave the box")
+		if err := s.EmailwatchMSAL.Validate(body.OverrideClientID); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_client_id", err.Error())
 			return
 		}
 	}
-	if body.Model != "" && !modelSafe.MatchString(body.Model) {
-		s.writeError(w, http.StatusBadRequest, "bad_model", "model has forbidden characters")
+	effective := body.OverrideClientID
+	if effective == "" {
+		effective = s.MicrosoftOAuthFallbackID
+	}
+	if body.OverrideClientID == "" {
+		if err := settings.Delete(r.Context(), s.DB, settings.KeyMicrosoftOAuthID); err != nil {
+			s.serverErr(w, "settings.microsoft_oauth.clear", err)
+			return
+		}
+	} else if err := settings.Set(r.Context(), s.DB, settings.KeyMicrosoftOAuthID, body.OverrideClientID); err != nil {
+		s.serverErr(w, "settings.microsoft_oauth.save", err)
 		return
 	}
-	if body.APIKey != "" && s.LLMAEAD == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "secret_storage_unavailable",
-			"LLM API keys cannot be stored until secret storage is initialized")
+	if err := s.EmailwatchMSAL.SetActive(effective); err != nil {
+		s.serverErr(w, "settings.microsoft_oauth.apply", err)
 		return
 	}
-	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
-		EndpointURL: body.EndpointURL,
-		Model:       body.Model,
-		EgressAck:   body.EgressAck,
-	}, s.LLMAEAD, body.APIKey); err != nil {
-		s.serverErr(w, "settings.llm.save", err)
+	status, err := s.microsoftOAuthStatus(r.Context())
+	if err != nil {
+		s.serverErr(w, "settings.microsoft_oauth.status_after_save", err)
 		return
 	}
-	if s.LLMReloader == nil {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"saved":            true,
-			"restart_required": true,
-		})
-		return
-	}
-	if err := s.LLMReloader(r.Context()); err != nil {
-		s.Log.Warn("settings.llm.reload_failed", "err", err.Error())
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"saved":            true,
-			"restart_required": true,
-			"reload_error":     err.Error(),
-		})
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.writeJSON(w, http.StatusOK, status)
 }
 
 // ---------- preferences ----------
@@ -350,6 +636,28 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 var langCode = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?$`)
 
 // SavePreferences persists backup interval + OCR languages.
+func (s *Server) GetPreferences(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	if s.RuntimePreferencesReader != nil {
+		status, err := s.RuntimePreferencesReader(r.Context())
+		if err != nil {
+			s.serverErr(w, "settings.preferences.status", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, status)
+		return
+	}
+	prefs := settings.ResolveRuntimePreferences(r.Context(), s.DB, settings.RuntimePreferences{
+		BackupInterval: 24 * time.Hour, OCRLanguages: []string{"eng"},
+	})
+	s.writeJSON(w, http.StatusOK, RuntimePreferencesStatus{
+		BackupIntervalHours: int(prefs.BackupInterval / time.Hour),
+		OCRLanguages:        prefs.OCRLanguages,
+	})
+}
+
 func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -380,13 +688,19 @@ func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
 		}
 		cleaned = append(cleaned, l)
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyBackupIntervalHours, body.BackupIntervalHours); err != nil {
-		s.serverErr(w, "settings.backup", err)
+	if err := settings.SetMany(r.Context(), s.DB, map[string]any{
+		settings.KeyBackupIntervalHours: body.BackupIntervalHours,
+		settings.KeyOCRLanguages:        cleaned,
+	}); err != nil {
+		s.serverErr(w, "settings.preferences", err)
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyOCRLanguages, cleaned); err != nil {
-		s.serverErr(w, "settings.ocr", err)
-		return
+	if s.RuntimePreferencesReloader != nil {
+		if err := s.RuntimePreferencesReloader(r.Context()); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "apply_failed",
+				"preferences were saved but could not be applied; try again")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -398,8 +712,25 @@ func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
 // path itself; this is belt-and-braces.
 var fsPath = regexp.MustCompile(`^/[A-Za-z0-9 ._\-/]{0,255}$`)
 
-// SaveIngestSettings persists fs-watch dir + owner. Runtime picks
-// these up on next boot; documented "restart required" in the UI.
+func (s *Server) GetIngestSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	if s.FSWatchSettingsReader != nil {
+		status, err := s.FSWatchSettingsReader(r.Context())
+		if err != nil {
+			s.serverErr(w, "settings.fswatch.status", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, status)
+		return
+	}
+	cfg := settings.ResolveFSWatchConfig(r.Context(), s.DB, settings.FSWatchConfig{})
+	s.writeJSON(w, http.StatusOK, FSWatchSettingsStatus{Dir: cfg.Dir, OwnerEmail: cfg.OwnerEmail})
+}
+
+// SaveIngestSettings persists fs-watch dir + owner and replaces the running
+// watcher after the new configuration validates.
 func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -423,13 +754,37 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_email", "fs_watch_owner_email invalid")
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyFSWatchDir, body.FSWatchDir); err != nil {
-		s.serverErr(w, "settings.fswatch.dir", err)
+	if (body.FSWatchDir == "") != (body.FSWatchOwnerEmail == "") {
+		s.writeError(w, http.StatusBadRequest, "incomplete_source",
+			"fs_watch_dir and fs_watch_owner_email are both required")
 		return
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyFSWatchOwnerEmail, body.FSWatchOwnerEmail); err != nil {
-		s.serverErr(w, "settings.fswatch.owner", err)
+	if body.FSWatchOwnerEmail != "" {
+		var ownerID int64
+		err := s.DB.Read.QueryRowContext(r.Context(),
+			`SELECT id FROM users WHERE email = ? AND disabled = 0`, body.FSWatchOwnerEmail).Scan(&ownerID)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeError(w, http.StatusBadRequest, "owner_not_found", "fs-watch owner is not an active user")
+			return
+		}
+		if err != nil {
+			s.serverErr(w, "settings.fswatch.owner", err)
+			return
+		}
+	}
+	if err := settings.SetMany(r.Context(), s.DB, map[string]any{
+		settings.KeyFSWatchDir:        body.FSWatchDir,
+		settings.KeyFSWatchOwnerEmail: body.FSWatchOwnerEmail,
+	}); err != nil {
+		s.serverErr(w, "settings.fswatch", err)
 		return
+	}
+	if s.FSWatchReloader != nil {
+		if err := s.FSWatchReloader(r.Context()); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "apply_failed",
+				"ingest source was saved but could not be applied; try again")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

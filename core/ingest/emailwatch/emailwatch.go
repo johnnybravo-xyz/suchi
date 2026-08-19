@@ -61,30 +61,13 @@ func DefaultMaxAttach() int64 {
 	return pipeconfig.Bytes("SUCHI_EMAIL_MAX_ATTACH", 25*1024*1024)
 }
 
-// AllowedMIMEs is the attachment-type allowlist. Kept tight on
-// purpose: an inbox is hostile input, and only types the downstream
-// pipeline can render + text-extract belong here. Currently: PDFs,
-// common raster images, plus the office-doc formats the converter
-// chain already handles (docx / xlsx / odt) and plain text.
-var AllowedMIMEs = map[string]bool{
-	"application/pdf": true,
-	"image/jpeg":      true,
-	"image/png":       true,
-	"image/tiff":      true,
-	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":       true, // .xlsx
-	"application/vnd.oasis.opendocument.text":                                 true, // .odt
-	"text/plain": true,
-}
-
 // shouldImport is the pre-ingest gate. Splitting it out of importOne
 // lets the unit tests exercise the drop paths without spinning up a
 // CAS + DB fixture.
 //
 // Returns:
-//   - hasAttachment: cached result of the AllowedMIMEs walk. importOne
-//     reuses this for the post-ingest payload so we don't parse the
-//     mime tree twice.
+//   - hasAttachment: cached result of the MIME walk. importOne reuses
+//     this for the post-ingest payload so we don't parse twice.
 //   - fromHeader:    the address we compared against the allowlist,
 //     surfaced so the caller can log it on drop.
 //   - drop:          "" means pass the gate. Non-empty is the reason
@@ -96,7 +79,7 @@ func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw [
 	if !MatchFromAllowlist(fromHeader, account.FromAllowlist) {
 		return false, fromHeader, "from_allowlist"
 	}
-	hasAttachment = HasAllowlistedAttachment(raw, AllowedMIMEs)
+	hasAttachment = HasAttachment(raw)
 	if account.AttachmentsOnly && !hasAttachment {
 		return hasAttachment, fromHeader, "attachments_only"
 	}
@@ -118,7 +101,7 @@ type Watcher struct {
 	cas     *blob.CAS
 	disp    *jobs.Dispatcher
 	aead    *crypto.AEADKey
-	msal    *oauth.Client
+	msal    *oauth.Manager
 	log     *slog.Logger
 
 	interval  time.Duration
@@ -132,7 +115,7 @@ type Watcher struct {
 // error only for hard-fails the operator needs to see (bad CA file);
 // password unseal is deferred to connect so a rotated/stale seal
 // doesn't block the whole supervisor at build time.
-func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Client, log *slog.Logger) (*Watcher, error) {
+func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Manager, log *slog.Logger) (*Watcher, error) {
 	if account == nil || !account.Enabled {
 		return nil, nil
 	}
@@ -199,8 +182,8 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 	}, nil
 }
 
-// Run is the poll loop. Connects, syncs one folder's UNSEEN messages
-// into suchi as .eml documents, then sleeps and repeats. Blocks until
+// Run is the poll loop. Connects, syncs messages above one folder's durable
+// UID cursor into suchi as .eml documents, then sleeps and repeats. Blocks until
 // ctx is cancelled.
 //
 // A connection error is logged and retried on the next tick — no
@@ -211,7 +194,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	w.log.Info("emailwatch.start", "interval", w.interval.String())
 	// First cycle immediately so the operator's first upload lands
 	// without a full poll interval wait.
-	w.cycle(ctx)
+	w.runCycle(ctx)
 	t := time.NewTicker(w.interval)
 	defer t.Stop()
 	for {
@@ -220,9 +203,33 @@ func (w *Watcher) Run(ctx context.Context) {
 			w.log.Info("emailwatch.stop", "reason", "context")
 			return
 		case <-t.C:
-			w.cycle(ctx)
+			w.runCycle(ctx)
 		}
 	}
+}
+
+// runCycle records the outcome separately from the UID cursor. A failed poll
+// keeps the timestamp of the last successful poll while surfacing its error;
+// a successful poll clears any prior error even when no new mail was found.
+func (w *Watcher) runCycle(ctx context.Context) {
+	err := w.cycle(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+	syncedAt := w.account.LastSyncAt
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+		w.log.Warn("emailwatch.cycle_failed", "err", errMsg)
+	} else {
+		syncedAt = time.Now().Unix()
+	}
+	if markErr := emailaccounts.MarkSync(ctx, w.db, w.account.ID, syncedAt, errMsg); markErr != nil {
+		w.log.Warn("emailwatch.sync_status_persist_failed", "err", markErr.Error())
+		return
+	}
+	w.account.LastSyncAt = syncedAt
+	w.account.LastError = errMsg
 }
 
 // cycle runs one connect → search-by-UID-cursor → ingest → advance-
@@ -238,21 +245,19 @@ func (w *Watcher) Run(ctx context.Context) {
 // from what we last saw, we've been reconnected to a "different"
 // folder (recreated / mailbox reset) and old UIDs are meaningless.
 // Reset the cursor to 0 and re-sync from the SINCE horizon.
-func (w *Watcher) cycle(ctx context.Context) {
+func (w *Watcher) cycle(ctx context.Context) error {
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	c, err := w.connect(ctx)
 	if err != nil {
-		w.log.Warn("emailwatch.connect_failed", "err", err.Error())
-		return
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer func() { _ = c.Logout() }()
 
 	mbox, err := c.Select(w.account.Folder, false)
 	if err != nil {
-		w.log.Warn("emailwatch.select_failed", "folder", w.account.Folder, "err", err.Error())
-		return
+		return fmt.Errorf("select folder %q: %w", w.account.Folder, err)
 	}
 	uidValidity := mbox.UidValidity
 	lastUID := w.account.LastUIDSeen
@@ -271,8 +276,7 @@ func (w *Watcher) cycle(ctx context.Context) {
 	}
 	uids, err := c.UidSearch(criteria)
 	if err != nil {
-		w.log.Warn("emailwatch.search_failed", "err", err.Error())
-		return
+		return fmt.Errorf("search: %w", err)
 	}
 	if len(uids) == 0 {
 		// Even with no messages, persist a UIDVALIDITY stamp on first
@@ -280,12 +284,13 @@ func (w *Watcher) cycle(ctx context.Context) {
 		// changed to avoid a pointless updated_at bump every poll.
 		if w.account.UIDValiditySeen != uidValidity {
 			if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, lastUID, uidValidity); err != nil {
-				w.log.Warn("emailwatch.cursor_persist_failed", "err", err.Error())
+				return fmt.Errorf("persist cursor: %w", err)
 			} else {
+				w.account.LastUIDSeen = lastUID
 				w.account.UIDValiditySeen = uidValidity
 			}
 		}
-		return
+		return nil
 	}
 	w.log.Info("emailwatch.new_messages", "count", len(uids), "cursor", lastUID)
 
@@ -302,21 +307,36 @@ func (w *Watcher) cycle(ctx context.Context) {
 	done := make(chan error, 1)
 	go func() { done <- c.UidFetch(seqset, items, msgs) }()
 
-	var seenUIDs []uint32
+	var (
+		seenUIDs   []uint32
+		failedUIDs []uint32
+		cycleErrs  []error
+		cycleErrN  int
+	)
+	recordCycleErr := func(err error) {
+		cycleErrN++
+		if len(cycleErrs) < 5 {
+			cycleErrs = append(cycleErrs, err)
+		}
+	}
 	for m := range msgs {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 		raw, msgID, err := w.materialize(m, section)
 		if err != nil {
 			w.log.Warn("emailwatch.materialize_failed",
 				"uid", m.Uid, "err", err.Error())
+			failedUIDs = append(failedUIDs, m.Uid)
+			recordCycleErr(fmt.Errorf("uid %d materialize: %w", m.Uid, err))
 			continue
 		}
 		imported, err := w.importOne(ctx, raw, msgID, m)
 		if err != nil {
 			w.log.Warn("emailwatch.import_failed",
 				"uid", m.Uid, "msg_id", msgID, "err", err.Error())
+			failedUIDs = append(failedUIDs, m.Uid)
+			recordCycleErr(fmt.Errorf("uid %d import: %w", m.Uid, err))
 			continue
 		}
 		if imported {
@@ -325,12 +345,10 @@ func (w *Watcher) cycle(ctx context.Context) {
 		}
 		seenUIDs = append(seenUIDs, m.Uid)
 	}
-	if err := <-done; err != nil {
-		w.log.Warn("emailwatch.fetch_failed", "err", err.Error())
-		// still fall through and mark whatever we did import
-	}
-	if len(seenUIDs) == 0 {
-		return
+	fetchErr := <-done
+	if fetchErr != nil {
+		w.log.Warn("emailwatch.fetch_failed", "err", fetchErr.Error())
+		recordCycleErr(fmt.Errorf("fetch: %w", fetchErr))
 	}
 
 	// Server-side bookkeeping for the processed UIDs.
@@ -340,39 +358,76 @@ func (w *Watcher) cycle(ctx context.Context) {
 	//   - Else                  → do nothing on the server; the local
 	//                              cursor below is what makes the poll
 	//                              idempotent
-	markSet := new(imap.SeqSet)
-	markSet.AddNum(seenUIDs...)
-	switch {
-	case w.account.ProcessedFolder != "":
-		if err := c.UidMove(markSet, w.account.ProcessedFolder); err != nil {
-			w.log.Warn("emailwatch.move_failed",
-				"to", w.account.ProcessedFolder, "err", err.Error())
-		}
-	case w.account.MarkSeen:
-		flags := []any{imap.SeenFlag}
-		if err := c.UidStore(markSet,
-			imap.FormatFlagsOp(imap.AddFlags, true), flags, nil); err != nil {
-			w.log.Warn("emailwatch.mark_seen_failed", "err", err.Error())
+	bookkeepingOK := true
+	if len(seenUIDs) > 0 {
+		markSet := new(imap.SeqSet)
+		markSet.AddNum(seenUIDs...)
+		switch {
+		case w.account.ProcessedFolder != "":
+			if err := c.UidMove(markSet, w.account.ProcessedFolder); err != nil {
+				w.log.Warn("emailwatch.move_failed",
+					"to", w.account.ProcessedFolder, "err", err.Error())
+				bookkeepingOK = false
+				recordCycleErr(fmt.Errorf("move to %q: %w", w.account.ProcessedFolder, err))
+			}
+		case w.account.MarkSeen:
+			flags := []any{imap.SeenFlag}
+			if err := c.UidStore(markSet,
+				imap.FormatFlagsOp(imap.AddFlags, true), flags, nil); err != nil {
+				w.log.Warn("emailwatch.mark_seen_failed", "err", err.Error())
+				bookkeepingOK = false
+				recordCycleErr(fmt.Errorf("mark seen: %w", err))
+			}
 		}
 	}
 
-	// Advance the cursor. Persist even if some UIDs failed to import —
-	// each failure was logged, and we don't want a single bad message
-	// to freeze the poller forever.
-	var maxUID uint32
-	for _, u := range seenUIDs {
-		if u > maxUID {
-			maxUID = u
-		}
-	}
-	if maxUID > lastUID || w.account.UIDValiditySeen != uidValidity {
-		if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, maxUID, uidValidity); err != nil {
+	// A transient failure is a checkpoint barrier: later messages may be
+	// imported and moved, but the cursor stops immediately before the first
+	// failed UID. Those later messages are harmlessly deduplicated if the
+	// server still returns them on the next poll. A fetch-level error keeps the
+	// old cursor because the client cannot know which requested UIDs were lost.
+	nextUID := nextUIDCheckpoint(lastUID, seenUIDs, failedUIDs, fetchErr == nil && bookkeepingOK)
+	if nextUID > lastUID || w.account.UIDValiditySeen != uidValidity {
+		if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, nextUID, uidValidity); err != nil {
 			w.log.Warn("emailwatch.cursor_persist_failed", "err", err.Error())
+			recordCycleErr(fmt.Errorf("persist cursor: %w", err))
 		} else {
-			w.account.LastUIDSeen = maxUID
+			w.account.LastUIDSeen = nextUID
 			w.account.UIDValiditySeen = uidValidity
 		}
 	}
+	if omitted := cycleErrN - len(cycleErrs); omitted > 0 {
+		cycleErrs = append(cycleErrs, fmt.Errorf("%d additional errors omitted", omitted))
+	}
+	return errors.Join(cycleErrs...)
+}
+
+// nextUIDCheckpoint returns the highest UID that can be safely skipped on the
+// next search. Message-level failures form a barrier; an incomplete fetch or
+// failed server-side move/flag operation leaves the prior cursor untouched.
+func nextUIDCheckpoint(lastUID uint32, completed, failed []uint32, checkpointComplete bool) uint32 {
+	if !checkpointComplete {
+		return lastUID
+	}
+	next := lastUID
+	for _, uid := range completed {
+		if uid > next {
+			next = uid
+		}
+	}
+	var firstFailed uint32
+	for _, uid := range failed {
+		if uid != 0 && (firstFailed == 0 || uid < firstFailed) {
+			firstFailed = uid
+		}
+	}
+	if firstFailed != 0 {
+		next = firstFailed - 1
+	}
+	if next < lastUID {
+		return lastUID
+	}
+	return next
 }
 
 // connect dials, TLS-wraps when the account row says so, and logs in.
@@ -430,12 +485,17 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 			_ = c.Logout()
 			return nil, errors.New("emailwatch: xoauth2 client not configured")
 		}
-		cacheJSON, err := emailaccounts.OpenTokenCache(w.aead, w.account.SealedSecret)
+		credential, err := emailaccounts.OpenMicrosoftOAuthCredential(w.aead, w.account.SealedSecret)
 		if err != nil {
 			_ = c.Logout()
 			return nil, fmt.Errorf("emailwatch: unseal token cache: %w", err)
 		}
-		refreshed, err := w.msal.AcquireTokenSilent(ctx, cacheJSON, w.account.OAuthAccountID)
+		client, err := w.msal.ClientFor(credential.ClientID)
+		if err != nil {
+			_ = c.Logout()
+			return nil, fmt.Errorf("emailwatch: resolve oauth client: %w", err)
+		}
+		refreshed, err := client.AcquireTokenSilent(ctx, credential.CacheJSON, w.account.OAuthAccountID)
 		if err != nil {
 			_ = c.Logout()
 			if errors.Is(err, oauth.ErrCacheStale) {
@@ -448,7 +508,8 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 			return nil, fmt.Errorf("emailwatch: acquire token: %w", err)
 		}
 		if refreshed.Rotated {
-			sealed, sealErr := emailaccounts.SealTokenCache(w.aead, refreshed.CacheJSON)
+			sealed, sealErr := emailaccounts.SealMicrosoftOAuthCredential(w.aead,
+				emailaccounts.MicrosoftOAuthCredential{ClientID: credential.ClientID, CacheJSON: refreshed.CacheJSON})
 			if sealErr != nil {
 				_ = c.Logout()
 				return nil, fmt.Errorf("emailwatch: seal rotated cache: %w", sealErr)
@@ -479,11 +540,16 @@ func (w *Watcher) materialize(m *imap.Message, section *imap.BodySectionName) ([
 	if lit == nil {
 		return nil, "", errors.New("empty body literal")
 	}
-	// Cap the read at maxAttach*2 — a message with 25 MB attachments
-	// can easily be 40 MB with encoding overhead.
-	raw, err := io.ReadAll(io.LimitReader(lit, w.maxAttach*2+8*1024))
+	// Cap the read at maxAttach*2 — a message with 25 MB attachments can
+	// easily be 40 MB with encoding overhead. Read one sentinel byte so an
+	// oversized message fails visibly instead of entering CAS truncated.
+	limit := w.maxAttach*2 + 8*1024
+	raw, err := io.ReadAll(io.LimitReader(lit, limit+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if int64(len(raw)) > limit {
+		return nil, "", fmt.Errorf("message exceeds %d-byte ingest limit", limit)
 	}
 	msgID := ""
 	if m.Envelope != nil {

@@ -23,11 +23,14 @@ const (
 	KeySetupCompletedAt = "setup.completed_at"
 	KeySetupStepsDone   = "setup.steps_done"
 	KeySetupStepsSkip   = "setup.steps_skipped"
+	KeySetupIntent      = "setup.intent"
 
 	KeyLLMEndpointURL  = "llm.endpoint_url"
 	KeyLLMModel        = "llm.model"
 	KeyLLMAPIKeySealed = "llm.api_key_sealed"
 	KeyLLMEgressAck    = "llm.egress_ack"
+	KeyLLMDisabled     = "llm.disabled"
+	KeyLLMConfidence   = "llm.confidence_threshold"
 
 	KeyPreset = "preset"
 
@@ -36,6 +39,7 @@ const (
 
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
+	KeyMicrosoftOAuthID  = "mail.microsoft_oauth_client_id"
 
 	// Mail intake — legacy seed keys for the emailwatch IMAP poller.
 	// Consumed once by emailaccounts.MigrateFromLegacySettings to
@@ -129,8 +133,11 @@ const (
 
 // SetupState is the wizard's view of onboarding progress.
 type SetupState struct {
-	CompletedAt *int64                `json:"completed_at,omitempty"` // unix seconds
-	Steps       map[string]StepStatus `json:"steps"`
+	CompletedAt       *int64                `json:"completed_at,omitempty"` // unix seconds
+	Steps             map[string]StepStatus `json:"steps"`
+	Intent            string                `json:"intent,omitempty"`
+	RecommendedPreset string                `json:"recommended_preset,omitempty"`
+	CurrentPreset     string                `json:"current_preset,omitempty"`
 }
 
 // LoadSetupState reads the wizard's state. Missing keys → zero-value.
@@ -155,6 +162,12 @@ func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 	}
 	for _, step := range skipped {
 		s.Steps[step] = StepSkipped
+	}
+	if err := Get(ctx, database, KeySetupIntent, &s.Intent); err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if err := Get(ctx, database, KeyPreset, &s.CurrentPreset); err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
 	}
 	return s, nil
 }
@@ -212,10 +225,14 @@ func SetupNeeded(ctx context.Context, database *db.DB) (bool, error) {
 // LLMConfig is the shape callers merge into their plugin config. Uses
 // plain scalars so this package doesn't import plugins/*.
 type LLMConfig struct {
-	EndpointURL string
-	Model       string
-	APIKey      string
-	EgressAck   bool
+	EndpointURL         string
+	Model               string
+	APIKey              string
+	EgressAck           bool
+	ConfidenceThreshold float64
+	// Disabled is persisted separately from EndpointURL so an operator can
+	// turn off an environment-backed classifier without erasing its setup.
+	Disabled bool
 }
 
 type SecretBox interface {
@@ -236,14 +253,19 @@ func SetLLMAPIKey(ctx context.Context, database *db.DB, box SecretBox, apiKey st
 	return Set(ctx, database, KeyLLMAPIKeySealed, secret)
 }
 
-func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey string) error {
+// SaveLLMConfig persists public fields and optionally replaces the API key.
+// apiKey=nil preserves the existing setting; a pointer to "" stores an
+// encrypted empty override so an environment fallback does not reappear.
+func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey *string) error {
 	values := map[string]any{
 		KeyLLMEndpointURL: cfg.EndpointURL,
 		KeyLLMModel:       cfg.Model,
 		KeyLLMEgressAck:   cfg.EgressAck,
+		KeyLLMDisabled:    cfg.Disabled,
+		KeyLLMConfidence:  cfg.ConfidenceThreshold,
 	}
-	if apiKey != "" {
-		secret, err := sealLLMAPIKey(box, apiKey)
+	if apiKey != nil {
+		secret, err := sealLLMAPIKey(box, *apiKey)
 		if err != nil {
 			return err
 		}
@@ -310,6 +332,17 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box Se
 	if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
 		out.EgressAck = b
 	}
+	b = false
+	if err := Get(ctx, database, KeyLLMDisabled, &b); err == nil {
+		out.Disabled = b
+	}
+	var confidence float64
+	if err := Get(ctx, database, KeyLLMConfidence, &confidence); err == nil && confidence > 0 {
+		out.ConfidenceThreshold = confidence
+	}
+	if out.ConfidenceThreshold == 0 {
+		out.ConfidenceThreshold = 0.7
+	}
 	return out, nil
 }
 
@@ -372,10 +405,8 @@ type FSWatchConfig struct {
 	OwnerEmail string
 }
 
-// ResolveFSWatchConfig merges settings over env fallback for fs-watch
-// boot config. Same shape as ResolveLLMConfig — settings win when set.
-// Live-reload isn't wired for fs-watch (the watcher owns a goroutine
-// bound to a specific path); wizard writes take effect on next boot.
+// ResolveFSWatchConfig merges settings over the environment fallback. The
+// filesystem-watch supervisor calls it at boot and after setup saves.
 func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig) FSWatchConfig {
 	out := fb
 	var s string
@@ -385,6 +416,36 @@ func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig
 	s = ""
 	if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
 		out.OwnerEmail = s
+	}
+	return out
+}
+
+// RuntimePreferences are setup-owned values that affect long-running
+// components. Durations stay typed here so callers cannot disagree about the
+// stored hours-to-duration conversion.
+type RuntimePreferences struct {
+	BackupInterval time.Duration
+	OCRLanguages   []string
+}
+
+// ResolveRuntimePreferences merges setup values over config-file/environment
+// fallbacks. Zero backup hours is an explicit disable; an empty OCR list keeps
+// the fallback because the OCR engines require at least one language.
+func ResolveRuntimePreferences(ctx context.Context, database *db.DB, fb RuntimePreferences) RuntimePreferences {
+	out := RuntimePreferences{
+		BackupInterval: fb.BackupInterval,
+		OCRLanguages:   append([]string(nil), fb.OCRLanguages...),
+	}
+	var hours int
+	if err := Get(ctx, database, KeyBackupIntervalHours, &hours); err == nil && hours >= 0 && hours <= 720 {
+		out.BackupInterval = time.Duration(hours) * time.Hour
+	}
+	var languages []string
+	if err := Get(ctx, database, KeyOCRLanguages, &languages); err == nil && len(languages) > 0 {
+		out.OCRLanguages = append([]string(nil), languages...)
+	}
+	if len(out.OCRLanguages) == 0 {
+		out.OCRLanguages = []string{"eng"}
 	}
 	return out
 }

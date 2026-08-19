@@ -80,3 +80,36 @@ func TestTrustedProxyCIDRsRejectInvalidValue(t *testing.T) {
 		t.Fatal("invalid trusted proxy network was accepted")
 	}
 }
+
+func TestLLMConfidenceThreshold(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	for _, key := range []string{
+		"OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
+		"OIDC_CLIENT_SECRET_FILE", "TLS_CERT_FILE", "TLS_KEY_FILE",
+	} {
+		t.Setenv(key, "")
+	}
+
+	t.Setenv("LLM_CONFIDENCE_THRESHOLD", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMConfidenceThreshold != 0.7 {
+		t.Fatalf("default LLMConfidenceThreshold = %v, want 0.7", cfg.LLMConfidenceThreshold)
+	}
+
+	t.Setenv("LLM_CONFIDENCE_THRESHOLD", "0.85")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMConfidenceThreshold != 0.85 {
+		t.Fatalf("configured LLMConfidenceThreshold = %v, want 0.85", cfg.LLMConfidenceThreshold)
+	}
+
+	t.Setenv("LLM_CONFIDENCE_THRESHOLD", "0.49")
+	if _, err := Load(); err == nil {
+		t.Fatal("out-of-range LLM confidence threshold was accepted")
+	}
+}

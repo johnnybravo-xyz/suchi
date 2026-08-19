@@ -7,6 +7,7 @@ package backup
 import (
 	"context"
 	"database/sql"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -71,6 +72,36 @@ func TestSnapshot(t *testing.T) {
 	// user_version isn't set by suchi (schema_migrations tracks it)
 	// but the query proves the file is a well-formed SQLite DB.
 	_ = version
+}
+
+func TestSchedulerActivatesFromDisabledConfiguration(t *testing.T) {
+	d := newDB(t)
+	dataDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := NewScheduler(Config{DataDir: dataDir, Keep: 1})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scheduler.Run(ctx, d, log)
+	}()
+	scheduler.Update(Config{DataDir: dataDir, Interval: 50 * time.Millisecond, Keep: 1})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		entries, err := os.ReadDir(filepath.Join(dataDir, "backups"))
+		if err == nil && len(entries) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("live scheduler update did not produce a backup")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
 }
 
 func TestSnapshotRetention(t *testing.T) {

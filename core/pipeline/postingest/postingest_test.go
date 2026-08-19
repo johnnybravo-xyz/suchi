@@ -35,6 +35,45 @@ const msgConvertedEmail = "From: sender@example.com\r\n" +
 	"Content-Transfer-Encoding: base64\r\n\r\nSGVsbG8gd29ybGQK\r\n" +
 	"--BOUNDARY--\r\n"
 
+func TestLanguageStateAppliesWithoutRebuildingHandler(t *testing.T) {
+	languages := []string{"eng"}
+	h := New(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithLanguageState(func() []string { return languages }))
+	if got := h.ocrLanguages(); len(got) != 1 || got[0] != "eng" {
+		t.Fatalf("initial languages = %#v", got)
+	}
+	languages = []string{"deu", "eng"}
+	if got := h.ocrLanguages(); len(got) != 2 || got[0] != "deu" {
+		t.Fatalf("reloaded languages = %#v", got)
+	}
+}
+
+func TestPostContentUsesOneClassifierStateSnapshot(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "application/octet-stream", []byte("opaque"))
+	calls := 0
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithLLMClassifierState(func() bool {
+			calls++
+			return true
+		}))
+	if err := h.postContentSteps(ctx, h.log, docID); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("classifier state read %d times, want one coherent snapshot", calls)
+	}
+	var jobs int
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE kind = ? AND doc_id = ?`, PostClassifyKind, docID).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 {
+		t.Fatalf("classify jobs = %d, want 1", jobs)
+	}
+}
+
 func TestHandleRoutingContracts(t *testing.T) {
 	tests := []struct {
 		name            string

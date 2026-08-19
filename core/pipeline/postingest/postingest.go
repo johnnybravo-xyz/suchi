@@ -61,9 +61,9 @@ type postIngestPayload struct {
 	MailRuleID int64  `json:"mail_rule_id,omitempty"` // set by mail-intake plugins that own a rule id
 }
 
-// PostClassifyKind is the job kind the LLM classifier plugin's
-// Subscriber picks up. Post-ingest enqueues one at the tail of Handle
-// when enqueueClassify=true.
+// PostClassifyKind is the job kind the LLM classifier plugin's Subscriber
+// picks up. Post-ingest enqueues one at the tail of Handle when the live
+// classifier state reports enabled.
 const PostClassifyKind = "post-classify"
 
 // Kind is the job.kind value the outbox uses.
@@ -110,16 +110,17 @@ const (
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
 // documents row with content + optional archive_blob, runs the
 // rules-engine classifier, refreshes the rendered-view symlink, and
-// (when enqueueClassify=true) hands off to the LLM classifier via a
+// (when classifyEnabled returns true) hands off to the LLM classifier via a
 // post-classify job.
 type Handler struct {
 	db              *db.DB
 	cas             *blob.CAS
 	log             *slog.Logger
 	langs           []string
-	langChain       *lang.Chain    // optional — nil = language detection is a no-op
-	render          *view.Renderer // optional — nil disables rendered-view
-	enqueueClassify bool           // true when an LLM classifier is registered
+	langChain       *lang.Chain     // optional — nil = language detection is a no-op
+	render          *view.Renderer  // optional — nil disables rendered-view
+	classifyEnabled func() bool     // optional live classifier state
+	languageState   func() []string // optional live OCR-language state
 	limits          ContentLimits
 	ocrEngine       string // "auto" | "tesseract" | "ocrmypdf"
 	scanBlank       ScanBlank
@@ -175,6 +176,13 @@ func WithLanguages(langs []string) Option {
 	}
 }
 
+// WithLanguageState supplies the OCR languages at job execution time. It is
+// used by the setup preferences reloader so future documents pick up a saved
+// language change immediately.
+func WithLanguageState(languages func() []string) Option {
+	return func(h *Handler) { h.languageState = languages }
+}
+
 // WithRenderer wires in a rendered-view projection. Absent (nil) →
 // no symlink tree is refreshed; useful for bare-metal or test setups.
 func WithRenderer(r *view.Renderer) Option {
@@ -196,7 +204,14 @@ func WithLanguageChain(c *lang.Chain) Option {
 // is actually registered on the dispatcher — otherwise the job goes
 // dead.
 func WithLLMClassifier(enabled bool) Option {
-	return func(h *Handler) { h.enqueueClassify = enabled }
+	return func(h *Handler) { h.classifyEnabled = func() bool { return enabled } }
+}
+
+// WithLLMClassifierState wires a live enabled check. Unlike the static option,
+// this lets the setup API activate or disable classification without replacing
+// the post-ingest handler.
+func WithLLMClassifierState(enabled func() bool) Option {
+	return func(h *Handler) { h.classifyEnabled = enabled }
 }
 
 // WithContentLimits pins the per-format extraction caps. Zero-valued
@@ -1395,6 +1410,15 @@ func (h *Handler) recordDecrypted(ctx context.Context, log *slog.Logger, docID i
 	})
 }
 
+func (h *Handler) ocrLanguages() []string {
+	if h.languageState != nil {
+		if languages := h.languageState(); len(languages) > 0 {
+			return append([]string(nil), languages...)
+		}
+	}
+	return append([]string(nil), h.langs...)
+}
+
 // runOCR dispatches to the configured OCR engine. Returns (content,
 // archiveBlobSHA, archiveBlobSize). archiveBlob is empty when the
 // engine doesn't produce a searchable-PDF archive (tessocr) or when
@@ -1422,7 +1446,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte)
 	switch engine {
 	case OCREngineTesseract:
 		res, err := tessocr.OCR(ctx, bytes.NewReader(pdfBytes), log, tessocr.Options{
-			Languages:    h.langs,
+			Languages:    h.ocrLanguages(),
 			MaxTextBytes: h.limits.PDF,
 		})
 		if err != nil {
@@ -1440,7 +1464,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte)
 
 	case OCREngineOCRmyPDF:
 		res, err := ocrmypdf.OCR(ctx, bytes.NewReader(pdfBytes), log, ocrmypdf.Options{
-			Languages: h.langs,
+			Languages: h.ocrLanguages(),
 		})
 		if err != nil {
 			return "", "", 0, fmt.Errorf("ocrmypdf: %w", err)
@@ -1482,10 +1506,20 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		log.Info("post-ingest.rules.applied", "count", len(applied))
 	}
 
+	// One snapshot governs both heuristic suppression and LLM handoff. If an
+	// admin toggles the classifier during this block, the document still gets
+	// exactly one guaranteed path: a queued job whose stable handler can fall
+	// back, or forced heuristics now.
+	classify := h.classifyEnabled != nil && h.classifyEnabled()
+	automationCtx := ctx
+	if !classify {
+		automationCtx = automations.WithForceHeuristics(ctx)
+	}
+
 	// Automations — trigger→conditions→actions on document_added.
 	// Fail-soft: an automation error logs a warning and never blocks the
 	// rest of the post-ingest chain. See core/automations for the shape.
-	if err := automations.ApplyOnDocumentAdded(ctx, h.db, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(automationCtx, h.db, log, docID); err != nil {
 		log.Warn("post-ingest.automations.error", "err", err.Error())
 	}
 
@@ -1506,7 +1540,7 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// the llm-classifier plugin's Subscriber picks up. Only enqueue
 	// when the plugin is actually registered — otherwise the job
 	// would die as a "no subscriber for kind" dead-letter.
-	if h.enqueueClassify {
+	if classify {
 		if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 			return jobs.Enqueue(ctx, tx, PostClassifyKind, docID, "{}")
 		}); err != nil {

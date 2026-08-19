@@ -47,16 +47,12 @@ const (
 // are ignored. Not safe to run concurrently with itself; boot is a
 // single-writer moment so this is fine.
 //
-// llmEnabled reflects whether the LLM classifier plugin is registered
-// at boot. The apply_llm_title seed uses it as its default enabled
-// value so a stock install with no LLM ships with the automation
-// disabled (nothing to react to); an install with LLM configured
-// ships enabled. Both cases seed the row so the operator can toggle
-// later from Settings without a re-seed.
-func Seed(ctx context.Context, d *db.DB, log *slog.Logger, llmEnabled bool) error {
+// The LLM title automation remains idle when there are no title proposals, so
+// it can be enabled from the start and is ready for first-time live activation.
+func Seed(ctx context.Context, d *db.DB, log *slog.Logger) error {
 	seeds := []systemSeed{
 		autoFileFromArchiveSeed(),
-		applyLLMTitleSeed(llmEnabled),
+		applyLLMTitleSeed(),
 	}
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
 		for _, s := range seeds {
@@ -109,12 +105,12 @@ func autoFileFromArchiveSeed() systemSeed {
 // proposals written by the LLM handler and applies them when
 // confidence >= threshold. See apply_llm_title.go for the action
 // semantics.
-func applyLLMTitleSeed(enabled bool) systemSeed {
+func applyLLMTitleSeed() systemSeed {
 	return systemSeed{
 		slug:    SystemSlugApplyLLMTitle,
 		name:    "Apply LLM title suggestions",
 		trigger: TriggerDocumentUpdated,
-		enabled: enabled,
+		enabled: true,
 		actions: []Action{{
 			OrderIndex: 0,
 			Kind:       "apply_llm_title",
