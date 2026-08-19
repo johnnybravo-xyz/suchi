@@ -1,13 +1,13 @@
 // Package config is the env-var-first config loader.
 //
-// Every knob has an env var; config.yaml is for advanced users and does not
-// exist in Phase 0. The rule is: reading Load() is the ONLY place raw
-// os.Getenv appears in the codebase.
+// Application settings are resolved from environment variables and an
+// optional config file.
 package config
 
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,9 +21,13 @@ type Config struct {
 	DataDir        string
 	ListenAddr     string
 	LogLevel       string
+	PprofEnabled   bool
 	BodyLimit      int64
 	SessionKeyPath string
 	BackupInterval time.Duration
+	// TrustedProxyCIDRs enables forwarded client addresses for rate limiting
+	// only when the direct TCP peer belongs to an explicitly trusted network.
+	TrustedProxyCIDRs []netip.Prefix
 	// BackupKeep — retention window for VACUUM INTO snapshots. After
 	// each successful snapshot, all-but-the-latest N are deleted.
 	// 0 = keep everything (documented; not the default).
@@ -75,12 +79,12 @@ type Config struct {
 	// offline_access (some corp tenants, well-known public client IDs).
 	IngestIMAPOAuthScopesMicrosoft string
 
-	// Filesystem-watch ingest (Phase 2). Idle unless the owner email is
+	// Filesystem-watch ingest. Idle unless the owner email is
 	// set — matches the design principle "opt-in, never surprise".
 	IngestFSDir        string
 	IngestFSOwnerEmail string
 
-	// LLM classifier (Phase 3, opt-in). Empty endpoint = disabled.
+	// LLM classifier (opt-in). Empty endpoint = disabled.
 	// Non-local endpoint requires LLMEgressAck=true; the classifier
 	// plugin refuses to enable otherwise. Ollama-on-box is the
 	// zero-egress recommended default.
@@ -89,13 +93,11 @@ type Config struct {
 	LLMAPIKey      string
 	LLMEgressAck   bool
 
-	// Per-format max content byte caps for documents.content extraction.
-	// Ebook formats default higher because a novel/textbook can legitimately
-	// exceed the PDF-oriented default. Truncation is silent + logged at
-	// Warn — the doc is still ingested, FTS still works over what fit.
-	PdfMaxContentBytes  int64 // pdftotext output cap (default 8 MiB)
-	EpubMaxContentBytes int64 // concatenated XHTML text cap (default 32 MiB)
-	DjvuMaxContentBytes int64 // djvutxt stdout cap (default 32 MiB)
+	// Per-format documents.content caps. Truncation is logged and ingest
+	// continues with the content that fit.
+	PdfMaxContentBytes    int64
+	AnyDocMaxContentBytes int64
+	DjvuMaxContentBytes   int64
 
 	// OCR engine selector for scanned-PDF ingest. Values:
 	//   "auto"      — prefer tesseract-only (tessocr) when available,
@@ -175,8 +177,7 @@ type Config struct {
 	// Read from SUCHI_DEMO_MODE. Default off. Nothing outside the demo
 	// container is expected to set it.
 	DemoMode bool
-	// DemoGlobalRPS caps the global per-IP request rate when DemoMode is
-	// on. 0 disables the cap. Read from SUCHI_DEMO_GLOBAL_RPS.
+	// DemoGlobalRPS caps demo session endpoints per IP. 0 disables it.
 	DemoGlobalRPS int
 	// DemoScratchTTLMinutes bounds how long a per-visitor scratch user
 	// (and its uploads) survive before the reset ticker sweeps them.
@@ -204,6 +205,7 @@ func Load() (*Config, error) {
 		DataDir:                          env("DATA_DIR", "/data"),
 		ListenAddr:                       env("LISTEN_ADDR", ":8000"),
 		LogLevel:                         env("LOG_LEVEL", "info"),
+		PprofEnabled:                     env("SUCHI_PPROF", "") == "1",
 		OCRLanguages:                     splitCSV(env("OCR_LANGUAGES", "eng")),
 		OIDCIssuerURL:                    env("OIDC_ISSUER_URL", ""),
 		OIDCClientID:                     env("OIDC_CLIENT_ID", ""),
@@ -250,11 +252,14 @@ func Load() (*Config, error) {
 		env("AUDIT_RETENTION_DAYS", "20"), 0, 100); err != nil {
 		return nil, err
 	}
+	if c.TrustedProxyCIDRs, err = parseCIDRs(env("TRUSTED_PROXY_CIDRS", "")); err != nil {
+		return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS: %w", err)
+	}
 	if c.PdfMaxContentBytes, err = parseBytes(env("PDF_MAX_CONTENT_BYTES", "8M")); err != nil {
 		return nil, fmt.Errorf("PDF_MAX_CONTENT_BYTES: %w", err)
 	}
-	if c.EpubMaxContentBytes, err = parseBytes(env("EPUB_MAX_CONTENT_BYTES", "32M")); err != nil {
-		return nil, fmt.Errorf("EPUB_MAX_CONTENT_BYTES: %w", err)
+	if c.AnyDocMaxContentBytes, err = parseBytes(env("ANYDOC_MAX_CONTENT_BYTES", "32M")); err != nil {
+		return nil, fmt.Errorf("ANYDOC_MAX_CONTENT_BYTES: %w", err)
 	}
 	if c.DjvuMaxContentBytes, err = parseBytes(env("DJVU_MAX_CONTENT_BYTES", "32M")); err != nil {
 		return nil, fmt.Errorf("DJVU_MAX_CONTENT_BYTES: %w", err)
@@ -301,7 +306,7 @@ func Load() (*Config, error) {
 	c.DemoMode = env("SUCHI_DEMO_MODE", "") == "true" ||
 		env("SUCHI_DEMO_MODE", "") == "1"
 	if c.DemoGlobalRPS, err = parseIntBounded("SUCHI_DEMO_GLOBAL_RPS",
-		env("SUCHI_DEMO_GLOBAL_RPS", "0"), 0, 10_000); err != nil {
+		env("SUCHI_DEMO_GLOBAL_RPS", "5"), 0, 10_000); err != nil {
 		return nil, err
 	}
 	if c.DemoScratchTTLMinutes, err = parseIntBounded("SUCHI_DEMO_SCRATCH_TTL_MINUTES",
@@ -372,6 +377,19 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseCIDRs(raw string) ([]netip.Prefix, error) {
+	values := splitCSV(raw)
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q", value)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
 }
 
 // parseIntBounded parses `s` as a base-10 int and enforces `min <=

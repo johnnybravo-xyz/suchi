@@ -1,4 +1,4 @@
-// Package migrations embeds Phase-0 SQL migrations.
+// Package migrations embeds the database schema migrations.
 package migrations
 
 import "embed"

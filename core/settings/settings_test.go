@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -12,6 +13,19 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
+
+type testSecretBox struct{}
+
+func (testSecretBox) Seal(plaintext []byte) ([]byte, error) {
+	return append([]byte("sealed:"), plaintext...), nil
+}
+
+func (testSecretBox) Open(ciphertext []byte) ([]byte, error) {
+	if !bytes.HasPrefix(ciphertext, []byte("sealed:")) {
+		return nil, errors.New("bad ciphertext")
+	}
+	return bytes.TrimPrefix(ciphertext, []byte("sealed:")), nil
+}
 
 func setupDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -68,6 +82,27 @@ func TestSet_Overwrite(t *testing.T) {
 	_ = settings.Get(ctx, d, "k", &got)
 	if got != "v2" {
 		t.Errorf("overwrite failed: got %q", got)
+	}
+}
+
+func TestSetMany_RollsBackOnError(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if _, err := d.Write.ExecContext(ctx, `
+		CREATE TRIGGER reject_bad_setting
+		BEFORE INSERT ON settings WHEN NEW.key = 'bad'
+		BEGIN SELECT RAISE(ABORT, 'rejected'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := settings.SetMany(ctx, d, map[string]any{"good": "saved", "bad": "rejected"})
+	if err == nil {
+		t.Fatal("expected batch failure")
+	}
+	var got string
+	if err := settings.Get(ctx, d, "good", &got); !errors.Is(err, settings.ErrNotFound) {
+		t.Fatalf("batch partially committed: value=%q err=%v", got, err)
 	}
 }
 
@@ -172,14 +207,20 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 		EgressAck:   false,
 	}
 	// No settings written yet — should be identical to env.
-	got := settings.ResolveLLMConfig(ctx, d, envFB)
+	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != envFB {
 		t.Errorf("empty settings should pass env through, got %+v", got)
 	}
 	// Write one setting → that field wins, others stay env.
 	_ = settings.Set(ctx, d, settings.KeyLLMEndpointURL, "http://override.local/v1")
 	_ = settings.Set(ctx, d, settings.KeyLLMEgressAck, true)
-	got = settings.ResolveLLMConfig(ctx, d, envFB)
+	got, err = settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.EndpointURL != "http://override.local/v1" {
 		t.Errorf("settings should override endpoint, got %q", got.EndpointURL)
 	}
@@ -188,6 +229,76 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 	}
 	if !got.EgressAck {
 		t.Errorf("egress_ack should follow settings, got false")
+	}
+}
+
+func TestLLMAPIKey_SealedAndResolved(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	box := testSecretBox{}
+	if err := settings.SetLLMAPIKey(ctx, d, box, "secret-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored map[string]any
+	if err := settings.Get(ctx, d, settings.KeyLLMAPIKeySealed, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["ciphertext"] == "secret-key" {
+		t.Fatal("API key stored in plaintext")
+	}
+
+	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "secret-key" {
+		t.Fatalf("APIKey = %q", got.APIKey)
+	}
+}
+
+func TestSaveLLMConfig_UpdatesOneSnapshot(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	want := settings.LLMConfig{
+		EndpointURL: "http://localhost:11434/v1",
+		Model:       "qwen2.5:7b",
+		EgressAck:   true,
+	}
+	if err := settings.SaveLLMConfig(ctx, d, want, testSecretBox{}, "secret-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.APIKey = "secret-key"
+	if got != want {
+		t.Fatalf("resolved config = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveLLMConfig_MigratesLegacyPlaintextKey(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if err := settings.Set(ctx, d, settings.KeyLLMAPIKeySealed, "old-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "old-key" {
+		t.Fatalf("APIKey = %q", got.APIKey)
+	}
+	var stored map[string]any
+	if err := settings.Get(ctx, d, settings.KeyLLMAPIKeySealed, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["version"] != float64(1) {
+		t.Fatalf("legacy key was not migrated: %#v", stored)
 	}
 }
 

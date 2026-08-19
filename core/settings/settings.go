@@ -2,8 +2,7 @@
 // key-value table. Every value round-trips as JSON so scalars, lists,
 // and structs share one storage shape.
 //
-// Callers stay away from the raw table — Get + Set here are the only
-// public surface, plus the SetupState helpers the wizard uses.
+// Callers stay away from the raw table and use the typed helpers here.
 package settings
 
 import (
@@ -12,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -73,22 +73,38 @@ func Get(ctx context.Context, database *db.DB, key string, out any) error {
 	return nil
 }
 
-// Set writes (or overwrites) a key. Serialization runs before the tx
-// so a bad shape can't half-commit.
 func Set(ctx context.Context, database *db.DB, key string, value any) error {
-	payload, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("marshal %s: %w", key, err)
+	return SetMany(ctx, database, map[string]any{key: value})
+}
+
+// SetMany writes all values in one transaction.
+func SetMany(ctx context.Context, database *db.DB, values map[string]any) error {
+	payloads := make(map[string]string, len(values))
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		payload, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("marshal %s: %w", key, err)
+		}
+		payloads[key] = string(payload)
+		keys = append(keys, key)
 	}
+	sort.Strings(keys)
+
 	return database.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO settings (key, value_json, updated_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(key) DO UPDATE SET
-				value_json = excluded.value_json,
-				updated_at = excluded.updated_at
-		`, key, string(payload), time.Now().Unix())
-		return err
+		now := time.Now().Unix()
+		for _, key := range keys {
+			if _, err := tx.ExecContext(ctx, `
+					INSERT INTO settings (key, value_json, updated_at)
+					VALUES (?, ?, ?)
+					ON CONFLICT(key) DO UPDATE SET
+						value_json = excluded.value_json,
+						updated_at = excluded.updated_at
+				`, key, payloads[key], now); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -202,13 +218,58 @@ type LLMConfig struct {
 	EgressAck   bool
 }
 
-// ResolveLLMConfig returns the effective LLM config: settings override
-// each non-empty env fallback field. String fields prefer settings when
-// set; EgressAck prefers settings when the key exists at all.
-//
-// Callers pass the env-derived config as fb so the merge stays a
-// single-source-of-truth function.
-func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig) LLMConfig {
+type SecretBox interface {
+	Seal([]byte) ([]byte, error)
+	Open([]byte) ([]byte, error)
+}
+
+type sealedSecret struct {
+	Version    int    `json:"version"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
+func SetLLMAPIKey(ctx context.Context, database *db.DB, box SecretBox, apiKey string) error {
+	secret, err := sealLLMAPIKey(box, apiKey)
+	if err != nil {
+		return err
+	}
+	return Set(ctx, database, KeyLLMAPIKeySealed, secret)
+}
+
+func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey string) error {
+	values := map[string]any{
+		KeyLLMEndpointURL: cfg.EndpointURL,
+		KeyLLMModel:       cfg.Model,
+		KeyLLMEgressAck:   cfg.EgressAck,
+	}
+	if apiKey != "" {
+		secret, err := sealLLMAPIKey(box, apiKey)
+		if err != nil {
+			return err
+		}
+		values[KeyLLMAPIKeySealed] = secret
+	}
+	return SetMany(ctx, database, values)
+}
+
+func sealLLMAPIKey(box SecretBox, apiKey string) (sealedSecret, error) {
+	if box == nil {
+		return sealedSecret{}, errors.New("settings: secret storage unavailable")
+	}
+	sealed, err := box.Seal([]byte(apiKey))
+	if err != nil {
+		return sealedSecret{}, fmt.Errorf("seal LLM API key: %w", err)
+	}
+	return sealedSecret{
+		Version:    1,
+		Ciphertext: sealed,
+	}, nil
+}
+
+// ResolveLLMConfig merges settings over environment fallbacks and opens the
+// stored API key. Plaintext keys written by development builds are migrated on
+// read when a secret box is available.
+func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box SecretBox) (LLMConfig, error) {
 	out := fb
 	var s string
 	if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
@@ -218,15 +279,38 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig) LLMCon
 	if err := Get(ctx, database, KeyLLMModel, &s); err == nil && s != "" {
 		out.Model = s
 	}
-	s = ""
-	if err := Get(ctx, database, KeyLLMAPIKeySealed, &s); err == nil && s != "" {
-		out.APIKey = s
+	var secret sealedSecret
+	if err := Get(ctx, database, KeyLLMAPIKeySealed, &secret); err == nil {
+		if secret.Version != 1 || len(secret.Ciphertext) == 0 {
+			return LLMConfig{}, errors.New("settings: invalid sealed LLM API key")
+		}
+		if box == nil {
+			return LLMConfig{}, errors.New("settings: cannot open LLM API key without secret storage")
+		}
+		plaintext, err := box.Open(secret.Ciphertext)
+		if err != nil {
+			return LLMConfig{}, fmt.Errorf("open LLM API key: %w", err)
+		}
+		out.APIKey = string(plaintext)
+	} else if !errors.Is(err, ErrNotFound) {
+		// Before v0.1, the value was stored as a JSON string despite the key
+		// name. Accept it once and replace it with a sealed envelope.
+		var legacy string
+		if legacyErr := Get(ctx, database, KeyLLMAPIKeySealed, &legacy); legacyErr != nil {
+			return LLMConfig{}, err
+		}
+		out.APIKey = legacy
+		if legacy != "" && box != nil {
+			if err := SetLLMAPIKey(ctx, database, box, legacy); err != nil {
+				return LLMConfig{}, err
+			}
+		}
 	}
 	var b bool
 	if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
 		out.EgressAck = b
 	}
-	return out
+	return out, nil
 }
 
 // EmailWatchConfig mirrors the emailwatch runtime knobs the SPA

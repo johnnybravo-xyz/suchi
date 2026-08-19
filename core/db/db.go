@@ -7,7 +7,7 @@
 //
 //   - DB.Write:  MaxOpenConns=1, BEGIN IMMEDIATE, busy_timeout=5000ms.
 //     All writes go through this handle. It queues; it does not race.
-//   - DB.Read:   ordinary pool, WAL readers concurrent with the writer.
+//   - DB.Read:   MaxOpenConns=4, WAL readers concurrent with the writer.
 //
 // Both pools point at the same file. Both apply the boot pragmas below.
 // The write pool additionally applies "PRAGMA foreign_keys=ON" per
@@ -91,7 +91,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		_ = write.Close()
 		return nil, fmt.Errorf("open read pool: %w", err)
 	}
-	read.SetMaxOpenConns(0) // unbounded; WAL readers don't block each other
+	read.SetMaxOpenConns(4)
 	read.SetMaxIdleConns(4)
 	read.SetConnMaxIdleTime(5 * time.Minute)
 	if err := ping(ctx, read); err != nil {
@@ -131,6 +131,17 @@ func (d *DB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ExecWrite executes one statement through the serialized writer.
+func (d *DB) ExecWrite(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var result sql.Result
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = tx.ExecContext(ctx, query, args...)
+		return err
+	})
+	return result, err
 }
 
 func ping(ctx context.Context, d *sql.DB) error {

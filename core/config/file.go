@@ -1,22 +1,20 @@
 // Config-file loader. Optional overlay above the env-var reader.
 //
 // Layered precedence (last wins):
-//   1. config file (TOML — recommended, or YAML/JSON)
+//   1. config file (TOML or HUML)
 //   2. process env vars (existing config.Load())
 //   3. future: CLI flags
 //
-// **TOML is the recommended default format.** Explicit typing, no
-// indentation surprises, and none of YAML's parse-ambiguity footguns
-// (the Norway problem, sexagesimal times, `1.10` decimal-vs-string).
-// YAML and JSON are supported for operators with existing tooling but
-// TOML is what suchi's own examples use.
+// **TOML is the recommended default format.** HUML is the documented
+// alternative. JSON and YAML remain compatibility parsers for existing
+// operator files.
 //
 // Format is detected by file extension:
 //
 //	.toml            → TOML (recommended)
 //	.huml            → HUML — https://huml.io — human-readable, TOML-adjacent
-//	.yaml / .yml     → YAML (uses the same yaml.v3 dep as i18n)
-//	.json            → JSON (stdlib)
+//	.json            → JSON compatibility
+//	.yaml / .yml     → YAML compatibility
 //
 // File shape mirrors env var names in lower_snake: an operator who
 // knows PUBLIC_URL knows public_url. Nested tables/objects are
@@ -106,7 +104,7 @@ func parseByExt(path string, raw []byte) (map[string]any, error) {
 		return doc, nil
 	}
 	return nil, fmt.Errorf(
-		"config file %s: unknown extension %q — use .toml (recommended), .huml, .yaml, or .json",
+		"config file %s: unknown extension %q — use .toml or .huml",
 		path, ext)
 }
 
@@ -122,7 +120,7 @@ func parseByExt(path string, raw []byte) (map[string]any, error) {
 // env parsers already use.
 func applyFileConfig(m map[string]any, prefix string) {
 	for k, v := range m {
-		envKey := yamlKeyToEnv(k) // reused; case-normalization only
+		envKey := configKeyToEnv(k)
 		if envKey == "" {
 			continue
 		}
@@ -157,10 +155,9 @@ func findConfigFile() string {
 		}
 		return ""
 	}
-	// Extension search order: TOML first (recommended), then HUML,
-	// YAML, JSON. Every path is probed in that order before moving to
-	// the next directory.
-	exts := []string{".toml", ".huml", ".yaml", ".yml", ".json"}
+	// Keep compatibility formats last so an old file cannot shadow a
+	// documented TOML or HUML config in the same directory.
+	exts := []string{".toml", ".huml", ".json", ".yaml", ".yml"}
 	dirs := []string{}
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		dirs = append(dirs, filepath.Join(xdg, "suchi"))
@@ -190,16 +187,14 @@ func fileExists(p string) bool {
 	return err == nil && !fi.IsDir()
 }
 
-// yamlKeyToEnv normalises a config key into its env-var counterpart.
+// configKeyToEnv normalises a config key into its env-var counterpart.
 // Convention:  public_url  → PUBLIC_URL
 //
 //	cert_file   → CERT_FILE
 //
-// Named yamlKeyToEnv historically; kept the name so tests reference a
-// stable symbol. Keys with characters outside [a-zA-Z0-9_] are
-// rejected (returns "") so a stray dot or hyphen doesn't create an
-// env var no shell can address.
-func yamlKeyToEnv(k string) string {
+// Keys with characters outside [a-zA-Z0-9_] are rejected so a stray
+// dot or hyphen cannot create an env var no shell can address.
+func configKeyToEnv(k string) string {
 	k = strings.TrimSpace(k)
 	if k == "" {
 		return ""

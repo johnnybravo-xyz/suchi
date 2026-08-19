@@ -2,9 +2,6 @@ package db_test
 
 import (
 	"context"
-	"database/sql"
-	"embed"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -30,6 +27,9 @@ func TestOpenAndMigrate(t *testing.T) {
 	// Writer discipline: write pool must be capped at 1.
 	if got := d.Write.Stats().MaxOpenConnections; got != 1 {
 		t.Fatalf("write pool MaxOpenConns = %d, want 1", got)
+	}
+	if got := d.Read.Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("read pool MaxOpenConns = %d, want 4", got)
 	}
 
 	// Pragma check: WAL journal, foreign_keys ON.
@@ -64,12 +64,9 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 
 	// A trivial write to prove the write pool is functional.
-	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO settings(key, value_json, updated_at) VALUES ('probe', '"ok"', 0)
-		`)
-		return err
-	})
+	_, err = d.ExecWrite(ctx, `
+		INSERT INTO settings(key, value_json, updated_at) VALUES ('probe', '"ok"', 0)
+	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -80,14 +77,12 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 }
 
-// Guard against silent regressions in the embed path.
-func TestMigrationsEmbedded(t *testing.T) {
-	got, err := fs.ReadDir(migrations.FS, ".")
+func TestV01BaselineIsSingleMigration(t *testing.T) {
+	got, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) == 0 {
-		t.Fatal("no .sql files in migrations FS")
+	if len(got) != 1 || got[0].Version != 1 || got[0].Name != "baseline" {
+		t.Fatalf("migrations = %#v, want only 0001_baseline.sql", got)
 	}
-	_ = embed.FS{} // keep the import used if migrations.FS changes shape
 }

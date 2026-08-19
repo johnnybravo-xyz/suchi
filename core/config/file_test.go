@@ -179,7 +179,7 @@ func assertLoad(t *testing.T, ext, body string, want map[string]string) {
 	}
 }
 
-func TestYamlKeyToEnv(t *testing.T) {
+func TestConfigKeyToEnv(t *testing.T) {
 	cases := map[string]string{
 		"public_url":  "PUBLIC_URL",
 		"BODY_LIMIT":  "BODY_LIMIT",
@@ -189,8 +189,8 @@ func TestYamlKeyToEnv(t *testing.T) {
 		"  trimmed  ": "TRIMMED",
 	}
 	for in, want := range cases {
-		if got := yamlKeyToEnv(in); got != want {
-			t.Errorf("yamlKeyToEnv(%q) = %q, want %q", in, got, want)
+		if got := configKeyToEnv(in); got != want {
+			t.Errorf("configKeyToEnv(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

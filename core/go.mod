@@ -7,6 +7,7 @@ require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/emersion/go-imap v1.2.1
 	github.com/emersion/go-message v0.18.2
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/huml-lang/go-huml v0.3.0
 	github.com/johnnybravo-xyz/suchi/plugin-api v0.0.0-00010101000000-000000000000
@@ -21,7 +22,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
