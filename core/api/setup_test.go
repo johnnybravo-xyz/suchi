@@ -504,11 +504,10 @@ func TestStepNames_IsExactAllowlist(t *testing.T) {
 	// Any change to the allowlist should be intentional — this test
 	// forces a review by listing the exact set.
 	want := map[string]bool{
-		"welcome":     true,
+		"archive":     true,
 		"users":       true,
 		"mail":        true,
 		"llm":         true,
-		"jd":          true,
 		"rules":       true,
 		"sources":     true,
 		"preferences": true,

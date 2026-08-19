@@ -24,11 +24,10 @@ import (
 // StepNames is the wizard's step allowlist. Any /step/{name} endpoint
 // call not matching this set returns 400.
 var StepNames = map[string]bool{
-	"welcome":     true,
+	"archive":     true,
 	"users":       true,
 	"mail":        true,
 	"llm":         true,
-	"jd":          true,
 	"rules":       true,
 	"sources":     true,
 	"preferences": true,

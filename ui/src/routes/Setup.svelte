@@ -12,8 +12,7 @@
   let { notify, onDone } = $props()
 
   const STEPS = [
-    { name: 'welcome',     label: 'Your archive' },
-    { name: 'jd',          label: 'Filing tree' },
+    { name: 'archive',     label: 'Your archive' },
     { name: 'users',       label: 'People' },
     { name: 'sources',     label: 'Ingest sources' },
     { name: 'mail',        label: 'Email intake' },
@@ -42,7 +41,7 @@
   listPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
 
   let steps = $state({})          // name -> 'done' | 'skipped'
-  let cur = $state('welcome')
+  let cur = $state('archive')
   let busy = $state(false)
   let err = $state('')
 
@@ -112,6 +111,11 @@
     return saveSetupIntent(intent)
   }
 
+  async function saveArchive() {
+    await saveIntent()
+    return applyPreset(preset)
+  }
+
   async function loadLLM() {
     try {
       const st = await getLLMSettings()
@@ -148,7 +152,7 @@
   loadIngest()
 
   const idx = $derived(STEPS.findIndex(s => s.name === cur))
-  const doneCount = $derived(Object.values(steps).filter(v => v === 'done' || v === 'skipped').length)
+  const doneCount = $derived(STEPS.filter(s => steps[s.name] === 'done' || steps[s.name] === 'skipped').length)
 
   async function mark(status) {
     err = ''
@@ -250,7 +254,7 @@
   <div class="card wiz-body">
     {#if err}<div class="err">{err}</div>{/if}
 
-    {#if cur === 'welcome'}
+    {#if cur === 'archive'}
       <h3>What are you organizing?</h3>
       <p class="wiz-p">Pick the closest fit. Suchi will recommend a ready-made filing tree, and every option remains editable.</p>
       <div class="intent-grid">
@@ -260,19 +264,57 @@
           </button>
         {/each}
       </div>
-      {#if recommendedPreset}
-        <div class="recommendation">
-          <span class="pill ok">Recommended</span>
-          <b>{recommendedPreset.name}</b>
-          <span class="sub">{recommendedPreset.description}</span>
+
+      {#if intent}
+        <h3 class="section-heading">Choose a filing tree</h3>
+        <p class="wiz-p">Start with the recommendation or compare every ready-made tree. You can switch later.</p>
+        {#if ENABLE_SETUP_TAXONOMY_IMPORT}
+          <span class="seg" style="margin-bottom:14px">
+            <button class:on={jdTab === 'presets'} onclick={() => (jdTab = 'presets')}>Presets</button>
+            <button class:on={jdTab === 'import'} onclick={() => (jdTab = 'import')}>Import a file</button>
+          </span>
+        {/if}
+        {#if ENABLE_SETUP_TAXONOMY_IMPORT && jdTab === 'import'}
+          <TaxonomyImport {notify} onApplied={() => saveAnd(saveIntent, 'Archive setup saved')} />
+        {:else}
+          {#if recommendedPreset && !showAllPresets}
+            <div class="toolbar" style="margin:0 0 12px">
+              <span class="pill ok">Recommended for {INTENTS.find(x => x.id === intent)?.label}</span>
+              <button class="btn sm" onclick={() => (showAllPresets = true)}>Compare all filing trees</button>
+            </div>
+          {/if}
+          <div class="preset-grid">
+            {#each visiblePresets as p (p.id)}
+              <label class="preset" class:on={preset.preset_id === p.id}>
+                <input type="radio" bind:group={preset.preset_id} value={p.id} hidden />
+                <b>{p.name}</b><span class="sub">{p.description}</span>
+                {#if p.areas?.length}
+                  <span class="preset-tree">
+                    {#each p.areas as a}<span class="chip" title={`${a.category_count} categories`}>{a.code}–{a.code + 9} {a.name}</span>{/each}
+                  </span>
+                {/if}
+              </label>
+            {/each}
+          </div>
+          {#if presets.find(p => p.id === preset.preset_id)?.blank || preset.preset_id === 'blank'}
+            <label class="wiz-check"><input type="checkbox" bind:checked={preset.confirm_blank} />
+              I understand documents will pile up in the inbox until I build categories.</label>
+          {/if}
+          <label class="wiz-check"><input type="checkbox" bind:checked={preset.include_seeds} />
+            Install the preset's starter filing rules and automations (recommended). Turn off if you want to start from scratch — you can still add them by re-picking the preset later.</label>
+          <label class="wiz-check"><input type="checkbox" bind:checked={preset.refile} />
+            Refile existing documents into the new tree now.</label>
+          <div class="toolbar">
+            <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
+                    onclick={() => saveAnd(saveArchive, 'Archive setup saved')}>Apply filing tree</button>
+            <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveIntent, 'Archive direction saved')}>Keep the current tree</button>
+          </div>
+        {/if}
+      {:else}
+        <div class="toolbar">
+          <button class="btn sm" onclick={() => mark('skipped')}>Skip for now</button>
         </div>
-      {:else if intent === 'custom'}
-        <div class="recommendation"><b>Compare every filing tree</b><span class="sub">The next step will show the complete catalog.</span></div>
       {/if}
-      <div class="toolbar">
-        <button class="btn primary sm" disabled={busy || !intent}
-                onclick={() => saveAnd(saveIntent, 'Setup direction saved')}>Choose filing tree</button>
-      </div>
 
     {:else if cur === 'users'}
       <h3>Add another person</h3>
@@ -302,55 +344,6 @@
                 onclick={() => saveAnd(createSetupUser, 'User created')}>Create user</button>
         <button class="btn sm" onclick={() => mark('skipped')}>Just me for now</button>
       </div>
-
-    {:else if cur === 'jd'}
-      <h3>Pick a filing tree</h3>
-      <p class="wiz-p">Johnny.Decimal areas and categories, tailored to how you'll use the archive. You can always switch later — refile moves every document to the closest match in the new tree.</p>
-      {#if ENABLE_SETUP_TAXONOMY_IMPORT}
-        <span class="seg" style="margin-bottom:14px">
-          <button class:on={jdTab === 'presets'} onclick={() => (jdTab = 'presets')}>Presets</button>
-          <button class:on={jdTab === 'import'} onclick={() => (jdTab = 'import')}>Import a file</button>
-        </span>
-      {/if}
-      {#if ENABLE_SETUP_TAXONOMY_IMPORT && jdTab === 'import'}
-        <TaxonomyImport {notify} onApplied={() => mark('done')} />
-        <div class="toolbar" style="margin-top:10px">
-          <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
-        </div>
-      {:else}
-      {#if recommendedPreset && !showAllPresets}
-        <div class="toolbar" style="margin:0 0 12px">
-          <span class="pill ok">Recommended for {INTENTS.find(x => x.id === intent)?.label}</span>
-          <button class="btn sm" onclick={() => (showAllPresets = true)}>Compare all filing trees</button>
-        </div>
-      {/if}
-      <div class="preset-grid">
-        {#each visiblePresets as p (p.id)}
-          <label class="preset" class:on={preset.preset_id === p.id}>
-            <input type="radio" bind:group={preset.preset_id} value={p.id} hidden />
-            <b>{p.name}</b><span class="sub">{p.description}</span>
-            {#if p.areas?.length}
-              <span class="preset-tree">
-                {#each p.areas as a}<span class="chip" title={`${a.category_count} categories`}>{a.code}–{a.code + 9} {a.name}</span>{/each}
-              </span>
-            {/if}
-          </label>
-        {/each}
-      </div>
-      {#if presets.find(p => p.id === preset.preset_id)?.blank || preset.preset_id === 'blank'}
-        <label class="wiz-check"><input type="checkbox" bind:checked={preset.confirm_blank} />
-          I understand documents will pile up in the inbox until I build categories.</label>
-      {/if}
-      <label class="wiz-check"><input type="checkbox" bind:checked={preset.include_seeds} />
-        Install the preset's starter filing rules and automations (recommended). Turn off if you want to start from scratch — you can still add them by re-picking the preset later.</label>
-      <label class="wiz-check"><input type="checkbox" bind:checked={preset.refile} />
-        Refile existing documents into the new tree now.</label>
-      <div class="toolbar">
-        <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
-                onclick={() => saveAnd(() => applyPreset(preset), 'Filing tree applied')}>Apply preset</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Keep the current tree</button>
-      </div>
-      {/if}
 
     {:else if cur === 'sources'}
       <h3>Ingest sources</h3>
@@ -502,11 +495,7 @@
   .intent-choice:hover { border-color: var(--accent); }
   .intent-choice.on { border-color: var(--accent); background: var(--tint); }
   .intent-choice .sub { color: var(--muted); font-size: .78rem; line-height: 1.35; }
-  .recommendation {
-    display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 5px 9px;
-    border-left: 3px solid var(--ok); padding: 8px 10px; margin-bottom: 14px;
-  }
-  .recommendation .sub { grid-column: 2; color: var(--muted); font-size: .8rem; }
+  .section-heading { margin-top: 22px; }
   .range { width: 100%; accent-color: var(--accent); }
   .test-result {
     display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--ok);
