@@ -6,7 +6,7 @@
 // content change automatically, so a search for `barcode:INV-2024-42`
 // or plain `barcode:INV` returns the doc.
 //
-// Phase-2 scope: image uploads only (image/*). PDF pages need
+// Image uploads only (image/*). PDF pages need
 // rasterization via pdftoppm before gozxing can see them; deferred
 // until we bake pdftoppm into the Docker "full" image and confirm
 // the extra dep earns its keep.

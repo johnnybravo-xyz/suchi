@@ -57,7 +57,7 @@ type Result struct {
 }
 
 // Render rasterizes page 1 of pdfBytes into a PNG at the configured
-// DPI. Returns Skipped=true when pdftoppm isn't on PATH (slim image /
+// DPI. Returns Skipped=true when pdftoppm isn't on PATH (bare install /
 // pre-Docker setup); the caller treats that as "no thumb, that's OK."
 func Render(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Options) (*Result, error) {
 	log = log.With("component", "thumb")

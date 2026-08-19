@@ -1,21 +1,5 @@
-// Package postingest owns the post-ingest job kind — the first
-// dispatcher step that runs after a document row lands.
-//
-// The chain, in order:
-//
-//  1. qpdf --remove-restrictions --decrypt   (normalization)
-//  2. pdf-inspector / pdftotext              (text-native decision)
-//     3a. If text-native → write content into documents.content.
-//     3b. If scanned → OCRmyPDF, store archive PDF in CAS, write text.
-//
-// Every step degrades gracefully — a missing binary or an
-// unrecognized input skips that step and lets the pipeline continue.
-// The design principle: ingest completes even when some tools aren't
-// installed. Missing OCR just means documents.content stays empty
-// until a real ocrmypdf lands.
-//
-// Non-PDF mime types are a no-op today. Office docs / images grow a
-// converter step in a follow-up.
+// Package postingest runs extraction, classification, and rendering after a
+// document lands. Optional external tools degrade to storing the original.
 package postingest
 
 import (
@@ -45,7 +29,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
-	"github.com/johnnybravo-xyz/suchi/core/pipeline/epub"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/heic"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
@@ -58,6 +41,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/thumb"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/zugferd"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -99,25 +83,20 @@ const Kind = "post-ingest"
 //
 //	OCR engine or tesseract data.
 //
-// PipelineVersionLLM     — the post-classify LLM step. Bump when the
-//
-//	model, prompt template, or JSON schema changes.
-//
 // Zero (the schema default on ADD COLUMN) means "never processed by
 // this pipeline" — a fresh row before its first post-ingest tick.
 const (
 	PipelineVersionContent = 2
 	PipelineVersionOCR     = 1
-	PipelineVersionLLM     = 1
 )
 
 // ContentLimits carries the per-format byte caps applied when writing
 // documents.content. Zero-valued entries fall back to the extractor's
 // package-level DefaultMaxTextBytes.
 type ContentLimits struct {
-	PDF  int64
-	EPUB int64
-	DjVu int64
+	PDF    int64
+	AnyDoc int64
+	DjVu   int64
 }
 
 // OCR engine selectors. "auto" prefers tessocr (~300 MB smaller image)
@@ -147,6 +126,7 @@ type Handler struct {
 	scanSplit       ScanSplit
 	decrypt         Decrypt
 	preConsume      string // path to optional user script; empty → skip
+	convertMSG      func(context.Context, io.Reader, *slog.Logger, msg.Options) (*msg.Result, error)
 }
 
 // Decrypt carries the per-Handler configuration for password-protected
@@ -277,11 +257,12 @@ func WithScanSplit(cfg ScanSplit) Option {
 // no LLM handoff, extractor defaults, OCR engine "auto".
 func New(d *db.DB, cas *blob.CAS, log *slog.Logger, opts ...Option) *Handler {
 	h := &Handler{
-		db:        d,
-		cas:       cas,
-		log:       log.With("component", "post-ingest"),
-		langs:     []string{"eng"},
-		ocrEngine: OCREngineAuto,
+		db:         d,
+		cas:        cas,
+		log:        log.With("component", "post-ingest"),
+		langs:      []string{"eng"},
+		ocrEngine:  OCREngineAuto,
+		convertMSG: msg.Convert,
 	}
 	for _, o := range opts {
 		o(h)
@@ -307,7 +288,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Warn("post-ingest.consumption_automations.error", "err", err.Error())
 	}
 
-	origBlob, mime, err := h.loadDoc(ctx, e.DocID)
+	origBlob, mime, ownerEmail, err := h.loadDoc(ctx, e.DocID)
 	if err != nil {
 		return fmt.Errorf("load doc: %w", err)
 	}
@@ -322,7 +303,12 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// rewrite them (SUCHI_OUTPUT) and/or emit tags + custom-fields
 	// via a stdout JSON envelope. See docs/preconsume.mdx.
 	if h.preConsume != "" {
-		pc, err := preconsume.Run(ctx, origBytes, e.DocID, mime, "", log,
+		pc, err := preconsume.Run(ctx, origBytes, preconsume.Document{
+			ID:         e.DocID,
+			MIME:       mime,
+			Filename:   consCtx.Filename,
+			OwnerEmail: ownerEmail,
+		}, log,
 			preconsume.Options{Script: h.preConsume})
 		if err != nil {
 			log.Warn("post-ingest.preconsume.error", "err", err.Error())
@@ -343,30 +329,27 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// Outlook .msg path: convert to RFC 822 via msgconvert, then fall
 	// through to the same handleEmail() as .eml so Message-Id dedup,
 	// attachment fanout, and correspondent inheritance work identically.
-	// When msgconvert isn't installed (slim image), Skipped=true and
+	// When msgconvert isn't installed, Skipped=true and
 	// the doc stays as an opaque blob — same fallback shape as djvu.
 	if msg.Recognized(mime) {
-		res, mErr := msg.Convert(ctx, bytes.NewReader(origBytes), log, msg.Options{})
+		res, mErr := h.convertMSG(ctx, bytes.NewReader(origBytes), log, msg.Options{})
 		if mErr != nil {
 			return fmt.Errorf("msg: %w", mErr)
 		}
 		if res.Skipped || len(res.EML) == 0 {
 			log.Info("post-ingest.route.msg.skipped", "reason", res.StderrTail)
+			if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
+				return err
+			}
 			return h.postContentSteps(ctx, log, e.DocID)
 		}
 		log.Info("post-ingest.route.msg", "eml_bytes", len(res.EML),
 			"took", res.Duration.String())
-		// Overwrite mime so downstream detail views see message/rfc822
-		// and any log line honestly reflects the format we're feeding.
+		// Route the converted working bytes through the EML parser without
+		// changing the source MIME. original_blob still contains CFB bytes.
 		mime = "message/rfc822"
 		origBytes = res.EML
-		if _, err := h.db.Write.ExecContext(ctx,
-			`UPDATE documents SET mime_type = ? WHERE id = ?`,
-			"message/rfc822", e.DocID); err != nil {
-			log.Warn("post-ingest.msg.mime_update", "err", err.Error())
-		}
-		// Fall through — the eml.Recognized() block below picks up the
-		// new mime + bytes.
+		// Fall through to the shared EML path.
 	}
 
 	// Email path: parse the .eml, set title/correspondent/date on the
@@ -390,9 +373,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// default. ImageMagick converts to a single-page PDF; that PDF then
 	// flows through the standard OCR engine so a photograph of a
 	// receipt becomes full-text searchable. Original HEIC bytes stay
-	// in the CAS via original_blob; archive_blob holds the OCR-searchable
-	// PDF. Must come BEFORE the barcode route because barcode.Recognized
-	// accepts every image/* type.
+	// in the CAS; archive_blob holds the converted PDF and has an embedded
+	// text layer only when OCRmyPDF produced it. This route must precede
+	// the generic barcode route, which accepts every image type.
 	if heic.Recognized(mime) {
 		res, herr := heic.Convert(ctx, bytes.NewReader(origBytes), log, heic.Options{})
 		if herr != nil {
@@ -400,21 +383,19 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 		if res.Skipped || len(res.PDF) == 0 {
 			log.Info("post-ingest.route.heic.skipped", "reason", res.StderrTail)
+			if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
+				return err
+			}
 			return h.postContentSteps(ctx, log, e.DocID)
 		}
 		log.Info("post-ingest.route.heic", "pdf_bytes", len(res.PDF), "took", res.Duration.String())
 
-		// Run OCR against the converted PDF. Falls back gracefully if
-		// neither engine is available — the doc still lands with an
-		// archive_blob PDF for preview, just without text search.
+		// Keep the converted PDF for preview when the OCR engine does not
+		// produce its own archive.
 		content, archiveBlob, archiveSize, err := h.runOCR(ctx, log, res.PDF)
 		if err != nil {
 			return fmt.Errorf("heic.ocr: %w", err)
 		}
-		// When OCR skipped (no engine on PATH), the converted PDF still
-		// deserves to be the archive — otherwise the detail page's PDF
-		// preview has nothing to render. Log the state so the operator
-		// sees that the archive carries no text layer.
 		if archiveBlob == "" {
 			ref, cerr := h.cas.Put(bytes.NewReader(res.PDF))
 			if cerr != nil {
@@ -422,10 +403,15 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 			archiveBlob = ref.SHA256
 			archiveSize = ref.Size
-			log.Warn("post-ingest.route.heic.archive_no_ocr",
-				"doc_id", e.DocID,
-				"reason", "OCR engine not available; archive is a plain wrapper without a searchable text layer",
-				"hint", "install tesseract (slim) or ocrmypdf (full), then reingest")
+			if strings.TrimSpace(content) == "" {
+				log.Warn("post-ingest.route.heic.archive_no_ocr",
+					"doc_id", e.DocID,
+					"reason", "no OCR text was extracted; archive is a plain PDF wrapper",
+					"hint", "install tesseract or ocrmypdf, then reingest")
+			} else {
+				log.Debug("post-ingest.route.heic.archive_plain", "doc_id", e.DocID,
+					"reason", "OCR engine extracted text without rewriting the PDF")
+			}
 		}
 		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
 			return err
@@ -434,7 +420,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 
 	// Raster image path: wrap to a single-page PDF, run OCR, and merge
-	// with barcode tokens. Same "wrap → OCR" pattern as HEIC — slim
+	// with barcode tokens. Same "wrap → OCR" pattern as HEIC — standard
 	// (tessocr) and full (ocrmypdf) both work; the archive PDF stays
 	// as the preview when the OCR engine is absent. When magick is
 	// missing entirely, falls through to barcode-only content, which
@@ -467,10 +453,6 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if err != nil {
 			return fmt.Errorf("image.ocr: %w", err)
 		}
-		// When OCR skipped (no engine on PATH), the wrapped PDF still
-		// deserves to be the archive so the detail page's PDF preview
-		// has something to render — but log the state so the operator
-		// sees that the archive carries no text layer.
 		if archiveBlob == "" {
 			ref, cerr := h.cas.Put(bytes.NewReader(pdfRes.PDF))
 			if cerr != nil {
@@ -478,10 +460,16 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 			archiveBlob = ref.SHA256
 			archiveSize = ref.Size
-			log.Warn("post-ingest.route.image.archive_no_ocr",
-				"mime", mime, "doc_id", e.DocID,
-				"reason", "OCR engine not available; archive is a plain wrapper without a searchable text layer",
-				"hint", "install tesseract (slim) or ocrmypdf (full), then reingest")
+			if strings.TrimSpace(ocrContent) == "" {
+				log.Warn("post-ingest.route.image.archive_no_ocr",
+					"mime", mime, "doc_id", e.DocID,
+					"reason", "no OCR text was extracted; archive is a plain PDF wrapper",
+					"hint", "install tesseract or ocrmypdf, then reingest")
+			} else {
+				log.Debug("post-ingest.route.image.archive_plain",
+					"mime", mime, "doc_id", e.DocID,
+					"reason", "OCR engine extracted text without rewriting the PDF")
+			}
 		}
 		content := ocrContent
 		if barcodeTokens != "" {
@@ -527,14 +515,12 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	// Office documents (docx, xlsx, pptx, odt, rtf, csv, ...) — anydoc
-	// converts to GitHub-flavored Markdown, we drop it into content.
-	// Missing binary = Skipped=true, doc lands with empty content and
-	// operator can re-ingest after installing the CLI.
+	// EPUB and office documents route through anydoc. A missing binary is a
+	// soft skip so the original can be reprocessed after installation.
 	if anydoc.Recognized(mime) {
 		res, err := anydoc.Extract(ctx, bytes.NewReader(origBytes), log,
 			anydoc.Options{
-				MaxTextBytes: h.limits.EPUB, // office docs cap same as EPUB (~32 MiB)
+				MaxTextBytes: h.limits.AnyDoc,
 				Ext:          anydoc.ExtFromMIME(mime),
 			})
 		if err != nil {
@@ -543,28 +529,6 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Info("post-ingest.route.anydoc",
 			"mime", mime, "non_blank", res.NonBlank,
 			"skipped", res.Skipped, "truncated", res.Truncated)
-		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
-			return err
-		}
-		return h.postContentSteps(ctx, log, e.DocID)
-	}
-
-	// EPUB path: pure-Go zip walker → concatenated XHTML text. No qpdf,
-	// no OCR, no external binary. Metadata (title, authors) is logged
-	// today; hooking it into custom fields lives with the other exotic
-	// formats when they land.
-	if epub.Recognized(mime) {
-		res, err := epub.Extract(origBytes, log, epub.Options{MaxTextBytes: h.limits.EPUB})
-		if err != nil {
-			log.Warn("post-ingest.epub.error", "err", err.Error())
-		}
-		if res == nil {
-			res = &epub.Result{Skipped: true}
-		}
-		log.Info("post-ingest.route.epub",
-			"spine", res.SpineLen, "non_blank", res.NonBlank,
-			"truncated", res.Truncated,
-			"title", res.Title, "authors", res.Authors)
 		if err := h.updateDoc(ctx, e.DocID, res.Text, "", 0); err != nil {
 			return err
 		}
@@ -593,7 +557,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	if !strings.HasPrefix(strings.ToLower(mime), "application/pdf") {
 		log.Info("post-ingest.skip.non_pdf", "mime", mime)
-		return nil
+		if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
+			return err
+		}
+		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
 	// 1. qpdf normalize (with password candidates). Gathers candidates
@@ -879,12 +846,12 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 			}
 			// Upsert the tag by slugified name (matches rules-engine
 			// convention). Then attach.
-			slug := slugify(name)
+			sl := slug.Make(name)
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO tags(name, slug, created_at, updated_at)
 				VALUES (?, ?, ?, ?)
 				ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-			`, name, slug, now, now); err != nil {
+			`, name, sl, now, now); err != nil {
 				return err
 			}
 			var tagID int64
@@ -929,22 +896,6 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 	})
 }
 
-// slugify is the same lowercase/dash-only rule used by the rules-engine
-// and the bulk importer. Keeping it inline avoids a cross-package
-// dependency for one 6-line function.
-func slugify(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == ' ' || r == '_' || r == '-':
-			b.WriteByte('-')
-		}
-	}
-	return b.String()
-}
-
 // handleEmail parses an RFC-822 message, updates the parent doc's
 // title / content / correspondent / created_at from the headers, and
 // creates one child document per attachment. Each attachment gets its
@@ -968,7 +919,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 	parsed, err := eml.Parse(raw)
 	if err != nil {
 		log.Warn("post-ingest.email.parse_failed", "err", err.Error())
-		return false, nil // keep the doc as a plain file
+		return false, h.updateDoc(ctx, parentID, "", "", 0)
 	}
 	// Message-ID dedup. If ANOTHER doc under the same owner already
 	// carries this Message-ID, this doc is a duplicate — soft-delete
@@ -1134,7 +1085,7 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 			INSERT INTO correspondents(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, name, slugify(name), now, now); err != nil {
+		`, name, slug.Make(name), now, now); err != nil {
 			return err
 		}
 		var corID int64
@@ -1546,8 +1497,7 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 		}
 	}
 
-	// First-page thumbnail. Best-effort — a missing pdftoppm (slim
-	// image without full-pipeline binaries) skips silently, non-PDFs
+	// First-page thumbnail. Best-effort — a missing pdftoppm skips, non-PDFs
 	// fall through the same skip path. On success the endpoint
 	// GET /api/documents/{id}/thumb/ serves it with an immutable ETag.
 	h.generateThumb(ctx, log, docID)
@@ -1644,7 +1594,7 @@ func (h *Handler) generateThumb(ctx context.Context, log *slog.Logger, docID int
 		log.Warn("post-ingest.thumb.cas_put", "err", err.Error())
 		return
 	}
-	if _, err := h.db.Write.ExecContext(ctx,
+	if _, err := h.db.ExecWrite(ctx,
 		`UPDATE documents SET thumb_sha = ?, updated_at = unixepoch() WHERE id = ?`,
 		ref.SHA256, docID); err != nil {
 		log.Warn("post-ingest.thumb.write", "err", err.Error())
@@ -1700,19 +1650,20 @@ func consumptionContextFromPayload(p map[string]any) automations.Context {
 	return c
 }
 
-// loadDoc reads original_blob + mime_type. The trashed_at guard means
+// loadDoc reads the fields needed to start processing. The trashed_at guard means
 // a race between soft-delete and post-ingest gets us "not found" and
 // the retry loop eventually parks the job dead — better than doing OCR
 // on a document the user already trashed.
-func (h *Handler) loadDoc(ctx context.Context, id int64) (origBlob, mime string, err error) {
+func (h *Handler) loadDoc(ctx context.Context, id int64) (origBlob, mime, ownerEmail string, err error) {
 	var mimeNull sql.NullString
 	err = h.db.Read.QueryRowContext(ctx, `
-		SELECT original_blob, COALESCE(mime_type, '')
-		FROM documents
-		WHERE id = ? AND trashed_at IS NULL
-	`, id).Scan(&origBlob, &mimeNull)
+		SELECT d.original_blob, COALESCE(d.mime_type, ''), u.email
+		FROM documents d
+		JOIN users u ON u.id = d.owner_id
+		WHERE d.id = ? AND d.trashed_at IS NULL
+	`, id).Scan(&origBlob, &mimeNull, &ownerEmail)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", fmt.Errorf("doc %d not found or trashed", id)
+		return "", "", "", fmt.Errorf("doc %d not found or trashed", id)
 	}
 	if mimeNull.Valid {
 		mime = mimeNull.String
@@ -1720,8 +1671,7 @@ func (h *Handler) loadDoc(ctx context.Context, id int64) (origBlob, mime string,
 	return
 }
 
-// readBlob pulls a blob into memory. For Phase-2 sizes (few MB PDFs)
-// this is fine; larger inputs get a streaming refactor when we hit them.
+// readBlob loads one pipeline input into memory.
 func (h *Handler) readBlob(sha string) ([]byte, error) {
 	rc, err := h.cas.Get(sha)
 	if err != nil {

@@ -38,8 +38,8 @@ func TestNewDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New with empty opts: %v", err)
 	}
-	if c == nil || c.bridge == nil {
-		t.Fatalf("expected client + bridge, got %+v", c)
+	if c == nil || c.clientID != DefaultClientID || c.authority != Authority {
+		t.Fatalf("defaults not applied: %+v", c)
 	}
 }
 
@@ -50,6 +50,25 @@ func TestNewCustomClientID(t *testing.T) {
 	}
 	if c == nil {
 		t.Fatal("nil client")
+	}
+}
+
+func TestClientCreatesIsolatedCaches(t *testing.T) {
+	c, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, first, err := c.newRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := c.newRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.set([]byte("account-one"))
+	if got := second.snapshot(); len(got) != 0 {
+		t.Fatalf("second runtime inherited cache %q", got)
 	}
 }
 

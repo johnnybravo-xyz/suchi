@@ -38,6 +38,7 @@ import (
 	"unicode"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -139,7 +140,7 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 	defer os.RemoveAll(dir)
 
 	inputPath := filepath.Join(dir, "in.pdf")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -268,18 +269,6 @@ func listPGMs(dir string) ([]string, error) {
 		paths[i] = x.path
 	}
 	return paths, nil
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func countNonWhitespace(s string) int {

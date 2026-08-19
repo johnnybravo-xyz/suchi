@@ -1,0 +1,26 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Email::Outlook::Message;
+
+my ($input, $output);
+while (@ARGV) {
+    my $arg = shift @ARGV;
+    if ($arg eq '--outfile') {
+        $output = shift @ARGV;
+        die "--outfile requires a path\n" unless defined $output;
+    } elsif ($arg =~ /^-/) {
+        die "unsupported option: $arg\n";
+    } elsif (!defined $input) {
+        $input = $arg;
+    } else {
+        die "unexpected argument: $arg\n";
+    }
+}
+die "usage: msgconvert --outfile OUTPUT INPUT\n" unless defined $input && defined $output;
+
+my $message = Email::Outlook::Message->new($input, 0);
+my $mime = $message->to_email_mime;
+open my $fh, '>:raw', $output or die "open $output: $!\n";
+print {$fh} $mime->as_string;
+close $fh or die "close $output: $!\n";

@@ -1,30 +1,5 @@
-// Package preconsume runs an optional operator-supplied script before
-// any format-specific ingest logic (qpdf, docsplit, blank removal, OCR,
-// ZUGFeRD, and friends). It's the generic escape hatch: whatever your
-// scanner leaves behind that suchi doesn't handle natively — a
-// polyglot ZIP that needs unpacking, a proprietary bank binary that
-// needs decoding, a scan that needs custom deskewing — gets fixed here.
-//
-// Contract with the script:
-//
-//	argv[1]  = a scratch input path (readable) with the doc's bytes.
-//	           The CAS original is NEVER handed to the script.
-//	env      = DOC_ID, MIME_TYPE, OWNER_EMAIL, SUCHI_OUTPUT.
-//	           SUCHI_OUTPUT is a scratch path the script MAY write
-//	           modified bytes to. If it does, downstream ingest uses
-//	           those bytes; if it doesn't, the input bytes flow through
-//	           unchanged. Either way the CAS original is untouched.
-//	stdout   = optional JSON: {"tags":["a","b"], "custom_fields":{"k":v}}.
-//	           Applied by the caller after the script exits successfully.
-//	exit 0   = success. Use SUCHI_OUTPUT if written; apply stdout JSON.
-//	non-zero = log Warn, treat as "no changes". Ingest keeps flowing —
-//	           a failing pre-consume never aborts a doc.
-//
-// The whole thing runs in core/sandbox: empty env (beyond the four
-// vars above), no network, hard timeout, bounded stderr.
-//
-// Missing script (SCRIPT env var unset OR file not on disk) → Skipped=true,
-// zero-cost no-op. Feature is genuinely opt-in.
+// Package preconsume runs an optional operator script before built-in ingest.
+// The script works on scratch files; the CAS original remains unchanged.
 package preconsume
 
 import (
@@ -64,6 +39,13 @@ type Options struct {
 	MaxOutput int64 // max size of SUCHI_OUTPUT file
 }
 
+type Document struct {
+	ID         int64
+	MIME       string
+	Filename   string
+	OwnerEmail string
+}
+
 // Result carries the pre-consume output.
 type Result struct {
 	// WorkingBytes is the bytes downstream should operate on. Either
@@ -94,16 +76,7 @@ type StdoutEnvelope struct {
 }
 
 // Run executes the script against the provided input bytes.
-//
-// Steps:
-//  1. Skip if no script configured or file missing.
-//  2. Materialize input + a scratch SUCHI_OUTPUT path under a fresh
-//     tmpdir.
-//  3. Invoke the script in the sandbox with env DOC_ID, MIME_TYPE,
-//     OWNER_EMAIL, SUCHI_OUTPUT.
-//  4. On success: parse stdout as StdoutEnvelope (best-effort), and
-//     read SUCHI_OUTPUT if the script wrote to it.
-func Run(ctx context.Context, input []byte, docID int64, mime, ownerEmail string, log *slog.Logger, opts Options) (*Result, error) {
+func Run(ctx context.Context, input []byte, doc Document, log *slog.Logger, opts Options) (*Result, error) {
 	log = log.With("component", "preconsume")
 
 	if opts.Script == "" {
@@ -153,9 +126,10 @@ func Run(ctx context.Context, input []byte, docID int64, mime, ownerEmail string
 	res, err := sandbox.Run(ctx, sandbox.Opts{
 		Args: []string{opts.Script, inputPath},
 		Env: map[string]string{
-			"DOC_ID":       strconv.FormatInt(docID, 10),
-			"MIME_TYPE":    mime,
-			"OWNER_EMAIL":  ownerEmail,
+			"DOC_ID":       strconv.FormatInt(doc.ID, 10),
+			"FILENAME":     doc.Filename,
+			"MIME_TYPE":    doc.MIME,
+			"OWNER_EMAIL":  doc.OwnerEmail,
 			"SUCHI_OUTPUT": outputPath,
 			// PATH kept minimal — enough for a shebang shell script to
 			// resolve /usr/bin/env, python, curl, etc.

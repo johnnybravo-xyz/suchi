@@ -12,6 +12,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -153,10 +154,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 	log.Info("llm-classifier.result",
 		"confidence", res.Confidence,
-		"title", res.Title,
-		"correspondent", res.Correspondent,
 		"jd_category", res.JDCategory,
-		"tags", res.Tags)
+		"has_title", res.Title != "",
+		"has_correspondent", res.Correspondent != "",
+		"tag_count", len(res.Tags))
 
 	// Low-confidence path: apply only the needs-review tag so an
 	// operator sees the doc in the review queue. Leaves title,
@@ -164,9 +165,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	threshold := h.plugin.Config().ConfidenceThreshold
 	lowConfidence := res.Confidence < threshold
 	if lowConfidence {
-		log.Info("llm-classifier.low_confidence",
-			"threshold", threshold,
-			"reasoning", res.Reasoning)
+		log.Info("llm-classifier.low_confidence", "threshold", threshold)
 	}
 
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -394,12 +393,11 @@ func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64
 	if name == "" {
 		return 0, errors.New("empty name")
 	}
-	slug := slugify(name)
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s(name, slug, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-	`, table), name, slug, now, now); err != nil {
+	`, table), name, slug.Make(name), now, now); err != nil {
 		return 0, err
 	}
 	var id int64
@@ -420,21 +418,4 @@ func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int6
 		`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
 		docID, tagID)
 	return err
-}
-
-func slugify(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	s := b.String()
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
 }

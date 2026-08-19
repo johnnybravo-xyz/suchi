@@ -1,13 +1,6 @@
 // Package pdfinspector routes a PDF between the "text-native shortcut"
 // and the "scanned → OCR" paths.
 //
-// The design doc's primary implementation is Firecrawl's pdf-inspector
-// (Rust, per-page classification + confidence + Markdown extraction).
-// Phase 2's first cut ships the pdftotext-based fallback because it's
-// available on every Linux box the pipeline runs on today and lets us
-// wire the routing decision end-to-end without waiting on the
-// vendored-binary story.
-//
 // Contract:
 //
 //   - Extract(src) returns the pulled text and a HasText bool.
@@ -22,11 +15,6 @@
 // scanned PDFs sometimes carry a stray text layer (a cover-page
 // timestamp, an XMP watermark), so a small floor beats a strict
 // "is anything text-native" check.
-//
-// Real pdf-inspector integration lands in a follow-up commit when the
-// binary is pinned + vendored into the Docker "full" image. The
-// interface here is stable enough that swap is a matter of extending
-// Extract() with a second exec.LookPath probe.
 package pdfinspector
 
 import (
@@ -44,6 +32,7 @@ import (
 	"unicode"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -118,7 +107,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	defer os.RemoveAll(dir)
 
 	inputPath := filepath.Join(dir, "in.pdf")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -174,18 +163,6 @@ func countNonWhitespace(s string) int {
 		}
 	}
 	return n
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

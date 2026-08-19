@@ -1,0 +1,8 @@
+The standard image includes Email::Outlook::Message 0.921, distributed
+under the same terms as Perl itself.
+
+Source: https://metacpan.org/dist/Email-Outlook-Message
+Archive SHA-256: fb4abeea14cda51c1e60bc211cf9521bbbaae74b84118ca6d58f0a7223680388
+
+The bundled msgconvert wrapper only exposes the conversion contract used by
+suchi. The full image uses the distribution-provided command from Debian.

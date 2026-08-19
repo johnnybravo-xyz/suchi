@@ -13,7 +13,7 @@ func silentLog() *slog.Logger {
 }
 
 func TestRun_NoScriptConfigured(t *testing.T) {
-	r, err := Run(context.Background(), []byte("hi"), 1, "text/plain", "u@ex.dev", silentLog(), Options{})
+	r, err := Run(context.Background(), []byte("hi"), Document{ID: 1, MIME: "text/plain"}, silentLog(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestRun_NoScriptConfigured(t *testing.T) {
 }
 
 func TestRun_ScriptMissingFile(t *testing.T) {
-	r, err := Run(context.Background(), []byte("hi"), 1, "text/plain", "u@ex.dev", silentLog(),
+	r, err := Run(context.Background(), []byte("hi"), Document{ID: 1, MIME: "text/plain"}, silentLog(),
 		Options{Script: "/no/such/file"})
 	if err != nil {
 		t.Fatal(err)
@@ -42,14 +42,15 @@ set -e
 tr '[:lower:]' '[:upper:]' < "$1" > "$SUCHI_OUTPUT"
 # Emit tags + custom_fields JSON on stdout.
 cat <<EOF
-{"tags": ["from-hook","doc-$DOC_ID"], "custom_fields": {"mime": "$MIME_TYPE"}}
+{"tags": ["from-hook","doc-$DOC_ID"], "custom_fields": {"source": "$FILENAME:$OWNER_EMAIL:$MIME_TYPE"}}
 EOF
 `
 	if err := os.WriteFile(script, []byte(src), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := Run(context.Background(), []byte("hello world"), 42,
-		"text/plain", "u@ex.dev", silentLog(),
+	r, err := Run(context.Background(), []byte("hello world"), Document{
+		ID: 42, MIME: "text/plain", Filename: "invoice.txt", OwnerEmail: "u@ex.dev",
+	}, silentLog(),
 		Options{Script: script})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +67,7 @@ EOF
 	if len(r.Tags) != 2 || r.Tags[0] != "from-hook" || r.Tags[1] != "doc-42" {
 		t.Errorf("tags: got %v", r.Tags)
 	}
-	if r.CustomFields["mime"] != "text/plain" {
+	if r.CustomFields["source"] != "invoice.txt:u@ex.dev:text/plain" {
 		t.Errorf("custom_fields: got %v", r.CustomFields)
 	}
 }
@@ -77,7 +78,7 @@ func TestRun_ScriptExitNonZero_KeepsIngestFlowing(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'broke' >&2\nexit 7\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := Run(context.Background(), []byte("hi"), 1, "text/plain", "u@ex.dev", silentLog(),
+	r, err := Run(context.Background(), []byte("hi"), Document{ID: 1, MIME: "text/plain"}, silentLog(),
 		Options{Script: script})
 	if err != nil {
 		t.Fatalf("non-zero exit should NOT be an error: %v", err)
@@ -96,7 +97,7 @@ func TestRun_ScriptWritesNothing_UsesInput(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := Run(context.Background(), []byte("hi"), 1, "text/plain", "u@ex.dev", silentLog(),
+	r, err := Run(context.Background(), []byte("hi"), Document{ID: 1, MIME: "text/plain"}, silentLog(),
 		Options{Script: script})
 	if err != nil {
 		t.Fatal(err)

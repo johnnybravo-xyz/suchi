@@ -12,8 +12,7 @@
 //   - Binary missing on the box → Skipped=true, no error. The caller
 //     leaves documents.archive_blob NULL and documents.content ”.
 //   - Non-zero exit             → Skipped=true, StderrTail carries the
-//     error. Ingest continues; a rules-engine classifier (Phase 2
-//     later) may still pick up something from the correspondent.
+//     error. Ingest continues so later classifiers can still run.
 //   - Timeout                   → error. OCR runs are long by design
 //     (default 10 min); a timeout means the file is pathological.
 //   - Output cap exceeded       → error. Decompression / bomb defense.
@@ -37,6 +36,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -129,7 +129,7 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 	outputPath := filepath.Join(dir, "out.pdf")
 	sidecarPath := filepath.Join(dir, "text.txt")
 
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -186,18 +186,6 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 		StderrTail: tail(res.Stderr),
 		Duration:   dur,
 	}, nil
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 // readCapped reads path, refusing to return more than max bytes. The

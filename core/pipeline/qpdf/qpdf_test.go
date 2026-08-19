@@ -17,8 +17,7 @@ func silentLog() *slog.Logger {
 
 // TestMissingBinaryReturnsOriginal covers the graceful-degrade path:
 // when qpdf isn't installed on the box, Normalize returns the input
-// untouched with Skipped=true. This is Phase 2's contract with the
-// ingest pipeline — never fail ingest because a pre-processor is
+// untouched with Skipped=true. Never fail ingest because a pre-processor is
 // absent.
 func TestMissingBinaryReturnsOriginal(t *testing.T) {
 	ctx := context.Background()

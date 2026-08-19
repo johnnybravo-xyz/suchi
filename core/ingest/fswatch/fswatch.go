@@ -32,7 +32,6 @@
 package fswatch
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -54,8 +53,10 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
 // Config carries the knobs Run needs.
@@ -327,30 +328,10 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		w.log.Warn("fswatch.mime_sniff", "err", err.Error())
 		mime = "application/octet-stream"
 	}
-	// net/http.DetectContentType returns "text/plain" for .eml files
-	// because the header block is ASCII text. Bump to message/rfc822
-	// when the extension OR content heuristic says email — post-ingest
-	// then routes into core/pipeline/eml/ instead of treating it as
-	// generic text.
-	if strings.HasSuffix(strings.ToLower(path), ".eml") ||
-		emlLooksLikeEmail(w.cas, ref.SHA256) {
+	if emlLooksLikeEmail(w.cas, ref.SHA256) {
 		mime = "message/rfc822"
 	}
-	// http.DetectContentType doesn't know about HEIC/HEIF (limited
-	// stdlib signature set). Nudge via the extension so post-ingest
-	// routes into core/pipeline/heic/ instead of falling through as
-	// application/octet-stream.
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".heic":
-		mime = "image/heic"
-	case ".heif":
-		mime = "image/heif"
-	case ".msg":
-		// Outlook Compound File binary. http.DetectContentType returns
-		// application/x-ole-storage; nudge to the IANA-registered type
-		// so post-ingest routes into core/pipeline/msg/.
-		mime = "application/vnd.ms-outlook"
-	}
+	mime = mimeutil.RefineByFilename(mime, path)
 
 	title := deriveTitle(path, side)
 
@@ -496,7 +477,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 			INSERT INTO correspondents(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, c.Name, slugify(c.Name), now, now); err != nil {
+		`, c.Name, slug.Make(c.Name), now, now); err != nil {
 			return fmt.Errorf("upsert correspondent: %w", err)
 		}
 		var corID int64
@@ -530,7 +511,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 			INSERT INTO tags(name, slug, created_at, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, name, slugify(name), now, now); err != nil {
+		`, name, slug.Make(name), now, now); err != nil {
 			return fmt.Errorf("upsert tag %q: %w", name, err)
 		}
 		var tagID int64
@@ -636,24 +617,4 @@ func sidecarFor(path string) string {
 		return base + ".json"
 	}
 	return path + ".json"
-}
-
-// slugify: lowercase, non-alnum → '-'. Cheap; matches the importer's
-// slug convention.
-func slugify(name string) string {
-	var b bytes.Buffer
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	// collapse runs of '-'
-	s := b.String()
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
 }

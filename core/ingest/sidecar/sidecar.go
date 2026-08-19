@@ -40,10 +40,8 @@ type V1 struct {
 	Version int    `json:"suchi_sidecar"`
 	Title   string `json:"title,omitempty"`
 
-	// Correspondent is the primary/sender-role name. Kept singular for
-	// backwards compat with pre-Phase-2 producers. When Correspondents
-	// is also set, the array wins and this field is treated as
-	// redundant with the first sender entry.
+	// Correspondent preserves compatibility with single-sender producers.
+	// Correspondents takes precedence when both fields are set.
 	Correspondent string `json:"correspondent,omitempty"`
 
 	// Correspondents is the multi-party form. Each entry pairs a

@@ -3,7 +3,7 @@
 // iPhones save photos as HEIC by default. Users routinely photograph
 // receipts, ID cards, tax forms, etc. — a DMS that can't ingest HEIC
 // silently loses that whole class of source. Shelling out to
-// ImageMagick keeps the slim image ~15 MB heavier and CGO-free
+// ImageMagick keeps the standard image CGO-free
 // (a libheif binding would need CGO).
 //
 // Output is a single-page PDF sized to the input image. Post-ingest
@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -118,7 +119,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	inputPath := filepath.Join(dir, "in.heic")
 	interPath := filepath.Join(dir, "step.png")
 	outputPath := filepath.Join(dir, "out.pdf")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -174,18 +175,6 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		Duration:   dur,
 		StderrTail: tail(res2.Stderr),
 	}, nil
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -140,7 +141,7 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 	defer os.RemoveAll(dir)
 
 	inputPath := filepath.Join(dir, "in.pdf")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -339,19 +340,6 @@ func buildPageRanges(pages []int) string {
 		i++
 	}
 	return strings.Join(parts, ",")
-}
-
-// writeAll streams r into path. Overwrites on collision.
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 // tail returns the last few hundred bytes of stderr — enough to

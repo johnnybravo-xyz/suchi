@@ -25,14 +25,11 @@
 //	  "tags":           ["utilities", "electricity"],
 //	  "jd_category":    31,
 //	  "confidence":     0.87,
-//	  "reasoning":      "one sentence (dropped by the caller, kept for
-//	                    debugging when confidence is low)"
+//	  "reasoning":      "one sentence explaining low confidence"
 //	}
 //
 // confidence below the threshold (default 0.7) → apply `needs-review`
 // tag + keep the doc in inbox. Above → apply the suggested fields.
-// The `reasoning` string is logged at Debug when confidence is low
-// so operators can tune prompts + threshold.
 package llmclassifier
 
 import (
@@ -50,6 +47,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
 )
 
 // Kind is the job kind the classifier subscribes to. Post-ingest
@@ -153,7 +151,7 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("llm-classifier: parse endpoint: %w", err)
 	}
-	local := isLocalHost(u.Hostname())
+	local := netutil.IsLocalHost(u.Hostname())
 	if !local && !cfg.EgressAck {
 		log.Warn("llm-classifier.disabled",
 			"reason", "non-local endpoint requires LLM_EGRESS_ACK=true",
@@ -203,7 +201,7 @@ func (p *Plugin) SetConfig(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("llm-classifier: parse endpoint: %w", err)
 	}
-	local := isLocalHost(u.Hostname())
+	local := netutil.IsLocalHost(u.Hostname())
 	if !local && !cfg.EgressAck {
 		return errors.New("llm-classifier: non-local endpoint requires EgressAck=true")
 	}
@@ -274,11 +272,10 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		// outcomes that never become success. 429 stays retryable — the
 		// outbox backoff waits out a rate limit. Wrap jobs.ErrTerminal
 		// so the dispatcher short-circuits to dead on first failure.
-		return nil, fmt.Errorf("%w: llm-classifier: HTTP %d: %s",
-			jobs.ErrTerminal, resp.StatusCode, truncate(string(rb), 200))
+		return nil, fmt.Errorf("%w: llm-classifier: HTTP %d", jobs.ErrTerminal, resp.StatusCode)
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("llm-classifier: HTTP %d: %s", resp.StatusCode, truncate(string(rb), 200))
+		return nil, fmt.Errorf("llm-classifier: HTTP %d", resp.StatusCode)
 	}
 
 	return parseChatCompletion(rb)
@@ -372,59 +369,7 @@ func parseChatCompletion(body []byte) (*Result, error) {
 	}
 	var r Result
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		return nil, fmt.Errorf("decode result (raw: %s): %w", truncate(raw, 200), err)
+		return nil, fmt.Errorf("decode result: %w", err)
 	}
 	return &r, nil
-}
-
-// isLocalHost decides whether an endpoint host counts as "local" for
-// the egress-ack check. Loopback + link-local + private (10/8, 172.16/12,
-// 192.168/16) all count. Hostnames like "localhost" are recognized
-// literally.
-func isLocalHost(host string) bool {
-	host = strings.ToLower(host)
-	if host == "" || host == "localhost" || strings.HasSuffix(host, ".local") ||
-		strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	// IPv4 loopback / private ranges.
-	switch {
-	case strings.HasPrefix(host, "127."), host == "::1":
-		return true
-	case strings.HasPrefix(host, "10."),
-		strings.HasPrefix(host, "192.168."),
-		strings.HasPrefix(host, "169.254."):
-		return true
-	}
-	// 172.16.0.0 – 172.31.255.255
-	if strings.HasPrefix(host, "172.") {
-		parts := strings.SplitN(host, ".", 3)
-		if len(parts) >= 2 {
-			if n, err := parseByte(parts[1]); err == nil && n >= 16 && n <= 31 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func parseByte(s string) (int, error) {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("non-digit %q", c)
-		}
-		n = n*10 + int(c-'0')
-		if n > 255 {
-			return 0, errors.New("overflow")
-		}
-	}
-	return n, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

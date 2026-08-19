@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -90,7 +91,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	defer os.RemoveAll(dir)
 
 	inputPath := filepath.Join(dir, "in.djvu")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -130,18 +131,6 @@ func countNonWhitespace(s string) int {
 		}
 	}
 	return n
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

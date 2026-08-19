@@ -1,19 +1,4 @@
-// Package anydoc extracts text from office documents (Word,
-// PowerPoint, Excel, OpenDocument, RTF, CSV) via the firecrawl/anydoc
-// CLI. Same shape as core/pipeline/djvu — degrades gracefully when the
-// binary isn't installed, returns HasText true only when we pulled
-// enough content to trust.
-//
-// Upstream: MIT-licensed Rust library from Firecrawl. anydoc converts
-// documents to clean GitHub-flavored Markdown at ~5ms per document.
-// suchi shells out to the standalone CLI via core/sandbox; stdout
-// markdown lands as documents.content and FTS5 indexes it just like
-// OCR'd PDF text.
-//
-// PDF and EPUB are deliberately NOT routed here — suchi has its own
-// PDF pipeline (qpdf → pdf-inspector → ocrmypdf) and a purpose-built
-// EPUB extractor. anydoc handles them upstream but we don't want two
-// paths for the same MIME.
+// Package anydoc extracts EPUB and office documents through the anydoc CLI.
 package anydoc
 
 import (
@@ -30,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -82,9 +68,9 @@ type Result struct {
 // allowlist so a wildcard trailing charset (e.g. "text/csv; charset=utf-8")
 // still routes correctly via Recognized() below, which strips params
 // before lookup.
-//
-// EPUB and PDF are omitted: they have dedicated extractors upstream.
 var supportedMIMEs = map[string]bool{
+	"application/epub+zip": true,
+	"application/epub":     true,
 	// Word
 	"application/msword": true, // .doc
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
@@ -170,7 +156,7 @@ func Extract(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		ext = "." + ext
 	}
 	inputPath := filepath.Join(dir, "in"+ext)
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -218,6 +204,8 @@ func ExtFromMIME(mime string) string {
 	}
 	mime = strings.ToLower(strings.TrimSpace(mime))
 	switch mime {
+	case "application/epub+zip", "application/epub":
+		return ".epub"
 	case "application/msword":
 		return ".doc"
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -264,18 +252,6 @@ func countNonWhitespace(s string) int {
 		}
 	}
 	return n
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

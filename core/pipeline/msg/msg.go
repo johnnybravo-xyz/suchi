@@ -1,16 +1,4 @@
-// Package msg converts Outlook .msg files (Compound File Binary Format)
-// to RFC 822 .eml bytes via `msgconvert` from libemail-outlook-message-perl.
-//
-// Users routinely receive Outlook-forwarded mail as .msg attachments
-// or drag Outlook messages straight into an ingest folder. Doing the
-// conversion here means the rest of the pipeline (Message-Id dedup,
-// attachment fanout, correspondent inheritance) works unchanged — a
-// .msg becomes an .eml at the ingest boundary and everything downstream
-// treats it identically.
-//
-// `msgconvert` isn't packaged on Alpine, so .msg only rides the full
-// image today. Same pattern as djvu (djvulibre-bin) and ocrmypdf —
-// slim tells the operator the binary is missing and skips.
+// Package msg converts Outlook .msg files to RFC 822 bytes via msgconvert.
 package msg
 
 import (
@@ -24,15 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
 const (
-	DefaultBinary  = "msgconvert"
-	DefaultTimeout = 60 * time.Second
-	// DefaultMaxOutputBytes caps the resulting .eml. 64 MiB accommodates
-	// a message with a few dozen MB of attachments; real-world .msg is
-	// usually <10 MB.
+	DefaultBinary         = "msgconvert"
+	DefaultTimeout        = 60 * time.Second
 	DefaultMaxOutputBytes = 64 * 1024 * 1024
 )
 
@@ -67,10 +53,8 @@ func Available() bool {
 	return err == nil
 }
 
-// Convert streams the .msg bytes to a tempfile and runs msgconvert to
-// produce a .eml. Skipped=true when the binary isn't installed — safe
-// caller behavior is "keep the .msg as an opaque blob; someone can
-// install msgconvert later and re-run".
+// Convert streams src through msgconvert. A missing binary or invalid input is
+// a soft skip so the original remains available for later reprocessing.
 func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*Result, error) {
 	log = log.With("component", "msg")
 
@@ -101,12 +85,10 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 
 	inputPath := filepath.Join(dir, "in.msg")
 	outputPath := filepath.Join(dir, "in.eml")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
-	// msgconvert writes to <input-basename>.eml alongside the input by
-	// default. --outfile takes an explicit path.
 	start := time.Now()
 	res, err := sandbox.Run(ctx, sandbox.Opts{
 		Args:    []string{binary, "--outfile", outputPath, inputPath},
@@ -137,18 +119,6 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		Duration:   dur,
 		StderrTail: tail(res.Stderr),
 	}, nil
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

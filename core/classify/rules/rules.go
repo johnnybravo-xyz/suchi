@@ -24,7 +24,6 @@ package rules
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -33,6 +32,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // Rule mirrors the table row.
@@ -211,8 +211,7 @@ func loadEnabled(ctx context.Context, d *db.DB) ([]Rule, error) {
 	return out, rows.Err()
 }
 
-// matches implements the Phase-2 trigger set. All comparisons are
-// case-insensitive on the value. Returning early on any miss.
+// matches compares rule values case-insensitively.
 func matches(r Rule, s *docSnapshot) bool {
 	want := strings.ToLower(r.IfValue)
 	switch r.IfKind {
@@ -239,7 +238,7 @@ func runAction(ctx context.Context, tx *sql.Tx, r Rule, docID int64) (Applied, e
 
 	switch r.ThenKind {
 	case "add_tag":
-		id, err := upsertByName(ctx, tx, "tags", r.ThenValue, now)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, r.ThenValue, now)
 		if err != nil {
 			return a, err
 		}
@@ -249,7 +248,7 @@ func runAction(ctx context.Context, tx *sql.Tx, r Rule, docID int64) (Applied, e
 		return a, err
 
 	case "set_correspondent":
-		id, err := upsertByName(ctx, tx, "correspondents", r.ThenValue, now)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, r.ThenValue, now)
 		if err != nil {
 			return a, err
 		}
@@ -258,7 +257,7 @@ func runAction(ctx context.Context, tx *sql.Tx, r Rule, docID int64) (Applied, e
 		return a, err
 
 	case "set_document_type":
-		id, err := upsertByName(ctx, tx, "document_types", r.ThenValue, now)
+		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableDocumentTypes, r.ThenValue, now)
 		if err != nil {
 			return a, err
 		}
@@ -282,49 +281,6 @@ func runAction(ctx context.Context, tx *sql.Tx, r Rule, docID int64) (Applied, e
 		return a, err
 	}
 	return a, fmt.Errorf("unknown then_kind %q", r.ThenKind)
-}
-
-// upsertByName is the two reference tables the classifier writes to.
-// Slug is derived from the name — matches the importer's slug
-// convention.
-func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {
-	if name == "" {
-		return 0, errors.New("empty name")
-	}
-	slug := slugify(name)
-	// tags carry extra defaults (color, matching_algorithm, ...); the
-	// schema's DEFAULT clauses handle those on insert.
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-	`, table), name, slug, now, now); err != nil {
-		return 0, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, table),
-		name).Scan(&id); err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-func slugify(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	s := b.String()
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
 }
 
 func appliedNames(a []Applied) []string {

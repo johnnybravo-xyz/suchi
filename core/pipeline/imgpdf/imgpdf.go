@@ -1,16 +1,5 @@
-// Package imgpdf wraps a raster image (JPEG, PNG, TIFF, WebP, GIF,
-// BMP) into a single-page PDF via ImageMagick.
-//
-// This exists so bare images can flow through the same OCR pipeline
-// PDFs and HEICs use — postingest converts the image to a PDF, hands
-// it to runOCR, and the result is a searchable archive with extracted
-// text. Without this step, non-HEIC images land with content = only
-// barcode tokens (empty when no barcode present), which blinds search,
-// list snippets, and similar-docs.
-//
-// Unlike HEIC (which needs a HEIC→PNG→PDF two-step because Alpine's
-// ImageMagick fails single-call HEIC→PDF), regular raster formats
-// convert directly in one magick invocation.
+// Package imgpdf wraps raster images in a single-page PDF so the standard OCR
+// path can extract text. Only OCRmyPDF embeds that text in the PDF.
 package imgpdf
 
 import (
@@ -24,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipefile"
 	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
@@ -138,7 +128,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	}
 	inputPath := filepath.Join(dir, "in."+inExt)
 	outputPath := filepath.Join(dir, "out.pdf")
-	if err := writeAll(inputPath, src); err != nil {
+	if err := pipefile.WriteAll(inputPath, src); err != nil {
 		return nil, err
 	}
 
@@ -205,18 +195,6 @@ func ExtFromMIME(mime string) string {
 		return "bmp"
 	}
 	return "img"
-}
-
-func writeAll(path string, r io.Reader) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return f.Sync()
 }
 
 func tail(b []byte) string {

@@ -17,7 +17,7 @@ import (
 // (idempotency) and as the row's display label.
 const legacyName = "Legacy mailbox"
 
-// legacyKeys is the set of settings the pre-Phase-1 emailwatch boot
+// legacyKeys is the set of settings the original emailwatch boot
 // path consumed. Post-migration they are deleted so ResolveEmailWatch
 // no longer sees stale state.
 var legacyKeys = []string{
@@ -30,7 +30,7 @@ var legacyKeys = []string{
 	settings.KeyIMAPOwnerEmail,
 }
 
-// MigrateFromLegacySettings reads the pre-Phase-1 `ingest.imap_*`
+// MigrateFromLegacySettings reads the legacy `ingest.imap_*`
 // settings, materializes them as a single email_accounts row, and
 // deletes the legacy keys. Idempotent: a second run detects the
 // "Legacy mailbox" row and no-ops.
@@ -39,8 +39,6 @@ var legacyKeys = []string{
 //   - ingest.imap_host is empty (no legacy config was ever written).
 //   - The owner_email doesn't resolve to an active user (logs a warn).
 //   - A row named "Legacy mailbox" already exists.
-//
-// Not wired to boot yet — Phase 2 owns that.
 func MigrateFromLegacySettings(ctx context.Context, database *db.DB, aead *crypto.AEADKey) error {
 	var existing int
 	if err := database.Read.QueryRowContext(ctx,

@@ -39,7 +39,8 @@ func TestRecognized(t *testing.T) {
 		"  TEXT/CSV ; charset=utf-16 ": true,
 		// Explicitly out of scope
 		"application/pdf":      false,
-		"application/epub+zip": false,
+		"application/epub+zip": true,
+		"application/epub":     true,
 		"image/png":            false,
 		"":                     false,
 	}
@@ -60,6 +61,7 @@ func TestExtFromMIME(t *testing.T) {
 		"application/rtf":         ".rtf",
 		"text/csv":                ".csv",
 		"text/csv; charset=utf-8": ".csv",
+		"application/epub+zip":    ".epub",
 		"application/pdf":         "", // out of scope, no extension guess
 		"":                        "",
 	}

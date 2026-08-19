@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/netutil"
 )
 
 func silentLog() *slog.Logger {
@@ -32,12 +33,12 @@ func TestIsLocalHost(t *testing.T) {
 		"172.15.0.1", "172.32.0.1", // outside 172.16/12
 	}
 	for _, h := range locals {
-		if !isLocalHost(h) {
+		if !netutil.IsLocalHost(h) {
 			t.Errorf("%q should be local", h)
 		}
 	}
 	for _, h := range notLocals {
-		if isLocalHost(h) {
+		if netutil.IsLocalHost(h) {
 			t.Errorf("%q should not be local", h)
 		}
 	}
@@ -283,10 +284,21 @@ func TestParseChatCompletionStripsFence(t *testing.T) {
 	}
 }
 
+func TestParseChatCompletionDoesNotEchoMalformedModelOutput(t *testing.T) {
+	const sensitive = "private document text"
+	_, err := parseChatCompletion([]byte(`{"choices":[{"message":{"content":"` + sensitive + `"}}]}`))
+	if err == nil {
+		t.Fatal("expected malformed model output to fail")
+	}
+	if strings.Contains(err.Error(), sensitive) {
+		t.Fatalf("error exposed model output: %v", err)
+	}
+}
+
 func TestClassifyPropagatesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
-		w.Write([]byte(`{"error":"model is unavailable"}`))
+		w.Write([]byte(`{"error":"private upstream response"}`))
 	}))
 	defer srv.Close()
 
@@ -298,15 +310,14 @@ func TestClassifyPropagatesHTTPError(t *testing.T) {
 	if !strings.Contains(err.Error(), "500") {
 		t.Errorf("err missing 500: %v", err)
 	}
+	if strings.Contains(err.Error(), "private upstream response") {
+		t.Fatalf("error exposed upstream response: %v", err)
+	}
 	if errors.Is(err, jobs.ErrTerminal) {
 		t.Error("500 must remain retryable; ErrTerminal is 4xx-only")
 	}
 }
 
-// 4xx from an LLM endpoint is terminal: retrying a bad model name or a
-// forbidden project never turns into success. The plugin wraps the
-// jobs.ErrTerminal sentinel so the dispatcher short-circuits to dead
-// on the first failure.
 func TestClassifyWrapsHTTP4xxAsTerminal(t *testing.T) {
 	for _, code := range []int{400, 401, 403, 404} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
