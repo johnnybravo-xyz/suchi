@@ -9,7 +9,8 @@
   import Icon from './Icon.svelte'
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
 
-  let { mode, account, onClose, notify, viewerRole = 'admin', users = [] } = $props()
+  let { mode, account, onClose, notify, viewerRole = 'admin', users = [],
+        microsoftOAuth = { ready: false, reason: '' } } = $props()
 
   // Preset table mirrors core/ingest/emailwatch/providers.go.
   const presets = {
@@ -192,6 +193,16 @@
   function onKey(e) { if (e.key === 'Escape' && !oauthOpen) onClose?.(false) }
 
   const providerHelp = $derived(presets[form.provider]?.help || '')
+  const microsoftOAuthReady = $derived(microsoftOAuth?.ready === true)
+  const displayedProviderHelp = $derived(
+    form.provider === 'microsoft' && !microsoftOAuthReady
+      ? (microsoftOAuth?.reason || 'Microsoft OAuth is not configured on this server.')
+      : providerHelp
+  )
+  const oauthCredentialReady = $derived(
+    form.auth_method !== 'xoauth2' ||
+      ((isEdit && !!form.oauth_account_id) || !!form.sealed_secret_b64)
+  )
   const shortOAuthID = $derived(
     form.oauth_account_id ? form.oauth_account_id.slice(0, 8) + '…' : ''
   )
@@ -243,8 +254,8 @@
         </select>
       </div>
     </div>
-    {#if providerHelp}
-      <p class="sub" style="margin:-6px 0 10px;color:var(--muted);font-size:.82rem">{providerHelp}</p>
+    {#if displayedProviderHelp}
+      <p class="sub" style="margin:-6px 0 10px;color:var(--muted);font-size:.82rem">{displayedProviderHelp}</p>
     {/if}
 
     <div class="toolbar" style="margin-bottom:0">
@@ -285,7 +296,8 @@
           Password
         </label>
         <label style="display:flex;gap:6px;align-items:center">
-          <input id="ma-auth-oauth" type="radio" name="auth" value="xoauth2" bind:group={form.auth_method} />
+          <input id="ma-auth-oauth" type="radio" name="auth" value="xoauth2" bind:group={form.auth_method}
+                 disabled={!microsoftOAuthReady && !form.oauth_account_id} />
           Microsoft OAuth
         </label>
       </div>
@@ -305,6 +317,10 @@
             <span class="pill ok">Signed in · {shortOAuthID}</span>
             <button id="ma-oauth-btn" class="btn sm" onclick={revoke} disabled={busy}>Revoke sign-in</button>
           </div>
+        {:else if !microsoftOAuthReady}
+          <p class="sub" style="margin:0;color:var(--warn)">
+            {microsoftOAuth?.reason || 'Microsoft OAuth is not configured on this server.'}
+          </p>
         {:else if signedInAs}
           <div class="toolbar" style="margin:0;gap:8px">
             <span class="pill ok">Signed in as {signedInAs}</span>
@@ -381,7 +397,7 @@
     {/if}
 
     <div class="toolbar" style="margin:14px 0 0">
-      <button class="btn primary sm" disabled={busy || !form.name || (viewerRole === 'admin' && !form.owner_id) || !form.username} onclick={save}>
+      <button class="btn primary sm" disabled={busy || !form.name || (viewerRole === 'admin' && !form.owner_id) || !form.username || !oauthCredentialReady} onclick={save}>
         {isEdit ? 'Save changes' : 'Create mailbox'}
       </button>
       {#if isEdit}
@@ -397,7 +413,7 @@
   </div>
 </div>
 
-{#if oauthOpen}
+{#if oauthOpen && microsoftOAuthReady}
   <OAuthDeviceCodeModal
     provider="microsoft"
     {notify}
