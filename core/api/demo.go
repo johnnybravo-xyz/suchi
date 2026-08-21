@@ -180,7 +180,8 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, "provision_failed", "could not mint scratch user")
 		return
 	}
-	token, err := s.TokenIssuer(r.Context(), uid, "demo-visitor", "read,write")
+	token, err := s.TokenIssuer(r.Context(), uid, "demo-visitor",
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
 	if err != nil {
 		s.Log.Warn("api.demo.upgrade.token_err", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "token_failed", "could not mint token")

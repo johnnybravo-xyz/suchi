@@ -1,8 +1,8 @@
 // hack/transcript is a recording reverse proxy: point a client at it
 // with --target set to a live upstream, and every request/response
 // pair lands in --out as a golden fixture. The primary use case is
-// replaying the compatibility surface as contract tests —
-// but the tool is target-agnostic.
+// recording an HTTP surface before a contract change. The tool is
+// target-agnostic.
 //
 // Fixtures land in --out with names like:
 //   0001-GET-api-documents.json
@@ -77,7 +77,7 @@ func main() {
 		req.Host = targetURL.Host
 	}
 
-	log.Printf("legacy-recorder listening on %s → %s (fixtures → %s)",
+	log.Printf("transcript recorder listening on %s → %s (fixtures → %s)",
 		*listen, targetURL, *outDir)
 	if err := http.ListenAndServe(*listen, r); err != nil {
 		log.Fatal(err)
@@ -202,7 +202,7 @@ func (r *recorder) storeBody(b []byte, contentType string) fixtureBody {
 }
 
 // sanitizeHeaders redacts auth-bearing headers. Kept as a strict
-// allow-list-adjacent denylist because legacy / mobile apps put
+// allow-list-adjacent denylist because some clients put
 // creds into surprising places (X-Api-Auth, Cookie, plus custom
 // per-fork headers).
 func (r *recorder) sanitizeHeaders(h http.Header) map[string][]string {

@@ -22,7 +22,20 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/db"
 )
+
+func seedUploadCategory(t *testing.T, d *db.DB) {
+	t.Helper()
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
+		VALUES (10, 19, 'test-area', 0);
+		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
+		VALUES (1, 10, 11, 'test-category', 0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // buildMultipart returns a request body carrying `n` bytes under a
 // single "document" form part. The Content-Type is set to match.
@@ -50,7 +63,7 @@ func (cheapZeroes) Read(p []byte) (int, error) { return len(p), nil }
 func TestUpload_BodyTooLarge(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
-	seedJDCategory(t, d)
+	seedUploadCategory(t, d)
 	// Upload path resolves inbox from settings.jd_inbox_category_id.
 	if _, err := d.Write.ExecContext(context.Background(),
 		`UPDATE jd_categories SET system = 1 WHERE id = 1`); err != nil {
@@ -118,7 +131,7 @@ func TestUpload_BodyTooLarge(t *testing.T) {
 func TestUpload_AtCapSucceeds(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
-	seedJDCategory(t, d)
+	seedUploadCategory(t, d)
 	// Upload path resolves inbox from settings.jd_inbox_category_id.
 	if _, err := d.Write.ExecContext(context.Background(),
 		`UPDATE jd_categories SET system = 1 WHERE id = 1`); err != nil {

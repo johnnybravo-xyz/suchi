@@ -1,8 +1,13 @@
 package localauth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,5 +209,63 @@ func TestEnsureDevAdmin_IdempotentPasswordReset(t *testing.T) {
 	}
 	if firstHash == secondHash {
 		t.Fatal("password_hash should rotate on re-invocation with a new password")
+	}
+}
+
+func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(LoginRequest{Email: DevAdminEmail, Password: DevAdminPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	p.LoginHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var scopes string
+	if err := p.db.Read.QueryRow(`SELECT scopes FROM api_tokens ORDER BY id DESC LIMIT 1`).Scan(&scopes); err != nil {
+		t.Fatal(err)
+	}
+	if scopes != "documents:read,documents:write" {
+		t.Fatalf("scopes: got %q, want granular document scopes", scopes)
+	}
+}
+
+func TestLoginHandler_RejectsUsernameField(t *testing.T) {
+	p := openTestPlugin(t)
+	body := []byte(`{"username":"admin@example.com","password":"password"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	p.LoginHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "email and password required") {
+		t.Fatalf("body: got %q", rec.Body.String())
+	}
+}
+
+func TestLoginFormHandlerAcceptsEmailField(t *testing.T) {
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"email": {DevAdminEmail}, "password": {DevAdminPassword}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	p.LoginFormHandler(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status: got %d, want 302: %s", rec.Code, rec.Body.String())
+	}
+	if len(rec.Result().Cookies()) == 0 {
+		t.Fatal("login did not issue a session cookie")
 	}
 }

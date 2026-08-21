@@ -29,13 +29,13 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
   # → {"token":"...", "name":"mcp-desktop", "scopes":"..."}
   ```
 
-  Or generate by username+password (mobile-compat, one-shot):
+  Or exchange email and password directly:
 
   ```bash
   curl -sS -X POST http://127.0.0.1:8000/api/token/ \
     -H "Accept: application/json" \
     -H "Content-Type: application/json" \
-    -d '{"username":"you@example.com","password":"..."}'
+    -d '{"email":"you@example.com","password":"..."}'
   ```
 
   Every MCP action is attributed to the token's owner in the audit log.

@@ -27,7 +27,7 @@
     <form method="post" action="/login">
       <label>
         <span>Email</span>
-        <input name="username" type="email" autocomplete="username" required autofocus
+        <input name="email" type="email" autocomplete="username" required autofocus
                {{ if .DemoLoginEmail }}value="{{ .DemoLoginEmail }}"{{ end }}>
       </label>
       <label>

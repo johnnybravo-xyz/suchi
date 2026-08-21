@@ -15,10 +15,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
-// seedJDCategoryRow inserts one area+category using arbitrary code
-// values. The shared seedJDCategory helper in mobile_compat_test.go
-// only seeds code=11; these tests need 31 (Utilities) and 49 (Inbox)
-// so they seed their own.
+// seedJDCategoryRow inserts one area and category using arbitrary codes.
 func seedJDCategoryRow(t *testing.T, d *db.DB, catID, code int64, name string) {
 	t.Helper()
 	ctx := context.Background()

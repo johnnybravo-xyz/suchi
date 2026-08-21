@@ -28,6 +28,12 @@ version header when a tag is cut.
 - Local archive matching now runs before user automations and exposes live review and auto-apply thresholds in classification settings.
 - The optional model now uses one confidence threshold; fixed classifier plumbing no longer appears as editable automations.
 
+### Removed
+
+- Removed the unclaimed mobile handshake endpoints and coarse API-token scope aliases.
+- Removed JSON/YAML config-file parsing; operator config files are TOML or HuML.
+- Local JSON and form login now consistently use `email` instead of a `username` alias.
+
 ### Fixed
 
 - Taxonomy CLI imports now honor flags after the input filename, apply merge-mode imports with explicit collision remaps, and export the same portable seeds as the admin API.

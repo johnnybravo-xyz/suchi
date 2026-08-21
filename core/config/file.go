@@ -6,15 +6,12 @@
 //   3. future: CLI flags
 //
 // **TOML is the recommended default format.** HUML is the documented
-// alternative. JSON and YAML remain compatibility parsers for existing
-// operator files.
+// alternative.
 //
 // Format is detected by file extension:
 //
 //	.toml            → TOML (recommended)
 //	.huml            → HUML — https://huml.io — human-readable, TOML-adjacent
-//	.json            → JSON compatibility
-//	.yaml / .yml     → YAML compatibility
 //
 // File shape mirrors env var names in lower_snake: an operator who
 // knows PUBLIC_URL knows public_url. Nested tables/objects are
@@ -30,7 +27,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,7 +34,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	huml "github.com/huml-lang/go-huml"
-	"gopkg.in/yaml.v3"
 )
 
 // FileConfigEnv is the operator-provided explicit path. Set
@@ -88,18 +83,6 @@ func parseByExt(path string, raw []byte) (map[string]any, error) {
 		var doc map[string]any
 		if err := huml.Unmarshal(raw, &doc); err != nil {
 			return nil, fmt.Errorf("parse HUML %s: %w", path, err)
-		}
-		return doc, nil
-	case ".yaml", ".yml":
-		var doc map[string]any
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("parse YAML %s: %w", path, err)
-		}
-		return doc, nil
-	case ".json":
-		var doc map[string]any
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("parse JSON %s: %w", path, err)
 		}
 		return doc, nil
 	}
@@ -155,9 +138,7 @@ func findConfigFile() string {
 		}
 		return ""
 	}
-	// Keep compatibility formats last so an old file cannot shadow a
-	// documented TOML or HUML config in the same directory.
-	exts := []string{".toml", ".huml", ".json", ".yaml", ".yml"}
+	exts := []string{".toml", ".huml"}
 	dirs := []string{}
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		dirs = append(dirs, filepath.Join(xdg, "suchi"))

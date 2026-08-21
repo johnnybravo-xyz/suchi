@@ -33,47 +33,6 @@ client_id = "suchi"
 	})
 }
 
-func TestLoadFile_YAML(t *testing.T) {
-	body := `
-public_url: http://example.com
-data_dir: /data
-body_limit: 50M
-ocr_languages: [eng, deu]
-oidc:
-  issuer: https://id.example.com
-  client_id: suchi
-`
-	assertLoad(t, ".yaml", body, map[string]string{
-		"PUBLIC_URL":     "http://example.com",
-		"DATA_DIR":       "/data",
-		"BODY_LIMIT":     "50M",
-		"OCR_LANGUAGES":  "eng,deu",
-		"OIDC_ISSUER":    "https://id.example.com",
-		"OIDC_CLIENT_ID": "suchi",
-	})
-}
-
-func TestLoadFile_JSON(t *testing.T) {
-	body := `{
-	"public_url": "http://example.com",
-	"data_dir": "/data",
-	"body_limit": "50M",
-	"ocr_languages": ["eng", "deu"],
-	"oidc": {
-		"issuer": "https://id.example.com",
-		"client_id": "suchi"
-	}
-}`
-	assertLoad(t, ".json", body, map[string]string{
-		"PUBLIC_URL":     "http://example.com",
-		"DATA_DIR":       "/data",
-		"BODY_LIMIT":     "50M",
-		"OCR_LANGUAGES":  "eng,deu",
-		"OIDC_ISSUER":    "https://id.example.com",
-		"OIDC_CLIENT_ID": "suchi",
-	})
-}
-
 func TestLoadFile_HUML(t *testing.T) {
 	// HUML syntax (github.com/huml-lang/go-huml v0.3.0):
 	//   scalars      → key: "value"
@@ -150,6 +109,23 @@ func TestLoadFile_UnknownExtension(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown extension") {
 		t.Errorf("expected 'unknown extension' in error, got %v", err)
+	}
+}
+
+func TestLoadFile_RejectsCompatibilityFormats(t *testing.T) {
+	for _, ext := range []string{".json", ".yaml", ".yml"} {
+		t.Run(ext, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config"+ext)
+			if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(FileConfigEnv, path)
+			_, err := LoadFile()
+			if err == nil || !strings.Contains(err.Error(), "unknown extension") {
+				t.Fatalf("LoadFile(%s): got %v, want unknown-extension error", ext, err)
+			}
+		})
 	}
 }
 

@@ -17,9 +17,8 @@
 // for the whole batch (documents.bulk_edit) with the count + method,
 // not per doc — the response array carries the granular result.
 //
-// The method vocabulary intentionally follows the convention used by
-// mobile-compat DMS clients (set_*/add_*/remove_*/set_sensitivity) so
-// existing clients can reuse their wire code path unchanged.
+// Method names use a bounded verb_object vocabulary so browser and external
+// clients share one contract.
 
 package api
 
@@ -344,9 +343,8 @@ func (s *Server) applyBulkEdit(r *http.Request, method string, params map[string
 	return errBadMethod
 }
 
-// paramInt64 coerces a JSON number-or-string into int64. JSON numbers
-// decode as float64 by default; a client sending "5" as a string
-// (mobile-compat quirk) still lands. Zero is allowed — it means
+// paramInt64 coerces a JSON number or numeric string into int64. JSON numbers
+// decode as float64 by default. Zero is allowed; it means
 // "unset the FK" for set_* operations.
 func paramInt64(params map[string]any, key string) (int64, error) {
 	raw, ok := params[key]

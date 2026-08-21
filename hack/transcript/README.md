@@ -27,7 +27,7 @@ It has zero dependencies beyond the stdlib and is not built into
   --out     ../../testdata/transcripts
 ```
 
-Then point the client (mobile app, curl, whatever) at
+Then point the client or script at
 `http://127.0.0.1:8443/`. Drive it through the interactions you want
 captured. Kill the recorder when done; fixtures are already on disk.
 
@@ -45,10 +45,9 @@ captured. Kill the recorder when done; fixtures are already on disk.
 
 ```
 testdata/transcripts/
-├── 0001-GET-api-remote_version.json
-├── 0002-POST-api-token.json
-├── 0003-GET-api-documents.json
-├── 0004-POST-api-documents.json
+├── 0001-POST-api-token.json
+├── 0002-GET-api-documents.json
+├── 0003-POST-api-documents.json
 └── blobs/
     ├── 6f5f... (raw PDF that was uploaded)
     └── b3a1... (raw PDF that was downloaded)

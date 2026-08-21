@@ -9,7 +9,7 @@
 //   sensitivity               — one of the SensitivityLevels keys.
 //   document_type__id         — exact match.
 //   tags__id__in              — CSV of tag ids; document must carry
-//                               EVERY id (AND semantics; mobile-compat).
+//                               EVERY id (AND semantics).
 //   correspondents__id__in    — CSV of correspondent ids; document
 //                               matches ANY (OR semantics — one doc
 //                               with 2 correspondents shouldn't need

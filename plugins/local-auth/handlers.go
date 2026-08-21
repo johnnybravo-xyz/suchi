@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 // SetupRequest is the payload for POST /setup.
@@ -46,7 +48,7 @@ func (p *Plugin) SetupHandler(w http.ResponseWriter, r *http.Request) {
 // url-encoded form, creates the admin, plants a session cookie, and
 // 302s to /. On any error redirects back to /bootstrap?error=... so the
 // UI can display the failure. Kept separate from SetupHandler so
-// mobile-app JSON contracts and browser flows don't fight over one
+// API JSON contracts and browser flows don't fight over one
 // response shape.
 func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 	if p.setupToken == "" {
@@ -159,11 +161,8 @@ func setupErrStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// LoginRequest is shared by POST /api/login and /api/token/. Accepts both
-// `username` (mobile-legacy) and `email` (SPA); when both present,
-// `email` wins.
+// LoginRequest is shared by POST /api/login and /api/token/.
 type LoginRequest struct {
-	Username string `json:"username"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -176,11 +175,8 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	if req.Email != "" {
-		req.Username = req.Email
-	}
-	if req.Username == "" || req.Password == "" {
-		http.Error(w, "username and password required", http.StatusBadRequest)
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "email and password required", http.StatusBadRequest)
 		return
 	}
 
@@ -190,9 +186,9 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	err := p.db.Read.QueryRowContext(r.Context(),
 		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
-		req.Username).Scan(&userID, &hash)
+		req.Email).Scan(&userID, &hash)
 	if errors.Is(err, sql.ErrNoRows) || !hash.Valid || VerifyPassword(hash.String, req.Password) != nil {
-		// One error path for every "bad login" outcome — no username-vs-password oracle.
+		// One error path for every "bad login" outcome.
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -201,7 +197,7 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The mobile apps request JSON tokens; browsers get cookies.
+	// JSON clients receive tokens; browsers get cookies.
 	// The SPA under /app/* is a browser client that ALSO wants a
 	// token (for Authorization: Token headers on API calls) — so
 	// it hits /api/login with Accept: application/json AND expects
@@ -211,7 +207,8 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// states (token minted, no cookie) were where support threads
 	// were being born.
 	if wantsJSON(r) {
-		token, err := p.issueAPIToken(r.Context(), userID, "mobile", "read,write")
+		token, err := p.issueAPIToken(r.Context(), userID, "login",
+			auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
 		if err != nil {
 			http.Error(w, "token failed", http.StatusInternalServerError)
 			return
@@ -271,9 +268,9 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	username := r.PostForm.Get("username")
+	email := r.PostForm.Get("email")
 	password := r.PostForm.Get("password")
-	if username == "" || password == "" {
+	if email == "" || password == "" {
 		http.Redirect(w, r, "/login?error=missing", http.StatusFound)
 		return
 	}
@@ -284,7 +281,7 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	err := p.db.Read.QueryRowContext(r.Context(),
 		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
-		username).Scan(&userID, &hash)
+		email).Scan(&userID, &hash)
 	if errors.Is(err, sql.ErrNoRows) || !hash.Valid || VerifyPassword(hash.String, password) != nil {
 		http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
 		return
