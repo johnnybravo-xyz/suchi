@@ -13,7 +13,7 @@ export default defineConfig({
     )
   },
   build: {
-    target: 'es2020',
+    target: 'baseline-widely-available',
     assetsInlineLimit: 8192,        // favicon + icons inline into the bundle
     cssCodeSplit: false,            // one CSS file; dist/ is committed,
                                      // per-chunk CSS would just be more
@@ -21,7 +21,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Stable, unhashed names. dist/ is embedded and committed
-        // (see Justfile), so a build that only touches one file
+        // (see Makefile), so a build that only touches one file
         // should show as one modified file in git, not an
         // add/delete pair from a changed content hash.
         entryFileNames: 'assets/[name].js',

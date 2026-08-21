@@ -37,6 +37,12 @@
   ]
   let presets = $state(FALLBACK_PRESETS)
   listPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
+  const loaded = new Set()
+  function loadOnce(key, fn) {
+    if (loaded.has(key)) return
+    loaded.add(key)
+    fn()
+  }
 
   let cur = $state('archive')
   let busy = $state(false)
@@ -93,8 +99,6 @@
       ingest.fs_watch_owner_email = mailUsers.find(u => !u.disabled)?.email || ''
     }
   }
-  loadUsers()
-
   async function createSetupUser() {
     const result = await adminCreateUser(user)
     await loadUsers()
@@ -133,8 +137,6 @@
       llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
     } catch {}
   }
-  loadLLM()
-
   async function loadPreferences() {
     try {
       const current = await getPreferences()
@@ -142,8 +144,6 @@
       prefs.ocr_languages = (current?.ocr_languages || ['eng']).join(',')
     } catch {}
   }
-  loadPreferences()
-
   async function loadIngest() {
     try {
       const current = await getIngestSettings()
@@ -152,7 +152,12 @@
       seedSourceOwner()
     } catch {}
   }
-  loadIngest()
+  $effect(() => {
+    if (cur === 'users' || cur === 'sources' || cur === 'mail') loadOnce('users', loadUsers)
+    if (cur === 'sources') loadOnce('ingest', loadIngest)
+    if (cur === 'llm') loadOnce('llm', loadLLM)
+    if (cur === 'preferences') loadOnce('preferences', loadPreferences)
+  })
 
   const idx = $derived(STEPS.findIndex(s => s.name === cur))
 

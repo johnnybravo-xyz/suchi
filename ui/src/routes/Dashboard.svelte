@@ -3,7 +3,7 @@
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, st, inboxCategory, recent } = $props()
+  let { st, inboxCategory, recent } = $props()
   const inboxCount = $derived(st?.inbox_count ?? 0)
   const pending = $derived(st?.pending_approvals ?? 0)
   const dead = $derived(st?.dead_jobs ?? 0)
