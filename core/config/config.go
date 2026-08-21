@@ -69,13 +69,12 @@ type Config struct {
 	IngestIMAPOwnerEmail string
 	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
 	// IngestIMAPOAuthClientIDMicrosoft is the operator's Entra public-client
-	// application ID for Outlook / M365 device-code auth. Empty leaves
-	// Microsoft OAuth disabled; public clients carry no client secret.
+	// application ID for Outlook / M365 device-code auth. Empty uses Suchi's
+	// shipped registration; public clients carry no client secret.
 	IngestIMAPOAuthClientIDMicrosoft string
 	// IngestIMAPOAuthScopesMicrosoft is a comma-separated list of MSAL
-	// scopes. Empty falls back to oauth.DefaultScopes (IMAP + offline).
-	// Override when the app registration does not consent to
-	// offline_access (some corp tenants, well-known public client IDs).
+	// resource scopes. Empty falls back to oauth.DefaultScopes (Exchange IMAP).
+	// MSAL adds its required OIDC scopes, including offline_access.
 	IngestIMAPOAuthScopesMicrosoft string
 
 	// Filesystem-watch ingest. Idle unless the owner email is

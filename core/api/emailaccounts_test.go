@@ -419,6 +419,52 @@ func TestEmailAccounts_OAuth_Complete_UnknownHandle(t *testing.T) {
 	}
 }
 
+func TestEmailAccounts_OAuth_Complete_Pending(t *testing.T) {
+	s, _ := newEmailAccountsServer(t)
+	m, err := oauth.NewManager("11111111-1111-1111-1111-111111111111", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.EmailwatchMSAL = m
+	now := time.Now()
+	if !s.oauthFlows.put("pending", oauthFlowEntry{
+		clientID:  "11111111-1111-1111-1111-111111111111",
+		expiresAt: now.Add(time.Minute),
+	}, now) {
+		t.Fatal("put failed")
+	}
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
+		`{"flow_handle":"pending"}`, adminPrincipal(1))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"pending"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmailAccounts_OAuth_Complete_ProviderFailure(t *testing.T) {
+	s, _ := newEmailAccountsServer(t)
+	m, err := oauth.NewManager("11111111-1111-1111-1111-111111111111", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.EmailwatchMSAL = m
+	now := time.Now()
+	if !s.oauthFlows.put("failed", oauthFlowEntry{
+		clientID:  "11111111-1111-1111-1111-111111111111",
+		expiresAt: now.Add(time.Minute),
+	}, now) {
+		t.Fatal("put failed")
+	}
+	s.oauthFlows.finish("failed", nil, errors.New("provider details must stay in logs"))
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
+		`{"flow_handle":"failed"}`, adminPrincipal(1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"code":"oauth_failed"`) || strings.Contains(body, "provider details") {
+		t.Fatalf("unexpected provider error response: %s", body)
+	}
+}
+
 func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
 	now := time.Now()
 	var store oauthFlowStore
@@ -436,12 +482,16 @@ func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
 	}
 }
 
-func TestOAuthFlowStoreAllowsOneCompletion(t *testing.T) {
+func TestOAuthFlowStoreTracksPendingAndAllowsOneCompletion(t *testing.T) {
 	now := time.Now()
 	var store oauthFlowStore
 	if !store.put("flow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
+	if _, err := store.begin("flow", now); !errors.Is(err, errOAuthFlowPending) {
+		t.Fatalf("pending flow error = %v", err)
+	}
+	store.finish("flow", &oauth.CompletedFlow{}, nil)
 	if _, err := store.begin("flow", now); err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +501,23 @@ func TestOAuthFlowStoreAllowsOneCompletion(t *testing.T) {
 	store.release("flow")
 	if _, err := store.begin("flow", now); err != nil {
 		t.Fatalf("retry after release: %v", err)
+	}
+}
+
+func TestOAuthFlowStoreReturnsProviderFailure(t *testing.T) {
+	now := time.Now()
+	var store oauthFlowStore
+	if !store.put("flow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+		t.Fatal("put failed")
+	}
+	want := errors.New("provider declined")
+	store.finish("flow", nil, want)
+	entry, err := store.begin("flow", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(entry.err, want) {
+		t.Fatalf("entry error = %v, want %v", entry.err, want)
 	}
 }
 

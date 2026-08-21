@@ -40,7 +40,6 @@ const (
 
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
-	KeyMicrosoftOAuthID  = "mail.microsoft_oauth_client_id"
 
 	// Mail intake — legacy seed keys for the emailwatch IMAP poller.
 	// Consumed once by emailaccounts.MigrateFromLegacySettings to

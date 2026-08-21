@@ -1,6 +1,10 @@
 package emailwatch
 
-import "testing"
+import (
+	"errors"
+	"slices"
+	"testing"
+)
 
 func TestNextUIDCheckpoint(t *testing.T) {
 	tests := []struct {
@@ -24,5 +28,25 @@ func TestNextUIDCheckpoint(t *testing.T) {
 				t.Fatalf("checkpoint = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConcurrentDeleteFetchError(t *testing.T) {
+	if !isConcurrentDeleteFetchError(errors.New("Some of the requested messages no longer exist.")) {
+		t.Fatal("Outlook concurrent deletion should be ignored")
+	}
+	if isConcurrentDeleteFetchError(errors.New("connection reset by peer")) {
+		t.Fatal("network error must remain a mailbox failure")
+	}
+}
+
+func TestMissingUIDs(t *testing.T) {
+	got := missingUIDs(
+		[]uint32{11, 12, 13, 14},
+		[]uint32{11, 14},
+		[]uint32{13},
+	)
+	if want := []uint32{12}; !slices.Equal(got, want) {
+		t.Fatalf("missing UIDs = %v, want %v", got, want)
 	}
 }

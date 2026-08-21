@@ -19,7 +19,6 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
-	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -152,62 +151,15 @@ func TestSetupStepRouteRemoved(t *testing.T) {
 	}
 }
 
-func TestMicrosoftOAuthSettings_OverrideAppliesLiveAndClears(t *testing.T) {
-	d := openTestDB(t)
-	fallback := "11111111-1111-1111-1111-111111111111"
-	override := "22222222-2222-2222-2222-222222222222"
-	manager, err := oauth.NewManager(fallback, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{
-		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		EmailwatchMSAL: manager, MicrosoftOAuthFallbackID: fallback,
-		MicrosoftOAuthFallbackSource: "built_in",
-	}
-	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
-
-	saveReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/microsoft-oauth",
-		strings.NewReader(`{"override_client_id":"`+override+`"}`))
-	saveReq = saveReq.WithContext(auth.WithPrincipal(saveReq.Context(), admin))
-	saveRec := httptest.NewRecorder()
-	s.SaveMicrosoftOAuthSettings(saveRec, saveReq)
-	if saveRec.Code != http.StatusOK || manager.ActiveID() != override ||
-		!strings.Contains(saveRec.Body.String(), `"source":"settings"`) {
-		t.Fatalf("save status=%d active=%q body=%s", saveRec.Code, manager.ActiveID(), saveRec.Body.String())
-	}
-	var stored string
-	if err := settings.Get(saveReq.Context(), d, settings.KeyMicrosoftOAuthID, &stored); err != nil || stored != override {
-		t.Fatalf("stored override=%q err=%v", stored, err)
-	}
-
-	clearReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/microsoft-oauth",
-		strings.NewReader(`{"override_client_id":""}`))
-	clearReq = clearReq.WithContext(auth.WithPrincipal(clearReq.Context(), admin))
-	clearRec := httptest.NewRecorder()
-	s.SaveMicrosoftOAuthSettings(clearRec, clearReq)
-	if clearRec.Code != http.StatusOK || manager.ActiveID() != fallback ||
-		!strings.Contains(clearRec.Body.String(), `"source":"built_in"`) {
-		t.Fatalf("clear status=%d active=%q body=%s", clearRec.Code, manager.ActiveID(), clearRec.Body.String())
-	}
-}
-
-func TestMicrosoftOAuthSettings_RejectsBadClientID(t *testing.T) {
-	d := openTestDB(t)
-	manager, err := oauth.NewManager("11111111-1111-1111-1111-111111111111", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), EmailwatchMSAL: manager}
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/microsoft-oauth",
-		strings.NewReader(`{"override_client_id":"not-a-guid"}`))
-	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
-		Kind: "user", UserID: 1, Role: "admin",
-	}))
-	rec := httptest.NewRecorder()
-	s.SaveMicrosoftOAuthSettings(rec, req)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_client_id") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+func TestMicrosoftOAuthSettingsRoutesRemoved(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Server{}).registerSetup(mux)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, "/api/admin/settings/microsoft-oauth", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s removed Microsoft OAuth settings route returned %d", method, rec.Code)
+		}
 	}
 }
 

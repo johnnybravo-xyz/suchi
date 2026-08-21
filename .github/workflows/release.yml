@@ -44,14 +44,6 @@ jobs:
       channel:    ${{ steps.extract.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
-      - name: verify shipped Microsoft OAuth registration
-        if: inputs.publish == 'true'
-        run: |
-          if grep -q 'DefaultClientID = "00000000-0000-0000-0000-000000000000"' \
-            core/ingest/emailwatch/oauth/microsoft.go; then
-            echo '::error::Register the shipped Entra app and replace DefaultClientID before releasing.'
-            exit 1
-          fi
       - id: extract
         run: |
           set -euo pipefail

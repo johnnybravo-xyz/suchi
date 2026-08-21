@@ -30,7 +30,7 @@ bypass provider account policy.
 Pick **Microsoft** and click **Sign in with Microsoft**. Published builds use
 Suchi's public-client registration, so ordinary users need no Azure account,
 client ID, or secret. A deployment operator may set a different public-client
-ID under advanced mail settings, and the change applies immediately.
+ID in the config file or environment before starting Suchi.
 
 See [Microsoft mailbox sign-in](/guides/mail-intake-oauth).
 
@@ -80,8 +80,8 @@ Suchi reads mail only and needs no SMTP configuration.
 8. Save, then run **Test connection**.
 
 The supervisor starts or reloads the mailbox within seconds. Adding, editing,
-disabling, deleting, testing, signing in, or changing credentials never
-requires a Suchi restart.
+disabling, deleting, testing, signing in, or changing mailbox credentials does
+not require a Suchi restart.
 
 ## History and cursor behavior
 
@@ -93,6 +93,10 @@ again.
 If a message fails, the cursor does not advance past it. Deduplication uses
 `Message-ID` per owner, including messages that also arrive through a watched
 folder or mbsync.
+
+Deleting or moving a message in the provider while Suchi is polling is harmless.
+Suchi skips a message that disappears between mailbox discovery and download;
+it does not mark the mailbox unhealthy or remove an already archived document.
 
 Without a processed folder, Suchi leaves server read state unchanged unless
 **Mark messages as read** is enabled.
@@ -117,9 +121,8 @@ The built-in poller is the simpler default.
 
 - **Microsoft password rejected:** use **Sign in with Microsoft**; the preset
   does not support basic password authentication.
-- **Microsoft sign-in unavailable:** the build contains the registration
-  sentinel or the deployment override is invalid. Published releases are gated
-  against the sentinel.
+- **Microsoft sign-in unavailable:** remove an invalid configured client ID to
+  restore Suchi's shipped registration on the next start.
 - **Gmail requests an application password:** enable 2-Step Verification and
   use a Google app password. There is no Google OAuth fallback in v0.1.
 - **Provider rejects credentials:** verify that the credential is an app

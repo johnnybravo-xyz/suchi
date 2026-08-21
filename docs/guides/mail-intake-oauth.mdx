@@ -41,15 +41,16 @@ The project registration is configured for:
 - personal Microsoft accounts and organizational work or school accounts
 - public-client device-code flow
 - delegated Exchange `IMAP.AccessAsUser.All`
-- delegated `offline_access`
+- automatic MSAL `offline_access` for silent token renewal
 
-The release workflow refuses to publish while the source contains the
-development sentinel instead of the tested registration.
+The client ID is public configuration. Suchi never ships or requests a client
+secret.
 
-## Deployment override
+## Deployment registration
 
 An organization may use its own Entra registration for tenant policy, admin
-consent, or deployment-specific naming. This is optional.
+consent, or deployment-specific naming. This is optional and is configured by
+the deployment operator, not through the Suchi UI.
 
 Create the registration in Microsoft Entra:
 
@@ -61,26 +62,46 @@ Create the registration in Microsoft Entra:
 4. Under **Authentication**, enable public client flows.
 5. Under **API permissions**, add delegated
    `IMAP.AccessAsUser.All` from **Office 365 Exchange Online**.
-6. Add delegated `offline_access` from Microsoft Graph.
-7. Grant tenant admin consent when organization policy requires it.
-8. Copy the Application (client) ID. Do not create a client secret.
+6. Grant tenant admin consent when organization policy requires it.
+7. Copy the Application (client) ID. Do not create a client secret. MSAL
+   requests `offline_access` automatically during sign-in.
 
-Open **Settings > Mailboxes**, use the Microsoft sign-in settings button,
-enter the client ID, and save. New sign-ins and explicit reauthentication use
-it immediately. Clear the field to restore the environment fallback or Suchi
-registration.
+If **Office 365 Exchange Online** is absent in a bare Entra tenant, declare its
+delegated permission directly on the app registration:
+
+```sh
+az ad app permission add \
+  --id "<application-client-id>" \
+  --api 00000002-0000-0ff1-ce00-000000000000 \
+  --api-permissions 652390e4-393a-48de-9484-05f9b1212954=Scope
+```
+
+The portal may show the permission UUID instead of its friendly name when the
+tenant lacks local Exchange metadata. Type **Delegated** and **Admin consent
+required: No** are the expected values.
+
+Set the override before starting Suchi:
+
+```toml
+# suchi.toml
+ingest_imap_oauth_client_id_microsoft = "<application-client-id>"
+```
+
+Or set `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT` in the process environment. The
+environment wins over the config file. Remove the value to restore Suchi's
+shipped registration on the next start.
 
 Precedence is:
 
-1. stored web override
-2. `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT` boot fallback
+1. `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT`
+2. `ingest_imap_oauth_client_id_microsoft` in the config file
 3. Suchi's shipped registration
 
 This is the Microsoft-specific form of Suchi's documented [configuration
 precedence](/config#precedence).
 
-Changing the web override does not require a restart. Existing mailboxes keep
-refreshing with the client ID stored in their credential envelope. Reauthenticate
+Existing mailboxes keep refreshing with the client ID stored in their
+credential envelope after the deployment registration changes. Reauthenticate
 a mailbox only when intentionally moving it to another registration.
 
 ## Revoke and reauthenticate

@@ -43,24 +43,45 @@
   }
 
   async function complete(signal) {
-    if (!flow || expired) return
-    try {
-      const r = await completeEmailOAuth(flow.flow_handle, { signal })
-      if (signal.aborted || expired) return
-      if (r?.ok) {
+    while (flow && !expired && !signal.aborted) {
+      try {
+        const r = await completeEmailOAuth(flow.flow_handle, { signal })
+        if (signal.aborted || expired) return
+        if (r?.ok) {
+          stop()
+          onSuccess?.({
+            username: r.username,
+            oauth_account_id: r.oauth_account_id,
+            sealed_secret_b64: r.sealed_secret_b64,
+          })
+          onClose?.(true)
+          return
+        }
+        await pollDelay(signal)
+      } catch (ex) {
+        if (signal.aborted) return
+        err = ex.data?.error || ex.data?.message || ex.message || 'Microsoft sign-in failed.'
         stop()
-        onSuccess?.({
-          username: r.username,
-          oauth_account_id: r.oauth_account_id,
-          sealed_secret_b64: r.sealed_secret_b64,
-        })
-        onClose?.(true)
+        return
       }
-    } catch (ex) {
-      if (signal.aborted) return
-      err = ex.data?.message || ex.message || 'Microsoft sign-in failed.'
-      stop()
     }
+  }
+
+  function pollDelay(signal) {
+    return new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve()
+        return
+      }
+      let timer
+      const finish = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', finish)
+        resolve()
+      }
+      timer = setTimeout(finish, 1500)
+      signal.addEventListener('abort', finish, { once: true })
+    })
   }
 
   function copyCode() {

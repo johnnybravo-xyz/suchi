@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
-	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
@@ -41,8 +40,6 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/settings/llm", s.GetLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
-	mux.HandleFunc("GET /api/admin/settings/microsoft-oauth", s.GetMicrosoftOAuthSettings)
-	mux.HandleFunc("POST /api/admin/settings/microsoft-oauth", s.SaveMicrosoftOAuthSettings)
 	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
 	mux.HandleFunc("POST /api/admin/settings/preferences", s.SavePreferences)
 	mux.HandleFunc("GET /api/admin/settings/ingest", s.GetIngestSettings)
@@ -517,106 +514,6 @@ func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Classifier responded with a valid result.", "result": result,
 	})
-}
-
-// ---------- Microsoft OAuth registration ----------
-
-var microsoftClientIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-type microsoftOAuthSettingsStatus struct {
-	Ready             bool   `json:"ready"`
-	EffectiveClientID string `json:"effective_client_id,omitempty"`
-	OverrideClientID  string `json:"override_client_id,omitempty"`
-	Source            string `json:"source"`
-}
-
-func (s *Server) microsoftOAuthStatus(ctx context.Context) (microsoftOAuthSettingsStatus, error) {
-	var override string
-	if err := settings.Get(ctx, s.DB, settings.KeyMicrosoftOAuthID, &override); err != nil && !errors.Is(err, settings.ErrNotFound) {
-		return microsoftOAuthSettingsStatus{}, err
-	}
-	effective := strings.TrimSpace(override)
-	source := "settings"
-	if effective == "" {
-		effective = strings.TrimSpace(s.MicrosoftOAuthFallbackID)
-		source = s.MicrosoftOAuthFallbackSource
-		if source == "" {
-			source = "built_in"
-		}
-	}
-	return microsoftOAuthSettingsStatus{
-		Ready:             oauth.UsableClientID(effective) && s.EmailwatchMSAL != nil && s.EmailwatchMSAL.Ready(),
-		EffectiveClientID: effective, OverrideClientID: override, Source: source,
-	}, nil
-}
-
-func (s *Server) GetMicrosoftOAuthSettings(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
-		return
-	}
-	s.microsoftOAuthSettingsMu.Lock()
-	defer s.microsoftOAuthSettingsMu.Unlock()
-	status, err := s.microsoftOAuthStatus(r.Context())
-	if err != nil {
-		s.serverErr(w, "settings.microsoft_oauth.status", err)
-		return
-	}
-	s.writeJSON(w, http.StatusOK, status)
-}
-
-func (s *Server) SaveMicrosoftOAuthSettings(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
-		return
-	}
-	s.microsoftOAuthSettingsMu.Lock()
-	defer s.microsoftOAuthSettingsMu.Unlock()
-	if s.EmailwatchMSAL == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "oauth_manager_unavailable",
-			"Microsoft OAuth runtime is unavailable")
-		return
-	}
-	var body struct {
-		OverrideClientID string `json:"override_client_id"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
-		return
-	}
-	body.OverrideClientID = strings.TrimSpace(body.OverrideClientID)
-	if body.OverrideClientID != "" {
-		if !microsoftClientIDPattern.MatchString(body.OverrideClientID) || !oauth.UsableClientID(body.OverrideClientID) {
-			s.writeError(w, http.StatusBadRequest, "bad_client_id",
-				"override_client_id must be a non-zero Microsoft application id GUID")
-			return
-		}
-		if err := s.EmailwatchMSAL.Validate(body.OverrideClientID); err != nil {
-			s.writeError(w, http.StatusBadRequest, "bad_client_id", err.Error())
-			return
-		}
-	}
-	effective := body.OverrideClientID
-	if effective == "" {
-		effective = s.MicrosoftOAuthFallbackID
-	}
-	if body.OverrideClientID == "" {
-		if err := settings.Delete(r.Context(), s.DB, settings.KeyMicrosoftOAuthID); err != nil {
-			s.serverErr(w, "settings.microsoft_oauth.clear", err)
-			return
-		}
-	} else if err := settings.Set(r.Context(), s.DB, settings.KeyMicrosoftOAuthID, body.OverrideClientID); err != nil {
-		s.serverErr(w, "settings.microsoft_oauth.save", err)
-		return
-	}
-	if err := s.EmailwatchMSAL.SetActive(effective); err != nil {
-		s.serverErr(w, "settings.microsoft_oauth.apply", err)
-		return
-	}
-	status, err := s.microsoftOAuthStatus(r.Context())
-	if err != nil {
-		s.serverErr(w, "settings.microsoft_oauth.status_after_save", err)
-		return
-	}
-	s.writeJSON(w, http.StatusOK, status)
 }
 
 // ---------- preferences ----------

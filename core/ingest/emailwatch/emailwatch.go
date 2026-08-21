@@ -346,7 +346,15 @@ func (w *Watcher) cycle(ctx context.Context) error {
 		seenUIDs = append(seenUIDs, m.Uid)
 	}
 	fetchErr := <-done
-	if fetchErr != nil {
+	vanishedUIDs := missingUIDs(uids, seenUIDs, failedUIDs)
+	if fetchErr == nil {
+		if len(vanishedUIDs) > 0 {
+			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
+		}
+	} else if isConcurrentDeleteFetchError(fetchErr) {
+		w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
+		fetchErr = nil
+	} else {
 		w.log.Warn("emailwatch.fetch_failed", "err", fetchErr.Error())
 		recordCycleErr(fmt.Errorf("fetch: %w", fetchErr))
 	}
@@ -386,7 +394,8 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	// failed UID. Those later messages are harmlessly deduplicated if the
 	// server still returns them on the next poll. A fetch-level error keeps the
 	// old cursor because the client cannot know which requested UIDs were lost.
-	nextUID := nextUIDCheckpoint(lastUID, seenUIDs, failedUIDs, fetchErr == nil && bookkeepingOK)
+	checkpointUIDs := append(seenUIDs, vanishedUIDs...)
+	nextUID := nextUIDCheckpoint(lastUID, checkpointUIDs, failedUIDs, fetchErr == nil && bookkeepingOK)
 	if nextUID > lastUID || w.account.UIDValiditySeen != uidValidity {
 		if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, nextUID, uidValidity); err != nil {
 			w.log.Warn("emailwatch.cursor_persist_failed", "err", err.Error())
@@ -400,6 +409,35 @@ func (w *Watcher) cycle(ctx context.Context) error {
 		cycleErrs = append(cycleErrs, fmt.Errorf("%d additional errors omitted", omitted))
 	}
 	return errors.Join(cycleErrs...)
+}
+
+// Outlook can return NO when a message disappears between UID SEARCH and UID
+// FETCH. That is normal concurrent mailbox activity, not a mailbox failure.
+func isConcurrentDeleteFetchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "requested messages no longer exist") ||
+		strings.Contains(message, "requested message no longer exists")
+}
+
+func missingUIDs(requested, completed, failed []uint32) []uint32 {
+	delivered := make(map[uint32]struct{}, len(completed)+len(failed))
+	for _, uid := range completed {
+		delivered[uid] = struct{}{}
+	}
+	for _, uid := range failed {
+		delivered[uid] = struct{}{}
+	}
+
+	missing := make([]uint32, 0)
+	for _, uid := range requested {
+		if _, ok := delivered[uid]; !ok {
+			missing = append(missing, uid)
+		}
+	}
+	return missing
 }
 
 // nextUIDCheckpoint returns the highest UID that can be safely skipped on the

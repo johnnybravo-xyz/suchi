@@ -15,7 +15,8 @@ func TestOptionsValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{"empty is legal", Options{}, false},
-		{"custom client id ok", Options{ClientID: "custom-id"}, false},
+		{"custom client id ok", Options{ClientID: "11111111-1111-1111-1111-111111111111"}, false},
+		{"malformed client id rejected", Options{ClientID: "custom-id"}, true},
 		{"https authority ok", Options{Authority: "https://login.microsoftonline.com/tenantid"}, false},
 		{"http authority rejected", Options{Authority: "http://insecure/"}, true},
 		{"garbage authority rejected", Options{Authority: "not-a-url"}, true},
@@ -44,7 +45,7 @@ func TestNewDefaults(t *testing.T) {
 }
 
 func TestNewCustomClientID(t *testing.T) {
-	c, err := New(Options{ClientID: "custom-id"})
+	c, err := New(Options{ClientID: "11111111-1111-1111-1111-111111111111"})
 	if err != nil {
 		t.Fatalf("New with custom id: %v", err)
 	}
@@ -53,32 +54,34 @@ func TestNewCustomClientID(t *testing.T) {
 	}
 }
 
-func TestManagerLiveOverrideKeepsPriorClient(t *testing.T) {
-	first := "11111111-1111-1111-1111-111111111111"
-	second := "22222222-2222-2222-2222-222222222222"
-	m, err := NewManager(first, nil)
+func TestManagerUsesConfiguredClientAndRetainsCredentialClients(t *testing.T) {
+	configured := "11111111-1111-1111-1111-111111111111"
+	credentialID := "22222222-2222-2222-2222-222222222222"
+	m, err := NewManager(configured, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstClient, firstID, ready := m.Active()
-	if !ready || firstID != first || firstClient == nil {
-		t.Fatalf("first active = %q ready=%v client=%v", firstID, ready, firstClient)
+	activeClient, activeID, ready := m.Active()
+	if !ready || activeID != configured || activeClient == nil {
+		t.Fatalf("active = %q ready=%v client=%v", activeID, ready, activeClient)
 	}
-	if err := m.SetActive(second); err != nil {
+	credentialClient, err := m.ClientFor(credentialID)
+	if err != nil || credentialClient == nil {
+		t.Fatalf("credential client=%v err=%v", credentialClient, err)
+	}
+	retained, err := m.ClientFor(credentialID)
+	if err != nil || retained != credentialClient {
+		t.Fatalf("credential client not retained: client=%v err=%v", retained, err)
+	}
+	if _, id, _ := m.Active(); id != configured {
+		t.Fatalf("credential lookup changed active id to %q", id)
+	}
+
+	disabled, err := NewManager(UnconfiguredClientID, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, activeID, ready := m.Active()
-	if !ready || activeID != second {
-		t.Fatalf("second active = %q ready=%v", activeID, ready)
-	}
-	retained, err := m.ClientFor(first)
-	if err != nil || retained != firstClient {
-		t.Fatalf("prior client not retained: client=%v err=%v", retained, err)
-	}
-	if err := m.SetActive(DefaultClientID); err != nil {
-		t.Fatal(err)
-	}
-	if m.Ready() {
+	if disabled.Ready() {
 		t.Fatal("sentinel client id should disable new sign-ins")
 	}
 }
