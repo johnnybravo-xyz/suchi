@@ -2,7 +2,7 @@
   import { startEmailOAuth, completeEmailOAuth } from './api.js'
   import Icon from './Icon.svelte'
 
-  let { provider, onSuccess, onClose, notify } = $props()
+  let { provider, accountID = null, onSuccess, onClose, notify } = $props()
 
   let flow = $state(null)      // {flow_handle, user_code, verification_url, expires_at, message}
   let err = $state('')
@@ -45,7 +45,7 @@
   async function complete(signal) {
     while (flow && !expired && !signal.aborted) {
       try {
-        const r = await completeEmailOAuth(flow.flow_handle, { signal })
+        const r = await completeEmailOAuth(flow.flow_handle, { account_id: accountID, signal })
         if (signal.aborted || expired) return
         if (r?.ok) {
           stop()

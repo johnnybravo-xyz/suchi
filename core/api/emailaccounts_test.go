@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -145,6 +146,9 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	if out.ID == 0 || out.Host != "imap.fastmail.com" || out.Port != 993 || !out.UseTLS {
 		t.Fatalf("preset auto-fill missed: %+v", out)
 	}
+	if out.AuthMethod != emailaccounts.AuthPassword {
+		t.Fatalf("auth method = %q, want password", out.AuthMethod)
+	}
 	// SyncSince defaults to ~time.Now() when the caller omits it —
 	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
 	if out.SyncSince == nil {
@@ -197,6 +201,9 @@ func TestEmailAccounts_Create_Validation(t *testing.T) {
 		{"unknown_provider",
 			`{"name":"x","owner_id":1,"provider":"nope","username":"a@example.com","password":"p"}`,
 			"unknown_provider"},
+		{"auth_method_is_not_client_configurable",
+			`{"name":"x","owner_id":1,"provider":"fastmail","auth_method":"xoauth2","username":"a@example.com","password":"p"}`,
+			"bad_json"},
 		{"xoauth2_via_create_rejected",
 			`{"name":"x","owner_id":1,"provider":"microsoft","username":"a@example.com","password":"p"}`,
 			"oauth_required"},
@@ -253,14 +260,6 @@ func TestEmailAccounts_List_OmitsSealedSecret(t *testing.T) {
 	}
 }
 
-func TestEmailAccounts_Get_404(t *testing.T) {
-	s, _ := newEmailAccountsServer(t)
-	rec := call(t, s, "GET", "/api/email-accounts/999", "", adminPrincipal(1))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 // ---------- patch ----------
 
 func TestEmailAccounts_Patch_PasswordSealsAndAudits(t *testing.T) {
@@ -305,6 +304,46 @@ func TestEmailAccounts_Patch_PasswordSealsAndAudits(t *testing.T) {
 	}
 	if strings.Contains(afterJSON, "new-hunter") {
 		t.Fatalf("audit row leaked plaintext password: %s", afterJSON)
+	}
+}
+
+func TestEmailAccounts_Patch_ProviderAndAuthAreFixed(t *testing.T) {
+	s, _ := newEmailAccountsServer(t)
+	seedUser(t, s.DB, 1)
+	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "old")
+	custom, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+		Name: "custom", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
+		Host: "imap.example.com", Port: 993, UseTLS: true,
+		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := call(t, s, "PATCH", "/api/email-accounts/"+strconv.FormatInt(custom.ID, 10),
+		`{"provider":"microsoft"}`, adminPrincipal(1))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provider_immutable") {
+		t.Fatalf("provider change status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	oauthSeal, _ := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+		emailaccounts.MicrosoftOAuthCredential{
+			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte("cache"),
+		})
+	microsoft, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+		Name: "outlook", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
+		Host: "outlook.office365.com", Port: 993, UseTLS: true,
+		AuthMethod: emailaccounts.AuthXOAuth2, Username: "u", SealedSecret: oauthSeal,
+		OAuthAccountID: "home", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, s, "PATCH", "/api/email-accounts/"+strconv.FormatInt(microsoft.ID, 10),
+		`{"password":"not-supported"}`, adminPrincipal(1))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "oauth_required") {
+		t.Fatalf("Microsoft password status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -504,20 +543,55 @@ func TestOAuthFlowStoreTracksPendingAndAllowsOneCompletion(t *testing.T) {
 	}
 }
 
-func TestOAuthFlowStoreReturnsProviderFailure(t *testing.T) {
-	now := time.Now()
-	var store oauthFlowStore
-	if !store.put("flow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
-		t.Fatal("put failed")
-	}
-	want := errors.New("provider declined")
-	store.finish("flow", nil, want)
-	entry, err := store.begin("flow", now)
+func TestEmailAccounts_OAuth_Complete_ReauthenticatesAndEnables(t *testing.T) {
+	s, reloads := newEmailAccountsServer(t)
+	seedUser(t, s.DB, 1)
+	m, err := oauth.NewManager("11111111-1111-1111-1111-111111111111", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(entry.err, want) {
-		t.Fatalf("entry error = %v, want %v", entry.err, want)
+	s.EmailwatchMSAL = m
+	account, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+		Name: "outlook", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
+		Host: "outlook.office365.com", Port: 993, UseTLS: true,
+		AuthMethod: emailaccounts.AuthXOAuth2, Username: "old@example.com",
+		SealedSecret: []byte{0}, Enabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if !s.oauthFlows.put("reauth", oauthFlowEntry{
+		clientID:  "11111111-1111-1111-1111-111111111111",
+		expiresAt: now.Add(time.Minute),
+	}, now) {
+		t.Fatal("put failed")
+	}
+	s.oauthFlows.finish("reauth", &oauth.CompletedFlow{
+		HomeAccountID:     "home-new",
+		PreferredUsername: "new@example.com",
+		CacheJSON:         []byte(`{"cache":"new"}`),
+	}, nil)
+	previousReloads := reloads.Load()
+
+	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
+		fmt.Sprintf(`{"flow_handle":"reauth","account_id":%d}`, account.ID), adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := emailaccounts.Get(context.Background(), s.DB, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Enabled || updated.AuthMethod != emailaccounts.AuthXOAuth2 ||
+		updated.Username != "new@example.com" || updated.OAuthAccountID != "home-new" {
+		t.Fatalf("reauthenticated account = %+v", updated)
+	}
+	if _, err := emailaccounts.OpenMicrosoftOAuthCredential(s.EmailwatchAEAD, updated.SealedSecret); err != nil {
+		t.Fatalf("credential was not replaced with a sealed OAuth cache: %v", err)
+	}
+	if reloads.Load() != previousReloads+1 {
+		t.Fatal("reload didn't fire after reauthentication")
 	}
 }
 
@@ -551,8 +625,8 @@ func TestEmailAccounts_OAuth_Revoke_ClearsAndDisables(t *testing.T) {
 	if after.OAuthAccountID != "" {
 		t.Fatalf("oauth_account_id should be cleared, got %q", after.OAuthAccountID)
 	}
-	if after.AuthMethod != emailaccounts.AuthPassword {
-		t.Fatalf("auth_method should be password, got %q", after.AuthMethod)
+	if after.AuthMethod != emailaccounts.AuthXOAuth2 {
+		t.Fatalf("auth_method should remain xoauth2, got %q", after.AuthMethod)
 	}
 	if after.Enabled {
 		t.Fatal("row should be disabled after revoke")

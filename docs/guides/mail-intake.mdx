@@ -20,7 +20,7 @@ cursor, and health state. A failing mailbox does not stop other pollers.
 | iCloud Mail | `imap.mail.me.com:993` | Apple app-specific password |
 | Zoho Mail | `imap.zoho.com:993` | Password or application-specific password |
 | Proton Mail | Local Proton Bridge | Bridge-generated IMAP credentials |
-| Custom | Provider supplied | Password, app password, or supported OAuth setup |
+| Custom | Provider supplied | Password or app password |
 
 Provider presets fill host, port, TLS, and default authentication. They do not
 bypass provider account policy.
@@ -46,13 +46,24 @@ OAuth:
 Workspace policy, Advanced Protection, or security-key-only verification may
 disable app passwords. Suchi cannot connect those Gmail accounts in v0.1.
 
-### Fastmail, iCloud, and Zoho
+### iCloud Mail
+
+v0.1 uses an app-specific password, not the normal Apple Account password:
+
+1. Turn on two-factor authentication for the Apple Account.
+2. Open [Apple Account](https://account.apple.com/) and create an app-specific
+   password for Suchi under **Sign-In and Security > App-Specific Passwords**.
+3. Use the part before `@icloud.com` as the username and paste the generated
+   password into Suchi.
+
+If that username is rejected, try the full iCloud Mail address. Changing the
+Apple Account password revokes all app-specific passwords. See
+[Apple's app-specific password instructions](https://support.apple.com/102654).
+
+### Fastmail and Zoho
 
 - Fastmail: create an app password under **Settings > Privacy & Security >
   Integrations**. The account plan must include IMAP.
-- iCloud: enable two-factor authentication and create an app-specific password
-  at [account.apple.com](https://account.apple.com/). Changing the Apple Account
-  password revokes app-specific passwords.
 - Zoho: enable IMAP and use an application-specific password when account
   policy requires it. Some organizations and regions use a host other than
   `imap.zoho.com`; copy the server shown in Zoho settings.
@@ -82,6 +93,10 @@ Suchi reads mail only and needs no SMTP configuration.
 The supervisor starts or reloads the mailbox within seconds. Adding, editing,
 disabling, deleting, testing, signing in, or changing mailbox credentials does
 not require a Suchi restart.
+
+Suchi selects authentication from the provider: Microsoft always uses OAuth;
+the other presets use their app-specific or Bridge password. Custom IMAP uses
+password authentication. There is no separate authentication-mode switch.
 
 ## History and cursor behavior
 
@@ -119,8 +134,8 @@ The built-in poller is the simpler default.
 
 ## Troubleshooting
 
-- **Microsoft password rejected:** use **Sign in with Microsoft**; the preset
-  does not support basic password authentication.
+- **Microsoft sign-in fails:** confirm IMAP access is enabled for the mailbox,
+  then retry **Sign in with Microsoft** and review any tenant consent policy.
 - **Microsoft sign-in unavailable:** remove an invalid configured client ID to
   restore Suchi's shipped registration on the next start.
 - **Gmail requests an application password:** enable 2-Step Verification and

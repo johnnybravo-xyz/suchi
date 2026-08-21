@@ -169,7 +169,6 @@ func TestEmailAccounts_member_with_cap(t *testing.T) {
 		"owner_id":6,
 		"provider":"custom",
 		"host":"h","port":993,"use_tls":true,
-		"auth_method":"password",
 		"username":"u","password":"p",
 		"enabled":true
 	}`

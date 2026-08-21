@@ -147,7 +147,6 @@ type emailAccountInput struct {
 	Folder          *string `json:"folder,omitempty"`
 	ProcessedFolder *string `json:"processed_folder,omitempty"`
 	PollIntervalMin *int    `json:"poll_interval_min,omitempty"`
-	AuthMethod      *string `json:"auth_method,omitempty"`
 	Username        *string `json:"username,omitempty"`
 	Password        *string `json:"password,omitempty"`
 	OAuthAccountID  *string `json:"oauth_account_id,omitempty"`
@@ -288,9 +287,6 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if in.PollIntervalMin != nil {
 		acc.PollIntervalMin = *in.PollIntervalMin
 	}
-	if in.AuthMethod != nil {
-		acc.AuthMethod = emailaccounts.AuthMethod(strings.TrimSpace(*in.AuthMethod))
-	}
 	if in.Username != nil {
 		acc.Username = strings.TrimSpace(*in.Username)
 	}
@@ -319,8 +315,8 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		acc.MarkSeen = *in.MarkSeen
 	}
 
-	// Provider preset auto-fill. User-supplied values already landed in
-	// acc; a preset only fills the blanks so operator overrides win.
+	// Provider presets fill connection defaults and own the authentication
+	// method. Host, port, and TLS remain overridable; auth does not.
 	if acc.Provider != "" {
 		p, ok := emailwatch.Presets[string(acc.Provider)]
 		if !ok {
@@ -337,18 +333,31 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		if in.UseTLS == nil {
 			acc.UseTLS = p.UseTLS
 		}
-		if acc.AuthMethod == "" {
-			acc.AuthMethod = emailaccounts.AuthMethod(p.AuthMethod)
-		}
+		acc.AuthMethod = emailaccounts.AuthMethod(p.AuthMethod)
 	}
 
 	// xoauth2 needs a pre-sealed MSAL cache from /oauth/complete;
 	// password mode seals the plaintext here. Either path lands
 	// SealedSecret before Create so the NOT NULL column is satisfied.
 	if acc.AuthMethod == emailaccounts.AuthXOAuth2 {
+		if in.Password != nil && *in.Password != "" {
+			s.writeError(w, http.StatusBadRequest, "oauth_required",
+				"Microsoft mailboxes must use Sign in with Microsoft")
+			return
+		}
 		if in.SealedSecretB64 == nil || *in.SealedSecretB64 == "" {
 			s.writeError(w, http.StatusBadRequest, "oauth_required",
 				"xoauth2 accounts must be created with sealed_secret_b64 from /oauth/complete")
+			return
+		}
+		if acc.OAuthAccountID == "" {
+			s.writeError(w, http.StatusBadRequest, "oauth_required",
+				"Microsoft sign-in did not return an account identifier")
+			return
+		}
+		if s.EmailwatchAEAD == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "no_aead",
+				"server AEAD key not configured")
 			return
 		}
 		sealed, err := base64.StdEncoding.DecodeString(*in.SealedSecretB64)
@@ -364,9 +373,14 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		acc.SealedSecret = sealed
 	} else {
+		if in.SealedSecretB64 != nil || in.OAuthAccountID != nil {
+			s.writeError(w, http.StatusBadRequest, "unsupported_oauth",
+				"OAuth credentials are only supported for Microsoft mailboxes")
+			return
+		}
 		if in.Password == nil || *in.Password == "" {
 			s.writeError(w, http.StatusBadRequest, "missing_password",
-				"password is required for password-auth accounts")
+				"a password is required for this provider")
 			return
 		}
 		if s.EmailwatchAEAD == nil {
@@ -442,6 +456,11 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		in.OwnerID = nil
 	}
+	if in.OAuthAccountID != nil || in.SealedSecretB64 != nil {
+		s.writeError(w, http.StatusBadRequest, "oauth_managed",
+			"Microsoft credentials can only be changed through Sign in with Microsoft")
+		return
+	}
 
 	patch := emailaccounts.AccountPatch{
 		Name:            trimStringPtr(in.Name),
@@ -454,7 +473,6 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		ProcessedFolder: trimStringPtr(in.ProcessedFolder),
 		PollIntervalMin: in.PollIntervalMin,
 		Username:        trimStringPtr(in.Username),
-		OAuthAccountID:  trimStringPtr(in.OAuthAccountID),
 		AttachmentsOnly: in.AttachmentsOnly,
 		FromAllowlist:   trimStringPtr(in.FromAllowlist),
 		SyncSince:       in.SyncSince,
@@ -468,15 +486,20 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("provider %q is not a known preset", prov))
 			return
 		}
-		patch.Provider = &prov
-	}
-	if in.AuthMethod != nil {
-		am := emailaccounts.AuthMethod(strings.TrimSpace(*in.AuthMethod))
-		patch.AuthMethod = &am
+		if prov != before.Provider {
+			s.writeError(w, http.StatusBadRequest, "provider_immutable",
+				"mailbox provider cannot be changed; create a new mailbox instead")
+			return
+		}
 	}
 
 	passwordUpdated := false
 	if in.Password != nil && *in.Password != "" {
+		if before.Provider == emailaccounts.ProviderMicrosoft {
+			s.writeError(w, http.StatusBadRequest, "oauth_required",
+				"Microsoft mailboxes must use Sign in with Microsoft")
+			return
+		}
 		if s.EmailwatchAEAD == nil {
 			s.writeError(w, http.StatusServiceUnavailable, "no_aead",
 				"server AEAD key not configured")
@@ -789,17 +812,21 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	// When a member targets an existing row via account_id we still
-	// enforce ownership existence-safely — otherwise a member could
-	// bind another user's mailbox to their own OAuth cache.
-	if body.AccountID != nil && !isAdmin {
+	// Existing-row completion is restricted to Microsoft mailboxes and
+	// remains ownership-scoped for members.
+	if body.AccountID != nil {
 		existing, err := emailaccounts.Get(r.Context(), s.DB, *body.AccountID)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && existing.OwnerID != p.UserID) {
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !isAdmin && existing.OwnerID != p.UserID) {
 			s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 			return
 		}
 		if err != nil {
 			s.serverErr(w, "email_accounts.get", err)
+			return
+		}
+		if existing.Provider != emailaccounts.ProviderMicrosoft {
+			s.writeError(w, http.StatusBadRequest, "not_microsoft",
+				"Microsoft sign-in can only be attached to a Microsoft mailbox")
 			return
 		}
 	}
@@ -869,11 +896,13 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		am := emailaccounts.AuthXOAuth2
 		oid := completed.HomeAccountID
 		user := completed.PreferredUsername
+		on := true
 		patch := emailaccounts.AccountPatch{
 			AuthMethod:     &am,
 			SealedSecret:   &sealed,
 			OAuthAccountID: &oid,
 			Username:       &user,
+			Enabled:        &on,
 		}
 		updated, err := emailaccounts.Patch(r.Context(), s.DB, *body.AccountID, patch)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -919,10 +948,9 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 
 // RevokeEmailAccountOAuth — POST /api/email-accounts/{id}/oauth/revoke.
 //
-// Clears the sealed token cache, drops the OAuth account id, flips auth
-// back to password, and disables the row. The account is unusable until
-// the operator either re-runs the OAuth flow or supplies a password via
-// PATCH.
+// Clears the sealed token cache, drops the OAuth account id, and disables the
+// row. The account remains a Microsoft OAuth mailbox and is unusable until the
+// operator signs in again.
 func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request) {
 	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
 	if p == nil {
@@ -945,13 +973,18 @@ func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
+	if before.Provider != emailaccounts.ProviderMicrosoft {
+		s.writeError(w, http.StatusBadRequest, "not_microsoft",
+			"Microsoft sign-in can only be revoked from a Microsoft mailbox")
+		return
+	}
 
 	// The store rejects a zero-length sealed_secret because the column
 	// is NOT NULL. A single-byte placeholder keeps the write valid while
 	// making the row obviously unusable until re-credentialed.
 	placeholder := []byte{0}
 	empty := ""
-	am := emailaccounts.AuthPassword
+	am := emailaccounts.AuthXOAuth2
 	off := false
 	patch := emailaccounts.AccountPatch{
 		SealedSecret:   &placeholder,

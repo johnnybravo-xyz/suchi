@@ -14,20 +14,37 @@
 
   // Preset table mirrors core/ingest/emailwatch/providers.go.
   const presets = {
-    microsoft: { host: 'outlook.office365.com', port: 993, use_tls: 1, auth_method: 'xoauth2',
+    microsoft: { host: 'outlook.office365.com', port: 993, use_tls: 1,
       help: 'Outlook / M365 — click Sign in with Microsoft to complete the device-code flow.' },
-    gmail: { host: 'imap.gmail.com', port: 993, use_tls: 1, auth_method: 'password',
-      help: 'Gmail — requires a Google App Password (2FA on).' },
-    fastmail: { host: 'imap.fastmail.com', port: 993, use_tls: 1, auth_method: 'password',
+    gmail: { host: 'imap.gmail.com', port: 993, use_tls: 1,
+      usernamePlaceholder: 'you@gmail.com',
+      usernameHelp: 'Use your full Gmail address.',
+      credential: {
+        note: 'Use a Google app password, not your regular Google password.',
+        steps: ['Turn on 2-Step Verification.', 'Create an app password for Suchi.', 'Paste the generated 16-character password above.'],
+        links: [
+          { label: 'Google App Passwords', href: 'https://myaccount.google.com/apppasswords' },
+          { label: 'Google instructions', href: 'https://support.google.com/mail/answer/185833' },
+        ],
+      } },
+    fastmail: { host: 'imap.fastmail.com', port: 993, use_tls: 1,
       help: 'Fastmail — generate an app password under Settings → Password & Security.' },
-    icloud: { host: 'imap.mail.me.com', port: 993, use_tls: 1, auth_method: 'password',
-      help: 'iCloud — requires an app-specific password from appleid.apple.com.' },
-    proton: { host: 'protonmail-bridge', port: 143, use_tls: 0, auth_method: 'password',
+    icloud: { host: 'imap.mail.me.com', port: 993, use_tls: 1,
+      usernamePlaceholder: 'you',
+      usernameHelp: 'Usually the part before @icloud.com; try the full address if needed.',
+      credential: {
+        note: 'Use an Apple app-specific password, not your Apple Account password.',
+        steps: ['Turn on two-factor authentication.', 'Create an app-specific password for Suchi.', 'Paste the generated password above.'],
+        links: [
+          { label: 'Apple Account', href: 'https://account.apple.com/' },
+          { label: 'Apple instructions', href: 'https://support.apple.com/102654' },
+        ],
+      } },
+    proton: { host: 'protonmail-bridge', port: 143, use_tls: 0,
       help: 'Proton Bridge via the socat relay (host = protonmail-bridge, port 143).' },
-    zoho: { host: 'imap.zoho.com', port: 993, use_tls: 1, auth_method: 'password',
+    zoho: { host: 'imap.zoho.com', port: 993, use_tls: 1,
       help: 'Zoho — generate an app password under Security → App Passwords.' },
-    custom: { auth_method: 'password',
-      help: 'Configure host/port/TLS by hand.' },
+    custom: { help: 'Configure host/port/TLS by hand.' },
   }
 
   // Snapshot props once; the modal remounts per-open so a reactive
@@ -71,7 +88,6 @@
     folder: seed.folder || 'INBOX',
     processed_folder: seed.processed_folder || '',
     poll_interval_min: seed.poll_interval_min || 10,
-    auth_method: seed.auth_method || 'password',
     username: seed.username || '',
     password: '',
     attachments_only: seed.attachments_only ?? 0,
@@ -96,14 +112,19 @@
     if (!isEdit || !form.host) form.host = p.host || form.host
     if (!isEdit || !form.port || form.port === 993) form.port = p.port ?? form.port
     if (!isEdit || form.use_tls === 1) form.use_tls = p.use_tls ?? form.use_tls
-    if (!isEdit) form.auth_method = p.auth_method || form.auth_method
+    if (!isEdit) {
+      form.password = ''
+      form.oauth_account_id = ''
+      form.sealed_secret_b64 = ''
+      signedInAs = ''
+    }
   }
 
   function onOAuthSuccess({ username, oauth_account_id, sealed_secret_b64 }) {
     form.username = username || form.username
     form.oauth_account_id = oauth_account_id || ''
     form.sealed_secret_b64 = sealed_secret_b64 || ''
-    form.auth_method = 'xoauth2'
+    if (isEdit) form.enabled = true
     signedInAs = username || oauth_account_id || ''
   }
 
@@ -121,16 +142,15 @@
         folder: form.folder,
         processed_folder: form.processed_folder,
         poll_interval_min: Number(form.poll_interval_min) || 10,
-        auth_method: form.auth_method,
         username: form.username,
         password: form.password,
-        oauth_account_id: form.oauth_account_id,
         attachments_only: !!form.attachments_only,
         mark_seen: !!form.mark_seen,
         from_allowlist: form.from_allowlist,
         enabled: !!form.enabled,
       }
-      if (form.sealed_secret_b64) body.sealed_secret_b64 = form.sealed_secret_b64
+      if (!isEdit && form.oauth_account_id) body.oauth_account_id = form.oauth_account_id
+      if (!isEdit && form.sealed_secret_b64) body.sealed_secret_b64 = form.sealed_secret_b64
       // Strip empty strings so PATCH stays sparse and POST doesn't send
       // an empty password for OAuth accounts.
       for (const k of Object.keys(body)) {
@@ -179,7 +199,7 @@
 
   async function revoke() {
     if (!isEdit) return
-    if (!confirm('Revoke Microsoft sign-in? The mailbox will be disabled until you re-authenticate or set a password.')) return
+    if (!confirm('Revoke Microsoft sign-in? The mailbox will be disabled until you sign in again.')) return
     busy = true
     try {
       await revokeEmailOAuth(account.id)
@@ -199,10 +219,18 @@
       ? (microsoftOAuth?.reason || 'Microsoft OAuth is not configured on this server.')
       : providerHelp
   )
+  const isMicrosoft = $derived(form.provider === 'microsoft')
   const oauthCredentialReady = $derived(
-    form.auth_method !== 'xoauth2' ||
+    !isMicrosoft ||
       ((isEdit && !!form.oauth_account_id) || !!form.sealed_secret_b64)
   )
+  const passwordLabel = $derived(
+    form.provider === 'proton' ? 'Bridge password' :
+      form.provider === 'custom' ? 'Password / app password' : 'App password'
+  )
+  const usernamePlaceholder = $derived(presets[form.provider]?.usernamePlaceholder || '')
+  const usernameHelp = $derived(presets[form.provider]?.usernameHelp || '')
+  const credentialGuide = $derived(presets[form.provider]?.credential || null)
   const shortOAuthID = $derived(
     form.oauth_account_id ? form.oauth_account_id.slice(0, 8) + '…' : ''
   )
@@ -243,7 +271,7 @@
     <div class="toolbar" style="margin-bottom:0">
       <div class="field" style="flex:1;min-width:200px">
         <label for="ma-provider">Provider</label>
-        <select id="ma-provider" class="input" bind:value={form.provider} onchange={applyPreset}>
+        <select id="ma-provider" class="input" bind:value={form.provider} onchange={applyPreset} disabled={isEdit}>
           <option value="microsoft">Microsoft / Outlook</option>
           <option value="gmail">Gmail</option>
           <option value="fastmail">Fastmail</option>
@@ -284,30 +312,34 @@
     <div class="toolbar" style="margin-bottom:0">
       <div class="field" style="flex:1;min-width:200px">
         <label for="ma-user">Username</label>
-        <input id="ma-user" class="input mono" bind:value={form.username} autocomplete="off" />
+        <input id="ma-user" class="input mono" bind:value={form.username}
+               placeholder={usernamePlaceholder} autocomplete="off" />
+        {#if usernameHelp}<span class="sub" style="font-size:.76rem;color:var(--faint)">{usernameHelp}</span>{/if}
       </div>
     </div>
 
-    <div class="field">
-      <label for="ma-auth-pw">Auth method</label>
-      <div class="toolbar" style="margin:0;gap:16px">
-        <label style="display:flex;gap:6px;align-items:center">
-          <input id="ma-auth-pw" type="radio" name="auth" value="password" bind:group={form.auth_method} />
-          Password
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          <input id="ma-auth-oauth" type="radio" name="auth" value="xoauth2" bind:group={form.auth_method}
-                 disabled={!microsoftOAuthReady && !form.oauth_account_id} />
-          Microsoft OAuth
-        </label>
-      </div>
-    </div>
-
-    {#if form.auth_method === 'password'}
+    {#if !isMicrosoft}
       <div class="field">
-        <label for="ma-pw">Password / app token</label>
+        <label for="ma-pw">{passwordLabel}</label>
         <input id="ma-pw" class="input mono" type="password" bind:value={form.password}
-               placeholder={isEdit ? 'unchanged if left blank' : ''} autocomplete="new-password" />
+               placeholder={isEdit ? 'unchanged if left blank' : (credentialGuide ? 'Paste generated app password' : '')}
+               autocomplete="new-password" />
+        {#if credentialGuide}
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">
+            <span class="sub" style="font-size:.8rem;color:var(--muted)"><b>{credentialGuide.note}</b></span>
+            <ol class="sub" style="margin:0 0 0 18px;padding:0;font-size:.78rem;line-height:1.55;color:var(--muted)">
+              {#each credentialGuide.steps as step}<li>{step}</li>{/each}
+            </ol>
+            <div class="toolbar" style="margin:1px 0 0;gap:12px">
+              {#each credentialGuide.links as link}
+                <a href={link.href} target="_blank" rel="noopener noreferrer"
+                   style="font-size:.78rem;display:inline-flex;gap:5px;align-items:center">
+                  <Icon name="link" size={12} /> {link.label}
+                </a>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="field">
@@ -416,6 +448,7 @@
 {#if oauthOpen && microsoftOAuthReady}
   <OAuthDeviceCodeModal
     provider="microsoft"
+    accountID={isEdit ? account.id : null}
     {notify}
     onSuccess={onOAuthSuccess}
     onClose={() => (oauthOpen = false)} />
