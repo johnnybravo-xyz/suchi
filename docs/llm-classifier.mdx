@@ -97,7 +97,8 @@ At or above the threshold:
 - the JD category changes only while the document remains in the inbox
 
 Below the classifier threshold, source fields stay unchanged, Suchi adds the
-`needs-review` tag, and a changed title is offered for review.
+`needs-review` tag, and a changed title is offered as an approval assigned to
+the document owner.
 
 ## Test and live reload
 
@@ -157,7 +158,7 @@ belong to later releases rather than this classifier contract.
 - **Invalid result:** use an instruction-tuned model that reliably returns one
   JSON object. Suchi intentionally rejects explanatory prose.
 - **Low confidence:** use a stronger model, improve deterministic automations,
-  or keep the conservative threshold and review proposals.
+  or keep the conservative threshold and review suggestions in Approvals.
 - **No classification:** inspect LLM status in Settings and durable tasks for a
   dead `post-classify` job.
 

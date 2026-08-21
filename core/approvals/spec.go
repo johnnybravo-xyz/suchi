@@ -50,7 +50,7 @@ var stateKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
 // assigneePattern accepts "user:<int>" or "role:<slug>" — nothing else.
 // Delegation chains are a v2 concern; the skeleton stores an opaque
 // string but still validates the format so bad data can't reach SQL.
-var assigneePattern = regexp.MustCompile(`^(user:[1-9][0-9]{0,18}|role:[a-z][a-z0-9_\-]{0,31})$`)
+var assigneePattern = regexp.MustCompile(`^(document_owner|user:[1-9][0-9]{0,18}|role:[a-z][a-z0-9_\-]{0,31})$`)
 
 // Validate returns nil when the spec is internally consistent: start
 // exists, every On target exists, every referenced Kind is a
@@ -80,7 +80,7 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("spec.validate: state %q has negative timeout_sec", key)
 		}
 		if st.Assignee != "" && !assigneePattern.MatchString(st.Assignee) {
-			return fmt.Errorf("spec.validate: state %q has bad assignee %q; want user:N or role:slug",
+			return fmt.Errorf("spec.validate: state %q has bad assignee %q; want document_owner, user:N, or role:slug",
 				key, st.Assignee)
 		}
 		// approve-kind gates: needs assignee + at least one choice, and

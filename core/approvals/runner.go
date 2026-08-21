@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -50,7 +51,29 @@ func (e *Engine) Register(ctx context.Context, spec Spec, slug string, actor *pl
 // docID. Returns the new run_id. Enqueues a approval:advance job in
 // the same tx so the first state fires right after commit.
 func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
-	d, err := activeDefBySlug(ctx, e.db.Read, slug)
+	var runID int64
+	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := e.StartInTx(ctx, tx, slug, docID, vars, actor)
+		runID = id
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if e.log != nil {
+		e.log.Info("approvals.start", "run_id", runID, "slug", slug, "doc_id", docID)
+	}
+	return runID, nil
+}
+
+// StartInTx starts a run and enqueues its first advance as part of an
+// existing write transaction.
+func (e *Engine) StartInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+	return startInTx(ctx, tx, slug, docID, vars, actor)
+}
+
+func startInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+	d, err := activeDefBySlug(ctx, tx, slug)
 	if err != nil {
 		return 0, err
 	}
@@ -61,6 +84,17 @@ func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[s
 	startState, ok := spec.States[spec.Start]
 	if !ok {
 		return 0, fmt.Errorf("approvals.start: start state %q missing", spec.Start)
+	}
+	vars = mergeVars(nil, vars)
+	if specUsesDocumentOwner(spec) && docID <= 0 {
+		return 0, errors.New("approvals.start: document_owner requires a document")
+	}
+	if docID > 0 && specUsesDocumentOwner(spec) {
+		var ownerID int64
+		if err := tx.QueryRowContext(ctx, `SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&ownerID); err != nil {
+			return 0, fmt.Errorf("approvals.start: load document owner: %w", err)
+		}
+		vars["owner_id"] = ownerID
 	}
 	var startedBy int64
 	if actor != nil {
@@ -75,22 +109,23 @@ func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[s
 		v := time.Now().Add(time.Duration(startState.TimeoutSec) * time.Second).Unix()
 		deadline = &v
 	}
-	var runID int64
-	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		id, err := insertRun(ctx, tx, d.ID, docPtr, spec.Start, vars, deadline, startedBy)
-		if err != nil {
-			return err
-		}
-		runID = id
-		return enqueueAdvance(ctx, tx, runID, "")
-	})
+	runID, err := insertRun(ctx, tx, d.ID, docPtr, spec.Start, vars, deadline, startedBy)
 	if err != nil {
 		return 0, err
 	}
-	if e.log != nil {
-		e.log.Info("approvals.start", "run_id", runID, "def_id", d.ID, "slug", slug, "doc_id", docID)
+	if err := enqueueAdvance(ctx, tx, runID, ""); err != nil {
+		return 0, err
 	}
 	return runID, nil
+}
+
+func specUsesDocumentOwner(spec Spec) bool {
+	for _, state := range spec.States {
+		if state.Assignee == "document_owner" {
+			return true
+		}
+	}
+	return false
 }
 
 // Advance runs one step of the machine for runID. Called by the
@@ -228,8 +263,17 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	// One tx: write transition, update run, expire tasks for the state
 	// we're leaving, finalize if terminal, enqueue advance if not.
 	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if res.Effect != nil {
+			if err := res.Effect(ctx, tx); err != nil {
+				return err
+			}
+		}
+		actor, err := resolvedActor(ctx, tx, runID, run.CurrentState, trigger)
+		if err != nil {
+			return err
+		}
 		if err := insertTransition(ctx, tx, runID,
-			run.CurrentState, next, res.Event, nil, res.Vars); err != nil {
+			run.CurrentState, next, res.Event, actor, res.Vars); err != nil {
 			return err
 		}
 		if err := expireOpenTasksForRun(ctx, tx, runID); err != nil {
@@ -416,4 +460,38 @@ func deadlineArg(d *int64) any {
 		return nil
 	}
 	return *d
+}
+
+func resolvedActor(ctx context.Context, tx *sql.Tx, runID int64, stateKey, trigger string) (*string, error) {
+	if trigger == "" || trigger == "timeout" {
+		return nil, nil
+	}
+	var actor string
+	err := tx.QueryRowContext(ctx, `
+		SELECT resolved_by FROM approval_tasks
+		WHERE run_id = ? AND state_key = ? AND resolved_choice = ? AND status = 'resolved'
+		ORDER BY resolved_at DESC, id DESC LIMIT 1
+	`, runID, stateKey, trigger).Scan(&actor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &actor, nil
+}
+
+func int64Var(vars map[string]any, key string) (int64, error) {
+	switch v := vars[key].(type) {
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case float64:
+		return int64(v), nil
+	case json.Number:
+		return v.Int64()
+	default:
+		return 0, fmt.Errorf("%s is not an integer", key)
+	}
 }

@@ -81,10 +81,14 @@ func insertDef(ctx context.Context, tx *sql.Tx, slug, specJSON string, createdBy
 		return 0, 0, err
 	}
 	now := time.Now().Unix()
+	var createdByCol any
+	if createdBy > 0 {
+		createdByCol = createdBy
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
 		VALUES (?, ?, ?, 1, ?, ?)
-	`, slug, nextVersion, specJSON, now, createdBy)
+	`, slug, nextVersion, specJSON, now, createdByCol)
 	if err != nil {
 		return 0, 0, err
 	}

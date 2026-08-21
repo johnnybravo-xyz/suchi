@@ -17,8 +17,7 @@ import (
 )
 
 // setupDB brings up a fresh SQLite with every migration applied plus a
-// throwaway admin user (users.id=1) so approval_defs FK constraints
-// pass. Mirrors settings/settings_test.go's pattern.
+// throwaway admin user for user-assigned approval tests.
 func setupDB(t *testing.T) *db.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -36,7 +35,7 @@ func setupDB(t *testing.T) *db.DB {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	// Seed a user so approval_defs.created_by FK is satisfied.
+	// Seed the user referenced by user:1 test assignees.
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 		_, err := tx.ExecContext(ctx, `

@@ -3,8 +3,7 @@
 // Fetches the top-K similar existing documents (FTS5 more-like-this
 // via core/similar), aggregates their core-four metadata
 // (jd_category, correspondent, document_type, tags), applies
-// confident winners, and sends weaker signals to
-// document_proposals for the Tasks inbox.
+// confident winners, and sends weaker signals to the approvals inbox.
 
 package automations
 
@@ -17,6 +16,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -212,11 +212,6 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 		}
 		supporters := scalarSupporters[field][winnerID]
 		label := lookupLabel(ctx, tx, field, winnerID)
-		payload := map[string]any{
-			"id":         winnerID,
-			"label":      label,
-			"supporters": supporters,
-		}
 		if confidence >= cfg.AutoThreshold {
 			if err := applyScalar(ctx, tx, field, docID, winnerID); err != nil {
 				log.Warn("archive_classifier.autoapply.write", "field", field, "err", err.Error())
@@ -237,7 +232,10 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			})
 			autoapplied++
 		} else {
-			if err := insertProposal(ctx, tx, docID, field, winnerID, payload, confidence, supporters); err != nil {
+			if err := approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
+				Field: field, ValueID: winnerID, Label: label, Confidence: confidence,
+				BasedOn: supporters, Source: "archive",
+			}); err != nil {
 				log.Warn("archive_classifier.propose.write", "field", field, "err", err.Error())
 				continue
 			}
@@ -261,11 +259,6 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 				continue
 			}
 			label := lookupLabel(ctx, tx, "tag", tagID)
-			payload := map[string]any{
-				"id":         tagID,
-				"label":      label,
-				"supporters": supporters,
-			}
 			if confidence >= cfg.AutoThreshold {
 				if _, err := tx.ExecContext(ctx,
 					`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
@@ -288,7 +281,10 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 				})
 				autoapplied++
 			} else {
-				if err := insertProposal(ctx, tx, docID, "tag", tagID, payload, confidence, supporters); err != nil {
+				if err := approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
+					Field: "tag", ValueID: tagID, Label: label, Confidence: confidence,
+					BasedOn: supporters, Source: "archive",
+				}); err != nil {
 					log.Warn("archive_classifier.propose.tag", "tag_id", tagID, "err", err.Error())
 					continue
 				}
@@ -405,26 +401,6 @@ func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID i
 	_, err := tx.ExecContext(ctx,
 		"UPDATE documents SET "+col+" = ?, updated_at = ? WHERE id = ? AND "+col+" IS NULL",
 		valueID, time.Now().Unix(), docID)
-	return err
-}
-
-func insertProposal(ctx context.Context, tx *sql.Tx, docID int64, field string, valueID int64,
-	payload map[string]any, confidence float64, basedOn []int64) error {
-	rawPayload, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	rawBasedOn, err := json.Marshal(basedOn)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO document_proposals(
-			document_id, field, value_id, value_json,
-			confidence, based_on, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, docID, field, valueID, string(rawPayload),
-		confidence, string(rawBasedOn), time.Now().Unix())
 	return err
 }
 

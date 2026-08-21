@@ -69,7 +69,7 @@ func TestApplyFromArchiveEmptyArchiveIsNoOp(t *testing.T) {
 	}
 	var proposals int
 	if err := d.Read.QueryRow(
-		`SELECT COUNT(*) FROM document_proposals WHERE document_id = ?`, targetID).Scan(&proposals); err != nil {
+		`SELECT COUNT(*) FROM approval_runs WHERE doc_id = ?`, targetID).Scan(&proposals); err != nil {
 		t.Fatal(err)
 	}
 	if proposals != 0 {

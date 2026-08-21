@@ -267,9 +267,6 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 		if wt.ApprovalID == 0 {
 			t.Errorf("ApprovalID not populated: %+v", wt)
 		}
-		if wt.WorkflowID != wt.ApprovalID {
-			t.Errorf("WorkflowID compat mirror not populated: %+v", wt)
-		}
 		if len(wt.Choices) != 2 {
 			t.Errorf("choices not decoded: %v", wt.Choices)
 		}

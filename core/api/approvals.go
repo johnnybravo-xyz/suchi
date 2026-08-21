@@ -12,6 +12,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
 // Approval slugs are stable URL identifiers.
@@ -148,6 +149,9 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_doc_id", "doc_id must be non-negative")
 		return
 	}
+	if body.DocID > 0 && !s.authorize(w, r, actor, authz.KindDocument, body.DocID, authz.PermChange) {
+		return
+	}
 	runID, err := approvals.Start(r.Context(), slug, body.DocID, body.Vars, actor)
 	if err != nil {
 		if errors.Is(err, approvals.ErrNoDef) {
@@ -188,6 +192,10 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "approval.getrun", err)
 		return
 	}
+	actor := auth.FromContext(r.Context())
+	if run.DocID != nil && !s.authorize(w, r, actor, authz.KindDocument, *run.DocID, authz.PermView) {
+		return
+	}
 	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
 	if err != nil {
 		s.serverErr(w, "approval.getrun.transitions", err)
@@ -200,7 +208,7 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ApprovalResolveTask marks a task done. Body: {"choice":"approve","note":"..."}.
+// ApprovalResolveTask marks a task done. Body: {"choice":"approve"}.
 // Principal must be the assignee or an admin.
 func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context())
@@ -218,14 +226,8 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "task_id must be a positive integer")
 		return
 	}
-	// Body accepts either {choice} (server-native, matches
-	// state.choices vocab) or {decision} (mobile/SPA compat spelling).
-	// Choice wins when both are present so a client migrating to the
-	// canonical field has predictable behavior.
 	var body struct {
-		Choice   string `json:"choice"`
-		Decision string `json:"decision"`
-		Note     string `json:"note"`
+		Choice string `json:"choice"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -233,11 +235,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Choice = strings.TrimSpace(body.Choice)
 	if body.Choice == "" {
-		body.Choice = strings.TrimSpace(body.Decision)
-	}
-	if body.Choice == "" {
-		s.writeError(w, http.StatusBadRequest, "missing_choice",
-			"choice (or decision) is required")
+		s.writeError(w, http.StatusBadRequest, "missing_choice", "choice is required")
 		return
 	}
 	if err := approvals.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {

@@ -25,7 +25,7 @@
       href: '#/automations',
       icon: 'zap' },
     { title: 'Approvals inbox',
-      hint: 'One pending expense-review approval + heuristics-proposal cards.',
+      hint: 'Pending reviews and document suggestions share one approvals inbox.',
       href: '#/tasks',
       icon: 'tasks' },
     { title: 'Upload something',

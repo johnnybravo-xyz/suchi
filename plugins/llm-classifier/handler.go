@@ -3,13 +3,13 @@ package llmclassifier
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
@@ -150,7 +150,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				return err
 			}
 			if res.Title != "" && res.Title != title {
-				if err := insertTitleProposal(ctx, tx, e.DocID, res.Title, res.Confidence, now); err != nil {
+				if err := approvals.ProposeDocumentChangeInTx(ctx, tx, e.DocID, approvals.DocumentChange{
+					Field: "title", Value: res.Title, Label: res.Title,
+					Confidence: res.Confidence, Source: "llm",
+				}); err != nil {
 					return err
 				}
 			}
@@ -308,29 +311,6 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
-}
-
-// insertTitleProposal writes a document_proposals row surfacing the
-// LLM's title suggestion when the doc already has a title. The Tasks
-// inbox renders it as a chip; the operator hits Apply to overwrite
-// the current title. INSERT OR IGNORE'd via a UNIQUE index would be
-// nicer but the schema doesn't have one for (document_id, field);
-// callers duplicate-suppress by not re-classifying done docs.
-func insertTitleProposal(ctx context.Context, tx *sql.Tx, docID int64, title string, confidence float64, now int64) error {
-	valueJSON, err := json.Marshal(map[string]any{
-		"label":      title,
-		"supporters": []int64{},
-	})
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO document_proposals(
-			document_id, field, value_id, value_json,
-			confidence, based_on, created_at
-		) VALUES (?, 'title', NULL, ?, ?, '[]', ?)
-	`, docID, string(valueJSON), confidence, now)
-	return err
 }
 
 func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {
