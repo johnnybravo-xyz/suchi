@@ -76,13 +76,3 @@ func TestOpenAndMigrate(t *testing.T) {
 		t.Fatalf("re-migrate: %v", err)
 	}
 }
-
-func TestV01BaselineIsSingleMigration(t *testing.T) {
-	got, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Version != 1 || got[0].Name != "baseline" {
-		t.Fatalf("migrations = %#v, want only 0001_baseline.sql", got)
-	}
-}

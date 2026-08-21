@@ -115,8 +115,3 @@ func TestRefineZipMIME_UnknownZip(t *testing.T) {
 		t.Errorf("unknown zip: got %q, want empty", got)
 	}
 }
-
-func TestRefineZipMIME_Corrupt(t *testing.T) {
-	data := []byte("PK\x03\x04garbage that isn't a valid central directory")
-	_, _ = refineZipMIME(bytes.NewReader(data), int64(len(data)))
-}

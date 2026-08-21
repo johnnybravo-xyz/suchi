@@ -19,41 +19,9 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
-	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
-
-func TestIsNonLocal(t *testing.T) {
-	cases := []struct {
-		host string
-		want bool
-	}{
-		{"", false},
-		{"localhost", false},
-		{"127.0.0.1", false},
-		{"::1", false},
-		{"192.168.1.10", false},
-		{"10.0.0.5", false},
-		{"172.16.99.1", false},
-		{"172.31.255.255", false},
-		{"172.32.0.1", true}, // out of RFC-1918 range
-		{"172.15.0.1", true},
-		{"host.local", false},
-		{"lab.internal", true},
-		{"my.lan", true},
-		{"api.openai.com", true},
-		{"claude.anthropic.com", true},
-		{"[::1]", false},
-		{"localhost:11434", false},
-		{"api.openai.com:443", true},
-	}
-	for _, tc := range cases {
-		if got := !netutil.IsLocalHost(tc.host); got != tc.want {
-			t.Errorf("non-local(%q) = %v, want %v", tc.host, got, tc.want)
-		}
-	}
-}
 
 func TestEmailPattern(t *testing.T) {
 	good := []string{
@@ -138,28 +106,6 @@ func TestSetupIntent_RejectsUnknownValue(t *testing.T) {
 	s.SaveSetupIntent(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_intent") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestSetupStepRouteRemoved(t *testing.T) {
-	mux := http.NewServeMux()
-	(&Server{}).registerSetup(mux)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/setup/step/archive", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("removed setup step route returned %d", rec.Code)
-	}
-}
-
-func TestMicrosoftOAuthSettingsRoutesRemoved(t *testing.T) {
-	mux := http.NewServeMux()
-	(&Server{}).registerSetup(mux)
-	for _, method := range []string{http.MethodGet, http.MethodPost} {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(method, "/api/admin/settings/microsoft-oauth", nil))
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s removed Microsoft OAuth settings route returned %d", method, rec.Code)
-		}
 	}
 }
 

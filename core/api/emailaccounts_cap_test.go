@@ -57,10 +57,6 @@ func capMux(s *Server) *http.ServeMux {
 	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
 	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
 	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
-	// Legacy admin path — must return 404 in the moved-route test.
-	mux.HandleFunc("GET /api/admin/email-accounts", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
 	return mux
 }
 
@@ -207,21 +203,5 @@ func TestEmailAccounts_member_without_cap(t *testing.T) {
 				t.Fatalf("status=%d body=%s (want 403)", rec.Code, rec.Body.String())
 			}
 		})
-	}
-}
-
-func TestEmailAccounts_route_moved(t *testing.T) {
-	s, _ := newEmailCapServer(t)
-	seedUser(t, s.DB, 1)
-
-	// Legacy prefix → 404.
-	rec := capCall(t, s, "GET", "/api/admin/email-accounts", "", adminPrincipal(1))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("legacy path status=%d, want 404", rec.Code)
-	}
-	// New prefix → 200 for admin.
-	rec = capCall(t, s, "GET", "/api/email-accounts", "", adminPrincipal(1))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("new path status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

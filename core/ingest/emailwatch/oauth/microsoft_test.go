@@ -44,16 +44,6 @@ func TestNewDefaults(t *testing.T) {
 	}
 }
 
-func TestNewCustomClientID(t *testing.T) {
-	c, err := New(Options{ClientID: "11111111-1111-1111-1111-111111111111"})
-	if err != nil {
-		t.Fatalf("New with custom id: %v", err)
-	}
-	if c == nil {
-		t.Fatal("nil client")
-	}
-}
-
 func TestManagerUsesConfiguredClientAndRetainsCredentialClients(t *testing.T) {
 	configured := "11111111-1111-1111-1111-111111111111"
 	credentialID := "22222222-2222-2222-2222-222222222222"

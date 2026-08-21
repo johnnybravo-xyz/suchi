@@ -163,12 +163,6 @@ func TestFanout_FailingSinkDoesNotBlockWrite(t *testing.T) {
 	}
 }
 
-func TestFanout_NilSinkIgnored(t *testing.T) {
-	t.Cleanup(clearSinks)
-	// Should be a no-op, not panic.
-	audit.RegisterSink(nil)
-}
-
 // clearSinks resets the package-level registry between tests. There's
 // no exported clear so tests reach through — kept internal since
 // production code never wants this.

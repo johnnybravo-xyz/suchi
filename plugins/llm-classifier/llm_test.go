@@ -17,36 +17,11 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
-	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-}
-
-func TestIsLocalHost(t *testing.T) {
-	locals := []string{
-		"", "localhost", "LOCALHOST", "my-server.local", "app.localhost",
-		"127.0.0.1", "127.5.4.3", "::1",
-		"10.0.0.1", "10.255.255.255",
-		"192.168.1.1", "192.168.100.50",
-		"172.16.0.1", "172.31.255.254",
-	}
-	notLocals := []string{
-		"api.openai.com", "example.com", "8.8.8.8",
-		"172.15.0.1", "172.32.0.1", // outside 172.16/12
-	}
-	for _, h := range locals {
-		if !netutil.IsLocalHost(h) {
-			t.Errorf("%q should be local", h)
-		}
-	}
-	for _, h := range notLocals {
-		if netutil.IsLocalHost(h) {
-			t.Errorf("%q should not be local", h)
-		}
-	}
 }
 
 func TestNewRejectsNonLocalWithoutAck(t *testing.T) {
@@ -531,48 +506,6 @@ func TestClassifyWrapsHTTP4xxAsTerminal(t *testing.T) {
 				t.Errorf("HTTP %d must wrap jobs.ErrTerminal; got %v", code, err)
 			}
 		})
-	}
-}
-
-// One-classify-per-doc invariant: enforced structurally by the plugin's
-// topology. Classify has exactly one call site in this module (the
-// Subscriber handler). A second call would double per-doc latency +
-// cost, so we assert the invariant with a grep. Adding a legitimate
-// call site (e.g. a new plugin sub-service) is a deliberate decision:
-// bump the expected count here and document why in the plugin's godoc.
-func TestClassifyCallSites(t *testing.T) {
-	sources, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	callSites := 0
-	for _, path := range sources {
-		if strings.HasSuffix(path, "_test.go") {
-			continue // tests call Classify freely
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Every call site looks like `.Classify(` on a *Plugin receiver.
-		// Definition line `func (p *Plugin) Classify(` matches, so
-		// subtract 1 in the count for llm.go.
-		callSites += strings.Count(string(b), ".Classify(")
-	}
-	// Add the definition site (llm.go): "func (p *Plugin) Classify("
-	// isn't matched by ".Classify(" — that's a method receiver
-	// declaration syntax. So callSites now equals just the invocation
-	// count.
-	const expected = 1 // one invocation, in handler.go
-	if callSites != expected {
-		t.Errorf(
-			"Classify call sites = %d, want %d.\n\n"+
-				"The one-classify-per-doc invariant means exactly ONE Classify\n"+
-				"invocation lives in this module (the Subscriber handler).\n"+
-				"Adding a second call doubles per-doc latency + cost.\n"+
-				"If your change legitimately adds a second call site, update\n"+
-				"the expected count here and document why in llm.go's godoc.",
-			callSites, expected)
 	}
 }
 

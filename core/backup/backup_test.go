@@ -109,20 +109,25 @@ func TestSnapshotRetention(t *testing.T) {
 	dataDir := t.TempDir()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	// Take five snapshots with Keep=2. Only the two newest should
-	// survive; the older three get pruned.
-	cfg := Config{DataDir: dataDir, Interval: time.Hour, Keep: 2}
-	for i := 0; i < 5; i++ {
-		if err := Snapshot(context.Background(), cfg, d, log); err != nil {
-			t.Fatalf("snapshot %d: %v", i, err)
+	dir := filepath.Join(dataDir, "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"suchi-20000101T000001Z.db",
+		"suchi-20000101T000002Z.db",
+		"suchi-20000101T000003Z.db",
+		"suchi-20000101T000004Z.db",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		// Force the timestamp forward so filenames don't collide
-		// at the same second (test-only; real snapshots use the
-		// clock and won't fire this fast).
-		time.Sleep(1100 * time.Millisecond)
+	}
+	if err := Snapshot(context.Background(), Config{DataDir: dataDir, Keep: 2}, d, log); err != nil {
+		t.Fatalf("snapshot: %v", err)
 	}
 
-	entries, err := os.ReadDir(filepath.Join(dataDir, "backups"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

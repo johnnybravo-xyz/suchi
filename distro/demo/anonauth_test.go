@@ -90,8 +90,7 @@ func TestAnonAuth_RejectsExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	tok, _, _ := a.Mint(1 * time.Second)
-	time.Sleep(1200 * time.Millisecond)
+	tok, _, _ := a.Mint(time.Nanosecond)
 	r, _ := http.NewRequest("GET", "/", nil)
 	r.Header.Set("Authorization", "Token "+tok)
 	if _, err := a.Authenticate(r); err == nil {

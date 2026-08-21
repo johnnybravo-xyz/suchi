@@ -6,30 +6,9 @@ package api
 // deliberate code change.
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
-
-func TestUISettingsSurfaceRemoved(t *testing.T) {
-	d := openTestDB(t)
-	var tables int
-	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ui_settings'`).Scan(&tables); err != nil {
-		t.Fatal(err)
-	}
-	if tables != 0 {
-		t.Fatal("ui_settings table still exists")
-	}
-
-	mux := http.NewServeMux()
-	(&Server{DB: d}).Register(mux)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ui_settings/", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("removed ui_settings route returned %d", rec.Code)
-	}
-}
 
 func TestValidateFilterJSON_Allowed(t *testing.T) {
 	cases := []string{

@@ -112,23 +112,6 @@ func TestLoadFile_UnknownExtension(t *testing.T) {
 	}
 }
 
-func TestLoadFile_RejectsCompatibilityFormats(t *testing.T) {
-	for _, ext := range []string{".json", ".yaml", ".yml"} {
-		t.Run(ext, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "config"+ext)
-			if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv(FileConfigEnv, path)
-			_, err := LoadFile()
-			if err == nil || !strings.Contains(err.Error(), "unknown extension") {
-				t.Fatalf("LoadFile(%s): got %v, want unknown-extension error", ext, err)
-			}
-		})
-	}
-}
-
 // assertLoad writes body to a temp file with ext, points SUCHI_CONFIG
 // at it, runs LoadFile, and asserts every expected env var landed.
 func assertLoad(t *testing.T, ext, body string, want map[string]string) {

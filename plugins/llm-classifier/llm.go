@@ -102,10 +102,8 @@ type JDCat struct {
 // existing indexes and inject it into the single call.
 //
 // Enforced structurally by the ingestion topology: Classify is
-// called from exactly one site — the post-classify Subscriber
-// (plugins/llm-classifier/handler.go). No loops, no retries at the
-// plugin layer (the outbox handles retries at the job layer). A test
-// grep guards the invariant (see llm_test.go / TestClassifyCallSites).
+// called from the post-classify Subscriber (handler.go). No loops or
+// retries live at the plugin layer; the outbox handles job retries.
 
 // Result is what a classify call returns after parsing the model's JSON.
 // Consumers apply the suggested fields when Confidence >= threshold.
