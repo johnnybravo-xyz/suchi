@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke install-hooks ui ui-check ui-clean schema schema-check bench-check release
+.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke install-hooks ui ui-check ui-clean bench-check release
 
 BIN := $(PWD)/dist/suchi
 MODULES := plugin-api core plugins/local-auth plugins/oidc plugins/llm-classifier distro hack/emlfixtures hack/transcript
@@ -32,13 +32,7 @@ fmt-check:
 tidy:
 	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd $$m && go mod tidy ) || exit 1; done
 
-schema:
-	cd core && go run ./cmd/openapi-sync
-
-schema-check:
-	cd core && go run ./cmd/openapi-sync --check
-
-check: fmt-check vet test lint schema-check ui-check
+check: fmt-check vet test lint ui-check
 
 # Convenience: build + smoke-test the running server.
 smoke: build

@@ -35,7 +35,6 @@ Before requesting review:
 - Add focused tests for changed behavior.
 - Run `make smoke` for runtime, configuration, or deployment changes.
 - Update user documentation and `CHANGELOG.md` with user-visible changes.
-- Regenerate OpenAPI with `make schema` when routes or payloads change.
 - Rebuild and commit the embedded SPA with `make ui` for UI changes.
 
 Do not mix unrelated refactors into a feature or fix. A new package should own
@@ -43,8 +42,7 @@ a distinct responsibility, not merely shorten another file.
 
 ## Code conventions
 
-- Use `gofmt`; `make check` also runs tests, vet, Staticcheck, OpenAPI checks,
-  and the UI checks.
+- Use `gofmt`; `make check` also runs tests, vet, Staticcheck, and UI checks.
 - Prefer the standard library and existing project helpers. Explain any new
   dependency in the pull request.
 - Return and wrap errors instead of panicking. Comments should explain
@@ -87,7 +85,7 @@ when the reason is not obvious. No contribution trailer is required.
 Documentation ships with the behavior it describes:
 
 - CLI or config changes update `docs/cli.mdx` or `docs/config.mdx`.
-- API changes update OpenAPI and `docs/api.mdx`.
+- API changes update `docs/api.mdx`.
 - Feature changes update the relevant guide.
 - User-visible changes update `CHANGELOG.md`.
 

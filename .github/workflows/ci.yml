@@ -70,6 +70,4 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: '**/go.sum'
       - run: make fmt-check
-      - name: OpenAPI index is current
-        run: make schema-check
       - run: make lint
