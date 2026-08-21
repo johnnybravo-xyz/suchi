@@ -1,6 +1,6 @@
 // GET /api/documents/{id}/similar — "documents like this" using FTS5
 // more-like-this. Implementation lives in core/similar so the
-// automations `apply_from_similar` action can share the same code
+// local archive classifier can share the same code
 // path.
 //
 // Kept thin here: parse the query, authorize, hand off to

@@ -292,6 +292,25 @@ func TestSaveLLMConfig_UpdatesOneSnapshot(t *testing.T) {
 	}
 }
 
+func TestArchiveClassifierConfigDefaultsAndPersists(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	got := settings.ResolveArchiveClassifierConfig(ctx, d)
+	if !got.Enabled || got.AutoThreshold != 0.9 || got.ReviewThreshold != 0.5 {
+		t.Fatalf("defaults = %#v", got)
+	}
+
+	want := settings.ArchiveClassifierConfig{
+		Enabled: false, AutoThreshold: 0.85, ReviewThreshold: 0.65,
+	}
+	if err := settings.SaveArchiveClassifierConfig(ctx, d, want); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.ResolveArchiveClassifierConfig(ctx, d); got != want {
+		t.Fatalf("resolved config = %#v, want %#v", got, want)
+	}
+}
+
 func TestSaveLLMConfig_ExplicitEmptyKeyOverridesEnvironment(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()

@@ -3,7 +3,7 @@ title: "LLM classifier"
 description: "Optional local or hosted classification for newly ingested documents."
 ---
 
-Suchi ships deterministic filing rules and archive-based heuristics. The
+Suchi ships deterministic automations and local archive matching. The
 optional LLM classifier adds one fixed post-extraction model call for title,
 correspondent, tags, Johnny.Decimal category, confidence, and language.
 
@@ -19,7 +19,9 @@ Open **Settings > LLM classifier** during or after setup and choose:
 - **Hosted endpoint** for a provider on the public internet
 
 Configure endpoint, model, optional API key, confidence threshold, and enabled
-state. Hosted mode also requires an explicit egress acknowledgement.
+state. The same screen controls local archive matching and its review and
+auto-apply thresholds. Hosted mode also requires an explicit egress
+acknowledgement.
 
 API keys are sealed before entering SQLite. Leaving the key field blank keeps
 the stored value; **Clear the stored API key** removes it and prevents an
@@ -89,17 +91,13 @@ defaults to `0.70`.
 
 At or above the threshold:
 
-- an empty title can be filled
+- a validated suggested title replaces the current title
 - an unset correspondent can be filled
 - tags are added, never removed
 - the JD category changes only while the document remains in the inbox
 
-A changed non-empty title becomes a proposal. The built-in
-`apply_llm_title` automation applies it only above that automation's threshold;
-otherwise it remains in Tasks for review.
-
 Below the classifier threshold, source fields stay unchanged, Suchi adds the
-`needs-review` tag, and archive-based filing may offer a corroborating proposal.
+`needs-review` tag, and a changed title is offered for review.
 
 ## Test and live reload
 
@@ -107,9 +105,9 @@ Below the classifier threshold, source fields stay unchanged, Suchi adds the
 the production parser. It returns latency and sanitized synthetic fields only.
 It does not save settings, send archive content, or reveal raw provider output.
 
-Saving enabled state, endpoint, model, key, timeout, acknowledgement, or
-confidence applies to the running process immediately. No Suchi restart is
-required.
+Saving local archive settings or the model's enabled state, endpoint, model,
+key, timeout, acknowledgement, or confidence applies immediately. No Suchi
+restart is required.
 
 Activation affects new ingests. A settings change never starts an automatic
 archive-wide backfill. Select older documents in **Documents** and use
@@ -158,7 +156,7 @@ belong to later releases rather than this classifier contract.
   URL.
 - **Invalid result:** use an instruction-tuned model that reliably returns one
   JSON object. Suchi intentionally rejects explanatory prose.
-- **Low confidence:** use a stronger model, improve deterministic filing rules,
+- **Low confidence:** use a stronger model, improve deterministic automations,
   or keep the conservative threshold and review proposals.
 - **No classification:** inspect LLM status in Settings and durable tasks for a
   dead `post-classify` job.

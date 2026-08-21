@@ -1,7 +1,7 @@
 // Package similar is the FTS5 "documents like this" reader.
 //
 // Extracted from core/api/documents_similar.go so both the HTTP
-// endpoint and the automations `apply_from_similar` action share the
+// endpoint and the local archive classifier share the
 // same tokenizer + BM25 SQL + ACL splice. Cross-package cycle
 // prevention — api imports automations, so the shared helper can't
 // live in api.
@@ -48,7 +48,7 @@ const MaxContentBytes = 4096
 // around 1e-6, while genuine overlap on multiple discriminative
 // tokens scores several orders of magnitude higher. A caller
 // filtering below this floor drops the noise band. The API endpoint
-// applies it; the automations `apply_from_similar` path keeps its
+// applies it; the archive classifier keeps its
 // per-rule configurable floor for finer control.
 const MinScore = 0.001
 

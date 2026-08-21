@@ -29,6 +29,9 @@ const (
 	KeyLLMEgressAck    = "llm.egress_ack"
 	KeyLLMDisabled     = "llm.disabled"
 	KeyLLMConfidence   = "llm.confidence_threshold"
+	KeyArchiveEnabled  = "classification.archive_enabled"
+	KeyArchiveAuto     = "classification.archive_auto_threshold"
+	KeyArchiveReview   = "classification.archive_review_threshold"
 
 	KeyPreset = "preset"
 
@@ -180,6 +183,40 @@ type LLMConfig struct {
 	// Disabled is persisted separately from EndpointURL so an operator can
 	// turn off an environment-backed classifier without erasing its setup.
 	Disabled bool
+}
+
+// ArchiveClassifierConfig controls the local similar-document classifier.
+// It is intentionally small: retrieval and supported fields are product
+// behavior, while operators only choose whether and how confidently to apply.
+type ArchiveClassifierConfig struct {
+	Enabled         bool
+	AutoThreshold   float64
+	ReviewThreshold float64
+}
+
+func ResolveArchiveClassifierConfig(ctx context.Context, database *db.DB) ArchiveClassifierConfig {
+	out := ArchiveClassifierConfig{Enabled: true, AutoThreshold: 0.9, ReviewThreshold: 0.5}
+	var enabled bool
+	if err := Get(ctx, database, KeyArchiveEnabled, &enabled); err == nil {
+		out.Enabled = enabled
+	}
+	var threshold float64
+	if err := Get(ctx, database, KeyArchiveAuto, &threshold); err == nil && threshold > 0 {
+		out.AutoThreshold = threshold
+	}
+	threshold = 0
+	if err := Get(ctx, database, KeyArchiveReview, &threshold); err == nil && threshold > 0 {
+		out.ReviewThreshold = threshold
+	}
+	return out
+}
+
+func SaveArchiveClassifierConfig(ctx context.Context, database *db.DB, cfg ArchiveClassifierConfig) error {
+	return SetMany(ctx, database, map[string]any{
+		KeyArchiveEnabled: cfg.Enabled,
+		KeyArchiveAuto:    cfg.AutoThreshold,
+		KeyArchiveReview:  cfg.ReviewThreshold,
+	})
 }
 
 type SecretBox interface {

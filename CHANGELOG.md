@@ -25,7 +25,8 @@ version header when a tag is cut.
 
 ### Changed
 
-- Built-in automations now use plain-language tuning views and confidence sliders while keeping their fixed workflow structure read-only.
+- Local archive matching now runs before user automations and exposes live review and auto-apply thresholds in classification settings.
+- The optional model now uses one confidence threshold; fixed classifier plumbing no longer appears as editable automations.
 
 ### Fixed
 

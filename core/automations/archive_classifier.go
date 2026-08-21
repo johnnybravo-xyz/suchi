@@ -1,19 +1,10 @@
-// apply_from_similar — the built-in "auto-file from archive" action.
+// Archive classification learns filing metadata from similar documents.
 //
 // Fetches the top-K similar existing documents (FTS5 more-like-this
 // via core/similar), aggregates their core-four metadata
-// (jd_category, correspondent, document_type, tags), auto-applies
-// the winners with confidence ≥ threshold_autoapply, and drops the
-// weaker tier (>= threshold_propose but < threshold_autoapply) into
+// (jd_category, correspondent, document_type, tags), applies
+// confident winners, and sends weaker signals to
 // document_proposals for the Tasks inbox.
-//
-// LLM interaction: when the LLM classifier plugin is configured and
-// healthy, `SkipHeuristics` returns true and the action no-ops. The
-// LLM handler re-invokes ApplyOnDocumentAdded on terminal failure to
-// give heuristics a chance to fill gaps.
-//
-// Runs inside the automations WriteTx, so every write is atomic with
-// the rest of the automation's actions and the whole postingest tail.
 
 package automations
 
@@ -24,100 +15,28 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/similar"
 )
 
-// heuristicsSkip follows the live LLM state. It is atomic because an admin can
-// now disable or re-enable an already-loaded classifier while ingestion jobs
-// are running.
-var heuristicsSkip atomic.Bool
-
-func SetHeuristicsSkip(v bool) { heuristicsSkip.Store(v) }
-
-// forceHeuristicsKey is a request-scoped override the LLM handler
-// uses to re-run heuristics after terminal LLM failure.
-type forceHeuristicsKey struct{}
-
-// WithForceHeuristics returns a context that forces the
-// apply_from_similar action to run even when heuristicsSkip is true.
-// The LLM classifier's error path uses this on retry-exhausted docs.
-func WithForceHeuristics(ctx context.Context) context.Context {
-	return context.WithValue(ctx, forceHeuristicsKey{}, true)
-}
-
-func isForcedHeuristics(ctx context.Context) bool {
-	v, _ := ctx.Value(forceHeuristicsKey{}).(bool)
-	return v
-}
-
-// applyFromSimilarParams is the JSON shape stored in automation_actions.params_json.
-// All fields have sane defaults so an operator seeing the automation
-// in the visual builder doesn't have to fill anything to make it work.
-type applyFromSimilarParams struct {
-	Fields             []string `json:"fields"`
-	TopK               int      `json:"top_k"`
-	MinScore           float64  `json:"min_score"`
-	ThresholdAutoapply float64  `json:"threshold_autoapply"`
-	ThresholdPropose   float64  `json:"threshold_propose"`
-	TagFrequencyMin    float64  `json:"tag_frequency_min"`
-}
-
-func (p *applyFromSimilarParams) withDefaults() {
-	if len(p.Fields) == 0 {
-		p.Fields = []string{"jd_category", "correspondent", "document_type", "tags"}
-	}
-	if p.TopK <= 0 {
-		p.TopK = 10
-	}
-	// MinScore floors the accepted FTS matches. SQLite's BM25 returns
-	// small magnitudes (often < 1) so the default is deliberately 0
-	// — the FTS MATCH clause is already a strong filter, and an
-	// operator raising this to something like 0.5 filters out weakly
-	// overlapping docs without touching the SPA UI.
-	if p.MinScore < 0 {
-		p.MinScore = 0
-	}
-	if p.ThresholdAutoapply <= 0 {
-		p.ThresholdAutoapply = 0.9
-	}
-	if p.ThresholdPropose <= 0 {
-		p.ThresholdPropose = 0.5
-	}
-	if p.TagFrequencyMin <= 0 {
-		p.TagFrequencyMin = 0.3
-	}
-}
-
-func (p *applyFromSimilarParams) wants(field string) bool {
-	for _, f := range p.Fields {
-		if f == field {
-			return true
-		}
-	}
-	return false
-}
-
-// runApplyFromSimilar is the action handler. Called from apply.go's
-// runAction switch inside the automations WriteTx.
-func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logger, docID int64, a Action) error {
-	if heuristicsSkip.Load() && !isForcedHeuristics(ctx) {
+// ApplyFromArchive runs before user automations and the optional LLM. It reads
+// settings on every call, so changes apply immediately without runtime wiring.
+func ApplyFromArchive(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
+	cfg := settings.ResolveArchiveClassifierConfig(ctx, d)
+	if !cfg.Enabled {
 		return nil
 	}
+	return d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return applyFromArchive(ctx, tx, d, log, docID, cfg)
+	})
+}
 
-	// Parse params (round-trip the map through JSON to hit the struct
-	// tags). Missing fields fall back to defaults.
-	var p applyFromSimilarParams
-	if raw, err := json.Marshal(a.Params); err == nil {
-		_ = json.Unmarshal(raw, &p)
-	}
-	p.withDefaults()
-
+func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logger, docID int64, cfg settings.ArchiveClassifierConfig) error {
 	// Load target-doc metadata + ownership. We need owner_id for the
 	// visibility-scoped similar query — the automation runs "as the
 	// document's owner", not the ingest producer.
@@ -132,7 +51,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // doc trashed between enqueue and now — no-op
 		}
-		return fmt.Errorf("apply_from_similar: load doc: %w", err)
+		return fmt.Errorf("archive classifier: load doc: %w", err)
 	}
 
 	// Ignore already-present-inbox jd_category, since fresh uploads
@@ -159,7 +78,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 	trows, err := tx.QueryContext(ctx,
 		`SELECT tag_id FROM document_tags WHERE document_id = ?`, docID)
 	if err != nil {
-		return fmt.Errorf("apply_from_similar: load tags: %w", err)
+		return fmt.Errorf("archive classifier: load tags: %w", err)
 	}
 	for trows.Next() {
 		var id int64
@@ -174,7 +93,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 	// Load owner's group memberships for the visibility splice.
 	groups, err := authz.LoadGroups(ctx, d, ownerID)
 	if err != nil {
-		return fmt.Errorf("apply_from_similar: load groups: %w", err)
+		return fmt.Errorf("archive classifier: load groups: %w", err)
 	}
 	sp := &similar.Principal{
 		UserID: ownerID,
@@ -182,22 +101,22 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 		Groups: groups,
 	}
 
-	neighbours, err := similar.TopDocs(ctx, d, docID, p.TopK, sp)
+	neighbours, err := similar.TopDocs(ctx, d, docID, 10, sp)
 	if err != nil {
-		return fmt.Errorf("apply_from_similar: fetch neighbours: %w", err)
+		return fmt.Errorf("archive classifier: fetch neighbours: %w", err)
 	}
 	// Filter by minimum score floor.
 	kept := neighbours[:0]
 	for _, n := range neighbours {
-		if n.Score >= p.MinScore {
+		if n.Score >= 0 {
 			kept = append(kept, n)
 		}
 	}
 	neighbours = kept
-	log.Info("apply_from_similar.considered",
+	log.Info("archive_classifier.considered",
 		"doc_id", docID,
 		"neighbours", len(neighbours),
-		"min_score", p.MinScore)
+		"min_score", 0)
 	if len(neighbours) < 3 {
 		// Not enough signal. The considered log above is the only trace
 		// operators auditing "why didn't heuristics propose?" can grep for.
@@ -218,7 +137,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 
 	metadata, err := loadNeighbourMetadata(ctx, d, ids)
 	if err != nil {
-		return fmt.Errorf("apply_from_similar: load neighbour metadata: %w", err)
+		return fmt.Errorf("archive classifier: load neighbour metadata: %w", err)
 	}
 
 	// Aggregate votes. `scalarTally` maps field → value → cumulative
@@ -280,7 +199,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 	autoapplied, proposed := 0, 0
 
 	for _, field := range []string{"jd_category", "correspondent", "document_type"} {
-		if !p.wants(field) || skip[field] {
+		if skip[field] {
 			continue
 		}
 		winnerID, winnerScore := topScalar(scalarTally[field])
@@ -288,7 +207,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 			continue
 		}
 		confidence := winnerScore / totalScore
-		if confidence < p.ThresholdPropose {
+		if confidence < cfg.ReviewThreshold {
 			continue
 		}
 		supporters := scalarSupporters[field][winnerID]
@@ -298,9 +217,9 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 			"label":      label,
 			"supporters": supporters,
 		}
-		if confidence >= p.ThresholdAutoapply {
+		if confidence >= cfg.AutoThreshold {
 			if err := applyScalar(ctx, tx, field, docID, winnerID); err != nil {
-				log.Warn("apply_from_similar.autoapply.write", "field", field, "err", err.Error())
+				log.Warn("archive_classifier.autoapply.write", "field", field, "err", err.Error())
 				continue
 			}
 			audit.LogInTx(ctx, tx, log, audit.Event{
@@ -319,7 +238,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 			autoapplied++
 		} else {
 			if err := insertProposal(ctx, tx, docID, field, winnerID, payload, confidence, supporters); err != nil {
-				log.Warn("apply_from_similar.propose.write", "field", field, "err", err.Error())
+				log.Warn("archive_classifier.propose.write", "field", field, "err", err.Error())
 				continue
 			}
 			proposed++
@@ -327,8 +246,8 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 	}
 
 	// Tags: emit each candidate that meets the frequency floor.
-	if p.wants("tags") {
-		threshold := p.TagFrequencyMin * float64(len(neighbours))
+	{
+		threshold := 0.3 * float64(len(neighbours))
 		for tagID, weightedScore := range tagTally {
 			supporters := tagSupporters[tagID]
 			if float64(len(supporters)) < threshold {
@@ -338,7 +257,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 				continue
 			}
 			confidence := weightedScore / totalScore
-			if confidence < p.ThresholdPropose {
+			if confidence < cfg.ReviewThreshold {
 				continue
 			}
 			label := lookupLabel(ctx, tx, "tag", tagID)
@@ -347,11 +266,11 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 				"label":      label,
 				"supporters": supporters,
 			}
-			if confidence >= p.ThresholdAutoapply {
+			if confidence >= cfg.AutoThreshold {
 				if _, err := tx.ExecContext(ctx,
 					`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
 					docID, tagID); err != nil {
-					log.Warn("apply_from_similar.autoapply.tag", "tag_id", tagID, "err", err.Error())
+					log.Warn("archive_classifier.autoapply.tag", "tag_id", tagID, "err", err.Error())
 					continue
 				}
 				audit.LogInTx(ctx, tx, log, audit.Event{
@@ -370,7 +289,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 				autoapplied++
 			} else {
 				if err := insertProposal(ctx, tx, docID, "tag", tagID, payload, confidence, supporters); err != nil {
-					log.Warn("apply_from_similar.propose.tag", "tag_id", tagID, "err", err.Error())
+					log.Warn("archive_classifier.propose.tag", "tag_id", tagID, "err", err.Error())
 					continue
 				}
 				proposed++
@@ -378,7 +297,7 @@ func runApplyFromSimilar(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Lo
 		}
 	}
 
-	log.Info("apply_from_similar.wrote",
+	log.Info("archive_classifier.wrote",
 		"doc_id", docID,
 		"autoapplied", autoapplied,
 		"proposed", proposed)
@@ -477,7 +396,7 @@ func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID i
 	case "document_type":
 		col = "document_type_id"
 	default:
-		return fmt.Errorf("apply_from_similar: unknown field %q", field)
+		return fmt.Errorf("archive classifier: unknown field %q", field)
 	}
 	// Only update when the field is still empty — belt-and-braces
 	// against a rules-classifier write that landed after our tally

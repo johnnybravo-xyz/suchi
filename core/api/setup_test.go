@@ -242,7 +242,7 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 			}, nil
 		},
 	}
-	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8}`
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"archive_enabled":false,"archive_auto_threshold":0.85,"archive_review_threshold":0.6}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -287,6 +287,10 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if resolved.ConfidenceThreshold != 0.8 {
 		t.Fatalf("confidence threshold = %v", resolved.ConfidenceThreshold)
 	}
+	archive := settings.ResolveArchiveClassifierConfig(req.Context(), d)
+	if archive.Enabled || archive.AutoThreshold != 0.85 || archive.ReviewThreshold != 0.6 {
+		t.Fatalf("archive config = %#v", archive)
+	}
 	if _, ok := stored["ciphertext"]; !ok {
 		t.Fatalf("stored key is not a sealed envelope: %#v", stored)
 	}
@@ -309,6 +313,9 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	}
 	if !status.HasAPIKey || !status.Enabled || !status.Active {
 		t.Fatalf("unexpected masked status: %#v", status)
+	}
+	if status.ArchiveEnabled || status.ArchiveAuto != 0.85 || status.ArchiveReview != 0.6 {
+		t.Fatalf("archive status = %#v", status)
 	}
 
 	clearBody := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","clear_api_key":true}`
@@ -427,6 +434,21 @@ func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.SaveLLMSettings(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_confidence_threshold") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	body := `{"enabled":false,"archive_auto_threshold":0.7,"archive_review_threshold":0.7}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
+		Kind: "user", UserID: 1, Role: "admin",
+	}))
+	rec := httptest.NewRecorder()
+	s.SaveLLMSettings(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_archive_thresholds") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

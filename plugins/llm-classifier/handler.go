@@ -24,22 +24,6 @@ import (
 // keep the dep graph flat).
 const PipelineVersionLLM = 1
 
-// OnFallbackFn is the "run heuristics fallback for this doc" hook
-// main.go wires. Called after the WriteTx commits when the LLM's
-// verdict was low-confidence — the archive-based automation gets a
-// chance to fill fields the LLM wasn't sure about. Nil means "no
-// fallback wired" (headless deploys with LLM but no automations
-// engine).
-type OnFallbackFn func(ctx context.Context, docID int64) error
-
-// OnUpdatedFn is the "kick document_updated automations" hook main.go
-// wires. Called after every successful classify — the LLM's writes
-// (title, correspondent, jd_category, tags) are indistinguishable from
-// a user PATCH as far as automations are concerned, so operators
-// building "when the doc becomes Utilities, add tag monthly-bill" get
-// a natural trigger point. Nil = no automations engine wired.
-type OnUpdatedFn func(ctx context.Context, docID int64) error
-
 // Handler is the durable-outbox Subscriber that runs the classifier on
 // `post-classify` jobs. Main registers it in a disabled state at boot so the
 // first settings save can activate classification without restarting.
@@ -49,20 +33,18 @@ type OnUpdatedFn func(ctx context.Context, docID int64) error
 // application is confidence-gated:
 //
 //   - confidence >= ConfidenceThreshold → apply the fields
-//     (title if currently empty, correspondent upsert, tags,
+//     (suggested title, unresolved correspondent, tags,
 //     jd_category via code → id lookup)
-//   - confidence <  ConfidenceThreshold → tag `needs-review`;
-//     leave the doc in its current category
+//   - confidence < ConfidenceThreshold → tag `needs-review`, retain the
+//     current metadata, and offer a title suggestion for review
 //
 // Everything runs in one write tx so a partial application never
 // lands. The plugin's own network call happens outside the tx to
 // avoid holding the SQLite writer during a slow LLM call.
 type Handler struct {
-	plugin     *Plugin
-	db         dbHandle
-	log        *slog.Logger
-	onFallback OnFallbackFn
-	onUpdated  OnUpdatedFn
+	plugin *Plugin
+	db     dbHandle
+	log    *slog.Logger
 }
 
 // dbHandle mirrors the small surface of *core/db.DB that Handler
@@ -85,27 +67,6 @@ func NewHandler(p *Plugin, db dbHandle, log *slog.Logger) *Handler {
 	return &Handler{plugin: p, db: db, log: log.With("component", "llm-classifier.handler")}
 }
 
-// WithFallback wires the archive-heuristics fallback hook. Called
-// after the WriteTx commits on the low-confidence branch — the
-// operator gets both signals side by side, matching the "if LLM is
-// unsure, corroborate with the archive" semantics main.go set up.
-func (h *Handler) WithFallback(fn OnFallbackFn) *Handler {
-	if h != nil {
-		h.onFallback = fn
-	}
-	return h
-}
-
-// WithOnUpdated wires the document_updated automations hook. Called
-// after every successful classify so operators can build automations
-// that chain onto LLM output.
-func (h *Handler) WithOnUpdated(fn OnUpdatedFn) *Handler {
-	if h != nil {
-		h.onUpdated = fn
-	}
-	return h
-}
-
 // Kinds implements pluginapi.Subscriber.
 func (h *Handler) Kinds() []string { return []string{Kind} }
 
@@ -115,7 +76,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	startRuntime := h.plugin.rt.Load()
 	if startRuntime == nil {
 		log.Debug("llm-classifier.skip.disabled")
-		return h.runFallback(ctx, e.DocID)
+		return nil
 	}
 
 	title, content, err := h.loadDoc(ctx, e.DocID)
@@ -150,7 +111,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	res, err := h.plugin.Classify(ctx, title, content, jdCats, siblings)
 	if err != nil {
 		if errors.Is(err, ErrDisabled) {
-			return h.runFallback(ctx, e.DocID)
+			return nil
 		}
 		// Best-effort classification — a transient LLM error goes
 		// through the outbox retry path via a returned err. When it
@@ -161,7 +122,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if current := h.plugin.rt.Load(); current != startRuntime {
 		if current == nil {
 			log.Info("llm-classifier.result.discarded", "reason", "disabled during request")
-			return h.runFallback(ctx, e.DocID)
+			return nil
 		}
 		return errors.New("classifier configuration changed during request")
 	}
@@ -188,6 +149,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			if err := upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now); err != nil {
 				return err
 			}
+			if res.Title != "" && res.Title != title {
+				if err := insertTitleProposal(ctx, tx, e.DocID, res.Title, res.Confidence, now); err != nil {
+					return err
+				}
+			}
 			// Confidence controls whether suggestions apply, not whether the
 			// classifier completed. Stamp the successful revision so version 0
 			// remains an unambiguous "never completed" marker.
@@ -201,34 +167,11 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			return view.EnqueueMove(ctx, tx, e.DocID)
 		}
 
-		// Title has two paths:
-		//   - Current title is empty → apply the suggestion directly.
-		//     A filename-derived title ("invoice.pdf") is nothing to
-		//     preserve; the LLM suggestion is strictly better. Fast
-		//     path, no proposal, no automation round-trip.
-		//   - Current title is non-empty AND differs from the
-		//     suggestion → write a document_proposals row. The
-		//     `apply_llm_title` system automation (second built-in)
-		//     reads pending title proposals on document_updated and
-		//     either auto-applies above its threshold or leaves them
-		//     in the Tasks inbox. Toggle the automation off to keep
-		//     LLM suggestions surfaced but never auto-applied.
-		if res.Title != "" {
-			var currentTitle string
-			if err := tx.QueryRowContext(ctx,
-				`SELECT title FROM documents WHERE id = ?`, e.DocID).Scan(&currentTitle); err != nil {
+		if res.Title != "" && res.Title != title {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE documents SET title = ?, updated_at = ? WHERE id = ?
+			`, res.Title, now, e.DocID); err != nil {
 				return err
-			}
-			if currentTitle == "" {
-				if _, err := tx.ExecContext(ctx, `
-					UPDATE documents SET title = ?, updated_at = ? WHERE id = ?
-				`, res.Title, now, e.DocID); err != nil {
-					return err
-				}
-			} else if currentTitle != res.Title {
-				if err := insertTitleProposal(ctx, tx, e.DocID, res.Title, res.Confidence, now); err != nil {
-					return err
-				}
 			}
 		}
 
@@ -237,8 +180,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			if err != nil {
 				return err
 			}
-			// Only set the primary FK when unset — mirror the rules
-			// engine's non-overwrite policy for setters.
+			// Only set the primary FK when unresolved.
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE documents
 				SET correspondent_id = COALESCE(correspondent_id, ?),
@@ -328,36 +270,6 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return err
 	}
 
-	// Low-confidence path fires the archive-heuristics fallback. LLM
-	// was unsure; the automation may still corroborate a jd_category
-	// or correspondent from the archive. Runs outside the WriteTx —
-	// the automation opens its own; nested writes on the single-
-	// writer pool would deadlock. Nil hook = no fallback wired.
-	if lowConfidence && h.onFallback != nil {
-		if err := h.onFallback(ctx, e.DocID); err != nil {
-			log.Warn("llm-classifier.fallback.error", "err", err.Error())
-		}
-	}
-
-	// document_updated automations hook. Fires after the write commits
-	// on both high- and low-confidence paths (low-conf still tagged
-	// needs-review — that's a mutation an operator may want to chain).
-	// Nil hook = no automations engine wired.
-	if h.onUpdated != nil {
-		if err := h.onUpdated(ctx, e.DocID); err != nil {
-			log.Warn("llm-classifier.updated.error", "err", err.Error())
-		}
-	}
-	return nil
-}
-
-func (h *Handler) runFallback(ctx context.Context, docID int64) error {
-	if h.onFallback == nil {
-		return nil
-	}
-	if err := h.onFallback(ctx, docID); err != nil {
-		return fmt.Errorf("disabled classifier fallback: %w", err)
-	}
 	return nil
 }
 

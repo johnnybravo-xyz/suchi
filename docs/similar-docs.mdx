@@ -52,9 +52,9 @@ const MinScore = 0.001
 ```
 
 Anything below is dropped before the response reaches the client.
-The automations `apply_from_similar` action keeps its own per-rule
-`min_score` because heuristics work best with an operator-tunable
-floor; the human-facing endpoint uses this constant instead.
+Local archive matching uses the same bounded retrieval path before applying
+its review and auto-apply confidence thresholds. The human-facing endpoint
+uses this constant directly.
 
 ## The title-only warning
 
@@ -103,4 +103,4 @@ The `Similar documents` card on `/#/doc/{id}`:
 ## Related
 
 - [API — `GET /api/documents/{id}/similar`](/api#get-apidocumentsid-similar)
-- [Automations — `apply_from_similar` action](/automations)
+- [Automations and classification order](/automations#classification-order)

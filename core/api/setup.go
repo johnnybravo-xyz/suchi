@@ -285,6 +285,9 @@ type llmSettingsInput struct {
 	ClearAPIKey         bool     `json:"clear_api_key"`
 	EgressAck           bool     `json:"egress_ack"`
 	ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
+	ArchiveEnabled      *bool    `json:"archive_enabled,omitempty"`
+	ArchiveAuto         *float64 `json:"archive_auto_threshold,omitempty"`
+	ArchiveReview       *float64 `json:"archive_review_threshold,omitempty"`
 }
 
 func (in *llmSettingsInput) normalize() {
@@ -299,7 +302,7 @@ func (in llmSettingsInput) wantsEnabled() bool {
 	return in.EndpointURL != ""
 }
 
-func (s *Server) validateLLMSettings(w http.ResponseWriter, in llmSettingsInput, required bool) bool {
+func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter, in llmSettingsInput, required bool) bool {
 	if required && in.EndpointURL == "" {
 		s.writeError(w, http.StatusBadRequest, "endpoint_required", "endpoint_url is required")
 		return false
@@ -345,12 +348,31 @@ func (s *Server) validateLLMSettings(w http.ResponseWriter, in llmSettingsInput,
 			"confidence_threshold must be between 0.50 and 0.95")
 		return false
 	}
+	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
+	if in.ArchiveAuto != nil {
+		archive.AutoThreshold = *in.ArchiveAuto
+	}
+	if in.ArchiveReview != nil {
+		archive.ReviewThreshold = *in.ArchiveReview
+	}
+	if archive.ReviewThreshold < 0.5 || archive.ReviewThreshold > 0.9 ||
+		archive.AutoThreshold < 0.55 || archive.AutoThreshold > 0.95 ||
+		archive.ReviewThreshold >= archive.AutoThreshold {
+		s.writeError(w, http.StatusBadRequest, "bad_archive_thresholds",
+			"archive review threshold must be 0.50-0.90 and below the 0.55-0.95 auto-apply threshold")
+		return false
+	}
 	return true
 }
 
 func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
+	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
 	if s.LLMStatusReader != nil {
-		return s.LLMStatusReader(ctx)
+		status, err := s.LLMStatusReader(ctx)
+		status.ArchiveEnabled = archive.Enabled
+		status.ArchiveAuto = archive.AutoThreshold
+		status.ArchiveReview = archive.ReviewThreshold
+		return status, err
 	}
 	cfg, err := settings.ResolveLLMConfig(ctx, s.DB, settings.LLMConfig{}, s.LLMAEAD)
 	if err != nil {
@@ -365,6 +387,9 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 		EgressAck:           cfg.EgressAck,
 		HasAPIKey:           cfg.APIKey != "",
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
+		ArchiveEnabled:      archive.Enabled,
+		ArchiveAuto:         archive.AutoThreshold,
+		ArchiveReview:       archive.ReviewThreshold,
 	}, nil
 }
 
@@ -391,7 +416,7 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	body.normalize()
 	enabled := body.wantsEnabled()
-	if !s.validateLLMSettings(w, body, enabled) {
+	if !s.validateLLMSettings(r.Context(), w, body, enabled) {
 		return
 	}
 	var apiKeyUpdate *string
@@ -420,6 +445,20 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 		Disabled:            !enabled,
 	}, s.LLMAEAD, apiKeyUpdate); err != nil {
 		s.serverErr(w, "settings.llm.save", err)
+		return
+	}
+	archive := settings.ResolveArchiveClassifierConfig(r.Context(), s.DB)
+	if body.ArchiveEnabled != nil {
+		archive.Enabled = *body.ArchiveEnabled
+	}
+	if body.ArchiveAuto != nil {
+		archive.AutoThreshold = *body.ArchiveAuto
+	}
+	if body.ArchiveReview != nil {
+		archive.ReviewThreshold = *body.ArchiveReview
+	}
+	if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, archive); err != nil {
+		s.serverErr(w, "settings.archive_classifier.save", err)
 		return
 	}
 	if s.LLMReloader != nil {
@@ -452,7 +491,7 @@ func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.normalize()
-	if !s.validateLLMSettings(w, body, true) {
+	if !s.validateLLMSettings(r.Context(), w, body, true) {
 		return
 	}
 	if s.LLMTester == nil {

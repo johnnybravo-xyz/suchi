@@ -5,7 +5,7 @@ package automations
 // Two automations are "the same rule" when they have the same triggers
 // (as unordered sets of filter-field tuples) and the same actions (in
 // order, since action order changes what runs first). Name, order,
-// enabled state, and owner (system / preset / user) are metadata —
+// enabled state, and preset ownership are metadata —
 // they don't change what the automation DOES.
 //
 // signatureOf turns an in-memory automation into a stable canonical

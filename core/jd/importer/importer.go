@@ -503,8 +503,8 @@ func seedKeywordAutomations(ctx context.Context, tx *sql.Tx, pf *presetfile.Pres
 				continue
 			}
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO automations(name, order_index, enabled, system, preset_slug, created_at, updated_at)
-				VALUES (?, 100, 1, 0, ?, ?, ?)
+				INSERT INTO automations(name, order_index, enabled, preset_slug, created_at, updated_at)
+				VALUES (?, 100, 1, ?, ?, ?)
 				ON CONFLICT(name) DO NOTHING
 			`, fmt.Sprintf("%s: file %d %s", pf.ID, effective, c.Name), pf.ID, now, now)
 			if err != nil {
@@ -551,8 +551,8 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *pres
 	n := 0
 	for i, sa := range pf.Seeds.Automations {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(name, order_index, enabled, system, preset_slug, created_at, updated_at)
-			VALUES (?, ?, 1, 0, ?, ?, ?)
+			INSERT INTO automations(name, order_index, enabled, preset_slug, created_at, updated_at)
+			VALUES (?, ?, 1, ?, ?, ?)
 			ON CONFLICT(name) DO NOTHING
 		`, sa.Name, i, pf.ID, now, now)
 		if err != nil {

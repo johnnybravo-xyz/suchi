@@ -482,21 +482,11 @@ func TestDisableStopsClassifyUntilSetConfig(t *testing.T) {
 	}
 }
 
-func TestDisabledHandlerRunsFallback(t *testing.T) {
+func TestDisabledHandlerIsNoOp(t *testing.T) {
 	p := NewDisabled(silentLog())
-	called := false
-	h := NewHandler(p, nil, silentLog()).WithFallback(func(_ context.Context, docID int64) error {
-		called = true
-		if docID != 42 {
-			t.Fatalf("fallback docID = %d, want 42", docID)
-		}
-		return nil
-	})
+	h := NewHandler(p, nil, silentLog())
 	if err := h.Handle(context.Background(), pluginapi.Event{DocID: 42}); err != nil {
 		t.Fatal(err)
-	}
-	if !called {
-		t.Fatal("disabled classifier did not run heuristics fallback")
 	}
 }
 

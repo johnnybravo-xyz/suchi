@@ -61,7 +61,11 @@
   let intent = $state('')
   let showAllPresets = $state(false)
   let jdTab = $state('presets')
-  let llm = $state({ enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false, egress_ack: false, confidence_threshold: 0.7 })
+  let llm = $state({
+    enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
+    egress_ack: false, confidence_threshold: 0.7,
+    archive_enabled: true, archive_auto_threshold: 0.9, archive_review_threshold: 0.5,
+  })
   let llmStatus = $state(null)
   let llmTesting = $state(false)
   let llmMode = $state('local')
@@ -121,6 +125,9 @@
       llm.model = st?.model || 'qwen2.5:7b'
       llm.egress_ack = !!st?.egress_ack
       llm.confidence_threshold = st?.confidence_threshold ?? 0.7
+      llm.archive_enabled = st?.archive_enabled ?? true
+      llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
+      llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
       llm.api_key = ''
       llm.clear_api_key = false
       llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
@@ -364,8 +371,23 @@
       </div>
 
     {:else if cur === 'llm'}
-      <h3>Classification model</h3>
-      <p class="wiz-p">Automations work with no model at all. Add any OpenAI-compatible endpoint; a local Ollama keeps everything on your hardware, and low-confidence documents get a second opinion.</p>
+	  <h3>Classification</h3>
+	  <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills details that remain unresolved.</p>
+	  <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
+	  {#if llm.archive_enabled}
+		<div class="field">
+		  <label for="archive-auto">Apply archive matches at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
+		  <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
+			 bind:value={llm.archive_auto_threshold}
+			 onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
+		</div>
+		<div class="field">
+		  <label for="archive-review">Offer uncertain matches for review at · {Number(llm.archive_review_threshold).toFixed(2)}</label>
+		  <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
+			 bind:value={llm.archive_review_threshold} />
+		</div>
+	  {/if}
+	  <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
           <span class="pill ok">Classifier active</span>
@@ -416,7 +438,7 @@
         <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Classifier disabled; automations remain active')}>Use automations only</button>
+				onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Use local classification only</button>
       </div>
       {#if llmTestResult}
         <div class="test-result">

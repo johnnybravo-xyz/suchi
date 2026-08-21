@@ -1496,20 +1496,17 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// user-locked. See core/lang for the interface + defaults.
 	h.detectLanguages(ctx, log, docID)
 
-	// One snapshot governs both heuristic suppression and LLM handoff. If an
-	// admin toggles the classifier during this block, the document still gets
-	// exactly one guaranteed path: a queued job whose stable handler can fall
-	// back, or forced heuristics now.
-	classify := h.classifyEnabled != nil && h.classifyEnabled()
-	automationCtx := ctx
-	if !classify {
-		automationCtx = automations.WithForceHeuristics(ctx)
+	// Archive matching always runs locally before user automations and the
+	// optional model. It only fills unresolved metadata, so explicit
+	// automations remain authoritative when both find a match.
+	if err := automations.ApplyFromArchive(ctx, h.db, log, docID); err != nil {
+		log.Warn("post-ingest.archive_classification.error", "err", err.Error())
 	}
 
 	// Automations — trigger→conditions→actions on document_added.
 	// Fail-soft: an automation error logs a warning and never blocks the
 	// rest of the post-ingest chain. See core/automations for the shape.
-	if err := automations.ApplyOnDocumentAdded(automationCtx, h.db, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, h.db, log, docID); err != nil {
 		log.Warn("post-ingest.automations.error", "err", err.Error())
 	}
 
@@ -1530,7 +1527,7 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// the llm-classifier plugin's Subscriber picks up. Only enqueue
 	// when the plugin is actually registered — otherwise the job
 	// would die as a "no subscriber for kind" dead-letter.
-	if classify {
+	if h.classifyEnabled != nil && h.classifyEnabled() {
 		if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 			return jobs.Enqueue(ctx, tx, PostClassifyKind, docID, "{}")
 		}); err != nil {

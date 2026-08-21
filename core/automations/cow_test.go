@@ -28,9 +28,9 @@ func seedPresetRow(t *testing.T, ctx context.Context, d *db.DB, name, presetSlug
 	t.Helper()
 	now := time.Now().Unix()
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO automations(name, order_index, enabled, system, preset_slug,
+		INSERT INTO automations(name, order_index, enabled, preset_slug,
 		                        created_at, updated_at)
-		VALUES (?, 0, 1, 0, ?, ?, ?)
+		VALUES (?, 0, 1, ?, ?, ?)
 	`, name, presetSlug, now, now)
 	if err != nil {
 		t.Fatal(err)

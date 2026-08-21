@@ -111,22 +111,6 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := automations.New(s.DB)
-	// Fail-safe: apply_llm_title needs a configured classifier; without
-	// one, enabling the automation is a silent no-op trap. Block only the
-	// disabled-to-enabled transition; configured classifiers apply live.
-	if patch.Enabled != nil && *patch.Enabled {
-		if slug, err := store.SystemSlugByID(r.Context(), id); err == nil && slug == automations.SystemSlugApplyLLMTitle {
-			var enabled int
-			_ = s.DB.Read.QueryRowContext(r.Context(),
-				`SELECT enabled FROM automations WHERE id = ?`, id).Scan(&enabled)
-			status, statusErr := s.loadLLMSettingsStatus(r.Context())
-			if enabled == 0 && (statusErr != nil || !status.Enabled) {
-				s.writeError(w, http.StatusBadRequest, "llm_not_configured",
-					"Configure an LLM endpoint before enabling Apply LLM title suggestions — the automation reads title proposals the LLM classifier writes.")
-				return
-			}
-		}
-	}
 	atm, err := store.Update(r.Context(), id, patch)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
@@ -156,10 +140,6 @@ func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
 	store := automations.New(s.DB)
 	if err := store.Delete(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
-		return
-	} else if errors.Is(err, automations.ErrSystemAutomation) {
-		s.writeError(w, http.StatusConflict, "system_automation",
-			"this is a built-in automation; toggle 'enabled' off instead of deleting")
 		return
 	} else if err != nil {
 		s.serverErr(w, "automations.delete", err)

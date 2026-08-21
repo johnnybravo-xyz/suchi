@@ -18,8 +18,8 @@ func TestTaxonomyExportIncludesPortableAutomations(t *testing.T) {
 		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES (8, 'Tax', 'tax', 0, 0);
 		INSERT INTO document_types(id, name, slug, created_at, updated_at) VALUES (9, 'Invoice', 'invoice', 0, 0);
 		INSERT INTO correspondents(id, name, slug, created_at, updated_at) VALUES (10, 'Revenue', 'revenue', 0, 0);
-		INSERT INTO automations(id, name, order_index, enabled, system, preset_slug, created_at, updated_at)
-		VALUES (11, 'File tax invoices', 0, 1, 0, 'household', 0, 0);
+		INSERT INTO automations(id, name, order_index, enabled, preset_slug, created_at, updated_at)
+		VALUES (11, 'File tax invoices', 0, 1, 'household', 0, 0);
 		INSERT INTO automation_triggers(automation_id, type, filter_filename, created_at)
 		VALUES (11, 'document_added', '*.pdf', 0);
 	`)
