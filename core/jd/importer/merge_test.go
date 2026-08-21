@@ -6,7 +6,7 @@ package importer_test
 //   - same-code different-name + no remap = UnresolvedCollisionsError,
 //   - collision + skip via remaps[code]=0,
 //   - collision + remap via remaps[code]=<free code in decade>,
-//   - seed keyword rules land under the *effective* code after remap,
+//   - keyword automations land under the *effective* code after remap,
 //   - user-owned CoW copies survive re-apply of the same preset.
 
 import (
@@ -34,10 +34,8 @@ func TestApplyMerge_AdditiveOnEmptyTree(t *testing.T) {
 	}
 	assertQueryEquals(t, d, `SELECT COUNT(*) FROM jd_areas`, nil, 2)
 	assertQueryEquals(t, d, `SELECT COUNT(*) FROM jd_categories`, nil, 3)
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug = ?`,
-		[]any{"onto-empty"}, 2)
 	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`,
-		[]any{"onto-empty"}, 1)
+		[]any{"onto-empty"}, 2)
 }
 
 func TestApplyMerge_SameCodeSameNameNoOp(t *testing.T) {
@@ -122,9 +120,7 @@ func TestApplyMerge_CollisionSkipDropsSeeds(t *testing.T) {
 	// The "clash" preset's own automation references jd_category_code=11
 	// which was skipped — resolveActionParams returns an error, so no
 	// automation lands. That's the expected honest failure.
-	assertQueryEquals(t, d,
-		`SELECT COUNT(*) FROM rules WHERE preset_slug = ?`,
-		[]any{"clash"}, 0)
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`, []any{"clash"}, 0)
 }
 
 func TestApplyMerge_CollisionRemapImportsAtNewCode(t *testing.T) {
@@ -155,10 +151,14 @@ func TestApplyMerge_CollisionRemapImportsAtNewCode(t *testing.T) {
 	if name != "Utilities" {
 		t.Fatalf("remapped category name: got %q, want Utilities", name)
 	}
-	// Keyword rules should reference the *new* code (12).
+	// The keyword automation should reference the remapped category at code 12.
 	assertQueryEquals(t, d,
-		`SELECT COUNT(*) FROM rules WHERE preset_slug = ? AND then_value = ?`,
-		[]any{"clash", "12"}, 2)
+		`SELECT COUNT(*) FROM automation_actions aa
+		 JOIN automations a ON a.id = aa.automation_id
+		 JOIN jd_categories c ON c.id = json_extract(aa.params_json, '$.jd_category_id')
+		 WHERE a.preset_slug = ? AND c.code = ?
+		   AND json_type(aa.params_json, '$._preset_keywords') = 'array'`,
+		[]any{"clash", 12}, 1)
 	// Original category at 11 (Bills) is untouched.
 	assertQueryEquals(t, d,
 		`SELECT COUNT(*) FROM jd_categories WHERE code = 11 AND name = ?`,
@@ -190,11 +190,10 @@ func TestApplyMerge_ReSeedIdempotent_UserForksSurvive(t *testing.T) {
 	if err := runMerge(d, log, pf, nil); err != nil {
 		t.Fatal(err)
 	}
-	// User forks a rule into a user-owned copy (simulates CoW).
+	// User forks an automation into a user-owned copy (simulates CoW).
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO rules(name, if_kind, if_value, then_kind, then_value,
-		                  priority, enabled, preset_slug, created_at, updated_at)
-		VALUES ('user-fork', 'title_contains', 'x', 'add_tag', 'y', 100, 1, NULL, 0, 0)
+		INSERT INTO automations(name, order_index, enabled, preset_slug, created_at, updated_at)
+		VALUES ('user-fork', 100, 1, NULL, 0, 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -202,10 +201,9 @@ func TestApplyMerge_ReSeedIdempotent_UserForksSurvive(t *testing.T) {
 	if err := runMerge(d, log, pf, nil); err != nil {
 		t.Fatal(err)
 	}
-	// User fork present; preset rules re-seeded (same count, not doubled).
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug IS NULL`, nil, 1)
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug = ?`,
-		[]any{"iter"}, 2)
+	// User fork present; preset automations re-seeded (same count, not doubled).
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug IS NULL AND name = 'user-fork'`, nil, 1)
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`, []any{"iter"}, 2)
 }
 
 // runMerge is a small wrapper that opens a WriteTx and calls

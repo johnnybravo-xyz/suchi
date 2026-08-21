@@ -2,9 +2,8 @@
 //
 // Automations fire on job events (consumption, document_added,
 // document_updated) and apply bulk metadata operations to the doc that
-// triggered the event. Rules from core/classify/rules are a simpler
-// cousin: they classify. Automations mutate — assign owner, add tags,
-// set document_type, etc. — with a filter layer between event and
+// triggered the event. They mutate metadata such as filing category,
+// owner, tags, and document type, with a filter layer between event and
 // action so the operator can say "only for docs tagged 'invoice'".
 //
 // Design principles:
@@ -111,6 +110,7 @@ type Trigger struct {
 	FilterTagID              int64       `json:"filter_has_tag,omitempty"`
 	FilterCorrID             int64       `json:"filter_has_correspondent,omitempty"`
 	FilterDocTypeID          int64       `json:"filter_has_document_type,omitempty"`
+	FilterTitleRE            string      `json:"filter_title_matching,omitempty"`
 	FilterContentRE          string      `json:"filter_content_matching,omitempty"`
 	FilterEmailFrom          string      `json:"filter_email_from,omitempty"`
 	FilterEmailSubject       string      `json:"filter_email_subject,omitempty"`

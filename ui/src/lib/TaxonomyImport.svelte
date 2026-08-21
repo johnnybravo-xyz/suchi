@@ -118,7 +118,7 @@
         </div>
       {/if}
       <p class="sub" style="margin:8px 0 0;font-size:.76rem;color:var(--faint)">
-        {skipSeeds ? 'Seeds skipped.' : `Seeds: ${diff.keywords_to_seed} keyword rules · ${diff.automations_to_seed} automations.`}
+        {skipSeeds ? 'Seeds skipped.' : `Seeds: ${diff.keywords_to_seed} keywords · ${diff.automations_to_seed} explicit automations.`}
         sha256 {diff.content_sha256?.slice(0, 12)}…
       </p>
     </div>

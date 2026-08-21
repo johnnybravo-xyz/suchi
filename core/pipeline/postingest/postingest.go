@@ -18,7 +18,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
-	"github.com/johnnybravo-xyz/suchi/core/classify/rules"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -109,7 +108,7 @@ const (
 
 // Handler chains qpdf → pdf-inspector → ocrmypdf, updates the
 // documents row with content + optional archive_blob, runs the
-// rules-engine classifier, refreshes the rendered-view symlink, and
+// automations, refreshes the rendered-view symlink, and
 // (when classifyEnabled returns true) hands off to the LLM classifier via a
 // post-classify job.
 type Handler struct {
@@ -859,7 +858,7 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 			if name == "" {
 				continue
 			}
-			// Upsert the tag by slugified name (matches rules-engine
+			// Upsert the tag by slugified name (matches automation
 			// convention). Then attach.
 			sl := slug.Make(name)
 			if _, err := tx.ExecContext(ctx, `
@@ -915,7 +914,7 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 // title / content / correspondent / created_at from the headers, and
 // creates one child document per attachment. Each attachment gets its
 // own CAS put + post-ingest job so the downstream chain (OCR,
-// ZUGFeRD, rules, render) treats it like any other upload — while the
+// ZUGFeRD, automations, render) treats it like any other upload, while the
 // parent's search index carries the email body text.
 //
 // Owner + jd_category for children inherit from the parent. Children
@@ -1123,7 +1122,7 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 
 // createEmailAttachmentChild does the (blob put + document row +
 // post-ingest job) triple for one attachment. Uses the parent's
-// owner + JD category as defaults; the pipeline (rules, LLM) can
+// owner + JD category as defaults; the pipeline (automations, LLM) can
 // reclassify later.
 //
 // parsed is the enclosing email — used for source_mtime (Date) and,
@@ -1487,7 +1486,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte)
 }
 
 // postContentSteps runs the after-content-lands steps common to both
-// PDF and image paths: rules-engine, rendered-view refresh, and the
+// PDF and image paths: automations, rendered-view refresh, and the
 // LLM classify handoff. Extracted so both entry paths share exactly
 // one implementation.
 func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID int64) error {
@@ -1496,15 +1495,6 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// empty (default v1 build) or when the doc's languages are
 	// user-locked. See core/lang for the interface + defaults.
 	h.detectLanguages(ctx, log, docID)
-
-	// Rules engine runs after content lands so title/content triggers
-	// see the extracted text. Rules failure is logged, not fatal —
-	// classification is best-effort; the doc is already ingested.
-	if applied, err := rules.Apply(ctx, h.db, log, docID); err != nil {
-		log.Warn("post-ingest.rules.error", "err", err.Error())
-	} else if len(applied) > 0 {
-		log.Info("post-ingest.rules.applied", "count", len(applied))
-	}
 
 	// One snapshot governs both heuristic suppression and LLM handoff. If an
 	// admin toggles the classifier during this block, the document still gets

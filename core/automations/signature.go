@@ -87,6 +87,7 @@ type sigTrigger struct {
 	FilterTagID              int64       `json:"filter_tag_id,omitempty"`
 	FilterCorrID             int64       `json:"filter_corr_id,omitempty"`
 	FilterDocTypeID          int64       `json:"filter_doctype_id,omitempty"`
+	FilterTitleRE            string      `json:"filter_title_re,omitempty"`
 	FilterContentRE          string      `json:"filter_content_re,omitempty"`
 	FilterEmailFrom          string      `json:"filter_email_from,omitempty"`
 	FilterEmailSubject       string      `json:"filter_email_subject,omitempty"`
@@ -130,6 +131,7 @@ func triggerToSig(t Trigger) sigTrigger {
 		FilterTagID:              t.FilterTagID,
 		FilterCorrID:             t.FilterCorrID,
 		FilterDocTypeID:          t.FilterDocTypeID,
+		FilterTitleRE:            t.FilterTitleRE,
 		FilterContentRE:          t.FilterContentRE,
 		FilterEmailFrom:          t.FilterEmailFrom,
 		FilterEmailSubject:       t.FilterEmailSubject,

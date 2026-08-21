@@ -36,8 +36,7 @@ const demoAnonPrincipalKind = "demo-anon"
 // through — including per-document endpoints where ACL + the reset
 // ticker contain visitor writes.
 //
-// Prefix-match keeps this resilient to new sub-routes: adding
-// `/api/rules/{id}/enable` doesn't require touching this list.
+// Prefix matching keeps this resilient to new sub-routes.
 var demoDenyPrefixes = []string{
 	"/api/admin/",
 	"/api/acls/",
@@ -48,7 +47,6 @@ var demoDenyPrefixes = []string{
 	"/api/groups",
 	"/api/mailsettings",
 	"/api/mail_settings",
-	"/api/rules",
 	"/api/saved_views",
 	"/api/settings",
 	"/api/share_links",
@@ -107,8 +105,8 @@ func isDemoDenied(path string) bool {
 			continue
 		}
 		// Prefix does NOT end in '/': accept exact match, plus
-		// path == prefix + "/…" so /api/rules matches /api/rules,
-		// /api/rules/, and /api/rules/42 but not /api/rules_alt.
+		// path == prefix + "/…" accepts nested routes without matching
+		// similarly prefixed endpoint names.
 		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}

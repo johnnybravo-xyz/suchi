@@ -72,7 +72,7 @@ func runTaxonomyImport(args []string) int {
 	remaps := taxonomyRemaps{}
 	var (
 		apply     = fs.Bool("apply", false, "actually write. Default is dry-run.")
-		skipSeeds = fs.Bool("skip-seeds", false, "only touch the JD tree, no rules or automations")
+		skipSeeds = fs.Bool("skip-seeds", false, "only touch the JD tree, without starter automations")
 		format    = fs.String("format", "", "override auto-detect: huml|toml")
 	)
 	fs.Var(&remaps, "remap", "merge collision as incoming:target or incoming:skip; repeatable")
@@ -146,7 +146,7 @@ func runTaxonomyImport(args []string) int {
 	}
 	fmt.Printf("categories:  %d\n", catCount)
 	if !*skipSeeds {
-		fmt.Printf("keyword rules: %d\n", seedKw)
+		fmt.Printf("filing keywords: %d\n", seedKw)
 		fmt.Printf("automations:   %d\n", seedAuto)
 	}
 	if !*apply {

@@ -3,6 +3,7 @@ package taxonomy_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -100,7 +101,7 @@ func TestMergeCorrespondents(t *testing.T) {
 	}
 }
 
-func TestMergeRewritesRules(t *testing.T) {
+func TestMergeRewritesAutomations(t *testing.T) {
 	ctx := context.Background()
 	d := setup(t, ctx)
 	seedUser(t, ctx, d)
@@ -108,10 +109,25 @@ func TestMergeRewritesRules(t *testing.T) {
 	seedTag(t, ctx, d, "new-name")
 
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO rules(name, if_kind, if_value, then_kind, then_value,
-			                  priority, enabled, created_at, updated_at)
-			VALUES ('r1', 'tag', 'old-name', 'add_tag', 'old-name', 100, 1, 0, 0)`)
+		var oldID int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE name = 'old-name'`).Scan(&oldID); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
+			VALUES ('a1', 100, 1, 0, 0)`)
+		if err != nil {
+			return err
+		}
+		automationID, _ := res.LastInsertId()
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO automation_triggers(automation_id, type, filter_tag_id, created_at)
+			VALUES (?, 'document_added', ?, 0)`, automationID, oldID); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
+			VALUES (?, 0, 'assign_tags', ?, 0)`, automationID, fmt.Sprintf(`{"tag_ids":[%d]}`, oldID))
 		return err
 	}))
 
@@ -121,12 +137,19 @@ func TestMergeRewritesRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	var ifVal, thenVal string
-	if err := d.Read.QueryRow(`SELECT if_value, then_value FROM rules WHERE name = 'r1'`).Scan(&ifVal, &thenVal); err != nil {
+	var newID, filterID int64
+	var params string
+	if err := d.Read.QueryRow(`SELECT id FROM tags WHERE name = 'new-name'`).Scan(&newID); err != nil {
 		t.Fatal(err)
 	}
-	if ifVal != "new-name" || thenVal != "new-name" {
-		t.Errorf("rule not rewritten: if=%q then=%q", ifVal, thenVal)
+	if err := d.Read.QueryRow(`SELECT filter_tag_id FROM automation_triggers LIMIT 1`).Scan(&filterID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRow(`SELECT params_json FROM automation_actions LIMIT 1`).Scan(&params); err != nil {
+		t.Fatal(err)
+	}
+	if filterID != newID || params != fmt.Sprintf(`{"tag_ids":[%d]}`, newID) {
+		t.Errorf("automation not rewritten: filter=%d params=%s want=%d", filterID, params, newID)
 	}
 }
 

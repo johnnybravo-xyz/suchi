@@ -206,22 +206,20 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 // confirm_blank=true.
 //
 // A Suchi Preset is a preset following Suchi's Johnny.Decimal taxonomy —
-// the starter tree plus its seeded rules/automations.
+// the starter tree plus its seeded automations.
 func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	// IncludeSeeds is a pointer so we can distinguish "field omitted"
 	// (default true — the wizard's on-by-default toggle state) from
-	// "explicitly false" (operator opted out of starter rules +
-	// automations). *bool + a nil check keeps the wire shape backward
-	// compatible with the pre-toggle body.
+	// "explicitly false" (operator opted out of starter automations).
 	var body struct {
 		PresetID     string `json:"preset_id"`
 		ConfirmBlank bool   `json:"confirm_blank"`
 		// Refile=true accepts existing docs filed outside the inbox —
 		// they get parked on the new inbox and a refile sweep is
-		// triggered afterwards (re-run rules + enqueue re-render).
+		// triggered afterwards (re-run automations and enqueue re-render).
 		// Selling point: "you can always come back to change this."
 		Refile       bool  `json:"refile"`
 		IncludeSeeds *bool `json:"include_seeds,omitempty"`

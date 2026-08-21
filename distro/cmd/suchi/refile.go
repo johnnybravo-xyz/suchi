@@ -1,6 +1,6 @@
 // `suchi refile` — the operator-side kick that says "I changed the
-// preset / template / rules, now make it stick." Iterates every live
-// doc, re-runs the deterministic rules classifier, enqueues a
+// preset / template / automations, now make it stick." Iterates every live
+// doc, re-runs document-added automations, enqueues a
 // render/move job so the rendered-view symlinks converge on the
 // current storage-path template.
 //
@@ -30,9 +30,9 @@ import (
 func runRefile(args []string) int {
 	fs := flag.NewFlagSet("suchi refile", flag.ContinueOnError)
 	var (
-		skipRules  = fs.Bool("skip-rules", false, "don't re-run the deterministic classifier — enqueue render only")
-		skipRender = fs.Bool("skip-render", false, "don't enqueue render jobs — re-run classifier only")
-		ownerID    = fs.Int64("owner-id", 0, "restrict to docs owned by this user id; 0 = every owner")
+		skipAutomations = fs.Bool("skip-automations", false, "don't re-run automations; enqueue render only")
+		skipRender      = fs.Bool("skip-render", false, "don't enqueue render jobs — re-run classifier only")
+		ownerID         = fs.Int64("owner-id", 0, "restrict to docs owned by this user id; 0 = every owner")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -73,16 +73,16 @@ func runRefile(args []string) int {
 	_ = blob.CAS{}
 
 	stats, err := refile.All(ctx, d, log, refile.Options{
-		SkipRules:  *skipRules,
-		SkipRender: *skipRender,
-		OwnerID:    *ownerID,
+		SkipAutomations: *skipAutomations,
+		SkipRender:      *skipRender,
+		OwnerID:         *ownerID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "refile: %v\n", err)
 		return 1
 	}
-	fmt.Printf("refile complete: docs=%d rules_applied=%d render_enqueued=%d errors=%d elapsed=%s\n",
-		stats.DocsScanned, stats.RulesApplied, stats.RenderEnqueued,
+	fmt.Printf("refile complete: docs=%d automations_applied=%d render_enqueued=%d errors=%d elapsed=%s\n",
+		stats.DocsScanned, stats.AutomationsApplied, stats.RenderEnqueued,
 		stats.Errors, stats.Elapsed)
 	if stats.RenderEnqueued > 0 {
 		fmt.Println("note: render jobs are enqueued; a running suchi serve will process them, or the next boot will pick them up.")

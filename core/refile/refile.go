@@ -1,11 +1,11 @@
 // Package refile is the "come back and change your mind" primitive.
 //
 // Operators can swap Suchi Presets, edit storage-path templates, add or
-// tune classifier rules — but those changes don't retroactively rearrange
+// tune automations, but those changes don't retroactively rearrange
 // documents that were ingested under the old configuration. Refile
 // closes that loop:
 //
-//   - re-run the deterministic rules classifier against every live doc's
+//   - re-run document-added automations against every live doc's
 //     current metadata (cheap; touches DB rows only)
 //   - enqueue a render job for every live doc so the rendered-view
 //     symlinks converge on the current template
@@ -15,7 +15,7 @@
 // `--include-llm` flag can enqueue re-classify jobs for the paid path.
 //
 // Safe to run concurrently with normal ingest — every action goes
-// through the same idempotent handlers (rules.Apply, renderer.Move)
+// through the same idempotent handlers (automations, renderer.Move)
 // used by the post-ingest chain.
 
 package refile
@@ -27,7 +27,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/johnnybravo-xyz/suchi/core/classify/rules"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
@@ -36,19 +36,19 @@ import (
 // Stats reports what a refile pass touched. Returned so operators can
 // scale a subsequent sweep or bail early if the numbers look wrong.
 type Stats struct {
-	DocsScanned    int64
-	RulesApplied   int64
-	RenderEnqueued int64
-	Errors         int64
-	Elapsed        time.Duration
+	DocsScanned        int64
+	AutomationsApplied int64
+	RenderEnqueued     int64
+	Errors             int64
+	Elapsed            time.Duration
 }
 
 // Options controls what a single refile pass does. Zero-value runs both
-// passes; the flags let a caller narrow to just one when they know
-// they only touched rules OR templates.
+// passes; the flags let a caller narrow to just one when they only
+// changed automations or templates.
 type Options struct {
-	SkipRules  bool // don't re-run the deterministic classifier
-	SkipRender bool // don't enqueue render/move jobs
+	SkipAutomations bool // don't re-run document-added automations
+	SkipRender      bool // don't enqueue render/move jobs
 	// Optional owner filter: when non-zero, only refile docs owned by
 	// this user. Useful for "one household member wants to reflow
 	// their own tree" without touching everyone else.
@@ -65,15 +65,15 @@ type Options struct {
 //   - Doc IDs are snapshotted up front, so a sweep processes exactly
 //     the docs that were live at start-time. Uploads that arrive
 //     mid-sweep are NOT included — but they don't need to be. Any
-//     new upload rides the normal postingest chain (rules → render)
+//     new upload rides the normal postingest chain (automations then render)
 //     which already reads the current preset + current template, so
 //     new docs file themselves under the new tree without help.
 //   - Two concurrent refiles are safe: the render subscriber
 //     deduplicates on (doc_id, kind, state='pending'), so a doc
-//     never gets its symlink swapped twice. rules.Apply is
-//     idempotent per rule/doc pair.
-//   - Refile applies rules; it does NOT undo prior rule actions.
-//     If you deleted a rule that previously added tag X, tag X
+//     never gets its symlink swapped twice. Automation actions are
+//     idempotent per document.
+//   - Refile applies automations; it does NOT undo prior actions.
+//     If you deleted an automation that previously added tag X, tag X
 //     stays on every doc it touched. The classifier is additive
 //     by design; manual cleanup is the intended path for removals.
 func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, error) {
@@ -89,20 +89,20 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 	}
 	s.DocsScanned = int64(len(ids))
 	log.Info("refile.begin", "docs", s.DocsScanned,
-		"skip_rules", opts.SkipRules, "skip_render", opts.SkipRender,
+		"skip_automations", opts.SkipAutomations, "skip_render", opts.SkipRender,
 		"owner_id", opts.OwnerID)
 
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return s, err
 		}
-		if !opts.SkipRules {
-			applied, err := rules.Apply(ctx, d, log, id)
+		if !opts.SkipAutomations {
+			applied, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, id)
 			if err != nil {
-				log.Warn("refile.rules.err", "doc_id", id, "err", err.Error())
+				log.Warn("refile.automations.err", "doc_id", id, "err", err.Error())
 				s.Errors++
-			} else if len(applied) > 0 {
-				s.RulesApplied++
+			} else {
+				s.AutomationsApplied += int64(applied)
 			}
 		}
 		if !opts.SkipRender {
@@ -120,7 +120,7 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 	}
 	s.Elapsed = time.Since(started)
 	log.Info("refile.done", "docs_scanned", s.DocsScanned,
-		"rules_applied", s.RulesApplied, "render_enqueued", s.RenderEnqueued,
+		"automations_applied", s.AutomationsApplied, "render_enqueued", s.RenderEnqueued,
 		"errors", s.Errors, "elapsed", s.Elapsed)
 	return s, nil
 }
@@ -129,7 +129,7 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 // render/move job for every live doc. Useful when only the
 // storage-path template changed and no metadata is affected.
 func EnqueueRenderOnly(ctx context.Context, d *db.DB, log *slog.Logger, disp *jobs.Dispatcher) (Stats, error) {
-	s, err := All(ctx, d, log, Options{SkipRules: true})
+	s, err := All(ctx, d, log, Options{SkipAutomations: true})
 	if err == nil && disp != nil {
 		disp.Nudge()
 	}

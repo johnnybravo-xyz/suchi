@@ -223,7 +223,7 @@ func runDemo(args []string) int {
 	}
 
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return seedAutomationAndRule(ctx, tx, now)
+		return seedAutomations(ctx, tx, now)
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "seed automation: %v\n", err)
 		return 1
@@ -270,7 +270,7 @@ func runDemo(args []string) int {
 
 // resetDemoRows wipes rows previously seeded by `suchi demo` so a
 // nightly reset returns the DB to the canonical seed state. Deletes:
-//   - automations / rules whose name starts with "demo:"
+//   - automations whose name starts with "demo:"
 //   - documents whose original_blob starts with "demo:"
 //   - correspondents / tags / document_types are LEFT ALONE — they
 //     may be referenced by user uploads, and seedTaxonomy is
@@ -283,7 +283,6 @@ func resetDemoRows(ctx context.Context, tx *sql.Tx) error {
 		`DELETE FROM automation_actions WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
 		`DELETE FROM automation_triggers WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
 		`DELETE FROM automations WHERE name LIKE 'demo:%'`,
-		`DELETE FROM rules WHERE name LIKE 'demo:%'`,
 		`DELETE FROM documents WHERE original_blob LIKE 'demo:%'`,
 	}
 	for _, s := range stmts {
@@ -384,22 +383,41 @@ func seedDocs(ctx context.Context, tx *sql.Tx, now int64, owner int64) error {
 	return nil
 }
 
-func seedAutomationAndRule(ctx context.Context, tx *sql.Tx, now int64) error {
-	// One rule — deterministic classifier line.
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO rules(name, description, if_kind, if_value, then_kind, then_value,
-		                  priority, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 100, 1, ?, ?)
-		ON CONFLICT(name) DO NOTHING
-	`, "demo: invoices are Invoice type",
-		"Sample rule seeded by `suchi demo`.",
-		"title_contains", "invoice",
-		"set_document_type", "Invoice",
-		now, now); err != nil {
-		return err
+func seedAutomations(ctx context.Context, tx *sql.Tx, now int64) error {
+	var documentTypeID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM document_types WHERE name = 'Invoice'`).Scan(&documentTypeID); err == nil {
+		var automationID int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT id FROM automations WHERE name = 'demo: invoices are Invoice type'`).Scan(&automationID)
+		if err == sql.ErrNoRows {
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
+				VALUES ('demo: invoices are Invoice type', 5, 1, ?, ?)
+			`, now, now)
+			if err != nil {
+				return err
+			}
+			automationID, _ = res.LastInsertId()
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO automation_triggers(automation_id, type, filter_title_re, created_at)
+				VALUES (?, 'document_added', 'invoice', ?)
+			`, automationID, now); err != nil {
+				return err
+			}
+			params, _ := json.Marshal(map[string]any{"document_type_id": documentTypeID})
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
+				VALUES (?, 0, 'assign_document_type', ?, ?)
+			`, automationID, string(params), now); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
 	}
 
-	// One automation — "when doc arrives with correspondent BESCOM,
+	// When a document arrives with correspondent BESCOM,
 	// tag it utilities". We look up the ids we just seeded.
 	var corrID, tagID int64
 	if err := tx.QueryRowContext(ctx,

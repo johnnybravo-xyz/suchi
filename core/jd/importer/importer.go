@@ -9,8 +9,8 @@
 //
 // Replace vs merge mode:
 //   - Replace fires when the archive has zero non-inbox documents. The
-//     JD tree is swapped wholesale, preset-owned rules and automations
-//     from any prior preset are cleared, and the new preset's seeds
+//     JD tree is swapped wholesale, preset-owned automations from any
+//     prior preset are cleared, and the new preset's seeds
 //     land as preset-owned singletons.
 //   - Merge is additive: new areas/categories added where codes are
 //     free, seeds from the incoming preset get preset_slug=<incoming>
@@ -21,7 +21,7 @@
 //     collisions surface as *UnresolvedCollisionsError so the admin
 //     endpoint can reply 409 with the list.
 //
-// User-owned CoW copies of preset rules/automations (preset_slug NULL,
+// User-owned CoW copies of preset automations (preset_slug NULL,
 // after a fork) are never touched by any mode — they were promoted
 // out of the preset the moment the user edited them.
 package importer
@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -160,10 +161,6 @@ func ApplyReplace(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetf
 	log = log.With("component", "jd.importer", "preset", pf.ID, "mode", "replace")
 
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM rules WHERE preset_slug IS NOT NULL`); err != nil {
-		return nil, fmt.Errorf("clear preset rules: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM automations WHERE preset_slug IS NOT NULL`); err != nil {
 		return nil, fmt.Errorf("clear preset automations: %w", err)
 	}
@@ -190,7 +187,7 @@ func ApplyReplace(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetf
 // preserved (spec §3 "never rename or delete"). Same-code
 // same-name is a no-op; same-code different-name is a collision
 // that must be resolved via opts.Remaps (skip or fresh in-decade
-// code). Preset-owned rules + automations from this preset are
+// code). Preset-owned automations from this preset are
 // cleared and re-seeded so re-applying the same file is idempotent;
 // prior presets' seed rows stay put.
 //
@@ -222,7 +219,7 @@ func ApplyMerge(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfil
 	return res, nil
 }
 
-// runSeeds is the shared tail — keyword rules + seed automations —
+// runSeeds is the shared tail for keyword and explicitly defined automations.
 // used by both ApplyReplace and ApplyMerge.
 func runSeeds(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.PresetFile, cm codeMap, catByCode map[int]int64, opts Options, res *Result) error {
 	if opts.SkipSeeds {
@@ -235,7 +232,7 @@ func runSeeds(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *presetfile.
 		}
 		res.AutomationsSeeded = n
 	}
-	n, err := seedKeywordRules(ctx, tx, pf, catByCode, cm)
+	n, err := seedKeywordAutomations(ctx, tx, pf, catByCode, cm)
 	if err != nil {
 		return err
 	}
@@ -404,7 +401,7 @@ func mergeTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, remap
 				}
 				if choice == 0 {
 					// Operator chose to skip. No codeMap entry → keyword
-					// rules + jd_category_code refs get dropped.
+					// Automations with skipped category references get dropped.
 					res.CategoriesSkipped++
 					continue
 				}
@@ -477,12 +474,11 @@ func seedInboxPointer(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-// seedKeywordRules materializes per-category keywords as
-// content_contains rules pinned to their (post-remap) category
-// code. Preset-owned singletons; missing codeMap entry means the
-// category was skipped and its keywords are dropped with it.
-func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, catByCode map[int]int64, cm codeMap) (int, error) {
-	n := 0
+// seedKeywordAutomations groups each category's keywords into one
+// preset-owned automation. The private metadata lets taxonomy export
+// recover the original keywords without maintaining a second classifier model.
+func seedKeywordAutomations(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, catByCode map[int]int64, cm codeMap) (int, error) {
+	keywordsSeeded := 0
 	now := time.Now().Unix()
 	for _, a := range pf.Areas {
 		for _, c := range a.Categories {
@@ -493,26 +489,58 @@ func seedKeywordRules(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile
 			if !ok {
 				continue // category skipped in merge mode
 			}
+			keywords := make([]string, 0, len(c.Keywords))
+			patterns := make([]string, 0, len(c.Keywords))
 			for _, kw := range c.Keywords {
 				kw = strings.TrimSpace(kw)
 				if kw == "" {
 					continue
 				}
-				name := fmt.Sprintf("%s: %s → %d %s", pf.ID, kw, effective, c.Name)
-				desc := fmt.Sprintf("Seeded by preset %q. Edit or disable to fork a user-owned copy.", pf.ID)
-				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO rules(name, description, if_kind, if_value, then_kind, then_value,
-					                  priority, enabled, preset_slug, created_at, updated_at)
-					VALUES (?, ?, 'content_contains', ?, 'set_jd_category', ?, ?, 1, ?, ?, ?)
-					ON CONFLICT(name) DO NOTHING
-				`, name, desc, kw, fmt.Sprintf("%d", effective), 100, pf.ID, now, now); err != nil {
-					return n, fmt.Errorf("seed keyword rule %q: %w", kw, err)
-				}
-				n++
+				keywords = append(keywords, kw)
+				patterns = append(patterns, regexp.QuoteMeta(kw))
 			}
+			if len(keywords) == 0 {
+				continue
+			}
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO automations(name, order_index, enabled, system, preset_slug, created_at, updated_at)
+				VALUES (?, 100, 1, 0, ?, ?, ?)
+				ON CONFLICT(name) DO NOTHING
+			`, fmt.Sprintf("%s: file %d %s", pf.ID, effective, c.Name), pf.ID, now, now)
+			if err != nil {
+				return keywordsSeeded, fmt.Errorf("seed keyword automation for category %d: %w", effective, err)
+			}
+			inserted, _ := res.RowsAffected()
+			if inserted == 0 {
+				continue
+			}
+			automationID, err := res.LastInsertId()
+			if err != nil {
+				return keywordsSeeded, err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO automation_triggers(automation_id, type, filter_content_re, created_at)
+				VALUES (?, 'document_added', ?, ?)
+			`, automationID, strings.Join(patterns, "|"), now); err != nil {
+				return keywordsSeeded, err
+			}
+			params, err := json.Marshal(map[string]any{
+				"jd_category_id":   catByCode[effective],
+				"_preset_keywords": keywords,
+			})
+			if err != nil {
+				return keywordsSeeded, err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
+				VALUES (?, 0, 'assign_jd_category', ?, ?)
+			`, automationID, string(params), now); err != nil {
+				return keywordsSeeded, err
+			}
+			keywordsSeeded += len(keywords)
 		}
 	}
-	return n, nil
+	return keywordsSeeded, nil
 }
 
 // seedAutomations materializes seeds.automations rows with symbolic
@@ -581,14 +609,10 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *pres
 	return n, nil
 }
 
-// ClearRefile removes every rule/automation whose preset_slug matches
+// ClearForPreset removes every automation whose preset_slug matches
 // slug — used by callers that are about to re-seed the same preset
 // (e.g. a reapply).
 func ClearForPreset(ctx context.Context, tx *sql.Tx, slug string) error {
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM rules WHERE preset_slug = ?`, slug); err != nil {
-		return err
-	}
 	_, err := tx.ExecContext(ctx,
 		`DELETE FROM automations WHERE preset_slug = ?`, slug)
 	return err

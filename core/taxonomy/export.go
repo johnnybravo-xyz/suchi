@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -56,36 +57,6 @@ func BuildExport(ctx context.Context, d *db.DB) (*presetfile.PresetFile, error) 
 			if system == 1 {
 				pf.Inbox = category.Code
 			}
-			keywordRows, err := d.Read.QueryContext(ctx, `
-				SELECT if_value FROM rules
-				WHERE if_kind = 'content_contains'
-				  AND then_kind = 'set_jd_category'
-				  AND then_value = ?
-				  AND preset_slug IS NOT NULL
-				ORDER BY if_value
-			`, fmt.Sprintf("%d", category.Code))
-			if err != nil {
-				categoryRows.Close()
-				return nil, err
-			}
-			for keywordRows.Next() {
-				var keyword string
-				if err := keywordRows.Scan(&keyword); err != nil {
-					keywordRows.Close()
-					categoryRows.Close()
-					return nil, err
-				}
-				category.Keywords = append(category.Keywords, keyword)
-			}
-			if err := keywordRows.Err(); err != nil {
-				keywordRows.Close()
-				categoryRows.Close()
-				return nil, err
-			}
-			if err := keywordRows.Close(); err != nil {
-				categoryRows.Close()
-				return nil, err
-			}
 			area.Categories = append(area.Categories, category)
 		}
 		if err := categoryRows.Err(); err != nil {
@@ -110,6 +81,13 @@ func appendExportAutomations(ctx context.Context, d *db.DB, pf *presetfile.Prese
 	}
 	for _, row := range rows {
 		if row.PresetSlug == "" {
+			continue
+		}
+		keywordAutomation, err := exportKeywordAutomation(ctx, d.Read, pf, row)
+		if err != nil {
+			return err
+		}
+		if keywordAutomation {
 			continue
 		}
 		if len(row.Triggers) != 1 {
@@ -147,6 +125,58 @@ func appendExportAutomations(ctx context.Context, d *db.DB, pf *presetfile.Prese
 		pf.Seeds.Automations = append(pf.Seeds.Automations, seed)
 	}
 	return nil
+}
+
+func exportKeywordAutomation(ctx context.Context, query *sql.DB, pf *presetfile.PresetFile, row automations.Automation) (bool, error) {
+	for _, action := range row.Actions {
+		raw, ok := action.Params["_preset_keywords"]
+		if !ok {
+			continue
+		}
+		categoryID, ok := numericID(action.Params["jd_category_id"])
+		if !ok || categoryID == 0 {
+			return true, fmt.Errorf("preset keyword automation %q has no category", row.Name)
+		}
+		keywords, ok := stringList(raw)
+		if !ok {
+			return true, fmt.Errorf("preset keyword automation %q has invalid keywords", row.Name)
+		}
+		var code int
+		if err := query.QueryRowContext(ctx, `SELECT code FROM jd_categories WHERE id = ?`, categoryID).Scan(&code); err != nil {
+			return true, err
+		}
+		for areaIndex := range pf.Areas {
+			for categoryIndex := range pf.Areas[areaIndex].Categories {
+				category := &pf.Areas[areaIndex].Categories[categoryIndex]
+				if category.Code == code {
+					category.Keywords = append(category.Keywords, keywords...)
+					sort.Strings(category.Keywords)
+					return true, nil
+				}
+			}
+		}
+		return true, fmt.Errorf("preset keyword automation %q targets unknown category %d", row.Name, code)
+	}
+	return false, nil
+}
+
+func stringList(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return values, true
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			item, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, item)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 func exportActionParams(ctx context.Context, query *sql.DB, input map[string]any) (map[string]any, error) {

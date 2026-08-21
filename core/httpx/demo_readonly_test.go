@@ -22,9 +22,9 @@ func TestDemoReadOnly(t *testing.T) {
 		wantStatus int
 	}{
 		{"GET is always fine", http.MethodGet, "/api/admin/users", http.StatusOK},
-		{"HEAD is always fine", http.MethodHead, "/api/rules", http.StatusOK},
+		{"HEAD is always fine", http.MethodHead, "/api/automations", http.StatusOK},
 		{"POST admin denied", http.MethodPost, "/api/admin/users", http.StatusForbidden},
-		{"POST rules denied", http.MethodPost, "/api/rules/", http.StatusForbidden},
+		{"POST automations denied", http.MethodPost, "/api/automations", http.StatusForbidden},
 		{"PATCH tag denied", http.MethodPatch, "/api/tags/5", http.StatusForbidden},
 		{"DELETE correspondent denied", http.MethodDelete, "/api/correspondents/12", http.StatusForbidden},
 		{"POST settings denied", http.MethodPost, "/api/settings/llm", http.StatusForbidden},

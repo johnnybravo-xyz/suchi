@@ -10,6 +10,7 @@ package taxonomy
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -173,21 +174,7 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 				return err
 			}
 		}
-		// Rules referencing the source name by exact value get rewritten
-		// too, so operators don't leave dangling names in the rules
-		// table after a merge.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE rules SET if_value = ?, updated_at = unixepoch()
-			WHERE (if_kind = 'tag' OR if_kind = 'correspondent' OR if_kind = 'document_type')
-			  AND if_value = ?
-		`, opts.IntoName, opts.FromName); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE rules SET then_value = ?, updated_at = unixepoch()
-			WHERE (then_kind = 'add_tag' OR then_kind = 'set_correspondent' OR then_kind = 'set_document_type')
-			  AND then_value = ?
-		`, opts.IntoName, opts.FromName); err != nil {
+		if err := rewriteAutomationReferences(ctx, tx, opts.Kind, fromID, intoID); err != nil {
 			return err
 		}
 		// Finally drop the source row.
@@ -198,6 +185,95 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		return nil
 	})
 	return res, err
+}
+
+func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, kind string, fromID, intoID int64) error {
+	triggerColumn := map[string]string{
+		KindTag:           "filter_tag_id",
+		KindCorrespondent: "filter_corr_id",
+		KindDocumentType:  "filter_doctype_id",
+	}[kind]
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE automation_triggers SET `+triggerColumn+` = ? WHERE `+triggerColumn+` = ?`,
+		intoID, fromID); err != nil {
+		return err
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind, params_json FROM automation_actions`)
+	if err != nil {
+		return err
+	}
+	type actionRow struct {
+		id     int64
+		kind   string
+		params string
+	}
+	var actions []actionRow
+	for rows.Next() {
+		var row actionRow
+		if err := rows.Scan(&row.id, &row.kind, &row.params); err != nil {
+			rows.Close()
+			return err
+		}
+		actions = append(actions, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, row := range actions {
+		var params map[string]any
+		if err := json.Unmarshal([]byte(row.params), &params); err != nil {
+			return fmt.Errorf("taxonomy: decode automation action %d: %w", row.id, err)
+		}
+		changed := false
+		switch kind {
+		case KindTag:
+			changed = replaceIDList(params, "tag_ids", fromID, intoID)
+		case KindCorrespondent:
+			changed = replaceID(params, "correspondent_id", fromID, intoID) ||
+				replaceIDList(params, "correspondent_ids", fromID, intoID)
+		case KindDocumentType:
+			changed = replaceID(params, "document_type_id", fromID, intoID)
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE automation_actions SET params_json = ? WHERE id = ?`, string(encoded), row.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceID(params map[string]any, key string, fromID, intoID int64) bool {
+	value, ok := numericID(params[key])
+	if !ok || value != fromID {
+		return false
+	}
+	params[key] = intoID
+	return true
+}
+
+func replaceIDList(params map[string]any, key string, fromID, intoID int64) bool {
+	values, ok := params[key].([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for index, value := range values {
+		id, ok := numericID(value)
+		if ok && id == fromID {
+			values[index] = intoID
+			changed = true
+		}
+	}
+	return changed
 }
 
 func tableFor(kind string) (table NamedTable, junction string, err error) {

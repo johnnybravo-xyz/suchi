@@ -28,7 +28,7 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 	if res.AreasSeeded != 2 || res.CategoriesSeeded != 3 {
 		t.Fatalf("tree seed count wrong: %+v", res)
 	}
-	// Two keyword rules — one per Keywords entry.
+	// Two keywords are grouped into one preset-owned automation.
 	if res.KeywordsSeeded != 2 {
 		t.Fatalf("keywords seeded: got %d, want 2", res.KeywordsSeeded)
 	}
@@ -36,17 +36,15 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 		t.Fatalf("automations seeded: got %d, want 1", res.AutomationsSeeded)
 	}
 
-	// Preset rules carry preset_slug.
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug = ?`,
-		[]any{pf.ID}, 2)
 	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`,
-		[]any{pf.ID}, 1)
+		[]any{pf.ID}, 2)
 
 	// jd_category_code → jd_category_id resolved.
 	var resolved int
 	err = d.Read.QueryRowContext(context.Background(), `
 		SELECT COUNT(*) FROM automation_actions
-		WHERE params_json LIKE '%jd_category_id%'
+		WHERE kind = 'assign_jd_category'
+		  AND automation_id = (SELECT id FROM automations WHERE name = 'File utility bills')
 	`).Scan(&resolved)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +54,9 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 	}
 	var rawParams string
 	if err := d.Read.QueryRowContext(context.Background(),
-		`SELECT params_json FROM automation_actions LIMIT 1`).Scan(&rawParams); err != nil {
+		`SELECT aa.params_json FROM automation_actions aa
+		 JOIN automations a ON a.id = aa.automation_id
+		 WHERE a.name = 'File utility bills' LIMIT 1`).Scan(&rawParams); err != nil {
 		t.Fatal(err)
 	}
 	var params map[string]any
@@ -81,18 +81,17 @@ func TestApplyReplace_ClearsPriorPresetOwnedRows(t *testing.T) {
 	if _, err := importer.ImportForDB(context.Background(), d, log, pfOne, importer.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	// User-owned rule (survives re-apply).
+	// User-owned automation survives re-apply.
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO rules(name, if_kind, if_value, then_kind, then_value,
-		                  priority, enabled, created_at, updated_at)
-		VALUES ('user-authored', 'title_contains', 'x', 'add_tag', 'y', 100, 1, 0, 0)
+		INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
+		VALUES ('user-authored', 100, 1, 0, 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
 
 	// Clear the JD tree between preset applies (in production this is
 	// applyPreset's responsibility; the importer is called from within
-	// its write-tx). Rules + automations are wiped by ApplyReplace.
+	// its write-tx). Preset automations are wiped by ApplyReplace.
 	if _, err := d.Write.ExecContext(context.Background(), `DELETE FROM jd_categories`); err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +105,9 @@ func TestApplyReplace_ClearsPriorPresetOwnedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug = ?`, []any{"one"}, 0)
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug = ?`, []any{"two"}, 2)
-	assertQueryEquals(t, d, `SELECT COUNT(*) FROM rules WHERE preset_slug IS NULL AND name = ?`,
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`, []any{"one"}, 0)
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`, []any{"two"}, 2)
+	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug IS NULL AND name = ?`,
 		[]any{"user-authored"}, 1)
 }
 
@@ -121,7 +120,7 @@ func TestApplyReplace_SkipSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.KeywordsSeeded != 0 || res.AutomationsSeeded != 0 {
-		t.Fatalf("SkipSeeds should skip rules + automations: %+v", res)
+		t.Fatalf("SkipSeeds should skip keyword and explicit automations: %+v", res)
 	}
 	if res.AreasSeeded != 2 || res.CategoriesSeeded != 3 {
 		t.Fatalf("tree still seeds: %+v", res)

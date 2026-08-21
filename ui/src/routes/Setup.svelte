@@ -15,7 +15,7 @@
     { name: 'sources',     label: 'Ingest sources' },
     { name: 'mail',        label: 'Email intake' },
     { name: 'llm',         label: 'Classification (LLM)' },
-    { name: 'rules',       label: 'Rules' },
+    { name: 'automations', label: 'Automations' },
     { name: 'preferences', label: 'OCR & backups' },
   ]
   const ENABLE_SETUP_TAXONOMY_IMPORT = false
@@ -288,7 +288,7 @@
               I understand documents will pile up in the inbox until I build categories.</label>
           {/if}
           <label class="wiz-check"><input type="checkbox" bind:checked={preset.include_seeds} />
-            Install the preset's starter filing rules and automations (recommended). Turn off if you want to start from scratch — you can still add them by re-picking the preset later.</label>
+            Install the preset's starter automations (recommended). Turn off if you want to start from scratch; you can add them later by re-picking the preset.</label>
           <label class="wiz-check"><input type="checkbox" bind:checked={preset.refile} />
             Refile existing documents into the new tree now.</label>
           <div class="toolbar">
@@ -365,14 +365,14 @@
 
     {:else if cur === 'llm'}
       <h3>Classification model</h3>
-      <p class="wiz-p">The rules engine works with no model at all. Add any OpenAI-compatible endpoint — a local Ollama keeps everything on your hardware — and low-confidence documents get a second opinion.</p>
+      <p class="wiz-p">Automations work with no model at all. Add any OpenAI-compatible endpoint; a local Ollama keeps everything on your hardware, and low-confidence documents get a second opinion.</p>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
           <span class="pill ok">Classifier active</span>
         {:else if llmStatus?.enabled}
           <span class="pill warn">Classifier inactive</span>
         {:else}
-          <span class="pill">Rules only</span>
+          <span class="pill">No model</span>
         {/if}
         {#if llmStatus?.has_api_key}<span class="chip">API key stored</span>{/if}
       </div>
@@ -416,7 +416,7 @@
         <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Classifier disabled; rules remain active')}>Use rules only</button>
+                onclick={() => saveAnd(() => saveClassifier(false), 'Classifier disabled; automations remain active')}>Use automations only</button>
       </div>
       {#if llmTestResult}
         <div class="test-result">
@@ -427,9 +427,9 @@
       {/if}
       <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The classifier runs automatically on new documents. To classify older documents, select them in <a href="#/documents">Documents</a> and use Rescan.</p>
 
-    {:else if cur === 'rules'}
-      <h3>Rules</h3>
-      <p class="wiz-p">Your preset can install starter filing rules and automations. Preset-owned automations appear under the "Owned by <em>&lt;preset&gt;</em> filing tree" pill; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
+    {:else if cur === 'automations'}
+      <h3>Automations</h3>
+      <p class="wiz-p">Your preset can install starter filing automations. Preset-owned automations show their filing-tree owner; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
 		<p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
