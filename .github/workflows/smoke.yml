@@ -106,7 +106,7 @@ jobs:
           API_TOKEN=$(curl -s -X POST http://127.0.0.1:$HOST_PORT/api/login \
               -H 'Accept: application/json' \
               -H 'Content-Type: application/json' \
-              -d '{"username":"smoke@ex.dev","password":"pw"}' \
+              -d '{"email":"smoke@ex.dev","password":"pw"}' \
               | grep -oP '"token":"\K[^"]+')
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 

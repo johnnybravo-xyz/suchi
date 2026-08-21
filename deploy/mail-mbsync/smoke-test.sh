@@ -83,7 +83,7 @@ echo
 echo "== activate fs-watch live =="
 API_TOKEN=$(curl -sf -X POST "http://127.0.0.1:$PORT/api/login" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
-    -d "{\"username\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
     | grep -oP '"token":"\K[^"]+')
 curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
     -H "Authorization: Token $API_TOKEN" \

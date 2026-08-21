@@ -86,7 +86,7 @@ curl -sf -X POST "$BASE/setup" \
 
 API_TOKEN=$(curl -s -X POST "$BASE/api/login" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
-    -d "{\"username\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
     | grep -oP '"token":"\K[^"]+')
 if [ -z "$API_TOKEN" ]; then
   echo "no API token"; exit 1

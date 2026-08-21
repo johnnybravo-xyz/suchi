@@ -66,7 +66,7 @@ curl -sf -X POST "http://127.0.0.1:$PORT/setup" \
 
 API_TOKEN=$(curl -s -X POST "http://127.0.0.1:$PORT/api/login" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
-    -d "{\"username\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
     | grep -oP '"token":"\K[^"]+')
 echo "admin created, API token acquired"
 

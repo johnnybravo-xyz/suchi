@@ -134,7 +134,7 @@ bench_bootstrap_admin() {
 
     ADMIN_TOKEN="$(curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/login" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
-        -d "{\"username\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" \
+        -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" \
         | grep -oP '"token":"\K[^"]+' | head -1)"
     if [ -z "${ADMIN_TOKEN:-}" ]; then
         echo "bench_bootstrap_admin: /api/login returned no token" >&2
@@ -158,7 +158,7 @@ bench_mint_member() {
         || true
     curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/login" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
-        -d "{\"username\":\"$email\",\"password\":\"$password\"}" \
+        -d "{\"email\":\"$email\",\"password\":\"$password\"}" \
         | grep -oP '"token":"\K[^"]+' | head -1
 }
 
