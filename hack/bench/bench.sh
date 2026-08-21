@@ -11,11 +11,6 @@
 #   ./bench.sh --keep                # skip teardown; leak DATA_DIR for post-mortem
 #   USERS=20 DOCS_PER_USER=50 ./bench.sh --scenario 06
 #
-# Notes:
-#   --no-dev is accepted for symmetry with older workflows but is a no-op:
-#   the harness never relies on dev mode. Setup tokens are scraped from the
-#   log at LOG_LEVEL=warn, which emits the bootstrap event unconditionally.
-
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,16 +23,13 @@ CHECK_THRESHOLDS=0
 
 print_help() {
     cat <<'EOF'
-usage: bench.sh [--scenario NN]... [--keep] [--no-dev] [--thresholds]
+usage: bench.sh [--scenario NN]... [--keep] [--thresholds]
 
   --scenario NN   Run only the scenario whose filename starts with NN
                   (e.g. --scenario 04 for 04-single-100mb.sh). Repeatable:
                   --scenario 02 --scenario 03 --scenario 07 runs all three.
   --keep          Do not tear down after each scenario; useful for
                   poking at the DATA_DIR of a failed run.
-  --no-dev        Accepted for backward compat; no effect. The harness
-                  scrapes setup tokens from the log at LOG_LEVEL=warn
-                  and never needs dev mode.
   --thresholds    After scenarios finish, compare the guardrail metrics
                   (idle RSS, cold start, goroutines, binary size) against
                   hack/bench/thresholds.json. Exit 2 on any hard-fail.
@@ -53,7 +45,6 @@ while [ $# -gt 0 ]; do
         --scenario) SCENARIO_FILTERS+=("$2"); shift 2 ;;
         --scenario=*) SCENARIO_FILTERS+=("${1#*=}"); shift ;;
         --keep) KEEP=1; shift ;;
-        --no-dev) shift ;;
         --thresholds) CHECK_THRESHOLDS=1; shift ;;
         -h|--help) print_help; exit 0 ;;
         *) echo "bench.sh: unknown flag: $1" >&2; print_help >&2; exit 2 ;;

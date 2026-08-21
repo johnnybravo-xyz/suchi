@@ -59,4 +59,3 @@ ui/dist/
 /hack/bench/tools/sampler/sampler
 /hack/bench/tools/gen-pdf/gen-pdf
 /hack/bench/tools/report/report
-/hack/bench/tools/pprof2collapsed/pprof2collapsed

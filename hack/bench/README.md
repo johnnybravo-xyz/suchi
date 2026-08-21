@@ -46,7 +46,7 @@ USERS=10 DOCS_PER_USER=5 ./hack/bench/bench.sh --scenario 06
 | 04 | One 100 MB PDF ingest and peak RSS |
 | 05 | 1,000-document ingest and API reads |
 | 06 | Concurrent upload latency and throughput |
-| 07 | Heap, goroutines, top allocators, and flame graphs |
+| 07 | Heap, goroutines, and top allocators |
 
 ## Accepted v0.1 snapshot
 
@@ -68,16 +68,12 @@ These are measurements from one host, not universal guarantees. Record
 
 ## Profiling output
 
-Scenario 07 emits heap profiles, allocator tables, and interactive SVG flame
-graphs. Inspect a profile directly with:
+Scenario 07 emits heap profiles and allocator tables. Inspect a profile with
+Go's interactive pprof UI:
 
 ```sh
 go tool pprof -http=:0 hack/bench/results/<timestamp>/07-heap-idle.pprof
 ```
-
-The SVG renderer uses Brendan Gregg's `flamegraph.pl`, vendored with its
-CDDL-1.0 license under `tools/flamegraph/`. Without Perl, the scenario still
-produces pprof files and allocator tables.
 
 ## Known costs
 

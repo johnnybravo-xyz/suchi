@@ -69,21 +69,8 @@ go tool pprof -top -sample_index=alloc_space -unit=mb "$heap_post" 2>/dev/null \
 goroutines_idle="$(head -1 "$goro_idle" | sed -n 's/.*total \([0-9][0-9]*\).*/\1/p')"
 goroutines_postburst="$(head -1 "$goro_post" | sed -n 's/.*total \([0-9][0-9]*\).*/\1/p')"
 
-# Interactive flame graphs. Soft-skips if perl or the vendored pieces are
-# missing (bench_render_flame handles the guard) so scenario 07 still yields
-# top-N tables even on hosts without the flame toolchain.
-bench_build_flame_deps
-flame_idle_inuse="$RESULTS_DIR/07-flame-idle-inuse.svg"
-flame_idle_alloc="$RESULTS_DIR/07-flame-idle-alloc.svg"
-flame_post_inuse="$RESULTS_DIR/07-flame-postburst-inuse.svg"
-flame_post_alloc="$RESULTS_DIR/07-flame-postburst-alloc.svg"
-bench_render_flame "$heap_idle" "$flame_idle_inuse" inuse_space "idle heap (in-use)"
-bench_render_flame "$heap_idle" "$flame_idle_alloc" alloc_space "idle heap (alloc-space)"
-bench_render_flame "$heap_post" "$flame_post_inuse" inuse_space "post-burst heap (in-use)"
-bench_render_flame "$heap_post" "$flame_post_alloc" alloc_space "post-burst heap (alloc-space)"
-
 cat > "$RESULTS_DIR/07-mem-profile.summary.json" <<EOF
-{"scenario":"07-mem-profile","kind":"profile","goroutines_idle":$goroutines_idle,"goroutines_postburst":$goroutines_postburst,"heap_idle_path":"07-heap-idle.pprof","heap_postburst_path":"07-heap-postburst.pprof","flame_idle_inuse_path":"07-flame-idle-inuse.svg","flame_idle_alloc_path":"07-flame-idle-alloc.svg","flame_postburst_inuse_path":"07-flame-postburst-inuse.svg","flame_postburst_alloc_path":"07-flame-postburst-alloc.svg"}
+{"scenario":"07-mem-profile","kind":"profile","goroutines_idle":$goroutines_idle,"goroutines_postburst":$goroutines_postburst,"heap_idle_path":"07-heap-idle.pprof","heap_postburst_path":"07-heap-postburst.pprof"}
 EOF
 
 echo "07-mem-profile: goroutines idle=$goroutines_idle postburst=$goroutines_postburst" >&2

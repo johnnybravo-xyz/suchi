@@ -62,59 +62,6 @@ bench_build_tools() {
     export SAMPLER_BIN GEN_PDF_BIN REPORT_BIN
 }
 
-# ---------------------------------------------------------------------------
-# bench_build_flame_deps — build pprof2collapsed and locate the vendored
-# flamegraph.pl. Optional: scenario 07 renders flame graphs when these are
-# present and `perl` is on PATH, and silently skips otherwise.
-# ---------------------------------------------------------------------------
-bench_build_flame_deps() {
-    local src="$TOOLS_DIR/pprof2collapsed"
-    local bin="$src/bin/pprof2collapsed"
-    if [ ! -d "$src" ]; then
-        echo "bench_build_flame_deps: missing $src" >&2
-        return 1
-    fi
-    if [ ! -x "$bin" ] || [ ! -f "$src/main.go" ] || [ "$src/main.go" -nt "$bin" ]; then
-        mkdir -p "$src/bin"
-        ( cd "$src" && GOWORK=off go build -o "bin/pprof2collapsed" . )
-        echo "built $bin" >&2
-    fi
-    PPROF2COLLAPSED_BIN="$bin"
-    FLAMEGRAPH_PL="$TOOLS_DIR/flamegraph/flamegraph.pl"
-    export PPROF2COLLAPSED_BIN FLAMEGRAPH_PL
-}
-
-# ---------------------------------------------------------------------------
-# bench_render_flame <pprof-file> <svg-file> [sample-index] [title]
-# Convert a pprof heap/cpu profile to an interactive flame-graph SVG.
-# Soft-skips (returns 0) when any prerequisite is missing so scenarios can
-# call this unconditionally on hosts without perl or the vendored deps.
-# ---------------------------------------------------------------------------
-bench_render_flame() {
-    local pprof="$1" svg="$2" idx="${3:-inuse_space}" title="${4:-heap}"
-    if [ -z "${PPROF2COLLAPSED_BIN:-}" ] || [ ! -x "$PPROF2COLLAPSED_BIN" ] \
-        || [ -z "${FLAMEGRAPH_PL:-}" ] || [ ! -x "$FLAMEGRAPH_PL" ] \
-        || ! command -v perl >/dev/null 2>&1; then
-        echo "bench_render_flame: missing prerequisite, skipping $svg" >&2
-        return 0
-    fi
-    if [ ! -f "$pprof" ]; then
-        echo "bench_render_flame: missing pprof $pprof, skipping $svg" >&2
-        return 0
-    fi
-    local collapsed subtitle
-    collapsed="$(mktemp -t suchi-flame-XXXXXX.folded)"
-    subtitle="suchi $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    "$PPROF2COLLAPSED_BIN" -in "$pprof" -sample_index "$idx" > "$collapsed"
-    perl "$FLAMEGRAPH_PL" \
-        --title "$title" \
-        --subtitle "$subtitle" \
-        --countname "$idx" \
-        < "$collapsed" > "$svg"
-    rm -f "$collapsed"
-    echo "flame → $svg" >&2
-}
-
 bench_start_suchi() {
     PUBLIC_URL="http://127.0.0.1:$SUCHI_PORT" \
     LISTEN_ADDR=":$SUCHI_PORT" \
