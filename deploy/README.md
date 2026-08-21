@@ -15,12 +15,14 @@ and storage locations before you paste them into production.
 | [`k8s/`](k8s/) | Single-replica Deployment + PVC + ClusterIP Service. **SQLite is single-writer** — do not scale replicas up. |
 | [`mail-mbsync/`](mail-mbsync/) | The mail-intake sidecar reference deployment. Docker Compose flavor. |
 
-All shapes assume the same two env vars are set on suchi:
+All shapes assume the same three env vars are set on suchi:
 
 - `DATA_DIR` — where the SQLite database, CAS blobs, and rendered
   views live. Must be writable by the suchi process.
 - `LISTEN_ADDR` — usually `127.0.0.1:8000` behind a reverse proxy, or
   `0.0.0.0:8000` inside a container.
+- `PUBLIC_URL` — the absolute URL users open. Suchi uses it for secure-cookie
+  behavior, OIDC callbacks, and generated share links.
 
 Full env-var and config-file reference: [docs/config.mdx](../docs/config.mdx).
 

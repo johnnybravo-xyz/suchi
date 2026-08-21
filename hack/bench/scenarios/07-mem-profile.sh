@@ -27,8 +27,10 @@ sleep 5
 heap_idle="$RESULTS_DIR/07-heap-idle.pprof"
 goro_idle="$RESULTS_DIR/07-goroutine-idle.txt"
 echo "07-mem-profile: capturing idle heap + goroutine snapshots" >&2
-curl -sf "http://127.0.0.1:$SUCHI_PORT/debug/pprof/heap" -o "$heap_idle"
-curl -sf "http://127.0.0.1:$SUCHI_PORT/debug/pprof/goroutine?debug=1" -o "$goro_idle"
+curl -sf -H "Authorization: Token $ADMIN_TOKEN" \
+    "http://127.0.0.1:$SUCHI_PORT/debug/pprof/heap" -o "$heap_idle"
+curl -sf -H "Authorization: Token $ADMIN_TOKEN" \
+    "http://127.0.0.1:$SUCHI_PORT/debug/pprof/goroutine?debug=1" -o "$goro_idle"
 
 burst_dir="$DATA_DIR/burst"
 mkdir -p "$burst_dir"
@@ -51,8 +53,10 @@ bench_wait_jobs_drain "${JOB_DRAIN_TIMEOUT:-300}"
 heap_post="$RESULTS_DIR/07-heap-postburst.pprof"
 goro_post="$RESULTS_DIR/07-goroutine-postburst.txt"
 echo "07-mem-profile: capturing post-burst heap + goroutine snapshots" >&2
-curl -sf "http://127.0.0.1:$SUCHI_PORT/debug/pprof/heap" -o "$heap_post"
-curl -sf "http://127.0.0.1:$SUCHI_PORT/debug/pprof/goroutine?debug=1" -o "$goro_post"
+curl -sf -H "Authorization: Token $ADMIN_TOKEN" \
+    "http://127.0.0.1:$SUCHI_PORT/debug/pprof/heap" -o "$heap_post"
+curl -sf -H "Authorization: Token $ADMIN_TOKEN" \
+    "http://127.0.0.1:$SUCHI_PORT/debug/pprof/goroutine?debug=1" -o "$goro_post"
 
 # Top-10 tables. `head -25` keeps the pprof header + top 10 rows with
 # some breathing room; go tool pprof prints ~13 header lines before the

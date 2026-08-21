@@ -9,6 +9,8 @@
 # Storage: PVCs default to your cluster's StorageClass. Suchi needs
 # read/write on DATA_DIR — do NOT use ReadWriteMany (multi-writer
 # breaks SQLite WAL).
+#
+# Replace the PUBLIC_URL hostname with the TLS URL exposed by your Ingress.
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -43,7 +45,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: suchi
-          image: ghcr.io/johnnybravo-xyz/suchi:latest
+          image: ghcr.io/johnnybravo-xyz/suchi:beta
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -53,15 +55,19 @@ spec:
               value: /data
             - name: LISTEN_ADDR
               value: "0.0.0.0:8000"
+            - name: PUBLIC_URL
+              value: "https://suchi.example.com"
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 30
             periodSeconds: 30
           resources:
@@ -75,6 +81,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: suchi-data
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

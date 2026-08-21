@@ -9,14 +9,15 @@ User=suchi
 Group=suchi
 
 # Where the binary lives. Adjust to your install path.
-ExecStart=/usr/local/bin/suchi
+ExecStart=/usr/local/bin/suchi serve
 
 # suchi reads config from env. See docs/config.mdx for the full list.
-# The two below are load-bearing.
+# Replace the PUBLIC_URL hostname before starting the service.
 Environment=DATA_DIR=/var/lib/suchi
 Environment=LISTEN_ADDR=127.0.0.1:8000
+Environment=PUBLIC_URL=https://suchi.example.com
 
-# Optional: point to a TOML/HUML/YAML config file. Env still wins on
+# Optional: point to a TOML or HuML config file. Env still wins on
 # collisions — see docs/config.mdx.
 #Environment=SUCHI_CONFIG=/etc/suchi/config.toml
 

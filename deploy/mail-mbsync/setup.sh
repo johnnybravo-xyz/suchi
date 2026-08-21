@@ -4,8 +4,8 @@
 # Asks which IMAP provider to wire up, symlinks the matching template
 # under ./templates/mbsyncrc.tmpl, and writes two env files:
 #
-#   ./.env         — compose-level (COMPOSE_PROFILES, SUCHI_PORT, UID/GID)
-#   ./config/.env  — container-side (mbsync + suchi runtime vars)
+#   ./.env         — compose-level, non-secret suchi settings
+#   ./config/.env  — mbsync-only credentials and sync settings
 #
 # Idempotent: safe to re-run to change provider or rotate credentials.
 
@@ -78,11 +78,11 @@ MAIL_MAX_SIZE="${MAIL_MAX_SIZE:-25m}"
 read -rp "Suchi listening port [8000]: " SUCHI_PORT
 SUCHI_PORT="${SUCHI_PORT:-8000}"
 
-# ---------- write config/.env (container-side) ----------
+# ---------- write config/.env (mbsync only) ----------
 mkdir -p config
 umask 077
 cat > config/.env <<EOF
-# Container-side env for mbsync + suchi. Rendered by setup.sh.
+# Container-side credentials for mbsync only. Rendered by setup.sh.
 MAIL_HOST=${MAIL_HOST}
 MAIL_PORT=${MAIL_PORT}
 MAIL_SSL=${MAIL_SSL}
@@ -92,13 +92,6 @@ MAIL_FOLDERS=${MAIL_FOLDERS}
 MAIL_MAX_MESSAGES=${MAIL_MAX_MESSAGES}
 MAIL_MAX_SIZE=${MAIL_MAX_SIZE}
 SYNC_INTERVAL=300
-
-PUBLIC_URL=http://127.0.0.1:${SUCHI_PORT}
-LISTEN_ADDR=:8000
-DATA_DIR=/data
-INGEST_FS_DIR=/ingest
-INGEST_FS_OWNER_EMAIL=${MAIL_USER}
-LOG_LEVEL=info
 EOF
 
 # ---------- write .env (compose-level) ----------
@@ -109,6 +102,7 @@ COMPOSE_PROFILES=${PROFILE}
 SUCHI_PORT=${SUCHI_PORT}
 MAIL_UID=$(id -u)
 MAIL_GID=$(id -g)
+SUCHI_OWNER_EMAIL=${MAIL_USER}
 EOF
 
 # ---------- symlink template ----------

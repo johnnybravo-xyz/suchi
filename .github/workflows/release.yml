@@ -30,14 +30,65 @@ env:
   IMAGE_NAME: ${{ github.repository }}   # johnnybravo-xyz/suchi
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: validate publish ref
+        if: inputs.publish == 'true'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "publishing requires a tag ref; got $REF_TYPE '$REF_NAME'" >&2
+            exit 1
+          fi
+
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$REF_NAME" =~ $semver ]]; then
+            echo "publishing requires a SemVer tag such as v0.1.0 or v0.1.0-beta.1" >&2
+            exit 1
+          fi
+
+          version=${REF_NAME#v}
+          without_build=${version%%+*}
+          if [[ "$without_build" == *-* ]]; then
+            prerelease=${without_build#*-}
+            IFS=. read -ra identifiers <<< "$prerelease"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != 0 ]]; then
+                echo "numeric prerelease identifiers must not have leading zeroes: $identifier" >&2
+                exit 1
+              fi
+            done
+          fi
+
+          if ! awk -v h="## [$version]" '
+            $0 == h || index($0, h " - ") == 1 { found=1 }
+            END { exit !found }
+          ' CHANGELOG.md; then
+            echo "CHANGELOG.md must contain a matching '## [$version]' heading" >&2
+            exit 1
+          fi
+
+          client_id=$(awk -F'"' '/^[[:space:]]*DefaultClientID = "/ { print $2; exit }' \
+            core/ingest/emailwatch/oauth/microsoft.go)
+          if [ -z "$client_id" ] || [ "$client_id" = "00000000-0000-0000-0000-000000000000" ]; then
+            echo "publishing requires the tested Suchi Microsoft public client ID" >&2
+            exit 1
+          fi
+
   # -------------------------------------------------------------------
   # notes: pull the section for this version out of CHANGELOG.md so
-  # the release page carries the same prose as the file. Prerelease
-  # Prereleases skip `latest`; beta and RC releases receive their own
+  # the release page carries the same prose as the file. Prereleases
+  # skip `latest`; beta and RC releases receive their own
   # moving channel tags.
   # -------------------------------------------------------------------
   notes:
     runs-on: ubuntu-latest
+    needs: preflight
     outputs:
       body:       ${{ steps.extract.outputs.body }}
       prerelease: ${{ steps.extract.outputs.prerelease }}
@@ -55,15 +106,18 @@ jobs:
             *)       echo "channel=stable" >> "$GITHUB_OUTPUT" ;;
           esac
 
-          # Pull the section matching this version from CHANGELOG.md.
-          # Falls through to the [Unreleased] block if a version-named
-          # section isn't there yet (development cadence).
-          awk -v v="$ver" '
-            /^## \['"$ver"'\]/       { flag=1; next }
-            flag && /^## \[/         { exit }
-            flag                     { print }
+          # Published tags have a matching section, enforced by preflight.
+          # Artifact-only branch runs use [Unreleased].
+          awk -v h="## [$ver]" '
+            $0 == h || index($0, h " - ") == 1 { flag=1; next }
+            flag && /^## \[/                    { exit }
+            flag                                { print }
           ' CHANGELOG.md > /tmp/notes.md
           if [ ! -s /tmp/notes.md ]; then
+            if [ "${{ inputs.publish }}" = "true" ]; then
+              echo "release notes for $ver are empty" >&2
+              exit 1
+            fi
             awk '/^## \[Unreleased\]/ { flag=1; next } flag && /^## \[/ { exit } flag { print }' \
               CHANGELOG.md > /tmp/notes.md
           fi
@@ -117,6 +171,7 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: ${{ steps.standard_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -144,6 +199,7 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: ${{ steps.full_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -254,9 +310,11 @@ jobs:
             echo "could not find anydoc pins in Dockerfile" >&2
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "rust_image=$rust_image" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "commit=$commit"
+            echo "rust_image=$rust_image"
+          } >> "$GITHUB_OUTPUT"
       - name: build anydoc for ${{ matrix.platform }}
         env:
           ANYDOC_TAG: ${{ steps.pin.outputs.tag }}
@@ -285,9 +343,11 @@ jobs:
               cargo build --release --example convert
               strip target/release/examples/convert
               cp target/release/examples/convert /host/out/anydoc
-              cp LICENSE /host/out/LICENSE 2>/dev/null || \
-                cp LICENSE-MIT /host/out/LICENSE 2>/dev/null || true
+              if [ -s LICENSE ]; then cp LICENSE /host/out/LICENSE
+              elif [ -s LICENSE-MIT ]; then cp LICENSE-MIT /host/out/LICENSE
+              else echo "anydoc license file not found" >&2; exit 1; fi
             '
+          test -s out/LICENSE
           # NOTICE for MIT attribution — required for a redistributed
           # MIT binary.
           cat > out/NOTICE <<EOF

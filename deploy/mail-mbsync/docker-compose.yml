@@ -54,8 +54,13 @@ services:
     depends_on:
       - mbsync
     user: "${MAIL_UID:-1000}:${MAIL_GID:-1000}"
-    env_file:
-      - config/.env
+    environment:
+      PUBLIC_URL: "http://127.0.0.1:${SUCHI_PORT:-8000}"
+      LISTEN_ADDR: ":8000"
+      DATA_DIR: "/data"
+      INGEST_FS_DIR: "/ingest"
+      INGEST_FS_OWNER_EMAIL: "${SUCHI_OWNER_EMAIL:?set by setup.sh}"
+      LOG_LEVEL: "info"
     volumes:
       - ./suchi-data:/data
       - ./ingest:/ingest

@@ -70,7 +70,6 @@ bench_start_suchi() {
     SUCHI_DEV=0 \
     SUCHI_DEMO_MODE=0 \
     OIDC_ISSUER_URL='' \
-    INGEST_IMAP_URL='' \
     INGEST_FS_DIR='' \
     INGEST_FS_OWNER_EMAIL='' \
     LLM_ENDPOINT_URL='' \

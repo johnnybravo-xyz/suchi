@@ -126,10 +126,6 @@ done
 echo
 echo "== assertions =="
 FAIL=0
-docs_json=$(curl -sf "http://127.0.0.1:$PORT/api/documents/" \
-    -H "Authorization: Token $API_TOKEN" 2>/dev/null || echo '{"results":[]}')
-# api/documents/ isn't a list endpoint yet; use tasks to count instead.
-# Count via the tasks table + the docs we can walk individually.
 total_docs=$(sqlite3 "$DATA_DIR/suchi.db" \
     "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL")
 email_docs=$(sqlite3 "$DATA_DIR/suchi.db" \

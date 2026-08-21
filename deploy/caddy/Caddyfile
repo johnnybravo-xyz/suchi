@@ -13,7 +13,7 @@ suchi.example.com {
 
 	# Uploads can be large — bump the request body cap.
 	request_body {
-		max_size 200MB
+		max_size 500MB
 	}
 
 	# Suchi emits its own security headers; Caddy adds transport-level
