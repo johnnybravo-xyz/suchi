@@ -43,8 +43,28 @@ The project registration is configured for:
 - delegated Exchange `IMAP.AccessAsUser.All`
 - automatic MSAL `offline_access` for silent token renewal
 
-The client ID is public configuration. Suchi never ships or requests a client
-secret.
+The client ID is a public application identifier, not a credential. It is sent
+in OAuth requests and is visible in both source and compiled distributions.
+Keeping the project-owned ID beside the OAuth implementation gives published
+builds a reproducible default and lets ordinary users sign in without Azure
+setup. Moving the same value to a generated file or build flag would not make
+it secret. The ID can be copied, so the registration does not prove a request
+came from an official Suchi binary.
+
+The security boundary is the delegated permission and user or tenant consent,
+plus the sealed token cache stored after sign-in. Suchi never ships or requests
+a Microsoft client secret. The project limits the registration to delegated
+IMAP access and should keep its publisher verified and sign-ins monitored.
+Publisher verification identifies who owns the registration; it does not make
+the public ID exclusive to official Suchi builds.
+
+Authorization-code flows normally bind a sign-in to a registered redirect URI
+and use PKCE to protect the returned authorization code. Device-code flow has no
+redirect callback or PKCE exchange. Its protection against remote consent
+phishing is the explicit user-initiated flow and the short-lived code entered on
+Microsoft's page. Only complete a code that you just requested from your own
+Suchi instance. See Microsoft's distinction between
+[public and confidential clients](https://learn.microsoft.com/en-us/entra/msal/msal-client-applications).
 
 ## Deployment registration
 
