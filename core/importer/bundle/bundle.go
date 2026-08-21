@@ -12,6 +12,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
@@ -537,6 +538,10 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 		docID, err := res.LastInsertId()
 		if err != nil {
 			return err
+		}
+		if err := ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceImport,
+			"Paperless-ngx import", in.Fields.OriginalFilename, time.Now().Unix()); err != nil {
+			return fmt.Errorf("record import source: %w", err)
 		}
 
 		// Tag junctions.

@@ -101,6 +101,15 @@
     return ACCESS_LEVELS.find(([value]) => Number(value) === Number(bits))?.[1] || 'Custom'
   }
 
+  function sourceLabel(source) {
+    if (source.kind === 'upload') return source.label ? `Uploaded by ${source.label}` : 'Manual upload'
+    if (source.kind === 'api') return source.label ? `API upload by ${source.label}` : 'API upload'
+    if (source.kind === 'mailbox') return source.label || 'Mailbox'
+    if (source.kind === 'watched_folder') return source.label || 'Watched folder'
+    if (source.kind === 'import') return source.label || 'Import'
+    return source.label || 'Unknown source'
+  }
+
   async function grantAccess(e) {
     e.preventDefault()
     const [principalKind, rawID] = accessDraft.principal.split(':')
@@ -290,10 +299,22 @@
               <option value="confidential">Confidential</option>
             </select>
           </dd>
-          <dt>Added</dt><dd>{fmtDate(doc.created_at)}</dd>
-          {#if doc.source_mtime}
-            <dt title="Filesystem mtime carried from the source file at ingest">Created</dt>
-            <dd>{fmtDate(doc.source_mtime)}</dd>
+          <dt>Added</dt><dd>{fmtDate(doc.added_at || doc.created_at)}</dd>
+          {#if doc.sources?.length}
+            <dt>{doc.sources.length === 1 ? 'Source' : 'Sources'}</dt>
+            <dd style="display:flex;flex-direction:column;gap:4px;min-width:0">
+              {#each doc.sources as source, i}
+                <div style="min-width:0;overflow-wrap:anywhere">
+                  <span>{sourceLabel(source)}</span>
+                  {#if source.detail}<span class="sub"> · {source.detail}</span>{/if}
+                  {#if i === 0 && doc.sources.length > 1}<span class="pill" style="margin-left:6px;font-size:.68rem">first seen</span>{/if}
+                </div>
+              {/each}
+            </dd>
+          {/if}
+          {#if doc.source_mtime || (doc.created_at && doc.created_at !== doc.added_at)}
+            <dt title="Date carried from the source at ingest">Source date</dt>
+            <dd>{fmtDate(doc.source_mtime || doc.created_at)}</dd>
           {/if}
           <dt>Original</dt><dd>{doc.mime_type} · {fmtBytes(doc.original_size)}</dd>
           {#if doc.archive_blob}

@@ -50,6 +50,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -282,11 +283,10 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 	}
 	if deduped {
 		w.log.Info("fswatch.deduped", "doc_id", docID, "path", filepath.Base(path))
-		// Notification feed: the same dedup event API uploads emit,
-		// so drop-folder ingests and manual uploads produce the
-		// same "already had X" entry.
+		// Use the same dedup event as API uploads so every ingest path
+		// reports that it reused an existing document.
 		audit.Log(ctx, w.db, w.log, audit.Event{
-			Action: "document.upload.conflict", ObjectKind: "document", ObjectID: docID,
+			Action: "document.ingest.deduplicated", ObjectKind: "document", ObjectID: docID,
 			After: map[string]any{"source": "fswatch", "filename": filepath.Base(path)},
 		})
 	} else {
@@ -356,6 +356,12 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			return 0, false, fmt.Errorf("resolve jd code %d: %w", side.JDCategory, err)
 		}
 	}
+	relPath, relErr := filepath.Rel(w.cfg.Dir, path)
+	if relErr != nil || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+		relPath = filepath.Base(path)
+	}
+	sourceLabel := filepath.Base(filepath.Clean(w.cfg.Dir))
+	sourceDetail := filepath.ToSlash(relPath)
 
 	var docID int64
 	var deduped bool
@@ -371,7 +377,8 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			docID = aliveID
 			deduped = true
 			w.log.Info("fswatch.dedup.alive", "doc_id", docID, "sha", ref.SHA256)
-			return nil
+			return ingestmeta.RecordSource(ctx, tx, docID,
+				ingestmeta.SourceWatchedFolder, sourceLabel, sourceDetail, time.Now().Unix())
 		}
 		if !errors.Is(errAlive, sql.ErrNoRows) {
 			return errAlive
@@ -395,7 +402,8 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			docID = trashedID
 			deduped = true
 			w.log.Info("fswatch.dedup.restored", "doc_id", docID)
-			return nil
+			return ingestmeta.RecordSource(ctx, tx, docID,
+				ingestmeta.SourceWatchedFolder, sourceLabel, sourceDetail, time.Now().Unix())
 		}
 		if !errors.Is(errTrashed, sql.ErrNoRows) {
 			return errTrashed
@@ -430,6 +438,10 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			return err
 		}
 		docID = id
+		if err := ingestmeta.RecordSource(ctx, tx, docID,
+			ingestmeta.SourceWatchedFolder, sourceLabel, sourceDetail, now); err != nil {
+			return err
+		}
 
 		// Apply sidecar metadata (correspondent, tags, notes).
 		if side != nil {

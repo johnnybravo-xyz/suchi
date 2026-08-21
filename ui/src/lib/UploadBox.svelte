@@ -44,26 +44,21 @@
       try {
         const res = await uploadDocument(f)
         entry.id = res?.id
-        entry.status = 'done'
-        entry.processing = true
         markUploaded()
-        hydrate(entry)
-      } catch (ex) {
-        if (ex.status === 409 && ex.data?.matched?.id) {
-          // The archive already has these bytes — the 409 body carries
-          // a `matched` object with enough context to render "you
-          // already have this one" without a second round-trip.
-          const m = ex.data.matched
+        if (res?.deduplicated) {
           entry.status = 'dup'
-          entry.id = m.id
-          entry.match = m.title || `Document #${m.id}`
-          entry.matched = m
-        } else if (ex.status === 409) { entry.status = 'dup'; entry.msg = 'already in the archive' }
-        else if (ex.status === 413) { entry.status = 'error'; entry.msg = 'larger than the server allows' }
+          entry.match = res.title || `Document #${res.id}`
+        } else {
+          entry.status = 'done'
+          entry.processing = true
+          hydrate(entry)
+        }
+      } catch (ex) {
+        if (ex.status === 413) { entry.status = 'error'; entry.msg = 'larger than the server allows' }
         else { entry.status = 'error'; entry.msg = ex.message }
       }
     }
-    notify?.('Upload finished. The pipeline is processing')
+    notify?.('Upload finished')
   }
 
   function onDrop(e) {
@@ -114,15 +109,7 @@
           {#if q.status === 'dup'}
             <div class="up-detail">
               <span class="pill warn">duplicate</span>
-              <span class="sub">Already filed{q.match ? ` as “${q.match}”` : ''}.</span>
-              {#if q.matched}
-                <span class="sub" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                  {#if q.matched.jd_category_id}<span class="chip">{q.matched.jd_category_id}</span>{/if}
-                  {#if q.matched.correspondent}<span class="sub">from {q.matched.correspondent}</span>{/if}
-                  {#if q.matched.storage_path}<span class="sub">· {q.matched.storage_path}</span>{/if}
-                  {#if q.matched.added_at}<span class="sub">· added {new Date(q.matched.added_at).toLocaleDateString()}</span>{/if}
-                </span>
-              {/if}
+              <span class="sub">Already filed{q.match ? ` as “${q.match}”` : ''}; source recorded.</span>
               {#if q.id}<a class="btn sm" href={`#/doc/${q.id}`} target="_blank" rel="noopener">Open in new tab</a>{/if}
             </div>
           {:else if q.status === 'done'}

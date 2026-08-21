@@ -11,6 +11,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
@@ -88,6 +89,17 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	sourceKind := ingest.SourceUpload
+	sourceLabel := p.Display
+	if sourceLabel == "" {
+		sourceLabel = p.Email
+	}
+	if p.Kind == "token" {
+		sourceKind = ingest.SourceAPI
+		if sourceLabel == "" {
+			sourceLabel = "API token"
+		}
+	}
 
 	ref, err := s.CAS.Put(file)
 	if err != nil {
@@ -130,6 +142,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		newID = id
+		if err := ingest.RecordSource(r.Context(), tx, newID, sourceKind,
+			sourceLabel, header.Filename, now); err != nil {
+			return err
+		}
 
 		// A version is still the same logical document. Carry every explicit
 		// grant forward with the row so editors and viewers do not lose access

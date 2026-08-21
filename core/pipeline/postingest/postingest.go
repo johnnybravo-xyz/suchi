@@ -21,6 +21,7 @@ import (
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/anydoc"
@@ -836,6 +837,9 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 		if err != nil {
 			return err
 		}
+		if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
+			return err
+		}
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: parent.MIME,
 		})
@@ -968,6 +972,11 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 			log.Info("post-ingest.email.dedup",
 				"parent_id", parentID, "existing", existing,
 				"message_id", parsed.MessageID)
+			if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+				return ingestmeta.CopySources(ctx, tx, parentID, existing)
+			}); err != nil {
+				return true, err
+			}
 			return true, h.softDeleteParent(ctx, parentID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			log.Warn("post-ingest.email.dedup_check", "err", err.Error())
@@ -1197,6 +1206,9 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		}
 		childID, err := res.LastInsertId()
 		if err != nil {
+			return err
+		}
+		if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
 			return err
 		}
 		// Inherit the parent email's correspondents (sender + any

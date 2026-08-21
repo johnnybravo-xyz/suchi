@@ -41,6 +41,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
@@ -716,7 +717,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		`, w.account.OwnerID, msgID).Scan(&existing)
 		if err == nil {
 			w.log.Debug("emailwatch.dedup", "msg_id", msgID, "existing", existing)
-			return false, nil
+			return false, w.recordMailboxSource(ctx, existing)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
@@ -736,7 +737,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	`, w.account.OwnerID, ref.SHA256).Scan(&existingID)
 	if err == nil {
 		w.log.Debug("emailwatch.blob_dedup", "existing", existingID, "sha", ref.SHA256)
-		return false, nil
+		return false, w.recordMailboxSource(ctx, existingID)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
@@ -783,6 +784,10 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		if err != nil {
 			return err
 		}
+		if err := ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceMailbox,
+			w.account.Name, w.mailboxSourceDetail(), now); err != nil {
+			return err
+		}
 		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
 	}); err != nil {
 		return false, fmt.Errorf("db write: %w", err)
@@ -793,6 +798,20 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		w.disp.Nudge()
 	}
 	return true, nil
+}
+
+func (w *Watcher) mailboxSourceDetail() string {
+	if w.account.Username == "" {
+		return w.account.Folder
+	}
+	return w.account.Username + " / " + w.account.Folder
+}
+
+func (w *Watcher) recordMailboxSource(ctx context.Context, docID int64) error {
+	return w.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceMailbox,
+			w.account.Name, w.mailboxSourceDetail(), time.Now().Unix())
+	})
 }
 
 // nullOrString returns nil when s is empty (so INSERT stores NULL

@@ -380,8 +380,8 @@ func renderSummary(action string, objID sql.NullInt64, titles map[int64]string) 
 		return "Trashed " + docLabel
 	case "document.update":
 		return "Updated " + docLabel
-	case "document.upload.conflict":
-		return "Skipped duplicate of " + docLabel
+	case "document.ingest.deduplicated":
+		return "Reused " + docLabel
 	case "document.ingest.skipped":
 		return "Skipped an ingest (see server log)"
 	case "document.decrypt":

@@ -23,8 +23,15 @@ schema compatibility notes.
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+### Added
+
+- Document details now show every distinct upload, mailbox, watched-folder, or
+  import source, when Suchi first saw it, and the source-carried date.
+
 ### Changed
 
+- Repeated owner-scoped content now reuses the existing document and records a
+  distinct acquisition source without rerunning extraction or classification.
 - Office, OpenDocument, RTF, EPUB, and spreadsheet extraction now uses anydoc v0.2.2.
 - Local archive matching now runs before user automations and exposes live review and auto-apply thresholds in classification settings.
 - The optional model now uses one confidence threshold; fixed classifier plumbing no longer appears as editable automations.

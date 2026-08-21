@@ -7,6 +7,10 @@ description: "Review and import a Paperless-ngx export from the Suchi host or a 
 JSON-manifest + `originals/` + `archive/` layout. The import is idempotent and
 safe to re-run against a nightly export during a shadow window.
 
+Imported documents retain a `Paperless-ngx import` source with their original
+filename. This provenance is independent from the preserved legacy id and does
+not create a version or document link.
+
 ## Prerequisites
 
 - A completed export bundle at `/path/to/export` produced by
