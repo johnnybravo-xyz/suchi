@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -87,5 +88,19 @@ func TestRenderShareHTMLIncludesFavicon(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `href="/assets/brand/favicon.svg"`) {
 		t.Errorf("share page should declare the branded favicon")
+	}
+}
+
+func TestShareUnlockTokenIsBoundAndExpires(t *testing.T) {
+	link := &shareLinkLoaded{pwHash: sql.NullString{String: "stored-hash", Valid: true}}
+	value := shareUnlockToken(link, "share-a", 200)
+	if !validShareUnlockToken(link, "share-a", value, 199) {
+		t.Fatal("fresh unlock token should verify")
+	}
+	if validShareUnlockToken(link, "share-b", value, 199) {
+		t.Fatal("unlock token must be bound to its share")
+	}
+	if validShareUnlockToken(link, "share-a", value, 201) {
+		t.Fatal("expired unlock token should fail")
 	}
 }

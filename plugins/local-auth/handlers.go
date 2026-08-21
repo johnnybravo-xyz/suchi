@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -27,12 +29,12 @@ type SetupRequest struct {
 // token on success; refuses to run when the instance is already
 // initialized.
 func (p *Plugin) SetupHandler(w http.ResponseWriter, r *http.Request) {
-	if p.setupToken == "" {
+	if p.SetupToken() == "" {
 		http.Error(w, "already initialized", http.StatusConflict)
 		return
 	}
 	var req SetupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONRequest(w, r, &req); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
@@ -51,12 +53,13 @@ func (p *Plugin) SetupHandler(w http.ResponseWriter, r *http.Request) {
 // API JSON contracts and browser flows don't fight over one
 // response shape.
 func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
-	if p.setupToken == "" {
+	if p.SetupToken() == "" {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/bootstrap?error=bad+form", http.StatusFound)
+		http.Redirect(w, r, "/bootstrap?error="+url.QueryEscape("bad form"), http.StatusFound)
 		return
 	}
 	req := SetupRequest{
@@ -67,7 +70,7 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := p.applySetup(r.Context(), req)
 	if err != nil {
-		http.Redirect(w, r, "/bootstrap?error="+strings.ReplaceAll(err.Error(), " ", "+"),
+		http.Redirect(w, r, "/bootstrap?error="+url.QueryEscape(err.Error()),
 			http.StatusFound)
 		return
 	}
@@ -79,15 +82,7 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    sid,
-		Path:     "/",
-		Expires:  time.Now().Add(SessionTTL),
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, p.sessionCookie(sid))
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -95,8 +90,23 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the created user id + a friendly error suitable for either
 // JSON or a query-string redirect.
 func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error) {
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	if req.Token == "" || req.Email == "" || req.Password == "" {
 		return 0, errSetupMissing
+	}
+	if len(req.Password) < MinPasswordLen {
+		return 0, errSetupWeakPassword
+	}
+	p.setupMu.Lock()
+	defer p.setupMu.Unlock()
+	if p.setupToken == "" {
+		return 0, errSetupBadToken
+	}
+	if time.Since(p.setupTokenIssuedAt) >= SetupTokenTTL {
+		if err := p.mintSetupToken(); err != nil {
+			return 0, errSetupMint
+		}
+		return 0, errSetupExpired
 	}
 	// Constant-time compare — a length-difference leak would let attackers
 	// binary-search the token length. Cheap defense.
@@ -134,6 +144,7 @@ func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error
 		return 0, errSetupInsert
 	}
 	p.setupToken = "" // burn the token
+	p.setupTokenIssuedAt = time.Time{}
 	p.log.Info("localauth.setup.completed", "email", req.Email)
 	return userID, nil
 }
@@ -141,10 +152,15 @@ func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error
 // Setup errors — exported strings match the /bootstrap query-param the
 // UI reads.
 var (
-	errSetupMissing  = &setupErr{msg: "token+email+password+required", code: http.StatusBadRequest}
-	errSetupBadToken = &setupErr{msg: "invalid+token", code: http.StatusUnauthorized}
-	errSetupHash     = &setupErr{msg: "hash+failed", code: http.StatusInternalServerError}
-	errSetupInsert   = &setupErr{msg: "insert+failed", code: http.StatusInternalServerError}
+	errSetupMissing      = &setupErr{msg: "token, email, and password required", code: http.StatusBadRequest}
+	errSetupBadToken     = &setupErr{msg: "invalid token", code: http.StatusUnauthorized}
+	errSetupExpired      = &setupErr{msg: "setup token expired; a replacement was written to the server log", code: http.StatusUnauthorized}
+	errSetupWeakPassword = &setupErr{
+		msg: "password must be at least 8 characters", code: http.StatusBadRequest,
+	}
+	errSetupMint   = &setupErr{msg: "token generation failed", code: http.StatusInternalServerError}
+	errSetupHash   = &setupErr{msg: "password hashing failed", code: http.StatusInternalServerError}
+	errSetupInsert = &setupErr{msg: "account creation failed", code: http.StatusInternalServerError}
 )
 
 type setupErr struct {
@@ -171,7 +187,7 @@ type LoginRequest struct {
 // cookie (browser) or a fresh API token (JSON body). Branches on Accept.
 func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONRequest(w, r, &req); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
@@ -180,15 +196,8 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		userID int64
-		hash   sql.NullString
-	)
-	err := p.db.Read.QueryRowContext(r.Context(),
-		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
-		req.Email).Scan(&userID, &hash)
-	if errors.Is(err, sql.ErrNoRows) || !hash.Valid || VerifyPassword(hash.String, req.Password) != nil {
-		// One error path for every "bad login" outcome.
+	userID, err := p.verifyCredentials(r.Context(), req.Email, req.Password)
+	if errors.Is(err, errInvalidCredentials) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -197,15 +206,9 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// JSON clients receive tokens; browsers get cookies.
-	// The SPA under /app/* is a browser client that ALSO wants a
-	// token (for Authorization: Token headers on API calls) — so
-	// it hits /api/login with Accept: application/json AND expects
-	// the same-origin cookie flow to work for subsequent blob
-	// fetches (/preview, /download). We plant the cookie on the
-	// JSON path so both channels are usable. Half-authenticated
-	// states (token minted, no cookie) were where support threads
-	// were being born.
+	// Explicit JSON clients receive a token and a session cookie. The cookie
+	// keeps browser-capable clients able to follow direct preview/download URLs;
+	// the SPA omits this Accept header and uses only the session.
 	if wantsJSON(r) {
 		token, err := p.issueAPIToken(r.Context(), userID, "login",
 			auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
@@ -221,15 +224,7 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			p.log.Warn("localauth.json_login.session_failed",
 				"user_id", userID, "err", err.Error())
 		} else {
-			http.SetCookie(w, &http.Cookie{
-				Name:     CookieName,
-				Value:    sid,
-				Path:     "/",
-				Expires:  time.Now().Add(SessionTTL),
-				HttpOnly: true,
-				Secure:   r.TLS != nil,
-				SameSite: http.SameSiteLaxMode,
-			})
+			http.SetCookie(w, p.sessionCookie(sid))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
@@ -241,21 +236,12 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    sid,
-		Path:     "/",
-		Expires:  time.Now().Add(SessionTTL),
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, p.sessionCookie(sid))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func wantsJSON(r *http.Request) bool {
-	a := r.Header.Get("Accept")
-	return a == "application/json" || a == "application/json, text/plain, */*"
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json")
 }
 
 // LoginFormHandler is the sibling of LoginHandler for browser HTML
@@ -264,6 +250,7 @@ func wantsJSON(r *http.Request) bool {
 // session cookie and 302s to / on success. Cookie-only — never issues
 // tokens on this path.
 func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -275,14 +262,8 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		userID int64
-		hash   sql.NullString
-	)
-	err := p.db.Read.QueryRowContext(r.Context(),
-		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
-		email).Scan(&userID, &hash)
-	if errors.Is(err, sql.ErrNoRows) || !hash.Valid || VerifyPassword(hash.String, password) != nil {
+	userID, err := p.verifyCredentials(r.Context(), email, password)
+	if errors.Is(err, errInvalidCredentials) {
 		http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
 		return
 	}
@@ -296,20 +277,65 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    sid,
-		Path:     "/",
-		Expires:  time.Now().Add(SessionTTL),
-		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, p.sessionCookie(sid))
 	next := r.URL.Query().Get("next")
-	if next == "" || !strings.HasPrefix(next, "/") {
+	if !safeLocalRedirect(next) {
 		next = "/"
 	}
 	http.Redirect(w, r, next, http.StatusFound)
+}
+
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, into any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON object")
+		}
+		return err
+	}
+	return nil
+}
+
+func safeLocalRedirect(target string) bool {
+	if target == "" || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.Contains(target, `\`) {
+		return false
+	}
+	u, err := url.ParseRequestURI(target)
+	return err == nil && !u.IsAbs() && u.Host == ""
+}
+
+var errInvalidCredentials = errors.New("local-auth: invalid credentials")
+
+// A valid encoded hash keeps unknown, disabled, and passwordless accounts on
+// the same expensive verification path as a wrong password.
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=2,p=2$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000"
+
+func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) (int64, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var (
+		userID int64
+		hash   sql.NullString
+	)
+	err := p.db.Read.QueryRowContext(ctx,
+		"SELECT id, password_hash FROM users WHERE email = ? AND disabled = 0",
+		email).Scan(&userID, &hash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	encoded := dummyPasswordHash
+	found := err == nil && hash.Valid
+	if found {
+		encoded = hash.String
+	}
+	if VerifyPassword(encoded, password) != nil || !found {
+		return 0, errInvalidCredentials
+	}
+	return userID, nil
 }
 
 // IssueSession creates a fresh session row and returns its opaque id.
@@ -326,11 +352,53 @@ func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, sid, userID, now.Unix(), now.Add(SessionTTL).Unix(), now.Unix(),
+		`, digest(sid), userID, now.Unix(), now.Add(SessionTTL).Unix(), now.Unix(),
 			r.UserAgent(), r.RemoteAddr)
 		return err
 	})
 	return sid, err
+}
+
+func (p *Plugin) sessionCookie(sid string) *http.Cookie {
+	return &http.Cookie{
+		Name: CookieName, Value: sid, Path: "/",
+		Expires: time.Now().Add(SessionTTL), HttpOnly: true,
+		Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// LogoutHandler revokes the active browser session and login-issued API token.
+// It is idempotent so stale clients can always clear their cookie safely.
+func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	var sessionHash string
+	if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
+		sessionHash = digest(c.Value)
+	}
+	principal := auth.FromContext(r.Context())
+	err := p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if sessionHash != "" {
+			if _, err := tx.ExecContext(r.Context(), "DELETE FROM sessions WHERE id = ?", sessionHash); err != nil {
+				return err
+			}
+		}
+		if principal != nil && principal.TokenID != 0 {
+			if _, err := tx.ExecContext(r.Context(),
+				"UPDATE api_tokens SET revoked_at = unixepoch() WHERE id = ? AND revoked_at IS NULL",
+				principal.TokenID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "logout failed", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: CookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // IssueAPIToken creates and returns a fresh API token. The plaintext

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,7 +24,6 @@ type Config struct {
 	LogLevel       string
 	PprofEnabled   bool
 	BodyLimit      int64
-	SessionKeyPath string
 	BackupInterval time.Duration
 	// TrustedProxyCIDRs enables forwarded client addresses for rate limiting
 	// only when the direct TCP peer belongs to an explicitly trusted network.
@@ -56,18 +56,6 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// IMAP email ingest.
-	// Seed-only: consumed once at first boot when email_accounts is
-	// empty; ignored thereafter. The email_accounts table is the
-	// source of truth; the API at /api/email-accounts owns live
-	// mutation (admins see all rows; members with the mailboxes
-	// capability see their own). Left in place so an operator can
-	// bootstrap a
-	// mailbox from env before ever opening the UI.
-	IngestIMAPURL        string
-	IngestIMAPPassword   string
-	IngestIMAPOwnerEmail string
-	IngestIMAPTLSCAFile  string // extra CA PEM to trust (Proton Bridge, self-hosted Dovecot, homelab CAs)
 	// IngestIMAPOAuthClientIDMicrosoft is the operator's Entra public-client
 	// application ID for Outlook / M365 device-code auth. Empty uses Suchi's
 	// shipped registration; public clients carry no client secret.
@@ -134,7 +122,7 @@ type Config struct {
 	//     annotate the file.
 	//   DecryptKeyPath — AES-256-GCM key file for sealing operator-
 	//     supplied passwords in the decryption_passwords table. Auto-
-	//     generated 0600 on first boot (like the session key). Losing
+	//     generated 0600 on first boot. Losing
 	//     this file loses ALL stored passwords — operators back up
 	//     DATA_DIR wholesale.
 	IngestPasswordsFile string
@@ -190,9 +178,6 @@ func Load() (*Config, error) {
 		AdminEmail:                       env("ADMIN_EMAIL", ""),
 		TLSCertFile:                      env("TLS_CERT_FILE", ""),
 		TLSKeyFile:                       env("TLS_KEY_FILE", ""),
-		IngestIMAPURL:                    env("INGEST_IMAP_URL", ""),
-		IngestIMAPOwnerEmail:             env("INGEST_IMAP_OWNER_EMAIL", ""),
-		IngestIMAPTLSCAFile:              env("INGEST_IMAP_TLS_CA_FILE", ""),
 		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
 		IngestIMAPOAuthScopesMicrosoft:   env("INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", ""),
 		DevMode:                          env("SUCHI_DEV", "") == "1",
@@ -207,24 +192,20 @@ func Load() (*Config, error) {
 	}
 
 	var err error
-	// BODY_LIMIT applies to every HTTP request body (uploads,
-	// PATCHes, JSON POSTs). 500M by default because scanned PDFs
-	// routinely exceed the old 100M ceiling. `UPLOAD_MAX_BYTES` is
-	// accepted as an alias for the same value — the review used it,
-	// so we honor both. `0` disables the cap (for the operators who
-	// insist).
-	uploadEnv := env("UPLOAD_MAX_BYTES", "")
-	if uploadEnv == "" {
-		uploadEnv = env("BODY_LIMIT", "500M")
-	}
-	if c.BodyLimit, err = parseBytes(uploadEnv); err != nil {
-		return nil, fmt.Errorf("UPLOAD_MAX_BYTES / BODY_LIMIT: %w", err)
+	// BODY_LIMIT applies to every HTTP request body and watched file. 500M by
+	// default because scanned PDFs routinely exceed the old 100M ceiling. Zero
+	// disables the cap.
+	if c.BodyLimit, err = parseBytes(env("BODY_LIMIT", "500M")); err != nil {
+		return nil, fmt.Errorf("BODY_LIMIT: %w", err)
 	}
 	if c.BackupKeep, err = parseIntBounded("BACKUP_KEEP", env("BACKUP_KEEP", "7"), 0, 10_000); err != nil {
 		return nil, err
 	}
 	if c.BackupInterval, err = time.ParseDuration(env("BACKUP_INTERVAL", "24h")); err != nil {
 		return nil, fmt.Errorf("BACKUP_INTERVAL: %w", err)
+	}
+	if c.BackupInterval < 0 {
+		return nil, errors.New("BACKUP_INTERVAL: must be zero or positive")
 	}
 	if c.AuditRetentionDays, err = parseIntBounded("AUDIT_RETENTION_DAYS",
 		env("AUDIT_RETENTION_DAYS", "20"), 0, 100); err != nil {
@@ -249,7 +230,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("OCR_ENGINE: unknown value %q (want auto|tesseract|ocrmypdf)", c.OCREngine)
 	}
 
-	c.ScanBlankRemoval = strings.ToLower(env("SCAN_BLANK_REMOVAL", "auto")) != "off"
+	switch value := strings.ToLower(env("SCAN_BLANK_REMOVAL", "auto")); value {
+	case "auto":
+		c.ScanBlankRemoval = true
+	case "off":
+		c.ScanBlankRemoval = false
+	default:
+		return nil, fmt.Errorf("SCAN_BLANK_REMOVAL: unknown value %q (want auto|off)", value)
+	}
 	c.ScanBlankWhitenessThreshold = 0.995
 	if s := env("SCAN_BLANK_WHITENESS_THRESHOLD", ""); s != "" {
 		f, err := strconv.ParseFloat(s, 64)
@@ -259,7 +247,14 @@ func Load() (*Config, error) {
 		c.ScanBlankWhitenessThreshold = f
 	}
 
-	c.ScanSplitEnabled = strings.ToLower(env("SCAN_SPLIT_ENABLED", "off")) == "on"
+	switch value := strings.ToLower(env("SCAN_SPLIT_ENABLED", "off")); value {
+	case "on":
+		c.ScanSplitEnabled = true
+	case "off":
+		c.ScanSplitEnabled = false
+	default:
+		return nil, fmt.Errorf("SCAN_SPLIT_ENABLED: unknown value %q (want on|off)", value)
+	}
 	c.ScanSplitToken = env("SCAN_SPLIT_TOKEN", "SUCHI-SPLIT")
 	c.ScanSplitDPI = 150
 	if s := env("SCAN_SPLIT_DPI", ""); s != "" {
@@ -301,17 +296,18 @@ func Load() (*Config, error) {
 	if c.OIDCClientSecret, err = readSecret("OIDC_CLIENT_SECRET"); err != nil {
 		return nil, err
 	}
-	if c.IngestIMAPPassword, err = readSecret("INGEST_IMAP_PASSWORD"); err != nil {
-		return nil, err
-	}
 	if c.LLMAPIKey, err = readSecret("LLM_API_KEY"); err != nil {
 		return nil, err
 	}
 
-	c.SessionKeyPath = env("SESSION_KEY_FILE", filepath.Join(c.DataDir, ".session-key"))
-
 	if c.PublicURL == "" {
 		return nil, errors.New("PUBLIC_URL is required")
+	}
+	if err := validatePublicURL(c.PublicURL); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(c.ListenAddr) == "" {
+		return nil, errors.New("LISTEN_ADDR must not be empty")
 	}
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return nil, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must both be set or both unset")
@@ -326,6 +322,30 @@ func Load() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+func validatePublicURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("PUBLIC_URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || u.Opaque != "" {
+		return errors.New("PUBLIC_URL: must be an absolute http or https URL with a host")
+	}
+	if u.User != nil {
+		return errors.New("PUBLIC_URL: userinfo is not allowed")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return errors.New("PUBLIC_URL: query is not allowed")
+	}
+	if strings.Contains(raw, "#") {
+		return errors.New("PUBLIC_URL: fragment is not allowed")
+	}
+	if u.EscapedPath() != "" && u.EscapedPath() != "/" {
+		return errors.New("PUBLIC_URL: path is not supported; serve Suchi at the origin root")
+	}
+	return nil
 }
 
 func env(k, def string) string {
@@ -418,6 +438,12 @@ func parseBytes(s string) (int64, error) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, err
+	}
+	if n < 0 {
+		return 0, errors.New("must be zero or positive")
+	}
+	if n > (1<<63-1)/mult {
+		return 0, errors.New("value overflows int64 bytes")
 	}
 	return n * mult, nil
 }

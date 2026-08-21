@@ -17,13 +17,11 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,12 +40,14 @@ import (
 )
 
 const (
-	oauthFlowTTL  = 15 * time.Minute
-	maxOAuthFlows = 64
+	oauthFlowTTL         = 15 * time.Minute
+	maxOAuthFlows        = 64
+	maxOAuthFlowsPerUser = 4
 )
 
 type oauthFlowEntry struct {
 	clientID  string
+	ownerID   int64
 	expiresAt time.Time
 	completed *oauth.CompletedFlow
 	err       error
@@ -77,8 +77,19 @@ func (s *oauthFlowStore) put(handle string, entry oauthFlowEntry, now time.Time)
 			delete(s.entries, key)
 		}
 	}
-	if _, exists := s.entries[handle]; !exists && len(s.entries) >= maxOAuthFlows {
-		return false
+	if _, exists := s.entries[handle]; !exists {
+		if len(s.entries) >= maxOAuthFlows {
+			return false
+		}
+		owned := 0
+		for _, candidate := range s.entries {
+			if candidate.ownerID == entry.ownerID {
+				owned++
+			}
+		}
+		if owned >= maxOAuthFlowsPerUser {
+			return false
+		}
 	}
 	s.entries[handle] = entry
 	return true
@@ -277,6 +288,11 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.TLSCAFile != nil {
 		acc.TLSCAFile = strings.TrimSpace(*in.TLSCAFile)
+		if !isAdmin && acc.TLSCAFile != "" {
+			s.writeError(w, http.StatusForbidden, "admin_required",
+				"custom TLS CA files require the admin role")
+			return
+		}
 	}
 	if in.Folder != nil {
 		acc.Folder = strings.TrimSpace(*in.Folder)
@@ -286,6 +302,10 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.PollIntervalMin != nil {
 		acc.PollIntervalMin = *in.PollIntervalMin
+		if err := emailaccounts.ValidatePollInterval(acc.PollIntervalMin); err != nil {
+			s.writeError(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
 	}
 	if in.Username != nil {
 		acc.Username = strings.TrimSpace(*in.Username)
@@ -304,6 +324,10 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if in.SyncSince == nil {
 		nowTS := time.Now().Unix()
 		acc.SyncSince = &nowTS
+	} else if *in.SyncSince < 0 {
+		s.writeError(w, http.StatusBadRequest, "validation",
+			"sync_since must be zero or positive")
+		return
 	} else if *in.SyncSince > 0 {
 		v := *in.SyncSince
 		acc.SyncSince = &v
@@ -454,6 +478,11 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// Members can never re-owner a row via PATCH — silently ignore.
 	if !isAdmin {
+		if in.TLSCAFile != nil {
+			s.writeError(w, http.StatusForbidden, "admin_required",
+				"custom TLS CA files require the admin role")
+			return
+		}
 		in.OwnerID = nil
 	}
 	if in.OAuthAccountID != nil || in.SealedSecretB64 != nil {
@@ -478,6 +507,12 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		SyncSince:       in.SyncSince,
 		Enabled:         in.Enabled,
 		MarkSeen:        in.MarkSeen,
+	}
+	if patch.PollIntervalMin != nil {
+		if err := emailaccounts.ValidatePollInterval(*patch.PollIntervalMin); err != nil {
+			s.writeError(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
 	}
 	if in.Provider != nil {
 		prov := emailaccounts.Provider(strings.TrimSpace(*in.Provider))
@@ -620,19 +655,24 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
+	fail := func(message string, detail error, exposeDetail bool) {
+		if detail != nil {
+			if exposeDetail {
+				message += ": " + detail.Error()
+			} else {
+				s.Log.Warn("api.email_accounts.test", "account_id", acc.ID, "err", detail.Error())
+			}
+		}
+		_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, message)
+		s.writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": message})
+	}
 
 	if acc.AuthMethod == emailaccounts.AuthXOAuth2 && s.EmailwatchMSAL == nil {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      false,
-			"message": "Microsoft OAuth is unavailable on this server",
-		})
+		fail("Microsoft OAuth is unavailable on this server", nil, false)
 		return
 	}
 	if s.EmailwatchAEAD == nil {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      false,
-			"message": "server AEAD key not configured",
-		})
+		fail("Stored credentials are unavailable; check the server encryption configuration", nil, false)
 		return
 	}
 
@@ -641,35 +681,24 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	case emailaccounts.AuthPassword:
 		pw, err := emailaccounts.OpenPassword(s.EmailwatchAEAD, acc.SealedSecret)
 		if err != nil {
-			s.writeJSON(w, http.StatusOK, map[string]any{
-				"ok":      false,
-				"message": "unseal password: " + err.Error(),
-			})
+			fail("The stored password is unavailable; replace it and try again", err, false)
 			return
 		}
 		authFn = func(c *imapclient.Client) error { return c.Login(acc.Username, pw) }
 	case emailaccounts.AuthXOAuth2:
 		credential, err := emailaccounts.OpenMicrosoftOAuthCredential(s.EmailwatchAEAD, acc.SealedSecret)
 		if err != nil {
-			s.writeJSON(w, http.StatusOK, map[string]any{
-				"ok":      false,
-				"message": "unseal token cache: " + err.Error(),
-			})
+			fail("The Microsoft credential is unavailable; sign in again", err, false)
 			return
 		}
 		client, err := s.EmailwatchMSAL.ClientFor(credential.ClientID)
 		if err != nil {
-			s.writeJSON(w, http.StatusOK, map[string]any{
-				"ok": false, "message": "resolve OAuth client: " + err.Error(),
-			})
+			fail("The Microsoft sign-in registration is unavailable; check server configuration", err, false)
 			return
 		}
 		refreshed, err := client.AcquireTokenSilent(r.Context(), credential.CacheJSON, acc.OAuthAccountID)
 		if err != nil {
-			s.writeJSON(w, http.StatusOK, map[string]any{
-				"ok":      false,
-				"message": "acquire token: " + err.Error(),
-			})
+			fail("The Microsoft session expired; sign in again", err, false)
 			return
 		}
 		if refreshed.Rotated {
@@ -685,47 +714,26 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 			return c.Authenticate(oauth.XOAUTH2Client(acc.Username, token))
 		}
 	default:
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      false,
-			"message": "unknown auth method: " + string(acc.AuthMethod),
-		})
+		fail("The stored authentication method is unsupported", nil, false)
 		return
 	}
 
-	addr := fmt.Sprintf("%s:%d", acc.Host, acc.Port)
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
-		Config:    &tls.Config{ServerName: acc.Host, MinVersion: tls.VersionTLS12},
-	}
-	conn, err := dialer.DialContext(r.Context(), "tcp", addr)
+	dialCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	c, err := emailwatch.DialAccount(dialCtx, acc)
 	if err != nil {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "message": "connect: " + err.Error(),
-		})
-		return
-	}
-	c, err := imapclient.New(conn)
-	if err != nil {
-		_ = conn.Close()
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "message": "imap handshake: " + err.Error(),
-		})
+		fail("Connect failed", err, true)
 		return
 	}
 	defer c.Logout()
 
 	if err := authFn(c); err != nil {
-		// Persist the failure so the list-page dot reflects reality
-		// even if the poll loop hasn't run since.
-		_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, err.Error())
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "message": "login: " + err.Error(),
-		})
+		fail("Login failed", err, true)
 		return
 	}
-	// Success — clear any stale last_error and stamp a fresh sync
-	// time so the list-page indicator flips green.
-	_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, time.Now().Unix(), "")
+	// A connection test is not a mailbox sync. Clear a stale error while
+	// preserving the last successful poll timestamp.
+	_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, "")
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Connected — mailbox reachable.",
 	})
@@ -735,7 +743,8 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 
 // StartEmailAccountOAuth — POST /api/email-accounts/oauth/start.
 func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) {
-	if p, _ := s.requireCapability(w, r, authz.CapMailboxes); p == nil {
+	p, _ := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
 		return
 	}
 	var body struct {
@@ -767,7 +776,7 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	entry := oauthFlowEntry{clientID: clientID, expiresAt: now.Add(oauthFlowTTL)}
+	entry := oauthFlowEntry{clientID: clientID, ownerID: p.UserID, expiresAt: now.Add(oauthFlowTTL)}
 	if !s.oauthFlows.put(handle, entry, now) {
 		s.writeError(w, http.StatusTooManyRequests, "too_many_flows",
 			"too many Microsoft sign-ins are already pending")
@@ -861,6 +870,10 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer s.oauthFlows.release(body.FlowHandle)
+	if entry.ownerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "flow_gone", "flow_handle unknown or already consumed")
+		return
+	}
 
 	if entry.clientID == "" {
 		s.writeError(w, http.StatusNotFound, "flow_gone", "OAuth flow has no issuing registration")

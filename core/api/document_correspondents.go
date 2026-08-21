@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -54,7 +53,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 		Role string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}
@@ -182,6 +181,10 @@ func (s *Server) ListDocCorrespondents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
 	}
 	if out == nil {
 		out = []DocCorrespondent{}

@@ -196,7 +196,10 @@ func Normalize(ctx context.Context, src io.Reader, log *slog.Logger, opts Option
 		if errors.Is(err, sandbox.ErrTimeout) {
 			return nil, fmt.Errorf("qpdf timeout after %s: %s", res.Duration, tail(res.Stderr))
 		}
-		data, _ := os.ReadFile(inputPath)
+		data, readErr := os.ReadFile(inputPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("qpdf: reread input after failure: %w", readErr)
+		}
 		if passwordErr {
 			log.Info("qpdf.needs_password",
 				"tried_candidates", len(opts.Passwords),

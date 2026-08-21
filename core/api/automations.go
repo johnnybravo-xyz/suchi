@@ -4,7 +4,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -56,7 +55,7 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body automations.Automation
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
@@ -106,7 +105,7 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var patch automations.AutomationPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := decodeJSON(r, &patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}

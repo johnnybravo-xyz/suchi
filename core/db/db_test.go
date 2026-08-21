@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -74,5 +76,13 @@ func TestOpenAndMigrate(t *testing.T) {
 	// Re-migrate: must be a no-op (idempotent).
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatalf("re-migrate: %v", err)
+	}
+
+	tooNew := migs[len(migs)-1].Version + 1
+	if _, err := d.Write.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(tooNew)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, log); err == nil || !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("newer database must be rejected, got %v", err)
 	}
 }

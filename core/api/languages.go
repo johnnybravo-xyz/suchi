@@ -53,11 +53,16 @@ func (s *Server) ListLanguages(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var stored string
 		if err := rows.Scan(&stored); err != nil {
-			continue
+			s.serverErr(w, "languages.scan", err)
+			return
 		}
 		for _, code := range lang.Parse(stored) {
 			counts[code]++
 		}
+	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "languages.iterate", err)
+		return
 	}
 
 	out := make([]LanguageCount, 0, len(counts))

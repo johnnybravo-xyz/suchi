@@ -3,6 +3,7 @@ package api
 // Approval state machines are separate from trigger-action automations.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -102,8 +103,12 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 		WHERE slug = ? AND active = 1
 		ORDER BY version DESC LIMIT 1
 	`, slug).Scan(&id, &version, &specJSON)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "no_def", "no active approval flow for slug")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "approval.getdef", err)
 		return
 	}
 	var spec approvals.Spec
@@ -120,7 +125,8 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 }
 
 // ApprovalStart kicks off a run for slug against doc_id. Body:
-// {"doc_id":N, "vars":{...}}. Any authenticated member.
+// {"doc_id":N, "vars":{...}}. Document-bound runs require change access;
+// documentless runs require an administrator.
 func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context())
 	if actor == nil {
@@ -147,6 +153,11 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.DocID < 0 {
 		s.writeError(w, http.StatusBadRequest, "bad_doc_id", "doc_id must be non-negative")
+		return
+	}
+	if body.DocID == 0 && actor.Role != "admin" {
+		s.writeError(w, http.StatusForbidden, "forbidden",
+			"documentless approval runs require the admin role")
 		return
 	}
 	if body.DocID > 0 && !s.authorize(w, r, actor, authz.KindDocument, body.DocID, authz.PermChange) {
@@ -193,7 +204,13 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
-	if run.DocID != nil && !s.authorize(w, r, actor, authz.KindDocument, *run.DocID, authz.PermView) {
+	if run.DocID == nil {
+		if actor.Role != "admin" {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"documentless approval runs require the admin role")
+			return
+		}
+	} else if !s.authorize(w, r, actor, authz.KindDocument, *run.DocID, authz.PermView) {
 		return
 	}
 	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
@@ -279,7 +296,17 @@ func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 	}
 	// Reason is optional; empty body is fine.
-	_ = decodeJSON(r, &body)
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+			return
+		}
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if len(body.Reason) > 4096 {
+		s.writeError(w, http.StatusBadRequest, "bad_reason", "reason must be at most 4096 bytes")
+		return
+	}
 	actor := auth.FromContext(r.Context())
 	if err := approvals.Cancel(r.Context(), id, body.Reason, actor); err != nil {
 		switch {

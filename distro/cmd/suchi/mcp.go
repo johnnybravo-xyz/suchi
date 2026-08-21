@@ -1,4 +1,4 @@
-// Command suchi mcp — MCP v2 server adapter over suchi's REST API.
+// Command suchi mcp — MCP server adapter over suchi's REST API.
 //
 // This is a thin adapter, not a second API. Every tool maps 1:1 to
 // a /api/ call, no business logic that isn't a REST call underneath.
@@ -7,7 +7,7 @@
 //
 // Two transports (matches the MCP SDK):
 //   - stdio (default) — for local integrations like Claude Desktop
-//   - HTTP+SSE       — for remote agents, `--http :port` flag
+//   - Streamable HTTP — for remote agents, `--http :port` flag
 //
 // Auth (both transports):
 //   SUCHI_URL   base URL of the suchi API (e.g. https://suchi.local:8000)
@@ -50,7 +50,7 @@ func runMCP(args []string) int {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var (
-		httpAddr = fs.String("http", "", "if non-empty, listen for MCP HTTP+SSE on this addr (default: stdio)")
+		httpAddr = fs.String("http", "", "if non-empty, listen for MCP over Streamable HTTP on this addr (default: stdio)")
 		baseURL  = fs.String("url", "", "suchi API base URL; overrides SUCHI_URL/PUBLIC_URL env")
 		token    = fs.String("token", "", "suchi API token; overrides SUCHI_TOKEN env")
 	)
@@ -71,8 +71,15 @@ func runMCP(args []string) int {
 			"mcp: no API token — set SUCHI_TOKEN or pass --token")
 		return 2
 	}
-	if _, err := url.Parse(base); err != nil {
+	target, err := url.ParseRequestURI(base)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: bad --url %q: %v\n", base, err)
+		return 2
+	}
+	if target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") ||
+		target.User != nil || target.RawQuery != "" || target.Fragment != "" ||
+		(target.EscapedPath() != "" && target.EscapedPath() != "/") {
+		fmt.Fprintf(os.Stderr, "mcp: bad --url %q: want an http(s) origin without credentials, path, query, or fragment\n", base)
 		return 2
 	}
 	base = strings.TrimRight(base, "/")
@@ -96,12 +103,18 @@ func runMCP(args []string) int {
 	// Transport dispatch.
 	ctx := context.Background()
 	if *httpAddr != "" {
-		// HTTP+SSE — for remote agents.
+		// Streamable HTTP — for remote agents.
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
 		}, nil)
-		log.Printf("mcp: listening on %s (HTTP+SSE)", *httpAddr)
-		if err := http.ListenAndServe(*httpAddr, handler); err != nil {
+		log.Printf("mcp: listening on %s (Streamable HTTP; listener has no separate authentication)", *httpAddr)
+		httpServer := &http.Server{
+			Addr:              *httpAddr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		if err := httpServer.ListenAndServe(); err != nil {
 			log.Printf("mcp: http listen: %v", err)
 			return 1
 		}

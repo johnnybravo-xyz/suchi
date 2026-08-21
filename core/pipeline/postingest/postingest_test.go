@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -213,6 +215,86 @@ func writeExecutable(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFanOutSegmentsRetriesBeforeRetiringParent(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source pdf"))
+
+	binDir := t.TempDir()
+	failMarker := filepath.Join(binDir, "failed-once")
+	writeExecutable(t, filepath.Join(binDir, "qpdf"), fmt.Sprintf(`#!/bin/sh
+if [ "$4" = "3" ] && [ ! -f %q ]; then
+  : > %q
+  echo "transient failure" >&2
+  exit 2
+fi
+printf 'segment-%%s' "$4"
+`, failMarker, failMarker))
+	t.Setenv("PATH", binDir)
+
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	segments := []docsplit.Segment{{Start: 1, End: 1}, {Start: 3, End: 3}}
+	fanOut, err := h.fanOutSegments(ctx, h.log, parentID, []byte("source pdf"), segments)
+	if err == nil || fanOut {
+		t.Fatalf("first fan-out = (%v, %v), want retryable failure", fanOut, err)
+	}
+	assertSplitState(t, d, parentID, false, 1)
+
+	fanOut, err = h.fanOutSegments(ctx, h.log, parentID, []byte("source pdf"), segments)
+	if err != nil || !fanOut {
+		t.Fatalf("retry fan-out = (%v, %v), want success", fanOut, err)
+	}
+	assertSplitState(t, d, parentID, true, 2)
+
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT title FROM documents WHERE split_parent_id = ? ORDER BY split_index
+	`, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	wantTitles := []string{"opaque.bin (part 1/2)", "opaque.bin (part 2/2)"}
+	for i := 0; rows.Next(); i++ {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			t.Fatal(err)
+		}
+		if i >= len(wantTitles) || title != wantTitles[i] {
+			t.Fatalf("child %d title = %q, want %q", i+1, title, wantTitles[i])
+		}
+	}
+}
+
+func assertSplitState(t *testing.T, d *db.DB, parentID int64, parentTrashed bool, wantChildren int) {
+	t.Helper()
+	ctx := context.Background()
+	var (
+		trashed  sql.NullInt64
+		children int
+		jobs     int
+	)
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT trashed_at FROM documents WHERE id = ?`, parentID).Scan(&trashed); err != nil {
+		t.Fatal(err)
+	}
+	if trashed.Valid != parentTrashed {
+		t.Fatalf("parent trashed = %v, want %v", trashed.Valid, parentTrashed)
+	}
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM documents WHERE split_parent_id = ?`, parentID).Scan(&children); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM jobs
+		WHERE kind = ? AND doc_id IN (SELECT id FROM documents WHERE split_parent_id = ?)
+	`, Kind, parentID).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if children != wantChildren || jobs != wantChildren {
+		t.Fatalf("split children/jobs = %d/%d, want %d/%d", children, jobs, wantChildren, wantChildren)
 	}
 }
 

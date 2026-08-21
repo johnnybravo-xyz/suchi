@@ -25,8 +25,21 @@ import (
 
 func TestPreviewCSP_SandboxHeaderSet(t *testing.T) {
 	s := newUISrv(t)
+	for _, path := range []string{"/preview/1", "/download/1"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.SetPathValue("id", "1")
+		if strings.HasPrefix(path, "/preview/") {
+			s.Preview(rec, req)
+		} else {
+			s.Download(rec, req)
+		}
+		if rec.Code != 401 {
+			t.Fatalf("unauthenticated %s status = %d, want 401", path, rec.Code)
+		}
+	}
 	ctx := auth.WithPrincipal(context.Background(),
-		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "member", Email: "m@example.com"})
+		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin", Email: "admin@example.com"})
 
 	// No doc seeded — Preview falls through to serveBlob which 404s.
 	// The CSP header is set before serveBlob runs, so the recorder

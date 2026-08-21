@@ -410,7 +410,10 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 	}
 
 	// Blobs. The original is required; the archive is optional.
-	origPath, archPath := FilePaths(opts.BundleRoot, in.Fields)
+	origPath, archPath, err := FilePaths(opts.BundleRoot, in.Fields)
+	if err != nil {
+		return docResult{}, err
+	}
 	origInfo, err := os.Stat(origPath)
 	if err != nil {
 		return docResult{}, fmt.Errorf("original file %s: %w", origPath, err)

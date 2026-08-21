@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <title>Sign in · suchi{{ if .DemoMode }} · Demo{{ end }}</title>
+  <title>{{msg "auth.login.title"}} · suchi{{ if .DemoMode }} · Demo{{ end }}</title>
   <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
   <link rel="alternate icon" type="image/x-icon" href="/assets/brand/favicon.ico">
   <link rel="apple-touch-icon" href="/assets/brand/favicon.ico">
@@ -15,27 +15,19 @@
 <body class="auth">
   <main class="login-card">
     <span class="brand-hero" role="img" aria-label="suchi"></span>
-    <h1 class="brand">Sign in</h1>
-    <p class="muted">to continue to suchi.</p>
+    <h1 class="brand">{{msg "auth.login.title"}}</h1>
+    <p class="muted">{{msg "auth.login.subtitle"}}</p>
     {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
-    {{ if and .DemoLoginEmail .DemoLoginPassword }}
-    <p class="demo-hint">
-      Public demo — use <code>{{ .DemoLoginEmail }}</code> / <code>{{ .DemoLoginPassword }}</code>.
-      Logged-in visitors share one identity; browse without logging in for a private sandbox.
-    </p>
-    {{ end }}
     <form method="post" action="/login">
       <label>
-        <span>Email</span>
-        <input name="email" type="email" autocomplete="username" required autofocus
-               {{ if .DemoLoginEmail }}value="{{ .DemoLoginEmail }}"{{ end }}>
+        <span>{{msg "auth.login.email"}}</span>
+        <input name="email" type="email" autocomplete="username" required autofocus>
       </label>
       <label>
-        <span>Password</span>
-        <input name="password" type="password" autocomplete="current-password" required
-               {{ if .DemoLoginPassword }}value="{{ .DemoLoginPassword }}"{{ end }}>
+        <span>{{msg "auth.login.password"}}</span>
+        <input name="password" type="password" autocomplete="current-password" required>
       </label>
-      <button type="submit">Sign in</button>
+      <button type="submit">{{msg "auth.login.submit"}}</button>
     </form>
   </main>
 </body>

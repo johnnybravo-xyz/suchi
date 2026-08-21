@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -28,16 +30,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
-	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
-)
-
-// Public demo credentials. Rendered as a hint on /login when
-// SUCHI_DEMO_MODE=1 (see ui.Server.DemoHint) so visitors who bother to
-// open the login page know how to get in. Not a secret by design —
-// the anon-session tier is the primary landing path anyway.
-const (
-	DemoLoginEmail    = "user@demo.suchi.page"
-	DemoLoginPassword = "demo"
 )
 
 func runDemo(args []string) int {
@@ -110,34 +102,15 @@ func runDemo(args []string) int {
 
 	now := time.Now().Unix()
 
-	// Demo mode + empty DB: mint the public demo admin. Credentials
-	// are intentionally fixed + trivial (published on the login page)
-	// so a visitor who wants to "log in" can, but the SPA's default
-	// landing goes through the anon-session tier and never asks.
-	//
-	// Security posture:
-	//   - Role stays admin so seeded docs stay visible to the login
-	//     path and rescan seeding has an owner. Shared-state mutations
-	//     from this session are still blocked by httpx.DemoReadOnly
-	//     (the middleware guards regardless of role).
-	//   - Fixed password is hashed with argon2id via localauth.HashPassword,
-	//     matching every other credentialed row. Publishing the plaintext
-	//     is a demo affordance, not a leak.
-	//   - Guarded on cfg.DemoMode so a normal `suchi demo` invocation
-	//     never plants a known-password admin on a real install.
-	//   - INSERT ... WHERE NOT EXISTS keeps re-runs idempotent.
+	// Demo mode needs an owner for the shared corpus, not a login. The row has
+	// no password hash, so visitors can only use anonymous and scratch sessions.
 	if cfg.DemoMode {
-		hash, err := localauth.HashPassword(DemoLoginPassword)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "demo admin hash: %v\n", err)
-			return 1
-		}
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `
-				INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
-				SELECT ?, 'Demo User', 'admin', ?, ?, ?
+				INSERT INTO users(email, display_name, role, created_at, updated_at)
+				SELECT ?, 'Demo corpus', 'admin', ?, ?
 				WHERE NOT EXISTS (SELECT 1 FROM users)
-			`, DemoLoginEmail, hash, now, now)
+			`, authz.DemoCorpusOwnerEmail, now, now)
 			return err
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "demo admin: %v\n", err)
@@ -148,12 +121,16 @@ func runDemo(args []string) int {
 	// Look up an owner for corpus fixtures. Prefer an admin; fall back to
 	// the first user. A normal fresh install must complete setup first.
 	var demoUser int64
-	_ = d.Read.QueryRowContext(ctx, `
+	err = d.Read.QueryRowContext(ctx, `
 		SELECT id FROM users
 		WHERE disabled = 0
 		ORDER BY role = 'admin' DESC, id ASC
 		LIMIT 1
 	`).Scan(&demoUser)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fmt.Fprintf(os.Stderr, "corpus owner lookup: %v\n", err)
+		return 1
+	}
 
 	// Manifest-driven corpus seed. For every fixture in the manifest:
 	//   - stream the file into the CAS (dedup is automatic on hash)
@@ -241,15 +218,22 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 		// 4. JD category by manifest code; fall back to inbox.
 		var jdCatID int64
 		if f.JDCategory > 0 {
-			_ = d.Read.QueryRowContext(ctx,
+			err := d.Read.QueryRowContext(ctx,
 				`SELECT id FROM jd_categories WHERE code = ?`, f.JDCategory).
 				Scan(&jdCatID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, fmt.Errorf("look up JD category %d: %w", f.JDCategory, err)
+			}
 		}
 		if jdCatID == 0 {
-			if err := d.Read.QueryRowContext(ctx,
-				`SELECT id FROM jd_categories WHERE code = 10`).Scan(&jdCatID); err != nil {
-				_ = d.Read.QueryRowContext(ctx,
+			err := d.Read.QueryRowContext(ctx,
+				`SELECT id FROM jd_categories WHERE code = 10`).Scan(&jdCatID)
+			if errors.Is(err, sql.ErrNoRows) {
+				err = d.Read.QueryRowContext(ctx,
 					`SELECT id FROM jd_categories ORDER BY id LIMIT 1`).Scan(&jdCatID)
+			}
+			if err != nil {
+				return false, fmt.Errorf("look up fallback JD category: %w", err)
 			}
 		}
 

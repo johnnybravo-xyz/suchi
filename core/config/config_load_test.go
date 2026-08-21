@@ -3,8 +3,43 @@ package config
 import (
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestPublicURLValidation(t *testing.T) {
+	for _, raw := range []string{
+		"localhost:8000",
+		"ftp://example.com",
+		"https:///missing-host",
+		"https://:443",
+		"https://user@example.com",
+		"https://example.com?debug=1",
+		"https://example.com?",
+		"https://example.com#fragment",
+		"https://example.com#",
+		"https://example.com/archive",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", raw)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "PUBLIC_URL") {
+				t.Fatalf("Load error = %v, want PUBLIC_URL validation error", err)
+			}
+		})
+	}
+
+	for _, raw := range []string{"http://localhost:8000", "https://suchi.example.com/"} {
+		t.Run(raw, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", raw)
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load(%q): %v", raw, err)
+			}
+		})
+	}
+}
 
 func TestDemoGlobalRPSDefaultAndDisable(t *testing.T) {
 	t.Setenv("PUBLIC_URL", "http://localhost")
@@ -111,5 +146,23 @@ func TestLLMConfidenceThreshold(t *testing.T) {
 	t.Setenv("LLM_CONFIDENCE_THRESHOLD", "0.49")
 	if _, err := Load(); err == nil {
 		t.Fatal("out-of-range LLM confidence threshold was accepted")
+	}
+}
+
+func TestInvalidRuntimeSettings(t *testing.T) {
+	for key, value := range map[string]string{
+		"BODY_LIMIT":            "-1",
+		"PDF_MAX_CONTENT_BYTES": "9223372036854775807G",
+		"BACKUP_INTERVAL":       "-1h",
+		"LISTEN_ADDR":           "",
+	} {
+		t.Run(key, func(t *testing.T) {
+			isolateConfigEnv(t)
+			t.Setenv("PUBLIC_URL", "http://localhost")
+			t.Setenv(key, value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s=%q was accepted", key, value)
+			}
+		})
 	}
 }

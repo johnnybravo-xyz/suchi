@@ -64,6 +64,8 @@ const Kind = "post-classify"
 // after a worker starts a job but before it snapshots the runtime config.
 var ErrDisabled = errors.New("llm-classifier: disabled")
 
+var errEgressAckRequired = errors.New("llm-classifier: non-local endpoint requires EgressAck=true")
+
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
 	EndpointURL string // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
@@ -154,15 +156,59 @@ func NewDisabled(log *slog.Logger) *Plugin {
 // keeps booting; the classifier just stays off.
 func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	log = log.With("component", "llm-classifier")
-	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
-	cfg.Model = strings.TrimSpace(cfg.Model)
-
-	if cfg.EndpointURL == "" {
+	if strings.TrimSpace(cfg.EndpointURL) == "" {
 		log.Info("llm-classifier.disabled", "reason", "LLM_ENDPOINT_URL not set")
 		return nil, nil
 	}
+	rt, err := runtimeFromConfig(cfg)
+	if errors.Is(err, errEgressAckRequired) {
+		log.Warn("llm-classifier.disabled",
+			"reason", "non-local endpoint requires LLM_EGRESS_ACK=true",
+			"endpoint", strings.TrimSpace(cfg.EndpointURL))
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !rt.local {
+		log.Warn("llm-classifier.egress",
+			"endpoint", rt.cfg.EndpointURL,
+			"host", rt.host,
+			"msg", "OCR text of every classified document leaves the box")
+	}
+	p := &Plugin{log: log}
+	p.rt.Store(rt)
+	return p, nil
+}
+
+// SetConfig atomically swaps the plugin's runtime config. Same
+// validation as New(); on failure the old config stays live. Called by
+// the setup wizard's /api/admin/settings/llm handler so an operator
+// doesn't have to restart to try a different endpoint. The complete runtime,
+// including the request timeout, swaps as one snapshot.
+func (p *Plugin) SetConfig(cfg Config) error {
+	rt, err := runtimeFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	p.rt.Store(rt)
+	if !rt.local {
+		p.log.Warn("llm-classifier.reload.egress",
+			"endpoint", rt.cfg.EndpointURL, "host", rt.host)
+	} else {
+		p.log.Info("llm-classifier.reload", "endpoint", rt.cfg.EndpointURL, "model", rt.cfg.Model)
+	}
+	return nil
+}
+
+func runtimeFromConfig(cfg Config) (*runtime, error) {
+	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	if cfg.EndpointURL == "" {
+		return nil, errors.New("llm-classifier: endpoint URL required")
+	}
 	if cfg.Model == "" {
-		return nil, errors.New("llm-classifier: LLM_MODEL is required when LLM_ENDPOINT_URL is set")
+		return nil, errors.New("llm-classifier: model required")
 	}
 	u, err := parseEndpointURL(cfg.EndpointURL)
 	if err != nil {
@@ -170,11 +216,7 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	}
 	local := netutil.IsLocalHost(u.Hostname())
 	if !local && !cfg.EgressAck {
-		log.Warn("llm-classifier.disabled",
-			"reason", "non-local endpoint requires LLM_EGRESS_ACK=true",
-			"endpoint", cfg.EndpointURL,
-			"host", u.Hostname())
-		return nil, nil
+		return nil, errEgressAckRequired
 	}
 	if cfg.ConfidenceThreshold == 0 {
 		cfg.ConfidenceThreshold = 0.7
@@ -188,65 +230,19 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	if cfg.MaxContentChars == 0 {
 		cfg.MaxContentChars = 8000
 	}
-	if !local {
-		log.Warn("llm-classifier.egress",
-			"endpoint", cfg.EndpointURL,
-			"host", u.Hostname(),
-			"msg", "OCR text of every classified document leaves the box")
-	}
-	p := &Plugin{log: log}
-	p.rt.Store(&runtime{
-		cfg: cfg, client: &http.Client{Timeout: cfg.Timeout},
+	return &runtime{
+		cfg: cfg, client: classifierHTTPClient(cfg.Timeout),
 		host: u.Hostname(), local: local,
-	})
-	return p, nil
+	}, nil
 }
 
-// SetConfig atomically swaps the plugin's runtime config. Same
-// validation as New(); on failure the old config stays live. Called by
-// the setup wizard's /api/admin/settings/llm handler so an operator
-// doesn't have to restart to try a different endpoint. The complete runtime,
-// including the request timeout, swaps as one snapshot.
-func (p *Plugin) SetConfig(cfg Config) error {
-	cfg.EndpointURL = strings.TrimSpace(cfg.EndpointURL)
-	cfg.Model = strings.TrimSpace(cfg.Model)
-	if cfg.EndpointURL == "" {
-		return errors.New("llm-classifier: endpoint URL required")
+func classifierHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	if cfg.Model == "" {
-		return errors.New("llm-classifier: model required")
-	}
-	u, err := parseEndpointURL(cfg.EndpointURL)
-	if err != nil {
-		return err
-	}
-	local := netutil.IsLocalHost(u.Hostname())
-	if !local && !cfg.EgressAck {
-		return errors.New("llm-classifier: non-local endpoint requires EgressAck=true")
-	}
-	if cfg.ConfidenceThreshold == 0 {
-		cfg.ConfidenceThreshold = 0.7
-	}
-	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
-		return errors.New("llm-classifier: confidence threshold must be between 0 and 1")
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = 60 * time.Second
-	}
-	if cfg.MaxContentChars == 0 {
-		cfg.MaxContentChars = 8000
-	}
-	p.rt.Store(&runtime{
-		cfg: cfg, client: &http.Client{Timeout: cfg.Timeout},
-		host: u.Hostname(), local: local,
-	})
-	if !local {
-		p.log.Warn("llm-classifier.reload.egress",
-			"endpoint", cfg.EndpointURL, "host", u.Hostname())
-	} else {
-		p.log.Info("llm-classifier.reload", "endpoint", cfg.EndpointURL, "model", cfg.Model)
-	}
-	return nil
 }
 
 // Disable atomically stops new classify calls. The durable subscriber stays
@@ -297,8 +293,8 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 	if !rt.local {
 		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
 	}
-	if len(content) > cfg.MaxContentChars {
-		content = content[:cfg.MaxContentChars] + "\n… [truncated]"
+	if utf8.RuneCountInString(content) > cfg.MaxContentChars {
+		content = truncateChars(content, cfg.MaxContentChars) + "\n… [truncated]"
 	}
 	body := buildRequestBody(cfg.Model, title, content, jdCats, siblingTitles)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -336,6 +332,17 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 	}
 
 	return parseChatCompletion(rb)
+}
+
+func truncateChars(s string, max int) string {
+	count := 0
+	for i := range s {
+		if count == max {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 // ---------- helpers, kept unexported + testable ----------

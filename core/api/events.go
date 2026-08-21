@@ -20,12 +20,11 @@
 //     full-history client on this endpoint; use `audit_events` via a
 //     SIEM sink for that.
 //
-//   - Visibility: rows with object_kind='document' are filtered
-//     through the same DocVisibilityWhere fragment the list endpoints
-//     use — an ACL-restricted user can't see events about docs they
-//     couldn't read. Rows with operational kinds (job.dead,
-//     backup.written) require admin. Everything else is available to
-//     any authed caller with events:read.
+//   - Visibility: document rows follow the same visibility filter as
+//     document lists. Approval rows are visible to their assignee.
+//     Other rows are visible to their actor, while admins can see the
+//     complete feed. This keeps audit metadata from becoming a second,
+//     weaker authorization surface.
 //
 //   - Kind filter: ?kinds=a,b,c narrows the SELECT so a drawer that
 //     only wants the operational tail (job.dead, document.ingested)
@@ -42,13 +41,14 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
-	"github.com/johnnybravo-xyz/suchi/core/authz"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // EventRow is one entry in the /api/events/ result set.
@@ -69,12 +69,11 @@ type EventsResponse struct {
 	LatestID int64      `json:"latest_id"`
 }
 
-// operationalKinds are audit actions that reveal server-internal
-// state (dead jobs, snapshot activity) and thus require admin.
-// Extending this list is a security decision — see docs/api.mdx.
-var operationalKinds = map[string]bool{
-	"job.dead":       true,
-	"backup.written": true,
+type eventAuditRow struct {
+	id, ts            int64
+	actorKind, action string
+	actorID, objectID sql.NullInt64
+	objectKind        string
 }
 
 // feedHiddenKinds are audit actions that get recorded (for the
@@ -87,25 +86,6 @@ var feedHiddenKinds = map[string]bool{
 	"server.start":   true,
 	"audit.pruned":   true,
 	"jobs.reclaimed": true,
-}
-
-// docCentricKinds are events whose object_id points at a documents
-// row — these get filtered through DocVisibilityWhere. Everything
-// else (task_created for a workflow_task, share_link.*, etc.) is
-// visible to any authed caller with events:read; we take the audit
-// author's judgment on whether the surface was safe to record.
-var docCentricKinds = map[string]bool{
-	"document.create":               true,
-	"document.restore":              true,
-	"document.trash":                true,
-	"document.update":               true,
-	"document.upload.conflict":      true,
-	"document.ingested":             true,
-	"document.decrypt":              true,
-	"document.correspondent.add":    true,
-	"document.correspondent.remove": true,
-	"document.custom_field.set":     true,
-	"document.version.create":       true,
 }
 
 // ListEvents — GET /api/events/?since_id=<id>&kinds=a,b&limit=100.
@@ -137,17 +117,11 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 	requestedKinds := parseKindsCSV(r.URL.Query().Get("kinds"))
 	isAdmin := p.Role == "admin"
 
-	// Drop operational kinds from the filter list for non-admins and
-	// drop feed-hidden kinds for everyone. A member who asks for
-	// job.dead silently gets 0 rows for that kind — better than a 403
-	// that breaks the whole drawer. Same treatment for server.start
-	// and other lifecycle noise.
+	// Drop feed-hidden kinds for everyone. Unknown or inaccessible kinds
+	// naturally return no rows, which keeps rolling clients compatible.
 	kinds := make([]string, 0, len(requestedKinds))
 	for _, k := range requestedKinds {
 		if feedHiddenKinds[k] {
-			continue
-		}
-		if operationalKinds[k] && !isAdmin {
 			continue
 		}
 		kinds = append(kinds, k)
@@ -163,23 +137,16 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 			kindArgs = append(kindArgs, k)
 		}
 	case len(requestedKinds) > 0:
-		// Every requested kind was filtered out for lack of admin.
+		// Every requested kind was hidden from the feed.
 		s.writeJSON(w, http.StatusOK, EventsResponse{
 			Results: []EventRow{}, LatestID: sinceID,
 		})
 		return
 	default:
-		// No include filter — build a NOT IN of the kinds this caller
-		// isn't allowed / meant to see. Feed-hidden kinds are always
-		// excluded; operational kinds are excluded for non-admins.
-		hide := make([]string, 0, len(feedHiddenKinds)+len(operationalKinds))
+		// No include filter: omit lifecycle noise at the SQL layer.
+		hide := make([]string, 0, len(feedHiddenKinds))
 		for k := range feedHiddenKinds {
 			hide = append(hide, k)
-		}
-		if !isAdmin {
-			for k := range operationalKinds {
-				hide = append(hide, k)
-			}
 		}
 		placeholders := strings.Repeat("?,", len(hide)-1) + "?"
 		whereKind = "AND action NOT IN (" + placeholders + ")"
@@ -188,10 +155,13 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	groups, err := s.principalGroups(r.Context(), p.UserID)
-	if err != nil {
-		s.serverErr(w, "events.load_groups", err)
-		return
+	var groups []int64
+	if !isAdmin {
+		groups, err = s.principalGroups(r.Context(), p.UserID)
+		if err != nil {
+			s.serverErr(w, "events.load_groups", err)
+			return
+		}
 	}
 
 	// Pull limit*2 candidate rows so the visibility filter can drop
@@ -201,10 +171,14 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 	if sqlLimit > 400 {
 		sqlLimit = 400
 	}
-	q := `SELECT id, ts, action, object_kind, object_id
+	order := "id"
+	if sinceID == 0 {
+		order = "id DESC"
+	}
+	q := `SELECT id, ts, actor_kind, actor_id, action, object_kind, object_id
 	      FROM audit_events
 	      WHERE id > ? ` + whereKind + `
-	      ORDER BY id
+	      ORDER BY ` + order + `
 	      LIMIT ?`
 	args := append([]any{sinceID}, kindArgs...)
 	args = append(args, sqlLimit)
@@ -216,16 +190,11 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type rawRow struct {
-		id, ts     int64
-		action     string
-		objectKind string
-		objectID   sql.NullInt64
-	}
-	var raw []rawRow
+	var raw []eventAuditRow
 	for rows.Next() {
-		var r rawRow
-		if err := rows.Scan(&r.id, &r.ts, &r.action, &r.objectKind, &r.objectID); err != nil {
+		var r eventAuditRow
+		if err := rows.Scan(&r.id, &r.ts, &r.actorKind, &r.actorID,
+			&r.action, &r.objectKind, &r.objectID); err != nil {
 			s.serverErr(w, "events.scan", err)
 			return
 		}
@@ -246,14 +215,25 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 			docIDs = append(docIDs, rr.objectID.Int64)
 		}
 	}
-	titles := loadDocTitles(r.Context(), s.DB.Read, docIDs)
+	titles, err := loadDocTitles(r.Context(), s.DB.Read, docIDs)
+	if err != nil {
+		s.serverErr(w, "events.load_titles", err)
+		return
+	}
 
 	out := make([]EventRow, 0, limit)
 	latestID := sinceID
 	for _, rr := range raw {
-		latestID = rr.id
-		if docCentricKinds[rr.action] && rr.objectID.Valid {
-			if !isAdmin && !s.visibleDoc(r.Context(), p.UserID, groups, rr.objectID.Int64) {
+		if rr.id > latestID {
+			latestID = rr.id
+		}
+		if !isAdmin {
+			visible, err := s.eventVisible(r.Context(), p, groups, rr)
+			if err != nil {
+				s.serverErr(w, "events.visibility", err)
+				return
+			}
+			if !visible {
 				continue
 			}
 		}
@@ -272,33 +252,82 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if sinceID == 0 {
+		for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+			out[left], out[right] = out[right], out[left]
+		}
+	}
 	s.writeJSON(w, http.StatusOK, EventsResponse{
 		Results: out, LatestID: latestID,
 	})
 }
 
-// visibleDoc runs the doc-visibility WHERE against one specific
+func (s *Server) eventVisible(ctx context.Context, p *pluginapi.Principal, groups []int64, rr eventAuditRow) (bool, error) {
+	switch rr.objectKind {
+	case "document":
+		if !rr.objectID.Valid {
+			return false, nil
+		}
+		return s.visibleDoc(ctx, p, groups, rr.objectID.Int64)
+	case "approval_task":
+		if !rr.objectID.Valid {
+			return false, nil
+		}
+		return s.visibleApprovalTask(ctx, p, rr.objectID.Int64)
+	}
+	if !rr.actorID.Valid {
+		return false, nil
+	}
+	switch rr.actorKind {
+	case "user":
+		return p.UserID > 0 && rr.actorID.Int64 == p.UserID, nil
+	case "token":
+		return p.TokenID > 0 && rr.actorID.Int64 == p.TokenID, nil
+	default:
+		return false, nil
+	}
+}
+
+// visibleDoc runs the document-visibility WHERE against one specific
 // document id. Sub-millisecond at homelab scale — SQLite's read pool
 // serves it from the WAL cache in almost every case.
-func (s *Server) visibleDoc(ctx context.Context, userID int64, groups []int64, docID int64) bool {
-	if userID == 0 {
-		return false
-	}
-	frag, args := authz.DocVisibilityWhere(userID, groups)
+func (s *Server) visibleDoc(ctx context.Context, p *pluginapi.Principal, groups []int64, docID int64) (bool, error) {
+	frag, args := documentVisibilityWhere(p, groups)
 	q := "SELECT 1 FROM documents d WHERE d.id = ? AND " + frag + " LIMIT 1"
 	call := append([]any{docID}, args...)
 	var one int
 	err := s.DB.Read.QueryRowContext(ctx, q, call...).Scan(&one)
-	return err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *Server) visibleApprovalTask(ctx context.Context, p *pluginapi.Principal, taskID int64) (bool, error) {
+	if p.UserID == 0 {
+		return false, nil
+	}
+	userAssignee := fmt.Sprintf("user:%d", p.UserID)
+	roleAssignee := "role:" + p.Role
+	var one int
+	err := s.DB.Read.QueryRowContext(ctx, `
+		SELECT 1 FROM approval_tasks
+		WHERE id = ? AND assignee IN (?, ?)
+		LIMIT 1
+	`, taskID, userAssignee, roleAssignee).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // loadDocTitles batches a single SELECT over documents for every
 // distinct object_id referenced by the current window. Missing docs
 // (trashed hard-delete, wrong object_kind) simply aren't in the map;
 // renderSummary falls back to "document #N".
-func loadDocTitles(ctx context.Context, rdb *sql.DB, ids []int64) map[int64]string {
+func loadDocTitles(ctx context.Context, rdb *sql.DB, ids []int64) (map[int64]string, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
 	args := make([]any, len(ids))
@@ -308,7 +337,7 @@ func loadDocTitles(ctx context.Context, rdb *sql.DB, ids []int64) map[int64]stri
 	rows, err := rdb.QueryContext(ctx,
 		"SELECT id, title FROM documents WHERE id IN ("+placeholders+")", args...)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	out := make(map[int64]string, len(ids))
@@ -318,11 +347,14 @@ func loadDocTitles(ctx context.Context, rdb *sql.DB, ids []int64) map[int64]stri
 			title sql.NullString
 		)
 		if err := rows.Scan(&id, &title); err != nil {
-			return out
+			return nil, err
 		}
 		out[id] = title.String
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // renderSummary produces the human-readable one-liner the drawer

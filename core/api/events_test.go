@@ -4,10 +4,8 @@ package api
 //
 //   - since_id acts as a cursor (only newer rows return).
 //   - kinds= filters at the SQL layer.
-//   - Non-admin callers never see operational kinds (job.dead,
-//     backup.written) even when they explicitly ask for them.
-//   - Non-admin callers only see document.* events for docs they can
-//     see (owner match or ACL grant).
+//   - Members see documents they may view, assigned approvals, and
+//     their own non-document actions; operational metadata stays private.
 //   - Anonymous callers get 401.
 //   - latest_id echoes the cursor even when no rows come back so a
 //     poll loop can't spin.
@@ -39,6 +37,22 @@ func seedAuditEvent(t *testing.T, d *db.DB, ts int64, action, objKind string, ob
 		INSERT INTO audit_events(ts, actor_kind, action, object_kind, object_id)
 		VALUES (?, 'system', ?, ?, ?)
 	`, ts, action, objKind, objID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func seedUserAuditEvent(t *testing.T, d *db.DB, ts, userID int64, action, objKind string, objID int64) int64 {
+	t.Helper()
+	res, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO audit_events(ts, actor_kind, actor_id, action, object_kind, object_id)
+		VALUES (?, 'user', ?, ?, ?, ?)
+	`, ts, userID, action, objKind, objID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,21 +127,25 @@ func TestListEvents_SinceIDCursor(t *testing.T) {
 	docID := seedEventsDoc(t, s.DB, 1, "ITR-1", "sha_itr")
 	e1 := seedAuditEvent(t, s.DB, 100, "document.create", "document", docID)
 	e2 := seedAuditEvent(t, s.DB, 200, "document.ingested", "document", docID)
+	e3 := seedAuditEvent(t, s.DB, 300, "document.update", "document", docID)
 
-	// No since_id: both rows visible.
-	code, body := doListEvents(t, s, "/api/events/", adminPrincipal(1))
+	// No since_id returns the newest tail, in chronological order.
+	code, body := doListEvents(t, s, "/api/events/?limit=2", adminPrincipal(1))
 	if code != 200 {
 		t.Fatalf("status=%d", code)
 	}
 	if len(body.Results) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(body.Results))
 	}
-	if body.LatestID != e2 {
-		t.Errorf("latest_id=%d, want %d", body.LatestID, e2)
+	if body.Results[0].ID != e2 || body.Results[1].ID != e3 {
+		t.Errorf("tail order=%v, want [%d %d]", body.Results, e2, e3)
+	}
+	if body.LatestID != e3 {
+		t.Errorf("latest_id=%d, want %d", body.LatestID, e3)
 	}
 
-	// since_id=e1: only e2 comes back.
-	code, body = doListEvents(t, s, "/api/events/?since_id="+itoa(e1), adminPrincipal(1))
+	// A cursor continues forwards rather than returning another tail.
+	code, body = doListEvents(t, s, "/api/events/?limit=1&since_id="+itoa(e1), adminPrincipal(1))
 	if code != 200 {
 		t.Fatalf("status=%d", code)
 	}
@@ -135,16 +153,16 @@ func TestListEvents_SinceIDCursor(t *testing.T) {
 		t.Errorf("cursor filter failed: %+v", body.Results)
 	}
 
-	// since_id=e2: empty, latest_id echoes the cursor.
-	code, body = doListEvents(t, s, "/api/events/?since_id="+itoa(e2), adminPrincipal(1))
+	// since_id=e3: empty, latest_id echoes the cursor.
+	code, body = doListEvents(t, s, "/api/events/?since_id="+itoa(e3), adminPrincipal(1))
 	if code != 200 {
 		t.Fatalf("status=%d", code)
 	}
 	if len(body.Results) != 0 {
 		t.Errorf("expected 0 rows, got %d", len(body.Results))
 	}
-	if body.LatestID != e2 {
-		t.Errorf("empty response should echo cursor, got %d want %d", body.LatestID, e2)
+	if body.LatestID != e3 {
+		t.Errorf("empty response should echo cursor, got %d want %d", body.LatestID, e3)
 	}
 }
 
@@ -166,8 +184,11 @@ func TestListEvents_KindsFilter(t *testing.T) {
 
 func TestListEvents_OperationalKindsAdminOnly(t *testing.T) {
 	s := newEventsServer(t)
+	seedUser(t, s.DB, 1)
 	seedUser(t, s.DB, 2)
 	_ = seedAuditEvent(t, s.DB, 100, "job.dead", "job", 42)
+	other := seedUserAuditEvent(t, s.DB, 101, 1, "tag.create", "tag", 1)
+	own := seedUserAuditEvent(t, s.DB, 102, 2, "tag.create", "tag", 2)
 
 	// Member asking explicitly for job.dead gets an empty set — the
 	// kind is silently dropped from the filter.
@@ -198,6 +219,12 @@ func TestListEvents_OperationalKindsAdminOnly(t *testing.T) {
 		if r.Kind == "job.dead" {
 			t.Errorf("member/nofilter leaked job.dead: %+v", r)
 		}
+		if r.ID == other {
+			t.Errorf("member/nofilter leaked another user's event: %+v", r)
+		}
+	}
+	if len(body.Results) != 1 || body.Results[0].ID != own {
+		t.Errorf("member should see only their own non-document event: %+v", body.Results)
 	}
 }
 
@@ -206,10 +233,11 @@ func TestListEvents_FeedHiddenKinds(t *testing.T) {
 	// not user notifications — the drawer must skip them for every
 	// caller, admin included, whether or not they're named in ?kinds=.
 	s := newEventsServer(t)
+	seedUser(t, s.DB, 2)
 	_ = seedAuditEvent(t, s.DB, 100, "server.start", "server", 0)
 	_ = seedAuditEvent(t, s.DB, 101, "audit.pruned", "audit", 0)
 	_ = seedAuditEvent(t, s.DB, 102, "jobs.reclaimed", "job", 0)
-	visibleID := seedAuditEvent(t, s.DB, 103, "tag.create", "tag", 1)
+	visibleID := seedUserAuditEvent(t, s.DB, 103, 2, "tag.create", "tag", 1)
 
 	for _, who := range []struct {
 		name string
@@ -245,7 +273,8 @@ func TestListEvents_DocVisibility(t *testing.T) {
 	// only see events about doc B.
 	docA := seedEventsDoc(t, s.DB, 1, "user-1 secret", "sha_a")
 	docB := seedEventsDoc(t, s.DB, 2, "user-2 doc", "sha_b")
-	_ = seedAuditEvent(t, s.DB, 100, "document.create", "document", docA)
+	// An unlisted action must still follow the object kind's authorization.
+	_ = seedAuditEvent(t, s.DB, 100, "heuristics.autoapply", "document", docA)
 	eB := seedAuditEvent(t, s.DB, 200, "document.create", "document", docB)
 
 	code, body := doListEvents(t, s, "/api/events/", memberPrincipal(2))
@@ -263,8 +292,10 @@ func TestListEvents_DocVisibility(t *testing.T) {
 func TestListEvents_SummaryShape(t *testing.T) {
 	s := newEventsServer(t)
 	docID := seedEventsDoc(t, s.DB, 1, "March rent", "sha_r")
+	seedUser(t, s.DB, 2)
+	_, _, taskID := seedApprovalTask(t, s.DB, "user:2", "open")
 	_ = seedAuditEvent(t, s.DB, 100, "document.ingested", "document", docID)
-	_ = seedAuditEvent(t, s.DB, 200, "approval.task_created", "workflow_task", 99)
+	_ = seedAuditEvent(t, s.DB, 200, "approval.task_created", "approval_task", taskID)
 
 	_, body := doListEvents(t, s, "/api/events/", adminPrincipal(1))
 	if len(body.Results) != 2 {
@@ -293,6 +324,18 @@ func TestListEvents_SummaryShape(t *testing.T) {
 	}
 	if !strings.Contains(docRow.Summary, "March rent") {
 		t.Errorf("summary missing title: %q", docRow.Summary)
+	}
+
+	// The assignee sees the approval but not another user's document.
+	_, memberBody := doListEvents(t, s, "/api/events/", memberPrincipal(2))
+	if len(memberBody.Results) != 1 || memberBody.Results[0].Kind != "approval.task_created" {
+		t.Errorf("assignee feed=%+v, want only approval", memberBody.Results)
+	}
+	// The document owner sees their document event but not someone
+	// else's approval.
+	_, ownerBody := doListEvents(t, s, "/api/events/", memberPrincipal(1))
+	if len(ownerBody.Results) != 1 || ownerBody.Results[0].Kind != "document.ingested" {
+		t.Errorf("owner feed=%+v, want only document", ownerBody.Results)
 	}
 }
 

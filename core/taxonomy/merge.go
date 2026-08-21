@@ -217,6 +217,10 @@ func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, kind string, f
 		}
 		actions = append(actions, row)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}

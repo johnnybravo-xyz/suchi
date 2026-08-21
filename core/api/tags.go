@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -101,6 +100,10 @@ func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
 	if out == nil {
 		out = []TagView{}
 	}
@@ -124,7 +127,7 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in tagUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -198,7 +201,7 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in tagUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -325,7 +328,7 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ParentID *int64 `json:"parent_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}

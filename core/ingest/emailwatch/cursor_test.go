@@ -49,4 +49,12 @@ func TestMissingUIDs(t *testing.T) {
 	if want := []uint32{12}; !slices.Equal(got, want) {
 		t.Fatalf("missing UIDs = %v, want %v", got, want)
 	}
+
+	vanished, retry := partitionMissingUIDs(
+		[]uint32{12, 15, 18},
+		[]uint32{15, 16, 18},
+	)
+	if !slices.Equal(vanished, []uint32{12}) || !slices.Equal(retry, []uint32{15, 18}) {
+		t.Fatalf("partitioned missing UIDs: vanished=%v retry=%v", vanished, retry)
+	}
 }

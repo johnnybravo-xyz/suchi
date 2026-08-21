@@ -57,6 +57,7 @@ const MinScore = 0.001
 type Principal struct {
 	UserID int64
 	Role   string
+	Kind   string
 	Groups []int64
 }
 
@@ -93,7 +94,13 @@ func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Princ
 	visibility := ""
 	visArgs := []any{}
 	if p != nil && p.Role != "admin" {
-		frag, args := authz.DocVisibilityWhere(p.UserID, p.Groups)
+		var frag string
+		var args []any
+		if p.Kind == authz.KindDemoAnon || p.Kind == authz.KindDemoScratch {
+			frag, args = authz.DemoCorpusVisibilityWhere(p.UserID)
+		} else {
+			frag, args = authz.DocVisibilityWhere(p.UserID, p.Groups)
+		}
 		visibility = " AND " + frag
 		visArgs = args
 	}

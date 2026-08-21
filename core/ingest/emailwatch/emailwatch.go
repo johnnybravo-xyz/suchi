@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +36,7 @@ import (
 	"github.com/emersion/go-imap"
 	imapclient "github.com/emersion/go-imap/client"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -51,9 +52,11 @@ import (
 // Defaults. Per-attachment size cap is overridable via
 // SUCHI_EMAIL_MAX_ATTACH (byte-suffixed, e.g. "50M").
 const (
-	DefaultPollInterval = 5 * time.Minute
-	PluginName          = "email-ingest" // plugin_kv namespace for msg-id dedup
+	PluginName         = "email-ingest" // plugin_kv namespace for msg-id dedup
+	imapCommandTimeout = 30 * time.Second
 )
+
+var errMessageTooLarge = errors.New("emailwatch: raw message too large")
 
 // DefaultMaxAttach returns the effective per-attachment cap. Read at
 // call time so a config file loaded from main.runServe reaches it.
@@ -112,12 +115,15 @@ type Watcher struct {
 // New builds a Watcher from an account row. Returns (nil, nil) when
 // the account is disabled or its owner has been removed — the
 // supervisor treats nil as "skip this row this cycle". Returns an
-// error only for hard-fails the operator needs to see (bad CA file);
+// error only for account configuration the operator must fix;
 // password unseal is deferred to connect so a rotated/stale seal
 // doesn't block the whole supervisor at build time.
 func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, aead *crypto.AEADKey, msal *oauth.Manager, log *slog.Logger) (*Watcher, error) {
 	if account == nil || !account.Enabled {
 		return nil, nil
+	}
+	if err := emailaccounts.ValidatePollInterval(account.PollIntervalMin); err != nil {
+		return nil, fmt.Errorf("emailwatch: invalid account: %w", err)
 	}
 
 	var ownerCheck int64
@@ -132,9 +138,6 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 	}
 
 	interval := time.Duration(account.PollIntervalMin) * time.Minute
-	if interval == 0 {
-		interval = DefaultPollInterval
-	}
 	maxAttach := cfg.MaxAttachBytes
 	if maxAttach == 0 {
 		maxAttach = DefaultMaxAttach()
@@ -144,20 +147,9 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 	// Bridge, self-hosted Dovecot, homelab CAs, etc. System roots stay
 	// trusted; hard-fail rather than silently degrade if the file is
 	// unreadable or malformed.
-	var rootCAs *x509.CertPool
-	if account.TLSCAFile != "" {
-		pem, readErr := os.ReadFile(account.TLSCAFile)
-		if readErr != nil {
-			return nil, fmt.Errorf("emailwatch: read tls_ca_file %q: %w", account.TLSCAFile, readErr)
-		}
-		var poolErr error
-		rootCAs, poolErr = x509.SystemCertPool()
-		if poolErr != nil || rootCAs == nil {
-			rootCAs = x509.NewCertPool()
-		}
-		if !rootCAs.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("emailwatch: no valid PEM certs in %q", account.TLSCAFile)
-		}
+	rootCAs, err := emailaccounts.LoadTLSRootCAs(account.TLSCAFile)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Watcher{
@@ -249,6 +241,17 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	var ownerEnabled bool
+	if err := w.db.Read.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM users WHERE id = ? AND disabled = 0
+		)
+	`, w.account.OwnerID).Scan(&ownerEnabled); err != nil {
+		return fmt.Errorf("check account owner: %w", err)
+	}
+	if !ownerEnabled {
+		return nil
+	}
 	c, err := w.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -325,6 +328,24 @@ func (w *Watcher) cycle(ctx context.Context) error {
 		}
 		raw, msgID, err := w.materialize(m, section)
 		if err != nil {
+			if errors.Is(err, errMessageTooLarge) {
+				limit := w.rawMessageLimit()
+				w.log.Warn("emailwatch.message_skipped",
+					"uid", m.Uid, "reason", "raw_message_too_large", "err", err.Error())
+				audit.Log(ctx, w.db, w.log, audit.Event{
+					Action: "document.ingest.skipped", ObjectKind: "ingest",
+					After: map[string]any{
+						"reason":        "oversized_email",
+						"account_id":    w.account.ID,
+						"uid":           m.Uid,
+						"limit_type":    "raw_message",
+						"limit_bytes":   limit,
+						"size_at_least": limit + 1,
+					},
+				})
+				seenUIDs = append(seenUIDs, m.Uid)
+				continue
+			}
 			w.log.Warn("emailwatch.materialize_failed",
 				"uid", m.Uid, "err", err.Error())
 			failedUIDs = append(failedUIDs, m.Uid)
@@ -352,8 +373,18 @@ func (w *Watcher) cycle(ctx context.Context) error {
 			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
 		}
 	} else if isConcurrentDeleteFetchError(fetchErr) {
-		w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
-		fetchErr = nil
+		remaining, searchErr := c.UidSearch(criteria)
+		if searchErr != nil {
+			fetchErr = fmt.Errorf("recheck after concurrent delete: %w", searchErr)
+			w.log.Warn("emailwatch.fetch_recheck_failed", "err", searchErr.Error())
+			recordCycleErr(fetchErr)
+		} else {
+			var retryUIDs []uint32
+			vanishedUIDs, retryUIDs = partitionMissingUIDs(vanishedUIDs, remaining)
+			failedUIDs = append(failedUIDs, retryUIDs...)
+			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
+			fetchErr = nil
+		}
 	} else {
 		w.log.Warn("emailwatch.fetch_failed", "err", fetchErr.Error())
 		recordCycleErr(fmt.Errorf("fetch: %w", fetchErr))
@@ -440,6 +471,21 @@ func missingUIDs(requested, completed, failed []uint32) []uint32 {
 	return missing
 }
 
+func partitionMissingUIDs(missing, remaining []uint32) (vanished, retry []uint32) {
+	present := make(map[uint32]struct{}, len(remaining))
+	for _, uid := range remaining {
+		present[uid] = struct{}{}
+	}
+	for _, uid := range missing {
+		if _, ok := present[uid]; ok {
+			retry = append(retry, uid)
+		} else {
+			vanished = append(vanished, uid)
+		}
+	}
+	return vanished, retry
+}
+
 // nextUIDCheckpoint returns the highest UID that can be safely skipped on the
 // next search. Message-level failures form a barrier; an incomplete fetch or
 // failed server-side move/flag operation leaves the prior cursor untouched.
@@ -468,39 +514,68 @@ func nextUIDCheckpoint(lastUID uint32, completed, failed []uint32, checkpointCom
 	return next
 }
 
-// connect dials, TLS-wraps when the account row says so, and logs in.
-// Bounded by ctx.
-func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(30 * time.Second)
+// DialAccount opens an IMAP connection using the account's TLS mode and
+// optional CA file. Authentication remains the caller's responsibility.
+func DialAccount(ctx context.Context, account *emailaccounts.Account) (*imapclient.Client, error) {
+	if account == nil {
+		return nil, errors.New("emailwatch: account required")
 	}
-	addr := w.account.Host + ":" + strconv.Itoa(w.account.Port)
-	var (
-		c   *imapclient.Client
-		err error
-	)
-	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	rootCAs, err := emailaccounts.LoadTLSRootCAs(account.TLSCAFile)
+	if err != nil {
+		return nil, err
+	}
+	return dialAccount(ctx, account, rootCAs)
+}
+
+func dialAccount(ctx context.Context, account *emailaccounts.Account, rootCAs *x509.CertPool) (*imapclient.Client, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, imapCommandTimeout)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		if w.account.UseTLS {
-			c, err = imapclient.DialTLS(addr, &tls.Config{
-				ServerName: w.account.Host,
-				RootCAs:    w.rootCAs, // nil => system roots only
-			})
-		} else {
-			c, err = imapclient.Dial(addr)
-		}
-		done <- err
-	}()
-	select {
-	case <-dialCtx.Done():
-		return nil, dialCtx.Err()
-	case err = <-done:
-	}
+
+	addr := net.JoinHostPort(account.Host, strconv.Itoa(account.Port))
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	closeConn := true
+	defer func() {
+		if closeConn {
+			_ = conn.Close()
+		}
+	}()
+	if deadline, ok := dialCtx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if account.UseTLS {
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName: account.Host,
+			RootCAs:    rootCAs,
+			MinVersion: tls.VersionTLS12,
+		})
+		if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+			return nil, fmt.Errorf("TLS handshake %s: %w", addr, err)
+		}
+		conn = tlsConn
+	}
+	c, err := imapclient.New(conn)
+	if err != nil {
+		return nil, fmt.Errorf("IMAP handshake %s: %w", addr, err)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	c.Timeout = imapCommandTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < c.Timeout {
+			c.Timeout = remaining
+		}
+	}
+	closeConn = false
+	return c, nil
+}
+
+// connect dials with the account transport and logs in.
+func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
+	c, err := dialAccount(ctx, w.account, w.rootCAs)
+	if err != nil {
+		return nil, err
 	}
 
 	switch w.account.AuthMethod {
@@ -581,13 +656,13 @@ func (w *Watcher) materialize(m *imap.Message, section *imap.BodySectionName) ([
 	// Cap the read at maxAttach*2 — a message with 25 MB attachments can
 	// easily be 40 MB with encoding overhead. Read one sentinel byte so an
 	// oversized message fails visibly instead of entering CAS truncated.
-	limit := w.maxAttach*2 + 8*1024
+	limit := w.rawMessageLimit()
 	raw, err := io.ReadAll(io.LimitReader(lit, limit+1))
 	if err != nil {
 		return nil, "", err
 	}
 	if int64(len(raw)) > limit {
-		return nil, "", fmt.Errorf("message exceeds %d-byte ingest limit", limit)
+		return nil, "", fmt.Errorf("%w: exceeds %d-byte ingest limit", errMessageTooLarge, limit)
 	}
 	msgID := ""
 	if m.Envelope != nil {
@@ -600,6 +675,10 @@ func (w *Watcher) materialize(m *imap.Message, section *imap.BodySectionName) ([
 		msgID = "<" + msgID + ">"
 	}
 	return raw, msgID, nil
+}
+
+func (w *Watcher) rawMessageLimit() int64 {
+	return w.maxAttach*2 + 8*1024
 }
 
 // importOne is the write side: pre-ingest gates (from-allowlist,
@@ -683,11 +762,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 
 	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment, w.account.AttachmentsOnly)
 	if err != nil {
-		// Marshal is effectively impossible on the payload shape, but
-		// don't swallow a real error — skip the enqueue and let the
-		// operator see it.
-		w.log.Warn("emailwatch.payload_marshal_failed", "err", err.Error())
-		return false, nil
+		return false, fmt.Errorf("marshal post-ingest payload: %w", err)
 	}
 
 	if err := w.db.WriteTx(ctx, func(tx *sql.Tx) error {

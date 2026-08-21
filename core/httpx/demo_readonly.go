@@ -1,12 +1,6 @@
-// Read-only guard for demo-mode instances. Wraps the router when
-// SUCHI_DEMO_MODE=1. Reads always pass; mutations against shared-state
-// endpoints (admin, taxonomy, settings, auth mgmt) return 403 with a
-// stable {"code":"demo_read_only"} body.
-//
-// Per-document mutations (upload, edit-your-own, delete-your-own) are
-// deliberately allowed to keep the "throw a PDF in, see it filed"
-// interaction working. The scratch-user reset ticker sweeps those on
-// TTL — see docs/demo-instance.mdx.
+// Read-only guard for demo-mode instances. Reads always pass. Mutations are
+// denied by default; upgraded scratch identities may only upload and mutate
+// their own documents, with object authorization enforced by the handlers.
 
 package httpx
 
@@ -17,51 +11,13 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
-// demoAnonAllowedMutation is the small allow-list of write endpoints an
-// anonymous demo visitor is permitted to hit. Everything else is 403.
-// Currently: the upgrade endpoint that trades the anon token for a
-// scratch user.
-var demoAnonAllowedMutation = map[string]struct{}{
-	"/api/demo/session/upgrade": {},
-}
-
 // demoAnonPrincipalKind mirrors core/api.PrincipalKindDemoAnon and
 // distro/demo.PrincipalKind. Duplicated to keep httpx from importing
 // either. main.go asserts the three constants agree at boot.
 const demoAnonPrincipalKind = "demo-anon"
+const demoScratchPrincipalKind = "demo-scratch"
 
-// demoDenyPrefixes lists shared-state paths that must stay read-only
-// under demo mode. Mutation methods (POST/PATCH/PUT/DELETE) against
-// these prefixes return 403 demo_read_only. Everything else falls
-// through — including per-document endpoints where ACL + the reset
-// ticker contain visitor writes.
-//
-// Prefix matching keeps this resilient to new sub-routes.
-var demoDenyPrefixes = []string{
-	"/api/admin/",
-	"/api/acls/",
-	"/api/automations",
-	"/api/correspondents",
-	"/api/custom_fields",
-	"/api/document_types",
-	"/api/groups",
-	"/api/mailsettings",
-	"/api/mail_settings",
-	"/api/saved_views",
-	"/api/settings",
-	"/api/share_links",
-	"/api/storage_paths",
-	"/api/tags",
-	"/api/tokens",
-	"/api/users",
-	"/api/webhooks",
-	// /setup and POST /bootstrap are NOT in this list — they're the
-	// one-shot admin-provisioning endpoints, self-gated by localauth
-	// (token burned on success, 409 "already initialized" thereafter).
-	// Denying them here would make a demo box impossible to bootstrap.
-}
-
-// DemoReadOnly returns a middleware that enforces the deny-list above.
+// DemoReadOnly returns a middleware that enforces the allowlist above.
 // Compose after the auth middleware so principals are already resolved
 // (audit + rate-limit continue to see the request unmodified).
 func DemoReadOnly(next http.Handler) http.Handler {
@@ -71,11 +27,14 @@ func DemoReadOnly(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Anonymous demo visitors: everything is read-only EXCEPT the
-		// upgrade endpoint. Keeps the load plane cheap — no scratch
-		// user until they explicitly opt in.
-		if p := auth.FromContext(r.Context()); p != nil && p.Kind == demoAnonPrincipalKind {
-			if _, ok := demoAnonAllowedMutation[r.URL.Path]; !ok {
+		if r.URL.Path == "/login" || r.URL.Path == "/api/login" ||
+			r.URL.Path == "/api/token/" || r.URL.Path == "/api/logout" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		p := auth.FromContext(r.Context())
+		if p != nil && p.Kind == demoAnonPrincipalKind {
+			if r.URL.Path != "/api/demo/session/upgrade" {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte(`{"code":"demo_upgrade_required","message":"anonymous demo sessions are read-only — POST /api/demo/session/upgrade for a writable scratch identity."}`))
@@ -84,32 +43,20 @@ func DemoReadOnly(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if isDemoDenied(r.URL.Path) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"code":"demo_read_only","message":"public demo is read-only for global config and taxonomy — per-document uploads/edits still work."}`))
+		if p != nil && p.Kind == demoScratchPrincipalKind && isScratchDocumentMutation(r.URL.Path) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if p == nil && r.URL.Path == "/api/demo/session" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"demo_read_only","message":"public demo writes are limited to scratch documents."}`))
 	})
 }
 
-func isDemoDenied(path string) bool {
-	for _, p := range demoDenyPrefixes {
-		// Prefix already ends in '/': straight HasPrefix match works —
-		// /api/admin/ matches /api/admin/anything.
-		if strings.HasSuffix(p, "/") {
-			if strings.HasPrefix(path, p) {
-				return true
-			}
-			continue
-		}
-		// Prefix does NOT end in '/': accept exact match, plus
-		// path == prefix + "/…" accepts nested routes without matching
-		// similarly prefixed endpoint names.
-		if path == p || strings.HasPrefix(path, p+"/") {
-			return true
-		}
-	}
-	return false
+func isScratchDocumentMutation(path string) bool {
+	return path == "/api/documents/" || strings.HasPrefix(path, "/api/documents/")
 }

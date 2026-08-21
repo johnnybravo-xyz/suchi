@@ -295,11 +295,10 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	// Consumption-trigger automations. Fire before any content
 	// processing so filters that key on filename/source_path/mail_rule
-	// can tag or route the doc up-front. Fail-soft: an error warns and
-	// never blocks the ingest pipeline.
+	// can tag or route the doc up-front.
 	consCtx := consumptionContextFromPayload(e.Payload)
 	if err := automations.ApplyOnConsumption(ctx, h.db, log, e.DocID, consCtx); err != nil {
-		log.Warn("post-ingest.consumption_automations.error", "err", err.Error())
+		return fmt.Errorf("consumption automations: %w", err)
 	}
 
 	origBlob, mime, ownerEmail, err := h.loadDoc(ctx, e.DocID)
@@ -624,7 +623,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if h.scanSplit.Enabled {
 		fanOut, err := h.splitAndFanOut(ctx, log, e.DocID, pdfBytes)
 		if err != nil {
-			log.Warn("post-ingest.scan_split.error", "err", err.Error())
+			return fmt.Errorf("scan split: %w", err)
 		}
 		if fanOut {
 			return nil
@@ -724,7 +723,10 @@ func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID
 		"pages", plan.TotalPages,
 		"separators", len(plan.SeparatorPages),
 		"segments", len(plan.Segments))
+	return h.fanOutSegments(ctx, log, parentID, pdfBytes, plan.Segments)
+}
 
+func (h *Handler) fanOutSegments(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte, segments []docsplit.Segment) (bool, error) {
 	// Load enough of the parent's row to seed the children — owner,
 	// title, mime, jd_category all copy through.
 	parent, err := h.loadParentForSplit(ctx, parentID)
@@ -732,25 +734,38 @@ func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID
 		return false, fmt.Errorf("load parent for split: %w", err)
 	}
 
-	for i, seg := range plan.Segments {
-		segBytes, err := h.extractSegment(ctx, log, pdfBytes, seg)
+	for i, seg := range segments {
+		exists, err := h.splitChildExists(ctx, parentID, i+1)
 		if err != nil {
-			log.Warn("post-ingest.scan_split.extract_failed",
-				"segment", i+1, "err", err.Error())
+			return false, fmt.Errorf("check segment %d: %w", i+1, err)
+		}
+		if exists {
 			continue
 		}
-		if err := h.createSplitChild(ctx, log, parent, parentID, i+1, seg, segBytes); err != nil {
-			log.Warn("post-ingest.scan_split.child_failed",
-				"segment", i+1, "err", err.Error())
-			continue
+		segBytes, err := h.extractSegment(ctx, log, pdfBytes, seg)
+		if err != nil {
+			return false, fmt.Errorf("extract segment %d: %w", i+1, err)
+		}
+		if err := h.createSplitChild(ctx, log, parent, parentID, i+1, len(segments), seg, segBytes); err != nil {
+			return false, fmt.Errorf("create segment %d: %w", i+1, err)
 		}
 	}
 	// Soft-delete the parent so the workspace only shows children.
 	// CAS blob is still referenced by the trashed row, so gc leaves it.
 	if err := h.softDeleteParent(ctx, parentID); err != nil {
-		return true, fmt.Errorf("soft-delete parent: %w", err)
+		return false, fmt.Errorf("soft-delete parent: %w", err)
 	}
 	return true, nil
+}
+
+func (h *Handler) splitChildExists(ctx context.Context, parentID int64, index int) (bool, error) {
+	var exists bool
+	err := h.db.Read.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM documents WHERE split_parent_id = ? AND split_index = ?
+		)
+	`, parentID, index).Scan(&exists)
+	return exists, err
 }
 
 // splitParent is the projection of the parent doc row needed to seed
@@ -789,18 +804,18 @@ func (h *Handler) extractSegment(ctx context.Context, log *slog.Logger, pdfBytes
 	return res.Data, nil
 }
 
-// createSplitChild does the (blob put + document row + post-ingest
-// job) triple in one tx so a child either fully lands or not at all.
-func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent *splitParent, parentID int64, index int, seg docsplit.Segment, segBytes []byte) error {
+// createSplitChild writes the document row and post-ingest job atomically.
+// The preceding CAS put may leave an unreferenced blob on failure; normal GC
+// reclaims it.
+func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent *splitParent, parentID int64, index, total int, seg docsplit.Segment, segBytes []byte) error {
 	ref, err := h.cas.Put(bytes.NewReader(segBytes))
 	if err != nil {
 		return fmt.Errorf("cas put: %w", err)
 	}
-	// Title suffix disambiguates children in list views. Trim any
-	// existing " (part N/M)" suffix if we're re-splitting a doc.
-	title := fmt.Sprintf("%s (part %d/%d)", parent.Title, index, seg.PageCount())
+	// Title suffix disambiguates children in list views.
+	title := fmt.Sprintf("%s (part %d/%d)", parent.Title, index, total)
 	if parent.Title == "" {
-		title = fmt.Sprintf("Untitled (part %d)", index)
+		title = fmt.Sprintf("Untitled (part %d/%d)", index, total)
 	}
 
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -1302,6 +1317,10 @@ func (h *Handler) gatherDecryptCandidates(ctx context.Context, log *slog.Logger,
 			}
 			candidates = append(candidates, string(pt))
 			sources = append(sources, pwdSource{LearnedID: id})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("iterate learned passwords: %w", err)
 		}
 		rows.Close()
 	}

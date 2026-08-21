@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -40,19 +41,6 @@ const (
 
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
-
-	// Mail intake — legacy seed keys for the emailwatch IMAP poller.
-	// Consumed once by emailaccounts.MigrateFromLegacySettings to
-	// materialize a pre-multiaccount install as a single email_accounts
-	// row; the keys are then deleted. Live mutation goes through
-	// /api/admin/email-accounts.
-	KeyIMAPHost            = "ingest.imap_host"
-	KeyIMAPPort            = "ingest.imap_port"
-	KeyIMAPUsername        = "ingest.imap_username"
-	KeyIMAPPasswordSealed  = "ingest.imap_password_sealed"
-	KeyIMAPFolder          = "ingest.imap_folder"
-	KeyIMAPPollIntervalMin = "ingest.imap_poll_interval_min"
-	KeyIMAPOwnerEmail      = "ingest.imap_owner_email"
 )
 
 // ErrNotFound signals the key isn't present (distinct from a scan
@@ -169,7 +157,7 @@ func SetupNeeded(ctx context.Context, database *db.DB) (bool, error) {
 	return completedAt == 0, nil
 }
 
-// ---------- resolvers — settings-first, env-fallback ----------
+// ---------- resolvers — database defaults, explicit boot config wins ----------
 
 // LLMConfig is the shape callers merge into their plugin config. Uses
 // plain scalars so this package doesn't import plugins/*.
@@ -179,8 +167,8 @@ type LLMConfig struct {
 	APIKey              string
 	EgressAck           bool
 	ConfidenceThreshold float64
-	// Disabled is persisted separately from EndpointURL so an operator can
-	// turn off an environment-backed classifier without erasing its setup.
+	// Disabled is persisted separately from EndpointURL so a web-managed
+	// classifier can be turned off without erasing its setup.
 	Disabled bool
 }
 
@@ -238,7 +226,7 @@ func SetLLMAPIKey(ctx context.Context, database *db.DB, box SecretBox, apiKey st
 
 // SaveLLMConfig persists public fields and optionally replaces the API key.
 // apiKey=nil preserves the existing setting; a pointer to "" stores an
-// encrypted empty override so an environment fallback does not reappear.
+// encrypted empty value. Explicit file and environment keys still win.
 func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey *string) error {
 	values := map[string]any{
 		KeyLLMEndpointURL: cfg.EndpointURL,
@@ -271,57 +259,61 @@ func sealLLMAPIKey(box SecretBox, apiKey string) (sealedSecret, error) {
 	}, nil
 }
 
-// ResolveLLMConfig merges settings over environment fallbacks and opens the
-// stored API key. Plaintext keys written by development builds are migrated on
-// read when a secret box is available.
+// ResolveLLMConfig starts with boot configuration and fills unconfigured
+// fields from database settings. LoadFile promotes file values into the
+// environment before this runs, so explicit file and environment values both
+// remain authoritative.
 func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box SecretBox) (LLMConfig, error) {
 	out := fb
 	var s string
-	if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
-		out.EndpointURL = s
+	if !envSet("LLM_ENDPOINT_URL") {
+		if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
+			out.EndpointURL = s
+		}
 	}
 	s = ""
-	if err := Get(ctx, database, KeyLLMModel, &s); err == nil && s != "" {
-		out.Model = s
+	if !envSet("LLM_MODEL") {
+		if err := Get(ctx, database, KeyLLMModel, &s); err == nil && s != "" {
+			out.Model = s
+		}
 	}
-	var secret sealedSecret
-	if err := Get(ctx, database, KeyLLMAPIKeySealed, &secret); err == nil {
-		if secret.Version != 1 || len(secret.Ciphertext) == 0 {
-			return LLMConfig{}, errors.New("settings: invalid sealed LLM API key")
-		}
-		if box == nil {
-			return LLMConfig{}, errors.New("settings: cannot open LLM API key without secret storage")
-		}
-		plaintext, err := box.Open(secret.Ciphertext)
-		if err != nil {
-			return LLMConfig{}, fmt.Errorf("open LLM API key: %w", err)
-		}
-		out.APIKey = string(plaintext)
-	} else if !errors.Is(err, ErrNotFound) {
-		// Before v0.1, the value was stored as a JSON string despite the key
-		// name. Accept it once and replace it with a sealed envelope.
-		var legacy string
-		if legacyErr := Get(ctx, database, KeyLLMAPIKeySealed, &legacy); legacyErr != nil {
+	if !envSet("LLM_API_KEY", "LLM_API_KEY_FILE") {
+		var secret sealedSecret
+		if err := Get(ctx, database, KeyLLMAPIKeySealed, &secret); err == nil {
+			if secret.Version != 1 || len(secret.Ciphertext) == 0 {
+				return LLMConfig{}, errors.New("settings: invalid sealed LLM API key")
+			}
+			if box == nil {
+				return LLMConfig{}, errors.New("settings: cannot open LLM API key without secret storage")
+			}
+			plaintext, err := box.Open(secret.Ciphertext)
+			if err != nil {
+				return LLMConfig{}, fmt.Errorf("open LLM API key: %w", err)
+			}
+			out.APIKey = string(plaintext)
+		} else if !errors.Is(err, ErrNotFound) {
 			return LLMConfig{}, err
 		}
-		out.APIKey = legacy
-		if legacy != "" && box != nil {
-			if err := SetLLMAPIKey(ctx, database, box, legacy); err != nil {
-				return LLMConfig{}, err
-			}
+	}
+	if !envSet("LLM_EGRESS_ACK") {
+		var b bool
+		if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
+			out.EgressAck = b
 		}
 	}
-	var b bool
-	if err := Get(ctx, database, KeyLLMEgressAck, &b); err == nil {
-		out.EgressAck = b
+	if envSet("LLM_ENDPOINT_URL") {
+		out.Disabled = out.EndpointURL == ""
+	} else {
+		var disabled bool
+		if err := Get(ctx, database, KeyLLMDisabled, &disabled); err == nil {
+			out.Disabled = disabled
+		}
 	}
-	b = false
-	if err := Get(ctx, database, KeyLLMDisabled, &b); err == nil {
-		out.Disabled = b
-	}
-	var confidence float64
-	if err := Get(ctx, database, KeyLLMConfidence, &confidence); err == nil && confidence > 0 {
-		out.ConfidenceThreshold = confidence
+	if !envSet("LLM_CONFIDENCE_THRESHOLD") {
+		var confidence float64
+		if err := Get(ctx, database, KeyLLMConfidence, &confidence); err == nil && confidence > 0 {
+			out.ConfidenceThreshold = confidence
+		}
 	}
 	if out.ConfidenceThreshold == 0 {
 		out.ConfidenceThreshold = 0.7
@@ -329,56 +321,13 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box Se
 	return out, nil
 }
 
-// EmailWatchConfig mirrors the emailwatch runtime knobs the SPA
-// Admin panel can override. Plain scalars so this package doesn't
-// import emailwatch. The URL is assembled from Host/Port/Username/
-// Folder by the caller in main.go.
-type EmailWatchConfig struct {
-	Host            string
-	Port            int
-	Username        string
-	Password        string
-	Folder          string
-	PollIntervalMin int
-	OwnerEmail      string
-}
-
-// ResolveEmailWatchConfig merges settings over env fallback for the
-// mail-intake poller. Settings win when set; blank leaves the fb
-// value alone. Kept for the seed-migration path in emailaccounts —
-// mutation of live mail intake now flows through the email_accounts
-// table via /api/admin/email-accounts.
-func ResolveEmailWatchConfig(ctx context.Context, database *db.DB, fb EmailWatchConfig) EmailWatchConfig {
-	out := fb
-	var s string
-	if err := Get(ctx, database, KeyIMAPHost, &s); err == nil && s != "" {
-		out.Host = s
+func envSet(keys ...string) bool {
+	for _, key := range keys {
+		if _, ok := os.LookupEnv(key); ok {
+			return true
+		}
 	}
-	var n int
-	if err := Get(ctx, database, KeyIMAPPort, &n); err == nil && n > 0 {
-		out.Port = n
-	}
-	s = ""
-	if err := Get(ctx, database, KeyIMAPUsername, &s); err == nil && s != "" {
-		out.Username = s
-	}
-	s = ""
-	if err := Get(ctx, database, KeyIMAPPasswordSealed, &s); err == nil && s != "" {
-		out.Password = s
-	}
-	s = ""
-	if err := Get(ctx, database, KeyIMAPFolder, &s); err == nil && s != "" {
-		out.Folder = s
-	}
-	n = 0
-	if err := Get(ctx, database, KeyIMAPPollIntervalMin, &n); err == nil && n > 0 {
-		out.PollIntervalMin = n
-	}
-	s = ""
-	if err := Get(ctx, database, KeyIMAPOwnerEmail, &s); err == nil && s != "" {
-		out.OwnerEmail = s
-	}
-	return out
+	return false
 }
 
 // FSWatchConfig mirrors the fs-watch runtime knobs the setup wizard
@@ -388,17 +337,21 @@ type FSWatchConfig struct {
 	OwnerEmail string
 }
 
-// ResolveFSWatchConfig merges settings over the environment fallback. The
-// filesystem-watch supervisor calls it at boot and after setup saves.
+// ResolveFSWatchConfig fills fields not pinned by boot configuration from the
+// database. The filesystem-watch supervisor calls it at boot and after saves.
 func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig) FSWatchConfig {
 	out := fb
 	var s string
-	if err := Get(ctx, database, KeyFSWatchDir, &s); err == nil && s != "" {
-		out.Dir = s
+	if !envSet("INGEST_FS_DIR") {
+		if err := Get(ctx, database, KeyFSWatchDir, &s); err == nil && s != "" {
+			out.Dir = s
+		}
 	}
 	s = ""
-	if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
-		out.OwnerEmail = s
+	if !envSet("INGEST_FS_OWNER_EMAIL") {
+		if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
+			out.OwnerEmail = s
+		}
 	}
 	return out
 }
@@ -411,21 +364,25 @@ type RuntimePreferences struct {
 	OCRLanguages   []string
 }
 
-// ResolveRuntimePreferences merges setup values over config-file/environment
-// fallbacks. Zero backup hours is an explicit disable; an empty OCR list keeps
-// the fallback because the OCR engines require at least one language.
+// ResolveRuntimePreferences fills values not pinned by boot configuration from
+// setup. Zero stored backup hours disables backups; OCR always retains at least
+// one language.
 func ResolveRuntimePreferences(ctx context.Context, database *db.DB, fb RuntimePreferences) RuntimePreferences {
 	out := RuntimePreferences{
 		BackupInterval: fb.BackupInterval,
 		OCRLanguages:   append([]string(nil), fb.OCRLanguages...),
 	}
-	var hours int
-	if err := Get(ctx, database, KeyBackupIntervalHours, &hours); err == nil && hours >= 0 && hours <= 720 {
-		out.BackupInterval = time.Duration(hours) * time.Hour
+	if !envSet("BACKUP_INTERVAL") {
+		var hours int
+		if err := Get(ctx, database, KeyBackupIntervalHours, &hours); err == nil && hours >= 0 && hours <= 720 {
+			out.BackupInterval = time.Duration(hours) * time.Hour
+		}
 	}
-	var languages []string
-	if err := Get(ctx, database, KeyOCRLanguages, &languages); err == nil && len(languages) > 0 {
-		out.OCRLanguages = append([]string(nil), languages...)
+	if !envSet("OCR_LANGUAGES") {
+		var languages []string
+		if err := Get(ctx, database, KeyOCRLanguages, &languages); err == nil && len(languages) > 0 {
+			out.OCRLanguages = append([]string(nil), languages...)
+		}
 	}
 	if len(out.OCRLanguages) == 0 {
 		out.OCRLanguages = []string{"eng"}

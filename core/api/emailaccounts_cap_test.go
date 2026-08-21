@@ -158,6 +158,14 @@ func TestEmailAccounts_member_with_cap(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("own PATCH status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	// Filesystem-backed trust stores are an operator setting, not a
+	// member mailbox setting.
+	rec = capCall(t, s, "PATCH",
+		"/api/email-accounts/"+strconv.FormatInt(own.ID, 10),
+		`{"tls_ca_file":"/etc/ssl/custom.pem"}`, member)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("member CA PATCH status=%d body=%s", rec.Code, rec.Body.String())
+	}
 
 	// CREATE with a spoofed owner_id → server forces self.
 	body := `{

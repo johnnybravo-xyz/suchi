@@ -88,6 +88,10 @@ func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "custom_fields.iterate", err)
+		return
+	}
 	if out == nil {
 		out = []CustomFieldRow{}
 	}
@@ -100,7 +104,7 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in CustomFieldUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -161,7 +165,7 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in CustomFieldUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}

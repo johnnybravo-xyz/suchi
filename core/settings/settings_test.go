@@ -30,6 +30,7 @@ func (testSecretBox) Open(ciphertext []byte) ([]byte, error) {
 
 func setupDB(t *testing.T) *db.DB {
 	t.Helper()
+	clearRuntimeConfigEnv(t)
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := db.Open(ctx, path)
@@ -46,6 +47,26 @@ func setupDB(t *testing.T) *db.DB {
 		t.Fatal(err)
 	}
 	return d
+}
+
+func clearRuntimeConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"LLM_ENDPOINT_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_API_KEY_FILE",
+		"LLM_EGRESS_ACK", "LLM_CONFIDENCE_THRESHOLD",
+		"INGEST_FS_DIR", "INGEST_FS_OWNER_EMAIL",
+		"BACKUP_INTERVAL", "OCR_LANGUAGES",
+	} {
+		value, present := os.LookupEnv(key)
+		_ = os.Unsetenv(key)
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
 }
 
 func TestGet_MissingReturnsErrNotFound(t *testing.T) {
@@ -178,7 +199,7 @@ func TestMarkComplete_UpdatesNeeded(t *testing.T) {
 	}
 }
 
-func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
+func TestResolveLLMConfig_Precedence(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	envFB := settings.LLMConfig{
@@ -188,7 +209,7 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 		EgressAck:           false,
 		ConfidenceThreshold: 0.7,
 	}
-	// No settings written yet — should be identical to env.
+	// No settings written yet: use the boot fallback.
 	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +217,7 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 	if got != envFB {
 		t.Errorf("empty settings should pass env through, got %+v", got)
 	}
-	// Write one setting → that field wins, others stay env.
+	// Database settings fill fields that were not explicitly configured.
 	_ = settings.Set(ctx, d, settings.KeyLLMEndpointURL, "http://override.local/v1")
 	_ = settings.Set(ctx, d, settings.KeyLLMEgressAck, true)
 	got, err = settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
@@ -212,9 +233,20 @@ func TestResolveLLMConfig_SettingsOverrideEnv(t *testing.T) {
 	if !got.EgressAck {
 		t.Errorf("egress_ack should follow settings, got false")
 	}
+
+	// An explicit environment/file value wins over the stored value.
+	t.Setenv("LLM_ENDPOINT_URL", "http://env.example/v1")
+	t.Setenv("LLM_EGRESS_ACK", "false")
+	got, err = settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EndpointURL != envFB.EndpointURL || got.EgressAck {
+		t.Errorf("boot configuration should win, got %+v", got)
+	}
 }
 
-func TestResolveLLMConfig_DisabledOverridesEnvironment(t *testing.T) {
+func TestResolveLLMConfig_StoredDisabledWhenUnpinned(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	envFB := settings.LLMConfig{
@@ -236,7 +268,7 @@ func TestResolveLLMConfig_DisabledOverridesEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !got.Disabled {
-		t.Fatal("stored disabled state must override an enabled environment fallback")
+		t.Fatal("stored disabled state was not applied to an unpinned endpoint")
 	}
 	if got.EndpointURL != envFB.EndpointURL || got.Model != envFB.Model {
 		t.Fatalf("disabled config should retain its connection fields: %#v", got)
@@ -311,7 +343,7 @@ func TestArchiveClassifierConfigDefaultsAndPersists(t *testing.T) {
 	}
 }
 
-func TestSaveLLMConfig_ExplicitEmptyKeyOverridesEnvironment(t *testing.T) {
+func TestSaveLLMConfig_ExplicitEmptyKeyOverridesUnpinnedFallback(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	empty := ""
@@ -325,34 +357,11 @@ func TestSaveLLMConfig_ExplicitEmptyKeyOverridesEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.APIKey != "" {
-		t.Fatalf("API key = %q, want explicit empty override", got.APIKey)
+		t.Fatalf("API key = %q, want explicit empty stored value", got.APIKey)
 	}
 }
 
-func TestResolveLLMConfig_MigratesLegacyPlaintextKey(t *testing.T) {
-	d := setupDB(t)
-	ctx := context.Background()
-	if err := settings.Set(ctx, d, settings.KeyLLMAPIKeySealed, "old-key"); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, testSecretBox{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.APIKey != "old-key" {
-		t.Fatalf("APIKey = %q", got.APIKey)
-	}
-	var stored map[string]any
-	if err := settings.Get(ctx, d, settings.KeyLLMAPIKeySealed, &stored); err != nil {
-		t.Fatal(err)
-	}
-	if stored["version"] != float64(1) {
-		t.Fatalf("legacy key was not migrated: %#v", stored)
-	}
-}
-
-func TestResolveFSWatchConfig_SettingsOverrideEnv(t *testing.T) {
+func TestResolveFSWatchConfig_Precedence(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	envFB := settings.FSWatchConfig{Dir: "/env/dir", OwnerEmail: "env@e.com"}
@@ -364,9 +373,14 @@ func TestResolveFSWatchConfig_SettingsOverrideEnv(t *testing.T) {
 	if got.OwnerEmail != "env@e.com" {
 		t.Errorf("unset owner should stay env, got %q", got.OwnerEmail)
 	}
+	t.Setenv("INGEST_FS_DIR", envFB.Dir)
+	got = settings.ResolveFSWatchConfig(ctx, d, envFB)
+	if got.Dir != envFB.Dir {
+		t.Errorf("configured dir should win, got %q", got.Dir)
+	}
 }
 
-func TestResolveRuntimePreferences_SettingsOverrideFallback(t *testing.T) {
+func TestResolveRuntimePreferences_Precedence(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	if err := settings.SetMany(ctx, d, map[string]any{
@@ -384,5 +398,14 @@ func TestResolveRuntimePreferences_SettingsOverrideFallback(t *testing.T) {
 	}
 	if len(got.OCRLanguages) != 2 || got.OCRLanguages[0] != "deu" || got.OCRLanguages[1] != "eng" {
 		t.Fatalf("OCR languages = %#v", got.OCRLanguages)
+	}
+	t.Setenv("BACKUP_INTERVAL", "12h")
+	t.Setenv("OCR_LANGUAGES", "fra")
+	got = settings.ResolveRuntimePreferences(ctx, d, settings.RuntimePreferences{
+		BackupInterval: 12 * time.Hour,
+		OCRLanguages:   []string{"fra"},
+	})
+	if got.BackupInterval != 12*time.Hour || len(got.OCRLanguages) != 1 || got.OCRLanguages[0] != "fra" {
+		t.Fatalf("boot preferences should win: %#v", got)
 	}
 }

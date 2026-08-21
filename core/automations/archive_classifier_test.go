@@ -57,6 +57,66 @@ func TestApplyFromArchiveAutoAppliesStrongMatch(t *testing.T) {
 	}
 }
 
+func TestApplyFromArchiveReplacesOnlyInboxCategory(t *testing.T) {
+	ctx := context.Background()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	saveArchiveConfig(t, ctx, d, true)
+
+	cluster := seedSimilarCluster(t, ctx, d, 0, 6)
+	var inboxID int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT jd_category_id FROM documents WHERE id = ?`, cluster[0]).Scan(&inboxID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT id FROM jd_categories WHERE id <> ? ORDER BY id LIMIT 2
+	`, inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var categories []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		categories = append(categories, id)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(categories) != 2 {
+		t.Fatalf("non-Inbox categories = %d, want at least 2", len(categories))
+	}
+	recommendedID, chosenID := categories[0], categories[1]
+	for _, id := range cluster {
+		if _, err := d.Write.ExecContext(ctx,
+			`UPDATE documents SET jd_category_id = ? WHERE id = ?`, recommendedID, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inboxTarget := seedDoc(t, ctx, d, "Policy renewal inbox",
+		"policy renewal premium insurance annual coverage")
+	if err := automations.ApplyFromArchive(ctx, d, log, inboxTarget); err != nil {
+		t.Fatal(err)
+	}
+	assertDocumentCategory(t, d, inboxTarget, recommendedID)
+
+	chosenTarget := seedDoc(t, ctx, d, "Policy renewal chosen",
+		"policy renewal premium insurance annual coverage")
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET jd_category_id = ? WHERE id = ?`, chosenID, chosenTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := automations.ApplyFromArchive(ctx, d, log, chosenTarget); err != nil {
+		t.Fatal(err)
+	}
+	assertDocumentCategory(t, d, chosenTarget, chosenID)
+}
+
 func TestApplyFromArchiveEmptyArchiveIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	d, log := setup(t, ctx)
@@ -110,5 +170,17 @@ func TestApplyFromArchiveHonorsLiveDisable(t *testing.T) {
 	}
 	if !got.Valid || got.Int64 != acme {
 		t.Errorf("after enabling: correspondent_id = %v, want %d", got, acme)
+	}
+}
+
+func assertDocumentCategory(t *testing.T, d *db.DB, docID, want int64) {
+	t.Helper()
+	var got int64
+	if err := d.Read.QueryRow(
+		`SELECT jd_category_id FROM documents WHERE id = ?`, docID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("document %d category = %d, want %d", docID, got, want)
 	}
 }

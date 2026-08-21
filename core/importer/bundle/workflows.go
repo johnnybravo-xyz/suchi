@@ -420,8 +420,15 @@ func mapAction(
 			// Custom-field values arrive as a raw JSON object keyed by
 			// source field PK. Emit one assign_custom_field per field.
 			var values map[string]any
+			validValues := true
 			if len(af.AssignCustomFieldsValues) > 0 {
-				_ = json.Unmarshal(af.AssignCustomFieldsValues, &values)
+				if err := json.Unmarshal(af.AssignCustomFieldsValues, &values); err != nil {
+					reasons = append(reasons, "custom-field assignment values are invalid JSON")
+					validValues = false
+				}
+			}
+			if !validValues {
+				break
 			}
 			for _, srcFID := range af.AssignCustomFields {
 				id, ok := cfMap[srcFID]
@@ -490,14 +497,9 @@ func mapAction(
 			}
 		}
 		if len(af.RemoveOwners) > 0 {
-			out = append(out, mappedAction{
-				kind:   "remove_owner",
-				params: map[string]any{},
-			})
-			if len(af.RemoveOwners) > 1 {
-				reasons = append(reasons,
-					"remove_owners list collapsed to single remove")
-			}
+			reasons = append(reasons,
+				"remove_owner action dropped because Suchi documents always require an owner")
+			followups = append(followups, "remove_owner action")
 		}
 		if len(af.RemoveCustomFields) > 0 {
 			for _, srcFID := range af.RemoveCustomFields {

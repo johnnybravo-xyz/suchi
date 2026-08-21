@@ -1,10 +1,21 @@
 package emailwatch
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 )
+
+func TestNewRejectsInvalidPollInterval(t *testing.T) {
+	for _, poll := range []int{0, -1, emailaccounts.MaxPollIntervalMin + 1} {
+		account := &emailaccounts.Account{Enabled: true, PollIntervalMin: poll}
+		if _, err := New(context.Background(), account, Config{}, nil, nil, nil, nil, nil, slog.Default()); err == nil {
+			t.Fatalf("poll interval %d should be rejected", poll)
+		}
+	}
+}
 
 func TestFingerprintIgnoresSyncBookkeeping(t *testing.T) {
 	a := &emailaccounts.Account{

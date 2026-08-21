@@ -24,10 +24,10 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 	mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
 	mux.HandleFunc("POST /api/login", la.LoginHandler)
 	mux.HandleFunc("POST /api/token/", la.LoginHandler)
+	mux.HandleFunc("POST /api/logout", la.LogoutHandler)
 	if oa != nil {
 		mux.HandleFunc("GET /oidc/login", oa.LoginHandler)
 		mux.HandleFunc("GET /oidc/callback", oa.CallbackHandler)
-		mux.HandleFunc("GET /oidc/debug", oa.DebugInfoHandler)
 	}
 
 	if !cfg.UIDisabled {
@@ -44,10 +44,6 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 			return !cfg.DemoMode && la.SetupToken() != ""
 		}
 		uiServer.DemoMode = cfg.DemoMode
-		if cfg.DemoMode {
-			uiServer.DemoLoginEmail = DemoLoginEmail
-			uiServer.DemoLoginPassword = DemoLoginPassword
-		}
 		uiServer.Register(mux)
 		uiServer.RegisterSPA(mux)
 	} else {
@@ -69,14 +65,7 @@ func registerOperationalRoutes(mux *http.ServeMux, d *db.DB, metrics *httpx.Metr
 	mux.Handle("GET /readyz", readyz)
 
 	metricsHandler := metrics.Handler()
-	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
-		p := auth.FromContext(r.Context())
-		if p == nil || p.Role != "admin" {
-			http.Error(w, `{"error":"admin required","code":"forbidden"}`, http.StatusForbidden)
-			return
-		}
-		metricsHandler.ServeHTTP(w, r)
-	})
+	mux.Handle("GET /metrics", requireOperationalAdmin(metricsHandler))
 	registerPprofRoutes(mux, pprofEnabled, log)
 }
 
@@ -84,13 +73,30 @@ func registerPprofRoutes(mux *http.ServeMux, enabled bool, log *slog.Logger) {
 	if !enabled {
 		return
 	}
-	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	mux.Handle("GET /debug/pprof/", requireOperationalAdmin(http.HandlerFunc(pprof.Index)))
+	mux.Handle("GET /debug/pprof/cmdline", requireOperationalAdmin(http.HandlerFunc(pprof.Cmdline)))
+	mux.Handle("GET /debug/pprof/profile", requireOperationalAdmin(http.HandlerFunc(pprof.Profile)))
+	mux.Handle("GET /debug/pprof/symbol", requireOperationalAdmin(http.HandlerFunc(pprof.Symbol)))
+	mux.Handle("GET /debug/pprof/trace", requireOperationalAdmin(http.HandlerFunc(pprof.Trace)))
 	for _, name := range []string{"heap", "goroutine", "allocs", "block", "mutex", "threadcreate"} {
-		mux.Handle("GET /debug/pprof/"+name, pprof.Handler(name))
+		mux.Handle("GET /debug/pprof/"+name, requireOperationalAdmin(pprof.Handler(name)))
 	}
 	log.Info("pprof.enabled", "prefix", "/debug/pprof/")
+}
+
+func requireOperationalAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"auth required","code":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if p.Role != "admin" {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"admin required","code":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

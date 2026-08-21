@@ -35,6 +35,14 @@ import (
 // them together.
 const PrincipalKindDemoAnon = "demo-anon"
 
+// PrincipalKindDemoScratch is an upgraded visitor with an ordinary member row.
+// Both demo kinds may read the seeded corpus; only scratch users can own writes.
+const PrincipalKindDemoScratch = "demo-scratch"
+
+func isDemoCorpusKind(kind string) bool {
+	return kind == PrincipalKindDemoAnon || kind == PrincipalKindDemoScratch
+}
+
 // DemoAnonCookieName is the cookie the SPA reads for direct-URL
 // resources (<iframe src="/preview/{id}">, /download/{id}) that can't
 // attach the X-Suchi-Demo-Token header. The auth chain accepts the
@@ -50,6 +58,7 @@ const DemoAnonCookieName = "suchi_demo_anon"
 type DemoConfig struct {
 	Enabled       bool  `json:"enabled"`
 	NextResetUnix int64 `json:"next_reset_unix,omitempty"`
+	CookieSecure  bool  `json:"-"`
 }
 
 // DemoTokenMinter is the seam the anonymous-token authenticator plugs
@@ -124,7 +133,7 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  exp,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   s.demo.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
@@ -181,7 +190,7 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	token, err := s.TokenIssuer(r.Context(), uid, "demo-visitor",
-		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite+","+auth.ScopeDemoCorpusRead)
 	if err != nil {
 		s.Log.Warn("api.demo.upgrade.token_err", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "token_failed", "could not mint token")

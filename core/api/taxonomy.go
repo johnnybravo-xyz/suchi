@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -78,7 +77,7 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req TaxonomyImportReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}
@@ -309,6 +308,9 @@ func detectMergeCollisions(ctx context.Context, s *Server, pf *presetfile.Preset
 			return nil, nil, err
 		}
 		existing[code] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
 	}
 	// Reserve codes the incoming preset has already claimed for
 	// non-colliding categories so the "propose next free" walk

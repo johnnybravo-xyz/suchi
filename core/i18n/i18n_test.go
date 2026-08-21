@@ -30,8 +30,8 @@ func TestLoadResolvesBaseAndEnglishFallback(t *testing.T) {
 		if catalog.Locale != "en" {
 			t.Errorf("Load(%q) locale = %q, want en", locale, catalog.Locale)
 		}
-		if got := catalog.Msg("nav.documents"); got != "Documents" {
-			t.Errorf("Load(%q) nav.documents = %q", locale, got)
+		if got := catalog.Msg("auth.login.title"); got != "Sign in" {
+			t.Errorf("Load(%q) auth.login.title = %q", locale, got)
 		}
 	}
 }
@@ -41,8 +41,8 @@ func TestLookupAndMissingMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := catalog.Lookup("nav.documents"); !ok || got != "Documents" {
-		t.Fatalf("Lookup(nav.documents) = %q, %v", got, ok)
+	if got, ok := catalog.Lookup("auth.login.title"); !ok || got != "Sign in" {
+		t.Fatalf("Lookup(auth.login.title) = %q, %v", got, ok)
 	}
 	if got := catalog.Msg("missing.key"); got != "!missing.key!" {
 		t.Fatalf("Msg(missing.key) = %q", got)

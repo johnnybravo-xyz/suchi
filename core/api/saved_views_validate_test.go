@@ -1,9 +1,7 @@
 package api
 
-// filter_json validation guardrails. The saved_views table stores
-// opaque JSON, but every drift here silently rots existing views;
-// these tests pin the allow-list and shape so a new key needs a
-// deliberate code change.
+// filter_json validation guardrails. These tests pin the allow-list and
+// shape so a new key needs a deliberate code change.
 
 import (
 	"strings"
@@ -35,6 +33,7 @@ func TestValidateFilterJSON_Rejects(t *testing.T) {
 		{`"hi"`, "scalar"},
 		{`{"garbage_key":"x"}`, "unknown"},
 		{`{"q":{"nested":true}}`, "nested"},
+		{`{} {}`, "trailing-object"},
 		{`{"q":"` + strings.Repeat("x", 2100) + `"}`, "size"},
 	}
 	for _, tc := range cases {

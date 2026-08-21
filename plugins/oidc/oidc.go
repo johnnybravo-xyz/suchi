@@ -9,14 +9,13 @@ package oidcauth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -31,7 +30,10 @@ const (
 	Name        = "oidc"
 	stateCookie = "suchi_oidc_state"
 	stateTTL    = 10 * time.Minute
+	exchangeTTL = 30 * time.Second
 )
+
+var errUserDisabled = errors.New("oidc: user disabled")
 
 // Config carries everything New needs. All fields required.
 type Config struct {
@@ -40,6 +42,7 @@ type Config struct {
 	ClientSecret string
 	PublicURL    string // callback derived: PublicURL + "/oidc/callback"
 	AdminEmail   string
+	CookieSecure bool
 	// SessionIssuer wires session creation to the local-auth plugin's
 	// session table so the OIDC path and the local-password path both
 	// mint the same kind of cookie. Passing this as a func avoids a
@@ -122,6 +125,7 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 	if err := idTok.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("read claims: %w", err)
 	}
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
 	if claims.Email == "" {
 		return nil, errors.New("id token has no email")
 	}
@@ -140,14 +144,19 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 
 // LoginHandler redirects the browser to the IdP's authorize endpoint.
 func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	state := randHex(16)
+	state, err := randHex(16)
+	if err != nil {
+		p.log.Error("oidc.state.fail", "err", err.Error())
+		http.Error(w, "sign-in unavailable", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookie,
 		Value:    state,
 		Path:     "/",
 		Expires:  time.Now().Add(stateTTL),
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   p.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, p.oauth.AuthCodeURL(state), http.StatusFound)
@@ -158,15 +167,30 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	state := q.Get("state")
 	code := q.Get("code")
+	if q.Get("error") != "" {
+		p.log.Warn("oidc.callback.rejected", "error", q.Get("error"))
+		http.Error(w, "sign-in was not completed", http.StatusBadRequest)
+		return
+	}
 	c, err := r.Cookie(stateCookie)
-	if err != nil || c.Value == "" || c.Value != state {
+	if err != nil || state == "" || c.Value == "" ||
+		subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
 	}
 	// Burn the state cookie.
-	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{
+		Name: stateCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: p.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
+	})
 
-	tok, err := p.oauth.Exchange(r.Context(), code)
+	if code == "" {
+		http.Error(w, "authorization code missing", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), exchangeTTL)
+	defer cancel()
+	tok, err := p.oauth.Exchange(ctx, code)
 	if err != nil {
 		p.log.Warn("oidc.exchange.fail", "err", err.Error())
 		http.Error(w, "token exchange failed", http.StatusBadGateway)
@@ -177,9 +201,12 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no id_token in response", http.StatusBadGateway)
 		return
 	}
-	idTok, err := p.verifier.Verify(r.Context(), raw)
+	verifyCtx, verifyCancel := context.WithTimeout(r.Context(), exchangeTTL)
+	defer verifyCancel()
+	idTok, err := p.verifier.Verify(verifyCtx, raw)
 	if err != nil {
-		http.Error(w, "verify id token: "+err.Error(), http.StatusBadRequest)
+		p.log.Warn("oidc.verify.fail", "err", err.Error())
+		http.Error(w, "identity token was rejected", http.StatusBadRequest)
 		return
 	}
 	var claims struct {
@@ -187,9 +214,11 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		Name  string `json:"name"`
 	}
 	if err := idTok.Claims(&claims); err != nil {
-		http.Error(w, "read claims: "+err.Error(), http.StatusBadRequest)
+		p.log.Warn("oidc.claims.fail", "err", err.Error())
+		http.Error(w, "identity claims were rejected", http.StatusBadRequest)
 		return
 	}
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
 	if claims.Email == "" {
 		http.Error(w, "id token has no email", http.StatusBadRequest)
 		return
@@ -197,11 +226,16 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	userID, _, _, err := p.upsertUser(r.Context(), claims.Email, claims.Name)
 	if err != nil {
 		p.log.Error("oidc.upsert.fail", "err", err.Error())
+		if errors.Is(err, errUserDisabled) {
+			http.Error(w, "account disabled", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "user upsert failed", http.StatusInternalServerError)
 		return
 	}
 	sid, err := p.cfg.IssueSession(r.Context(), userID, r)
 	if err != nil {
+		p.log.Error("oidc.session.fail", "err", err.Error())
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
@@ -211,7 +245,7 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  time.Now().Add(30 * 24 * time.Hour),
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   p.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -232,10 +266,14 @@ func (p *Plugin) upsertUser(ctx context.Context, email, displayName string) (use
 		// SELECT first because sqlite RETURNING is not universally
 		// available in modernc CTE contexts we might want later.
 		row := tx.QueryRowContext(ctx,
-			"SELECT id, role, display_name FROM users WHERE email = ?", email)
+			"SELECT id, role, display_name, disabled FROM users WHERE email = ?", email)
 		var existingRole, existingDisplay string
-		errRow := row.Scan(&userID, &existingRole, &existingDisplay)
+		var disabled bool
+		errRow := row.Scan(&userID, &existingRole, &existingDisplay, &disabled)
 		if errRow == nil {
+			if disabled {
+				return errUserDisabled
+			}
 			role = existingRole
 			display = existingDisplay
 			return nil
@@ -261,26 +299,10 @@ func (p *Plugin) upsertUser(ctx context.Context, email, displayName string) (use
 	return
 }
 
-func randHex(n int) string {
+func randHex(n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// well-known info handler for debugging — returns the authorize URL that
-// the login flow would use, without redirecting. Useful when integrating.
-func (p *Plugin) DebugInfoHandler(w http.ResponseWriter, r *http.Request) {
-	u, _ := url.Parse(p.oauth.AuthCodeURL("EXAMPLE"))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"issuer":                p.cfg.IssuerURL,
-		"client_id":             p.cfg.ClientID,
-		"redirect":              p.oauth.RedirectURL,
-		"example_authorize_url": u.String(),
-	})
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

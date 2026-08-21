@@ -143,6 +143,14 @@ func TestSimilarDocuments_FindsOverlappingDocs(t *testing.T) {
 	if nearRank != -1 && farRank != -1 && nearRank > farRank {
 		t.Errorf("near-vocab doc ranked below far-vocab doc: near=%d far=%d", nearRank, farRank)
 	}
+	if _, err := s.DB.ExecWrite(context.Background(),
+		`UPDATE users SET email = ?, role = 'admin' WHERE id = 1`, authz.DemoCorpusOwnerEmail); err != nil {
+		t.Fatal(err)
+	}
+	code, body = doSimilar(t, s, src, &pluginapi.Principal{Kind: PrincipalKindDemoAnon, Role: "member"})
+	if code != 200 || len(body.Results) == 0 {
+		t.Fatalf("demo corpus similarity status=%d results=%+v", code, body.Results)
+	}
 }
 
 func TestSimilarDocuments_EmptyContentReturnsEmpty(t *testing.T) {

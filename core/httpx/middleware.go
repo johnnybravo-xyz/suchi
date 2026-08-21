@@ -7,7 +7,6 @@
 package httpx
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
@@ -183,7 +182,7 @@ func SecFetchSite(next http.Handler) http.Handler {
 		}
 		p := auth.FromContext(r.Context())
 		// Token / bearer calls exempt: forge-proof.
-		if p != nil && p.Kind == "token" {
+		if p != nil && (p.Kind == "token" || p.Kind == demoScratchPrincipalKind) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -438,15 +437,4 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	return strings.TrimSpace(r.RemoteAddr)
-}
-
-// CtxTimeout wraps requests in a hard timeout to bound handler work.
-func CtxTimeout(d time.Duration) Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx, cancel := context.WithTimeout(r.Context(), d)
-			defer cancel()
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
 }

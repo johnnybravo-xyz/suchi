@@ -93,8 +93,8 @@ func TestRegisterOperationalRoutesProtectsMetricsAndGatesPprof(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("anonymous metrics status = %d, want %d", rec.Code, http.StatusForbidden)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous metrics status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -115,8 +115,15 @@ func TestRegisterOperationalRoutesProtectsMetricsAndGatesPprof(t *testing.T) {
 	registerPprofRoutes(pprofMux, true, testLogger())
 	rec = httptest.NewRecorder()
 	pprofMux.ServeHTTP(rec, httptest.NewRequest("GET", "/debug/pprof/goroutine?debug=1", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous pprof status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	req = httptest.NewRequest("GET", "/debug/pprof/goroutine?debug=1", nil)
+	req = req.WithContext(auth.WithPrincipal(context.Background(), &pluginapi.Principal{Role: "admin"}))
+	rec = httptest.NewRecorder()
+	pprofMux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("enabled pprof status = %d, want %d", rec.Code, http.StatusOK)
+		t.Fatalf("admin pprof status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 

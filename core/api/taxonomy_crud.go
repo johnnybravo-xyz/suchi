@@ -17,7 +17,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -188,6 +187,10 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 		v.IsInsensitive = isInsens == 1
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "taxonomy.iterate."+table, err)
+		return
+	}
 	if out == nil {
 		out = []TaxonomyRow{}
 	}
@@ -203,7 +206,7 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	var in TaxonomyUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -292,7 +295,7 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	var in TaxonomyUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
@@ -16,7 +17,10 @@ import (
 )
 
 func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.CAS, apiServer *api.Server, anon *demo.AnonAuthenticator, log *slog.Logger) (*httpx.RateLimit, error) {
-	apiServer.SetDemo(api.DemoConfig{Enabled: cfg.DemoMode})
+	apiServer.SetDemo(api.DemoConfig{
+		Enabled:      cfg.DemoMode,
+		CookieSecure: strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://"),
+	})
 	if !cfg.DemoMode {
 		return nil, nil
 	}
@@ -37,7 +41,7 @@ func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.
 	}
 	log.Info("main.demo_mode.enabled",
 		"global_rps", cfg.DemoGlobalRPS,
-		"upload_max_bytes", cfg.BodyLimit,
+		"body_limit_bytes", cfg.BodyLimit,
 		"scratch_ttl_minutes", cfg.DemoScratchTTLMinutes)
 	go demo.Loop(ctx, demo.TickerOptions{
 		DB: d, CAS: cas, Log: log,

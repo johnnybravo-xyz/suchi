@@ -28,6 +28,7 @@ package bundle
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -57,12 +58,19 @@ func LoadManifests(root string) (Manifest, error) {
 	var out Manifest
 
 	// Top-level manifest.json — the canonical location.
-	if _, err := os.Stat(filepath.Join(root, "manifest.json")); err == nil {
-		m, err := loadOne(filepath.Join(root, "manifest.json"))
+	manifestPath := filepath.Join(root, "manifest.json")
+	if _, err := os.Stat(manifestPath); err == nil {
+		manifestPath, err = safeExistingBundleFile(root, manifestPath)
+		if err != nil {
+			return nil, err
+		}
+		m, err := loadOne(manifestPath)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, m...)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat %s: %w", manifestPath, err)
 	}
 
 	// Split-manifest sidecars: `<root>/*.json` other than manifest.json.
@@ -73,7 +81,10 @@ func LoadManifests(root string) (Manifest, error) {
 	for _, d := range dirs {
 		entries, err := os.ReadDir(d)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("read manifest directory %s: %w", d, err)
 		}
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -82,7 +93,11 @@ func LoadManifests(root string) (Manifest, error) {
 			if e.Name() == "manifest.json" {
 				continue
 			}
-			m, err := loadOne(filepath.Join(d, e.Name()))
+			path, err := safeExistingBundleFile(root, filepath.Join(d, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			m, err := loadOne(path)
 			if err != nil {
 				return nil, err
 			}
@@ -302,10 +317,13 @@ const (
 //     -- v3 with -p
 //
 // The archive path uses the same fallback chain.
-func FilePaths(root string, d DocumentFields) (original string, archive string) {
-	original = resolveExportedFile(root, "originals", d.OriginalFilename)
+func FilePaths(root string, d DocumentFields) (original string, archive string, err error) {
+	original, err = resolveExportedFile(root, "originals", d.OriginalFilename)
+	if err != nil {
+		return "", "", err
+	}
 	if d.ArchiveFilename != nil && *d.ArchiveFilename != "" {
-		archive = resolveExportedFile(root, "archive", *d.ArchiveFilename)
+		archive, err = resolveExportedFile(root, "archive", *d.ArchiveFilename)
 	}
 	return
 }
@@ -313,17 +331,25 @@ func FilePaths(root string, d DocumentFields) (original string, archive string) 
 // resolveExportedFile searches for a file matching name in the given
 // subdirectory (and root). Returns the first existing path, or the
 // nominal one so the caller can report a clean "no such file" error.
-func resolveExportedFile(root, subdir, name string) string {
+func resolveExportedFile(root, subdir, name string) (string, error) {
 	if name == "" {
-		return ""
+		return "", nil
 	}
-	direct := filepath.Join(root, subdir, name)
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("unsafe bundle filename %q", name)
+	}
+	direct := filepath.Join(root, subdir, clean)
 	if _, err := os.Stat(direct); err == nil {
-		return direct
+		return safeExistingBundleFile(root, direct)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
-	fallback := filepath.Join(root, name)
+	fallback := filepath.Join(root, clean)
 	if _, err := os.Stat(fallback); err == nil {
-		return fallback
+		return safeExistingBundleFile(root, fallback)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
 	// v3 -p scan: files named like "{created} {correspondent} {name}.{ext}".
 	subdirPath := filepath.Join(root, subdir)
@@ -333,12 +359,37 @@ func resolveExportedFile(root, subdir, name string) string {
 			if e.IsDir() {
 				continue
 			}
-			if strings.Contains(e.Name(), name) {
-				return filepath.Join(subdirPath, e.Name())
+			if strings.Contains(e.Name(), clean) {
+				return safeExistingBundleFile(root, filepath.Join(subdirPath, e.Name()))
 			}
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
-	return direct
+	return direct, nil
+}
+
+func safeExistingBundleFile(root, path string) (string, error) {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve bundle root: %w", err)
+	}
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("bundle file escapes root: %s", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("bundle path is not a regular file: %s", path)
+	}
+	return path, nil
 }
 
 // FirstExisting is a small helper for "here or there" file lookups; some

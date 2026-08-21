@@ -96,6 +96,20 @@ func TestImportEndToEnd(t *testing.T) {
 	}
 }
 
+func TestFilePathsStayInsideBundle(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.pdf")
+	must(t, os.WriteFile(outside, []byte("private"), 0o600))
+	must(t, os.Mkdir(filepath.Join(root, "originals"), 0o700))
+	must(t, os.Symlink(outside, filepath.Join(root, "originals", "linked.pdf")))
+
+	for _, name := range []string{"../../outside.pdf", "linked.pdf"} {
+		if _, _, err := bundle.FilePaths(root, bundle.DocumentFields{OriginalFilename: name}); err == nil {
+			t.Errorf("FilePaths(%q) should reject a bundle escape", name)
+		}
+	}
+}
+
 // buildFakeBundle writes a minimal but structurally-valid an existing DMS
 // export bundle into tmp/bundle and returns the bundle root.
 //

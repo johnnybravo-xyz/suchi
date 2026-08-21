@@ -131,6 +131,22 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		}
 		newID = id
 
+		// A version is still the same logical document. Carry every explicit
+		// grant forward with the row so editors and viewers do not lose access
+		// when the predecessor stops being the head.
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO object_acls(
+				object_kind, object_id, principal_kind, principal_id,
+				perm_bits, created_at, created_by
+			)
+			SELECT object_kind, ?, principal_kind, principal_id,
+			       perm_bits, created_at, created_by
+			FROM object_acls
+			WHERE object_kind = 'document' AND object_id = ?
+		`, newID, prevID); err != nil {
+			return err
+		}
+
 		payload, _ := json.Marshal(map[string]any{
 			"sha256":    ref.SHA256,
 			"size":      ref.Size,
@@ -257,6 +273,10 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		}
 		v.IsHead = isHead == 1
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
 	}
 	if out == nil {
 		out = []VersionView{}

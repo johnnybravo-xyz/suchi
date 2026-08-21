@@ -2,6 +2,7 @@ package bundle
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,13 +88,20 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 		err := d.Read.QueryRowContext(ctx, `
 			SELECT title, original_size FROM documents WHERE legacy_id = ?
 		`, o.PK).Scan(&suchiTitle, &suchiSize)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			// Not found → this doc would be imported.
 			rep.New = append(rep.New, o.PK)
 			continue
 		}
+		if err != nil {
+			return nil, fmt.Errorf("query document pk=%d: %w", o.PK, err)
+		}
 
-		diff := compareDoc(opts.BundleRoot, f, suchiTitle, suchiSize)
+		origPath, _, err := FilePaths(opts.BundleRoot, f)
+		if err != nil {
+			return nil, fmt.Errorf("resolve document pk=%d: %w", o.PK, err)
+		}
+		diff := compareDoc(origPath, f, suchiTitle, suchiSize)
 		if len(diff) == 0 {
 			rep.Match = append(rep.Match, o.PK)
 		} else {
@@ -145,12 +153,11 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 // across source-tool versions without a real change), tags (name-remap
 // noise would produce false positives before we build the mapping).
 // Add fields here as needs surface.
-func compareDoc(bundleRoot string, f DocumentFields, suchiTitle string, suchiSize int64) []string {
+func compareDoc(origPath string, f DocumentFields, suchiTitle string, suchiSize int64) []string {
 	var diff []string
 	if f.Title != suchiTitle {
 		diff = append(diff, "title")
 	}
-	origPath, _ := FilePaths(bundleRoot, f)
 	if fi, err := os.Stat(origPath); err == nil {
 		if fi.Size() != suchiSize {
 			diff = append(diff, "original_size")

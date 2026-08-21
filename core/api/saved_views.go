@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ type SavedViewUpsert struct {
 	Shared     *bool   `json:"shared,omitempty"`
 }
 
+const (
+	maxSavedViewsPerUser     = 50
+	maxSavedViewNameBytes    = 120
+	maxSavedViewDisplayBytes = 32
+)
+
 // ListSavedViews — GET /api/saved_views/.
 //
 // By default returns the caller's own views. Passing ?include=shared
@@ -57,7 +64,7 @@ func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	includeShared := r.URL.Query().Get("include") == "shared" || p.Kind == PrincipalKindDemoAnon
+	includeShared := r.URL.Query().Get("include") == "shared" || isDemoCorpusKind(p.Kind)
 	where := "owner_id = ?"
 	args := []any{p.UserID}
 	if includeShared {
@@ -106,6 +113,10 @@ func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "saved_views.iterate", err)
+		return
+	}
 	if out == nil {
 		out = []SavedViewRow{}
 	}
@@ -120,12 +131,17 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in SavedViewUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 	if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_name", "name is required")
+		return
+	}
+	name := strings.TrimSpace(*in.Name)
+	if len(name) > maxSavedViewNameBytes {
+		s.writeError(w, http.StatusBadRequest, "bad_name", "name must be at most 120 bytes")
 		return
 	}
 	filterJSON := "{}"
@@ -141,16 +157,23 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	// is a UX smell — a filter set that big means the client should
 	// switch to search, not persist state.
 	var count int
-	_ = s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM saved_views WHERE owner_id = ?", p.UserID).Scan(&count)
-	if count >= 50 {
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT COUNT(*) FROM saved_views WHERE owner_id = ?", p.UserID).Scan(&count); err != nil {
+		s.serverErr(w, "saved_views.count", err)
+		return
+	}
+	if count >= maxSavedViewsPerUser {
 		s.writeError(w, http.StatusConflict, "limit_reached",
 			"a user can hold at most 50 saved views")
 		return
 	}
 	display := "table"
 	if in.Display != nil {
-		display = *in.Display
+		display = strings.TrimSpace(*in.Display)
+		if display == "" || len(display) > maxSavedViewDisplayBytes {
+			s.writeError(w, http.StatusBadRequest, "bad_display", "display must be 1 to 32 bytes")
+			return
+		}
 	}
 	position := 0
 	if in.Position != nil {
@@ -166,7 +189,7 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, p.UserID, strings.TrimSpace(*in.Name), filterJSON, display, position, shared, now, now)
+		`, p.UserID, name, filterJSON, display, position, shared, now, now)
 		if err != nil {
 			return err
 		}
@@ -198,15 +221,20 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in SavedViewUpsert
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 	sets := []string{}
 	args := []any{}
 	if in.Name != nil {
+		name := strings.TrimSpace(*in.Name)
+		if name == "" || len(name) > maxSavedViewNameBytes {
+			s.writeError(w, http.StatusBadRequest, "bad_name", "name must be 1 to 120 bytes")
+			return
+		}
 		sets = append(sets, "name = ?")
-		args = append(args, strings.TrimSpace(*in.Name))
+		args = append(args, name)
 	}
 	if in.FilterJSON != nil {
 		if err := ValidateSavedViewFilterJSON(*in.FilterJSON); err != nil {
@@ -217,8 +245,13 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *in.FilterJSON)
 	}
 	if in.Display != nil {
+		display := strings.TrimSpace(*in.Display)
+		if display == "" || len(display) > maxSavedViewDisplayBytes {
+			s.writeError(w, http.StatusBadRequest, "bad_display", "display must be 1 to 32 bytes")
+			return
+		}
 		sets = append(sets, "display = ?")
-		args = append(args, *in.Display)
+		args = append(args, display)
 	}
 	if in.Position != nil {
 		sets = append(sets, "position = ?")
@@ -369,6 +402,10 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "trash.iterate", err)
+		return
+	}
 	if out == nil {
 		out = []TrashRow{}
 	}
@@ -397,6 +434,9 @@ func ValidateSavedViewFilterJSON(raw string) error {
 	var filter map[string]any
 	if err := dec.Decode(&filter); err != nil || filter == nil {
 		return &savedViewFilterError{message: "filter_json must be a JSON object"}
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return &savedViewFilterError{message: "filter_json must contain one JSON object"}
 	}
 	for key, value := range filter {
 		if !savedViewAllowedKeys[key] {

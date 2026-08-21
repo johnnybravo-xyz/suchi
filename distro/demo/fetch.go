@@ -2,6 +2,7 @@ package demo
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -13,6 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+)
+
+const (
+	maxCorpusArchiveBytes   = 256 << 20
+	maxCorpusExtractedBytes = 1 << 30
+	maxCorpusEntries        = 10_000
+	maxChecksumBytes        = 4 << 10
 )
 
 // FetchOptions controls where the corpus tarball comes from and
@@ -84,20 +92,27 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 	var tarBytes []byte
 	switch {
 	case opts.LocalFile != "":
+		info, err := os.Stat(opts.LocalFile)
+		if err != nil {
+			return "", fmt.Errorf("stat local tarball: %w", err)
+		}
+		if info.Size() > maxCorpusArchiveBytes {
+			return "", fmt.Errorf("local tarball exceeds %d-byte limit", maxCorpusArchiveBytes)
+		}
 		b, err := os.ReadFile(opts.LocalFile)
 		if err != nil {
 			return "", fmt.Errorf("read local tarball: %w", err)
 		}
 		tarBytes = b
 	case opts.URL != "":
-		b, err := httpGet(ctx, opts.URL)
+		b, err := httpGet(ctx, opts.URL, maxCorpusArchiveBytes)
 		if err != nil {
 			return "", fmt.Errorf("fetch %s: %w", opts.URL, err)
 		}
 		tarBytes = b
 		if opts.ExpectedSHA256 == "" {
 			// Try to grab the sidecar; a 404 is not fatal.
-			if s, err := httpGet(ctx, opts.URL+".sha256"); err == nil {
+			if s, err := httpGet(ctx, opts.URL+".sha256", maxChecksumBytes); err == nil {
 				opts.ExpectedSHA256 = firstHexToken(string(s))
 			}
 		}
@@ -115,19 +130,25 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 
 	// Extract into a temp sibling of CacheDir, then atomically rename.
 	tmp := opts.CacheDir + ".partial"
-	_ = os.RemoveAll(tmp)
+	if err := os.RemoveAll(tmp); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return "", err
 	}
 	if err := extractTarGz(tarBytes, tmp); err != nil {
 		return "", fmt.Errorf("extract: %w", err)
 	}
-	_ = os.RemoveAll(opts.CacheDir)
+	if err := os.RemoveAll(opts.CacheDir); err != nil {
+		return "", err
+	}
 	if err := os.Rename(tmp, opts.CacheDir); err != nil {
 		return "", err
 	}
 	if opts.ExpectedSHA256 != "" {
-		_ = os.WriteFile(opts.CacheDir+".sha256", []byte(opts.ExpectedSHA256), 0o644)
+		if err := os.WriteFile(opts.CacheDir+".sha256", []byte(opts.ExpectedSHA256), 0o644); err != nil {
+			return "", err
+		}
 	}
 	return opts.CacheDir, nil
 }
@@ -143,7 +164,7 @@ func defaultCacheBase() (string, error) {
 	return filepath.Join(home, ".cache"), nil
 }
 
-func httpGet(ctx context.Context, url string) ([]byte, error) {
+func httpGet(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
 	c := &http.Client{Timeout: 5 * time.Minute}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -157,7 +178,17 @@ func httpGet(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("response exceeds %d-byte limit", maxBytes)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxBytes {
+		return nil, fmt.Errorf("response exceeds %d-byte limit", maxBytes)
+	}
+	return b, nil
 }
 
 func firstHexToken(s string) string {
@@ -179,12 +210,14 @@ func isHex(s string) bool {
 }
 
 func extractTarGz(data []byte, dst string) error {
-	gz, err := gzip.NewReader(bytesReader(data))
+	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	var total int64
+	entries := 0
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -193,9 +226,17 @@ func extractTarGz(data []byte, dst string) error {
 		if err != nil {
 			return err
 		}
+		entries++
+		if entries > maxCorpusEntries {
+			return fmt.Errorf("archive exceeds %d-entry limit", maxCorpusEntries)
+		}
+		if h.Size < 0 || h.Size > maxCorpusExtractedBytes-total {
+			return fmt.Errorf("archive exceeds %d-byte extraction limit", maxCorpusExtractedBytes)
+		}
+		total += h.Size
 		// Guard against traversal.
 		clean := filepath.Clean(h.Name)
-		if strings.HasPrefix(clean, "..") || strings.HasPrefix(clean, "/") {
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || filepath.IsAbs(clean) {
 			return fmt.Errorf("unsafe tar entry: %s", h.Name)
 		}
 		target := filepath.Join(dst, clean)
@@ -216,25 +257,11 @@ func extractTarGz(data []byte, dst string) error {
 				_ = f.Close()
 				return err
 			}
-			_ = f.Close()
+			if err := f.Close(); err != nil {
+				return err
+			}
 		default:
 			// Skip symlinks + others: the demo corpus is regular files only.
 		}
 	}
-}
-
-// bytesReader avoids importing bytes just for one call site.
-type bytesRdr struct {
-	b   []byte
-	off int
-}
-
-func bytesReader(b []byte) *bytesRdr { return &bytesRdr{b: b} }
-func (r *bytesRdr) Read(p []byte) (int, error) {
-	if r.off >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.off:])
-	r.off += n
-	return n, nil
 }

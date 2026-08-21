@@ -343,6 +343,10 @@ func mergeTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, remap
 			existingAreaPos = pos + 1
 		}
 	}
+	if err := arows.Err(); err != nil {
+		arows.Close()
+		return nil, nil, nil, err
+	}
 	arows.Close()
 
 	existingCats := map[int]struct {
@@ -365,6 +369,10 @@ func mergeTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, remap
 			ID   int64
 			Name string
 		}{ID: id, Name: name}
+	}
+	if err := crows.Err(); err != nil {
+		crows.Close()
+		return nil, nil, nil, err
 	}
 	crows.Close()
 

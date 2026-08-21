@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -283,23 +284,34 @@ func listTransitions(ctx context.Context, d rowQuerier, runID int64) ([]Transiti
 
 // ---------- approval_tasks ----------
 
-func insertTask(ctx context.Context, tx *sql.Tx, runID int64, stateKey string, spec TaskSpec, deadline *int64) (int64, error) {
+func insertTask(ctx context.Context, tx *sql.Tx, runID int64, stateKey string, spec TaskSpec, deadline *int64) (int64, bool, error) {
 	choicesJSON, err := json.Marshal(spec.Choices)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	now := time.Now().Unix()
-	res, err := tx.ExecContext(ctx, `
+	var id int64
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO approval_tasks(
 			run_id, state_key, assignee, prompt, choices_json,
 			status, deadline_at, created_at
 		) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+		ON CONFLICT(run_id, state_key) WHERE status IN ('open', 'claimed')
+		DO NOTHING
+		RETURNING id
 	`, runID, stateKey, spec.Assignee, spec.Prompt, string(choicesJSON),
-		nullInt64(deadline), now)
-	if err != nil {
-		return 0, err
+		nullInt64(deadline), now).Scan(&id)
+	if err == nil {
+		return id, true, nil
 	}
-	return res.LastInsertId()
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	err = tx.QueryRowContext(ctx, `
+		SELECT id FROM approval_tasks
+		WHERE run_id = ? AND state_key = ? AND status IN ('open', 'claimed')
+	`, runID, stateKey).Scan(&id)
+	return id, false, err
 }
 
 // loadTask reads one task row.
@@ -324,7 +336,9 @@ func loadTask(ctx context.Context, d rowQuerier, id int64) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	_ = json.Unmarshal([]byte(choicesRaw), &t.Choices)
+	if err := json.Unmarshal([]byte(choicesRaw), &t.Choices); err != nil {
+		return Task{}, fmt.Errorf("decode approval task %d choices: %w", t.ID, err)
+	}
 	if deadline.Valid {
 		v := deadline.Int64
 		t.DeadlineAt = &v
@@ -376,7 +390,9 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.Status, &deadline, &resolvedC, &resolvedBy, &resolvedAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(choicesRaw), &t.Choices)
+		if err := json.Unmarshal([]byte(choicesRaw), &t.Choices); err != nil {
+			return nil, fmt.Errorf("decode approval task %d choices: %w", t.ID, err)
+		}
 		if deadline.Valid {
 			v := deadline.Int64
 			t.DeadlineAt = &v

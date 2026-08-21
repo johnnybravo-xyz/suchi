@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <title>Set up suchi</title>
+  <title>{{msg "auth.setup.title"}}</title>
   <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
   <link rel="alternate icon" type="image/x-icon" href="/assets/brand/favicon.ico">
   <link rel="apple-touch-icon" href="/assets/brand/favicon.ico">
@@ -15,31 +15,31 @@
 <body class="auth">
   <main class="login-card bootstrap-card">
     <span class="brand-hero" role="img" aria-label="suchi"></span>
-    <h1 class="brand">Set up suchi</h1>
-    <p class="muted">First-boot admin. The one-time token is in your server log as
-      <code>localauth.setup.token_minted</code>. Paste it below.</p>
+    <h1 class="brand">{{msg "auth.setup.title"}}</h1>
+    <p class="muted">{{msg "auth.setup.body"}}
+      <code>localauth.setup.token_minted</code>. {{msg "auth.setup.body_suffix"}}</p>
     {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
     <form method="post" action="/bootstrap">
       <label>
-        <span>Setup token</span>
+        <span>{{msg "auth.setup.token"}}</span>
         <input name="token" type="text" required autofocus
                spellcheck="false" autocomplete="off"
-               placeholder="paste the token from the log">
+               placeholder="{{msg "auth.setup.token_placeholder"}}">
       </label>
       <label>
-        <span>Admin email</span>
+        <span>{{msg "auth.setup.email"}}</span>
         <input name="email" type="email" autocomplete="username" required>
       </label>
       <label>
-        <span>Display name <em class="muted">(optional)</em></span>
+        <span>{{msg "auth.setup.display_name"}} <em class="muted">{{msg "auth.setup.optional"}}</em></span>
         <input name="display_name" type="text" autocomplete="name">
       </label>
       <label>
-        <span>Password</span>
+        <span>{{msg "auth.setup.password"}}</span>
         <input name="password" type="password" autocomplete="new-password"
                required minlength="8">
       </label>
-      <button type="submit">Create admin</button>
+      <button type="submit">{{msg "auth.setup.submit"}}</button>
     </form>
   </main>
 </body>

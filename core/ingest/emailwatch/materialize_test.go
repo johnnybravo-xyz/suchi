@@ -2,6 +2,7 @@ package emailwatch
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/emersion/go-imap"
@@ -18,8 +19,8 @@ func TestMaterializeRejectsTruncation(t *testing.T) {
 			responseSection: bytes.NewReader(bytes.Repeat([]byte("x"), int(limit+1))),
 		},
 	}
-	if _, _, err := w.materialize(msg, section); err == nil {
-		t.Fatal("oversized message was silently truncated")
+	if _, _, err := w.materialize(msg, section); !errors.Is(err, errMessageTooLarge) {
+		t.Fatalf("oversized message error = %v", err)
 	}
 }
 

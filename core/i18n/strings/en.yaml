@@ -1,137 +1,20 @@
-# suchi — English UI strings.
-#
-# Flat key → phrase. Sections are convention only; the loader flattens.
-# Keep values plain-text; HTML lives in templates.
+# English strings for the server-rendered authentication pages.
+# The main application is the Svelte SPA; keep this catalog limited to
+# templates under core/ui/templates.
 
-# Navigation / chrome
-nav.brand: suchi
-nav.documents: Documents
-nav.inbox: Inbox
-nav.categories: Categories
-nav.settings: Settings
+auth.login.title: Sign in
+auth.login.subtitle: to continue to suchi.
+auth.login.email: Email
+auth.login.password: Password
+auth.login.submit: Sign in
 
-# Document list
-doc.list.title: Documents
-doc.list.empty: No documents yet.
-doc.list.count: "%d documents"
-doc.list.col.title: Title
-doc.list.col.correspondent: Correspondent
-doc.list.col.type: Type
-doc.list.col.category: Category
-doc.list.col.created: Created
-doc.list.col.tags: Tags
-doc.list.pager.prev: Previous
-doc.list.pager.next: Next
-doc.list.pager.page: "Page %d"
-
-# Document detail
-doc.detail.title: Document
-doc.detail.section.metadata: Metadata
-doc.detail.section.content: Content
-doc.detail.section.notes: Notes
-doc.detail.section.custom_fields: Custom fields
-doc.detail.field.title: Title
-doc.detail.field.created: Created
-doc.detail.field.added: Added
-doc.detail.field.correspondent: Correspondent
-doc.detail.field.type: Type
-doc.detail.field.category: Category
-doc.detail.field.tags: Tags
-doc.detail.field.original: Original file
-doc.detail.field.archive: Archive (OCR)
-doc.detail.field.asn: Archive serial
-doc.detail.field.legacy: Legacy id (from import)
-doc.detail.field.split_from: Split from
-doc.detail.field.email_from: Attachment of email
-doc.detail.section.decrypt: Password required
-doc.detail.decrypt.desc: This document is password-protected. Supply the user password to unlock it — suchi will then run OCR + rules + render as usual.
-
-# Pending-decryption view
-nav.pending_decryption: Pending decryption
-nav.upload: Upload
-nav.mail_setup: Mail
-nav.setup: Setup
-
-# Inbox (workflow tasks awaiting the current user)
-inbox.title: Inbox
-inbox.count: "%d open task(s) assigned to you"
-inbox.empty: "Nothing to review. New approvals will show up here."
-
-# Setup wizard
-setup.title: Setup
-setup.subtitle: One-time onboarding, but come back any time to reconfigure.
-setup.next: Continue
-setup.skip: Skip
-setup.complete_button: Mark setup complete
-setup.complete_hint: Hides this page from the topbar. You can still return via /admin/setup.
-
-setup.welcome.title: Welcome
-setup.welcome.body: This wizard walks you through the pieces most operators tweak on day one. Nothing here is required — every step is skippable and you can revisit later.
-
-setup.users.title: Users
-setup.users.body: Add household members or teammates who should sign in.
-setup.users.field.email: Email
-setup.users.field.password: Password (min 8 chars)
-setup.users.field.display_name: Display name (optional)
-setup.users.field.role: Role
-setup.users.submit: Create user
-
-setup.llm.title: LLM classifier
-setup.llm.body: An optional plugin that classifies documents via an OpenAI-compatible endpoint (Ollama, LM Studio, cloud vendors, etc.).
-setup.llm.field.endpoint: Endpoint URL
-setup.llm.field.model: Model
-setup.llm.field.api_key: API key
-setup.llm.field.egress_ack: I understand document text will leave this box.
-setup.llm.note: Changes apply live — the running classifier swaps to the new endpoint on the next classification.
-setup.llm.save: Save
-
-setup.jd.title: Taxonomy
-setup.jd.body: Pick a Johnny Decimal preset that matches your use case. The blank slate is opt-in — nearly nobody wants it long-term.
-setup.jd.apply: Apply preset
-setup.jd.confirm_blank: I understand the blank slate leaves only an Inbox category and is harder to migrate away from.
-
-setup.sources.title: Ingest sources
-setup.sources.body: Filesystem-watch drops any file into a folder and suchi ingests it — great for scanners.
-setup.sources.field.dir: Watch directory (absolute path)
-setup.sources.field.owner: Owner email
-setup.sources.note: Changes apply to the running watcher immediately.
-setup.sources.save: Save
-
-setup.preferences.title: Preferences
-setup.preferences.body: Backup schedule + OCR language(s) applied to scanned PDFs.
-setup.preferences.field.backup: Backup interval (hours; 0 = disable)
-setup.preferences.field.ocr_langs: OCR languages (comma-separated ISO codes)
-setup.preferences.save: Save
-
-setup.done.title: Setup complete
-setup.done.body: Nothing else to do. Come back via /admin/setup to reconfigure any step.
-setup.done.home_link: Back to documents
-
-# Upload page
-upload.title: Upload a document
-upload.subtitle: Drop a file or pick one — it lands in Inbox, dedups against your existing docs, and runs the full ingest pipeline.
-upload.drop_hint: Drop a file here
-upload.pick: Choose a file
-upload.submit: Upload
-upload.uploading: Uploading…
-upload.err.no_file: Pick a file first.
-upload.err.generic: "Upload failed: %s"
-upload.err.conflict: You already have a document with these bytes.
-decrypt.title: Pending decryption
-decrypt.subtitle: Documents that need a password before suchi can index them. Supply one below; check-off which docs it applies to.
-decrypt.password_label: Password
-decrypt.label_optional: Label (optional)
-decrypt.remember: Remember for future encrypted uploads
-decrypt.submit: Try password on selected docs
-decrypt.submit_one: Unlock
-decrypt.empty: Nothing pending — every uploaded document is either unencrypted or already unlocked.
-decrypt.col.title: Title
-decrypt.col.size: Size
-decrypt.col.created: Uploaded
-doc.detail.download.original: Download original
-doc.detail.download.archive: Download archive
-doc.detail.notes.empty: No notes on this document.
-
-# Global
-none: "—"
-unclassified: Uncategorized
+auth.setup.title: Set up suchi
+auth.setup.body: First-boot admin. The one-time token is in your server log as
+auth.setup.body_suffix: Paste it below.
+auth.setup.token: Setup token
+auth.setup.token_placeholder: paste the token from the log
+auth.setup.email: Admin email
+auth.setup.display_name: Display name
+auth.setup.optional: (optional)
+auth.setup.password: Password
+auth.setup.submit: Create admin

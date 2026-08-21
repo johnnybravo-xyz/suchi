@@ -94,6 +94,10 @@ func (s *Server) ListPendingDecryption(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, d)
 	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
 
@@ -122,7 +126,7 @@ func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req DecryptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
@@ -196,7 +200,7 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req DecryptBatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
@@ -405,6 +409,10 @@ func (s *Server) ListDecryptionPasswords(w http.ResponseWriter, r *http.Request)
 		}
 		out = append(out, v)
 	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
 
@@ -423,7 +431,7 @@ func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Label *string `json:"label"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}

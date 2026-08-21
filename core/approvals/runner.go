@@ -204,22 +204,31 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 			v := time.Now().Add(time.Duration(secs) * time.Second).Unix()
 			deadline = &v
 		}
-		var taskID int64
+		var (
+			taskID      int64
+			taskCreated bool
+		)
 		if err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-			// Refresh deadline_at on the run so the sweeper can find it.
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE approval_runs SET deadline_at = ? WHERE id = ?
-			`, deadlineArg(deadline), runID); err != nil {
-				return err
-			}
-			id, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+			id, created, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
 			if err != nil {
 				return err
 			}
 			taskID = id
-			return nil
+			taskCreated = created
+			if !created {
+				return nil
+			}
+			// Set the run deadline only when this advance created the task.
+			// Retries must not extend an already-waiting approval.
+			_, err = tx.ExecContext(ctx, `
+				UPDATE approval_runs SET deadline_at = ? WHERE id = ?
+			`, deadlineArg(deadline), runID)
+			return err
 		}); err != nil {
 			return err
+		}
+		if !taskCreated {
+			return nil
 		}
 		// Notification feed: audit outside the tx (audit.Log opens
 		// its own WriteTx; nesting on the single-writer pool would
@@ -427,7 +436,7 @@ func principalTag(p *pluginapi.Principal) string {
 	if p == nil {
 		return "system"
 	}
-	if p.Kind == "token" && p.TokenID != 0 {
+	if (p.Kind == "token" || p.Kind == "demo-scratch") && p.TokenID != 0 {
 		return "token:" + strconv.FormatInt(p.TokenID, 10)
 	}
 	if p.UserID != 0 {

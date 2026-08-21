@@ -56,9 +56,7 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req setCustomFieldRequest
-	dec := json.NewDecoder(r.Body)
-	dec.UseNumber()
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON: "+err.Error())
 		return
 	}

@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
@@ -33,7 +35,7 @@ func openTestPlugin(t *testing.T) *Plugin {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	p, err := New(ctx, d, log)
+	p, err := New(ctx, d, log, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +237,71 @@ func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
 	if scopes != "documents:read,documents:write" {
 		t.Fatalf("scopes: got %q, want granular document scopes", scopes)
 	}
+	var response struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies: got %d, want 1", len(cookies))
+	}
+	var rawCount, digestCount int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, cookies[0].Value).Scan(&rawCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, digest(cookies[0].Value)).Scan(&digestCount); err != nil {
+		t.Fatal(err)
+	}
+	if rawCount != 0 || digestCount != 1 {
+		t.Fatalf("session storage: raw=%d digest=%d, want raw=0 digest=1", rawCount, digestCount)
+	}
+
+	cookieReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	cookieReq.AddCookie(cookies[0])
+	cookiePrincipal, err := p.Authenticate(cookieReq)
+	if err != nil || cookiePrincipal == nil {
+		t.Fatalf("cookie authentication failed: principal=%v err=%v", cookiePrincipal, err)
+	}
+	tokenReq := httptest.NewRequest(http.MethodGet, "/api/documents/", nil)
+	tokenReq.Header.Set("Authorization", "Token "+response.Token)
+	tokenPrincipal, err := p.Authenticate(tokenReq)
+	if err != nil || tokenPrincipal == nil {
+		t.Fatalf("token authentication failed: principal=%v err=%v", tokenPrincipal, err)
+	}
+
+	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 1 WHERE id = ?`, cookiePrincipal.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := p.Authenticate(cookieReq); err != nil || principal != nil {
+		t.Fatalf("disabled user's cookie accepted: principal=%v err=%v", principal, err)
+	}
+	if principal, err := p.Authenticate(tokenReq); err == nil || principal != nil {
+		t.Fatalf("disabled user's token accepted: principal=%v err=%v", principal, err)
+	}
+	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 0 WHERE id = ?`, cookiePrincipal.UserID); err != nil {
+		t.Fatal(err)
+	}
+
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
+	logoutReq.AddCookie(cookies[0])
+	logoutReq = logoutReq.WithContext(auth.WithPrincipal(logoutReq.Context(), tokenPrincipal))
+	logoutRec := httptest.NewRecorder()
+	p.LogoutHandler(logoutRec, logoutReq)
+	if logoutRec.Code != http.StatusNoContent {
+		t.Fatalf("logout status: got %d, want 204", logoutRec.Code)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, digest(cookies[0].Value)).Scan(&digestCount); err != nil {
+		t.Fatal(err)
+	}
+	var revokedCount int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens WHERE id = ? AND revoked_at IS NOT NULL`, tokenPrincipal.TokenID).Scan(&revokedCount); err != nil {
+		t.Fatal(err)
+	}
+	if digestCount != 0 || revokedCount != 1 {
+		t.Fatalf("logout cleanup: sessions=%d revoked_tokens=%d", digestCount, revokedCount)
+	}
 }
 
 func TestLoginHandler_RejectsUsernameField(t *testing.T) {
@@ -247,25 +314,51 @@ func TestLoginHandler_RejectsUsernameField(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "email and password required") {
+	if !strings.Contains(rec.Body.String(), "bad body") {
 		t.Fatalf("body: got %q", rec.Body.String())
 	}
 }
 
 func TestLoginFormHandlerAcceptsEmailField(t *testing.T) {
 	p := openTestPlugin(t)
+	p.cookieSecure = true
 	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
 		t.Fatal(err)
 	}
 	form := url.Values{"email": {DevAdminEmail}, "password": {DevAdminPassword}}
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/login?next=%2F%2Fevil.example", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	p.LoginFormHandler(rec, req)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status: got %d, want 302: %s", rec.Code, rec.Body.String())
 	}
+	if location := rec.Header().Get("Location"); location != "/" {
+		t.Fatalf("unsafe redirect accepted: %q", location)
+	}
 	if len(rec.Result().Cookies()) == 0 {
 		t.Fatal("login did not issue a session cookie")
+	}
+	if !rec.Result().Cookies()[0].Secure {
+		t.Fatal("HTTPS deployment did not issue a Secure session cookie")
+	}
+}
+
+func TestSetupRejectsWeakAndExpiredCredentials(t *testing.T) {
+	p := openTestPlugin(t)
+	token := p.SetupToken()
+	if _, err := p.applySetup(context.Background(), SetupRequest{
+		Token: token, Email: "admin@example.com", Password: "short",
+	}); err != errSetupWeakPassword {
+		t.Fatalf("weak password error = %v", err)
+	}
+	p.setupTokenIssuedAt = time.Now().Add(-SetupTokenTTL)
+	if _, err := p.applySetup(context.Background(), SetupRequest{
+		Token: token, Email: "admin@example.com", Password: "long-enough",
+	}); err != errSetupExpired {
+		t.Fatalf("expired token error = %v", err)
+	}
+	if replacement := p.SetupToken(); replacement == "" || replacement == token {
+		t.Fatal("expired setup token was not replaced")
 	}
 }

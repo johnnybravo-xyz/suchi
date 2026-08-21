@@ -253,8 +253,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 
 		// Bump the LLM pipeline-version marker on this doc. Used by
-		// `suchi rescan --stale llm` to pick out docs still on an
-		// older LLM config after the operator swaps model/prompt.
+		// `suchi rescan --stale llm` to pick out docs that predate a
+		// classifier code or prompt revision. Configuration changes are
+		// re-run only through an explicit selected rescan.
 		// Kept as a bare integer here rather than an import from
 		// core/postingest to keep the plugin's dep graph flat.
 		if _, err := tx.ExecContext(ctx, `

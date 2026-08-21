@@ -3,7 +3,7 @@
 // It handles two kinds of requests:
 //
 //   - Cookie sessions from the browser UI. The cookie carries an opaque
-//     session id whose row lives in the sessions table.
+//     session id; only its digest is stored in the sessions table.
 //   - API tokens sent as "Authorization: Token <hex>". Not Bearer —
 //     this is suchi's own wire format for third-party mobile clients.
 //
@@ -25,10 +25,12 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/argon2"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -42,20 +44,27 @@ const (
 
 // Plugin is the runtime handle. Zero value not useful; construct with New.
 type Plugin struct {
-	db  *db.DB
-	log *slog.Logger
+	db           *db.DB
+	log          *slog.Logger
+	cookieSecure bool
+	demoMode     bool
+	setupMu      sync.Mutex
 
 	// setupToken is populated on first boot when no users exist. It is
 	// consumed by POST /setup and cleared. Presence is what /setup
 	// checks — a non-empty value means "the instance has never been
 	// initialized."
-	setupToken string
+	setupToken         string
+	setupTokenIssuedAt time.Time
 }
 
 // New wires the plugin. If no users exist yet, a setup token is generated
 // and logged at Warn so an operator following the log can copy-paste it.
-func New(ctx context.Context, d *db.DB, log *slog.Logger) (*Plugin, error) {
-	p := &Plugin{db: d, log: log.With("plugin", Name)}
+func New(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode bool) (*Plugin, error) {
+	p := &Plugin{
+		db: d, log: log.With("plugin", Name),
+		cookieSecure: cookieSecure, demoMode: demoMode,
+	}
 	empty, err := usersEmpty(ctx, d)
 	if err != nil {
 		return nil, err
@@ -82,6 +91,7 @@ func (p *Plugin) mintSetupToken() error {
 		return err
 	}
 	p.setupToken = hex.EncodeToString(b[:])
+	p.setupTokenIssuedAt = time.Now()
 	p.log.Warn("localauth.setup.token_minted",
 		"msg", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
 		"token", p.setupToken)
@@ -90,12 +100,16 @@ func (p *Plugin) mintSetupToken() error {
 
 // SetupToken returns the current setup token, or "" if the instance is
 // already initialized. Used by the /setup handler; also useful for tests.
-func (p *Plugin) SetupToken() string { return p.setupToken }
+func (p *Plugin) SetupToken() string {
+	p.setupMu.Lock()
+	defer p.setupMu.Unlock()
+	return p.setupToken
+}
 
 // DevAdminMinPasswordLen mirrors core/api/setup.go's minimum for
 // operator-created users — dev-mode is not an escape hatch to bypass
 // password-quality checks that apply elsewhere.
-const DevAdminMinPasswordLen = 8
+const MinPasswordLen = 8
 
 // DevAdminEmail and DevAdminPassword are the fixed credentials the
 // SUCHI_DEV=1 boot auto-provisions. Fixed by design: dev-mode is gated
@@ -130,8 +144,8 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	if email == "" || password == "" {
 		return errors.New("localauth: dev admin email and password required")
 	}
-	if len(password) < DevAdminMinPasswordLen {
-		return fmt.Errorf("localauth: dev password must be at least %d chars", DevAdminMinPasswordLen)
+	if len(password) < MinPasswordLen {
+		return fmt.Errorf("localauth: dev password must be at least %d chars", MinPasswordLen)
 	}
 	var otherAdmins int
 	if err := p.db.Read.QueryRowContext(ctx,
@@ -235,7 +249,7 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	err := p.db.Read.QueryRowContext(ctx, `
 		SELECT t.id, t.user_id, t.scopes, t.revoked_at, u.email, u.display_name, u.role
 		  FROM api_tokens t JOIN users u ON u.id = t.user_id
-		 WHERE t.token_hash = ?
+		 WHERE t.token_hash = ? AND u.disabled = 0
 	`, hashHex).Scan(&tokenID, &userID, &scopes, &revoked, &email, &display, &role)
 	if err == sql.ErrNoRows {
 		// Bearer path: unknown token might be an OIDC JWT; don't halt
@@ -256,14 +270,22 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	_, _ = p.db.ExecWrite(ctx,
 		"UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?", tokenID)
 
+	kind := "token"
+	parsedScopes := strings.Split(scopes, ",")
+	for _, scope := range parsedScopes {
+		if p.demoMode && scope == auth.ScopeDemoCorpusRead {
+			kind = "demo-scratch"
+			break
+		}
+	}
 	return &pluginapi.Principal{
-		Kind:    "token",
+		Kind:    kind,
 		UserID:  userID,
 		TokenID: tokenID,
 		Email:   email,
 		Display: display,
 		Role:    role,
-		Scopes:  strings.Split(scopes, ","),
+		Scopes:  parsedScopes,
 	}, nil
 }
 
@@ -281,8 +303,8 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 	err := p.db.Read.QueryRowContext(ctx, `
 		SELECT s.user_id, s.expires_at, u.email, u.display_name, u.role
 		  FROM sessions s JOIN users u ON u.id = s.user_id
-		 WHERE s.id = ?
-	`, sid).Scan(&userID, &expires, &email, &display, &role)
+		 WHERE s.id = ? AND u.disabled = 0
+	`, digest(sid)).Scan(&userID, &expires, &email, &display, &role)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -299,6 +321,11 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 		Display: display,
 		Role:    role,
 	}, nil
+}
+
+func digest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 // looksLikeAPIToken returns true if s has the exact shape suchi issues:

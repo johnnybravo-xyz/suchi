@@ -1,9 +1,9 @@
 // Config-file loader. Optional overlay above the env-var reader.
 //
 // Layered precedence (last wins):
-//   1. config file (TOML or HUML)
-//   2. process env vars (existing config.Load())
-//   3. future: CLI flags
+//   1. built-in defaults from Load
+//   2. config file (TOML or HUML)
+//   3. process env vars
 //
 // **TOML is the recommended default format.** HUML is the documented
 // alternative.
@@ -15,7 +15,7 @@
 //
 // File shape mirrors env var names in lower_snake: an operator who
 // knows PUBLIC_URL knows public_url. Nested tables/objects are
-// flattened with `_` — [oidc]/issuer becomes OIDC_ISSUER. Arrays are
+// flattened with `_` — [oidc]/issuer_url becomes OIDC_ISSUER_URL. Arrays are
 // CSV-joined to match how existing multi-value env vars are shaped
 // (OCR_LANGUAGES=eng,deu).
 //
@@ -43,15 +43,18 @@ const FileConfigEnv = "SUCHI_CONFIG"
 
 // LoadFile reads the first config file it finds and exports each key
 // as an env var (unless that var is already set in the process env).
-// Returns the path it loaded from, or "" when no file exists. Errors
-// only for actual parse/read failures — a missing file is not an
-// error.
+// Returns the path it loaded from, or "" when normal discovery finds
+// no file. An explicit SUCHI_CONFIG path must be a readable regular
+// file; missing, unreadable, and directory paths are errors.
 //
 // Call this BEFORE config.Load() in main.go. Calling it multiple
 // times is safe: env vars from an earlier call are already set, so
 // subsequent calls no-op naturally.
 func LoadFile() (string, error) {
-	path := findConfigFile()
+	path, err := findConfigFile()
+	if err != nil {
+		return "", err
+	}
 	if path == "" {
 		return "", nil
 	}
@@ -63,7 +66,7 @@ func LoadFile() (string, error) {
 	if err != nil {
 		return path, err
 	}
-	applyFileConfig(doc, "")
+	applyFileConfig(doc, "", processEnvKeys())
 	return path, nil
 }
 
@@ -96,12 +99,12 @@ func parseByExt(path string, raw []byte) (map[string]any, error) {
 // with `_`, so:
 //
 //	[oidc]
-//	issuer = "…"
+//	issuer_url = "…"
 //
-// becomes OIDC_ISSUER. Sequences (arrays) are joined by comma so a
+// becomes OIDC_ISSUER_URL. Sequences (arrays) are joined by comma so a
 // TOML `["a","b","c"]` matches the CSV convention suchi's existing
 // env parsers already use.
-func applyFileConfig(m map[string]any, prefix string) {
+func applyFileConfig(m map[string]any, prefix string, processEnv map[string]struct{}) {
 	for k, v := range m {
 		envKey := configKeyToEnv(k)
 		if envKey == "" {
@@ -113,30 +116,37 @@ func applyFileConfig(m map[string]any, prefix string) {
 		}
 		switch x := v.(type) {
 		case map[string]any:
-			applyFileConfig(x, full)
+			applyFileConfig(x, full, processEnv)
 			continue
 		}
-		if _, present := os.LookupEnv(full); present {
+		if processEnvHasSetting(processEnv, full) {
 			continue // env wins over file
 		}
 		os.Setenv(full, valueToEnv(v))
 	}
 }
 
-// findConfigFile walks the search paths and returns the first
-// readable file. Order (first-found wins):
+// findConfigFile validates an explicit path or returns the first file
+// found through normal discovery. Order (first-found wins):
 //
 //  1. $SUCHI_CONFIG (explicit override)
 //  2. $XDG_CONFIG_HOME/suchi/config.toml
 //  3. $HOME/.config/suchi/config.toml
 //  4. /etc/suchi/config.toml
 //  5. ./suchi.toml
-func findConfigFile() string {
+func findConfigFile() (string, error) {
 	if p := strings.TrimSpace(os.Getenv(FileConfigEnv)); p != "" {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p
+		fi, err := os.Stat(p)
+		if err != nil {
+			return "", fmt.Errorf("config file %s: %w", p, err)
 		}
-		return ""
+		if fi.IsDir() {
+			return "", fmt.Errorf("config file %s: is a directory", p)
+		}
+		if fi.Mode().Perm()&0o444 == 0 {
+			return "", fmt.Errorf("config file %s: has no read permission", p)
+		}
+		return p, nil
 	}
 	exts := []string{".toml", ".huml"}
 	dirs := []string{}
@@ -156,11 +166,40 @@ func findConfigFile() string {
 		for _, ext := range exts {
 			p := filepath.Join(dir, base+ext)
 			if fileExists(p) {
-				return p
+				return p, nil
 			}
 		}
 	}
-	return ""
+	return "", nil
+}
+
+var fileConfigAliases = map[string][]string{
+	"OIDC_CLIENT_SECRET":      {"OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET_FILE"},
+	"OIDC_CLIENT_SECRET_FILE": {"OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET_FILE"},
+	"LLM_API_KEY":             {"LLM_API_KEY", "LLM_API_KEY_FILE"},
+	"LLM_API_KEY_FILE":        {"LLM_API_KEY", "LLM_API_KEY_FILE"},
+}
+
+func processEnvKeys() map[string]struct{} {
+	keys := make(map[string]struct{}, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		keys[key] = struct{}{}
+	}
+	return keys
+}
+
+func processEnvHasSetting(processEnv map[string]struct{}, key string) bool {
+	aliases := fileConfigAliases[key]
+	if len(aliases) == 0 {
+		aliases = []string{key}
+	}
+	for _, alias := range aliases {
+		if _, present := processEnv[alias]; present {
+			return true
+		}
+	}
+	return false
 }
 
 func fileExists(p string) bool {

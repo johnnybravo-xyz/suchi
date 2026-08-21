@@ -3,7 +3,6 @@ package main
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/config"
@@ -17,7 +16,6 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 		httpx.SecurityHeaders,
 		httpx.AccessLog(log),
 		httpx.BodyLimit(cfg.BodyLimit),
-		httpx.CtxTimeout(30 * time.Second),
 		httpx.Authenticate(authChain, log),
 		httpx.SecFetchSite,
 	}
@@ -30,9 +28,11 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 	overlay := http.NewServeMux()
 	overlay.Handle("POST /setup", loginLimiter.Middleware(handler))
 	overlay.Handle("POST /bootstrap", loginLimiter.Middleware(handler))
+	overlay.Handle("POST /login", loginLimiter.Middleware(handler))
 	overlay.Handle("POST /api/login", loginLimiter.Middleware(handler))
 	overlay.Handle("POST /api/token/", loginLimiter.Middleware(handler))
 	overlay.Handle("GET /s/{token}", loginLimiter.Middleware(handler))
+	overlay.Handle("POST /s/{token}", loginLimiter.Middleware(handler))
 	overlay.Handle("GET /s/{token}/{doc_id}/download", loginLimiter.Middleware(handler))
 	if demoLimiter != nil {
 		overlay.Handle("POST /api/demo/session", demoLimiter.Middleware(handler))

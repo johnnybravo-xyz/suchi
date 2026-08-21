@@ -15,36 +15,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
-// RoleAuthorizer allows owner + admin, denies everyone else.
-func TestRoleAuthorizer(t *testing.T) {
-	ctx := context.Background()
-	d := setup(t, ctx)
-
-	alice := seedUser(t, ctx, d, "alice@x", "member")
-	bob := seedUser(t, ctx, d, "bob@x", "member")
-	admin := seedUser(t, ctx, d, "root@x", "admin")
-	docID := seedDoc(t, ctx, d, alice, "alice's doc")
-
-	auth := authz.RoleAuthorizer{DB: d}
-
-	if err := auth.Can(ctx, authz.Principal{UserID: alice, Role: "member"},
-		authz.KindDocument, docID, authz.PermView); err != nil {
-		t.Errorf("owner should view: %v", err)
-	}
-	if err := auth.Can(ctx, authz.Principal{UserID: admin, Role: "admin"},
-		authz.KindDocument, docID, authz.PermAll); err != nil {
-		t.Errorf("admin should view+change+delete: %v", err)
-	}
-	if err := auth.Can(ctx, authz.Principal{UserID: bob, Role: "member"},
-		authz.KindDocument, docID, authz.PermView); err == nil {
-		t.Errorf("bob should not view alice's doc")
-	}
-	if err := auth.Can(ctx, authz.Principal{UserID: 0},
-		authz.KindDocument, docID, authz.PermView); err == nil {
-		t.Errorf("anonymous should always be denied")
-	}
-}
-
 // ACLAuthorizer honors grants for user + group principals.
 func TestACLAuthorizerUserGrant(t *testing.T) {
 	ctx := context.Background()
@@ -52,6 +22,7 @@ func TestACLAuthorizerUserGrant(t *testing.T) {
 
 	alice := seedUser(t, ctx, d, "alice@x", "member")
 	bob := seedUser(t, ctx, d, "bob@x", "member")
+	admin := seedUser(t, ctx, d, "root@x", "admin")
 	docID := seedDoc(t, ctx, d, alice, "alice's doc")
 
 	store := authz.NewStore(d)
@@ -67,6 +38,14 @@ func TestACLAuthorizerUserGrant(t *testing.T) {
 
 	auth := authz.ACLAuthorizer{DB: d}
 
+	if err := auth.Can(ctx, authz.Principal{UserID: alice, Role: "member"},
+		authz.KindDocument, docID, authz.PermAll); err != nil {
+		t.Errorf("owner should have full access: %v", err)
+	}
+	if err := auth.Can(ctx, authz.Principal{UserID: admin, Role: "admin"},
+		authz.KindDocument, docID, authz.PermAll); err != nil {
+		t.Errorf("admin should have full access: %v", err)
+	}
 	// Bob now views but can't change/delete.
 	if err := auth.Can(ctx, authz.Principal{UserID: bob, Role: "member"},
 		authz.KindDocument, docID, authz.PermView); err != nil {
@@ -83,6 +62,34 @@ func TestACLAuthorizerUserGrant(t *testing.T) {
 	if err := auth.Can(ctx, authz.Principal{UserID: bob, Role: "member"},
 		authz.KindDocument, docID, authz.PermView); err == nil {
 		t.Errorf("bob should NOT view after revoke")
+	}
+
+	// A demo scratch user can browse admin-owned corpus rows and its own rows,
+	// but cannot see or mutate another scratch user's documents.
+	scratch := authz.Principal{UserID: bob, Role: "member", Kind: authz.KindDemoScratch}
+	if err := auth.Can(ctx, scratch, authz.KindDocument, docID, authz.PermView); err == nil {
+		t.Error("scratch user should not view another member's document")
+	}
+	if err := auth.Can(ctx, scratch, authz.KindDocument, docID, authz.PermChange); err == nil {
+		t.Error("scratch user should not change another user's document")
+	}
+	corpusOwner := seedUser(t, ctx, d, authz.DemoCorpusOwnerEmail, "admin")
+	corpusDocID := seedDoc(t, ctx, d, corpusOwner, "seeded corpus")
+	if err := auth.Can(ctx, scratch, authz.KindDocument, corpusDocID, authz.PermView); err != nil {
+		t.Errorf("scratch user should view seeded corpus: %v", err)
+	}
+	bobDocID := seedDoc(t, ctx, d, bob, "bob's doc")
+	if err := auth.Can(ctx, scratch, authz.KindDocument, bobDocID, authz.PermChange); err != nil {
+		t.Errorf("scratch user should change own document: %v", err)
+	}
+	where, args := authz.DemoCorpusVisibilityWhere(bob)
+	var visible int
+	if err := d.Read.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM documents d WHERE "+where, args...).Scan(&visible); err != nil {
+		t.Fatal(err)
+	}
+	if visible != 2 {
+		t.Fatalf("scratch visibility count = %d, want corpus + own document", visible)
 	}
 }
 

@@ -4,7 +4,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -52,7 +51,7 @@ func (s *Server) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body authz.Group
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
@@ -74,7 +73,7 @@ func (s *Server) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body authz.Group
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
@@ -142,7 +141,7 @@ func (s *Server) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		UserID int64 `json:"user_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == 0 {
+	if err := decodeJSON(r, &body); err != nil || body.UserID == 0 {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "user_id required")
 		return
 	}

@@ -30,9 +30,7 @@ func (a *dbAdapter) ReadQuery(ctx context.Context, query string, args ...any) (*
 
 // SiblingTitles returns up to `limit` titles of docs similar to
 // docID via FTS more-like-this. Scoped to the doc's owner + their
-// groups (ACL-respecting). Empty slice on any lookup failure — the
-// classifier proceeds without stability examples rather than blocking
-// on a stale index. Used by the handler to inject few-shot examples
+// groups (ACL-respecting). Used by the handler to inject few-shot examples
 // into the single Classify call so titles across sibling docs stay
 // consistent instead of drifting (see the one-classify-per-doc
 // invariant in llm.go).
@@ -42,7 +40,10 @@ func (a *dbAdapter) SiblingTitles(ctx context.Context, docID int64, limit int) (
 		`SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&ownerID); err != nil {
 		return nil, err
 	}
-	groups, _ := authz.LoadGroups(ctx, a.inner, ownerID)
+	groups, err := authz.LoadGroups(ctx, a.inner, ownerID)
+	if err != nil {
+		return nil, err
+	}
 	docs, err := similar.TopDocs(ctx, a.inner, docID, limit, &similar.Principal{
 		UserID: ownerID, Role: "user", Groups: groups,
 	})

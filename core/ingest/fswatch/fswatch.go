@@ -81,7 +81,7 @@ type Config struct {
 	Settle time.Duration
 
 	// MaxBytes rejects files above this size at pickup time. Matches
-	// the HTTP UPLOAD_MAX_BYTES / BODY_LIMIT cap so producers can't
+	// the HTTP BODY_LIMIT cap so producers can't
 	// route around the ingest ceiling. Zero disables the check.
 	MaxBytes int64
 }
@@ -231,7 +231,7 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 		return
 	}
 
-	// Size cap — matches the HTTP producer's UPLOAD_MAX_BYTES so
+	// Size cap — matches the HTTP producer's BODY_LIMIT so
 	// dropping a giant file into the staging dir can't do what the
 	// upload endpoint refuses. Skip + WARN; leave the file on disk
 	// so the operator can decide.

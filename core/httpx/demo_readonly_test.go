@@ -28,13 +28,15 @@ func TestDemoReadOnly(t *testing.T) {
 		{"PATCH tag denied", http.MethodPatch, "/api/tags/5", http.StatusForbidden},
 		{"DELETE correspondent denied", http.MethodDelete, "/api/correspondents/12", http.StatusForbidden},
 		{"POST settings denied", http.MethodPost, "/api/settings/llm", http.StatusForbidden},
-		{"POST document upload allowed", http.MethodPost, "/api/documents/", http.StatusOK},
-		{"PATCH document allowed", http.MethodPatch, "/api/documents/42", http.StatusOK},
-		{"DELETE document allowed", http.MethodDelete, "/api/documents/42", http.StatusOK},
+		{"POST document upload denied without session", http.MethodPost, "/api/documents/", http.StatusForbidden},
+		{"PATCH document denied without session", http.MethodPatch, "/api/documents/42", http.StatusForbidden},
+		{"DELETE document denied without session", http.MethodDelete, "/api/documents/42", http.StatusForbidden},
 		{"POST login allowed", http.MethodPost, "/api/login", http.StatusOK},
+		{"POST form login allowed", http.MethodPost, "/login", http.StatusOK},
+		{"POST token login allowed", http.MethodPost, "/api/token/", http.StatusOK},
 		{"POST demo session allowed", http.MethodPost, "/api/demo/session", http.StatusOK},
-		{"POST bootstrap allowed", http.MethodPost, "/bootstrap", http.StatusOK},
-		{"POST setup allowed (localauth self-gates after first use)", http.MethodPost, "/setup", http.StatusOK},
+		{"POST bootstrap denied", http.MethodPost, "/bootstrap", http.StatusForbidden},
+		{"POST setup denied", http.MethodPost, "/setup", http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,6 +59,7 @@ func TestDemoReadOnly_AnonPrincipal(t *testing.T) {
 
 	anon := &pluginapi.Principal{Kind: "demo-anon"}
 	real := &pluginapi.Principal{Kind: "user", UserID: 7}
+	scratch := &pluginapi.Principal{Kind: "demo-scratch", UserID: 8}
 
 	cases := []struct {
 		name       string
@@ -65,11 +68,17 @@ func TestDemoReadOnly_AnonPrincipal(t *testing.T) {
 		principal  *pluginapi.Principal
 		wantStatus int
 	}{
-		{"anon GET anywhere → 200", http.MethodGet, "/api/documents/", anon, http.StatusOK},
-		{"anon POST doc upload → 403 (needs upgrade)", http.MethodPost, "/api/documents/", anon, http.StatusForbidden},
-		{"anon POST upgrade → 200", http.MethodPost, "/api/demo/session/upgrade", anon, http.StatusOK},
-		{"real user POST doc upload → 200 (past deny-list)", http.MethodPost, "/api/documents/", real, http.StatusOK},
-		{"real user POST tag → 403 (shared state)", http.MethodPost, "/api/tags/", real, http.StatusForbidden},
+		{"anon GET anywhere", http.MethodGet, "/api/documents/", anon, http.StatusOK},
+		{"anon upload needs upgrade", http.MethodPost, "/api/documents/", anon, http.StatusForbidden},
+		{"anon can upgrade", http.MethodPost, "/api/demo/session/upgrade", anon, http.StatusOK},
+		{"anon can log in", http.MethodPost, "/api/login", anon, http.StatusOK},
+		{"anon can use form login", http.MethodPost, "/login", anon, http.StatusOK},
+		{"anon can request an API token", http.MethodPost, "/api/token/", anon, http.StatusOK},
+		{"ordinary user cannot upload", http.MethodPost, "/api/documents/", real, http.StatusForbidden},
+		{"scratch user can upload", http.MethodPost, "/api/documents/", scratch, http.StatusOK},
+		{"scratch user can edit a document", http.MethodPatch, "/api/documents/42", scratch, http.StatusOK},
+		{"scratch user can restore a document", http.MethodPost, "/api/documents/42/restore", scratch, http.StatusOK},
+		{"scratch user cannot mutate shared tags", http.MethodPost, "/api/tags/", scratch, http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -657,6 +658,15 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	previous := settings.FSWatchConfig{}
+	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchDir, &previous.Dir); err != nil && !errors.Is(err, settings.ErrNotFound) {
+		s.serverErr(w, "settings.fswatch.previous_dir", err)
+		return
+	}
+	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchOwnerEmail, &previous.OwnerEmail); err != nil && !errors.Is(err, settings.ErrNotFound) {
+		s.serverErr(w, "settings.fswatch.previous_owner", err)
+		return
+	}
 	if err := settings.SetMany(r.Context(), s.DB, map[string]any{
 		settings.KeyFSWatchDir:        body.FSWatchDir,
 		settings.KeyFSWatchOwnerEmail: body.FSWatchOwnerEmail,
@@ -666,8 +676,15 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.FSWatchReloader != nil {
 		if err := s.FSWatchReloader(r.Context()); err != nil {
-			s.writeError(w, http.StatusInternalServerError, "apply_failed",
-				"ingest source was saved but could not be applied; try again")
+			rollbackErr := settings.SetMany(r.Context(), s.DB, map[string]any{
+				settings.KeyFSWatchDir:        previous.Dir,
+				settings.KeyFSWatchOwnerEmail: previous.OwnerEmail,
+			})
+			if rollbackErr != nil {
+				s.Log.Error("api.settings.fswatch.rollback", "err", rollbackErr.Error())
+			}
+			s.writeError(w, http.StatusUnprocessableEntity, "apply_failed",
+				"ingest source could not be applied; previous settings restored")
 			return
 		}
 	}
@@ -681,13 +698,24 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 func decodeJSON(r *http.Request, into any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
 	dec.DisallowUnknownFields()
-	return dec.Decode(into)
+	if err := dec.Decode(into); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON object")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Server) serverErr(w http.ResponseWriter, tag string, err error) {
 	s.Log.Error("api."+tag, "err", err.Error())
-	s.writeError(w, http.StatusInternalServerError, "internal", "server error")
+	s.writeJSON(w, http.StatusInternalServerError,
+		errBody{Code: "internal", Error: "server error"})
 }
 
 // isUniqueViolation checks the modernc.org/sqlite error surface for

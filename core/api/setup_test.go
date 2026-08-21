@@ -400,6 +400,20 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	if fsGetRec.Code != http.StatusOK || !strings.Contains(fsGetRec.Body.String(), "/tmp/suchi-inbox") {
 		t.Fatalf("fs-watch readback status=%d body=%s", fsGetRec.Code, fsGetRec.Body.String())
 	}
+
+	s.FSWatchReloader = func(context.Context) error { return errors.New("invalid watch directory") }
+	badReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/ingest",
+		strings.NewReader(`{"fs_watch_dir":"/tmp/unusable","fs_watch_owner_email":"u1@t.local"}`))
+	badReq = badReq.WithContext(auth.WithPrincipal(badReq.Context(), admin))
+	badRec := httptest.NewRecorder()
+	s.SaveIngestSettings(badRec, badReq)
+	if badRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("failed reload status=%d body=%s", badRec.Code, badRec.Body.String())
+	}
+	rolledBack := settings.ResolveFSWatchConfig(context.Background(), s.DB, settings.FSWatchConfig{})
+	if rolledBack.Dir != "/tmp/suchi-inbox" || rolledBack.OwnerEmail != "u1@t.local" {
+		t.Fatalf("failed reload persisted invalid settings: %+v", rolledBack)
+	}
 }
 
 func TestLangCode(t *testing.T) {

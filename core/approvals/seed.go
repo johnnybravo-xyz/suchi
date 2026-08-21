@@ -109,6 +109,9 @@ func (r AdminAssigneeResolver) Resolve(ctx context.Context, assignee string) ([]
 			}
 			out = append(out, id)
 		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 		if len(out) == 0 {
 			// No admins yet — the assignee is unresolvable. The runner
 			// treats this as an error and the advance job retries, so

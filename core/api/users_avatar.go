@@ -133,8 +133,11 @@ func (s *Server) PostSelfAvatar(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot old sha for the audit event + update the user row.
 	var old string
-	_ = s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COALESCE(avatar_sha, '') FROM users WHERE id = ?", p.UserID).Scan(&old)
+	if err := s.DB.Read.QueryRowContext(r.Context(),
+		"SELECT COALESCE(avatar_sha, '') FROM users WHERE id = ?", p.UserID).Scan(&old); err != nil {
+		s.serverErr(w, "avatar.load_current", err)
+		return
+	}
 
 	if _, err := s.DB.ExecWrite(r.Context(),
 		"UPDATE users SET avatar_sha = ?, updated_at = unixepoch() WHERE id = ?",

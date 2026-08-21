@@ -19,12 +19,13 @@
 //   trashed                   — "1" / "true" to show only trashed
 //                               docs; anything else = live only.
 //
-// Non-admin callers get the DocVisibilityWhere fragment spliced onto
-// every path. Admins bypass — this matches PatchDocument's rule.
+// Non-admin callers get the shared document-visibility fragment spliced onto
+// every path. Admins bypass; public-demo visitors are corpus-scoped.
 
 package api
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -32,7 +33,6 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
-	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
 // DocumentListRow is the projection each result carries. Slimmer
@@ -137,6 +137,18 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_tags", err.Error())
 		return
 	}
+	if len(tagIDs) > 0 {
+		placeholders := strings.Repeat("?,", len(tagIDs)-1) + "?"
+		where = append(where, `(
+			SELECT COUNT(DISTINCT dt.tag_id)
+			FROM document_tags dt
+			WHERE dt.document_id = d.id AND dt.tag_id IN (`+placeholders+`)
+		) = ?`)
+		for _, id := range tagIDs {
+			args = append(args, id)
+		}
+		args = append(args, len(tagIDs))
+	}
 	// Correspondent OR-match: doc matches if it has any listed id
 	// as either the primary correspondent_id or via
 	// document_correspondents.
@@ -192,17 +204,15 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, term)
 	}
 
-	// Visibility: admins + demo-anon bypass; members get the ACL
-	// fragment. Demo-anon visitors see the shared demo corpus by design
-	// (httpx.DemoReadOnly gates any mutation attempt at the route
-	// layer; authz.Can gates single-doc reads).
-	if p != nil && p.Role != "admin" && p.Kind != "demo-anon" {
+	// Visibility: admins bypass; members get owner/ACL visibility. Public demo
+	// visitors see only the seeded corpus, plus their own scratch uploads.
+	if p != nil && p.Role != "admin" {
 		groups, err := s.principalGroups(r.Context(), p.UserID)
 		if err != nil {
 			s.serverErr(w, "docs.list.load_groups", err)
 			return
 		}
-		frag, vargs := authz.DocVisibilityWhere(p.UserID, groups)
+		frag, vargs := documentVisibilityWhere(p, groups)
 		where = append(where, frag)
 		args = append(args, vargs...)
 	}
@@ -220,6 +230,10 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	var total int
 	countSQL := "SELECT COUNT(*) FROM documents d WHERE " + whereSQL
 	if err := s.DB.Read.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
+		if isFTSQueryError(err, q.Get("q")) {
+			s.writeFTSQueryError(w, "docs.list", q.Get("q"), err)
+			return
+		}
 		s.serverErr(w, "docs.list.count", err)
 		return
 	}
@@ -244,6 +258,10 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY `+orderBy+`
 		 LIMIT ? OFFSET ?`, rowArgs...)
 	if err != nil {
+		if isFTSQueryError(err, q.Get("q")) {
+			s.writeFTSQueryError(w, "docs.list", q.Get("q"), err)
+			return
+		}
 		s.serverErr(w, "docs.list.query", err)
 		return
 	}
@@ -276,21 +294,16 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply the tag AND-match after the main query — it's cheaper as
-	// a per-page filter than another EXISTS subquery in the WHERE.
-	if len(tagIDs) > 0 && len(out) > 0 {
-		out = filterByTagsAll(r.Context(), s.DB.Read, out, tagIDs)
-		// Rebuild ids from surviving rows.
-		ids = ids[:0]
-		for _, r := range out {
-			ids = append(ids, r.ID)
-		}
-	}
-
 	// Hydrate tags + correspondents in one batch per relation.
 	if len(ids) > 0 {
-		hydrateTagsForList(r.Context(), s.DB.Read, out, ids)
-		hydrateCorrespondentsForList(r.Context(), s.DB.Read, out, ids)
+		if err := hydrateTagsForList(r.Context(), s.DB.Read, out, ids); err != nil {
+			s.serverErr(w, "docs.list.tags", err)
+			return
+		}
+		if err := hydrateCorrespondentsForList(r.Context(), s.DB.Read, out, ids); err != nil {
+			s.serverErr(w, "docs.list.correspondents", err)
+			return
+		}
 	}
 
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
@@ -319,68 +332,25 @@ func parseCSVIDs(s string) ([]int64, error) {
 	return out, nil
 }
 
-// filterByTagsAll drops rows that don't carry every id in tagIDs.
-// Single query over document_tags with GROUP BY document_id having
-// COUNT(DISTINCT tag_id) == len(tagIDs).
-func filterByTagsAll(ctx interface{}, rdb *sql.DB, in []DocumentListRow, tagIDs []int64) []DocumentListRow {
-	if len(in) == 0 || len(tagIDs) == 0 {
-		return in
-	}
-	docPlaceholders := strings.Repeat("?,", len(in)-1) + "?"
-	tagPlaceholders := strings.Repeat("?,", len(tagIDs)-1) + "?"
-	args := make([]any, 0, len(in)+len(tagIDs)+1)
-	for _, r := range in {
-		args = append(args, r.ID)
-	}
-	for _, id := range tagIDs {
-		args = append(args, id)
-	}
-	args = append(args, len(tagIDs))
-	rows, err := rdb.Query(`
-		SELECT document_id FROM document_tags
-		 WHERE document_id IN (`+docPlaceholders+`)
-		   AND tag_id IN (`+tagPlaceholders+`)
-		 GROUP BY document_id
-		HAVING COUNT(DISTINCT tag_id) = ?`, args...)
-	if err != nil {
-		return in
-	}
-	defer rows.Close()
-	survivors := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err == nil {
-			survivors[id] = true
-		}
-	}
-	out := in[:0]
-	for _, r := range in {
-		if survivors[r.ID] {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // hydrateTagsForList populates the Tags slice on every list row via
 // one query. Preserves row order.
-func hydrateTagsForList(ctx interface{}, rdb *sql.DB, out []DocumentListRow, ids []int64) {
+func hydrateTagsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow, ids []int64) error {
 	if len(ids) == 0 {
-		return
+		return nil
 	}
 	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := rdb.Query(`
+	rows, err := rdb.QueryContext(ctx, `
 		SELECT dt.document_id, t.slug
 		  FROM document_tags dt
 		  JOIN tags t ON t.id = dt.tag_id
 		 WHERE dt.document_id IN (`+placeholders+`)
 		 ORDER BY dt.document_id, t.slug`, args...)
 	if err != nil {
-		return
+		return err
 	}
 	defer rows.Close()
 	tagsByDoc := map[int64][]string{}
@@ -389,24 +359,29 @@ func hydrateTagsForList(ctx interface{}, rdb *sql.DB, out []DocumentListRow, ids
 			id   int64
 			slug string
 		)
-		if err := rows.Scan(&id, &slug); err == nil {
-			tagsByDoc[id] = append(tagsByDoc[id], slug)
+		if err := rows.Scan(&id, &slug); err != nil {
+			return err
 		}
+		tagsByDoc[id] = append(tagsByDoc[id], slug)
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	for i := range out {
 		if v, ok := tagsByDoc[out[i].ID]; ok {
 			out[i].Tags = v
 		}
 	}
+	return nil
 }
 
 // hydrateCorrespondentsForList surfaces correspondent names for the
 // row. Multi-party form (sender + recipient + cc) via the junction
 // table; falls back to the singular correspondent_id if the doc
 // hasn't been migrated to the multi-party shape yet.
-func hydrateCorrespondentsForList(ctx interface{}, rdb *sql.DB, out []DocumentListRow, ids []int64) {
+func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow, ids []int64) error {
 	if len(ids) == 0 {
-		return
+		return nil
 	}
 	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
 	args := make([]any, len(ids))
@@ -414,38 +389,47 @@ func hydrateCorrespondentsForList(ctx interface{}, rdb *sql.DB, out []DocumentLi
 		args[i] = id
 	}
 	// Multi-party first.
-	rows, err := rdb.Query(`
+	rows, err := rdb.QueryContext(ctx, `
 		SELECT dc.document_id, c.name
 		  FROM document_correspondents dc
 		  JOIN correspondents c ON c.id = dc.correspondent_id
 		 WHERE dc.document_id IN (`+placeholders+`)
 		 ORDER BY dc.document_id, c.name`, args...)
-	if err == nil {
-		defer rows.Close()
-		byDoc := map[int64][]string{}
-		for rows.Next() {
-			var (
-				id   int64
-				name string
-			)
-			if err := rows.Scan(&id, &name); err == nil {
-				byDoc[id] = append(byDoc[id], name)
-			}
+	if err != nil {
+		return err
+	}
+	byDoc := map[int64][]string{}
+	for rows.Next() {
+		var (
+			id   int64
+			name string
+		)
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return err
 		}
-		for i := range out {
-			if v, ok := byDoc[out[i].ID]; ok {
-				out[i].Correspondents = v
-			}
+		byDoc[id] = append(byDoc[id], name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for i := range out {
+		if v, ok := byDoc[out[i].ID]; ok {
+			out[i].Correspondents = v
 		}
 	}
 	// Singular fallback for rows that didn't hit the junction.
-	fallback, err := rdb.Query(`
+	fallback, err := rdb.QueryContext(ctx, `
 		SELECT d.id, c.name
 		  FROM documents d
 		  JOIN correspondents c ON c.id = d.correspondent_id
 		 WHERE d.id IN (`+placeholders+`)`, args...)
 	if err != nil {
-		return
+		return err
 	}
 	defer fallback.Close()
 	for fallback.Next() {
@@ -453,12 +437,14 @@ func hydrateCorrespondentsForList(ctx interface{}, rdb *sql.DB, out []DocumentLi
 			id   int64
 			name string
 		)
-		if err := fallback.Scan(&id, &name); err == nil {
-			for i := range out {
-				if out[i].ID == id && len(out[i].Correspondents) == 0 {
-					out[i].Correspondents = []string{name}
-				}
+		if err := fallback.Scan(&id, &name); err != nil {
+			return err
+		}
+		for i := range out {
+			if out[i].ID == id && len(out[i].Correspondents) == 0 {
+				out[i].Correspondents = []string{name}
 			}
 		}
 	}
+	return fallback.Err()
 }

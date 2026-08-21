@@ -14,7 +14,6 @@ import (
 	"strconv"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
-	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
@@ -39,16 +38,10 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 	p := auth.FromContext(r.Context())
 	ctx := r.Context()
-	// Demo-anon visitors see the same shared corpus as admins for
-	// document read purposes (documents_list.go treats them the same
-	// way). Without seeCorpus, the dashboard doc tiles report 0 while
-	// the docs list shows 81.
-	//
 	// isAdmin stays strict: approvals + dead-jobs are admin-only
-	// operational counters and demo-anon must not see the real admin's
+	// operational counters and demo visitors must not see the real admin's
 	// pending queue.
 	isAdmin := p.Role == "admin"
-	seeCorpus := isAdmin || p.Kind == PrincipalKindDemoAnon
 
 	groups, err := s.principalGroups(ctx, p.UserID)
 	if err != nil {
@@ -63,7 +56,7 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 
 	// Doc counts. Members splice the visibility WHERE onto every
 	// document query; admins bypass it. The fragment references
-	// alias `d` (see authz.DocVisibilityWhere).
+	// alias `d`.
 	docWhere := "d.trashed_at IS NULL"
 	trashWhere := "d.trashed_at IS NOT NULL"
 	weekWhere := "d.trashed_at IS NULL AND d.created_at >= unixepoch('now', '-7 days')"
@@ -73,8 +66,8 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		docArgs, trashArgs, weekArgs []any
 		inboxArgs                    = []any{inbox}
 	)
-	if !seeCorpus {
-		vf, vargs := authz.DocVisibilityWhere(p.UserID, groups)
+	if !isAdmin {
+		vf, vargs := documentVisibilityWhere(p, groups)
 		docWhere += " AND " + vf
 		trashWhere += " AND " + vf
 		weekWhere += " AND " + vf

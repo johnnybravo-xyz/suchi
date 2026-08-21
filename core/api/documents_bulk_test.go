@@ -104,6 +104,37 @@ func TestBulkEdit_TrashHappyPath(t *testing.T) {
 	}
 }
 
+func TestBulkEdit_TrashRequiresDeletePermission(t *testing.T) {
+	s := newBulkServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	docID := seedStatsDoc(t, s.DB, 1, "shared-sha", "shared", inbox, false, 0)
+	seedUser(t, s.DB, 2)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO object_acls(
+			object_kind, object_id, principal_kind, principal_id,
+			perm_bits, created_at, created_by
+		) VALUES ('document', ?, 'user', 2, ?, 0, 1)
+	`, docID, int(authz.PermView|authz.PermChange)); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := doBulkEdit(t, s,
+		map[string]any{"documents": []int64{docID}, "method": "trash"},
+		memberPrincipal(2))
+	if code != 200 || body.Applied != 0 || body.Results[0].Code != "forbidden" {
+		t.Fatalf("trash status=%d body=%+v", code, body)
+	}
+	code, body = doBulkEdit(t, s,
+		map[string]any{
+			"documents":  []int64{docID},
+			"method":     "set_sensitivity",
+			"parameters": map[string]any{"sensitivity": "internal"},
+		}, memberPrincipal(2))
+	if code != 200 || body.Applied != 1 {
+		t.Fatalf("metadata edit status=%d body=%+v", code, body)
+	}
+}
+
 func TestBulkEdit_SetJDCategory(t *testing.T) {
 	s := newBulkServer(t)
 	d := s.DB

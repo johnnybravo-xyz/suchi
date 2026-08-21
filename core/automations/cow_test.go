@@ -47,7 +47,7 @@ func seedPresetRow(t *testing.T, ctx context.Context, d *db.DB, name, presetSlug
 	}
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
-		VALUES (?, 0, 'assign_jd_category', '{"jd_category_code":13}', ?)
+		VALUES (?, 0, 'assign_title', '{"template":"{{title}}"}', ?)
 	`, id, now); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +216,8 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 			FilterContentRE: "invoice",
 		}},
 		Actions: []automations.Action{{
-			Kind:   "assign_jd_category",
-			Params: map[string]any{"jd_category_code": 21},
+			Kind:   "assign_title",
+			Params: map[string]any{"template": "Filed {{title}}"},
 		}},
 	})
 	if err != nil {
@@ -233,8 +233,8 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 			FilterContentRE: "invoice",
 		}},
 		Actions: []automations.Action{{
-			Kind:   "assign_jd_category",
-			Params: map[string]any{"jd_category_code": 21},
+			Kind:   "assign_title",
+			Params: map[string]any{"template": "Filed {{title}}"},
 		}},
 	})
 	var dup *automations.ErrDuplicateRule
@@ -334,8 +334,8 @@ func TestStore_Create_ParamsMapOrderIndependent(t *testing.T) {
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
 		}},
 		Actions: []automations.Action{{
-			Kind:   "assign_jd_category",
-			Params: map[string]any{"jd_category_code": 21, "note": "keep"},
+			Kind:   "assign_title",
+			Params: map[string]any{"template": "Filed {{title}}", "note": "keep"},
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -347,8 +347,8 @@ func TestStore_Create_ParamsMapOrderIndependent(t *testing.T) {
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
 		}},
 		Actions: []automations.Action{{
-			Kind:   "assign_jd_category",
-			Params: map[string]any{"note": "keep", "jd_category_code": 21},
+			Kind:   "assign_title",
+			Params: map[string]any{"note": "keep", "template": "Filed {{title}}"},
 		}},
 	})
 	var dup *automations.ErrDuplicateRule

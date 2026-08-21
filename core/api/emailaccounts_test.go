@@ -6,11 +6,13 @@ package api
 // or skip the supervisor reload.
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,6 +135,7 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		"provider":"fastmail",
 		"username":"a@example.com",
 		"password":"hunter2",
+		"mark_seen":true,
 		"enabled":true
 	}`
 	rec := call(t, s, "POST", "/api/email-accounts", body, adminPrincipal(1))
@@ -148,6 +151,9 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	}
 	if out.AuthMethod != emailaccounts.AuthPassword {
 		t.Fatalf("auth method = %q, want password", out.AuthMethod)
+	}
+	if !out.MarkSeen {
+		t.Fatal("mark_seen was not persisted")
 	}
 	// SyncSince defaults to ~time.Now() when the caller omits it —
 	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
@@ -207,6 +213,15 @@ func TestEmailAccounts_Create_Validation(t *testing.T) {
 		{"xoauth2_via_create_rejected",
 			`{"name":"x","owner_id":1,"provider":"microsoft","username":"a@example.com","password":"p"}`,
 			"oauth_required"},
+		{"zero_poll_interval",
+			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","poll_interval_min":0}`,
+			"poll_interval_min"},
+		{"poll_interval_too_large",
+			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","poll_interval_min":1441}`,
+			"poll_interval_min"},
+		{"invalid_ca_file",
+			fmt.Sprintf(`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","tls_ca_file":%q}`, filepath.Join(t.TempDir(), "missing.pem")),
+			"tls_ca_file"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -419,6 +434,91 @@ func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "unavailable") {
 		t.Fatalf("expected msal-missing message; got %s", rec.Body.String())
 	}
+	after, err := emailaccounts.Get(context.Background(), s.DB, acc.ID)
+	if err != nil || !strings.Contains(after.LastError, "unavailable") {
+		t.Fatalf("mailbox health was not updated: account=%+v err=%v", after, err)
+	}
+}
+
+func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer conn.Close()
+		if _, err := fmt.Fprint(conn, "* OK [CAPABILITY IMAP4rev1] test ready\r\n"); err != nil {
+			serverDone <- err
+			return
+		}
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 2 {
+				serverDone <- fmt.Errorf("invalid IMAP command %q", scanner.Text())
+				return
+			}
+			tag, command := fields[0], strings.ToUpper(fields[1])
+			switch command {
+			case "CAPABILITY":
+				_, err = fmt.Fprintf(conn, "* CAPABILITY IMAP4rev1\r\n%s OK CAPABILITY completed\r\n", tag)
+			case "LOGIN":
+				_, err = fmt.Fprintf(conn, "%s OK LOGIN completed\r\n", tag)
+			case "LOGOUT":
+				_, err = fmt.Fprintf(conn, "* BYE logging out\r\n%s OK LOGOUT completed\r\n", tag)
+				serverDone <- err
+				return
+			default:
+				serverDone <- fmt.Errorf("unexpected IMAP command %q", command)
+				return
+			}
+			if err != nil {
+				serverDone <- err
+				return
+			}
+		}
+		serverDone <- scanner.Err()
+	}()
+
+	host, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := newEmailAccountsServer(t)
+	seedUser(t, s.DB, 1)
+	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "p")
+	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+		Name: "plain", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
+		Host: host, Port: port, UseTLS: false, PollIntervalMin: 10,
+		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, s, "POST", "/api/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/test", "", adminPrincipal(1))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("test IMAP server did not observe logout")
+	}
 }
 
 // ---------- oauth ----------
@@ -468,6 +568,7 @@ func TestEmailAccounts_OAuth_Complete_Pending(t *testing.T) {
 	now := time.Now()
 	if !s.oauthFlows.put("pending", oauthFlowEntry{
 		clientID:  "11111111-1111-1111-1111-111111111111",
+		ownerID:   1,
 		expiresAt: now.Add(time.Minute),
 	}, now) {
 		t.Fatal("put failed")
@@ -489,6 +590,7 @@ func TestEmailAccounts_OAuth_Complete_ProviderFailure(t *testing.T) {
 	now := time.Now()
 	if !s.oauthFlows.put("failed", oauthFlowEntry{
 		clientID:  "11111111-1111-1111-1111-111111111111",
+		ownerID:   1,
 		expiresAt: now.Add(time.Minute),
 	}, now) {
 		t.Fatal("put failed")
@@ -509,22 +611,30 @@ func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
 	var store oauthFlowStore
 	for i := 0; i < maxOAuthFlows; i++ {
 		handle := strconv.Itoa(i)
-		if !store.put(handle, oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+		if !store.put(handle, oauthFlowEntry{ownerID: int64(i + 1), expiresAt: now.Add(time.Minute)}, now) {
 			t.Fatalf("flow %d rejected before limit", i)
 		}
 	}
-	if store.put("overflow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+	if store.put("overflow", oauthFlowEntry{ownerID: 1000, expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("flow store exceeded its limit")
 	}
-	if !store.put("after-expiry", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now.Add(2*time.Minute)) {
+	if !store.put("after-expiry", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
 		t.Fatal("expired flows were not pruned")
+	}
+	for i := 0; i < maxOAuthFlowsPerUser-1; i++ {
+		if !store.put("same-owner-"+strconv.Itoa(i), oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
+			t.Fatal("same-owner flow rejected before per-user limit")
+		}
+	}
+	if store.put("same-owner-overflow", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
+		t.Fatal("flow store exceeded its per-user limit")
 	}
 }
 
 func TestOAuthFlowStoreTracksPendingAndAllowsOneCompletion(t *testing.T) {
 	now := time.Now()
 	var store oauthFlowStore
-	if !store.put("flow", oauthFlowEntry{expiresAt: now.Add(time.Minute)}, now) {
+	if !store.put("flow", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
 	if _, err := store.begin("flow", now); !errors.Is(err, errOAuthFlowPending) {
@@ -563,6 +673,7 @@ func TestEmailAccounts_OAuth_Complete_ReauthenticatesAndEnables(t *testing.T) {
 	now := time.Now()
 	if !s.oauthFlows.put("reauth", oauthFlowEntry{
 		clientID:  "11111111-1111-1111-1111-111111111111",
+		ownerID:   1,
 		expiresAt: now.Add(time.Minute),
 	}, now) {
 		t.Fatal("put failed")

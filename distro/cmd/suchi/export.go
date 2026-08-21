@@ -322,23 +322,28 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			MIME:        mime.String,
 		}
 		// Tags + correspondents + jd_category — each best-effort;
-		// missing rows just leave the field empty on the sidecar.
-		if tags, err := loadDocTags(ctx, d, id); err == nil {
-			side.Tags = tags
+		tags, err := loadDocTags(ctx, d, id)
+		if err != nil {
+			return written, skipped, fmt.Errorf("load tags for document %d: %w", id, err)
 		}
-		if corrs, err := loadDocCorrespondents(ctx, d, id); err == nil {
-			side.Correspondents = corrs
-			for _, c := range corrs {
-				if c.Role == "sender" || c.Role == "" {
-					side.Correspondent = c.Name
-					break
-				}
+		side.Tags = tags
+		corrs, err := loadDocCorrespondents(ctx, d, id)
+		if err != nil {
+			return written, skipped, fmt.Errorf("load correspondents for document %d: %w", id, err)
+		}
+		side.Correspondents = corrs
+		for _, c := range corrs {
+			if c.Role == "sender" || c.Role == "" {
+				side.Correspondent = c.Name
+				break
 			}
 		}
 		if jdCatID > 0 {
 			var code int
-			_ = d.Read.QueryRowContext(ctx,
-				`SELECT code FROM jd_categories WHERE id = ?`, jdCatID).Scan(&code)
+			if err := d.Read.QueryRowContext(ctx,
+				`SELECT code FROM jd_categories WHERE id = ?`, jdCatID).Scan(&code); err != nil {
+				return written, skipped, fmt.Errorf("load JD category for document %d: %w", id, err)
+			}
 			side.JDCategory = code
 		}
 

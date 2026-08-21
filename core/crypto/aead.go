@@ -6,7 +6,7 @@
 //
 //   - Symmetric AES-256-GCM.
 //   - Key material lives at DATA_DIR/.decrypt-key (auto-generated 0600
-//     on first boot, exactly like .session-key).
+//     on first boot).
 //   - Each seal produces a nonce-prefixed ciphertext: 12-byte GCM
 //     nonce | ciphertext | 16-byte tag. Stored as a BLOB — no base64
 //     inflation.

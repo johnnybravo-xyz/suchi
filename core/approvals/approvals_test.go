@@ -406,17 +406,8 @@ func adminPrincipal() *pluginapi.Principal {
 	return &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
 }
 
-// TestEngineResolve_HappyPath drives the full approval lifecycle in one
-// test: register → start → advance to create the task → resolve with a
-// valid choice → advance("approve") to consume the choice → run
-// transitions to end. This is the "crash-path" the review flagged as
-// under-tested: the individual pieces have unit tests but no test
-// walked through the entire happy path.
-//
-// The subscriber isn't wired here — we drive Advance directly to stand
-// in for what the outbox would do. The engine's contract is that
-// Resolve enqueues a approval:advance{trigger:choice} job; we skip the
-// jobs table and call Advance with the same trigger.
+// TestEngineResolve_HappyPath drives the full lifecycle directly. Repeating
+// the first advance models an outbox retry after task creation.
 func TestEngineResolve_HappyPath(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()
@@ -444,6 +435,9 @@ func TestEngineResolve_HappyPath(t *testing.T) {
 	// First advance materializes the human-approval task.
 	if err := e.Advance(ctx, runID, ""); err != nil {
 		t.Fatalf("advance to task: %v", err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatalf("retry advance to task: %v", err)
 	}
 	_, tasks, err := e.GetRun(ctx, runID)
 	if err != nil {

@@ -147,6 +147,10 @@ func Sweep(ctx context.Context, database *db.DB, cas *blob.CAS, ttl time.Duratio
 			}
 			userIDs = append(userIDs, id)
 		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate user ids: %w", err)
+		}
 		if err := rows.Close(); err != nil {
 			return err
 		}

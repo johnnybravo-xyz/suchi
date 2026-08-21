@@ -66,7 +66,7 @@ func (s *Server) PatchSelf(w http.ResponseWriter, r *http.Request) {
 		DisplayName *string `json:"display_name,omitempty"`
 		Email       *string `json:"email,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -352,6 +352,11 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 				ObjectID:   uid,
 				Before:     map[string]any{"capability": string(cap)},
 			})
+		}
+	}
+	if body.Disabled != nil && s.EmailwatchReload != nil {
+		if err := s.EmailwatchReload(r.Context()); err != nil {
+			s.Log.Warn("users.patch.emailwatch_reload", "user_id", uid, "err", err.Error())
 		}
 	}
 

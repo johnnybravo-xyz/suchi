@@ -12,6 +12,16 @@ package authz
 
 import "strings"
 
+// DemoCorpusVisibilityWhere admits the designated seeded corpus and, for an
+// upgraded scratch visitor, that visitor's own documents.
+func DemoCorpusVisibilityWhere(userID int64) (string, []any) {
+	corpus := `d.owner_id IN (SELECT id FROM users WHERE email = ? AND role = 'admin')`
+	if userID == 0 {
+		return corpus, []any{DemoCorpusOwnerEmail}
+	}
+	return "(d.owner_id = ? OR " + corpus + ")", []any{userID, DemoCorpusOwnerEmail}
+}
+
 // DocVisibilityWhere returns a SQL WHERE fragment (without the leading
 // AND) that admits documents visible to the given principal:
 //

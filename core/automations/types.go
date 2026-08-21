@@ -9,11 +9,10 @@
 // Design principles:
 //   - Data-driven: every automation is rows in three tables. No Go
 //     code changes to add a rule.
-//   - Fail-soft: an action that errors logs and skips; other actions in
-//     the same automation still run.
-//   - Restart-safe: applies inside the same db.WriteTx as any downstream
-//     work in postingest — a crash rolls back the doc's ingest tail
-//     and it retries.
+//   - Transactional: an action error rolls back that automation and is
+//     returned to the caller for retry or reporting.
+//   - Retry-safe metadata: assignment and removal actions converge when
+//     explicitly rerun. External tasks still require domain deduplication.
 //
 // Named for what they do. Distinct from core/approvals/, which owns
 // the state-machine "approvals" engine (routing/sign-off), exposed

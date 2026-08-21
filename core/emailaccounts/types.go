@@ -1,11 +1,8 @@
 // Package emailaccounts is the CRUD + secret-sealing surface for the
 // `email_accounts` table.
 //
-// One row = one mailbox the emailwatch poller can pull from. Until
-// v0.1 the poller was single-mailbox, boot-configured from
-// `ingest.imap_*` settings. Full IMAP support fans that out to N
-// accounts per instance, per-account owner + folder policy, and
-// AEAD-sealed credentials.
+// One row is one mailbox the emailwatch poller can pull from, with a
+// per-account owner, folder policy, schedule, and AEAD-sealed credential.
 //
 // The store is intentionally thin: no scheduling, no polling, no
 // classification. Those live in emailwatch/ and consume rows via

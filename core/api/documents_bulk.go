@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 
 	var body BulkEditRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
@@ -97,11 +98,15 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 
 	// Build per-doc outcome shell up front so authorization refusals
 	// keep the request→response id ordering.
+	requiredPerm := authz.PermChange
+	if body.Method == "trash" || body.Method == "delete" {
+		requiredPerm = authz.PermDelete
+	}
 	results := make([]BulkEditItemResult, len(body.Documents))
 	authorized := make([]int64, 0, len(body.Documents))
 	for i, id := range body.Documents {
 		results[i].ID = id
-		if !s.canWriteDoc(r, p, id) {
+		if !s.canBulkEditDoc(r, id, requiredPerm) {
 			results[i].Code = "forbidden"
 			continue
 		}
@@ -153,13 +158,11 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// canWriteDoc runs the same ACL check PatchDocument uses. authorize()
-// writes a 4XX to its w if refused, but bulk_edit needs a boolean —
-// so we pass a discard sink and only care about the returned bool.
-// Keeps the ACL rule in one place across PATCH + bulk_edit.
-func (s *Server) canWriteDoc(r *http.Request, _ any, id int64) bool {
+// canBulkEditDoc keeps the ACL rule in authorize while allowing each bulk
+// method to select the same permission as its single-document counterpart.
+func (s *Server) canBulkEditDoc(r *http.Request, id int64, perm authz.Perm) bool {
 	return s.authorize(&discardResponseWriter{}, r,
-		auth.FromContext(r.Context()), authz.KindDocument, id, authz.PermChange)
+		auth.FromContext(r.Context()), authz.KindDocument, id, perm)
 }
 
 // discardResponseWriter absorbs writes so authorize()'s deny-branch
@@ -352,15 +355,18 @@ func paramInt64(params map[string]any, key string) (int64, error) {
 		return 0, fmt.Errorf("%w: parameters.%s is required", errBadParams, key)
 	}
 	switch v := raw.(type) {
-	case float64:
-		return int64(v), nil
+	case json.Number:
+		out, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%w: parameters.%s must be an integer", errBadParams, key)
+		}
+		return out, nil
 	case int64:
 		return v, nil
 	case int:
 		return int64(v), nil
 	case string:
-		var out int64
-		_, err := fmt.Sscanf(v, "%d", &out)
+		out, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("%w: parameters.%s must parse as an integer", errBadParams, key)
 		}

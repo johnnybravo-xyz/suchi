@@ -5,7 +5,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -61,7 +60,7 @@ func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
 		PrincipalID   int64  `json:"principal_id"`
 		PermBits      int    `json:"perm_bits"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}

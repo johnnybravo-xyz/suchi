@@ -25,13 +25,20 @@ type Migration struct {
 // Migrate applies every migration with Version > current PRAGMA user_version,
 // each in its own transaction. Idempotent: safe to run at every boot.
 func Migrate(ctx context.Context, d *DB, migs []Migration, log *slog.Logger) error {
+	if len(migs) == 0 {
+		return fmt.Errorf("no migrations loaded")
+	}
 	sort.Slice(migs, func(i, j int) bool { return migs[i].Version < migs[j].Version })
 
 	var current int
 	if err := d.Write.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
-	log.Info("db.migrate.begin", "current_version", current, "target_version", migs[len(migs)-1].Version)
+	target := migs[len(migs)-1].Version
+	if current > target {
+		return fmt.Errorf("database schema version %d is newer than this binary supports (%d)", current, target)
+	}
+	log.Info("db.migrate.begin", "current_version", current, "target_version", target)
 
 	for _, m := range migs {
 		if m.Version <= current {

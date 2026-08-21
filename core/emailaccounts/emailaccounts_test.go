@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
@@ -84,6 +85,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 		Username:     "owner@example.com",
 		SealedSecret: sealed,
 		Enabled:      true,
+		MarkSeen:     true,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -98,7 +100,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 	}
 	if got.Name != "primary" || got.Port != 993 || !got.UseTLS ||
 		got.Provider != emailaccounts.ProviderFastmail ||
-		got.AuthMethod != emailaccounts.AuthPassword {
+		got.AuthMethod != emailaccounts.AuthPassword || !got.MarkSeen {
 		t.Fatalf("get returned wrong shape: %+v", got)
 	}
 	if !bytes.Equal(got.SealedSecret, sealed) {
@@ -125,6 +127,26 @@ func TestCRUDRoundTrip(t *testing.T) {
 	}
 	if patched.Host != "imap.fastmail.com" {
 		t.Fatalf("patch clobbered unrelated field host=%q", patched.Host)
+	}
+
+	if err := emailaccounts.UpdateUIDCursor(ctx, d, created.ID, 42, 7); err != nil {
+		t.Fatal(err)
+	}
+	newPoll = 45
+	patched, err = emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &newPoll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched.LastUIDSeen != 42 || patched.UIDValiditySeen != 7 {
+		t.Fatal("non-source patch reset the UID cursor")
+	}
+	newFolder := "Receipts"
+	patched, err = emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Folder: &newFolder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched.LastUIDSeen != 0 || patched.UIDValiditySeen != 0 {
+		t.Fatalf("source patch kept cursor: uid=%d uidvalidity=%d", patched.LastUIDSeen, patched.UIDValiditySeen)
 	}
 
 	if err := emailaccounts.Delete(ctx, d, created.ID); err != nil {
@@ -180,6 +202,16 @@ func TestListEnabledFilters(t *testing.T) {
 			t.Fatalf("ListEnabled returned disabled row: %+v", a)
 		}
 	}
+	if _, err := d.ExecWrite(ctx, `UPDATE users SET disabled = 1 WHERE id = ?`, uid); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = emailaccounts.ListEnabled(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled) != 0 {
+		t.Fatalf("ListEnabled returned %d mailboxes for a disabled owner", len(enabled))
+	}
 }
 
 func TestMarkSync(t *testing.T) {
@@ -223,6 +255,53 @@ func TestCreateValidations(t *testing.T) {
 	_, err := emailaccounts.Create(ctx, d, emailaccounts.Account{})
 	if err == nil {
 		t.Fatal("expected validation error for empty account")
+	}
+
+	uid := seedUser(t, ctx, d, "validation@example.com")
+	sealed, _ := emailaccounts.SealPassword(newAEAD(t), "p")
+	base := emailaccounts.Account{
+		Name: "mail", OwnerID: uid, Provider: emailaccounts.ProviderCustom,
+		Host: "mail.example.com", Port: 993, UseTLS: true,
+		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
+	}
+	for _, poll := range []int{-1, emailaccounts.MaxPollIntervalMin + 1} {
+		candidate := base
+		candidate.PollIntervalMin = poll
+		if _, err := emailaccounts.Create(ctx, d, candidate); err == nil {
+			t.Fatalf("poll interval %d should be rejected", poll)
+		}
+	}
+	invalidPoll := 0
+	created, err := emailaccounts.Create(ctx, d, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &invalidPoll}); err == nil {
+		t.Fatal("zero poll interval patch should be rejected")
+	}
+	emptyHost := ""
+	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Host: &emptyHost}); err == nil {
+		t.Fatal("empty host patch should be rejected")
+	}
+	negativeSince := int64(-1)
+	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{SyncSince: &negativeSince}); err == nil {
+		t.Fatal("negative sync_since patch should be rejected")
+	}
+	longName := strings.Repeat("x", 201)
+	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Name: &longName}); err == nil {
+		t.Fatal("overlong name patch should be rejected")
+	}
+	badCA := filepath.Join(t.TempDir(), "missing-ca.pem")
+	base.TLSCAFile = badCA
+	if _, err := emailaccounts.Create(ctx, d, base); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
+		t.Fatalf("invalid CA file error = %v", err)
+	}
+	if _, err := d.ExecWrite(ctx, `UPDATE email_accounts SET tls_ca_file = ? WHERE id = ?`, badCA, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Enabled: &on}); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
+		t.Fatalf("enabling with invalid CA file error = %v", err)
 	}
 }
 

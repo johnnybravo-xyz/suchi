@@ -42,6 +42,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 	// document's owner", not the ingest producer.
 	var (
 		ownerID                                  int64
+		inboxCategoryID                          int64
 		jdCategoryID, correspondentID, docTypeID sql.NullInt64
 	)
 	if err := tx.QueryRowContext(ctx, `
@@ -61,12 +62,16 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 	// jd_categories) — see core/jd/tree.go.
 	if jdCategoryID.Valid {
 		var inboxRaw sql.NullString
-		_ = tx.QueryRowContext(ctx,
+		err := tx.QueryRowContext(ctx,
 			`SELECT value_json FROM settings WHERE key = 'jd_inbox_category_id' LIMIT 1`).Scan(&inboxRaw)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("archive classifier: load inbox category: %w", err)
+		}
 		if inboxRaw.Valid {
-			var inboxID int64
-			_ = json.Unmarshal([]byte(inboxRaw.String), &inboxID)
-			if inboxID != 0 && jdCategoryID.Int64 == inboxID {
+			if err := json.Unmarshal([]byte(inboxRaw.String), &inboxCategoryID); err != nil {
+				return fmt.Errorf("archive classifier: decode inbox category: %w", err)
+			}
+			if inboxCategoryID != 0 && jdCategoryID.Int64 == inboxCategoryID {
 				jdCategoryID = sql.NullInt64{}
 			}
 		}
@@ -87,6 +92,10 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			return err
 		}
 		existingTags[id] = true
+	}
+	if err := trows.Err(); err != nil {
+		trows.Close()
+		return fmt.Errorf("archive classifier: iterate tags: %w", err)
 	}
 	trows.Close()
 
@@ -206,15 +215,24 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 		if winnerID == 0 {
 			continue
 		}
+		if field == "jd_category" && winnerID == inboxCategoryID {
+			continue
+		}
 		confidence := winnerScore / totalScore
 		if confidence < cfg.ReviewThreshold {
 			continue
 		}
 		supporters := scalarSupporters[field][winnerID]
-		label := lookupLabel(ctx, tx, field, winnerID)
+		label, err := lookupLabel(ctx, tx, field, winnerID)
+		if err != nil {
+			return fmt.Errorf("archive classifier: label %s: %w", field, err)
+		}
 		if confidence >= cfg.AutoThreshold {
-			if err := applyScalar(ctx, tx, field, docID, winnerID); err != nil {
-				log.Warn("archive_classifier.autoapply.write", "field", field, "err", err.Error())
+			changed, err := applyScalar(ctx, tx, field, docID, winnerID, inboxCategoryID)
+			if err != nil {
+				return fmt.Errorf("archive classifier: auto-apply %s: %w", field, err)
+			}
+			if !changed {
 				continue
 			}
 			audit.LogInTx(ctx, tx, log, audit.Event{
@@ -236,8 +254,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 				Field: field, ValueID: winnerID, Label: label, Confidence: confidence,
 				BasedOn: supporters, Source: "archive",
 			}); err != nil {
-				log.Warn("archive_classifier.propose.write", "field", field, "err", err.Error())
-				continue
+				return fmt.Errorf("archive classifier: propose %s: %w", field, err)
 			}
 			proposed++
 		}
@@ -258,13 +275,15 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			if confidence < cfg.ReviewThreshold {
 				continue
 			}
-			label := lookupLabel(ctx, tx, "tag", tagID)
+			label, err := lookupLabel(ctx, tx, "tag", tagID)
+			if err != nil {
+				return fmt.Errorf("archive classifier: label tag: %w", err)
+			}
 			if confidence >= cfg.AutoThreshold {
 				if _, err := tx.ExecContext(ctx,
 					`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
 					docID, tagID); err != nil {
-					log.Warn("archive_classifier.autoapply.tag", "tag_id", tagID, "err", err.Error())
-					continue
+					return fmt.Errorf("archive classifier: auto-apply tag %d: %w", tagID, err)
 				}
 				audit.LogInTx(ctx, tx, log, audit.Event{
 					Actor:      nil,
@@ -285,8 +304,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 					Field: "tag", ValueID: tagID, Label: label, Confidence: confidence,
 					BasedOn: supporters, Source: "archive",
 				}); err != nil {
-					log.Warn("archive_classifier.propose.tag", "tag_id", tagID, "err", err.Error())
-					continue
+					return fmt.Errorf("archive classifier: propose tag %d: %w", tagID, err)
 				}
 				proposed++
 			}
@@ -330,6 +348,10 @@ func loadNeighbourMetadata(ctx context.Context, d *db.DB, ids []int64) (map[int6
 			return nil, err
 		}
 		out[id] = md
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
 	}
 	rows.Close()
 
@@ -382,29 +404,41 @@ func topScalar(tally map[int64]float64) (int64, float64) {
 	return winnerID, winnerScore
 }
 
-func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID int64) error {
-	var col string
+func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID, inboxCategoryID int64) (bool, error) {
+	var (
+		col       string
+		condition string
+		args      []any
+	)
 	switch field {
 	case "jd_category":
 		col = "jd_category_id"
+		if inboxCategoryID != 0 {
+			condition = col + " IS NULL OR " + col + " = ?"
+			args = append(args, inboxCategoryID)
+		}
 	case "correspondent":
 		col = "correspondent_id"
 	case "document_type":
 		col = "document_type_id"
 	default:
-		return fmt.Errorf("archive classifier: unknown field %q", field)
+		return false, fmt.Errorf("archive classifier: unknown field %q", field)
 	}
-	// Only update when the field is still empty — belt-and-braces
-	// against a rules-classifier write that landed after our tally
-	// read but before our write. UPDATE ... WHERE col IS NULL keeps
-	// the action idempotent + race-tolerant.
-	_, err := tx.ExecContext(ctx,
-		"UPDATE documents SET "+col+" = ?, updated_at = ? WHERE id = ? AND "+col+" IS NULL",
-		valueID, time.Now().Unix(), docID)
-	return err
+	if condition == "" {
+		condition = col + " IS NULL"
+	}
+	args = append([]any{valueID, time.Now().Unix(), docID}, args...)
+	res, err := tx.ExecContext(ctx,
+		"UPDATE documents SET "+col+" = ?, updated_at = ? WHERE id = ? AND ("+condition+")",
+		args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
-func lookupLabel(ctx context.Context, tx *sql.Tx, field string, id int64) string {
+func lookupLabel(ctx context.Context, tx *sql.Tx, field string, id int64) (string, error) {
 	var table, col string
 	switch field {
 	case "jd_category":
@@ -416,10 +450,10 @@ func lookupLabel(ctx context.Context, tx *sql.Tx, field string, id int64) string
 	case "tag":
 		table, col = "tags", "COALESCE(name, '')"
 	default:
-		return ""
+		return "", fmt.Errorf("unknown field %q", field)
 	}
 	var s string
-	_ = tx.QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		"SELECT "+col+" FROM "+table+" WHERE id = ?", id).Scan(&s)
-	return s
+	return s, err
 }

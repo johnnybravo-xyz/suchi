@@ -5,7 +5,7 @@
 //      Sees /api/share_links/ to list their own active links.
 //   2. Recipient (anonymous with a token) — GET /s/{token} → JSON
 //      metadata (docs + labels); GET /s/{token}/{doc_id}/download —
-//      stream a blob. Password auth via query or POST-body header.
+//      stream a blob. Password auth via header or browser unlock form.
 //
 // The public /s/ paths are deliberately NOT under /api/ — they're a
 // separate surface with different auth (token in URL, optional
@@ -18,7 +18,9 @@
 package api
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +28,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	stdmime "mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -59,6 +62,13 @@ type ShareLinkCreate struct {
 	ExpiresIn int64   `json:"expires_in_sec,omitempty"` // 0 = never
 	Password  string  `json:"password,omitempty"`       // "" = no password
 }
+
+const (
+	maxShareLabelBytes    = 200
+	maxSharePasswordBytes = 1024
+	maxShareExpirySeconds = int64(365 * 24 * 60 * 60)
+	shareUnlockLifetime   = time.Hour
+)
 
 // ListShareLinks — GET /api/share_links/. Scoped to the caller.
 // Revoked and expired links stay visible so operators can audit them.
@@ -101,10 +111,17 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 			s.serverErr(w, "share_links.scan", err)
 			return
 		}
-		_ = json.Unmarshal([]byte(docIDsJSON), &v.DocIDs)
+		if err := json.Unmarshal([]byte(docIDsJSON), &v.DocIDs); err != nil {
+			s.serverErr(w, "share_links.doc_ids", err)
+			return
+		}
 		v.HasPasswd = hasPasswd == 1
 		v.PublicURL = "/s/" + v.Token
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "share_links.iterate", err)
+		return
 	}
 	if out == nil {
 		out = []ShareLinkRow{}
@@ -122,13 +139,26 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in ShareLinkCreate
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 	if len(in.DocIDs) == 0 || len(in.DocIDs) > 200 {
 		s.writeError(w, http.StatusBadRequest, "bad_doc_ids",
 			"doc_ids must be a non-empty array of at most 200 ids")
+		return
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	if len(in.Label) > maxShareLabelBytes {
+		s.writeError(w, http.StatusBadRequest, "bad_label", "label must be at most 200 bytes")
+		return
+	}
+	if len(in.Password) > maxSharePasswordBytes {
+		s.writeError(w, http.StatusBadRequest, "bad_password", "password must be at most 1024 bytes")
+		return
+	}
+	if in.ExpiresIn < 0 || in.ExpiresIn > maxShareExpirySeconds {
+		s.writeError(w, http.StatusBadRequest, "bad_expiry", "expires_in_sec must be between 0 and 31536000")
 		return
 	}
 	// Owner check: every doc must be one the caller can actually
@@ -144,7 +174,11 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docIDsJSON, _ := json.Marshal(in.DocIDs)
-	token := newShareToken()
+	token, err := newShareToken()
+	if err != nil {
+		s.serverErr(w, "share_links.token", err)
+		return
+	}
 	var pwHash sql.NullString
 	if in.Password != "" {
 		if s.PasswordHasher == nil {
@@ -167,7 +201,7 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	var id int64
-	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO share_links(token, doc_ids_json, created_by,
 			                        expires_at, password_hash, label,
@@ -266,7 +300,7 @@ func (s *Server) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
 // ShareLinkPublic is the JSON payload for GET /s/{token}. Deliberately
 // minimal — recipient sees a list of docs, their titles + mime, and
 // download links. Password requirement is announced via
-// requires_password=true; the client re-requests with ?password=<pw>.
+// requires_password=true; browser clients submit the unlock form.
 type ShareLinkPublic struct {
 	Label            string            `json:"label"`
 	RequiresPassword bool              `json:"requires_password"`
@@ -280,7 +314,7 @@ type ShareLinkPubDoc struct {
 	Download string `json:"download"` // relative URL
 }
 
-// GetSharePublic — GET /s/{token}[?password=<pw>].
+// GetSharePublic — GET /s/{token}.
 // Returns 404 for missing/revoked/expired links (no oracle on which);
 // 401 for password-required with no password; 403 for wrong password.
 //
@@ -304,8 +338,7 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "invalid or expired share link")
 		return
 	}
-	pw := readSharePassword(r)
-	if err := s.verifySharePassword(link, pw); err != nil {
+	if err := s.verifyShareAccess(link, token, r); err != nil {
 		if errors.Is(err, errShareNeedsPassword) {
 			if wantsHTML(r) {
 				renderShareHTML(w, http.StatusOK, shareHTMLData{
@@ -364,6 +397,7 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 // Wrong password re-renders the form with a message.
 func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_form", "invalid form body")
 		return
@@ -386,39 +420,27 @@ func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Set the path-scoped share cookie. Path=/s/{token} means the value
-	// is only sent back on requests for THIS share, so unlocking one
-	// bundle never leaks credentials to another.
+	// Store a short-lived proof of successful verification, never the
+	// recipient's password. The proof is bound to this share token and
+	// the stored password hash, so revocation or a password change
+	// invalidates it without server-side session state.
+	expires := time.Now().Add(shareUnlockLifetime)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sharePasswordCookieName,
-		Value:    pw,
+		Value:    shareUnlockToken(link, token, expires.Unix()),
 		Path:     "/s/" + token,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		Secure:   requestIsHTTPS(r),
-		MaxAge:   3600, // one hour — long enough for a recipient to grab their files
+		Expires:  expires,
+		MaxAge:   int(shareUnlockLifetime.Seconds()),
 	})
 	http.Redirect(w, r, "/s/"+token, http.StatusSeeOther)
 }
 
-// sharePasswordCookieName is the fixed cookie name for share-link
-// password auth. The security is in the Path attribute (scoped to the
-// specific /s/{token}), not the name.
+// sharePasswordCookieName is path-scoped to one share and contains a
+// signed unlock proof, not the entered password.
 const sharePasswordCookieName = "share_pw"
-
-// readSharePassword returns the password from any accepted source in
-// priority order: explicit ?password= query (for curl / agents that
-// don't do cookies), then the path-scoped share cookie set by
-// PostSharePublic (for browsers).
-func readSharePassword(r *http.Request) string {
-	if q := r.URL.Query().Get("password"); q != "" {
-		return q
-	}
-	if c, err := r.Cookie(sharePasswordCookieName); err == nil {
-		return c.Value
-	}
-	return ""
-}
 
 // requestIsHTTPS returns true when the request came in over TLS or via
 // a proxy that terminated TLS upstream (`X-Forwarded-Proto: https`).
@@ -541,7 +563,7 @@ const shareHTMLShell = `<html lang="en"><head><meta charset="utf-8">
 body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background: var(--bg); color: var(--ink); padding: 48px 24px; line-height: 1.55; }
 .wrap { max-width: 640px; margin: 0 auto; }
-h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -.01em; margin: 0 0 4px; }
+h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: 0; margin: 0 0 4px; }
 .sub { color: var(--muted); font-size: .88rem; margin: 0 0 24px; }
 .notice { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
   padding: 20px; color: var(--muted); }
@@ -595,7 +617,7 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, "not_found", "invalid or expired share link")
 		return
 	}
-	if err := s.verifySharePassword(link, readSharePassword(r)); err != nil {
+	if err := s.verifyShareAccess(link, token, r); err != nil {
 		s.writeError(w, http.StatusForbidden, "bad_password", "wrong password")
 		return
 	}
@@ -670,8 +692,9 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 	if title.Valid {
-		w.Header().Set("Content-Disposition",
-			`attachment; filename="`+strings.ReplaceAll(title.String, `"`, "")+`"`)
+		w.Header().Set("Content-Disposition", stdmime.FormatMediaType("attachment", map[string]string{
+			"filename": title.String,
+		}))
 	}
 	_, _ = io.Copy(w, rc)
 }
@@ -737,6 +760,52 @@ func (s *Server) verifySharePassword(l *shareLinkLoaded, supplied string) error 
 		return err
 	}
 	return nil
+}
+
+// verifyShareAccess accepts a direct password in a header for API clients,
+// or the signed unlock cookie issued by PostSharePublic for browsers.
+// Passwords are deliberately not accepted in URLs, where they leak into
+// history and proxy logs.
+func (s *Server) verifyShareAccess(l *shareLinkLoaded, token string, r *http.Request) error {
+	if !l.pwHash.Valid {
+		return nil
+	}
+	if supplied := r.Header.Get("X-Suchi-Share-Password"); supplied != "" {
+		return s.verifySharePassword(l, supplied)
+	}
+	cookie, err := r.Cookie(sharePasswordCookieName)
+	if err != nil {
+		return errShareNeedsPassword
+	}
+	if !validShareUnlockToken(l, token, cookie.Value, time.Now().Unix()) {
+		return errors.New("invalid share unlock token")
+	}
+	return nil
+}
+
+func shareUnlockToken(l *shareLinkLoaded, token string, expiresAt int64) string {
+	expires := strconv.FormatInt(expiresAt, 10)
+	mac := hmac.New(sha256.New, []byte(l.pwHash.String))
+	_, _ = io.WriteString(mac, token+"\x00"+expires)
+	return expires + "." + hex.EncodeToString(mac.Sum(nil))
+}
+
+func validShareUnlockToken(l *shareLinkLoaded, token, value string, now int64) bool {
+	expires, signature, ok := strings.Cut(value, ".")
+	if !ok {
+		return false
+	}
+	expiresAt, err := strconv.ParseInt(expires, 10, 64)
+	if err != nil || expiresAt < now {
+		return false
+	}
+	got, err := hex.DecodeString(signature)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(l.pwHash.String))
+	_, _ = io.WriteString(mac, token+"\x00"+expires)
+	return hmac.Equal(got, mac.Sum(nil))
 }
 
 type shareDocMeta struct {
@@ -820,8 +889,10 @@ func (s *Server) assertShareable(r *http.Request, p *pluginapiPrincipalStub, ids
 type pluginapiPrincipalStub = pluginapi.Principal
 
 // newShareToken returns 32 random bytes hex-encoded (64 chars).
-func newShareToken() string {
+func newShareToken() (string, error) {
 	var b [32]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }

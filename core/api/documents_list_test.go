@@ -147,6 +147,44 @@ func TestListDocuments_MemberACLScope(t *testing.T) {
 	}
 }
 
+func TestListDocuments_AllTagsFilterPrecedesPagination(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	first := seedStatsDoc(t, s.DB, 1, "sha_first", "first match", inbox, false, 100)
+	second := seedStatsDoc(t, s.DB, 1, "sha_second", "second match", inbox, false, 200)
+	newest := seedStatsDoc(t, s.DB, 1, "sha_newest", "not a match", inbox, false, 300)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES
+			(1, 'one', 'one', 0, 0),
+			(2, 'two', 'two', 0, 0);
+		INSERT INTO document_tags(document_id, tag_id) VALUES
+			(?, 1), (?, 2), (?, 1), (?, 2), (?, 1)
+	`, first, first, second, second, newest); err != nil {
+		t.Fatal(err)
+	}
+
+	_, rows, count := doList(t, s,
+		"/api/documents/?tags__id__in=1,2&page_size=1", adminPrincipal(1))
+	if count != 2 || len(rows) != 1 || rows[0].ID != second {
+		t.Fatalf("page 1 count=%d rows=%+v", count, rows)
+	}
+	_, rows, count = doList(t, s,
+		"/api/documents/?tags__id__in=1,2&page_size=1&page=2", adminPrincipal(1))
+	if count != 2 || len(rows) != 1 || rows[0].ID != first {
+		t.Fatalf("page 2 count=%d rows=%+v", count, rows)
+	}
+}
+
+func TestListDocuments_MalformedFTSQueryReturnsBadRequest(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	seedStatsDoc(t, s.DB, 1, "search-sha", "searchable", inbox, false, 1)
+	code, _, _ := doList(t, s, "/api/documents/?q=%22", adminPrincipal(1))
+	if code != 400 {
+		t.Fatalf("status=%d", code)
+	}
+}
+
 func TestListDocuments_OrderingAllowList(t *testing.T) {
 	s := newListServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

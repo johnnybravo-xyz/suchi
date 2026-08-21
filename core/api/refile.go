@@ -10,7 +10,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/johnnybravo-xyz/suchi/core/refile"
@@ -29,7 +28,7 @@ func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
 	}
 	// Empty body is valid — it means "run both passes across all owners".
 	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := decodeJSON(r, &body); err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 			return
 		}
