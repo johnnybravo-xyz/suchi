@@ -66,6 +66,54 @@ func TestRenderEmptyValuesSilent(t *testing.T) {
 	}
 }
 
+func TestRenderAllVariables(t *testing.T) {
+	tpl := `{{ title }}|{{doc_pk}}|{{ correspondent }}|{{ document_type }}|{{ storage_path }}|{{ tag_list }}|{{ created }}|{{ created_year }}|{{ created_month }}|{{ created_day }}|{{ added }}|{{ added_year }}|{{ added_month }}|{{ added_day }}|{{ owner }}|{{ asn }}|{{ jd.area.code_start }}|{{ jd.area.code_end }}|{{ jd.area.name }}|{{ jd.category.code }}|{{ jd.category.name }}`
+	ctx := paths.Context{
+		Title: "Title", DocPK: 7, Correspondent: "Sender", DocumentType: "Invoice",
+		StoragePath: "Bills", Tags: []string{"tax", "paid"}, Created: "2026-03-02",
+		Added: "2026-03-04T12:30:00Z", Owner: "owner@example.com", ASN: "42",
+		JDAreaCodeStart: 20, JDAreaCodeEnd: 29, JDAreaName: "Money",
+		JDCategoryCode: 22, JDCategoryName: "Tax",
+	}
+	got, err := paths.Render(tpl, ctx)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	want := "Title|7|Sender|Invoice|Bills|tax,paid|2026-03-02|2026|03|02|2026-03-04T12:30:00Z|2026|03|04|owner@example.com|42|20|29|Money|22|Tax"
+	if got != want {
+		t.Errorf("render mismatch\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestRenderRejectsUnknownAndUnsupportedSyntax(t *testing.T) {
+	cases := []string{
+		`{{ unknown }}`,
+		`{{ title | lower }}`,
+		`{{ }}`,
+		`{{ title`,
+		`title }}`,
+		`{{ {{ title }} }}`,
+		`{% if title %}{{ title }}{% endif %}`,
+		`{# comment #}{{ title }}`,
+	}
+	for _, tpl := range cases {
+		t.Run(tpl, func(t *testing.T) {
+			if _, err := paths.Render(tpl, paths.Context{Title: "Title"}); err == nil {
+				t.Fatal("expected render error")
+			}
+		})
+	}
+}
+
+func TestRenderRejectsOversizedInputAndOutput(t *testing.T) {
+	if _, err := paths.Render(strings.Repeat("x", 16<<10+1), paths.Context{}); err == nil {
+		t.Fatal("expected oversized template error")
+	}
+	if _, err := paths.Render(`{{ title }}`, paths.Context{Title: strings.Repeat("x", 64<<10+1)}); err == nil {
+		t.Fatal("expected oversized output error")
+	}
+}
+
 func TestSanitizePath(t *testing.T) {
 	cases := map[string]string{
 		"20-29 Money/22 Tax/2026/x.pdf": "20-29 Money/22 Tax/2026/x.pdf",

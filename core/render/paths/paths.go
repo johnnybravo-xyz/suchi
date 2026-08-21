@@ -1,6 +1,6 @@
-// Package paths renders storage-path templates via Gonja (Jinja2-
-// compatible). This is what turns a documents row into the human-
-// browsable file-tree projection under $DATA_DIR/rendered/... .
+// Package paths renders bounded storage-path templates. This turns a
+// documents row into the human-browsable file-tree projection under
+// $DATA_DIR/rendered/... .
 //
 // The template surface accepts the same variable names that common
 // DMS storage-path templates use, so imported archives keep their
@@ -33,9 +33,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+)
 
-	"github.com/nikolalohinski/gonja/v2"
-	"github.com/nikolalohinski/gonja/v2/exec"
+const (
+	maxTemplateBytes = 16 << 10
+	maxRenderedBytes = 64 << 10
 )
 
 // Context is what a template renders against. Every field is optional
@@ -62,55 +64,104 @@ type Context struct {
 	JDCategoryName  string
 }
 
-// Render evaluates tpl against ctx. Returns the rendered path (which
-// the caller sanitizes further before touching the filesystem).
+// Render substitutes the documented {{ variable }} placeholders in tpl.
+// Known variables with no value render as empty strings. Unknown variables
+// and Jinja expressions are rejected so configuration mistakes are visible.
+// The caller sanitizes the result further before touching the filesystem.
 func Render(tpl string, ctx Context) (string, error) {
 	if tpl == "" {
 		return "", errors.New("paths: empty template")
 	}
-	t, err := gonja.FromString(tpl)
-	if err != nil {
-		return "", fmt.Errorf("parse template: %w", err)
+	if len(tpl) > maxTemplateBytes {
+		return "", fmt.Errorf("paths: template exceeds %d bytes", maxTemplateBytes)
 	}
-	env := ctxToGonja(ctx)
-	out, err := t.ExecuteToString(exec.NewContext(env))
-	if err != nil {
-		return "", fmt.Errorf("render: %w", err)
+	if strings.Contains(tpl, "{%") || strings.Contains(tpl, "%}") ||
+		strings.Contains(tpl, "{#") || strings.Contains(tpl, "#}") {
+		return "", errors.New("paths: template statements and comments are not supported")
 	}
-	return out, nil
+
+	values := templateValues(ctx)
+	var out strings.Builder
+	for len(tpl) > 0 {
+		open := strings.Index(tpl, "{{")
+		close := strings.Index(tpl, "}}")
+		if close >= 0 && (open < 0 || close < open) {
+			return "", errors.New("paths: unexpected closing delimiter")
+		}
+		if open < 0 {
+			if err := appendBounded(&out, tpl); err != nil {
+				return "", err
+			}
+			break
+		}
+		if err := appendBounded(&out, tpl[:open]); err != nil {
+			return "", err
+		}
+		tpl = tpl[open+2:]
+		close = strings.Index(tpl, "}}")
+		if close < 0 {
+			return "", errors.New("paths: unclosed variable delimiter")
+		}
+		expression := strings.TrimSpace(tpl[:close])
+		if expression == "" {
+			return "", errors.New("paths: empty variable")
+		}
+		if strings.Contains(expression, "{{") || !validVariableName(expression) {
+			return "", fmt.Errorf("paths: unsupported expression %q", expression)
+		}
+		value, ok := values[expression]
+		if !ok {
+			return "", fmt.Errorf("paths: unknown variable %q", expression)
+		}
+		if err := appendBounded(&out, value); err != nil {
+			return "", err
+		}
+		tpl = tpl[close+2:]
+	}
+	return out.String(), nil
 }
 
-// ctxToGonja projects a Context into the map[string]any shape Gonja
-// wants. Nested keys (jd.area.*) become sub-maps.
-func ctxToGonja(c Context) map[string]any {
-	return map[string]any{
-		"title":         c.Title,
-		"doc_pk":        c.DocPK,
-		"correspondent": c.Correspondent,
-		"document_type": c.DocumentType,
-		"storage_path":  c.StoragePath,
-		"tag_list":      strings.Join(c.Tags, ","),
-		"created":       c.Created,
-		"created_year":  pickYear(c.Created),
-		"created_month": pickMonth(c.Created),
-		"created_day":   pickDay(c.Created),
-		"added":         c.Added,
-		"added_year":    pickYear(c.Added),
-		"added_month":   pickMonth(c.Added),
-		"added_day":     pickDay(c.Added),
-		"owner":         c.Owner,
-		"asn":           c.ASN,
-		"jd": map[string]any{
-			"area": map[string]any{
-				"code_start": c.JDAreaCodeStart,
-				"code_end":   c.JDAreaCodeEnd,
-				"name":       c.JDAreaName,
-			},
-			"category": map[string]any{
-				"code": c.JDCategoryCode,
-				"name": c.JDCategoryName,
-			},
-		},
+func appendBounded(out *strings.Builder, value string) error {
+	if out.Len()+len(value) > maxRenderedBytes {
+		return fmt.Errorf("paths: rendered path exceeds %d bytes", maxRenderedBytes)
+	}
+	out.WriteString(value)
+	return nil
+}
+
+func validVariableName(name string) bool {
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func templateValues(c Context) map[string]string {
+	return map[string]string{
+		"title":              c.Title,
+		"doc_pk":             strconv.FormatInt(c.DocPK, 10),
+		"correspondent":      c.Correspondent,
+		"document_type":      c.DocumentType,
+		"storage_path":       c.StoragePath,
+		"tag_list":           strings.Join(c.Tags, ","),
+		"created":            c.Created,
+		"created_year":       pickYear(c.Created),
+		"created_month":      pickMonth(c.Created),
+		"created_day":        pickDay(c.Created),
+		"added":              c.Added,
+		"added_year":         pickYear(c.Added),
+		"added_month":        pickMonth(c.Added),
+		"added_day":          pickDay(c.Added),
+		"owner":              c.Owner,
+		"asn":                c.ASN,
+		"jd.area.code_start": strconv.Itoa(c.JDAreaCodeStart),
+		"jd.area.code_end":   strconv.Itoa(c.JDAreaCodeEnd),
+		"jd.area.name":       c.JDAreaName,
+		"jd.category.code":   strconv.Itoa(c.JDCategoryCode),
+		"jd.category.name":   c.JDCategoryName,
 	}
 }
 
