@@ -67,6 +67,11 @@
   let ngName = $state('')
   let openGroup = $state(null)      // {id, members: []}
   let addUID = $state('')
+
+  function availableGroupUsers() {
+    const memberIDs = new Set((openGroup?.members || []).map(m => Number(m.user_id ?? m.id)))
+    return users.filter(u => !memberIDs.has(Number(u.id)))
+  }
   async function loadGroups() {
     try { const r = await listGroups(); groups = r?.results || r || [] } catch {}
   }
@@ -77,20 +82,27 @@
     catch (ex) { notify?.(ex.message || 'Could not create the group') }
   }
   async function rmGroup(g) {
-    if (!confirm(`Delete group “${g.name}”? Documents shared to it lose that grant.`)) return
+    if (!confirm(`Delete group “${g.name}”? Its members will be removed. Shared access must be revoked first.`)) return
     try { await deleteGroup(g.id); groups = groups.filter(x => x.id !== g.id); notify?.('Group deleted') }
-    catch (ex) { notify?.(ex.message || 'Could not delete') }
+    catch (ex) { notify?.(ex.code === 'delete_conflict' ? 'This group is still used for shared access. Revoke those grants before deleting it.' : (ex.message || 'Could not delete')) }
   }
   async function toggleMembers(g) {
     if (openGroup?.id === g.id) { openGroup = null; return }
+    addUID = ''
     try { const r = await groupMembers(g.id); openGroup = { id: g.id, members: r?.results || r || [] } }
     catch (ex) { notify?.(ex.message || 'Could not load members') }
   }
+
+  async function reloadMembers(g) {
+    const r = await groupMembers(g.id)
+    openGroup = { id: g.id, members: r?.results || r || [] }
+  }
+
   async function addMember(g) {
     const uid = Number(addUID)
     if (!uid) return
-    try { await addGroupMember(g.id, uid); addUID = ''; toggleMembers({ id: -1 }); toggleMembers(g); notify?.('Member added') }
-    catch (ex) { notify?.(ex.message || 'Could not add (check the user id)') }
+    try { await addGroupMember(g.id, uid); addUID = ''; await reloadMembers(g); notify?.('Member added') }
+    catch (ex) { notify?.(ex.message || 'Could not add the member') }
   }
   async function rmMember(g, uid) {
     try { await removeGroupMember(g.id, uid); openGroup = { ...openGroup, members: openGroup.members.filter(m => (m.user_id ?? m.id) !== uid) } }
@@ -267,15 +279,25 @@
               {#each openGroup.members as mrow ((mrow.user_id ?? mrow.id))}
                 <div class="irow" style="padding:5px 0;border:0">
                   <span class="dot accent" style="width:6px;height:6px"></span>
-                  <span class="title grow" style="font-size:.84rem">{mrow.email || mrow.display_name || `user #${mrow.user_id ?? mrow.id}`}</span>
+                  <span class="grow" style="min-width:0">
+                    <span class="title" style="display:block;font-size:.84rem">{mrow.display_name || mrow.email}</span>
+                    {#if mrow.display_name}<span class="sub" style="display:block">{mrow.email}</span>{/if}
+                  </span>
                   <button class="btn sm" onclick={() => rmMember(g, mrow.user_id ?? mrow.id)}>Remove</button>
                 </div>
               {:else}
                 <span class="sub">No members yet.</span>
               {/each}
               <div class="toolbar" style="margin:8px 0 0">
-                <input class="input" style="max-width:130px;padding:4px 10px" type="number" placeholder="user id" bind:value={addUID} />
-                <button class="btn sm" onclick={() => addMember(g)}>Add member</button>
+                <select class="input" style="flex:1;max-width:320px;padding:5px 10px" bind:value={addUID} aria-label="User to add">
+                  <option value="">Select a user by name or email</option>
+                  {#each availableGroupUsers() as u (u.id)}
+                    <option value={String(u.id)} disabled={u.disabled}>
+                      {u.display_name ? `${u.display_name} · ${u.email}` : u.email}{u.disabled ? ' · disabled' : ''}
+                    </option>
+                  {/each}
+                </select>
+                <button class="btn sm" disabled={!addUID} onclick={() => addMember(g)}><Icon name="plus" size={12} /> Add member</button>
               </div>
             </div>
           {/if}

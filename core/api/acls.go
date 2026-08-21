@@ -1,36 +1,54 @@
-// Object-permission grant CRUD. Writes require an admin.
+// Object-permission grant CRUD. Owners and admins manage grants;
+// receiving a grant never confers delegation rights.
 
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
 func (s *Server) ListGrants(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	p := s.requireAuth(w, r)
+	if p == nil {
 		return
 	}
 	kind, id, ok := parseAclPath(w, s, r)
 	if !ok {
 		return
 	}
-	grants, err := authz.NewStore(s.DB).ListGrants(r.Context(), string(kind), id)
+	store := authz.NewStore(s.DB)
+	if !s.requireGrantManager(w, r, store, p, kind, id) {
+		return
+	}
+	grants, err := store.ListGrants(r.Context(), string(kind), id)
 	if err != nil {
 		s.serverErr(w, "acls.list", err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"results": grants})
+	principals, err := store.ListPrincipals(r.Context())
+	if err != nil {
+		s.serverErr(w, "acls.principals", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"results":    grants,
+		"principals": principals,
+	})
 }
 
 // PutGrant — PUT /api/acls/{kind}/{id}.
 // Body: {"principal_kind":"user|group", "principal_id":N, "perm_bits":N}.
 // Idempotent upsert on the (object, principal) tuple.
 func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
-	p := s.requireAdmin(w, r)
+	p := s.requireAuth(w, r)
 	if p == nil {
 		return
 	}
@@ -55,13 +73,30 @@ func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal_id required")
 		return
 	}
-	g, err := authz.NewStore(s.DB).Grant(r.Context(), p.UserID, authz.Grant{
+	if err := authz.ValidatePermBits(body.PermBits); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_permissions",
+			"perm_bits must be View (1), Edit (3), or Full control (7)")
+		return
+	}
+	store := authz.NewStore(s.DB)
+	if !s.requireGrantManager(w, r, store, p, kind, id) {
+		return
+	}
+	g, err := store.Grant(r.Context(), p.UserID, authz.Grant{
 		ObjectKind:    string(kind),
 		ObjectID:      id,
 		PrincipalKind: body.PrincipalKind,
 		PrincipalID:   body.PrincipalID,
 		PermBits:      body.PermBits,
 	})
+	if errors.Is(err, authz.ErrPrincipalNotFound) {
+		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal does not exist")
+		return
+	}
+	if errors.Is(err, authz.ErrObjectNotFound) {
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+		return
+	}
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "grant_failed", err.Error())
 		return
@@ -71,7 +106,8 @@ func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGrant — DELETE /api/acls/{kind}/{id}?principal_kind=…&principal_id=…
 func (s *Server) DeleteGrant(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	p := s.requireAuth(w, r)
+	if p == nil {
 		return
 	}
 	kind, id, ok := parseAclPath(w, s, r)
@@ -88,11 +124,43 @@ func (s *Server) DeleteGrant(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal_id must be positive")
 		return
 	}
-	if err := authz.NewStore(s.DB).Revoke(r.Context(), string(kind), id, pk, pid); err != nil {
+	store := authz.NewStore(s.DB)
+	if !s.requireGrantManager(w, r, store, p, kind, id) {
+		return
+	}
+	if err := store.Revoke(r.Context(), string(kind), id, pk, pid); errors.Is(err, authz.ErrPrincipalNotFound) {
+		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal does not exist")
+		return
+	} else if errors.Is(err, authz.ErrObjectNotFound) {
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+		return
+	} else if err != nil {
 		s.serverErr(w, "acls.revoke", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireGrantManager(w http.ResponseWriter, r *http.Request, store *authz.Store,
+	p *pluginapi.Principal, kind authz.Kind, id int64) bool {
+	allowed, err := store.CanManage(r.Context(), authz.Principal{
+		UserID: p.UserID,
+		Role:   p.Role,
+		Kind:   p.Kind,
+	}, kind, id)
+	if errors.Is(err, authz.ErrObjectNotFound) || errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+		return false
+	}
+	if err != nil {
+		s.serverErr(w, "acls.manage", err)
+		return false
+	}
+	if !allowed {
+		s.writeError(w, http.StatusForbidden, "forbidden", "only the owner or an admin can manage access")
+		return false
+	}
+	return true
 }
 
 // parseAclPath reads {kind}/{id} from the mux + validates kind against

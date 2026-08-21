@@ -37,6 +37,7 @@ func DocVisibilityWhere(userID int64, groupIDs []int64) (string, []any) {
 				SELECT 1 FROM object_acls a
 				WHERE a.object_kind = 'document' AND a.object_id = d.id
 				  AND a.principal_kind = 'user' AND a.principal_id = ?
+				  AND (a.perm_bits & 1) = 1
 			)
 		)`, []any{userID, userID}
 	}
@@ -46,6 +47,7 @@ func DocVisibilityWhere(userID int64, groupIDs []int64) (string, []any) {
 		OR EXISTS (
 			SELECT 1 FROM object_acls a
 			WHERE a.object_kind = 'document' AND a.object_id = d.id
+			  AND (a.perm_bits & 1) = 1
 			  AND (
 				(a.principal_kind = 'user'  AND a.principal_id = ?)
 				OR (a.principal_kind = 'group' AND a.principal_id IN (` + placeholders + `))

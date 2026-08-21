@@ -119,6 +119,10 @@ func (s *Server) ListGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	members, err := authz.NewStore(s.DB).ListMembers(r.Context(), id)
+	if errors.Is(err, authz.ErrPrincipalNotFound) {
+		s.writeError(w, http.StatusNotFound, "not_found", "group not found")
+		return
+	}
 	if err != nil {
 		s.serverErr(w, "groups.members.list", err)
 		return
@@ -142,7 +146,10 @@ func (s *Server) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "user_id required")
 		return
 	}
-	if err := authz.NewStore(s.DB).AddMember(r.Context(), id, body.UserID); err != nil {
+	if err := authz.NewStore(s.DB).AddMember(r.Context(), id, body.UserID); errors.Is(err, authz.ErrPrincipalNotFound) {
+		s.writeError(w, http.StatusNotFound, "not_found", "group or user not found")
+		return
+	} else if err != nil {
 		s.serverErr(w, "groups.members.add", err)
 		return
 	}

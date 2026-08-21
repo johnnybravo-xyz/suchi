@@ -1,7 +1,8 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, listJDCategories, previewPath, downloadPath, similarDocs } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, listJDCategories, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
+  import { session } from '../lib/session.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
   let { id, notify } = $props()
@@ -17,6 +18,15 @@
   let shareURL = $state('')
   let jdCats = $state([])
   let similar = $state(null)   // {results, method} | null
+  let access = $state(null)    // owner/admin-only {results, principals}
+  let canManageAccess = $state(false)
+  let accessDraft = $state({ principal: '', perm_bits: '1' })
+
+  const ACCESS_LEVELS = [
+    ['1', 'View'],
+    ['3', 'Edit'],
+    ['7', 'Full control'],
+  ]
 
   const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
   // Inline-previewable formats: archive_blob is always PDF, and browsers
@@ -48,13 +58,84 @@
 
   async function load() {
     err = ''
+    access = null
+    canManageAccess = false
     try {
       doc = await getDocument(id)
       titleDraft = doc.title
       documentVersions(id).then(v => (versions = v?.results || v || [])).catch(() => {})
       similarDocs(id).then(r => (similar = r)).catch(() => (similar = null))
       listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
+      loadAccess()
     } catch (ex) { err = ex.message || 'Could not load this document.' }
+  }
+
+  async function loadAccess() {
+    try {
+      access = await listGrants('document', id)
+      canManageAccess = true
+    } catch (ex) {
+      access = null
+      canManageAccess = false
+      if (ex.status !== 403) notify?.(ex.message || 'Could not load document access')
+    }
+  }
+
+  function principalKey(principal) {
+    return `${principal.kind}:${principal.id}`
+  }
+
+  function principalFor(grant) {
+    return access?.principals?.find(p => p.kind === grant.principal_kind && Number(p.id) === Number(grant.principal_id))
+  }
+
+  function availablePrincipals(kind) {
+    const granted = new Set((access?.results || []).map(g => `${g.principal_kind}:${g.principal_id}`))
+    return (access?.principals || []).filter(p =>
+      p.kind === kind && !p.disabled && !granted.has(principalKey(p)) &&
+      !(p.kind === 'user' && Number(p.id) === Number(session.user?.user_id))
+    )
+  }
+
+  function accessLabel(bits) {
+    return ACCESS_LEVELS.find(([value]) => Number(value) === Number(bits))?.[1] || 'Custom'
+  }
+
+  async function grantAccess(e) {
+    e.preventDefault()
+    const [principalKind, rawID] = accessDraft.principal.split(':')
+    const principalID = Number(rawID)
+    if (!principalKind || !principalID) return
+    try {
+      await putGrant('document', id, {
+        principal_kind: principalKind,
+        principal_id: principalID,
+        perm_bits: Number(accessDraft.perm_bits),
+      })
+      accessDraft = { principal: '', perm_bits: '1' }
+      await loadAccess()
+      notify?.('Access granted')
+    } catch (ex) { notify?.(ex.message || 'Could not grant access') }
+  }
+
+  async function changeAccess(grant, bits) {
+    try {
+      await putGrant('document', id, {
+        principal_kind: grant.principal_kind,
+        principal_id: grant.principal_id,
+        perm_bits: Number(bits),
+      })
+      grant.perm_bits = Number(bits)
+      notify?.('Access updated')
+    } catch (ex) { notify?.(ex.message || 'Could not update access') }
+  }
+
+  async function revokeAccess(grant) {
+    try {
+      await deleteGrant('document', id, grant.principal_kind, grant.principal_id)
+      access = { ...access, results: access.results.filter(g => g.id !== grant.id) }
+      notify?.('Access revoked')
+    } catch (ex) { notify?.(ex.message || 'Could not revoke access') }
   }
 
   async function save(patch, label) {
@@ -138,7 +219,7 @@
     </button>
   {/if}
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
-  <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
+  {#if canManageAccess}<button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>{/if}
   <button class="btn sm danger" onclick={trash}><Icon name="trash" size={13} /> Trash</button>
 </div>
 
@@ -259,6 +340,58 @@
         {/if}
       </div>
 
+      {#if access}
+        <div class="card">
+          <h3 style="display:flex;align-items:center;gap:8px">
+            <Icon name="shield" size={14} /> Access
+            <span class="pill">{access.results?.length || 0}</span>
+          </h3>
+          <form class="toolbar" style="margin-bottom:{access.results?.length ? '10px' : '0'}" onsubmit={grantAccess}>
+            <select class="input" style="flex:1;max-width:none;min-width:180px" bind:value={accessDraft.principal} aria-label="Person or group">
+              <option value="">Select a person or group</option>
+              {#if availablePrincipals('user').length}
+                <optgroup label="People">
+                  {#each availablePrincipals('user') as person (person.id)}
+                    <option value={principalKey(person)}>{person.name}{person.email && person.email !== person.name ? ` · ${person.email}` : ''}</option>
+                  {/each}
+                </optgroup>
+              {/if}
+              {#if availablePrincipals('group').length}
+                <optgroup label="Groups">
+                  {#each availablePrincipals('group') as group (group.id)}
+                    <option value={principalKey(group)}>{group.name}</option>
+                  {/each}
+                </optgroup>
+              {/if}
+            </select>
+            <select class="input" style="max-width:130px" bind:value={accessDraft.perm_bits} aria-label="Access level">
+              {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
+            </select>
+            <button class="btn primary sm" disabled={!accessDraft.principal}><Icon name="plus" size={12} /> Add</button>
+          </form>
+          {#if access.results?.length}
+            <div class="index" style="border:0">
+              {#each access.results as grant (grant.id)}
+                {@const principal = principalFor(grant)}
+                <div class="irow" style="padding:7px 2px;cursor:default">
+                  <span class="dot" class:accent={grant.principal_kind === 'group'}></span>
+                  <span class="grow" style="min-width:0">
+                    <span class="title" style="display:block;font-size:.82rem">{principal?.name || `${grant.principal_kind} #${grant.principal_id}`}</span>
+                    <span class="sub" style="display:block;overflow:hidden;text-overflow:ellipsis">{principal?.email || (grant.principal_kind === 'group' ? 'Group' : '')}</span>
+                  </span>
+                  <select class="input" style="width:118px;padding:4px 7px;font-size:.76rem" value={String(grant.perm_bits)}
+                          aria-label={`Access for ${principal?.name || grant.principal_kind}`}
+                          title={accessLabel(grant.perm_bits)} onchange={(e) => changeAccess(grant, e.target.value)}>
+                    {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
+                  </select>
+                  <button class="btn sm danger" title="Revoke access" aria-label="Revoke access" onclick={() => revokeAccess(grant)}><Icon name="trash" size={12} /></button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if versions.length > 1}
         <div class="card">
           <h3>Versions</h3>
@@ -365,4 +498,3 @@
     </div>
   </div>
 {/if}
-
