@@ -1,12 +1,8 @@
 go 1.26.0
 
 use (
-	./core
-	./distro
+	.
 	./hack/emlfixtures
 	./hack/transcript
 	./plugin-api
-	./plugins/llm-classifier
-	./plugins/local-auth
-	./plugins/oidc
 )

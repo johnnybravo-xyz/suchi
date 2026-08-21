@@ -32,7 +32,7 @@ RUN wget -q -O source.tar.gz \
 
 FROM ${GO_IMAGE} AS build
 WORKDIR /src
-COPY go.work go.work.sum* ./
+COPY go.mod go.sum go.work go.work.sum* ./
 COPY plugin-api plugin-api
 COPY core core
 COPY plugins plugins
@@ -40,8 +40,7 @@ COPY distro distro
 COPY hack hack
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    cd distro && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/suchi ./cmd/suchi
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/suchi ./distro/cmd/suchi
 
 FROM ${DEBIAN_IMAGE} AS full
 RUN apt-get update && apt-get install -y --no-install-recommends \

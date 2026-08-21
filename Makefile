@@ -1,12 +1,12 @@
 .PHONY: build test vet lint fmt fmt-check tidy check run clean smoke install-hooks ui ui-check ui-clean bench-check release
 
 BIN := $(PWD)/dist/suchi
-MODULES := plugin-api core plugins/local-auth plugins/oidc plugins/llm-classifier distro hack/emlfixtures hack/transcript
+MODULES := . plugin-api hack/emlfixtures hack/transcript
 STATICCHECK_VERSION := v0.7.0
 
 build:
 	@mkdir -p dist
-	cd distro && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/suchi
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN) ./distro/cmd/suchi
 	@echo "built $(BIN) ($$(du -h $(BIN) | cut -f1))"
 
 test:

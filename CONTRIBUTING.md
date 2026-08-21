@@ -5,7 +5,7 @@ still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.26. UI changes also require Bun or npm.
+The workspace uses Go 1.26. UI changes also require Bun.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git
