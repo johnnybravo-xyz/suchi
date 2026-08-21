@@ -13,7 +13,7 @@ accounts and work or school accounts. Ordinary users only need to click
 
 ## Sign in
 
-1. Open **Admin > Mail intake**, add a mailbox, and choose **Microsoft**.
+1. Open **Settings > Mailboxes**, add a mailbox, and choose **Microsoft**.
 2. Enter the mailbox address and choose its Suchi owner.
 3. Click **Sign in with Microsoft**.
 4. Open the displayed Microsoft URL in any browser and enter the device code.
@@ -65,15 +65,19 @@ Create the registration in Microsoft Entra:
 7. Grant tenant admin consent when organization policy requires it.
 8. Copy the Application (client) ID. Do not create a client secret.
 
-Open **Admin > Mail intake > Advanced Microsoft settings**, enter the client
-ID, and save. New sign-ins and explicit reauthentication use it immediately.
-Clear the field to restore the environment fallback or Suchi registration.
+Open **Settings > Mailboxes**, use the Microsoft sign-in settings button,
+enter the client ID, and save. New sign-ins and explicit reauthentication use
+it immediately. Clear the field to restore the environment fallback or Suchi
+registration.
 
 Precedence is:
 
 1. stored web override
 2. `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT` boot fallback
 3. Suchi's shipped registration
+
+This is the Microsoft-specific form of Suchi's documented [configuration
+precedence](/config#precedence).
 
 Changing the web override does not require a restart. Existing mailboxes keep
 refreshing with the client ID stored in their credential envelope. Reauthenticate

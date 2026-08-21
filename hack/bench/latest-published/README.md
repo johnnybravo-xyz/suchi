@@ -14,5 +14,5 @@ tracked snapshot for docs.
 
 ## Snapshot
 
-Captured 2026-08-18 during the v0.1 beta audit. Host details and scalar
+Captured 2026-08-21 during the v0.1 beta audit. Host details and scalar
 results are recorded in `summary.md`.
