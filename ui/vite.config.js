@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-// Dev: run `just serve` (suchi on :8000) alongside `npm run dev`;
+// Dev: run `make run` (suchi on :8000) alongside `make ui-dev`;
 // every /api|/preview|/download|/login call proxies to the Go binary.
 export default defineConfig({
   plugins: [svelte()],

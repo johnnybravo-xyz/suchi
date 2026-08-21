@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-# One runner per job walks the full module / target list sequentially.
+# One runner per job walks the full module and target list sequentially.
 # Fanning these out as matrices caused codeload.github.com to 429 on
 # parallel setup-go downloads (12 concurrent fetches of the same tarball).
 # Sequential in-runner loops keep total wall-clock similar while cutting
@@ -38,14 +38,13 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: '**/go.sum'
       - name: cross-compile
-        working-directory: distro
         run: |
           set -e
           targets="linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
           for t in $targets; do
             export GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0
             echo "::group::$GOOS/$GOARCH"
-            go build -trimpath -ldflags="-s -w" -o /tmp/suchi-$GOOS-$GOARCH ./cmd/suchi
+            go build -trimpath -ldflags="-s -w" -o /tmp/suchi-$GOOS-$GOARCH ./distro/cmd/suchi
             ls -la /tmp/suchi-$GOOS-$GOARCH
             echo "::endgroup::"
           done
@@ -54,11 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
+          bun-version: 1.3.14
       - run: make ui-check
 
   lint:

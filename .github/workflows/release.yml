@@ -2,10 +2,10 @@ name: release
 
 # Manual-only trigger. `git push --tags` does NOT fire this workflow —
 # a human still has to click "Run workflow" in the GitHub UI or run
-# `just release VERSION=vX.Y.Z` locally. The two-step cut:
+# `make release VERSION=vX.Y.Z` locally. The two-step cut:
 #
 #   1. git tag -s vX.Y.Z -m "suchi X.Y.Z"; git push origin vX.Y.Z
-#   2. click "Run workflow" against ref=vX.Y.Z (or `just release
+#   2. click "Run workflow" against ref=vX.Y.Z (or `make release
 #      VERSION=vX.Y.Z`)
 #
 # The tag has to exist on origin first — the dispatch uses `ref` to
@@ -210,7 +210,6 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
-        working-directory: distro
         run: |
           set -euo pipefail
           bin=suchi-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}
@@ -218,7 +217,7 @@ jobs:
           go build \
             -trimpath \
             -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o "$RUNNER_TEMP/$bin" ./cmd/suchi
+            -o "$RUNNER_TEMP/$bin" ./distro/cmd/suchi
           # emit a per-binary sha256 line (concatenated later)
           ( cd "$RUNNER_TEMP" && sha256sum "$bin" > "$bin.sha256" )
       - uses: actions/upload-artifact@v4

@@ -36,9 +36,8 @@ jobs:
             **/go.sum
 
       - name: build suchi
-        working-directory: distro
         run: |
-          CGO_ENABLED=0 go build -trimpath -o /tmp/suchi ./cmd/suchi
+          CGO_ENABLED=0 go build -trimpath -o /tmp/suchi ./distro/cmd/suchi
 
       - name: install sqlite3 CLI
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends sqlite3

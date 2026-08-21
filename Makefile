@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke install-hooks ui ui-check ui-clean bench-check release
+.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-clean docs-dev docs-check bench-check release
 
 BIN := $(PWD)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/transcript
@@ -53,7 +53,7 @@ clean:
 # Manually trigger the release workflow. Requires `gh` and an existing
 # origin tag (create with `git tag -s v0.1.0 && git push origin v0.1.0`).
 # `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` runs
-# the artifacts-only smoke path. Mirrors `just release`.
+# the artifacts-only smoke path.
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)
@@ -64,30 +64,35 @@ release:
 	@echo "watch: gh run watch --workflow release.yml"
 
 # Build the Svelte SPA and refresh core/ui/spa/dist (embedded into the
-# Go binary). Prefers bun; falls back to npm. Contributors who don't
-# touch the UI never need either — the built dist is committed.
+# Go binary). Contributors who don't touch the UI do not need Bun; the
+# built dist is committed.
 ui:
-	@cd ui && \
-	  if command -v bun >/dev/null 2>&1; then \
-	    bun install --frozen-lockfile && bun run build; \
-	  else \
-	    npm ci && npm run build; \
-	  fi
+	@cd ui && bun install --frozen-lockfile && bun run build
 	@rm -rf core/ui/spa/dist && mkdir -p core/ui/spa
 	@cp -r ui/dist core/ui/spa/dist
 	@echo "embedded $$(du -sh core/ui/spa/dist | cut -f1) — commit core/ui/spa/dist"
 
+ui-dev:
+	@cd ui && bun run dev
+
 ui-check:
-	@cd ui && \
-	  if command -v bun >/dev/null 2>&1; then \
-	    bun install --frozen-lockfile && bun run check && bun test && bun run build; \
-	  else \
-	    npm ci && npm run check && npm test && npm run build; \
-	  fi
+	@cd ui && bun install --frozen-lockfile && bun run check && bun test && bun run build
 	@diff -qr ui/dist core/ui/spa/dist
 
 ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
+
+docs-dev:
+	@cd docs && bunx mint@latest dev
+
+docs-check:
+	@cd docs && bunx mint@latest broken-links
+
+smoke-ingest:
+	@./hack/local-ingest-test.sh
+
+smoke-mail:
+	@cd deploy/mail-mbsync && ./smoke-test.sh
 
 # Copy tracked hooks into .git/hooks. Idempotent; re-run after adding a
 # new script under hooks/. Uses install -D so a fresh clone that

@@ -10,8 +10,8 @@ Run the backend from the repository root, then start Vite:
 ```sh
 make run
 cd ui
-npm ci
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Vite serves the app on `http://127.0.0.1:5173` and proxies backend routes to
@@ -24,8 +24,8 @@ From the repository root:
 - `make ui` installs dependencies, builds the SPA, and refreshes
   `core/ui/spa/dist/`.
 
-Use `npm run check` for diagnostics without a production build. Bun can replace
-npm; both lockfiles are committed and checked by the root Make targets.
+Use `bun run check` for diagnostics without a production build. `bun.lock` is
+the only frontend lockfile and is checked by the root Make targets.
 
 ## Layout
 

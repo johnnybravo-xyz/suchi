@@ -46,7 +46,7 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 		// silent 404.
 		mux.HandleFunc("GET /app/", func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w,
-				"SPA bundle missing (run `just ui-build` and rebuild suchi)",
+				"SPA bundle missing (run `make ui` and rebuild suchi)",
 				http.StatusServiceUnavailable)
 		})
 		return
