@@ -21,8 +21,6 @@ import (
 // is one grep away.
 const (
 	KeySetupCompletedAt = "setup.completed_at"
-	KeySetupStepsDone   = "setup.steps_done"
-	KeySetupStepsSkip   = "setup.steps_skipped"
 	KeySetupIntent      = "setup.intent"
 
 	KeyLLMEndpointURL  = "llm.endpoint_url"
@@ -122,46 +120,22 @@ func Delete(ctx context.Context, database *db.DB, key string) error {
 
 // ---------- SetupState — the wizard's specific surface ----------
 
-// StepStatus records per-step outcome. "done" and "skipped" are the
-// only observed states; a step not present is implicitly pending.
-type StepStatus string
-
-const (
-	StepDone    StepStatus = "done"
-	StepSkipped StepStatus = "skipped"
-)
-
 // SetupState is the wizard's view of onboarding progress.
 type SetupState struct {
-	CompletedAt       *int64                `json:"completed_at,omitempty"` // unix seconds
-	Steps             map[string]StepStatus `json:"steps"`
-	Intent            string                `json:"intent,omitempty"`
-	RecommendedPreset string                `json:"recommended_preset,omitempty"`
-	CurrentPreset     string                `json:"current_preset,omitempty"`
+	CompletedAt       *int64 `json:"completed_at,omitempty"` // unix seconds
+	Intent            string `json:"intent,omitempty"`
+	RecommendedPreset string `json:"recommended_preset,omitempty"`
+	CurrentPreset     string `json:"current_preset,omitempty"`
 }
 
 // LoadSetupState reads the wizard's state. Missing keys → zero-value.
 func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
-	s := &SetupState{Steps: map[string]StepStatus{}}
+	s := &SetupState{}
 	var completedAt int64
 	if err := Get(ctx, database, KeySetupCompletedAt, &completedAt); err == nil {
 		s.CompletedAt = &completedAt
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
-	}
-	var done []string
-	if err := Get(ctx, database, KeySetupStepsDone, &done); err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-	for _, step := range done {
-		s.Steps[step] = StepDone
-	}
-	var skipped []string
-	if err := Get(ctx, database, KeySetupStepsSkip, &skipped); err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-	for _, step := range skipped {
-		s.Steps[step] = StepSkipped
 	}
 	if err := Get(ctx, database, KeySetupIntent, &s.Intent); err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -170,33 +144,6 @@ func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 		return nil, err
 	}
 	return s, nil
-}
-
-// RecordStep marks step as done or skipped. Preserves the OTHER list.
-func RecordStep(ctx context.Context, database *db.DB, step string, status StepStatus) error {
-	if status != StepDone && status != StepSkipped {
-		return fmt.Errorf("bad status %q", status)
-	}
-	s, err := LoadSetupState(ctx, database)
-	if err != nil {
-		return err
-	}
-	// Remove from the opposite list if it existed there. Same-list
-	// dupes are handled by the dedup below.
-	s.Steps[step] = status
-	var done, skipped []string
-	for k, v := range s.Steps {
-		switch v {
-		case StepDone:
-			done = append(done, k)
-		case StepSkipped:
-			skipped = append(skipped, k)
-		}
-	}
-	if err := Set(ctx, database, KeySetupStepsDone, done); err != nil {
-		return err
-	}
-	return Set(ctx, database, KeySetupStepsSkip, skipped)
 }
 
 // MarkSetupComplete stamps the wizard-finished timestamp. Idempotent —

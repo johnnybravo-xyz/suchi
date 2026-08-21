@@ -21,19 +21,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
-// StepNames is the wizard's step allowlist. Any /step/{name} endpoint
-// call not matching this set returns 400.
-var StepNames = map[string]bool{
-	"archive":     true,
-	"users":       true,
-	"mail":        true,
-	"llm":         true,
-	"rules":       true,
-	"sources":     true,
-	"preferences": true,
-	"done":        true,
-}
-
 var setupIntentPresets = map[string]string{
 	"personal":       "solo",
 	"household":      "household",
@@ -46,7 +33,6 @@ var setupIntentPresets = map[string]string{
 func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/setup/state", s.SetupState)
 	mux.HandleFunc("POST /api/admin/setup/intent", s.SaveSetupIntent)
-	mux.HandleFunc("POST /api/admin/setup/step/{name}", s.SetupStep)
 	mux.HandleFunc("POST /api/admin/setup/complete", s.SetupComplete)
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
@@ -63,7 +49,7 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/settings/ingest", s.SaveIngestSettings)
 }
 
-// ---------- state + step recording ----------
+// ---------- state ----------
 
 // SetupState returns the wizard's progress.
 func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
@@ -106,40 +92,6 @@ func (s *Server) SaveSetupIntent(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"intent": body.Intent, "recommended_preset": recommended,
 	})
-}
-
-// SetupStep records a step as done or skipped. Body: {"status":"done"|"skipped"}.
-func (s *Server) SetupStep(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
-		return
-	}
-	name := r.PathValue("name")
-	if !StepNames[name] {
-		s.writeError(w, http.StatusBadRequest, "unknown_step", "unknown step")
-		return
-	}
-	var body struct {
-		Status string `json:"status"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
-		return
-	}
-	var status settings.StepStatus
-	switch body.Status {
-	case "done":
-		status = settings.StepDone
-	case "skipped":
-		status = settings.StepSkipped
-	default:
-		s.writeError(w, http.StatusBadRequest, "bad_status", `status must be "done" or "skipped"`)
-		return
-	}
-	if err := settings.RecordStep(r.Context(), s.DB, name, status); err != nil {
-		s.serverErr(w, "setup.step", err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // SetupComplete stamps the wizard-finished timestamp.

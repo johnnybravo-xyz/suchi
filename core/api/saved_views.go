@@ -1,12 +1,9 @@
-// Saved views + ui_settings + trash listing.
+// Saved views + trash listing.
 //
-// Saved views: named query + display config, per user. Not shared —
-// each user owns their own set. Client hits POST /api/saved_views/ with
+// Saved views: named query + display config. Each user owns their own set and
+// may expose individual views to other users. Client hits POST /api/saved_views/ with
 // {name, filter_json, display, position} and later reads them via
 // GET /api/saved_views/. UNIQUE(owner_id, name) prevents duplicates.
-//
-// UI settings: opaque JSON blob per user. One-row-per-owner table.
-// Client PUTs its full desired-state JSON; suchi doesn't parse it.
 //
 // Trash listing: GET /api/trash/ returns the soft-deleted docs the
 // caller owns (or all of them for admin). Existing POST /api/documents/
@@ -18,7 +15,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -309,68 +305,6 @@ func (s *Server) DeleteSavedView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.serverErr(w, "saved_views.delete", err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---------- UI settings ----------
-
-// GetUISettings — GET /api/ui_settings/. Returns the caller's blob,
-// or {} for a first-time reader.
-func (s *Server) GetUISettings(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
-		return
-	}
-	var blob string
-	err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT settings FROM ui_settings WHERE owner_id = ?", p.UserID).Scan(&blob)
-	if errors.Is(err, sql.ErrNoRows) {
-		blob = "{}"
-	} else if err != nil {
-		s.serverErr(w, "ui_settings.get", err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(blob))
-}
-
-// PutUISettings — PUT /api/ui_settings/. Body is opaque JSON.
-// UPSERT semantics — one row per user, always. Empty body → reset
-// to {}.
-func (s *Server) PutUISettings(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
-		return
-	}
-	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 128*1024))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
-		return
-	}
-	blob := strings.TrimSpace(string(bodyBytes))
-	if blob == "" {
-		blob = "{}"
-	}
-	if !json.Valid([]byte(blob)) {
-		s.writeError(w, http.StatusBadRequest, "bad_json", "body must be valid JSON")
-		return
-	}
-	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(r.Context(), `
-			INSERT INTO ui_settings(owner_id, settings, updated_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(owner_id) DO UPDATE SET
-				settings = excluded.settings,
-				updated_at = excluded.updated_at
-		`, p.UserID, blob, time.Now().Unix())
-		return err
-	})
-	if err != nil {
-		s.serverErr(w, "ui_settings.put", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

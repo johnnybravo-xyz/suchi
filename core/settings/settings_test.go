@@ -135,7 +135,7 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-func TestSetupState_EmptyIsPendingEverywhere(t *testing.T) {
+func TestSetupState_Empty(t *testing.T) {
 	d := setupDB(t)
 	s, err := settings.LoadSetupState(context.Background(), d)
 	if err != nil {
@@ -143,9 +143,6 @@ func TestSetupState_EmptyIsPendingEverywhere(t *testing.T) {
 	}
 	if s.CompletedAt != nil {
 		t.Error("fresh setup should not have completed_at")
-	}
-	if len(s.Steps) != 0 {
-		t.Errorf("fresh setup should have no steps recorded; got %v", s.Steps)
 	}
 }
 
@@ -164,41 +161,6 @@ func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
 	}
 	if s.Intent != "household" || s.CurrentPreset != "household" {
 		t.Fatalf("setup state = %#v", s)
-	}
-}
-
-func TestRecordStep_DoneThenSkipped(t *testing.T) {
-	d := setupDB(t)
-	ctx := context.Background()
-	if err := settings.RecordStep(ctx, d, "welcome", settings.StepDone); err != nil {
-		t.Fatal(err)
-	}
-	// Toggling to skipped should move it, not duplicate.
-	if err := settings.RecordStep(ctx, d, "welcome", settings.StepSkipped); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := settings.LoadSetupState(ctx, d)
-	if s.Steps["welcome"] != settings.StepSkipped {
-		t.Errorf("expected welcome=skipped, got %v", s.Steps["welcome"])
-	}
-	// And no stale "done" copy hangs around.
-	count := 0
-	for k, v := range s.Steps {
-		if k == "welcome" {
-			count++
-		}
-		_ = v
-	}
-	if count != 1 {
-		t.Errorf("expected exactly one welcome entry, got %d", count)
-	}
-}
-
-func TestRecordStep_BadStatusRejected(t *testing.T) {
-	d := setupDB(t)
-	err := settings.RecordStep(context.Background(), d, "welcome", settings.StepStatus("weird"))
-	if err == nil {
-		t.Fatal("expected error for bad status")
 	}
 }
 

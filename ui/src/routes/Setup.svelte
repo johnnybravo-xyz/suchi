@@ -1,11 +1,9 @@
 <script>
-  import { setupState, setupStep, setupComplete, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
+  import { setupState, setupComplete, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
            listPresets } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
-  import { go } from '../lib/router.svelte.js'
-  import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
 
@@ -40,7 +38,6 @@
   let presets = $state(FALLBACK_PRESETS)
   listPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
 
-  let steps = $state({})          // name -> 'done' | 'skipped'
   let cur = $state('archive')
   let busy = $state(false)
   let err = $state('')
@@ -73,7 +70,6 @@
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '' })
 
   setupState().then(st => {
-    steps = st?.steps || {}
     intent = st?.intent || ''
     const selected = st?.current_preset || st?.recommended_preset
     if (selected) preset.preset_id = selected
@@ -152,15 +148,9 @@
   loadIngest()
 
   const idx = $derived(STEPS.findIndex(s => s.name === cur))
-  const doneCount = $derived(STEPS.filter(s => steps[s.name] === 'done' || steps[s.name] === 'skipped').length)
 
-  async function mark(status) {
-    err = ''
-    try {
-      await setupStep(cur, status)
-      steps = { ...steps, [cur]: status }
-      if (idx < STEPS.length - 1) cur = STEPS[idx + 1].name
-    } catch (ex) { err = ex.message || 'Could not record the step.' }
+  function advance() {
+    if (idx < STEPS.length - 1) cur = STEPS[idx + 1].name
   }
 
   async function saveAnd(fn, label) {
@@ -168,7 +158,7 @@
     try {
       const result = await fn()
       notify?.(typeof label === 'function' ? label(result) : label)
-      await mark('done')
+      advance()
     }
     catch (ex) { err = ex.message || 'The server rejected that.' }
     finally { busy = false }
@@ -233,14 +223,11 @@
 
 <div class="wizard">
   <aside class="wiz-steps">
-    <div class="side-head" style="padding-left:0">Setup · {doneCount}/{STEPS.length}</div>
-    {#each STEPS as s, i}
+    <div class="side-head" style="padding-left:0">Setup</div>
+    {#each STEPS as s}
       <button class="wiz-step" class:on={cur === s.name} onclick={() => (cur = s.name)}>
-        <span class="dot" class:ok={steps[s.name] === 'done'}
-              class:warn={steps[s.name] === 'skipped'}
-              class:accent={cur === s.name && !steps[s.name]}></span>
+        <span class="dot" class:accent={cur === s.name}></span>
         <span class="grow">{s.label}</span>
-        {#if steps[s.name] === 'skipped'}<span class="sub">skipped</span>{/if}
       </button>
     {/each}
     <button class="btn primary" style="margin-top:14px;justify-content:center" onclick={finish} disabled={busy}>
@@ -312,9 +299,13 @@
         {/if}
       {:else}
         <div class="toolbar">
-          <button class="btn sm" onclick={() => mark('skipped')}>Skip for now</button>
+          <button class="btn sm" onclick={advance}>Skip for now</button>
         </div>
       {/if}
+      <p class="migration-note">
+        Moving an existing archive? Large export bundles are safer through the CLI.
+        <a href="https://docs.suchi.page/importer" target="_blank" rel="noopener">Read the migration guide</a>.
+      </p>
 
     {:else if cur === 'users'}
       <h3>Add another person</h3>
@@ -342,7 +333,7 @@
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !user.email || !user.password}
                 onclick={() => saveAnd(createSetupUser, 'User created')}>Create user</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Just me for now</button>
+        <button class="btn sm" onclick={advance}>Just me for now</button>
       </div>
 
     {:else if cur === 'sources'}
@@ -360,7 +351,7 @@
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !ingest.fs_watch_dir || !ingest.fs_watch_owner_email}
                 onclick={() => saveAnd(() => saveIngestSettings(ingest), 'Ingest source saved')}>Save source</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Uploads only</button>
+        <button class="btn sm" onclick={advance}>Uploads only</button>
       </div>
 
     {:else if cur === 'mail'}
@@ -368,8 +359,8 @@
       <p class="wiz-p">Point suchi at one or more mailboxes and forwarded documents file themselves. Credentials stay server-side; the password field never reads back.</p>
       <EmailAccounts {notify} users={mailUsers} />
       <div class="toolbar" style="margin-top:12px">
-        <button class="btn primary sm" onclick={() => mark('done')}>Continue</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Skip for now</button>
+        <button class="btn primary sm" onclick={advance}>Continue</button>
+        <button class="btn sm" onclick={advance}>Skip for now</button>
       </div>
 
     {:else if cur === 'llm'}
@@ -439,11 +430,11 @@
     {:else if cur === 'rules'}
       <h3>Rules</h3>
       <p class="wiz-p">Your preset can install starter filing rules and automations. Preset-owned automations appear under the "Owned by <em>&lt;preset&gt;</em> filing tree" pill; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
-      <p class="wiz-p">Automations have a visual editor. Flat rule management is API-only in v0.1.</p>
+		<p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
-        <button class="btn sm" onclick={() => mark('done')}>Done</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Skip</button>
+        <button class="btn sm" onclick={advance}>Done</button>
+        <button class="btn sm" onclick={advance}>Skip</button>
       </div>
 
     {:else if cur === 'preferences'}
@@ -459,7 +450,7 @@
                   backup_interval_hours: Number(prefs.backup_interval_hours) || 0,
                   ocr_languages: prefs.ocr_languages.split(',').map(x => x.trim()).filter(Boolean),
                 }), 'Preferences saved')}>Save preferences</button>
-        <button class="btn sm" onclick={() => mark('skipped')}>Defaults are fine</button>
+        <button class="btn sm" onclick={advance}>Defaults are fine</button>
       </div>
     {/if}
   </div>
@@ -476,11 +467,8 @@
   .wiz-step:hover { background: var(--surface-2); color: var(--ink); }
   .wiz-step.on { background: var(--tint); color: var(--ink); font-weight: 600; }
   .wiz-step .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
-  .wiz-step .dot.ok { background: var(--ok); }
-  .wiz-step .dot.warn { background: var(--warn); }
   .wiz-step .dot.accent { background: var(--accent); }
   .wiz-step .grow { flex: 1; }
-  .wiz-step .sub { font-size: .68rem; color: var(--faint); }
   .wiz-body { min-height: 340px; }
   .wiz-p { color: var(--muted); font-size: .92rem; margin: 6px 0 16px; max-width: 46em; }
   .wiz-check { display: flex; gap: 9px; align-items: baseline; font-size: .86rem; color: var(--muted); margin: 0 0 14px; }
@@ -496,6 +484,7 @@
   .intent-choice.on { border-color: var(--accent); background: var(--tint); }
   .intent-choice .sub { color: var(--muted); font-size: .78rem; line-height: 1.35; }
   .section-heading { margin-top: 22px; }
+  .migration-note { margin: 18px 0 0; color: var(--faint); font-size: .76rem; }
   .range { width: 100%; accent-color: var(--accent); }
   .test-result {
     display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--ok);

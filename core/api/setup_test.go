@@ -111,13 +111,18 @@ func TestSetupIntent_PersistsRecommendation(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"recommended_preset":"freelance"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if err := settings.Set(req.Context(), d, settings.KeyPreset, "solo"); err != nil {
+		t.Fatal(err)
+	}
 
 	stateReq := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
 	stateReq = stateReq.WithContext(auth.WithPrincipal(stateReq.Context(), admin))
 	stateRec := httptest.NewRecorder()
 	s.SetupState(stateRec, stateReq)
 	if stateRec.Code != http.StatusOK || !strings.Contains(stateRec.Body.String(), `"intent":"freelance"`) ||
-		!strings.Contains(stateRec.Body.String(), `"recommended_preset":"freelance"`) {
+		!strings.Contains(stateRec.Body.String(), `"recommended_preset":"freelance"`) ||
+		!strings.Contains(stateRec.Body.String(), `"current_preset":"solo"`) ||
+		strings.Contains(stateRec.Body.String(), `"steps"`) {
 		t.Fatalf("state status=%d body=%s", stateRec.Code, stateRec.Body.String())
 	}
 }
@@ -134,6 +139,16 @@ func TestSetupIntent_RejectsUnknownValue(t *testing.T) {
 	s.SaveSetupIntent(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_intent") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetupStepRouteRemoved(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Server{}).registerSetup(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/setup/step/archive", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("removed setup step route returned %d", rec.Code)
 	}
 }
 
@@ -496,34 +511,6 @@ func TestFSPath(t *testing.T) {
 	for _, p := range bad {
 		if fsPath.MatchString(p) {
 			t.Errorf("expected invalid: %q", p)
-		}
-	}
-}
-
-func TestStepNames_IsExactAllowlist(t *testing.T) {
-	// Any change to the allowlist should be intentional — this test
-	// forces a review by listing the exact set.
-	want := map[string]bool{
-		"archive":     true,
-		"users":       true,
-		"mail":        true,
-		"llm":         true,
-		"rules":       true,
-		"sources":     true,
-		"preferences": true,
-		"done":        true,
-	}
-	if len(StepNames) != len(want) {
-		t.Fatalf("StepNames size drifted: got %d, want %d", len(StepNames), len(want))
-	}
-	for k := range want {
-		if !StepNames[k] {
-			t.Errorf("StepNames missing %q", k)
-		}
-	}
-	for k := range StepNames {
-		if !want[k] {
-			t.Errorf("StepNames has unexpected %q", k)
 		}
 	}
 }

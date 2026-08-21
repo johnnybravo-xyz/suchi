@@ -1,13 +1,12 @@
 <script>
   // Saved views as a first-class destination: create, share, reorder-by-name,
   // and jump straight into the filtered Documents list.
-  import { listSavedViews, createSavedView, deleteSavedView, listDocuments,
+  import { listSavedViews, createSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes, listJDCategories } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
   let views = $state([])
-  let counts = $state({})
   let loading = $state(true)
   let tags = $state([]), corrs = $state([]), types = $state([]), jdCats = $state([])
   let nv = $state({ name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false })
@@ -17,13 +16,6 @@
     try {
       const r = await listSavedViews()
       views = r?.results || r || []
-      views.forEach(async (v) => {
-        try {
-          const f = JSON.parse(v.filter_json || '{}')
-          const res = await listDocuments({ ...f, page_size: 1 })
-          counts[v.id] = res?.count ?? 0
-        } catch { counts[v.id] = null }
-      })
     } catch (ex) { notify?.(ex.message || 'Could not load views') }
     finally { loading = false }
   }
@@ -70,8 +62,8 @@
 
 <div class="content-narrow" style="max-width:860px">
   <p class="sub" style="color:var(--muted);margin:0 0 16px;font-size:.88rem">
-    A view is a saved filter with a number on it: it lives here, on your dashboard,
-    and (if shared) on everyone else's too.
+    A view is a saved filter that lives here, on your dashboard, and (if shared)
+    on everyone else's too.
   </p>
 
   <form class="card" style="margin-bottom:18px" onsubmit={create}>
@@ -94,7 +86,7 @@
   {#if loading}
     <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:50%"></div></div>{/each}</div>
   {:else if views.length === 0}
-    <div class="empty"><Icon name="eye" size={50} /><b>No views yet.</b><span>Save a filter above and it becomes a living count.</span></div>
+    <div class="empty"><Icon name="eye" size={50} /><b>No views yet.</b><span>Save a filter above for quick access to matching documents.</span></div>
   {:else}
     <div class="index">
       {#each views as v (v.id)}
@@ -102,7 +94,6 @@
           <span class="dot"></span>
           <span class="title grow">{v.name}</span>
           {#if v.shared}<span class="pill ok">shared</span>{/if}
-          {#if counts[v.id] != null}<span class="chip">{counts[v.id]}</span>{/if}
           <span class="sub mono" style="font-size:.66rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{v.filter_json}</span>
           <button class="btn sm danger" onclick={(e) => { e.preventDefault(); remove(v) }} title="Delete view"><Icon name="trash" size={12} /></button>
         </a>
