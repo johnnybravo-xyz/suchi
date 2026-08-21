@@ -5,7 +5,7 @@ still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.26. UI changes also require Bun.
+The workspace uses Go 1.26.6 or newer. UI changes also require Bun.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git
@@ -70,6 +70,7 @@ make test         # all Go modules
 make ui-check     # Svelte checks, tests, build, and embedded bundle diff
 make smoke        # build and probe a running server
 make bench-check  # binary, startup, memory, and goroutine guardrails
+make security-check # release-time Go and frontend advisory scan
 ```
 
 Tests should cover the contract being changed: authorization and refusal cases

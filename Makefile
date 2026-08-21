@@ -1,8 +1,9 @@
-.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
+.PHONY: build test vet lint fmt fmt-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
 
 BIN := $(PWD)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/transcript
 STATICCHECK_VERSION := v0.7.0
+GOVULNCHECK_VERSION := v1.7.0
 
 build:
 	@mkdir -p dist
@@ -33,6 +34,14 @@ tidy:
 	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd $$m && go mod tidy ) || exit 1; done
 
 check: fmt-check vet test lint ui-check
+
+# Release-time advisory scan. Kept separate from `check` because it queries
+# external vulnerability databases and may install the pinned scanner.
+security-check:
+	@tool="$$(command -v govulncheck || printf '%s/bin/govulncheck' "$$(go env GOPATH)")"; \
+	  test -x "$$tool" || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); \
+	  "$$tool" ./...
+	@cd ui && bun audit
 
 # Convenience: build + smoke-test the running server.
 smoke: build
