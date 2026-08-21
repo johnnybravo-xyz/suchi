@@ -401,7 +401,7 @@
         {:else}
           <span class="pill">No model</span>
         {/if}
-        {#if llmStatus?.has_api_key}<span class="chip">API key stored</span>{/if}
+        {#if llmStatus?.has_api_key}<span class="chip">API key configured</span>{/if}
       </div>
       <span class="seg" style="margin-bottom:14px">
         <button class:on={llmMode === 'local'} onclick={() => setLLMMode('local')}>Local model</button>
@@ -422,7 +422,7 @@
                placeholder={llmStatus?.has_api_key ? 'stored key — leave blank to keep' : ''} /></div>
       {#if llmStatus?.has_api_key}
         <label class="wiz-check"><input type="checkbox" checked={llm.clear_api_key} onchange={setClearAPIKey} />
-          Clear the stored API key when saving.</label>
+          Clear the saved API key when saving. Config-file and environment keys are unchanged.</label>
       {/if}
       {#if llmIsRemote}
         <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} />

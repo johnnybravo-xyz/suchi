@@ -1,5 +1,5 @@
 <script>
-  import { login, setToken } from '../lib/api.js'
+  import { login, setDemoAnonToken, setToken } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
 
   let { onSignedIn } = $props()
@@ -12,8 +12,11 @@
     e.preventDefault()
     err = ''; busy = true
     try {
-      const res = await login(email.trim(), password)
-      if (res?.token) setToken(res.token)
+      // A revoked token would make auth middleware reject the public login
+      // request before it reaches the password handler.
+      setToken(null)
+      setDemoAnonToken(null)
+      await login(email.trim(), password)
       await refreshSession()
       if (!session.user) throw new Error('Sign-in did not stick — check the server log.')
       onSignedIn?.()

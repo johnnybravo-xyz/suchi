@@ -32,10 +32,6 @@
       hint: 'Drop a PDF anywhere — the pipeline files it. Auto-cleared on reset.',
       href: '#/upload',
       icon: 'inbox' },
-    { title: 'Admin surface',
-      hint: 'Read-only from the demo — see the shape without editing anyone else’s world.',
-      href: '#/admin',
-      icon: 'settings' },
   ]
 </script>
 

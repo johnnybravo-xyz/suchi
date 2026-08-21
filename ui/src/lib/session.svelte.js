@@ -1,4 +1,4 @@
-import { whoami, setToken } from './api.js'
+import { logout, whoami, setToken, setDemoAnonToken } from './api.js'
 
 export const session = $state({
   user: null,        // { user_id, email, role, ... } | null
@@ -11,8 +11,16 @@ export async function refreshSession() {
   session.checked = true
 }
 
-export function signOut() {
+export async function signOut() {
+  try {
+    await logout()
+  } catch {
+    // A stale Authorization token prevents cookie fallback in the auth chain.
+    setToken(null)
+    try { await logout() } catch {}
+  }
   setToken(null)
+  setDemoAnonToken(null)
   session.user = null
   location.hash = '#/login'
 }

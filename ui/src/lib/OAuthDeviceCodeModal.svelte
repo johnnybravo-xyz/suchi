@@ -140,7 +140,7 @@
       <div class="field">
         <label for="devc-code">Code</label>
         <div class="toolbar" style="margin:0;gap:8px">
-          <span id="devc-code" class="input mono" style="flex:1;font-size:1.15rem;letter-spacing:2px;font-weight:600">
+			<span id="devc-code" class="input mono" style="flex:1;font-size:1.15rem;font-weight:600">
             {flow.user_code}
           </span>
           <button class="btn sm" onclick={copyCode}>Copy</button>

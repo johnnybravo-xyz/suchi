@@ -131,6 +131,10 @@
   async function save() {
     err = ''; busy = true
     try {
+      const pollInterval = Number(form.poll_interval_min)
+      if (!Number.isInteger(pollInterval) || pollInterval < 1 || pollInterval > 1440) {
+        throw new Error('Poll interval must be between 1 and 1440 minutes.')
+      }
       const body = {
         name: form.name,
         owner_id: Number(form.owner_id) || 0,
@@ -138,10 +142,10 @@
         host: form.host,
         port: Number(form.port) || 993,
         use_tls: !!form.use_tls,
-        tls_ca_file: form.tls_ca_file,
+		...(viewerRole === 'admin' ? { tls_ca_file: form.tls_ca_file } : {}),
         folder: form.folder,
         processed_folder: form.processed_folder,
-        poll_interval_min: Number(form.poll_interval_min) || 10,
+        poll_interval_min: pollInterval,
         username: form.username,
         password: form.password,
         attachments_only: !!form.attachments_only,
@@ -303,11 +307,13 @@
       </div>
     </div>
 
-    <div class="field">
-      <label for="ma-ca">TLS CA file (optional)</label>
-      <input id="ma-ca" class="input mono" bind:value={form.tls_ca_file}
-             placeholder="/etc/ssl/certs/custom.pem" />
-    </div>
+	{#if viewerRole === 'admin'}
+		<div class="field">
+			<label for="ma-ca">TLS CA file (optional)</label>
+			<input id="ma-ca" class="input mono" bind:value={form.tls_ca_file}
+					 placeholder="/etc/ssl/certs/custom.pem" />
+		</div>
+	{/if}
 
     <div class="toolbar" style="margin-bottom:0">
       <div class="field" style="flex:1;min-width:200px">
@@ -347,7 +353,8 @@
         {#if isEdit && form.oauth_account_id}
           <div class="toolbar" style="margin:0;gap:8px">
             <span class="pill ok">Signed in · {shortOAuthID}</span>
-            <button id="ma-oauth-btn" class="btn sm" onclick={revoke} disabled={busy}>Revoke sign-in</button>
+            <button id="ma-oauth-btn" class="btn sm" onclick={() => (oauthOpen = true)} disabled={busy}>Re-sign in</button>
+            <button class="btn sm" onclick={revoke} disabled={busy}>Revoke sign-in</button>
           </div>
         {:else if !microsoftOAuthReady}
           <p class="sub" style="margin:0;color:var(--warn)">
@@ -378,7 +385,8 @@
       </div>
       <div class="field" style="max-width:140px">
         <label for="ma-poll">Poll every (min)</label>
-        <input id="ma-poll" class="input" type="number" min="1" bind:value={form.poll_interval_min} />
+        <input id="ma-poll" class="input" type="number" min="1" max="1440" step="1"
+               bind:value={form.poll_interval_min} />
       </div>
     </div>
 

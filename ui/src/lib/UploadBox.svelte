@@ -1,5 +1,5 @@
 <script>
-  import { uploadDocument, getDocument, patchDocument, listJDCategories } from '../lib/api.js'
+  import { uploadDocument, getDocument, patchDocument, listJDCategories, listTasks } from '../lib/api.js'
   import { fmtBytes } from '../lib/format.js'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
   import Icon from '../lib/Icon.svelte'
@@ -15,16 +15,24 @@
   let jdCats = $state([])
   listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
 
-  // Poll the fresh document a few times so the panel fills in as the
-  // pipeline enriches it (title, JD, OCR text). Stops early once filed.
+  // Poll the durable post-ingest job while refreshing the document details.
   async function hydrate(entry) {
-    for (const wait of [1200, 2500, 4000, 6000]) {
-      await new Promise(r => setTimeout(r, wait))
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 2500))
       try {
-        const d = await getDocument(entry.id)
+        const [d, tasks] = await Promise.all([
+          getDocument(entry.id),
+          listTasks({ include: 'jobs', doc_id: entry.id, kind: 'post-ingest', limit: 1 }),
+        ])
         entry.doc = d
-        if (d.jd_category_code || d.content) { entry.processing = false; return }
-      } catch { return }
+        const job = tasks?.results?.[0]
+        if (!job) { entry.processing = false; return }
+        if (job.state === 'dead') {
+          entry.processing = false
+          entry.processingError = true
+          return
+        }
+      } catch { /* keep the durable processing state until a later poll */ }
     }
     entry.processing = false
   }
@@ -119,8 +127,10 @@
             </div>
           {:else if q.status === 'done'}
             <div class="up-detail" style="flex-wrap:wrap;row-gap:8px">
-              {#if q.processing && !q.doc?.jd_category_code}
+              {#if q.processing}
                 <span class="pill">processing<span class="ellip"></span></span>
+              {:else if q.processingError}
+                <span class="pill danger">processing failed</span>
               {/if}
               {#if q.doc?.title && q.doc.title !== q.name}<span class="sub">filed as “{q.doc.title}”</span>{/if}
               {#if q.doc?.tags?.length}

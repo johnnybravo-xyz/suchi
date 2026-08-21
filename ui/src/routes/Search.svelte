@@ -85,7 +85,7 @@
 
 <div class="content-narrow">
   <form class="toolbar" onsubmit={submit}>
-    <input class="input" style="flex:1" placeholder={'Search full text — supports "quoted phrases", AND, OR, jd:2*'}
+    <input class="input" style="flex:1" placeholder="Search document text"
            bind:value={q} />
     <button class="btn primary">Search</button>
   </form>
@@ -107,7 +107,7 @@
   {#if loading}
     <div class="index">{#each Array(4) as _}<div class="irow"><div class="skel" style="width:70%"></div></div>{/each}</div>
   {:else if searched && hits.length === 0}
-    <div class="empty"><Icon name="search" size={56} /><b>Nothing matched.</b><span>Try fewer words, or a <code>jd:</code> prefix.</span></div>
+    <div class="empty"><Icon name="search" size={56} /><b>Nothing matched.</b><span>Try fewer words.</span></div>
   {:else if hits.length}
     <p class="sub" style="color:var(--muted);margin:0 0 10px">{count} result{count === 1 ? '' : 's'}</p>
     <div class="index">
