@@ -20,13 +20,11 @@ export default defineConfig({
                                      // hashed files to churn in git
     rollupOptions: {
       output: {
-        // Stable, unhashed names. dist/ is embedded and committed
-        // (see Makefile), so a build that only touches one file
-        // should show as one modified file in git, not an
-        // add/delete pair from a changed content hash.
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name].[ext]',
+        // Content hashes prevent an upgraded binary from pairing with a
+        // browser-cached bundle from the previous release.
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
       },
     },
   }

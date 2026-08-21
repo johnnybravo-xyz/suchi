@@ -64,11 +64,16 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /app/", func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
-		if p != "" {
+		if p != "" && p != "index.html" {
 			// Only serve as an asset if the file actually exists —
 			// otherwise fall through to the shell so client-side
 			// deep links resolve.
 			if _, err := fs.Stat(sub, p); err == nil {
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				files.ServeHTTP(w, r)
 				return
 			}
@@ -84,9 +89,11 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 		}
 		if shell != nil {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
 			_, _ = w.Write(shell)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, sub, "index.html")
 	})
 	// Redirect `/app` (no trailing slash) so relative asset URLs in
