@@ -90,11 +90,6 @@ setup.jd.body: Pick a Johnny Decimal preset that matches your use case. The blan
 setup.jd.apply: Apply preset
 setup.jd.confirm_blank: I understand the blank slate leaves only an Inbox category and is harder to migrate away from.
 
-setup.rules.title: Rules
-setup.rules.body: The rules engine tags documents automatically. Skip for now, or wire rules via /api/rules/.
-setup.rules.link: View rules API
-setup.rules.done: Done with rules
-
 setup.sources.title: Ingest sources
 setup.sources.body: Filesystem-watch drops any file into a folder and suchi ingests it — great for scanners.
 setup.sources.field.dir: Watch directory (absolute path)
