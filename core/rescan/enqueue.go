@@ -254,21 +254,22 @@ func staleColumn(opts Options) (string, int, bool) {
 // behind the given current version. Used by the boot-time detector
 // in detect.go — the tasks-inbox proposal only surfaces when > 0.
 func CountStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
-	return countStale(ctx, d, kind, current, 0)
+	return countStale(ctx, d, kind, current, 0, false)
 }
 
 // CountProposalStale counts results eligible for an automatic upgrade
-// proposal. LLM version 0 means no successful classifier run, not an older
-// result, so it remains an explicit selected-rescan decision.
+// proposal. Documents already represented by an unfinished post-ingest job
+// are new or already need attention, not candidates for a second prompt.
+// LLM version 0 means no successful classifier run, not an older result.
 func CountProposalStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
 	minimum := 0
 	if kind == "llm" {
 		minimum = 1
 	}
-	return countStale(ctx, d, kind, current, minimum)
+	return countStale(ctx, d, kind, current, minimum, true)
 }
 
-func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int) (int, error) {
+func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int, proposal bool) (int, error) {
 	col, _, ok := staleColumn(Options{Stale: kind})
 	if !ok {
 		return 0, fmt.Errorf("rescan: unknown kind %q", kind)
@@ -278,6 +279,14 @@ func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int
 	if minimum > 0 {
 		query += ` AND ` + col + ` >= ?`
 		args = append(args, minimum)
+	}
+	if proposal {
+		query += ` AND NOT EXISTS (
+			SELECT 1 FROM jobs j
+			 WHERE j.doc_id = documents.id
+			   AND j.kind = 'post-ingest'
+			   AND j.state IN ('pending', 'running', 'dead')
+		)`
 	}
 	var n int
 	err := d.Read.QueryRowContext(ctx, query, args...).Scan(&n)

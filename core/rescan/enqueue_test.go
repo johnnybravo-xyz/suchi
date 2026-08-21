@@ -155,6 +155,34 @@ func TestCountProposalStale_LLMExcludesNeverProcessed(t *testing.T) {
 	}
 }
 
+func TestCountProposalStale_ExcludesDocumentsAlreadyNeedingProcessing(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	queued := seedDoc(t, ctx, d, owner, "sha-queued", 0)
+	failed := seedDoc(t, ctx, d, owner, "sha-failed", 0)
+	seedDoc(t, ctx, d, owner, "sha-stale", 0)
+
+	for _, job := range []struct {
+		docID int64
+		state string
+	}{{queued, "pending"}, {failed, "dead"}} {
+		if _, err := d.Write.ExecContext(ctx, `
+			INSERT INTO jobs(kind, doc_id, state, next_run_at, created_at, updated_at)
+			VALUES ('post-ingest', ?, ?, 0, 0, 0)
+		`, job.docID, job.state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := rescan.CountProposalStale(ctx, d, "ocr", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("proposal stale count = %d, want 1", got)
+	}
+}
+
 func TestEnqueue_StaleOCR(t *testing.T) {
 	ctx := context.Background()
 	d, owner := setupDB(t)
