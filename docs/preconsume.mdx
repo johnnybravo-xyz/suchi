@@ -11,12 +11,12 @@ every ingested document before any format-specific processing kicks in
   format, run a custom deskewer, whatever.
 - **Emit metadata** — attach tags or set custom fields via a JSON
   envelope on stdout.
-- **Do nothing** — a script that fails or produces no output is a
-  no-op; ingest continues with the original bytes.
+- **Do nothing** — a script that exits successfully without output leaves the
+  working bytes and metadata unchanged.
 
-The CAS original is **never** handed to the script and never touched
-by it — you can't accidentally destroy the upload from within a
-pre-consume hook.
+The CAS original is **never** handed to the script. Its argument is a private,
+mode-`0600` scratch copy of the current working bytes, so rewriting or deleting
+that path cannot damage the stored original.
 
 ## Contract
 
@@ -40,7 +40,11 @@ $PRE_CONSUME_SCRIPT <input_path>
 **Exit codes:**
 
 - `0` — success. `$SUCHI_OUTPUT` is read (only if non-empty). Stdout is parsed as JSON.
-- non-zero — log at `Warn`, treat as "no changes". Ingest keeps flowing; a failing pre-consume never aborts a doc.
+- non-zero — log at `Warn`, ignore the script's output, and continue with the
+  unchanged working bytes.
+
+A timeout or output-size violation is a pipeline error and follows normal job
+retry handling. Malformed stdout metadata is logged and ignored.
 
 **Stdout JSON envelope (optional):**
 
@@ -57,11 +61,11 @@ $PRE_CONSUME_SCRIPT <input_path>
 Unknown tags are auto-created. Unknown custom-field names are logged
 and skipped — create the field first via SQL / the admin surface.
 
-**Limits (all configurable via env, defaults shown):**
+**Limits (all configurable via environment, defaults shown):**
 
-- Timeout: 5 minutes (`sandbox.Opts.Timeout`)
-- Stdout ceiling: 1 MiB (parsed as JSON envelope)
-- SUCHI_OUTPUT ceiling: 200 MiB
+- Timeout: 5 minutes (`SUCHI_PRECONSUME_TIMEOUT`)
+- Stdout ceiling: 1 MiB (`SUCHI_PRECONSUME_MAX_STDOUT`)
+- `SUCHI_OUTPUT` ceiling: 200 MiB (`SUCHI_PRECONSUME_MAX_OUTPUT`)
 
 ## Example: try candidate passwords from a file
 

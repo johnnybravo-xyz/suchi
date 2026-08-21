@@ -10,7 +10,7 @@ REST surface as tools an LLM agent can call. Five tools total —
 for the tool schemas.
 
 This guide wires the adapter into three common runtimes. The pattern
-is the same everywhere: a subprocess spoken over stdio (or an HTTP+SSE
+is the same everywhere: a subprocess spoken over stdio (or a Streamable HTTP
 endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
 
 ## Prerequisites
@@ -101,14 +101,14 @@ Cursor's MCP config lives in Settings → Features → MCP or in
 Same shape as Claude Desktop. Restart Cursor; the tools appear in
 the Composer.
 
-## Remote MCP runtimes (HTTP + SSE)
+## Remote MCP runtimes (Streamable HTTP)
 
 For runtimes that connect over HTTP instead of stdio — an
 agent-framework running on a different host, a shared team-wide
 tool broker — launch the adapter with `--http`:
 
 ```sh
-suchi mcp --http :7000 \
+suchi mcp --http 127.0.0.1:7000 \
   --url   http://127.0.0.1:8000 \
   --token 0123abcd…
 ```
@@ -119,7 +119,7 @@ Point the runtime at `http://<host>:7000`. Two things to know:
   lifetime of the run — every tool call is attributed to that
   token's owner. To use different tokens per caller, run one
   adapter per caller.
-- HTTP+SSE has no separate auth of its own. Restrict access to
+- The MCP HTTP listener has no separate auth of its own. Restrict access to
   port 7000 with your usual mechanism (VPN, firewall rule,
   Tailscale, reverse-proxy with basic auth). Suchi's MCP surface
   is agent-facing, not internet-facing.

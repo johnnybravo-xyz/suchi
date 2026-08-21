@@ -33,7 +33,7 @@ The setup wizard then asks what you are organizing:
 
 Intent and filing-tree selection share one setup step. The recommendation
 changes the default, not the available features: you can compare every filing
-tree, skip starter rules and automations, and change the tree later.
+tree, skip its starter automations, and change the tree later.
 
 ## Docker Compose
 
@@ -89,6 +89,7 @@ schema readiness. `suchi doctor` reports the schema, filesystem, optional
 tools, taxonomy, job health, and configured egress without exposing secrets.
 
 Before storing important documents, configure TLS, create a complete backup,
-and test a restore. Continue with [Mail intake](/guides/mail-intake),
+and test a restore. Follow the [upgrade and rollback checklist](/backup-restore#upgrade-and-rollback)
+before changing versions. Continue with [Mail intake](/guides/mail-intake),
 [Configuration](/config), [Backup and restore](/backup-restore), or
 [Importing from Paperless-ngx](/importer).

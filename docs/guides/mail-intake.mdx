@@ -94,6 +94,11 @@ The supervisor starts or reloads the mailbox within seconds. Adding, editing,
 disabling, deleting, testing, signing in, or changing mailbox credentials does
 not require a Suchi restart.
 
+The poll interval is per mailbox, from 1 to 1440 minutes. A mailbox whose owner
+is disabled is not polled. Custom CA files are validated when a mailbox is
+created, changed, enabled, or tested; a missing or invalid CA is rejected before
+the poller uses it.
+
 Suchi selects authentication from the provider: Microsoft always uses OAuth;
 the other presets use their app-specific or Bridge password. Custom IMAP uses
 password authentication. There is no separate authentication-mode switch.
@@ -109,9 +114,17 @@ If a message fails, the cursor does not advance past it. Deduplication uses
 `Message-ID` per owner, including messages that also arrive through a watched
 folder or mbsync.
 
+Changing connection or source-folder settings resets that mailbox's UID cursor
+so a cursor from the old source is not reused against the new one.
+
 Deleting or moving a message in the provider while Suchi is polling is harmless.
 Suchi skips a message that disappears between mailbox discovery and download;
 it does not mark the mailbox unhealthy or remove an already archived document.
+
+Raw messages are bounded before parsing at roughly twice
+`SUCHI_EMAIL_MAX_ATTACH` plus 8 KiB. An oversized message is skipped, recorded
+as `document.ingest.skipped` in the audit log, and treated as consumed so it
+cannot permanently block the mailbox cursor.
 
 Without a processed folder, Suchi leaves server read state unchanged unless
 **Mark messages as read** is enabled.
@@ -124,7 +137,7 @@ creating a document.
 
 Consumption automations can filter on sender, subject, source folder, and
 attachment presence. Use them to assign correspondents, tags, document types,
-filing categories, or storage paths. See [Rules and automations](/automations).
+filing categories, or storage paths. See [Automations](/automations).
 
 ## Alternative mbsync path
 

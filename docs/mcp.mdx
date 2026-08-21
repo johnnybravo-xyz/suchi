@@ -35,10 +35,12 @@ administrator token.
 | Invocation | Transport | Typical use |
 | --- | --- | --- |
 | `suchi mcp` | stdio | Local desktop and editor clients |
-| `suchi mcp --http :8100` | HTTP with SSE | Remote runtimes and inspectors |
+| `suchi mcp --http 127.0.0.1:8100` | Streamable HTTP | Remote runtimes and inspectors through a protected network path |
 
-Protect a remote MCP listener with the same network and TLS controls as any
-other privileged integration endpoint.
+The listener has no separate client authentication: every caller can exercise
+the Suchi token held by that adapter process. Bind to loopback by default. For
+remote use, expose it only through a VPN, firewall rule, or TLS reverse proxy
+that authenticates callers.
 
 ## Tools
 

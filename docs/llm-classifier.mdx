@@ -24,8 +24,9 @@ auto-apply thresholds. Hosted mode also requires an explicit egress
 acknowledgement.
 
 API keys are sealed before entering SQLite. Leaving the key field blank keeps
-the stored value; **Clear the stored API key** removes it and prevents an
-environment fallback from silently returning.
+the stored value; **Clear the stored API key** removes the web-managed value.
+A key pinned in the config file or environment remains active until the
+operator changes that source and restarts Suchi.
 
 ## Local Ollama
 
@@ -114,9 +115,11 @@ Activation affects new ingests. A settings change never starts an automatic
 archive-wide backfill. Select older documents in **Documents** and use
 **Rescan** when you want the current configuration applied to them.
 
-Stored web settings take precedence over environment fallbacks, following the
-canonical [configuration precedence](/config#precedence). Prefer one management
-path per deployment so partial overrides remain easy to reason about.
+Config-file and environment values take precedence over stored web settings on
+a field-by-field basis, following the canonical [configuration
+precedence](/config#precedence). Unpinned fields still reload live. Prefer one
+management path per deployment so partial overrides remain easy to reason
+about.
 
 ## Pipeline versions and rescans
 
@@ -146,8 +149,9 @@ does not call the LLM.
 
 v0.1 provides fixed document classification. It does not provide custom prompt
 steps, typed custom-field extractors, arbitrary code in the ingest pipeline,
-or archive question answering. Typed extraction and citation-bound archive Q&A
-belong to later releases rather than this classifier contract.
+or archive question answering. The roadmap keeps typed, validated extraction
+inside the existing automation engine for v0.2, followed by citation-bound,
+ACL-scoped Ask in v0.3. Neither is part of the v0.1 classifier contract.
 
 ## Troubleshooting
 

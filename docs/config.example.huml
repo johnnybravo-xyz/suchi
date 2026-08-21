@@ -9,8 +9,9 @@
 #   lists / tables → key:: <inline or indented>
 #
 # Layered precedence (last wins):
-#   1. this file
-#   2. process env vars   ← env values override file values
+#   1. built-in defaults
+#   2. this file
+#   3. process env vars   ← env values override file values
 
 # --------------------------------------------------------------------
 # Required
@@ -25,7 +26,7 @@ public_url: "http://127.0.0.1:8000"
 data_dir: "/data"
 listen_addr: ":8000"
 log_level: "info"
-body_limit: "100M"
+body_limit: "500M"
 # trusted_proxy_cidrs: "127.0.0.1/32,::1/128"
 backup_interval: "24h"
 
@@ -33,21 +34,34 @@ backup_interval: "24h"
 # OCR + ingest
 # --------------------------------------------------------------------
 
-ocr_languages:: "eng"
+ocr_languages: "eng"
 ocr_engine: "auto"
 pdf_max_content_bytes: "8M"
 anydoc_max_content_bytes: "32M"
 djvu_max_content_bytes: "32M"
+scan_blank_removal: "auto"
+scan_blank_whiteness_threshold: 0.995
+scan_split_enabled: "off"
+scan_split_token: "SUCHI-SPLIT"
+scan_split_dpi: 150
 
 # --------------------------------------------------------------------
 # OIDC (uncomment the whole block to enable)
 # --------------------------------------------------------------------
 
+# admin_email: "you@example.com"
 # oidc::
-#   issuer: "https://id.example.com"
+#   issuer_url: "https://id.example.com"
 #   client_id: "suchi"
 #   client_secret: "..."
-#   redirect_url: "https://suchi.example.com/oidc/callback"
+
+# --------------------------------------------------------------------
+# Microsoft email OAuth
+# --------------------------------------------------------------------
+
+# ingest_imap::
+#   oauth_client_id_microsoft: "<application-client-id>"
+#   oauth_scopes_microsoft: "https://outlook.office.com/IMAP.AccessAsUser.All"
 
 # --------------------------------------------------------------------
 # LLM classifier
@@ -57,4 +71,5 @@ djvu_max_content_bytes: "32M"
 #   endpoint_url: "http://127.0.0.1:11434/v1"
 #   model: "llama3.1:8b"
 #   api_key: ""
-#   egress_ack: "true"
+#   egress_ack: true
+#   confidence_threshold: 0.70

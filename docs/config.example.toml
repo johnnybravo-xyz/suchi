@@ -4,9 +4,9 @@
 # no parse ambiguity. See docs/config.mdx for the full knob list.
 #
 # Layered precedence (last wins):
-#   1. this file
-#   2. process env vars   ← env values override file values
-#   3. CLI flags (future)
+#   1. built-in defaults
+#   2. this file
+#   3. process env vars   ← env values override file values
 #
 # Drop this file at one of the following paths and suchi picks it up
 # on next boot:
@@ -17,10 +17,10 @@
 #   ./suchi.toml         (cwd)
 #
 # Every field below has a matching env var of the same name in
-# SCREAMING_SNAKE_CASE (see .env.sample for the flat form). Some
-# knobs — mail intake, LLM classifier, fs-watch owner — can also be
-# written from the SPA Admin panel; the DB settings win over env at
-# boot when both are set (see docs/config.mdx §"Layered config").
+# SCREAMING_SNAKE_CASE (see .env.sample for the flat form). A small,
+# enumerated set of LLM, filesystem-watch, OCR, backup, and
+# onboarding values can also be managed live in the SPA. See
+# docs/config.mdx §"Live database settings" for that complete list.
 
 # --------------------------------------------------------------------
 # Required
@@ -38,19 +38,14 @@ public_url = "http://127.0.0.1:8000"
 data_dir = "/data"    # CAS blobs, rendered view, backups all under here
 listen_addr = ":8000" # ip:port; ":8000" listens on all interfaces
 log_level = "info"    # debug | info | warn | error
-body_limit = "100M"   # multipart cap (e.g. "20M", "1G")
+body_limit = "500M"   # request-body and filesystem intake cap
 # trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
-
-# Session-cookie signing key. Absent = generated + persisted under
-# $DATA_DIR/.session-key on first boot. Override only for restore-
-# from-backup or multi-node deploys.
-# session_key_path = "/etc/suchi/session-key"
 
 # --------------------------------------------------------------------
 # Backups
 # --------------------------------------------------------------------
 
-# VACUUM INTO snapshot cadence. "0" or "off" disables.
+# VACUUM INTO snapshot cadence. Go duration syntax; "0" disables.
 backup_interval = "24h"
 
 # Retention window for snapshots — keep the N most recent. 0 = keep
@@ -70,7 +65,7 @@ audit_retention_days = 20
 # Set to "1" or "true" to disable all browser-facing routes at boot.
 # For deployments where an external SPA fronts /api/. What stays:
 # /api/*, /healthz, /readyz, /metrics.
-# suchi_ui_disabled = "true"
+# suchi_ui_disabled = true
 
 # --------------------------------------------------------------------
 # TLS (only when suchi terminates TLS itself, not behind a proxy)
@@ -93,17 +88,16 @@ djvu_max_content_bytes = "32M"
 # Scan pre-processing
 # --------------------------------------------------------------------
 
-# Auto-drop blank pages before OCR to save index space + processing
-# time. Whiteness threshold is percent-of-white pixels above which
-# a page counts as blank (0–100).
-# scan_blank_removal            = "true"
-# scan_blank_whiteness_threshold = "99"
+# Auto-drop blank pages before OCR to save index space and processing
+# time. Removal accepts auto|off; whiteness is a fraction in (0,1].
+scan_blank_removal = "auto"
+scan_blank_whiteness_threshold = 0.995
 
 # Multi-doc split via a QR/barcode separator page. Token matches the
 # barcode's payload; DPI is the raster resolution.
-# scan_split_enabled = "false"
-# scan_split_token   = "SUCHI-SPLIT"
-# scan_split_dpi     = "300"
+scan_split_enabled = "off"
+scan_split_token = "SUCHI-SPLIT"
+scan_split_dpi = 150
 
 # --------------------------------------------------------------------
 # Pre-consume script — runs before the pipeline. Absolute path only.
@@ -124,11 +118,11 @@ djvu_max_content_bytes = "32M"
 # OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
 # --------------------------------------------------------------------
 
+# admin_email = "you@example.com"        # granted admin on first login
 # [oidc]
 # issuer_url    = "https://id.example.com"
 # client_id     = "suchi"
 # client_secret = "..."                    # or OIDC_CLIENT_SECRET_FILE
-# admin_email   = "you@example.com"        # granted admin on first login
 
 # --------------------------------------------------------------------
 # Filesystem-watch ingest
@@ -139,16 +133,15 @@ djvu_max_content_bytes = "32M"
 # owner_email = "you@example.com"
 
 # --------------------------------------------------------------------
-# Email ingest (IMAP polling) — the in-process poller
+# Email ingest (IMAP polling) — shared boot options
 # --------------------------------------------------------------------
 #
-# The SPA Admin panel can also write these into DB settings; settings
-# override env at boot. Restart required after either kind of change.
+# Mailbox accounts and credentials are managed in Settings → Mailboxes.
+# These boot options configure Microsoft OAuth.
 
 # [ingest_imap]
-# url           = "imaps://you@mail.example.com/INBOX"
-# password_file = "/run/secrets/imap-password"
-# owner_email   = "you@example.com"
+# oauth_client_id_microsoft = "<application-client-id>"
+# oauth_scopes_microsoft = "https://outlook.office.com/IMAP.AccessAsUser.All"
 
 # --------------------------------------------------------------------
 # LLM classifier (opt-in)
@@ -161,4 +154,5 @@ djvu_max_content_bytes = "32M"
 # endpoint_url = "http://127.0.0.1:11434/v1"    # Ollama by default
 # model        = "llama3.1:8b"
 # api_key      = ""                              # blank for local Ollama
-# egress_ack   = "true"                          # REQUIRED for non-local endpoints
+# egress_ack   = true                            # required for non-local endpoints
+# confidence_threshold = 0.70
