@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,8 +24,7 @@ type FetchOptions struct {
 	LocalFile string
 
 	// URL — HTTPS fetch endpoint. Ignored if LocalFile is set.
-	// Empty => default: latest corpus release of
-	// github.com/suchi-dms/suchi-demo.
+	// Empty => the corpus release tested with this Suchi build.
 	URL string
 
 	// ExpectedSHA256 — hex-encoded sha256. If set, the downloaded /
@@ -44,6 +42,11 @@ type FetchOptions struct {
 	Version string
 }
 
+// DefaultCorpusURL returns the release asset tested with this build.
+func DefaultCorpusURL(version string) string {
+	return fmt.Sprintf("https://github.com/suchi-dms/suchi-demo/releases/download/corpus-%s/corpus-%s.tar.gz", version, version)
+}
+
 // Fetch resolves the corpus tarball (local or HTTPS), verifies its
 // sha256 if one is available, extracts into CacheDir if the cache is
 // cold, and returns the extracted path. Idempotent — a warm cache
@@ -58,6 +61,9 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 			return "", err
 		}
 		opts.CacheDir = filepath.Join(base, "suchi", "demo-corpus-"+opts.Version)
+	}
+	if opts.LocalFile == "" && opts.URL == "" {
+		opts.URL = DefaultCorpusURL(opts.Version)
 	}
 
 	// Warm cache short-circuit: manifest.json exists AND (no sha
@@ -95,8 +101,6 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 				opts.ExpectedSHA256 = firstHexToken(string(s))
 			}
 		}
-	default:
-		return "", errors.New("demo.Fetch: one of LocalFile or URL is required")
 	}
 
 	// Verify sha if we have one.

@@ -1,34 +1,6 @@
-// `suchi demo` — seed DATA_DIR with a small representative dataset so
-// a first-time visitor can click around instead of staring at the
-// empty state. Idempotent per run: if the target rows already exist,
-// they are skipped.
-//
-// What lands (user-independent, always):
-//   - 4 correspondents (Landlord, HDFC Bank, Amazon, BESCOM)
-//   - 4 document_types (Invoice, Receipt, Bank statement, Utility bill)
-//   - 4 tags (rent, utilities, purchase, banking)
-//   - 1 automation ("route utilities" — auto-tags BESCOM docs)
-//   - 1 rule (title-contains "invoice" → set_document_type Invoice)
-//
-// What lands (only when an admin/user already exists):
-//   - 3 sample documents (title + content only; no real files) owned
-//     by the first available admin (or first user if no admin).
-//
-// Admin provisioning:
-//   - Normal (SUCHI_DEMO_MODE unset): the seed does NOT create a user.
-//     /setup is the single source of truth for admin credentials, so
-//     there's no UNIQUE-email collision. On a fresh DATA_DIR: run
-//     `suchi demo` → `suchi serve` → `/bootstrap` → rerun `suchi demo`
-//     to seed docs owned by the new admin.
-//   - Public demo (SUCHI_DEMO_MODE=1): the seed mints a passwordless
-//     system admin (`admin@demo.local`, password_hash NULL) so first
-//     boot is zero-touch — visitors land on the SPA via the anon
-//     session tier, no `/bootstrap` handshake needed. The row exists
-//     only to own docs + satisfy usersEmpty; NULL hash means no login
-//     path (localauth treats !hash.Valid as invalid credentials).
-//
-// Everything uses INSERT OR IGNORE / UPSERT so re-running converges on
-// the same state.
+// `suchi demo` materializes a versioned corpus manifest into a dedicated
+// showcase archive. Corpus content and product-story choices live in the
+// sibling suchi-demo repository; this command owns only generic ingestion.
 
 package main
 
@@ -50,6 +22,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
@@ -71,10 +44,9 @@ func runDemo(args []string) int {
 	fs := flag.NewFlagSet("suchi demo", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "DATA_DIR to seed; defaults to $DATA_DIR or /data")
 	corpusFile := fs.String("corpus-file", "", "path to a suchi-demo corpus tarball (skips HTTP fetch)")
-	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a suchi-demo corpus tarball; defaults to the latest release")
+	corpusURL := fs.String("corpus-url", "", "HTTPS URL of a compatible suchi-demo corpus tarball; defaults to the tested release")
 	corpusDirFlag := fs.String("corpus-dir", "", "path to an already-extracted corpus directory (skips tarball fetch + extract)")
 	fetchOnly := fs.Bool("fetch-only", false, "download + extract the corpus into the cache; do not seed the DB")
-	resetFlag := fs.Bool("reset", false, "wipe demo-seeded rows before seeding (idempotent full reset)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -93,16 +65,14 @@ func runDemo(args []string) int {
 
 	ctx := context.Background()
 
-	// If the operator pointed at a corpus tarball (or asked us to fetch
-	// one), resolve it before touching the DB. --corpus-dir skips the
-	// tarball dance entirely (compose stacks that bind-mount the corpus
-	// as a volume). --fetch-only exits after extraction.
+	// Resolve the tested release unless the operator supplied a local
+	// tarball or extracted directory. --fetch-only exits after extraction.
 	var corpusDir string
 	switch {
 	case *corpusDirFlag != "":
 		corpusDir = *corpusDirFlag
 		fmt.Printf("corpus dir: %s\n", corpusDir)
-	case *corpusFile != "" || *corpusURL != "":
+	default:
 		corpusDir, err = demo.Fetch(ctx, demo.FetchOptions{
 			LocalFile: *corpusFile,
 			URL:       *corpusURL,
@@ -136,16 +106,6 @@ func runDemo(args []string) int {
 	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
 		fmt.Fprintf(os.Stderr, "jd tree: %v\n", err)
 		return 1
-	}
-
-	if *resetFlag {
-		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return resetDemoRows(ctx, tx)
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "demo reset: %v\n", err)
-			return 1
-		}
-		fmt.Println("demo rows wiped; reseeding")
 	}
 
 	now := time.Now().Unix()
@@ -185,9 +145,8 @@ func runDemo(args []string) int {
 		}
 	}
 
-	// Look up an owner for the sample docs. Prefer an admin; fall back
-	// to the first user. On non-demo installs before /setup, this comes
-	// up empty and the doc seed is skipped.
+	// Look up an owner for corpus fixtures. Prefer an admin; fall back to
+	// the first user. A normal fresh install must complete setup first.
 	var demoUser int64
 	_ = d.Read.QueryRowContext(ctx, `
 		SELECT id FROM users
@@ -195,39 +154,6 @@ func runDemo(args []string) int {
 		ORDER BY role = 'admin' DESC, id ASC
 		LIMIT 1
 	`).Scan(&demoUser)
-
-	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return seedTaxonomy(ctx, tx, now)
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "seed taxonomy: %v\n", err)
-		return 1
-	}
-
-	// The 3 metadata-only sample rows are only useful as a smoke-test
-	// stand-in when no real corpus is available — they carry sentinel
-	// `demo:*` blob keys and can't preview. Skip them entirely when a
-	// corpus is being ingested (the corpus's own fixtures are the
-	// browse-testing dataset).
-	switch {
-	case corpusDir != "":
-		// covered by the manifest seed below
-	case demoUser > 0:
-		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return seedDocs(ctx, tx, now, demoUser)
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "seed docs: %v\n", err)
-			return 1
-		}
-	default:
-		fmt.Println("no users yet — skipping sample docs. Complete /setup, then re-run `suchi demo` to seed docs owned by the new admin.")
-	}
-
-	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return seedAutomations(ctx, tx, now)
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "seed automation: %v\n", err)
-		return 1
-	}
 
 	// Manifest-driven corpus seed. For every fixture in the manifest:
 	//   - stream the file into the CAS (dedup is automatic on hash)
@@ -247,218 +173,32 @@ func runDemo(args []string) int {
 			fmt.Fprintf(os.Stderr, "corpus seed cas: %v\n", err)
 			return 1
 		}
-		ingest := makeFixtureIngest(d, cas, demoUser, now, log)
+		ingest := makeFixtureIngest(d, cas, demoUser, now)
 		viewIngest := makeSavedViewIngest(d, demoUser, now)
+		automationIngest := makeAutomationIngest(d, now)
 		stats, err := demo.SeedFromManifest(ctx, demo.SeedOptions{
-			CorpusDir:       corpusDir,
-			Log:             log,
-			FixtureIngest:   ingest,
-			SavedViewIngest: viewIngest,
+			CorpusDir:        corpusDir,
+			Log:              log,
+			FixtureIngest:    ingest,
+			SavedViewIngest:  viewIngest,
+			AutomationIngest: automationIngest,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "manifest seed: %v\n", err)
 			return 1
 		}
-		fmt.Printf("manifest seed: seeded=%d skipped=%d failed=%d would-seed=%d views=%d existing-views=%d views-failed=%d\n",
-			stats.Seeded, stats.Skipped, stats.Failed, stats.WouldSeed,
-			stats.ViewsSeeded, stats.ViewsExisting, stats.ViewsFailed)
+		fmt.Printf("manifest seed: seeded=%d existing=%d skipped=%d failed=%d would-seed=%d views=%d existing-views=%d views-failed=%d automations=%d existing-automations=%d automations-failed=%d\n",
+			stats.Seeded, stats.Existing, stats.Skipped, stats.Failed, stats.WouldSeed,
+			stats.ViewsSeeded, stats.ViewsExisting, stats.ViewsFailed,
+			stats.AutomationsSeeded, stats.AutomationsExisting, stats.AutomationsFailed)
+		if stats.Skipped+stats.Failed+stats.ViewsFailed+stats.AutomationsFailed > 0 {
+			fmt.Fprintln(os.Stderr, "manifest seed incomplete; fix the corpus errors above and retry")
+			return 1
+		}
 	}
 
 	fmt.Println("demo seed complete — start `suchi serve` and browse the doc list.")
 	return 0
-}
-
-// resetDemoRows wipes rows previously seeded by `suchi demo` so a
-// nightly reset returns the DB to the canonical seed state. Deletes:
-//   - automations whose name starts with "demo:"
-//   - documents whose original_blob starts with "demo:"
-//   - correspondents / tags / document_types are LEFT ALONE — they
-//     may be referenced by user uploads, and seedTaxonomy is
-//     idempotent via ON CONFLICT.
-//
-// The reset is intentionally narrow. Users' own uploads survive until
-// the demo-mode ticker's scratch-user sweep evicts them.
-func resetDemoRows(ctx context.Context, tx *sql.Tx) error {
-	stmts := []string{
-		`DELETE FROM automation_actions WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
-		`DELETE FROM automation_triggers WHERE automation_id IN (SELECT id FROM automations WHERE name LIKE 'demo:%')`,
-		`DELETE FROM automations WHERE name LIKE 'demo:%'`,
-		`DELETE FROM documents WHERE original_blob LIKE 'demo:%'`,
-	}
-	for _, s := range stmts {
-		if _, err := tx.ExecContext(ctx, s); err != nil {
-			return fmt.Errorf("%s: %w", s, err)
-		}
-	}
-	return nil
-}
-
-func seedTaxonomy(ctx context.Context, tx *sql.Tx, now int64) error {
-	corrs := []string{"Landlord", "HDFC Bank", "Amazon", "BESCOM"}
-	for _, c := range corrs {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO correspondents(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO NOTHING
-		`, c, slug.Make(c), now, now); err != nil {
-			return err
-		}
-	}
-	types := []string{"Invoice", "Receipt", "Bank statement", "Utility bill"}
-	for _, dt := range types {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO document_types(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO NOTHING
-		`, dt, slug.Make(dt), now, now); err != nil {
-			return err
-		}
-	}
-	tags := []string{"rent", "utilities", "purchase", "banking"}
-	for _, t := range tags {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tags(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO NOTHING
-		`, t, t, now, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func seedDocs(ctx context.Context, tx *sql.Tx, now int64, owner int64) error {
-	// jd category — take Inbox; classifier can rehome later.
-	var inbox int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM jd_categories WHERE code = 10`).Scan(&inbox); err != nil {
-		// Inbox may live under a different code depending on the tree
-		// preset — fall through to first category we find.
-		_ = tx.QueryRowContext(ctx,
-			`SELECT id FROM jd_categories ORDER BY id LIMIT 1`).Scan(&inbox)
-	}
-
-	docs := []struct {
-		title, content, corr string
-	}{
-		{
-			title:   "March 2026 electricity bill",
-			content: "BESCOM bill for the month of March. Amount due: Rs. 4523. Due date: 15 April 2026.",
-			corr:    "BESCOM",
-		},
-		{
-			title:   "Rent invoice — March 2026",
-			content: "Monthly rent invoice from the landlord. Amount: Rs. 45000. Due: 5th of each month.",
-			corr:    "Landlord",
-		},
-		{
-			title:   "HDFC statement — Q1 2026",
-			content: "Quarterly bank statement covering January through March 2026.",
-			corr:    "HDFC Bank",
-		},
-	}
-	for i, d := range docs {
-		var corrID sql.NullInt64
-		var id int64
-		_ = tx.QueryRowContext(ctx,
-			`SELECT id FROM correspondents WHERE name = ?`, d.corr).Scan(&id)
-		if id != 0 {
-			corrID = sql.NullInt64{Int64: id, Valid: true}
-		}
-
-		// Sentinel blob key so re-runs are idempotent via the unique
-		// (owner_id, original_blob) partial index.
-		blobKey := fmt.Sprintf("demo:%d:%s", owner, slug.Make(d.title))
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size,
-			                      title, content, correspondent_id,
-			                      jd_category_id, created_at, updated_at)
-			VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT DO NOTHING
-		`, owner, blobKey, d.title, d.content, corrID, inbox,
-			now-int64((i+1)*3600), now-int64((i+1)*3600)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func seedAutomations(ctx context.Context, tx *sql.Tx, now int64) error {
-	var documentTypeID int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM document_types WHERE name = 'Invoice'`).Scan(&documentTypeID); err == nil {
-		var automationID int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM automations WHERE name = 'demo: invoices are Invoice type'`).Scan(&automationID)
-		if err == sql.ErrNoRows {
-			res, err := tx.ExecContext(ctx, `
-				INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-				VALUES ('demo: invoices are Invoice type', 5, 1, ?, ?)
-			`, now, now)
-			if err != nil {
-				return err
-			}
-			automationID, _ = res.LastInsertId()
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO automation_triggers(automation_id, type, filter_title_re, created_at)
-				VALUES (?, 'document_added', 'invoice', ?)
-			`, automationID, now); err != nil {
-				return err
-			}
-			params, _ := json.Marshal(map[string]any{"document_type_id": documentTypeID})
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
-				VALUES (?, 0, 'assign_document_type', ?, ?)
-			`, automationID, string(params), now); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-	}
-
-	// When a document arrives with correspondent BESCOM,
-	// tag it utilities". We look up the ids we just seeded.
-	var corrID, tagID int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM correspondents WHERE name = 'BESCOM'`).Scan(&corrID); err != nil {
-		return nil // demo taxonomy missing — skip quietly
-	}
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM tags WHERE name = 'utilities'`).Scan(&tagID); err != nil {
-		return nil
-	}
-
-	var atmID int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM automations WHERE name = 'demo: route utilities'`).Scan(&atmID)
-	if err == nil {
-		return nil // already seeded
-	}
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-		VALUES ('demo: route utilities', 10, 1, ?, ?)
-	`, now, now)
-	if err != nil {
-		return err
-	}
-	atmID, _ = res.LastInsertId()
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO automation_triggers(automation_id, type, filter_corr_id, created_at)
-		VALUES (?, 'document_added', ?, ?)
-	`, atmID, corrID, now); err != nil {
-		return err
-	}
-
-	params, _ := json.Marshal(map[string]any{"tag_ids": []int64{tagID}})
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
-		VALUES (?, 0, 'assign_tags', ?, ?)
-	`, atmID, string(params), now); err != nil {
-		return err
-	}
-	return nil
 }
 
 // makeFixtureIngest builds the demo.SeedFromManifest callback. Each
@@ -474,17 +214,17 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, now int64) error {
 // on demand; the fixture author doesn't have to pre-populate taxonomy.
 // JD categories are looked up by code and fall back to the JD inbox
 // (code=10) if the manifest names something outside the seeded tree.
-func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *slog.Logger) func(context.Context, demo.ManifestFixture, string) error {
-	return func(ctx context.Context, f demo.ManifestFixture, path string) error {
+func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(context.Context, demo.ManifestFixture, string) (bool, error) {
+	return func(ctx context.Context, f demo.ManifestFixture, path string) (bool, error) {
 		// 1. Stream the file into the CAS.
 		file, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("open fixture: %w", err)
+			return false, fmt.Errorf("open fixture: %w", err)
 		}
 		defer file.Close()
 		ref, err := cas.Put(file)
 		if err != nil {
-			return fmt.Errorf("cas put: %w", err)
+			return false, fmt.Errorf("cas put: %w", err)
 		}
 
 		// 2. Derive a browsable title from the fixture filename.
@@ -516,7 +256,8 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *s
 		// 5. One write-tx: upsert taxonomy, insert doc, link tags,
 		//    enqueue post-ingest. Keeps the doc row + its outbox job
 		//    atomic so a crash between them can't leave orphan work.
-		return d.WriteTx(ctx, func(tx *sql.Tx) error {
+		created := false
+		err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 			corrID, err := upsertCorrespondent(ctx, tx, f.Correspondent, now)
 			if err != nil {
 				return err
@@ -550,6 +291,7 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *s
 				// so re-runs stay silent.
 				return nil
 			}
+			created = true
 
 			for _, name := range f.Tags {
 				tagID, err := upsertTag(ctx, tx, name, now)
@@ -578,6 +320,7 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64, log *s
 			}
 			return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
 		})
+		return created, err
 	}
 }
 
@@ -690,4 +433,180 @@ func makeSavedViewIngest(d *db.DB, ownerID, now int64) func(context.Context, dem
 		})
 		return created, err
 	}
+}
+
+func makeAutomationIngest(d *db.DB, now int64) func(context.Context, int, presetfile.SeedAutomation) (bool, error) {
+	return func(ctx context.Context, order int, seed presetfile.SeedAutomation) (bool, error) {
+		created := false
+		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			var existing int64
+			err := tx.QueryRowContext(ctx, `SELECT id FROM automations WHERE name = ?`, seed.Name).Scan(&existing)
+			switch {
+			case err == nil:
+				return nil
+			case err != sql.ErrNoRows:
+				return err
+			}
+
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
+				VALUES (?, ?, 1, ?, ?)
+			`, seed.Name, order, now, now)
+			if err != nil {
+				return err
+			}
+			automationID, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+
+			filterTagID, err := upsertTag(ctx, tx, seed.Trigger.FilterTag, now)
+			if err != nil {
+				return err
+			}
+			filterCorrID, err := upsertCorrespondent(ctx, tx, seed.Trigger.FilterCorrespondent, now)
+			if err != nil {
+				return err
+			}
+			filterDocTypeID, err := upsertDocumentType(ctx, tx, seed.Trigger.FilterDocumentType, now)
+			if err != nil {
+				return err
+			}
+			triggerType := map[int]string{1: "consumption", 2: "document_added", 3: "document_updated"}[seed.Trigger.Type]
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO automation_triggers(
+					automation_id, type, filter_path, filter_filename,
+					filter_tag_id, filter_corr_id, filter_doctype_id,
+					filter_title_re, filter_content_re, created_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, automationID, triggerType,
+				nullIfEmpty(seed.Trigger.FilterPath), nullIfEmpty(seed.Trigger.FilterFilename),
+				nullIfZero(filterTagID), nullableInt64(filterCorrID), nullableInt64(filterDocTypeID),
+				nullIfEmpty(seed.Trigger.FilterTitleMatching), nullIfEmpty(seed.Trigger.FilterContentMatching), now); err != nil {
+				return err
+			}
+
+			for i, action := range seed.Actions {
+				params, err := resolveDemoActionParams(ctx, tx, action.Params, now)
+				if err != nil {
+					return fmt.Errorf("action %d: %w", i, err)
+				}
+				body, err := json.Marshal(params)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
+					VALUES (?, ?, ?, ?, ?)
+				`, automationID, i, action.Kind, string(body), now); err != nil {
+					return err
+				}
+			}
+			created = true
+			return nil
+		})
+		return created, err
+	}
+}
+
+func resolveDemoActionParams(ctx context.Context, tx *sql.Tx, params map[string]any, now int64) (map[string]any, error) {
+	out := make(map[string]any, len(params))
+	for key, value := range params {
+		out[key] = value
+	}
+	if names := stringList(out["tags"]); len(names) > 0 {
+		ids := make([]int64, 0, len(names))
+		for _, name := range names {
+			id, err := upsertTag(ctx, tx, name, now)
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		delete(out, "tags")
+		out["tag_ids"] = ids
+	} else if name, ok := out["tag"].(string); ok && name != "" {
+		id, err := upsertTag(ctx, tx, name, now)
+		if err != nil {
+			return nil, err
+		}
+		delete(out, "tag")
+		out["tag_ids"] = []int64{id}
+	}
+	if name, ok := out["document_type"].(string); ok && name != "" {
+		id, err := upsertDocumentType(ctx, tx, name, now)
+		if err != nil {
+			return nil, err
+		}
+		delete(out, "document_type")
+		out["document_type_id"] = id.Int64
+	}
+	if name, ok := out["correspondent"].(string); ok && name != "" {
+		id, err := upsertCorrespondent(ctx, tx, name, now)
+		if err != nil {
+			return nil, err
+		}
+		delete(out, "correspondent")
+		out["correspondent_id"] = id.Int64
+	}
+	if code, ok := numericInt(out["jd_category_code"]); ok {
+		var id int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE code = ?`, code).Scan(&id); err != nil {
+			return nil, fmt.Errorf("jd category code %d: %w", code, err)
+		}
+		delete(out, "jd_category_code")
+		out["jd_category_id"] = id
+	}
+	return out, nil
+}
+
+func stringList(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return values
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func numericInt(value any) (int, bool) {
+	switch number := value.(type) {
+	case int:
+		return number, true
+	case int64:
+		return int(number), true
+	case float64:
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func nullIfZero(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
+func nullableInt64(id sql.NullInt64) any {
+	if !id.Valid {
+		return nil
+	}
+	return id.Int64
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }

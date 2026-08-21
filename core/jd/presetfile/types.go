@@ -95,7 +95,11 @@ type Trigger struct {
 	Type                  int    `huml:"type" toml:"type" yaml:"type" json:"type"`
 	FilterPath            string `huml:"filter_path,omitempty" toml:"filter_path,omitempty" yaml:"filter_path,omitempty" json:"filter_path,omitempty"`
 	FilterFilename        string `huml:"filter_filename,omitempty" toml:"filter_filename,omitempty" yaml:"filter_filename,omitempty" json:"filter_filename,omitempty"`
+	FilterTitleMatching   string `huml:"filter_title_matching,omitempty" toml:"filter_title_matching,omitempty" yaml:"filter_title_matching,omitempty" json:"filter_title_matching,omitempty"`
 	FilterContentMatching string `huml:"filter_content_matching,omitempty" toml:"filter_content_matching,omitempty" yaml:"filter_content_matching,omitempty" json:"filter_content_matching,omitempty"`
+	FilterTag             string `huml:"filter_has_tag,omitempty" toml:"filter_has_tag,omitempty" yaml:"filter_has_tag,omitempty" json:"filter_has_tag,omitempty"`
+	FilterCorrespondent   string `huml:"filter_has_correspondent,omitempty" toml:"filter_has_correspondent,omitempty" yaml:"filter_has_correspondent,omitempty" json:"filter_has_correspondent,omitempty"`
+	FilterDocumentType    string `huml:"filter_has_document_type,omitempty" toml:"filter_has_document_type,omitempty" yaml:"filter_has_document_type,omitempty" json:"filter_has_document_type,omitempty"`
 }
 
 // Action — one automation action. Params carry symbolic refs (a

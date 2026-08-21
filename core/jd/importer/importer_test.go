@@ -69,6 +69,19 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 	if _, exists := params["tag_ids"]; !exists {
 		t.Fatalf("resolved tag_ids missing from stored params: %s", rawParams)
 	}
+	assertQueryEquals(t, d, `
+		SELECT COUNT(*)
+		FROM automation_triggers tr
+		JOIN automations a ON a.id = tr.automation_id
+		JOIN tags t ON t.id = tr.filter_tag_id
+		JOIN correspondents c ON c.id = tr.filter_corr_id
+		JOIN document_types dt ON dt.id = tr.filter_doctype_id
+		WHERE a.name = 'File utility bills'
+		  AND t.name = 'utilities'
+		  AND c.name = 'BESCOM'
+		  AND dt.name = 'Utility bill'
+		  AND tr.filter_title_re = '(?i)invoice'
+	`, nil, 1)
 }
 
 func TestApplyReplace_ClearsPriorPresetOwnedRows(t *testing.T) {
@@ -152,7 +165,11 @@ func smallPreset() *presetfile.PresetFile {
 				Name: "File utility bills",
 				Trigger: presetfile.Trigger{
 					Type:                  2,
+					FilterTitleMatching:   "(?i)invoice",
 					FilterContentMatching: "electricity|gas bill",
+					FilterTag:             "utilities",
+					FilterCorrespondent:   "BESCOM",
+					FilterDocumentType:    "Utility bill",
 				},
 				Actions: []presetfile.Action{{
 					Kind: "assign_jd_category",

@@ -38,6 +38,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // Options tunes an Import call.
@@ -576,15 +577,31 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *pres
 		if tType == "" {
 			return n, fmt.Errorf("seed automation %q: bad trigger type %d", sa.Name, sa.Trigger.Type)
 		}
+		filterTagID, err := resolveSeedTaxonomyID(ctx, tx, taxonomy.TableTags, sa.Trigger.FilterTag, now)
+		if err != nil {
+			return n, fmt.Errorf("seed automation %q trigger tag: %w", sa.Name, err)
+		}
+		filterCorrID, err := resolveSeedTaxonomyID(ctx, tx, taxonomy.TableCorrespondents, sa.Trigger.FilterCorrespondent, now)
+		if err != nil {
+			return n, fmt.Errorf("seed automation %q trigger correspondent: %w", sa.Name, err)
+		}
+		filterDocTypeID, err := resolveSeedTaxonomyID(ctx, tx, taxonomy.TableDocumentTypes, sa.Trigger.FilterDocumentType, now)
+		if err != nil {
+			return n, fmt.Errorf("seed automation %q trigger document type: %w", sa.Name, err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO automation_triggers(automation_id, type,
 			                                filter_path, filter_filename,
+			                                filter_tag_id, filter_corr_id,
+			                                filter_doctype_id, filter_title_re,
 			                                filter_content_re,
 			                                created_at)
-			VALUES (?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, atmID, tType,
 			nullIfEmpty(sa.Trigger.FilterPath),
 			nullIfEmpty(sa.Trigger.FilterFilename),
+			filterTagID, filterCorrID, filterDocTypeID,
+			nullIfEmpty(sa.Trigger.FilterTitleMatching),
 			nullIfEmpty(sa.Trigger.FilterContentMatching),
 			now); err != nil {
 			return n, fmt.Errorf("seed automation %q trigger: %w", sa.Name, err)
@@ -607,6 +624,17 @@ func seedAutomations(ctx context.Context, tx *sql.Tx, log *slog.Logger, pf *pres
 		n++
 	}
 	return n, nil
+}
+
+func resolveSeedTaxonomyID(ctx context.Context, tx *sql.Tx, table taxonomy.NamedTable, name string, now int64) (any, error) {
+	if name == "" {
+		return nil, nil
+	}
+	id, err := taxonomy.UpsertByName(ctx, tx, table, name, now)
+	if err != nil {
+		return nil, err
+	}
+	return id, nil
 }
 
 // ClearForPreset removes every automation whose preset_slug matches

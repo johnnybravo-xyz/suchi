@@ -11,18 +11,20 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
+	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 )
 
 // Manifest is the schema written to corpus/manifest.json in the sibling
 // suchi-demo repo. Kept intentionally flat — the demo corpus is
 // human-authored and this struct is the only contract.
 type Manifest struct {
-	Version    string                     `json:"version"`
-	Notes      string                     `json:"notes,omitempty"`
-	Personas   []string                   `json:"personas,omitempty"`
-	Clusters   map[string]ManifestCluster `json:"clusters,omitempty"`
-	Fixtures   []ManifestFixture          `json:"fixtures"`
-	SavedViews []ManifestSavedView        `json:"saved_views,omitempty"`
+	Version     string                      `json:"version"`
+	Notes       string                      `json:"notes,omitempty"`
+	Personas    []string                    `json:"personas,omitempty"`
+	Clusters    map[string]ManifestCluster  `json:"clusters,omitempty"`
+	Fixtures    []ManifestFixture           `json:"fixtures"`
+	SavedViews  []ManifestSavedView         `json:"saved_views,omitempty"`
+	Automations []presetfile.SeedAutomation `json:"automations,omitempty"`
 }
 
 // ManifestSavedView is one demo dashboard view owned by the seed user.
@@ -85,14 +87,16 @@ type SeedOptions struct {
 	// Left as a callback because the wiring for CAS + DB + pipeline
 	// engines lives in the distro command, not in this package.
 	//
-	// If nil, fixtures are logged but not stored — useful for --fetch-only
-	// and for the MVP-corpus period where the manifest names clusters
-	// but has no fixtures yet.
-	FixtureIngest func(ctx context.Context, f ManifestFixture, path string) error
+	// If nil, fixtures are validated but not stored.
+	FixtureIngest func(ctx context.Context, f ManifestFixture, path string) (bool, error)
 
 	// SavedViewIngest returns true when it inserted a new row and false when
 	// an existing user-edited view was preserved.
 	SavedViewIngest func(ctx context.Context, view ManifestSavedView) (bool, error)
+
+	// AutomationIngest returns true when it inserted a new rule and false
+	// when a same-name rule was preserved.
+	AutomationIngest func(ctx context.Context, order int, automation presetfile.SeedAutomation) (bool, error)
 }
 
 // SeedFromManifest walks the corpus manifest and hands each fixture to
@@ -105,6 +109,9 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 	if err != nil {
 		return s, err
 	}
+	if m.Version != DemoCorpusVersion {
+		return s, fmt.Errorf("demo corpus version %q is incompatible with this build (want %q)", m.Version, DemoCorpusVersion)
+	}
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -113,7 +120,8 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		"version", m.Version,
 		"clusters", len(m.Clusters),
 		"fixtures", len(m.Fixtures),
-		"saved_views", len(m.SavedViews))
+		"saved_views", len(m.SavedViews),
+		"automations", len(m.Automations))
 
 	fixDir := filepath.Join(opts.CorpusDir, "fixtures")
 	for _, f := range m.Fixtures {
@@ -127,12 +135,17 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 			s.WouldSeed++
 			continue
 		}
-		if err := opts.FixtureIngest(ctx, f, p); err != nil {
+		created, err := opts.FixtureIngest(ctx, f, p)
+		if err != nil {
 			log.Warn("demo.seed.fixture.err", "filename", f.Filename, "err", err.Error())
 			s.Failed++
 			continue
 		}
-		s.Seeded++
+		if created {
+			s.Seeded++
+		} else {
+			s.Existing++
+		}
 	}
 	for _, view := range m.SavedViews {
 		view.Name = strings.TrimSpace(view.Name)
@@ -165,17 +178,57 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 			s.ViewsExisting++
 		}
 	}
+	for i, automation := range m.Automations {
+		automation.Name = strings.TrimSpace(automation.Name)
+		if automation.Name == "" || automation.Trigger.Type < 1 || automation.Trigger.Type > 3 || len(automation.Actions) == 0 {
+			log.Warn("demo.seed.automation.invalid", "name", automation.Name)
+			s.AutomationsFailed++
+			continue
+		}
+		valid := true
+		for _, action := range automation.Actions {
+			if strings.TrimSpace(action.Kind) == "" {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			log.Warn("demo.seed.automation.invalid", "name", automation.Name)
+			s.AutomationsFailed++
+			continue
+		}
+		if opts.AutomationIngest == nil {
+			s.AutomationsWouldSeed++
+			continue
+		}
+		created, err := opts.AutomationIngest(ctx, i, automation)
+		if err != nil {
+			log.Warn("demo.seed.automation.err", "name", automation.Name, "err", err.Error())
+			s.AutomationsFailed++
+			continue
+		}
+		if created {
+			s.AutomationsSeeded++
+		} else {
+			s.AutomationsExisting++
+		}
+	}
 	return s, nil
 }
 
 // Stats summarize a seed run.
 type Stats struct {
-	Seeded         int // fixtures successfully stored
-	Skipped        int // fixture named in manifest but missing on disk
-	Failed         int // ingest callback returned error
-	WouldSeed      int // FixtureIngest was nil (dry run / fetch-only)
-	ViewsSeeded    int
-	ViewsExisting  int
-	ViewsFailed    int
-	ViewsWouldSeed int
+	Seeded               int // fixtures successfully stored
+	Existing             int // fixtures already present
+	Skipped              int // fixture named in manifest but missing on disk
+	Failed               int // ingest callback returned error
+	WouldSeed            int // FixtureIngest was nil
+	ViewsSeeded          int
+	ViewsExisting        int
+	ViewsFailed          int
+	ViewsWouldSeed       int
+	AutomationsSeeded    int
+	AutomationsExisting  int
+	AutomationsFailed    int
+	AutomationsWouldSeed int
 }
