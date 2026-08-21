@@ -35,6 +35,8 @@
 # svelte SPA build tree
 ui/node_modules/
 ui/dist/
+ui/playwright-report/
+ui/test-results/
 
 # But DO commit the embedded dist — it ships in the binary and a fresh
 # clone must `go build` without Node installed. Whitelist beats the

@@ -21,6 +21,9 @@ From the repository root:
 
 - `make ui-check` runs Svelte diagnostics, builds the SPA, and verifies that
   the committed embedded assets are current.
+- `make ui-e2e` runs the desktop/mobile Chromium setup smoke tests. Install a
+  browser with `bunx playwright install chromium`, or point
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` at a local Chromium binary.
 - `make ui` installs dependencies, builds the SPA, and refreshes
   `core/ui/spa/dist/`.
 

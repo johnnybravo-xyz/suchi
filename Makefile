@@ -1,4 +1,4 @@
-.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-clean docs-dev docs-check bench-check release
+.PHONY: build test vet lint fmt fmt-check tidy check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
 
 BIN := $(PWD)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/transcript
@@ -76,8 +76,11 @@ ui-dev:
 	@cd ui && bun run dev
 
 ui-check:
-	@cd ui && bun install --frozen-lockfile && bun run check && bun test && bun run build
+	@cd ui && bun install --frozen-lockfile && bun run check && bun run test && bun run build
 	@diff -qr ui/dist core/ui/spa/dist
+
+ui-e2e:
+	@cd ui && bun install --frozen-lockfile && bun run e2e
 
 ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules

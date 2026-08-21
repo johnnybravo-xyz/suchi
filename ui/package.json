@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "bun test",
+    "test": "bun test src",
+    "e2e": "playwright test",
     "check": "svelte-check",
     "build": "vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "svelte": "^5.56.8",
     "svelte-check": "^4.7.6",
