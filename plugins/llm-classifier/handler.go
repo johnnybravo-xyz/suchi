@@ -179,26 +179,31 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 
 		if res.Correspondent != "" {
-			corID, err := upsertByName(ctx, tx, "correspondents", res.Correspondent, now)
-			if err != nil {
+			var currentCorrespondent sql.NullInt64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT correspondent_id FROM documents WHERE id = ?`, e.DocID,
+			).Scan(&currentCorrespondent); err != nil {
 				return err
 			}
-			// Only set the primary FK when unresolved.
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE documents
-				SET correspondent_id = COALESCE(correspondent_id, ?),
-				    updated_at = ?
-				WHERE id = ?
-			`, corID, now, e.DocID); err != nil {
-				return err
-			}
-			// Also register as sender in the multi-correspondent
-			// junction, matching the AddDocCorrespondent semantics.
-			if _, err := tx.ExecContext(ctx, `
-				INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role)
-				VALUES (?, ?, 'sender')
-			`, e.DocID, corID); err != nil {
-				return err
+			// Parsed email headers and explicit metadata outrank a model guess.
+			if !currentCorrespondent.Valid {
+				corID, err := upsertByName(ctx, tx, "correspondents", res.Correspondent, now)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE documents
+						SET correspondent_id = ?, updated_at = ?
+						WHERE id = ? AND correspondent_id IS NULL
+				`, corID, now, e.DocID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `
+					INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role)
+					VALUES (?, ?, 'sender')
+				`, e.DocID, corID); err != nil {
+					return err
+				}
 			}
 		}
 

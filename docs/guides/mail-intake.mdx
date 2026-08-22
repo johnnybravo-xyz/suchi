@@ -94,6 +94,11 @@ The supervisor starts or reloads the mailbox within seconds. Adding, editing,
 disabling, deleting, testing, signing in, or changing mailbox credentials does
 not require a Suchi restart.
 
+Renaming a mailbox also updates its display name on linked document sources.
+The address and folder remain the values observed at ingest. Deleting the
+mailbox does not delete provenance; document details fall back to its recorded
+name.
+
 The poll interval is per mailbox, from 1 to 1440 minutes. A mailbox whose owner
 is disabled is not polled. Custom CA files are validated when a mailbox is
 created, changed, enabled, or tested; a missing or invalid CA is rejected before

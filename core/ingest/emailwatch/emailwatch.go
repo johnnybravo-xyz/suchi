@@ -784,7 +784,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		if err != nil {
 			return err
 		}
-		if err := ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceMailbox,
+		if err := ingestmeta.RecordMailboxSource(ctx, tx, docID, w.account.ID,
 			w.account.Name, w.mailboxSourceDetail(), now); err != nil {
 			return err
 		}
@@ -809,7 +809,7 @@ func (w *Watcher) mailboxSourceDetail() string {
 
 func (w *Watcher) recordMailboxSource(ctx context.Context, docID int64) error {
 	return w.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceMailbox,
+		return ingestmeta.RecordMailboxSource(ctx, tx, docID, w.account.ID,
 			w.account.Name, w.mailboxSourceDetail(), time.Now().Unix())
 	})
 }

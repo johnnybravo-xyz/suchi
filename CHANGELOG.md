@@ -23,6 +23,13 @@ schema compatibility notes.
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+### Fixed
+
+- Mailbox source labels now follow account renames while retaining their
+  recorded identity after the account is deleted.
+- The optional model no longer adds a competing sender when email headers or
+  explicit metadata already supplied a correspondent.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added

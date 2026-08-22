@@ -110,3 +110,64 @@ func TestUploadDuplicateRecordsDistinctSources(t *testing.T) {
 		t.Fatalf("source order=%+v", detail.Sources)
 	}
 }
+
+func TestDocumentSourceUsesCurrentMailboxNameAndKeepsFallback(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	seedUploadCategory(t, d)
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO documents(
+			id, owner_id, original_blob, original_size, title,
+			jd_category_id, created_at, updated_at
+		) VALUES (1, 1, 'mail-sha', 1, 'Mail document', 1, 0, 0);
+		INSERT INTO email_accounts(
+			id, name, owner_id, provider, host, port, folder,
+			auth_method, username, sealed_secret, created_at, updated_at
+		) VALUES (
+			1, 'Old mailbox name', 1, 'custom', 'imap.example.com', 993,
+			'INBOX', 'password', 'owner@example.com', X'00', 0, 0
+		);
+		INSERT INTO document_sources(
+			document_id, kind, label, detail, observed_at, email_account_id
+		) VALUES (
+			1, 'mailbox', 'Old mailbox name', 'owner@example.com / INBOX', 10, 1
+		);
+		UPDATE email_accounts SET name = 'Archive mailbox' WHERE id = 1;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &pluginapi.Principal{
+		Kind: "user", UserID: 1, Role: "admin", Scopes: []string{"documents:read"},
+	}
+	s := &Server{DB: d, Authz: authz.ACLAuthorizer{DB: d}, Log: slog.Default()}
+	getSource := func() DocumentSource {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/documents/1", nil)
+		req.SetPathValue("id", "1")
+		req = req.WithContext(auth.WithPrincipal(req.Context(), p))
+		rec := httptest.NewRecorder()
+		s.GetDocument(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var detail DocumentDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatal(err)
+		}
+		if len(detail.Sources) != 1 {
+			t.Fatalf("sources=%+v", detail.Sources)
+		}
+		return detail.Sources[0]
+	}
+
+	if got := getSource().Label; got != "Archive mailbox" {
+		t.Fatalf("live source label=%q, want Archive mailbox", got)
+	}
+	if _, err := d.Write.Exec(`DELETE FROM email_accounts WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := getSource().Label; got != "Old mailbox name" {
+		t.Fatalf("deleted-account fallback=%q, want Old mailbox name", got)
+	}
+}

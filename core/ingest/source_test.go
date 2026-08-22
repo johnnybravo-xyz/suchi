@@ -39,6 +39,13 @@ func openSourceDB(t *testing.T) *db.DB {
 		                      jd_category_id, created_at, updated_at)
 		VALUES (1, 1, 'sha-1', 1, 'one', 1, 0, 0),
 		       (2, 1, 'sha-2', 1, 'two', 1, 0, 0);
+		INSERT INTO email_accounts(
+			id, name, owner_id, provider, host, port, folder,
+			auth_method, username, sealed_secret, created_at, updated_at
+		) VALUES (
+			1, 'Personal Outlook', 1, 'microsoft', 'outlook.office365.com',
+			993, 'INBOX', 'oauth', 'ritesh@example.com', X'00', 0, 0
+		);
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -49,10 +56,10 @@ func openSourceDB(t *testing.T) *db.DB {
 func TestRecordAndCopySources(t *testing.T) {
 	d := openSourceDB(t)
 	ctx := context.Background()
-	for range 2 {
+	for _, label := range []string{"Personal Outlook", "Renamed Outlook"} {
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return ingest.RecordSource(ctx, tx, 1, ingest.SourceMailbox,
-				"Personal Outlook", "ritesh@example.com / INBOX", 100)
+			return ingest.RecordMailboxSource(ctx, tx, 1, 1,
+				label, "ritesh@example.com / INBOX", 100)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -64,12 +71,17 @@ func TestRecordAndCopySources(t *testing.T) {
 	}
 	for _, id := range []int64{1, 2} {
 		var count int
+		var accountID sql.NullInt64
 		if err := d.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM document_sources WHERE document_id = ?`, id).Scan(&count); err != nil {
+			`SELECT COUNT(*), MAX(email_account_id) FROM document_sources WHERE document_id = ?`, id).
+			Scan(&count, &accountID); err != nil {
 			t.Fatal(err)
 		}
 		if count != 1 {
 			t.Fatalf("document %d source count = %d, want 1", id, count)
+		}
+		if !accountID.Valid || accountID.Int64 != 1 {
+			t.Fatalf("document %d email_account_id = %v, want 1", id, accountID)
 		}
 	}
 }

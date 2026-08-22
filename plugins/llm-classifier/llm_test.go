@@ -24,6 +24,48 @@ func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 }
 
+func openHandlerDocument(t *testing.T, title, content string) (*db.DB, int64) {
+	t.Helper()
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, silentLog()); err != nil {
+		t.Fatal(err)
+	}
+	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, created_at, updated_at)
+		VALUES ('owner@example.com', 'Owner', 'admin', 0, 0)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID, _ := res.LastInsertId()
+	inboxID, err := jd.InboxCategoryID(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = d.Write.ExecContext(ctx, `
+		INSERT INTO documents(owner_id, original_blob, original_size, title, content,
+		                      jd_category_id, created_at, updated_at)
+		VALUES (?, 'handler-test-sha', 10, ?, ?, ?, 0, 0)
+	`, ownerID, title, content, inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docID, _ := res.LastInsertId()
+	return d, docID
+}
+
 func TestNewRejectsNonLocalWithoutAck(t *testing.T) {
 	// Non-local endpoint without ack → disabled (not an error).
 	p, err := New(Config{
@@ -162,42 +204,7 @@ func TestClassifyHappyPath(t *testing.T) {
 
 func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	ctx := context.Background()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(ctx, d, migs, silentLog()); err != nil {
-		t.Fatal(err)
-	}
-	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD); err != nil {
-		t.Fatal(err)
-	}
-	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO users(email, display_name, role, created_at, updated_at)
-		VALUES ('owner@example.com', 'Owner', 'admin', 0, 0)
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ownerID, _ := res.LastInsertId()
-	inboxID, err := jd.InboxCategoryID(ctx, d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err = d.Write.ExecContext(ctx, `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, content,
-		                      jd_category_id, created_at, updated_at)
-		VALUES (?, 'sha-low-confidence', 10, 'Original title', 'ambiguous text', ?, 0, 0)
-	`, ownerID, inboxID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	docID, _ := res.LastInsertId()
+	d, docID := openHandlerDocument(t, "Original title", "ambiguous text")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -233,6 +240,56 @@ func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	}
 	if reviewTags != 1 {
 		t.Fatalf("needs-review tags = %d, want 1", reviewTags)
+	}
+}
+
+func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
+	ctx := context.Background()
+	d, docID := openHandlerDocument(t, "Statement", "credit card statement")
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO correspondents(id, name, slug, created_at, updated_at)
+		VALUES (1, 'Header Sender', 'header-sender', 0, 0);
+		UPDATE documents SET correspondent_id = 1 WHERE id = ?;
+		INSERT INTO document_correspondents(document_id, correspondent_id, role)
+		VALUES (?, 1, 'sender');
+	`, docID, docID); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"correspondent\":\"Model Guess\",\"confidence\":0.9}"}}]}`))
+	}))
+	defer srv.Close()
+	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewHandler(p, Adapt(d), silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+		t.Fatal(err)
+	}
+
+	var primary string
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT c.name FROM documents d
+		JOIN correspondents c ON c.id = d.correspondent_id
+		WHERE d.id = ?
+	`, docID).Scan(&primary); err != nil {
+		t.Fatal(err)
+	}
+	var attached, guesses int
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM document_correspondents WHERE document_id = ?`, docID,
+	).Scan(&attached); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM correspondents WHERE name = 'Model Guess'`,
+	).Scan(&guesses); err != nil {
+		t.Fatal(err)
+	}
+	if primary != "Header Sender" || attached != 1 || guesses != 0 {
+		t.Fatalf("primary=%q attached=%d model guesses=%d", primary, attached, guesses)
 	}
 }
 
