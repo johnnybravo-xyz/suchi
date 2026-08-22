@@ -23,8 +23,21 @@ schema compatibility notes.
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+## [0.1.0] - 2026-08-22
+
 ### Added
 
+- A local-first document archive in one Go binary with an embedded responsive
+  web UI, SQLite storage, content-addressed blobs, full-text search, metadata,
+  saved views, document versions, ACLs, and Johnny.Decimal filing trees.
+- Intent-led setup, ready-made filing-tree presets, and deterministic
+  Automations with a visual builder, JSON inspection, and human approvals.
+- Intake through browser or API upload, watched folders, IMAP mailboxes, and
+  Paperless-ngx bundles, including guided Microsoft sign-in and app-password
+  guidance for Gmail and iCloud.
+- An optional fixed classifier for local Ollama or hosted OpenAI-compatible
+  endpoints, with sealed keys, explicit hosted-egress consent, confidence
+  controls, validation, and review below the configured threshold.
 - Document details now show every distinct upload, mailbox, watched-folder, or
   import source, when Suchi first saw it, and the source-carried date.
 
@@ -69,9 +82,3 @@ version header when a tag is cut.
 - Public demo visitors no longer share a known-password administrator; scratch users can mutate only their own documents.
 - Internal and upstream failures no longer expose provider, database, filesystem, or cryptographic details in API responses.
 - Local login equalizes unknown-account password work and rejects external protocol-relative redirect targets.
-
----
-
-## Release history
-
-No tags cut yet. `v0.1` is the first line in the sand.
