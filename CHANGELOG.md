@@ -23,6 +23,12 @@ schema compatibility notes.
 Everything since the last tag lands here and rolls into the next
 version header when a tag is cut.
 
+### Removed
+
+- Removed the noisy activity bell and drawer. Approvals and failed jobs remain
+  on their dedicated page, while the audit-backed events API remains available
+  to integrations.
+
 ### Fixed
 
 - Mailbox source labels now follow account renames while retaining their

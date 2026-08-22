@@ -1,10 +1,9 @@
 // /api/events/ — cursor-based activity feed over audit_events.
 //
-// The notification drawer in the SPA (and any agent that wants a
-// change stream without polling documents-list) reads this endpoint
-// with ?since_id=<id> to receive rows created after the last one it
-// saw. Each row carries a pre-rendered summary so the client never
-// needs to join names or handle content.
+// Agents and integrations that want a change stream without polling
+// documents-list read this endpoint with ?since_id=<id> to receive rows
+// created after the last one they saw. Each row carries a pre-rendered
+// summary so the client never needs to join names or handle content.
 //
 // Design notes:
 //
@@ -26,7 +25,7 @@
 //     complete feed. This keeps audit metadata from becoming a second,
 //     weaker authorization surface.
 //
-//   - Kind filter: ?kinds=a,b,c narrows the SELECT so a drawer that
+//   - Kind filter: ?kinds=a,b,c narrows the SELECT so a consumer that
 //     only wants the operational tail (job.dead, document.ingested)
 //     doesn't pay for every document.update the archive produces.
 //     Unknown kinds simply return no rows (no error) so a client

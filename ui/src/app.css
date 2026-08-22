@@ -336,14 +336,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   border: 1px solid var(--line); border-radius: 99px; padding: 1px 7px;
 }
 
-/* ---------- topbar bell + setup banner ---------- */
-.bell { position: relative; padding: 8px 11px; }
-.bell-dot {
-  position: absolute; top: -6px; right: -6px;
-  background: var(--danger); color: #fff;
-  font-size: .62rem; font-weight: 700; font-family: ui-monospace, monospace;
-  border-radius: 99px; padding: 1px 6px; border: 2px solid var(--bg);
-}
+/* ---------- setup banner ---------- */
 .setup-banner {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 22px; font-size: .86rem;
@@ -351,20 +344,6 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   color: var(--ink);
 }
 .setup-banner span { flex: 1; min-width: 240px; }
-
-/* ---------- notification drawer ---------- */
-.drawer-veil { position: fixed; inset: 0; z-index: 80; background: color-mix(in srgb, var(--ink) 20%, transparent); }
-.ndrawer {
-  position: absolute; top: 0; right: 0; bottom: 0;
-  width: min(380px, 92vw);
-  background: var(--bg); border-left: 1px solid var(--line-strong);
-  box-shadow: var(--shadow); padding: 16px 18px; overflow-y: auto;
-  animation: slide-in .2s ease backwards;
-}
-@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } }
-.ndrawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.ndrawer-head h3 { font-size: 1rem; }
-.ndrawer .index { margin-bottom: 8px; }
 
 /* ---------- bulk selection ---------- */
 .bulkbar {

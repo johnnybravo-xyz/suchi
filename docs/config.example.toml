@@ -53,7 +53,7 @@ backup_interval = "24h"
 backup_keep = 7
 
 # Audit-events sliding window (days). Pruning runs after each backup
-# snapshot. Default 20. Env caps at 100 so notifications-feed growth
+# snapshot. Default 20. Env caps at 100 so activity-feed growth
 # can't blow up storage without an operator conscious decision. 0
 # disables pruning entirely.
 audit_retention_days = 20
