@@ -350,7 +350,10 @@ func TestPatchUser_regrant_does_not_reenable_mailboxes(t *testing.T) {
 
 func TestWhoami_capabilities(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		PublicURL: "https://suchi.example.com",
+	}
 	seedMember(t, s, 5, `["mailboxes"]`)
 
 	rec := doAdmin(t, s, "GET", "/api/whoami", "", memberPrincipal(5))
@@ -363,6 +366,9 @@ func TestWhoami_capabilities(t *testing.T) {
 	}
 	if len(self.Capabilities) != 1 || self.Capabilities[0] != "mailboxes" {
 		t.Fatalf("whoami capabilities = %v", self.Capabilities)
+	}
+	if self.InstanceHost != "suchi.example.com" {
+		t.Fatalf("whoami instance_host = %q", self.InstanceHost)
 	}
 
 	// A member with no caps still sees the field as [], not omitted.

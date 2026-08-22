@@ -126,7 +126,7 @@
     bulkBusy = true
     try {
       const res = await createShareLink({ doc_ids: [...sel], label: `Selection of ${sel.size}` })
-      const url = location.origin + (res?.public_url || `/s/${res?.token}`)
+      const url = res?.public_url || `${location.origin}/s/${res?.token}`
       await navigator.clipboard?.writeText(url)
       notify?.('Share link for the selection copied')
     } catch (ex) { notify?.(ex.message || 'Could not create the bundle') }

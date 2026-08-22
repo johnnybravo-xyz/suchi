@@ -88,8 +88,8 @@ for non-admin users.
 - `expires_in_sec`: optional lifetime; zero means no expiry
 - `password`: optional recipient password
 
-The response contains a relative `/s/<token>` URL. Resolve it against the
-configured Suchi URL before presenting it outside the MCP client.
+The response contains an absolute `/s/<token>` URL resolved from the server's
+configured `PUBLIC_URL`.
 
 ## Current limits
 

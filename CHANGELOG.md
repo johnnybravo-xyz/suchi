@@ -31,6 +31,9 @@ version header when a tag is cut.
 
 ### Fixed
 
+- Public share pages now identify the person and configured Suchi hostname,
+  including before password entry, without exposing email addresses. The share
+  dialog previews this recipient identity before creating a link.
 - Mailbox source labels now follow account renames while retaining their
   recorded identity after the account is deleted.
 - The optional model no longer adds a competing sender when email headers or

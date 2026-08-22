@@ -27,6 +27,7 @@ type UserSelf struct {
 	UserID       int64    `json:"user_id"`
 	Email        string   `json:"email"`
 	DisplayName  string   `json:"display_name,omitempty"`
+	InstanceHost string   `json:"instance_host,omitempty"`
 	Role         string   `json:"role"`
 	AuthNBy      string   `json:"authn_by,omitempty"`
 	AvatarURL    string   `json:"avatar_url,omitempty"`
@@ -46,6 +47,7 @@ func (s *Server) Whoami(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "whoami.load", err)
 		return
 	}
+	self.InstanceHost = s.publicHost()
 	s.writeJSON(w, http.StatusOK, self)
 }
 

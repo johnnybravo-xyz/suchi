@@ -191,6 +191,13 @@
   let shareLinks = $state([])
   let sh = $state({ expiry: '0', password: '' })
   const EXPIRIES = [['0', 'Never expires'], ['86400', '1 day'], ['604800', '7 days'], ['2592000', '30 days']]
+  const shareIdentity = $derived.by(() => {
+    const name = session.user?.display_name?.trim() || ''
+    const host = session.user?.instance_host?.trim() || location.host
+    if (name && host) return `Shared by ${name} · ${host}`
+    if (name) return `Shared by ${name}`
+    return `Shared from ${host}`
+  })
 
   async function openShare() {
     shareOpen = true
@@ -205,7 +212,7 @@
         doc_ids: [Number(id)], label: doc?.title || '',
         expires_in_sec: Number(sh.expiry), password: sh.password,
       })
-      const url = location.origin + (res?.public_url || `/s/${res?.token}`)
+      const url = res?.public_url || `${location.origin}/s/${res?.token}`
       await navigator.clipboard?.writeText(url)
       shareURL = url
       notify?.(sh.password ? 'Password-protected link copied' : 'Share link copied')
@@ -518,6 +525,12 @@
       <p class="sub" style="color:var(--muted);font-size:.82rem;margin:0 0 12px">
         Anyone with the link can view and download. No account needed on their side.
       </p>
+      <div class="share-preview">
+        <span>Recipients will see</span>
+        <strong>{doc?.title || `Document #${id}`}</strong>
+        <small>{shareIdentity}</small>
+        <em>Powered by suchi</em>
+      </div>
       <div class="toolbar" style="margin:0 0 10px">
         <select class="input" bind:value={sh.expiry} aria-label="Link expiry">
           {#each EXPIRIES as [v, label]}<option value={v}>{label}</option>{/each}

@@ -30,6 +30,7 @@ import (
 	"io"
 	stdmime "mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,7 +53,7 @@ type ShareLinkRow struct {
 	ViewCount int64   `json:"view_count"`
 	CreatedAt int64   `json:"created_at"`
 	RevokedAt int64   `json:"revoked_at,omitempty"`
-	PublicURL string  `json:"public_url"` // relative, e.g. "/s/<token>"
+	PublicURL string  `json:"public_url"` // absolute configured public URL
 }
 
 // ShareLinkCreate is the POST body.
@@ -115,7 +116,7 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.HasPasswd = hasPasswd == 1
-		v.PublicURL = "/s/" + v.Token
+		v.PublicURL = s.publicShareURL(v.Token)
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -231,9 +232,11 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		RequestID:  r.Header.Get("X-Request-Id"),
 	})
 	s.writeJSON(w, http.StatusCreated, map[string]any{
-		"id":         id,
-		"token":      token,
-		"public_url": "/s/" + token,
+		"id":            id,
+		"token":         token,
+		"public_url":    s.publicShareURL(token),
+		"shared_by":     strings.TrimSpace(p.Display),
+		"instance_host": s.publicHost(),
 	})
 }
 
@@ -304,6 +307,8 @@ func (s *Server) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
 // requires_password=true; browser clients submit the unlock form.
 type ShareLinkPublic struct {
 	Label            string            `json:"label"`
+	SharedBy         string            `json:"shared_by"`
+	InstanceHost     string            `json:"instance_host"`
 	RequiresPassword bool              `json:"requires_password"`
 	Docs             []ShareLinkPubDoc `json:"docs"`
 }
@@ -330,7 +335,8 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if wantsHTML(r) {
 			renderShareHTML(w, http.StatusNotFound, shareHTMLData{
-				Title: "Link expired",
+				Title:        "Link expired",
+				InstanceHost: s.publicHost(),
 				Notice: "This share link is invalid, expired, or was revoked. " +
 					"Ask the sender for a fresh link.",
 			})
@@ -344,6 +350,8 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 			if wantsHTML(r) {
 				renderShareHTML(w, http.StatusOK, shareHTMLData{
 					Title:            link.label,
+					SharedBy:         link.sharedBy,
+					InstanceHost:     s.publicHost(),
 					Token:            token,
 					RequiresPassword: true,
 				})
@@ -351,6 +359,8 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeJSON(w, http.StatusOK, ShareLinkPublic{
 				Label:            link.label,
+				SharedBy:         link.sharedBy,
+				InstanceHost:     s.publicHost(),
 				RequiresPassword: true,
 			})
 			return
@@ -358,6 +368,8 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 		if wantsHTML(r) {
 			renderShareHTML(w, http.StatusForbidden, shareHTMLData{
 				Title:            link.label,
+				SharedBy:         link.sharedBy,
+				InstanceHost:     s.publicHost(),
 				Token:            token,
 				RequiresPassword: true,
 				BadPassword:      true,
@@ -377,11 +389,15 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 	_ = s.bumpShareViewCount(r, link.id)
 	if wantsHTML(r) {
 		renderShareHTML(w, http.StatusOK, shareHTMLData{
-			Title: link.label, Token: token, Docs: docs,
+			Title: link.label, SharedBy: link.sharedBy, InstanceHost: s.publicHost(),
+			Token: token, Docs: docs,
 		})
 		return
 	}
-	out := ShareLinkPublic{Label: link.label, Docs: make([]ShareLinkPubDoc, 0, len(docs))}
+	out := ShareLinkPublic{
+		Label: link.label, SharedBy: link.sharedBy, InstanceHost: s.publicHost(),
+		Docs: make([]ShareLinkPubDoc, 0, len(docs)),
+	}
 	for _, d := range docs {
 		out.Docs = append(out.Docs, ShareLinkPubDoc{
 			ID: d.ID, Title: d.Title, MIME: d.MIME, Size: d.Size,
@@ -407,7 +423,7 @@ func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
 	link, err := s.loadShareByToken(r, token)
 	if err != nil {
 		renderShareHTML(w, http.StatusNotFound, shareHTMLData{
-			Title:  "Link expired",
+			Title: "Link expired", InstanceHost: s.publicHost(),
 			Notice: "This share link is invalid, expired, or was revoked.",
 		})
 		return
@@ -415,6 +431,8 @@ func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
 	if err := s.verifySharePassword(link, pw); err != nil {
 		renderShareHTML(w, http.StatusForbidden, shareHTMLData{
 			Title:            link.label,
+			SharedBy:         link.sharedBy,
+			InstanceHost:     s.publicHost(),
 			Token:            token,
 			RequiresPassword: true,
 			BadPassword:      true,
@@ -471,6 +489,8 @@ func wantsHTML(r *http.Request) bool {
 // (set by PostSharePublic), so download hrefs stay clean.
 type shareHTMLData struct {
 	Title            string
+	SharedBy         string
+	InstanceHost     string
 	Token            string
 	RequiresPassword bool
 	BadPassword      bool
@@ -494,6 +514,7 @@ func renderShareHTML(w http.ResponseWriter, status int, d shareHTMLData) {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(shareHTMLDoctype))
 	_, _ = fmt.Fprintf(w, shareHTMLShell, html.EscapeString(d.Title))
+	writeShareByline(w, d)
 	if d.Notice != "" {
 		_, _ = fmt.Fprintf(w, `<div class="notice">%s</div>`, html.EscapeString(d.Notice))
 	} else if d.RequiresPassword {
@@ -521,6 +542,24 @@ func renderShareHTML(w http.ResponseWriter, status int, d shareHTMLData) {
 		_, _ = w.Write([]byte(`</ul>`))
 	}
 	_, _ = w.Write([]byte(shareHTMLFoot))
+}
+
+func writeShareByline(w io.Writer, d shareHTMLData) {
+	name := strings.TrimSpace(d.SharedBy)
+	host := strings.TrimSpace(d.InstanceHost)
+	var byline string
+	switch {
+	case name != "" && host != "":
+		byline = `Shared by <strong>` + html.EscapeString(name) + `</strong>` +
+			` <span aria-hidden="true">·</span> ` + html.EscapeString(host)
+	case name != "":
+		byline = `Shared by <strong>` + html.EscapeString(name) + `</strong>`
+	case host != "":
+		byline = `Shared from <strong>` + html.EscapeString(host) + `</strong>`
+	default:
+		byline = "Shared document"
+	}
+	_, _ = fmt.Fprintf(w, `<p class="sub">%s</p>`, byline)
 }
 
 func defaultString(s, fallback string) string {
@@ -594,14 +633,17 @@ ul.docs a:hover { background: var(--tint); }
 .meta em { font-style: normal; font-size: .78rem; color: var(--muted); }
 .sub a { color: var(--accent); text-decoration: none; }
 .sub a:hover { text-decoration: underline; }
+footer { margin-top: 28px; color: var(--muted); font-size: .74rem; }
+footer a { color: inherit; text-decoration: none; }
+footer a:hover { color: var(--accent); }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#141618; --surface:#1D2023; --ink:#ECEAE2; --muted:#9C9A90;
     --line:rgba(236,234,226,.1); --accent:#4FA8DC; --tint:rgba(79,168,220,.12); }
 }
 </style></head><body><div class="wrap">
-<h1>%[1]s</h1><p class="sub">Shared via <a href="https://suchi.page" target="_blank" rel="noopener noreferrer">suchi</a>. Click a document to download.</p>`
+<h1>%[1]s</h1>`
 
-const shareHTMLFoot = `</div></body></html>`
+const shareHTMLFoot = `<footer>Powered by <a href="https://suchi.page" target="_blank" rel="noopener noreferrer">suchi</a></footer></div></body></html>`
 
 // GetSharePublicDownload — GET /s/{token}/{doc_id}/download.
 // Streams the original blob if the share link covers doc_id and the
@@ -705,6 +747,7 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 type shareLinkLoaded struct {
 	id        int64
 	label     string
+	sharedBy  string
 	docIDs    []int64
 	pwHash    sql.NullString
 	expiresAt sql.NullInt64
@@ -722,10 +765,13 @@ func (s *Server) loadShareByToken(r *http.Request, token string) (*shareLinkLoad
 	var l shareLinkLoaded
 	var docIDsJSON string
 	err := s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT id, label, doc_ids_json, password_hash, expires_at, revoked_at
-		FROM share_links
-		WHERE token = ?
-	`, token).Scan(&l.id, &l.label, &docIDsJSON, &l.pwHash, &l.expiresAt, &l.revokedAt)
+		SELECT sl.id, sl.label, COALESCE(NULLIF(TRIM(u.display_name), ''), ''), sl.doc_ids_json,
+		       sl.password_hash, sl.expires_at, sl.revoked_at
+		FROM share_links sl
+		JOIN users u ON u.id = sl.created_by
+		WHERE sl.token = ?
+	`, token).Scan(&l.id, &l.label, &l.sharedBy, &docIDsJSON,
+		&l.pwHash, &l.expiresAt, &l.revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errNotFound
 	}
@@ -742,6 +788,22 @@ func (s *Server) loadShareByToken(r *http.Request, token string) (*shareLinkLoad
 		return nil, err
 	}
 	return &l, nil
+}
+
+func (s *Server) publicHost() string {
+	u, err := url.Parse(strings.TrimSpace(s.PublicURL))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func (s *Server) publicShareURL(token string) string {
+	base := strings.TrimRight(strings.TrimSpace(s.PublicURL), "/")
+	if base == "" {
+		return "/s/" + token
+	}
+	return base + "/s/" + token
 }
 
 // verifySharePassword returns nil when a password isn't required or

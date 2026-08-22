@@ -81,13 +81,78 @@ func TestShareLinks_cap_gate(t *testing.T) {
 
 func TestRenderShareHTMLIncludesFavicon(t *testing.T) {
 	rec := httptest.NewRecorder()
-	renderShareHTML(rec, http.StatusOK, shareHTMLData{Title: "Shared documents"})
+	renderShareHTML(rec, http.StatusOK, shareHTMLData{
+		Title: "Shared documents", SharedBy: "Ritesh & family", InstanceHost: "suchi.example.com",
+	})
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `href="/assets/brand/favicon.svg"`) {
 		t.Errorf("share page should declare the branded favicon")
+	}
+	if !strings.Contains(rec.Body.String(), "Shared by <strong>Ritesh &amp; family</strong> <span aria-hidden=\"true\">·</span> suchi.example.com") {
+		t.Errorf("share page should identify and escape its creator")
+	}
+	if !strings.Contains(rec.Body.String(), "Powered by") {
+		t.Errorf("share page should keep product attribution in its footer")
+	}
+	if strings.Contains(rec.Body.String(), "document to download") {
+		t.Errorf("share page should not explain self-evident download rows")
+	}
+}
+
+func TestPublicShareUsesCurrentCreatorName(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		PublicURL: "https://suchi.example.com",
+	}
+	seedUser(t, d, 1)
+	if _, err := d.Write.Exec(`UPDATE users SET display_name = 'Ritesh' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("a", 64)
+	if _, err := d.Write.Exec(`
+		INSERT INTO share_links(token, doc_ids_json, created_by, password_hash, created_at)
+		VALUES (?, '[42]', 1, 'test-hash', 0)
+	`, token); err != nil {
+		t.Fatal(err)
+	}
+
+	request := func(accept string) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/s/"+token, http.NoBody)
+		req.Header.Set("Accept", accept)
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /s/{token}", s.GetSharePublic)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	if body := request("text/html"); !strings.Contains(body, "Shared by <strong>Ritesh</strong> <span aria-hidden=\"true\">·</span> suchi.example.com") {
+		t.Fatalf("creator missing from share page: %s", body)
+	} else if strings.Index(body, "Shared by") > strings.Index(body, "<form") {
+		t.Fatalf("creator identity should appear before password entry: %s", body)
+	}
+	if body := request("application/json"); !strings.Contains(body, `"shared_by":"Ritesh"`) ||
+		!strings.Contains(body, `"instance_host":"suchi.example.com"`) {
+		t.Fatalf("creator missing from public share JSON: %s", body)
+	}
+	if _, err := d.Write.Exec(`UPDATE users SET display_name = 'R. Shrivastav' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if body := request("text/html"); !strings.Contains(body, "Shared by <strong>R. Shrivastav</strong> <span aria-hidden=\"true\">·</span> suchi.example.com") {
+		t.Fatalf("renamed creator missing from share page: %s", body)
+	}
+	if _, err := d.Write.Exec(`UPDATE users SET display_name = '' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if body := request("text/html"); !strings.Contains(body, "Shared from <strong>suchi.example.com</strong>") {
+		t.Fatalf("empty creator name should fall back to instance host: %s", body)
 	}
 }
 

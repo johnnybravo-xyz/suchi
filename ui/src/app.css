@@ -428,6 +428,14 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .modal { width: min(680px, 94vw); max-height: 82vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); padding: 18px 20px; animation: rise-sm .16s ease backwards; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .modal-head h3 { font-size: 1rem; }
+.share-preview {
+  display: grid; gap: 3px; margin: 0 0 14px; padding: 11px 0;
+  border-block: 1px solid var(--line); color: var(--muted);
+}
+.share-preview > span { font-size: .7rem; font-weight: 600; text-transform: uppercase; color: var(--faint); }
+.share-preview > strong { color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
+.share-preview > small { font-size: .78rem; }
+.share-preview > em { font-size: .68rem; font-style: normal; color: var(--faint); }
 .admin-tabs { margin-bottom: 16px; }
 .inline-edit { border: 0; background: none; font: inherit; color: inherit; padding: 2px 4px; border-radius: 4px; width: 100%; }
 .inline-edit:focus { background: var(--surface-2); outline: 1px solid var(--accent); }
