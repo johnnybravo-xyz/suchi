@@ -31,6 +31,8 @@ version header when a tag is cut.
 
 ### Fixed
 
+- Document access controls now open from the top toolbar instead of interrupting
+  the metadata and related-document flow.
 - Public share pages now identify the person and configured Suchi hostname,
   including before password entry, without exposing email addresses. The share
   dialog previews this recipient identity before creating a link.

@@ -22,6 +22,7 @@
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
   let accessDraft = $state({ principal: '', perm_bits: '1' })
+  let accessOpen = $state(false)
   let trashOpen = $state(false)
   let trashBusy = $state(false)
 
@@ -236,7 +237,7 @@
     finally { trashBusy = false }
   }
 
-  $effect(() => { id; revealed = false; load() })
+  $effect(() => { id; revealed = false; accessOpen = false; load() })
 </script>
 
 <div class="toolbar">
@@ -252,7 +253,10 @@
     </button>
   {/if}
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
-  {#if canManageAccess}<button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>{/if}
+  {#if canManageAccess}
+    <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> Access</button>
+    <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
+  {/if}
   <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
 </div>
 
@@ -385,58 +389,6 @@
         {/if}
       </div>
 
-      {#if access}
-        <div class="card">
-          <h3 style="display:flex;align-items:center;gap:8px">
-            <Icon name="shield" size={14} /> Access
-            <span class="pill">{access.results?.length || 0}</span>
-          </h3>
-          <form class="toolbar" style="margin-bottom:{access.results?.length ? '10px' : '0'}" onsubmit={grantAccess}>
-            <select class="input" style="flex:1;max-width:none;min-width:180px" bind:value={accessDraft.principal} aria-label="Person or group">
-              <option value="">Select a person or group</option>
-              {#if availablePrincipals('user').length}
-                <optgroup label="People">
-                  {#each availablePrincipals('user') as person (person.id)}
-                    <option value={principalKey(person)}>{person.name}{person.email && person.email !== person.name ? ` · ${person.email}` : ''}</option>
-                  {/each}
-                </optgroup>
-              {/if}
-              {#if availablePrincipals('group').length}
-                <optgroup label="Groups">
-                  {#each availablePrincipals('group') as group (group.id)}
-                    <option value={principalKey(group)}>{group.name}</option>
-                  {/each}
-                </optgroup>
-              {/if}
-            </select>
-            <select class="input" style="max-width:130px" bind:value={accessDraft.perm_bits} aria-label="Access level">
-              {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
-            </select>
-            <button class="btn primary sm" disabled={!accessDraft.principal}><Icon name="plus" size={12} /> Add</button>
-          </form>
-          {#if access.results?.length}
-            <div class="index" style="border:0">
-              {#each access.results as grant (grant.id)}
-                {@const principal = principalFor(grant)}
-                <div class="irow" style="padding:7px 2px;cursor:default">
-                  <span class="dot" class:accent={grant.principal_kind === 'group'}></span>
-                  <span class="grow" style="min-width:0">
-                    <span class="title" style="display:block;font-size:.82rem">{principal?.name || `${grant.principal_kind} #${grant.principal_id}`}</span>
-                    <span class="sub" style="display:block;overflow:hidden;text-overflow:ellipsis">{principal?.email || (grant.principal_kind === 'group' ? 'Group' : '')}</span>
-                  </span>
-                  <select class="input" style="width:118px;padding:4px 7px;font-size:.76rem" value={String(grant.perm_bits)}
-                          aria-label={`Access for ${principal?.name || grant.principal_kind}`}
-                          title={accessLabel(grant.perm_bits)} onchange={(e) => changeAccess(grant, e.target.value)}>
-                    {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
-                  </select>
-                  <button class="btn sm danger" title="Revoke access" aria-label="Revoke access" onclick={() => revokeAccess(grant)}><Icon name="trash" size={12} /></button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-
       {#if versions.length > 1}
         <div class="card">
           <h3>Versions</h3>
@@ -499,6 +451,60 @@
              class:blurred
              style="white-space:pre-wrap;max-height:220px;overflow:auto;font-size:.8rem;color:var(--muted);margin:0"
              aria-hidden={blurred}>{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? '…' : ''}</p>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+{#if accessOpen && access}
+  <div class="modal-veil" onclick={() => (accessOpen = false)} role="presentation">
+    <div class="modal" style="width:min(620px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') accessOpen = false }} role="dialog" aria-label="Document access" tabindex="-1">
+      <div class="modal-head">
+        <h3>Access to “{doc?.title || `Document #${id}`}” <span class="pill">{access.results?.length || 0}</span></h3>
+        <button class="btn sm" onclick={() => (accessOpen = false)} aria-label="Close access"><Icon name="x" size={13} /></button>
+      </div>
+      <form class="toolbar" style="margin-bottom:{access.results?.length ? '10px' : '0'}" onsubmit={grantAccess}>
+        <select class="input" style="flex:1;max-width:none;min-width:180px" bind:value={accessDraft.principal} aria-label="Person or group">
+          <option value="">Select a person or group</option>
+          {#if availablePrincipals('user').length}
+            <optgroup label="People">
+              {#each availablePrincipals('user') as person (person.id)}
+                <option value={principalKey(person)}>{person.name}{person.email && person.email !== person.name ? ` · ${person.email}` : ''}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if availablePrincipals('group').length}
+            <optgroup label="Groups">
+              {#each availablePrincipals('group') as group (group.id)}
+                <option value={principalKey(group)}>{group.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+        <select class="input" style="max-width:130px" bind:value={accessDraft.perm_bits} aria-label="Access level">
+          {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
+        </select>
+        <button class="btn primary sm" disabled={!accessDraft.principal}><Icon name="plus" size={12} /> Add</button>
+      </form>
+      {#if access.results?.length}
+        <div class="index" style="border:0">
+          {#each access.results as grant (grant.id)}
+            {@const principal = principalFor(grant)}
+            <div class="irow" style="padding:7px 2px;cursor:default">
+              <span class="dot" class:accent={grant.principal_kind === 'group'}></span>
+              <span class="grow" style="min-width:0">
+                <span class="title" style="display:block;font-size:.82rem">{principal?.name || `${grant.principal_kind} #${grant.principal_id}`}</span>
+                <span class="sub" style="display:block;overflow:hidden;text-overflow:ellipsis">{principal?.email || (grant.principal_kind === 'group' ? 'Group' : '')}</span>
+              </span>
+              <select class="input" style="width:118px;padding:4px 7px;font-size:.76rem" value={String(grant.perm_bits)}
+                      aria-label={`Access for ${principal?.name || grant.principal_kind}`}
+                      title={accessLabel(grant.perm_bits)} onchange={(e) => changeAccess(grant, e.target.value)}>
+                {#each ACCESS_LEVELS as [value, label]}<option {value}>{label}</option>{/each}
+              </select>
+              <button class="btn sm danger" title="Revoke access" aria-label="Revoke access" onclick={() => revokeAccess(grant)}><Icon name="trash" size={12} /></button>
+            </div>
+          {/each}
         </div>
       {/if}
     </div>
