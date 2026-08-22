@@ -76,6 +76,7 @@
   let llmTesting = $state(false)
   let llmMode = $state('local')
   let llmTestResult = $state(null)
+  let llmTestError = $state('')
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '' })
 
@@ -193,6 +194,7 @@
   function setLLMMode(mode) {
     llmMode = mode
     llmTestResult = null
+    llmTestError = ''
     if (mode === 'local' && (!llm.endpoint_url || !isLocalEndpoint(llm.endpoint_url))) {
       llm.endpoint_url = 'http://host.suchi.local:11434/v1'
       if (!llm.model) llm.model = 'qwen2.5:7b'
@@ -215,13 +217,13 @@
   }
 
   async function testClassifier() {
-    err = ''; llmTesting = true; llmTestResult = null
+    err = ''; llmTesting = true; llmTestResult = null; llmTestError = ''
     try {
       const result = await testLLMSettings(llmPayload(true))
       llmTestResult = result?.result || null
       notify?.(result?.message || 'Classifier connection passed')
     } catch (ex) {
-      err = ex.message || 'The classifier did not return a valid response.'
+      llmTestError = ex.message || 'The classifier did not return a valid response.'
     } finally { llmTesting = false }
   }
 
@@ -445,7 +447,12 @@
         <button class="btn sm" disabled={busy || llmTesting}
 				onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Use local classification only</button>
       </div>
-      {#if llmTestResult}
+      {#if llmTestError}
+        <div class="test-result failed">
+          <b>Connection failed</b>
+          <span>{llmTestError}</span>
+        </div>
+      {:else if llmTestResult}
         <div class="test-result">
           <b>Validated in {llmTestResult.elapsed_ms} ms</b>
           <span>{llmTestResult.title || 'No title'} · confidence {Number(llmTestResult.confidence).toFixed(2)}</span>
@@ -517,6 +524,7 @@
     display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--ok);
     padding: 7px 10px; margin-top: 12px; font-size: .82rem;
   }
+  .test-result.failed { border-left-color: var(--danger); }
   @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .intent-grid { grid-template-columns: 1fr; } }
   .preset {

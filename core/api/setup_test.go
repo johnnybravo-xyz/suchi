@@ -321,6 +321,35 @@ func TestLLMSettingsTest_UsesCandidateWithoutSaving(t *testing.T) {
 	}
 }
 
+type testUpstreamError struct{ status int }
+
+func (e testUpstreamError) Error() string           { return "private provider error" }
+func (e testUpstreamError) UpstreamStatusCode() int { return e.status }
+
+func TestLLMSettingsTest_ExplainsMissingModelWithoutProviderDetails(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB:  d,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLMTester: func(context.Context, LLMTestConfig) (LLMTestResult, error) {
+			return LLMTestResult{}, testUpstreamError{status: http.StatusNotFound}
+		},
+	}
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"missing"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm/test", strings.NewReader(body))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
+		Kind: "user", UserID: 1, Role: "admin",
+	}))
+	rec := httptest.NewRecorder()
+	s.TestLLMSettings(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not find this model") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "private provider error") {
+		t.Fatalf("provider details leaked: %s", rec.Body.String())
+	}
+}
+
 func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}

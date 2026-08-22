@@ -509,12 +509,40 @@ func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
 		ConfidenceThreshold: confidence,
 	})
 	if err != nil {
-		s.writeError(w, http.StatusBadGateway, "llm_test_failed", err.Error())
+		if s.Log != nil {
+			s.Log.Error("api.response_error", "status", http.StatusBadGateway,
+				"code", "llm_test_failed", "err", err.Error())
+		}
+		s.writeJSON(w, http.StatusBadGateway, errBody{
+			Code: "llm_test_failed", Error: llmTestErrorMessage(err),
+		})
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Classifier responded with a valid result.", "result": result,
 	})
+}
+
+func llmTestErrorMessage(err error) string {
+	var upstream interface{ UpstreamStatusCode() int }
+	if errors.As(err, &upstream) {
+		switch upstream.UpstreamStatusCode() {
+		case http.StatusBadRequest:
+			return "Provider rejected the request. Check the endpoint and model."
+		case http.StatusUnauthorized:
+			return "Provider rejected the API key."
+		case http.StatusForbidden:
+			return "Provider denied access. Check the API key and model permissions."
+		case http.StatusNotFound:
+			return "Provider could not find this model. Check the model name and endpoint."
+		case http.StatusTooManyRequests:
+			return "Provider rate limit reached. Try again shortly."
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Provider did not respond before the timeout."
+	}
+	return "Provider request failed. Check the endpoint, model, and provider availability."
 }
 
 // ---------- preferences ----------

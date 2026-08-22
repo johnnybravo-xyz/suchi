@@ -66,6 +66,26 @@ var ErrDisabled = errors.New("llm-classifier: disabled")
 
 var errEgressAckRequired = errors.New("llm-classifier: non-local endpoint requires EgressAck=true")
 
+type providerHTTPError struct {
+	status   int
+	terminal bool
+}
+
+func (e *providerHTTPError) Error() string {
+	return fmt.Sprintf("llm-classifier: HTTP %d", e.status)
+}
+
+func (e *providerHTTPError) Unwrap() error {
+	if e.terminal {
+		return jobs.ErrTerminal
+	}
+	return nil
+}
+
+// UpstreamStatusCode lets admin-facing callers provide useful, sanitized
+// guidance without exposing the provider response body.
+func (e *providerHTTPError) UpstreamStatusCode() int { return e.status }
+
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
 	EndpointURL string // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
@@ -325,10 +345,10 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		// outcomes that never become success. 429 stays retryable — the
 		// outbox backoff waits out a rate limit. Wrap jobs.ErrTerminal
 		// so the dispatcher short-circuits to dead on first failure.
-		return nil, fmt.Errorf("%w: llm-classifier: HTTP %d", jobs.ErrTerminal, resp.StatusCode)
+		return nil, &providerHTTPError{status: resp.StatusCode, terminal: true}
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("llm-classifier: HTTP %d", resp.StatusCode)
+		return nil, &providerHTTPError{status: resp.StatusCode}
 	}
 
 	return parseChatCompletion(rb)

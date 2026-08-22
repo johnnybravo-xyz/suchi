@@ -159,6 +159,8 @@ ACL-scoped Ask in v0.3. Neither is part of the v0.1 classifier contract.
   egress acknowledgement and usually a key.
 - **401 or 403:** verify the provider key, Azure deployment, or endpoint base
   URL.
+- **404:** verify the model name against the provider's current model list and
+  confirm that the endpoint is its OpenAI-compatible base URL.
 - **Invalid result:** use an instruction-tuned model that reliably returns one
   JSON object. Suchi intentionally rejects explanatory prose.
 - **Low confidence:** use a stronger model, improve deterministic automations,
