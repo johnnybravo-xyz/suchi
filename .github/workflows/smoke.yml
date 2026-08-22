@@ -30,6 +30,7 @@ jobs:
       # coexist even if GitHub ever schedules them on the same runner.
       HOST_PORT: ${{ matrix.port }}
       LANE: ${{ matrix.lane }}
+      SMOKE_PASSWORD: suchi-smoke-password
     steps:
       - uses: actions/checkout@v6
 
@@ -99,14 +100,14 @@ jobs:
           fi
           curl -sf -X POST http://127.0.0.1:$HOST_PORT/setup \
               -H 'Content-Type: application/json' \
-              -d "{\"token\":\"$TOKEN\",\"email\":\"smoke@ex.dev\",\"password\":\"pw\"}"
+              -d "{\"token\":\"$TOKEN\",\"email\":\"smoke@ex.dev\",\"password\":\"$SMOKE_PASSWORD\"}"
 
       - name: Login → API token
         run: |
           API_TOKEN=$(curl -s -X POST http://127.0.0.1:$HOST_PORT/api/login \
               -H 'Accept: application/json' \
               -H 'Content-Type: application/json' \
-              -d '{"email":"smoke@ex.dev","password":"pw"}' \
+              -d "{\"email\":\"smoke@ex.dev\",\"password\":\"$SMOKE_PASSWORD\"}" \
               | grep -oP '"token":"\K[^"]+')
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 
