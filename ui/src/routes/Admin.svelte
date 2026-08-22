@@ -3,22 +3,24 @@
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
            listTags, listCorrespondents, listDocumentTypes, listStoragePaths,
-           createTaxon, patchTaxon, deleteTaxon } from '../lib/api.js'
+           createTaxon, patchTaxon, deleteTaxon, exportTaxonomy } from '../lib/api.js'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
-  import { exportTaxonomy } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
   let tab = $state('users')
 
   // ---------- users ----------
-  // Grep-friendly whitelist — future capabilities land here (one line each)
-  // and every admin surface picks them up automatically.
-  const KNOWN_CAPS = ['mailboxes', 'share_links']
+  // Keep backend capability keys next to the copy shown to administrators.
+  const KNOWN_CAPS = [
+    { key: 'mailboxes', label: 'Manage mailboxes', description: 'Connect and manage their own mail intake.' },
+    { key: 'share_links', label: 'Create share links', description: 'Share documents using revocable links.' },
+  ]
 
   let nu = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })
   let users = $state([])
   let usersLoaded = $state(false)
+  let userBusy = $state(false)
 
   async function loadUsers() {
     try {
@@ -45,21 +47,30 @@
   }
 
   async function toggleUserCap(u, cap) {
-    const has = (u.capabilities || []).includes(cap)
-    const newCaps = has ? u.capabilities.filter(c => c !== cap) : [...(u.capabilities || []), cap]
+    if (userBusy) return
+    const has = (u.capabilities || []).includes(cap.key)
+    const newCaps = has ? u.capabilities.filter(c => c !== cap.key) : [...(u.capabilities || []), cap.key]
+    userBusy = true
     try {
       await adminPatchUser(u.id, { capabilities: newCaps })
-      notify?.(has ? `Revoked ${cap} from ${u.email}` : `Granted ${cap} to ${u.email}`)
-      loadUsers()
+      u.capabilities = newCaps
+      users = [...users]
+      notify?.(has ? `Revoked ${cap.label} from ${u.email}` : `Granted ${cap.label} to ${u.email}`)
     } catch (ex) { notify?.(ex.message || 'Could not update capabilities') }
+    finally { userBusy = false }
   }
 
   async function toggleDisabled(u) {
+    if (userBusy) return
+    const disabled = !u.disabled
+    userBusy = true
     try {
-      await adminPatchUser(u.id, { disabled: !u.disabled })
-      notify?.(!u.disabled ? `Disabled ${u.email}` : `Enabled ${u.email}`)
-      loadUsers()
+      await adminPatchUser(u.id, { disabled })
+      u.disabled = disabled
+      users = [...users]
+      notify?.(disabled ? `Disabled ${u.email}` : `Enabled ${u.email}`)
     } catch (ex) { notify?.(ex.message || 'Could not update user') }
+    finally { userBusy = false }
   }
 
   // ---------- groups ----------
@@ -176,7 +187,7 @@
     catch (ex) { notify?.(ex.message || 'Could not delete (in use?)') }
   }
 
-  loadUsers(); loadGroups(); loadFields(); loadTaxa()
+  loadGroups(); loadFields()
   $effect(() => { taxon; loadTaxa() })
   // Reload roster whenever the users tab regains focus — cheap and keeps
   // capability chips in sync with anything the sidebar/mailboxes surface
@@ -209,17 +220,17 @@
         <button class="btn primary sm" style="align-self:flex-end"><Icon name="plus" size={13} /> Create</button>
       </div>
       {#if nu.role !== 'admin'}
-        <div class="field" style="margin-top:8px">
-          <span class="sub" style="font-size:.76rem;color:var(--muted);display:block;margin-bottom:4px">Capabilities</span>
-          <div class="toolbar" style="margin:0;gap:14px;flex-wrap:wrap">
-            {#each KNOWN_CAPS as cap}
-              <label style="display:flex;gap:6px;align-items:center;font-size:.84rem">
-                <input type="checkbox" checked={nu.capabilities.includes(cap)} onchange={() => toggleNewCap(cap)} />
-                {cap}
+        <fieldset class="capabilities">
+          <legend>Additional access</legend>
+          <div class="capability-options">
+            {#each KNOWN_CAPS as cap (cap.key)}
+              <label class="capability-option">
+                <input type="checkbox" checked={nu.capabilities.includes(cap.key)} onchange={() => toggleNewCap(cap.key)} />
+                <span><b>{cap.label}</b><small>{cap.description}</small></span>
               </label>
             {/each}
           </div>
-        </div>
+        </fieldset>
       {/if}
     </form>
 
@@ -231,8 +242,7 @@
     {:else}
       <div class="index">
         {#each users as u (u.id)}
-          <div class="irow" style="flex-wrap:wrap;gap:8px">
-            <span class="dot" class:ok={!u.disabled} class:warn={u.disabled}></span>
+          <div class="irow user-row" style="flex-wrap:wrap;gap:10px">
             <span class="grow">
               <span class="title" style="font-weight:600">{u.email}</span>
               {#if u.display_name}
@@ -240,21 +250,25 @@
               {/if}
             </span>
             <span class="pill">{u.role}</span>
-            {#if u.disabled}<span class="pill warn">disabled</span>{/if}
-            {#each (u.capabilities || []) as cap (cap)}
-              <span class="chip">{cap}</span>
-            {/each}
             {#if u.role !== 'admin'}
-              {#each KNOWN_CAPS as cap}
-                <button class="btn sm" onclick={() => toggleUserCap(u, cap)}
-                        title={`Toggle ${cap} capability`}>
-                  {(u.capabilities || []).includes(cap) ? `revoke ${cap}` : `grant ${cap}`}
-                </button>
+              {#each KNOWN_CAPS as cap (cap.key)}
+                <span class="switch-control">
+                  <span>{cap.label}</span>
+                  <button type="button" class="switch" role="switch"
+                          aria-checked={(u.capabilities || []).includes(cap.key)}
+                          aria-label={`${cap.label} capability for ${u.email}`}
+                          disabled={userBusy}
+                          onclick={() => toggleUserCap(u, cap)}></button>
+                </span>
               {/each}
             {/if}
-            <button class="btn sm" onclick={() => toggleDisabled(u)}>
-              {u.disabled ? 'Enable' : 'Disable'}
-            </button>
+            <span class="switch-control">
+              <span>{u.disabled ? 'Disabled' : 'Active'}</span>
+              <button type="button" class="switch" role="switch" aria-checked={!u.disabled}
+                      aria-label={`User ${u.email} active`}
+                      disabled={userBusy}
+                      onclick={() => toggleDisabled(u)}></button>
+            </span>
           </div>
         {/each}
       </div>
@@ -366,6 +380,20 @@
   </div>
 
 {/if}
+
+<style>
+  .capabilities { border: 0; margin: 12px 0 4px; padding: 0; }
+  .capabilities legend { color: var(--muted); font-size: .76rem; font-weight: 600; margin-bottom: 7px; }
+  .capability-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; }
+  .capability-option { display: flex; align-items: flex-start; gap: 8px; font-size: .84rem; }
+  .capability-option input { margin-top: 4px; }
+  .capability-option span { display: flex; flex-direction: column; }
+  .capability-option b { font-weight: 600; }
+  .capability-option small { color: var(--muted); }
+  @media (max-width: 600px) {
+    .user-row > .grow { flex-basis: 100%; }
+  }
+</style>
 
 <svelte:window onkeydown={(e) => { if (taxImpOpen && e.key === 'Escape') taxImpOpen = false }} />
 

@@ -1,5 +1,5 @@
 // Curate the complete audit stream into concise Activity drawer rows.
-export const HIDDEN_KINDS = new Set([
+const HIDDEN_KINDS = new Set([
   'documents.bulk_edit',
   'heuristics.autoapply',
   'documents.rescan',
@@ -39,7 +39,7 @@ function shape(ev, text) {
   }
 }
 
-export function presentEvent(ev) {
+function presentEvent(ev) {
   if (!ev || !ev.kind) return null
   if (HIDDEN_KINDS.has(ev.kind)) return null
   if (ev.kind.endsWith('.list') || ev.kind.endsWith('.get')) return null

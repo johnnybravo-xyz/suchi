@@ -1,6 +1,6 @@
-export const defaultLocale = 'en'
+const defaultLocale = 'en'
 
-export const dictionaries = Object.freeze({
+const dictionaries = Object.freeze({
   en: Object.freeze({
     'common.cancel': 'Cancel',
     'common.loading': 'Loading...',

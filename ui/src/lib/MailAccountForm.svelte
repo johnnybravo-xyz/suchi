@@ -429,10 +429,13 @@
 
     {#if isEdit}
       <div class="field">
-        <label for="ma-en">Enabled</label>
-        <label style="display:flex;gap:6px;align-items:center">
-          <input id="ma-en" type="checkbox" bind:checked={form.enabled} /> Poll this mailbox
-        </label>
+        <label for="ma-en">Mailbox polling</label>
+        <span class="switch-control">
+          <button id="ma-en" type="button" class="switch" role="switch" aria-checked={form.enabled}
+                  aria-label="Poll this mailbox"
+                  onclick={() => (form.enabled = !form.enabled)}></button>
+          <span>{form.enabled ? 'Enabled' : 'Disabled'}</span>
+        </span>
       </div>
     {/if}
 

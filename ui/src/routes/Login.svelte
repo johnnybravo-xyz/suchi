@@ -1,6 +1,7 @@
 <script>
   import { login, setDemoAnonToken, setToken } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
+  import BrandMark from '../lib/BrandMark.svelte'
 
   let { onSignedIn } = $props()
   let email = $state('')
@@ -29,7 +30,7 @@
 <div class="login-wrap">
   <form class="card login-card" onsubmit={submit}>
     <div class="brand">
-      <svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true"><rect x="8" y="8" width="48" height="48" rx="8" fill="var(--manila)" stroke="currentColor" stroke-width="3.5"/><circle cx="17.5" cy="19" r="2.2" fill="currentColor"/><line x1="23" y1="19" x2="48" y2="19" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/><circle cx="17.5" cy="28" r="2.2" fill="currentColor"/><line x1="23" y1="28" x2="48" y2="28" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/><circle cx="16.8" cy="37.25" r="3.2" fill="var(--accent)"/><rect x="22.5" y="33.5" width="29.5" height="7.5" rx="3.75" fill="var(--accent)"/><circle cx="17.5" cy="46" r="2.2" fill="currentColor"/><line x1="23" y1="46" x2="48" y2="46" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg>
+      <BrandMark />
       <b style="font-size:1.2rem">suchi</b>
     </div>
     {#if err}<div class="err">{err}</div>{/if}
