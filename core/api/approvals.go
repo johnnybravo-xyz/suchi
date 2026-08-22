@@ -31,6 +31,9 @@ func (s *Server) registerApprovals(mux *http.ServeMux) {
 // ApprovalRegister persists a Spec at a new version for the given
 // slug. Body: {"slug":"...", "spec": {...}}.
 func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
@@ -84,6 +87,9 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 
 // ApprovalGetDef returns the current active spec for slug.
 func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
+		return
+	}
 	if s.requireAuth(w, r) == nil {
 		return
 	}
@@ -128,11 +134,10 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 // {"doc_id":N, "vars":{...}}. Document-bound runs require change access;
 // documentless runs require an administrator.
 func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
-	actor := auth.FromContext(r.Context())
-	if actor == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	actor := auth.FromContext(r.Context())
 	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
@@ -181,6 +186,9 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 
 // ApprovalGetRun returns run + transitions + open tasks.
 func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
+		return
+	}
 	if s.requireAuth(w, r) == nil {
 		return
 	}
@@ -228,11 +236,10 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 // ApprovalResolveTask marks a task done. Body: {"choice":"approve"}.
 // Principal must be the assignee or an admin.
 func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
-	actor := auth.FromContext(r.Context())
-	if actor == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "sign-in required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	actor := auth.FromContext(r.Context())
 	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
@@ -279,6 +286,9 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 // ApprovalCancel stops a running run. Admin-only for now — cancelling
 // someone else's approval run is a privileged action.
 func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
 	if s.requireAdmin(w, r) == nil {
 		return
 	}

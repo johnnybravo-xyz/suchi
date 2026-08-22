@@ -73,11 +73,10 @@ const (
 // ListShareLinks — GET /api/share_links/. Scoped to the caller.
 // Revoked and expired links stay visible so operators can audit them.
 func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
 		"SELECT COUNT(*) FROM share_links WHERE created_by = ?",
@@ -131,9 +130,12 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 
 // CreateShareLink — POST /api/share_links/. Gated by the
 // share_links capability — admin short-circuits, members need the
-// slug set on their users row. GET + DELETE stay unguarded so a
-// member can inventory + revoke their own links even after cap loss.
+// slug set on their users row. GET + DELETE do not require that
+// capability, so a member can audit and revoke links after cap loss.
 func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
+		return
+	}
 	p, _ := s.requireCapability(w, r, authz.CapShareLinks)
 	if p == nil {
 		return
@@ -238,11 +240,10 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 // RevokeShareLink — DELETE /api/share_links/{id}. Idempotent: revoking
 // an already-revoked link returns 204 without error.
 func (s *Server) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
 	}
+	p := auth.FromContext(r.Context())
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")

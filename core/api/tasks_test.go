@@ -245,9 +245,22 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
 	// user 5 owns two tasks (one open, one claimed); user 6 owns one.
-	_, _, _ = seedApprovalTask(t, d, "user:5", "open")
+	_, firstRun, _ := seedApprovalTask(t, d, "user:5", "open")
 	_, _, _ = seedApprovalTask(t, d, "user:5", "claimed")
 	_, _, _ = seedApprovalTask(t, d, "user:6", "open")
+	seedUser(t, d, 5)
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO jd_areas(code_start, code_end, name, position)
+		VALUES (20, 29, 'Money', 0);
+		INSERT INTO jd_categories(id, area_start, code, name, system)
+		VALUES (8, 20, 24, 'Receipts', 0);
+		INSERT INTO documents(id, owner_id, original_blob, original_size, title,
+		                      jd_category_id, thumb_sha, created_at, updated_at)
+		VALUES (17, 5, 'sha-17', 1, 'Bank statement.pdf', 8, 'thumb-17', 0, 0);
+		UPDATE approval_runs SET doc_id = 17 WHERE id = ?;
+	`, firstRun); err != nil {
+		t.Fatal(err)
+	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
@@ -269,6 +282,11 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 		}
 		if len(wt.Choices) != 2 {
 			t.Errorf("choices not decoded: %v", wt.Choices)
+		}
+		if wt.RunID == firstRun && (wt.DocTitle != "Bank statement.pdf" || wt.DocJDCategoryID != 8 ||
+			wt.DocJDCategoryCode != 24 || wt.DocJDCategoryName != "Receipts" ||
+			!wt.DocHasThumbnail) {
+			t.Errorf("document context not populated: %+v", wt)
 		}
 	}
 }

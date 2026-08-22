@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
@@ -15,10 +16,9 @@ import (
 const SweepInterval = 30 * time.Second
 
 // TimeoutSweep is called by the approval:timeout-sweep subscriber. It:
-//  1. Finds every running run with deadline_at <= now.
-//  2. Enqueues approval:advance{trigger:"timeout"} for each — the
-//     handler for that state's Kind sees trigger and returns the
-//     "timeout" event, which On[] maps to the escalation state.
+//  1. Finds running runs whose deadline passed and document suggestions
+//     whose proposed value is already present.
+//  2. Enqueues timeout or apply advances through the normal state machine.
 //  3. Re-enqueues itself with run_after = now + SweepInterval.
 //
 // Deadline_at is cleared as part of the transition so a run can't be
@@ -47,7 +47,11 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if len(due) == 0 {
+	satisfied, err := e.satisfiedDocumentChanges(ctx)
+	if err != nil {
+		return err
+	}
+	if len(due) == 0 && len(satisfied) == 0 {
 		return e.rescheduleSweep(ctx)
 	}
 	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -71,15 +75,89 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 				return err
 			}
 		}
+		for _, item := range satisfied {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE approval_tasks
+				SET status = 'resolved', resolved_choice = 'apply',
+				    resolved_by = 'system:satisfied', resolved_at = ?
+				WHERE id = ? AND status IN ('open', 'claimed')
+			`, now, item.taskID)
+			if err != nil {
+				return err
+			}
+			changed, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if changed == 0 {
+				continue
+			}
+			if err := enqueueAdvanceWithTrigger(ctx, tx, item.runID, "apply"); err != nil {
+				return err
+			}
+			audit.LogInTx(ctx, tx, e.log, audit.Event{
+				Action: "document.suggestion_satisfied", ObjectKind: "document", ObjectID: item.docID,
+				After: map[string]any{
+					"run_id": item.runID, "field": item.field, "label": item.label,
+				},
+			})
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 	if e.log != nil {
-		e.log.Info("approvals.sweep.fired", "count", len(due))
+		e.log.Info("approvals.sweep.fired", "timeouts", len(due), "satisfied", len(satisfied))
 	}
 	return e.rescheduleSweep(ctx)
+}
+
+type satisfiedDocumentChange struct {
+	taskID, runID, docID int64
+	field, label         string
+}
+
+func (e *Engine) satisfiedDocumentChanges(ctx context.Context) ([]satisfiedDocumentChange, error) {
+	rows, err := e.db.Read.QueryContext(ctx, `
+		SELECT t.id, r.id, r.doc_id,
+		       COALESCE(json_extract(r.vars_json, '$.field'), ''),
+		       COALESCE(json_extract(r.vars_json, '$.label'), '')
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs def ON def.id = r.def_id
+		JOIN documents doc ON doc.id = r.doc_id
+		WHERE def.slug = ? AND r.state = 'running'
+		  AND t.status IN ('open', 'claimed')
+		  AND (
+		    (json_extract(r.vars_json, '$.field') = 'jd_category'
+		      AND doc.jd_category_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
+		    OR (json_extract(r.vars_json, '$.field') = 'correspondent'
+		      AND doc.correspondent_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
+		    OR (json_extract(r.vars_json, '$.field') = 'document_type'
+		      AND doc.document_type_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
+		    OR (json_extract(r.vars_json, '$.field') = 'title'
+		      AND doc.title = COALESCE(json_extract(r.vars_json, '$.value'), ''))
+		    OR (json_extract(r.vars_json, '$.field') = 'tag' AND EXISTS (
+		      SELECT 1 FROM document_tags dt
+		      WHERE dt.document_id = doc.id
+		        AND dt.tag_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
+		    ))
+		  )
+	`, DocumentChangeSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []satisfiedDocumentChange
+	for rows.Next() {
+		var item satisfiedDocumentChange
+		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.field, &item.label); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // rescheduleSweep enqueues the next sweep tick. Kept idempotent: if

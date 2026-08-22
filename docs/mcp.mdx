@@ -66,11 +66,12 @@ tool only to clients allowed to read archive text.
 ### `list_inbox`
 
 Returns up to 50 durable jobs and approval tasks visible to the caller through
-`GET /api/tasks/?limit=50`.
+`GET /api/tasks/?limit=50`. Requires `documents:read` for API-token callers.
 
 ### `resolve_approval_task`
 
 Resolves a task through `POST /api/approvals/tasks/{id}/resolve`.
+Requires `documents:write` for API-token callers.
 
 - `task_id`: required task ID
 - `choice`: required declared choice
@@ -79,6 +80,8 @@ Resolves a task through `POST /api/approvals/tasks/{id}/resolve`.
 ### `create_share_link`
 
 Creates a link for 1 to 200 visible documents through `POST /api/share_links/`.
+Requires `documents:write` for API-token callers and the share-links capability
+for non-admin users.
 
 - `doc_ids`: required document ID array
 - `label`: optional label

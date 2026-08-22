@@ -80,6 +80,57 @@ func TestDocumentChangeUsesApprovalLifecycle(t *testing.T) {
 	}
 }
 
+func TestDocumentChangeSweepClosesSatisfiedReview(t *testing.T) {
+	e := newEngine(t)
+	ctx := context.Background()
+	seedDocumentForChange(t, e.DB())
+
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+			Field: "jd_category", ValueID: 10, Label: "10 Inbox",
+			Confidence: 0.70, Source: "archive",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT r.id FROM approval_runs r
+		JOIN approval_defs d ON d.id = r.def_id
+		WHERE d.slug = ? AND r.doc_id = 10
+	`, approvals.DocumentChangeSlug).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.TimeoutSweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var status, choice, resolver string
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT status, resolved_choice, resolved_by
+		FROM approval_tasks WHERE run_id = ?
+	`, runID).Scan(&status, &choice, &resolver); err != nil {
+		t.Fatal(err)
+	}
+	if status != "resolved" || choice != "apply" || resolver != "system:satisfied" {
+		t.Fatalf("task status=%q choice=%q resolver=%q", status, choice, resolver)
+	}
+	var events int
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM audit_events
+		WHERE action = 'document.suggestion_satisfied' AND object_id = 10
+	`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("satisfied audit events = %d, want 1", events)
+	}
+}
+
 func seedDocumentForChange(t *testing.T, d interface {
 	WriteTx(context.Context, func(*sql.Tx) error) error
 }) {
