@@ -178,40 +178,6 @@ input, select, textarea { font: inherit; color: inherit; }
   .content { padding: 16px 14px 32px; }
 }
 .content-narrow { max-width: 980px; margin: 0 auto; }
-.settings-page { display: flex; flex-direction: column; gap: 16px; }
-.settings-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 16px;
-  align-items: start;
-}
-.settings-right { display: flex; flex-direction: column; gap: 16px; }
-.section-sep { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
-.vault-last-doc { color: var(--faint); font-size: .78rem; margin-top: 4px; }
-.vault-last-doc a { color: var(--accent); text-decoration: none; }
-.vault-last-doc a:hover { text-decoration: underline; }
-.vault-last-doc .linkish {
-  background: none; border: 0; padding: 0;
-  color: var(--faint); font: inherit; font-style: italic; cursor: pointer;
-}
-.mbx-row {
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 11px 16px; border-bottom: 1px solid var(--line);
-}
-.mbx-row:last-child { border-bottom: none; }
-.mbx-row:hover { background: var(--tint); }
-.mbx-row-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.mbx-row-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
-.mbx-row-head .dot.ok { background: var(--ok); }
-.mbx-row-head .dot.warn { background: var(--warn); }
-.mbx-row-head .dot.danger { background: var(--danger); }
-.mbx-row-head .grow { flex: 1; min-width: 0; overflow: hidden; }
-.mbx-row-head .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mbx-row-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mbx-row-meta .mbx-spacer { flex: 1; }
-@media (max-width: 780px) {
-  .settings-grid { grid-template-columns: minmax(0, 1fr); }
-}
 
 /* ---------- the dotted index row (signature) ---------- */
 .index { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
@@ -492,7 +458,8 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .gmeta { display: flex; gap: 8px; align-items: center; padding: 0 12px; min-width: 0; }
 .gmeta .title { font-size: .84rem; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hoveracts { display: none; gap: 6px; align-items: center; }
-.irow.hoverable:hover .hoveracts { display: inline-flex; }
+.irow.hoverable:hover .hoveracts,
+.irow.hoverable:focus-within .hoveracts { display: inline-flex; }
 /* the timestamp never hides; actions slide in beside it */
 
 /* ---------- upload modal / admin / locked ---------- */

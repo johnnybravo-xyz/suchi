@@ -4,6 +4,7 @@
   import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
   import Icon from '../lib/Icon.svelte'
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
   let { id, notify } = $props()
 
@@ -21,6 +22,8 @@
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
   let accessDraft = $state({ principal: '', perm_bits: '1' })
+  let trashOpen = $state(false)
+  let trashBusy = $state(false)
 
   const ACCESS_LEVELS = [
     ['1', 'View'],
@@ -207,9 +210,14 @@
   }
 
   async function trash() {
-    if (!confirm('Move this document to trash?')) return
-    try { await deleteDocument(id); notify?.('Moved to trash'); go('#/documents') }
-    catch (ex) { notify?.(ex.message || 'Could not delete') }
+    trashBusy = true
+    try {
+      await deleteDocument(id)
+      trashOpen = false
+      notify?.('Moved to trash')
+      go('#/documents')
+    } catch (ex) { notify?.(ex.message || 'Could not delete') }
+    finally { trashBusy = false }
   }
 
   $effect(() => { id; revealed = false; load() })
@@ -229,7 +237,7 @@
   {/if}
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
   {#if canManageAccess}<button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>{/if}
-  <button class="btn sm danger" onclick={trash}><Icon name="trash" size={13} /> Trash</button>
+  <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
 </div>
 
 {#if err}<div class="err">{err}</div>{/if}
@@ -479,6 +487,16 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if trashOpen}
+  <ConfirmDialog
+    title="Move document to trash?"
+    message={`“${doc?.title || `Document #${id}`}” will move to Trash, where it can be restored.`}
+    confirmLabel="Move to trash"
+    busy={trashBusy}
+    onConfirm={trash}
+    onCancel={() => (trashOpen = false)} />
 {/if}
 
 {#if shareOpen}

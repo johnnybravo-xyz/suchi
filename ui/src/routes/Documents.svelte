@@ -4,6 +4,7 @@
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
   let { notify, inbox = null } = $props()
 
@@ -32,8 +33,9 @@
     } catch {}
   }
 
-  async function load() {
-    loading = true; err = ''
+  async function load({ background = false } = {}) {
+    if (!background) loading = true
+    err = ''
     try {
       const params = {
         page, page_size: pageSize, ordering,
@@ -47,7 +49,7 @@
       docs = res?.results || []
       count = res?.count ?? docs.length
     } catch (ex) { err = ex.message || 'Could not load documents.' }
-    finally { loading = false }
+    finally { if (!background) loading = false }
   }
 
   async function fileTo(doc, jdId) {
@@ -58,10 +60,26 @@
       notify?.('Filed')
     } catch (ex) { notify?.(ex.message || 'Could not file it') }
   }
-  async function trashOne(doc) {
-    if (!confirm(`Move “${doc.title || 'document #' + doc.id}” to trash?`)) return
-    try { await deleteDocument(doc.id); docs = docs.filter(d => d.id !== doc.id); count--; notify?.('Trashed') }
-    catch (ex) { notify?.(ex.message || 'Could not trash it') }
+  let trashRequest = $state(null)
+  let trashBusy = $state(false)
+
+  async function confirmTrash() {
+    const request = trashRequest
+    if (!request) return
+    trashBusy = true
+    if (request.kind === 'bulk') {
+      await bulk('Trashed', 'delete', {})
+      trashRequest = null
+    } else {
+      try {
+        await deleteDocument(request.doc.id)
+        docs = docs.filter(d => d.id !== request.doc.id)
+        count = Math.max(0, count - 1)
+        trashRequest = null
+        notify?.('Trashed')
+      } catch (ex) { notify?.(ex.message || 'Could not trash it') }
+    }
+    trashBusy = false
   }
 
   let jdCats = $state([])
@@ -103,8 +121,7 @@
   const bulkRefile = (jdId) => bulk('Refiled', 'set_jd_category', { jd_category_id: Number(jdId) })
   const bulkSens = (s) => bulk('Sensitivity set', 'set_sensitivity', { sensitivity: s })
   const bulkRescan = () => bulk('Rescan enqueued', 'rescan_enqueue', {})
-  const bulkTrash = () => confirm(`Move ${sel.size} document${sel.size === 1 ? '' : 's'} to trash?`) &&
-    bulk('Trashed', 'delete', {})
+  const bulkTrash = () => (trashRequest = { kind: 'bulk', count: sel.size })
   async function bulkShare() {
     bulkBusy = true
     try {
@@ -186,7 +203,7 @@
   loadJDCats()
   $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
   $effect(() => {
-    const fn = () => { if (document.visibilityState === 'visible') load() }
+    const fn = () => { if (document.visibilityState === 'visible') load({ background: true }) }
     document.addEventListener('visibilitychange', fn)
     return () => document.removeEventListener('visibilitychange', fn)
   })
@@ -349,7 +366,7 @@
                 {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
               </select>
               <button class="btn sm danger" title="Trash"
-                      onclick={(e) => { e.preventDefault(); e.stopPropagation(); trashOne(d) }}>
+                      onclick={(e) => { e.preventDefault(); e.stopPropagation(); trashRequest = { kind: 'one', doc: d } }}>
                 <Icon name="trash" size={12} /></button>
             </span>
           {/if}
@@ -366,6 +383,20 @@
       <button class="btn sm" disabled={page >= pages} onclick={() => page++}>Next ›</button>
     </div>
   {/if}
+{/if}
+
+{#if trashRequest}
+  <ConfirmDialog
+    title={trashRequest.kind === 'bulk'
+      ? `Move ${trashRequest.count} document${trashRequest.count === 1 ? '' : 's'} to trash?`
+      : 'Move document to trash?'}
+    message={trashRequest.kind === 'bulk'
+      ? `The selected document${trashRequest.count === 1 ? '' : 's'} will move to Trash, where ${trashRequest.count === 1 ? 'it can' : 'they can'} be restored.`
+      : `“${trashRequest.doc.title || `Document #${trashRequest.doc.id}`}” will move to Trash, where it can be restored.`}
+    confirmLabel="Move to trash"
+    busy={trashBusy}
+    onConfirm={confirmTrash}
+    onCancel={() => (trashRequest = null)} />
 {/if}
 
 {#if bulkDecOpen}

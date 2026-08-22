@@ -39,6 +39,9 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
   ```
 
   Every MCP action is attributed to the token's owner in the audit log.
+  A Read-only token supports search, document reads, and inbox inspection.
+  Choose Read & write only when the client must resolve approvals or create
+  share links.
 
 - The `suchi` binary somewhere on PATH, or the shipped `suchi-mcp`
   symlink (the binary responds to argv[0] rewrite so

@@ -46,6 +46,7 @@
 
   function taskChoices(t) {
     const choices = t.choices?.length ? t.choices : ['approve', 'reject']
+    if (categoryAlreadyApplied(t)) return choices.filter(c => c === 'apply')
     if (t.approval_name === 'rescan-proposal' && Number(t.vars?.stale_count || 0) <= 20) {
       return choices.filter(c => c !== 'approve_sample')
     }
@@ -59,6 +60,19 @@
       if (choice === 'approve_sample') return 'Try 20 first'
       if (choice === 'dismiss') return 'Dismiss'
     }
+    if (t.approval_name === 'document-change') {
+      if (choice === 'reject') return 'Dismiss'
+      if (choice === 'apply') {
+        if (categoryAlreadyApplied(t)) return 'Close review'
+        return {
+          jd_category: 'File document',
+          correspondent: 'Set correspondent',
+          document_type: 'Set document type',
+          tag: 'Add tag',
+          title: 'Change title',
+        }[t.vars?.field] || 'Apply change'
+      }
+    }
     const text = choice.replaceAll('_', ' ')
     return text.charAt(0).toUpperCase() + text.slice(1)
   }
@@ -67,12 +81,75 @@
     return { llm: 'LLM classification', ocr: 'OCR', content: 'content extraction' }[kind] || kind
   }
 
-  function fieldLabel(field) {
-    return { jd_category: 'Filing category', correspondent: 'Correspondent', document_type: 'Document type', tag: 'Tag', title: 'Title' }[field] || field
-  }
-
   function suggestionValue(vars) {
     return vars?.label || vars?.value || `#${vars?.value_id}`
+  }
+
+  function decisionPrompt(t) {
+    if (t.approval_name !== 'document-change' || !t.vars) {
+      return t.prompt || t.title || `Task #${t.id}`
+    }
+    const value = suggestionValue(t.vars)
+    if (categoryAlreadyApplied(t)) return `Already filed under “${value}”`
+    return {
+      jd_category: `File under “${value}”?`,
+      correspondent: `Set correspondent to “${value}”?`,
+      document_type: `Set document type to “${value}”?`,
+      tag: `Add “${value}” tag?`,
+      title: `Change title to “${value}”?`,
+    }[t.vars.field] || t.prompt
+  }
+
+  function filingLabel(t) {
+    if (!t.doc_jd_category_name) return ''
+    return t.doc_jd_category_code
+      ? `${t.doc_jd_category_code} ${t.doc_jd_category_name}`
+      : t.doc_jd_category_name
+  }
+
+  function categoryAlreadyApplied(t) {
+    return t.vars?.field === 'jd_category' &&
+      Number(t.doc_jd_category_id || 0) === Number(t.vars?.value_id || 0)
+  }
+
+  function reviewContext(t) {
+    if (categoryAlreadyApplied(t)) {
+      return 'The document is already filed there. No metadata change is needed, so this review can close.'
+    }
+    return ''
+  }
+
+  function evidenceLabel(t) {
+    if (t.vars?.source === 'archive' && t.vars.based_on?.length) {
+      return `Based on ${t.vars.based_on.length} similar documents`
+    }
+    if (t.vars?.source === 'llm') return 'Suggested by the configured LLM'
+    return ''
+  }
+
+  function approvalGroups(items) {
+    const groups = []
+    const documents = new Map()
+    for (const task of items) {
+      if (task.approval_name === 'document-change' && task.doc_id) {
+        let group = documents.get(task.doc_id)
+        if (!group) {
+          group = { key: `document-${task.doc_id}`, document: task, tasks: [] }
+          documents.set(task.doc_id, group)
+          groups.push(group)
+        }
+        group.tasks.push(task)
+      } else {
+        groups.push({ key: `task-${task.id}`, document: task.doc_id ? task : null, tasks: [task] })
+      }
+    }
+    return groups
+  }
+
+  function groupContext(group) {
+    const filed = filingLabel(group.document || {})
+    if (!filed || !group.tasks.some(t => t.vars?.field !== 'jd_category')) return ''
+    return `Filed under ${filed}. Review the remaining metadata suggestions independently.`
   }
 
   function retryLabel(job) {
@@ -119,43 +196,70 @@
     <div class="empty"><Icon name="tasks" size={56} /><b>Nothing needs you.</b><span>The archive is running itself.</span></div>
   {:else if tasks.length > 0}
     <h3 style="font-size:.9rem;color:var(--muted);margin:14px 0 8px">Approvals</h3>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:22px">
-      {#each tasks as t (t.id)}
-        {@const dl = deadline(t)}
+    <div class="approval-list">
+      {#each approvalGroups(tasks) as group (group.key)}
         <div class="card task-card">
-          <div class="prompt">{t.prompt || t.title || `Task #${t.id}`}</div>
-          {#if t.approval_name === 'rescan-proposal' && t.vars}
-            <div style="font-size:.85rem;color:var(--muted);margin-top:2px">
-              <b>{pipelineLabel(t.vars.kind)}</b> has a newer processing revision.
-              {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} can be updated to v{t.vars.current_version}.
+          {#if group.document}
+            <div class="document-header">
+              <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail}
+                 href={`#/doc/${group.document.doc_id}`}
+                 aria-label={`Open ${group.document.doc_title || `document ${group.document.doc_id}`}`}>
+                {#if group.document.doc_has_thumbnail}
+                  <img src={`/api/documents/${group.document.doc_id}/thumb/`} alt="" loading="lazy" />
+                {:else}
+                  <Icon name="docs" size={22} />
+                {/if}
+              </a>
+              <div class="document-identity">
+                <a href={`#/doc/${group.document.doc_id}`}>
+                  {group.document.doc_title || `Document #${group.document.doc_id}`}
+                </a>
+                <div class="document-meta">
+                  <span>#{group.document.doc_id}</span>
+                  {#if filingLabel(group.document)}<span class="pill">{filingLabel(group.document)}</span>{/if}
+                  {#if group.tasks.length > 1}<span>{group.tasks.length} suggestions</span>{/if}
+                </div>
+              </div>
             </div>
+            {#if groupContext(group)}<div class="group-context">{groupContext(group)}</div>{/if}
           {/if}
-          {#if t.approval_name === 'document-change' && t.vars}
-            <div class="suggestion">
-              <span class="chip mono">{fieldLabel(t.vars.field)}</span>
-              <b>{suggestionValue(t.vars)}</b>
-              <span class="sub">{Math.round(Number(t.vars.confidence || 0) * 100)}% confidence</span>
-              {#if t.vars.source === 'archive' && t.vars.based_on?.length}
-                <span class="sub">from {t.vars.based_on.length} similar documents</span>
-              {:else if t.vars.source === 'llm'}
-                <span class="sub">suggested by the configured LLM</span>
+          <div class="decision-list">
+            {#each group.tasks as t (t.id)}
+              {@const dl = deadline(t)}
+              <section class="decision-row">
+                <div class="prompt decision">{decisionPrompt(t)}</div>
+              {#if t.approval_name === 'rescan-proposal' && t.vars}
+                <div class="rescan-context">
+                  <b>{pipelineLabel(t.vars.kind)}</b> has a newer processing revision.
+                  {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} can be updated to v{t.vars.current_version}.
+                </div>
               {/if}
-            </div>
-          {/if}
-          <div class="meta">
-            {#if t.approval_name}<span class="pill ok">{t.approval_name}</span>{/if}
-            {#if t.assignee}<span class="pill">{t.assignee}</span>{/if}
-            <span>step <code>{t.state_key}</code></span>
-            {#if t.doc_id}<a href={`#/doc/${t.doc_id}`}>document #{t.doc_id}</a>{/if}
-            <span>opened {fmtDate(t.created_at)}</span>
-            {#if dl}<span class:deadline-soon={dl.soon}>{dl.text}</span>{/if}
-          </div>
-          <div class="choices">
-            {#each taskChoices(t) as c, i}
-              <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
-                      onclick={() => resolve(t, c)}>
-                {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
-              </button>
+              {#if t.approval_name === 'document-change' && t.vars}
+                {#if reviewContext(t)}<div class="review-context">{reviewContext(t)}</div>{/if}
+                <div class="evidence">
+                  <span>{Math.round(Number(t.vars.confidence || 0) * 100)}% confidence</span>
+                  {#if evidenceLabel(t)}<span>{evidenceLabel(t)}</span>{/if}
+                </div>
+              {/if}
+              <div class="choices">
+                {#each taskChoices(t) as c, i}
+                  <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
+                          onclick={() => resolve(t, c)}>
+                    {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
+                  </button>
+                {/each}
+              </div>
+              <details class="task-details">
+                <summary>Details</summary>
+                <div class="meta">
+                  {#if t.approval_name}<span>{t.approval_name}</span>{/if}
+                  {#if t.assignee}<span>{t.assignee}</span>{/if}
+                  <span>step <code>{t.state_key}</code></span>
+                  <span>opened {fmtDate(t.created_at)}</span>
+                  {#if dl}<span class:deadline-soon={dl.soon}>{dl.text}</span>{/if}
+                </div>
+              </details>
+              </section>
             {/each}
           </div>
         </div>
@@ -189,5 +293,30 @@
 {/if}
 
 <style>
-  .suggestion { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px }
+  .approval-list { display:flex;flex-direction:column;gap:12px;margin-bottom:22px }
+  .document-header { display:flex;gap:14px;align-items:center }
+  .document-identity { flex:1;min-width:0 }
+  .document-identity > a { color:var(--ink);font-weight:650;overflow-wrap:anywhere }
+  .document-meta { display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:var(--muted);font-size:.76rem;margin-top:6px }
+  .decision { font-size:1rem;line-height:1.35;overflow-wrap:anywhere }
+  .task-thumb {
+    display:flex;align-items:center;justify-content:center;flex:0 0 64px;width:64px;aspect-ratio:3 / 4;
+    border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface-2)
+  }
+  .task-thumb img { width:100%;height:100%;object-fit:cover;display:block }
+  .task-thumb.placeholder { color:var(--faint) }
+  .group-context { color:var(--muted);font-size:.82rem;line-height:1.45;margin-top:10px }
+  .decision-list { margin-top:14px;border-top:1px solid var(--line) }
+  .decision-row { padding:15px 0;border-bottom:1px solid var(--line) }
+  .decision-row:last-child { padding-bottom:0;border-bottom:0 }
+  .task-card > .decision-list:first-child { margin-top:0;border-top:0 }
+  .review-context, .rescan-context { color:var(--muted);font-size:.84rem;line-height:1.45;margin-top:10px }
+  .evidence { display:flex;gap:6px 14px;flex-wrap:wrap;color:var(--muted);font-size:.78rem;margin-top:5px }
+  .choices { margin-top:14px }
+  .task-details { margin-top:10px;color:var(--muted);font-size:.75rem }
+  .task-details summary { cursor:pointer;width:max-content }
+  .task-details .meta { margin-top:6px }
+  @media (max-width: 560px) {
+    .task-thumb { flex-basis:52px;width:52px }
+  }
 </style>
