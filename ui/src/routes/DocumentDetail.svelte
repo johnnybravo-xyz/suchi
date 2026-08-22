@@ -113,6 +113,15 @@
     return source.label || 'Unknown source'
   }
 
+  function sourceDetail(source) {
+    const detail = source.detail?.trim() || ''
+    const label = source.label?.trim() || ''
+    if (source.kind !== 'mailbox' || !label) return detail
+    if (detail === label) return ''
+    const repeatedPrefix = `${label} / `
+    return detail.startsWith(repeatedPrefix) ? detail.slice(repeatedPrefix.length) : detail
+  }
+
   async function grantAccess(e) {
     e.preventDefault()
     const [principalKind, rawID] = accessDraft.principal.split(':')
@@ -314,7 +323,7 @@
               {#each doc.sources as source, i}
                 <div style="min-width:0;overflow-wrap:anywhere">
                   <span>{sourceLabel(source)}</span>
-                  {#if source.detail}<span class="sub"> · {source.detail}</span>{/if}
+                  {#if sourceDetail(source)}<span class="sub"> · {sourceDetail(source)}</span>{/if}
                   {#if i === 0 && doc.sources.length > 1}<span class="pill" style="margin-left:6px;font-size:.68rem">first seen</span>{/if}
                 </div>
               {/each}
