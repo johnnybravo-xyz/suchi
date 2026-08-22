@@ -5,7 +5,7 @@ still pre-1.0, so prefer clear designs over compatibility layers.
 
 ## Get started
 
-The workspace uses Go 1.26.6 or newer. UI changes also require Bun.
+The workspace uses Go 1.26.7 or newer. UI changes also require Bun.
 
 ```sh
 git clone git@github.com:johnnybravo-xyz/suchi.git
@@ -45,6 +45,9 @@ a distinct responsibility, not merely shorten another file.
 - Use `gofmt`; `make check` also runs tests, vet, Staticcheck, and UI checks.
 - Prefer the standard library and existing project helpers. Explain any new
   dependency in the pull request.
+- Routine dependency bumps stop at the previous stable release after a
+  changelog review; existing newer pins are not downgraded, and security fixes
+  and base-image patches take precedence.
 - Return and wrap errors instead of panicking. Comments should explain
   invariants or non-obvious decisions.
 - Use SQL bind parameters. New tables use `STRICT`, explicit constraints, and

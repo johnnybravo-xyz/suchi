@@ -321,7 +321,7 @@ from the anydoc repo into a static musl binary and installs it as
 
 **`examples/convert.rs` is not upstream-guaranteed as a stable CLI.**
 It's an example — the argv shape could shift between anydoc releases.
-As of `v0.1.3` it's `convert <file> [-f <fmt>] [-o <out>]
+As of `v0.2.2` it's `convert <file> [-f <fmt>] [-o <out>]
 [--assets <dir>]`. suchi shells out with just `anydoc <file>`, reading
 stdout for Markdown. If a future upstream tag changes this shape,
 suchi's extractor at `core/pipeline/anydoc/anydoc.go` needs a matching
@@ -332,8 +332,7 @@ update; symptoms would be silent Skipped=true with non-zero exit and
 Dockerfile comment — is:
 
 1. Run `hack/pin-bumper.sh` from repo root. It reports when the pinned
-   version is more than 2 releases behind and suggests a bump to n-1
-   (never latest — soak time matters).
+   version is older than n-1 and suggests the previous stable release.
 2. Read the compare URL it prints. Scan `examples/convert.rs`
    for argv changes.
 3. Edit `ARG ANYDOC_TAG=` and its resolved `ARG ANYDOC_COMMIT=` in

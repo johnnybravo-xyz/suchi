@@ -31,7 +31,7 @@ jobs:
       HOST_PORT: ${{ matrix.port }}
       LANE: ${{ matrix.lane }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build the ${{ matrix.lane }} image
         run: docker build --target ${{ matrix.target }} -t suchi:smoke-${{ matrix.lane }} .
@@ -211,7 +211,7 @@ jobs:
 
       - name: Upload container logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: smoke-${{ matrix.lane }}-logs
           path: /tmp/suchi-${{ matrix.lane }}.log

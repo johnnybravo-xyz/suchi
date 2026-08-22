@@ -1,13 +1,13 @@
 # `standard` supports every format; `full` adds OCRmyPDF archives.
 
-ARG RUST_IMAGE=rust:1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
+ARG RUST_IMAGE=rust:1.97.1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
 ARG ALPINE_IMAGE=alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-ARG GO_IMAGE=golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
+ARG GO_IMAGE=golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468
 ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 FROM ${RUST_IMAGE} AS anydoc-build
-ARG ANYDOC_TAG=v0.1.3
-ARG ANYDOC_COMMIT=6eac2b2774df8707d83a3d8b19223d7718469254
+ARG ANYDOC_TAG=v0.2.2
+ARG ANYDOC_COMMIT=c9d4eee742f66dd79c45e02c93f75996e671c2c4
 RUN apk add --no-cache git musl-dev pkgconfig
 WORKDIR /src
 RUN git init . && \

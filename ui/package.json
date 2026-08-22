@@ -13,10 +13,10 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@sveltejs/vite-plugin-svelte": "^7.3.0",
-    "svelte": "^5.56.8",
-    "svelte-check": "^4.7.6",
-    "vite": "^8.2.1"
+    "@playwright/test": "1.62.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "svelte": "5.56.9",
+    "svelte-check": "4.7.6",
+    "vite": "8.2.1"
   }
 }

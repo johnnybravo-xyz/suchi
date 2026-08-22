@@ -2,8 +2,9 @@
 
 BIN := $(PWD)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/transcript
-STATICCHECK_VERSION := v0.7.0
+STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
+MINT_VERSION := 4.2.817
 
 build:
 	@mkdir -p dist
@@ -95,10 +96,10 @@ ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
 
 docs-dev:
-	@cd docs && bunx mint@latest dev
+	@cd docs && bunx mint@$(MINT_VERSION) dev
 
 docs-check:
-	@cd docs && bunx mint@latest broken-links
+	@cd docs && bunx mint@$(MINT_VERSION) broken-links
 
 smoke-ingest:
 	@./hack/local-ingest-test.sh

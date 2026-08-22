@@ -25,6 +25,7 @@ version header when a tag is cut.
 
 ### Changed
 
+- Office, OpenDocument, RTF, EPUB, and spreadsheet extraction now uses anydoc v0.2.2.
 - Local archive matching now runs before user automations and exposes live review and auto-apply thresholds in classification settings.
 - The optional model now uses one confidence threshold; fixed classifier plumbing no longer appears as editable automations.
 - Mailbox poll intervals are bounded to 1–1440 minutes, source changes reset UID cursors, and disabled owners stop being polled.

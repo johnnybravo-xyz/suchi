@@ -51,16 +51,16 @@ USERS=10 DOCS_PER_USER=5 ./hack/bench/bench.sh --scenario 06
 ## Accepted v0.1 snapshot
 
 The current report is [`latest-published/summary.md`](latest-published/summary.md),
-measured on 2026-08-21 on an Intel Core Ultra 7 265U.
+measured on 2026-08-22 on an Intel Core Ultra 7 265U.
 
 | Metric | Result |
 | --- | ---: |
-| Stripped binary | 25.2 MB |
-| Idle median RSS | 34.6 MB |
-| Cold start | 90 ms |
-| 10 users x 5 uploads | 50/50 successful |
-| Upload throughput / p95 | 549.5 documents/s / 9 ms |
-| Upload peak RSS | 51.7 MB |
+| Stripped binary | 25.5 MB |
+| Idle median RSS | 31.9 MB |
+| Cold start | 86 ms |
+| 10 users x 20 uploads | 200/200 successful |
+| Upload throughput / p95 | 625 documents/s / 10 ms |
+| Upload peak RSS | 50.8 MB |
 | Idle / post-burst goroutines | 12 / 12 |
 
 These are measurements from one host, not universal guarantees. Record
