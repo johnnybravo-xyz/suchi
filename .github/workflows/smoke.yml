@@ -3,9 +3,7 @@ name: smoke
 # End-to-end validation of the standard and full images against real tools.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read

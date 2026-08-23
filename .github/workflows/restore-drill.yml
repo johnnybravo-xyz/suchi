@@ -7,18 +7,11 @@ name: restore-drill
 # silent breakage of the backup loop (schema drift, VACUUM INTO
 # regression, half-written file on disk-full).
 #
-# Weekly cadence: the code paths this exercises only change when
-# core/backup/* or the migrations set does — nightly runs would burn
-# CI minutes to re-prove yesterday's answer. Sundays at 03:00 UTC
-# lines up with the quietest window on most operators' clocks.
-# Run manually from the Actions tab (workflow_dispatch) when a
-# backup/migration/CAS-layout change lands and can't wait for the
-# weekly tick.
+# Called by the manually dispatched checks workflow. It has no push,
+# pull-request, or scheduled trigger of its own.
 
 on:
-  schedule:
-    - cron: "0 3 * * 0"   # Sundays 03:00 UTC
-  workflow_dispatch:      # manual re-run from the Actions tab
+  workflow_call:
 
 permissions:
   contents: read

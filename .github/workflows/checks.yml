@@ -1,0 +1,24 @@
+name: checks
+
+# Repository validation is intentionally opt-in. A maintainer can run this
+# workflow from the Actions tab against the branch or tag they want to check.
+# The called workflows have no automatic triggers of their own.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: quality
+    uses: ./.github/workflows/ci.yml
+
+  image-smoke:
+    name: image smoke
+    uses: ./.github/workflows/smoke.yml
+
+  restore-drill:
+    name: restore drill
+    uses: ./.github/workflows/restore-drill.yml

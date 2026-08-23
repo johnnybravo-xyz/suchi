@@ -83,10 +83,15 @@ the changelog. Tag pushes alone do not publish anything.
 
 ## Automation
 
-- `ci.yml` runs formatting, tests, vet, lint, and UI checks.
-- `smoke.yml` tests the built image and an ingest path.
-- `restore-drill.yml` validates backup restoration.
+- `checks.yml` is the single manual entry point for repository validation.
+- `ci.yml` runs formatting, tests, vet, lint, and UI checks when called by it.
+- `smoke.yml` tests the built images and ingest paths when called by it.
+- `restore-drill.yml` validates backup restoration when called by it.
 - `release.yml` is manually dispatched from an existing tag.
+
+Pushes, pull requests, and schedules do not start Actions. A maintainer chooses
+**checks** in the Actions tab and clicks **Run workflow** to run all validation
+jobs against the selected ref. Publishing remains a separate manual action.
 
 For a security hotfix, branch from the affected tag, land the fix and changelog
 entry, publish the patch release, then merge the fix back into `main`.
