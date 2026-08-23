@@ -117,6 +117,7 @@ type SetupState struct {
 	Intent            string `json:"intent,omitempty"`
 	RecommendedPreset string `json:"recommended_preset,omitempty"`
 	CurrentPreset     string `json:"current_preset,omitempty"`
+	FilingTreeChosen  bool   `json:"filing_tree_chosen"`
 }
 
 // LoadSetupState reads the wizard's state. Missing keys → zero-value.
@@ -143,7 +144,25 @@ func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 	if err := Get(ctx, database, KeyPreset, &s.CurrentPreset); err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
+	chosen, err := FilingTreeChosen(ctx, database)
+	if err != nil {
+		return nil, err
+	}
+	s.FilingTreeChosen = chosen
 	return s, nil
+}
+
+// FilingTreeChosen reports whether an operator has explicitly selected or
+// built a filing tree. The protected Inbox-only bootstrap does not count.
+func FilingTreeChosen(ctx context.Context, database *db.DB) (bool, error) {
+	var chosen bool
+	if err := database.Read.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM jd_categories WHERE system = 0)
+		    OR EXISTS(SELECT 1 FROM settings WHERE key IN (?, 'taxonomy_preset_id'))
+	`, KeyPreset).Scan(&chosen); err != nil {
+		return false, fmt.Errorf("read filing-tree choice: %w", err)
+	}
+	return chosen, nil
 }
 
 // MarkSetupComplete stamps the wizard-finished timestamp. Idempotent —

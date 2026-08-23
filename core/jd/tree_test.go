@@ -22,6 +22,23 @@ func TestStarterTreeValid(t *testing.T) {
 	}
 }
 
+func TestBootstrapTreeIsInboxOnly(t *testing.T) {
+	if err := jd.BootstrapTree.Validate(); err != nil {
+		t.Fatalf("bootstrap tree validate: %v", err)
+	}
+	if len(jd.BootstrapTree.Areas) != 1 {
+		t.Fatalf("bootstrap areas = %d, want 1", len(jd.BootstrapTree.Areas))
+	}
+	area := jd.BootstrapTree.Areas[0]
+	if area.Start != 40 || area.End != 49 || area.Name != "System" {
+		t.Fatalf("bootstrap area = %+v, want 40-49 System", area)
+	}
+	if len(area.Categories) != 1 || area.Categories[0].Code != 49 ||
+		area.Categories[0].Name != "Inbox" || !area.Categories[0].System {
+		t.Fatalf("bootstrap categories = %+v, want system Inbox only", area.Categories)
+	}
+}
+
 func TestFlatTreeValid(t *testing.T) {
 	if err := jd.FlatTree.Validate(); err != nil {
 		t.Fatalf("flat tree validate: %v", err)
@@ -72,6 +89,70 @@ func TestEnsureTreeFirstBoot(t *testing.T) {
 	inbox2, _ := jd.InboxCategoryID(ctx, d)
 	if inbox2 != inbox {
 		t.Errorf("inbox drifted %d -> %d on idempotent re-run", inbox, inbox2)
+	}
+}
+
+func TestEnsureBootstrapTreeFirstBoot(t *testing.T) {
+	d, log := setupDB(t)
+	defer d.Close()
+	ctx := context.Background()
+
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+		t.Fatalf("ensure bootstrap: %v", err)
+	}
+	var areas, categories, nonSystem, selectedPreset int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM jd_areas),
+		       (SELECT COUNT(*) FROM jd_categories),
+		       (SELECT COUNT(*) FROM jd_categories WHERE system = 0),
+		       (SELECT COUNT(*) FROM settings WHERE key = 'preset')
+	`).Scan(&areas, &categories, &nonSystem, &selectedPreset); err != nil {
+		t.Fatal(err)
+	}
+	if areas != 1 || categories != 1 || nonSystem != 0 {
+		t.Fatalf("bootstrap counts = areas:%d categories:%d non-system:%d, want 1/1/0",
+			areas, categories, nonSystem)
+	}
+	if selectedPreset != 0 {
+		t.Fatal("bootstrap must not record a preset selection")
+	}
+	mode, err := jd.Mode(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != jd.ModeJD {
+		t.Fatalf("bootstrap mode = %q, want jd", mode)
+	}
+	if _, err := jd.InboxCategoryID(ctx, d); err != nil {
+		t.Fatalf("bootstrap inbox pointer: %v", err)
+	}
+}
+
+func TestEnsureBootstrapTreePreservesExistingTaxonomy(t *testing.T) {
+	d, log := setupDB(t)
+	defer d.Close()
+	ctx := context.Background()
+
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+		t.Fatalf("seed starter: %v", err)
+	}
+	var before int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jd_categories`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+		t.Fatalf("ensure bootstrap over existing tree: %v", err)
+	}
+	var after, identity int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jd_categories`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jd_categories WHERE code = 11 AND name = 'Identity'`).Scan(&identity); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || identity != 1 {
+		t.Fatalf("existing taxonomy changed: categories %d -> %d, identity rows = %d", before, after, identity)
 	}
 }
 

@@ -1,5 +1,5 @@
-// Package jd owns the Johnny.Decimal taxonomy: the starter tree, the
-// first-boot loader, and the inbox-category invariant.
+// Package jd owns the Johnny.Decimal taxonomy: the neutral first-boot
+// baseline, the legacy importer starter tree, and the inbox-category invariant.
 //
 // The design opinion is: JD on by default, flat mode is a degenerate JD
 // tree (one area, one category, no branching in code). Either way
@@ -61,16 +61,24 @@ const (
 	SettingInboxCategoryID = "jd_inbox_category_id"
 )
 
-// FlatTree is the degenerate one-area, one-category tree used when a
-// migrator opts out of JD. Kept as a constant here (not a YAML file) so
-// flat-mode setup does not require reading a file — a bootless install
-// can still stand up its schema.
+// BootstrapTree is the neutral first-boot baseline. It satisfies the document
+// category foreign key without choosing a filing preset on the user's behalf.
+var BootstrapTree = inboxOnlyTree("Required until a filing tree is selected.")
+
+// FlatTree is the same one-area shape with explicit flat-mode semantics.
 var FlatTree = Tree{
 	Areas: []Area{{
 		Start: 40, End: 49, Name: "System",
 		Description: "Flat mode — everything lives in the inbox.",
 		Categories:  []Category{{Code: 49, Name: "Inbox", System: true}},
 	}},
+}
+
+func inboxOnlyTree(description string) Tree {
+	return Tree{Areas: []Area{{
+		Start: 40, End: 49, Name: "System", Description: description,
+		Categories: []Category{{Code: 49, Name: "Inbox", System: true}},
+	}}}
 }
 
 // StarterTree returns the embedded default JD tree. Parsed on every call
@@ -130,8 +138,20 @@ func (t Tree) Validate() error {
 	return nil
 }
 
-// EnsureTree is the first-boot invariant enforcer. It runs after
-// migrations. Behavior:
+// EnsureBootstrapTree establishes the neutral System/Inbox baseline used by
+// normal server boot. A populated taxonomy is only repaired, never replaced.
+func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode) error {
+	tree := BootstrapTree
+	if mode == ModeFlat {
+		tree = FlatTree
+	}
+	return ensureTree(ctx, d, log, mode, tree)
+}
+
+// EnsureTree preserves the established starter taxonomy used by explicit
+// classified imports and demo seeding. Normal server boot should call
+// EnsureBootstrapTree so it does not choose categories before the wizard.
+// Behavior:
 //
 //   - If jd_areas is empty: load the caller's tree (starter by default,
 //     FlatTree if mode=flat), seed jd_areas + jd_categories, write
@@ -142,8 +162,6 @@ func (t Tree) Validate() error {
 //
 // Idempotent: safe to run on every boot.
 func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode) error {
-	log = log.With("component", "jd")
-
 	// The active tree depends on the mode. Flat mode uses the built-in
 	// degenerate tree — no file read, no external state.
 	tree := FlatTree
@@ -154,6 +172,11 @@ func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMo
 		}
 		tree = t
 	}
+	return ensureTree(ctx, d, log, mode, tree)
+}
+
+func ensureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, tree Tree) error {
+	log = log.With("component", "jd")
 
 	var have int
 	if err := d.Read.QueryRowContext(ctx, "SELECT COUNT(*) FROM jd_areas").Scan(&have); err != nil {

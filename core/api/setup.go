@@ -97,6 +97,16 @@ func (s *Server) SetupComplete(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
+	chosen, err := settings.FilingTreeChosen(r.Context(), s.DB)
+	if err != nil {
+		s.serverErr(w, "setup.complete", err)
+		return
+	}
+	if !chosen {
+		s.writeError(w, http.StatusConflict, "filing_tree_required",
+			"choose a filing tree before finishing setup; choose Blank explicitly to keep Inbox only")
+		return
+	}
 	if err := settings.MarkSetupComplete(r.Context(), s.DB); err != nil {
 		s.serverErr(w, "setup.complete", err)
 		return

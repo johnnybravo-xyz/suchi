@@ -101,7 +101,7 @@ func runImport(args []string) int {
 		log.Error("import.jd.mode", "err", err.Error())
 		return 1
 	}
-	if err := jd.EnsureTree(ctx, d, log, mode); err != nil {
+	if err := ensureImportTree(ctx, d, log, mode, opts); err != nil {
 		log.Error("import.jd.ensure", "err", err.Error())
 		return 1
 	}
@@ -156,6 +156,16 @@ Import complete (dry_run=%v).
 		fmt.Fprintf(os.Stderr, "Migration report written to %s\n", *reportPath)
 	}
 	return 0
+}
+
+// ensureImportTree preserves the starter taxonomy only when the operator
+// explicitly requested category mapping. An unclassified import is neutral and
+// lands in the same Inbox-only baseline as normal server boot.
+func ensureImportTree(ctx context.Context, d *db.DB, log *slog.Logger, mode jd.TaxonomyMode, opts bundle.Options) error {
+	if opts.AutoJD || opts.MapJD != nil {
+		return jd.EnsureTree(ctx, d, log, mode)
+	}
+	return jd.EnsureBootstrapTree(ctx, d, log, mode)
 }
 
 // runImportVerify is the --verify entry point. Reads-only: parses the

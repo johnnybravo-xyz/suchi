@@ -168,6 +168,9 @@ func TestSetupState_Empty(t *testing.T) {
 	if s.StartedAt != nil {
 		t.Error("setup without an admin should not have started_at")
 	}
+	if s.FilingTreeChosen {
+		t.Error("fresh setup should not have a filing-tree choice")
+	}
 }
 
 func TestSetupState_StartsWithFirstAdmin(t *testing.T) {
@@ -205,6 +208,24 @@ func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
 	}
 	if s.Intent != "household" || s.CurrentPreset != "household" {
 		t.Fatalf("setup state = %#v", s)
+	}
+	if !s.FilingTreeChosen {
+		t.Error("an applied preset should count as a filing-tree choice")
+	}
+}
+
+func TestSetupState_ImportedTaxonomyCountsAsChoice(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if err := settings.Set(ctx, d, "taxonomy_preset_id", "custom-archive"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := settings.LoadSetupState(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.FilingTreeChosen {
+		t.Error("an imported taxonomy should count as a filing-tree choice")
 	}
 }
 

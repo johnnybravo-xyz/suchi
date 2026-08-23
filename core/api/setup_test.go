@@ -109,6 +109,31 @@ func TestSetupIntent_RejectsUnknownValue(t *testing.T) {
 	}
 }
 
+func TestSetupComplete_RequiresFilingTreeChoice(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	complete := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/complete", nil)
+		req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
+		rec := httptest.NewRecorder()
+		s.SetupComplete(rec, req)
+		return rec
+	}
+
+	rec := complete()
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"filing_tree_required"`) {
+		t.Fatalf("without choice status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := settings.Set(context.Background(), d, settings.KeyPreset, "blank"); err != nil {
+		t.Fatal(err)
+	}
+	rec = complete()
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("with explicit blank choice status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	d := openTestDB(t)
 	key, err := suchicrypto.LoadOrCreateKey(filepath.Join(t.TempDir(), "secret.key"))

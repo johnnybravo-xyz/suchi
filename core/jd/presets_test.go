@@ -109,3 +109,40 @@ func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
 		t.Errorf("docs on new inbox = %d, want 2", parked)
 	}
 }
+
+func TestApplyEveryPresetFromInboxOnlyBootstrap(t *testing.T) {
+	for _, preset := range jd.Presets() {
+		t.Run(preset.ID, func(t *testing.T) {
+			d := openTestDB(t)
+			ctx := context.Background()
+			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Write.ExecContext(ctx, `
+				INSERT INTO users(id, email, display_name, role, created_at, updated_at)
+				VALUES (1, 'u@t.local', 't', 'admin', 0, 0);
+				INSERT INTO documents(owner_id, title, original_blob, original_size,
+				                      jd_category_id, created_at, added_at, updated_at)
+				VALUES (1, 'waiting.pdf', 'sha-bootstrap', 1,
+				        (SELECT id FROM jd_categories WHERE system = 1), 0, 0, 0)
+			`); err != nil {
+				t.Fatal(err)
+			}
+			if err := jd.ApplyPreset(ctx, d, log, preset.ID, jd.ApplyPresetOpts{}); err != nil {
+				t.Fatalf("apply from bootstrap: %v", err)
+			}
+			var onInbox int
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM documents d
+				JOIN jd_categories c ON c.id = d.jd_category_id
+				WHERE c.system = 1
+			`).Scan(&onInbox); err != nil {
+				t.Fatal(err)
+			}
+			if onInbox != 1 {
+				t.Fatalf("documents on new Inbox = %d, want 1", onInbox)
+			}
+		})
+	}
+}
