@@ -71,7 +71,21 @@
   const seedSyncSince = isEdit
     ? unixToLocalInput(seed.sync_since)
     : unixToLocalInput(Math.floor(Date.now() / 1000))
-  const seedPolicy = seed.intake_policy || { selection: 'all', content: 'email_and_files' }
+  let nextRuleID = 1
+  function makeIntakeRule(source = {}) {
+    return {
+      id: nextRuleID++,
+      selection: source.selection || 'all',
+      content: source.content || 'email_and_files',
+      from: source.from || '',
+      recipients: source.recipients || '',
+      subject_terms: source.subject_terms || '',
+      attachment_names: source.attachment_names || '',
+    }
+  }
+  const seedRules = seed.intake_policy?.rules?.length
+    ? seed.intake_policy.rules.map((rule) => makeIntakeRule(rule))
+    : [makeIntakeRule()]
 
   // Members can't pick an owner — server forces owner_id to their own
   // user id. Seed the form so the save-button guard passes without
@@ -91,12 +105,6 @@
     poll_interval_min: seed.poll_interval_min || 10,
     username: seed.username || '',
     password: '',
-    intake_selection: seedPolicy.selection || 'all',
-    intake_content: seedPolicy.content || 'email_and_files',
-    intake_from: seedPolicy.from || '',
-    intake_recipients: seedPolicy.recipients || '',
-    intake_subject_terms: seedPolicy.subject_terms || '',
-    intake_attachment_names: seedPolicy.attachment_names || '',
     after_ingest: seed.processed_folder ? 'move' : (seed.mark_seen ? 'read' : 'leave'),
     sync_since: seedSyncSince,
     oauth_account_id: seed.oauth_account_id || '',
@@ -110,18 +118,42 @@
   let signedInAs = $state('')
   let preview = $state(null)
   let previewError = $state('')
+  let intakeRules = $state(seedRules)
 
   function intakePolicy() {
-    return {
-      selection: form.intake_selection,
-      content: form.intake_content,
-      ...(form.intake_selection === 'matching' ? {
-        from: form.intake_from.trim(),
-        recipients: form.intake_recipients.trim(),
-        subject_terms: form.intake_subject_terms.trim(),
-        attachment_names: form.intake_attachment_names.trim(),
-      } : {}),
-    }
+    return { rules: intakeRules.map((rule) => {
+      const wireRule = { selection: rule.selection, content: rule.content }
+      if (rule.selection === 'matching') {
+        for (const field of ['from', 'recipients', 'subject_terms', 'attachment_names']) {
+          const value = rule[field].trim()
+          if (value) wireRule[field] = value
+        }
+      }
+      return wireRule
+    }) }
+  }
+
+  function validateIntakePolicy(policy) {
+    if (policy.rules.length < 1) throw new Error('Add at least one intake rule.')
+    if (policy.rules.length > 20) throw new Error('A mailbox can have at most 20 intake rules.')
+    const invalidRule = policy.rules.findIndex((rule) =>
+      rule.selection === 'matching' &&
+      !rule.from && !rule.recipients && !rule.subject_terms && !rule.attachment_names)
+    if (invalidRule >= 0) throw new Error(`Rule ${invalidRule + 1}: add at least one matching condition.`)
+  }
+
+  function addIntakeRule() {
+    if (intakeRules.length >= 20) return
+    intakeRules.push(makeIntakeRule({ selection: 'matching' }))
+    preview = null
+    previewError = ''
+  }
+
+  function removeIntakeRule(id) {
+    if (intakeRules.length === 1) return
+    intakeRules = intakeRules.filter((rule) => rule.id !== id)
+    preview = null
+    previewError = ''
   }
 
   function applyPreset() {
@@ -156,10 +188,7 @@
         throw new Error('Poll interval must be between 1 and 1440 minutes.')
       }
       const policy = intakePolicy()
-      if (policy.selection === 'matching' &&
-          !policy.from && !policy.recipients && !policy.subject_terms && !policy.attachment_names) {
-        throw new Error('Add at least one matching condition.')
-      }
+      validateIntakePolicy(policy)
       if (form.after_ingest === 'move' && !form.processed_folder.trim()) {
         throw new Error('Choose a folder for processed messages.')
       }
@@ -219,7 +248,9 @@
     if (!isEdit) return
     previewError = ''; preview = null; busy = true
     try {
-      preview = await previewEmailAccount(account.id, intakePolicy())
+      const policy = intakePolicy()
+      validateIntakePolicy(policy)
+      preview = await previewEmailAccount(account.id, policy)
     } catch (ex) {
       previewError = ex.data?.message || ex.message || 'Could not preview this mailbox.'
     } finally { busy = false }
@@ -276,9 +307,7 @@
     form.oauth_account_id ? form.oauth_account_id.slice(0, 8) + '…' : ''
   )
   const intakeSummary = $derived(
-    (form.intake_selection === 'all' ? 'Every message' :
-      form.intake_selection === 'files' ? 'Messages with files' : 'Messages matching these conditions') +
-    (form.intake_content === 'files_only' ? ' · keep files only' : ' · keep email and files')
+    `${intakeRules.length} ${intakeRules.length === 1 ? 'rule' : 'rules'} · archive when any rule matches`
   )
 </script>
 
@@ -398,52 +427,82 @@
         </div>
       </div>
 
-      <div class="field">
-        <span class="field-label">Accept</span>
-        <span class="seg choice-row" aria-label="Messages to accept">
-          <button type="button" class:on={form.intake_selection === 'all'}
-                  onclick={() => (form.intake_selection = 'all')}>Every message</button>
-          <button type="button" class:on={form.intake_selection === 'files'}
-                  onclick={() => (form.intake_selection = 'files')}>With files</button>
-          <button type="button" class:on={form.intake_selection === 'matching'}
-                  onclick={() => (form.intake_selection = 'matching')}>Matching</button>
-        </span>
+      <div class="rule-list">
+        {#each intakeRules as rule, index (rule.id)}
+          <fieldset class="rule-block">
+            <legend id={`intake-rule-${rule.id}`}>Rule {index + 1}</legend>
+            <button type="button" class="btn sm rule-remove"
+                    aria-label={`Remove rule ${index + 1}`} title="Remove rule"
+                    disabled={intakeRules.length === 1}
+                    onclick={() => removeIntakeRule(rule.id)}>
+              <Icon name="x" size={12} />
+            </button>
+
+            <div class="field">
+              <span class="field-label">Accept</span>
+              <span class="seg choice-row accept-choice" aria-label={`Rule ${index + 1} messages to accept`}>
+                <button type="button" class:on={rule.selection === 'all'}
+                        aria-pressed={rule.selection === 'all'}
+                        onclick={() => (rule.selection = 'all')}>Every message</button>
+                <button type="button" class:on={rule.selection === 'files'}
+                        aria-pressed={rule.selection === 'files'}
+                        onclick={() => (rule.selection = 'files')}>With files</button>
+                <button type="button" class:on={rule.selection === 'matching'}
+                        aria-pressed={rule.selection === 'matching'}
+                        onclick={() => (rule.selection = 'matching')}>Matching</button>
+              </span>
+            </div>
+
+            {#if rule.selection === 'matching'}
+              <div class="condition-grid">
+                <div class="field">
+                  <label for={`ma-from-${rule.id}`}>From</label>
+                  <input id={`ma-from-${rule.id}`} class="input" bind:value={rule.from}
+                         placeholder="billing@example.com, @trusted.org" />
+                </div>
+                <div class="field">
+                  <label for={`ma-recipients-${rule.id}`}>To or Cc</label>
+                  <input id={`ma-recipients-${rule.id}`} class="input" bind:value={rule.recipients}
+                         placeholder="receipts@example.com" />
+                </div>
+                <div class="field">
+                  <label for={`ma-subject-${rule.id}`}>Subject contains</label>
+                  <input id={`ma-subject-${rule.id}`} class="input" bind:value={rule.subject_terms}
+                         placeholder="invoice, statement" />
+                </div>
+                <div class="field">
+                  <label for={`ma-filename-${rule.id}`}>File name</label>
+                  <input id={`ma-filename-${rule.id}`} class="input mono" bind:value={rule.attachment_names}
+                         placeholder="*.pdf, invoice-*" />
+                </div>
+              </div>
+            {/if}
+
+            <div class="field">
+              <span class="field-label">Keep</span>
+              <span class="seg choice-row keep-choice" aria-label={`Rule ${index + 1} content to archive`}>
+                <button type="button" class:on={rule.content === 'email_and_files'}
+                        aria-pressed={rule.content === 'email_and_files'}
+                        onclick={() => (rule.content = 'email_and_files')}>Email and files</button>
+                <button type="button" class:on={rule.content === 'files_only'}
+                        aria-pressed={rule.content === 'files_only'}
+                        onclick={() => (rule.content = 'files_only')}>Files only</button>
+              </span>
+            </div>
+          </fieldset>
+          {#if index < intakeRules.length - 1}
+            <div class="rule-or" role="separator" aria-label="or"><span>OR</span></div>
+          {/if}
+        {/each}
       </div>
 
-      {#if form.intake_selection === 'matching'}
-        <div class="condition-grid">
-          <div class="field">
-            <label for="ma-from">From</label>
-            <input id="ma-from" class="input" bind:value={form.intake_from}
-                   placeholder="billing@example.com, @trusted.org" />
-          </div>
-          <div class="field">
-            <label for="ma-recipients">To or Cc</label>
-            <input id="ma-recipients" class="input" bind:value={form.intake_recipients}
-                   placeholder="receipts@example.com" />
-          </div>
-          <div class="field">
-            <label for="ma-subject">Subject contains</label>
-            <input id="ma-subject" class="input" bind:value={form.intake_subject_terms}
-                   placeholder="invoice, statement" />
-          </div>
-          <div class="field">
-            <label for="ma-filename">File name</label>
-            <input id="ma-filename" class="input mono" bind:value={form.intake_attachment_names}
-                   placeholder="*.pdf, invoice-*" />
-          </div>
-        </div>
-      {/if}
-
-      <div class="field">
-        <span class="field-label">Keep</span>
-        <span class="seg choice-row" aria-label="Content to archive">
-          <button type="button" class:on={form.intake_content === 'email_and_files'}
-                  onclick={() => (form.intake_content = 'email_and_files')}>Email and files</button>
-          <button type="button" class:on={form.intake_content === 'files_only'}
-                  onclick={() => (form.intake_content = 'files_only')}>Files only</button>
-        </span>
+      <div class="rule-footer">
+        <button type="button" class="btn sm" onclick={addIntakeRule} disabled={intakeRules.length >= 20}>
+          <Icon name="plus" size={12} /> Add rule
+        </button>
+        <span>{intakeRules.length} / 20</span>
       </div>
+      <p class="overlap-note">If rules overlap, Email and files wins.</p>
 
       {#if isEdit}
         <div class="preview-row">
@@ -586,6 +645,25 @@
   .intake-heading h4 { margin: 0 0 3px; font-size: .95rem; }
   .intake-heading span { color: var(--muted); font-size: .78rem; }
   .choice-row { width: max-content; max-width: 100%; }
+  .rule-list { display: grid; }
+  .rule-block {
+    position: relative;
+    display: grid;
+    gap: 11px;
+    min-width: 0;
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+  }
+  .rule-block legend { padding: 0 6px; font-size: .78rem; font-weight: 700; color: var(--muted); }
+  .rule-remove { position: absolute; top: 8px; right: 8px; }
+  .rule-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .68rem; font-weight: 750; }
+  .rule-or::before, .rule-or::after { content: ''; height: 1px; background: var(--line); flex: 1; }
+  .rule-or span { padding: 5px 0; }
+  .rule-footer { display: flex; align-items: center; gap: 9px; }
+  .rule-footer > span { color: var(--faint); font-size: .72rem; }
+  .overlap-note { margin: -5px 0 0; color: var(--muted); font-size: .76rem; }
   .condition-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
   .preview-row { display: flex; align-items: center; gap: 10px; font-size: .78rem; }
   .compact-error { margin: 0; }
@@ -609,6 +687,11 @@
     .condition-grid { grid-template-columns: 1fr; }
     .choice-row { display: grid; width: 100%; }
     .choice-row button { min-height: 38px; }
+    .rule-block { padding: 11px 10px; }
+    .rule-block .field { min-width: 0; }
+    .rule-block .choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rule-block .accept-choice { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .rule-block .choice-row button { padding-inline: 5px; white-space: normal; }
     .preview-row { align-items: start; flex-direction: column; }
     .tls-field { justify-content: start; }
   }
