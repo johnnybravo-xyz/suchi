@@ -81,6 +81,10 @@
     return { llm: 'LLM classification', ocr: 'OCR', content: 'content extraction' }[kind] || kind
   }
 
+  function rescanTargets(t) {
+    return Array.isArray(t.vars?.target_documents) ? t.vars.target_documents : []
+  }
+
   function suggestionValue(vars) {
     return vars?.label || vars?.value || `#${vars?.value_id}`
   }
@@ -226,6 +230,7 @@
           <div class="decision-list">
             {#each group.tasks as t (t.id)}
               {@const dl = deadline(t)}
+              {@const targets = rescanTargets(t)}
               <section class="decision-row">
                 <div class="prompt decision">{decisionPrompt(t)}</div>
               {#if t.approval_name === 'rescan-proposal' && t.vars}
@@ -251,6 +256,19 @@
               </div>
               <details class="task-details">
                 <summary>Details</summary>
+                {#if targets.length}
+                  <div class="rescan-targets">
+                    <b>Affected documents</b>
+                    <ul>
+                      {#each targets as target (target.id)}
+                        <li><a href={`#/doc/${target.id}`}>{target.title || `Document #${target.id}`}</a></li>
+                      {/each}
+                    </ul>
+                    {#if Number(t.vars?.stale_count || 0) > targets.length}
+                      <span>and {Number(t.vars.stale_count) - targets.length} more</span>
+                    {/if}
+                  </div>
+                {/if}
                 <div class="meta">
                   {#if t.approval_name}<span>{t.approval_name}</span>{/if}
                   {#if t.assignee}<span>{t.assignee}</span>{/if}
@@ -316,6 +334,11 @@
   .task-details { margin-top:10px;color:var(--muted);font-size:.75rem }
   .task-details summary { cursor:pointer;width:max-content }
   .task-details .meta { margin-top:6px }
+  .rescan-targets { margin-top:9px;max-width:720px }
+  .rescan-targets b { color:var(--ink);font-size:.78rem }
+  .rescan-targets ul { margin:5px 0 3px;padding-left:18px }
+  .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
+  .rescan-targets a { color:var(--accent) }
   @media (max-width: 560px) {
     .task-thumb { flex-basis:52px;width:52px }
   }
