@@ -79,7 +79,7 @@ func (w *Watcher) PreviewPolicy(ctx context.Context, policy emailaccounts.Intake
 		}
 		names := bodyStructureAttachmentNames(message.BodyStructure)
 		result.Inspected++
-		if evaluatePolicy(policy, message.Envelope, names) != "" {
+		if evaluatePolicy(policy, message.Envelope, names) == "" {
 			continue
 		}
 		result.Matched++

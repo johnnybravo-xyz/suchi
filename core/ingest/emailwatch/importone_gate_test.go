@@ -30,51 +30,86 @@ func TestShouldImport(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		policy     emailaccounts.IntakePolicy
-		raw        []byte
-		wantDrop   string
-		wantAttach bool
+		name        string
+		policy      emailaccounts.IntakePolicy
+		envelope    *imap.Envelope
+		raw         []byte
+		wantContent emailaccounts.IntakeContent
+		wantAttach  bool
 	}{
-		{name: "default accepts email", raw: textOnly},
+		{name: "default accepts email", raw: textOnly, wantContent: emailaccounts.IntakeEmailAndFiles},
 		{name: "files mode rejects body only", policy: emailaccounts.IntakePolicy{
-			Selection: emailaccounts.IntakeMessagesWithFiles,
-			Content:   emailaccounts.IntakeEmailAndFiles,
-		}, raw: textOnly, wantDrop: "files_required"},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection: emailaccounts.IntakeMessagesWithFiles,
+				Content:   emailaccounts.IntakeEmailAndFiles,
+			}},
+		}, raw: textOnly},
 		{name: "files mode accepts attachment", policy: emailaccounts.IntakePolicy{
-			Selection: emailaccounts.IntakeMessagesWithFiles,
-			Content:   emailaccounts.IntakeFilesOnly,
-		}, raw: withPDF, wantAttach: true},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection: emailaccounts.IntakeMessagesWithFiles,
+				Content:   emailaccounts.IntakeFilesOnly,
+			}},
+		}, raw: withPDF, wantContent: emailaccounts.IntakeFilesOnly, wantAttach: true},
 		{name: "matching fields are ANDed", policy: emailaccounts.IntakePolicy{
-			Selection: emailaccounts.IntakeMatchingMessages,
-			Content:   emailaccounts.IntakeEmailAndFiles,
-			From:      "@example.com", Recipients: "finance@house.test",
-			SubjectTerms: "invoice", AttachmentNames: "*.pdf",
-		}, raw: withPDF, wantAttach: true},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection: emailaccounts.IntakeMatchingMessages,
+				Content:   emailaccounts.IntakeEmailAndFiles,
+				From:      "@example.com", Recipients: "finance@house.test",
+				SubjectTerms: "invoice", AttachmentNames: "*.pdf",
+			}},
+		}, raw: withPDF, wantContent: emailaccounts.IntakeEmailAndFiles, wantAttach: true},
 		{name: "sender mismatch rejects", policy: emailaccounts.IntakePolicy{
-			Selection: emailaccounts.IntakeMatchingMessages,
-			Content:   emailaccounts.IntakeEmailAndFiles,
-			From:      "trusted@elsewhere.test",
-		}, raw: withPDF, wantDrop: "from", wantAttach: true},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection: emailaccounts.IntakeMatchingMessages,
+				Content:   emailaccounts.IntakeEmailAndFiles,
+				From:      "trusted@elsewhere.test",
+			}},
+		}, raw: withPDF, wantAttach: true},
 		{name: "one failed criterion rejects", policy: emailaccounts.IntakePolicy{
-			Selection:    emailaccounts.IntakeMatchingMessages,
-			Content:      emailaccounts.IntakeEmailAndFiles,
-			From:         "@example.com",
-			SubjectTerms: "receipt",
-		}, raw: withPDF, wantDrop: "subject", wantAttach: true},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection:    emailaccounts.IntakeMatchingMessages,
+				Content:      emailaccounts.IntakeEmailAndFiles,
+				From:         "@example.com",
+				SubjectTerms: "receipt",
+			}},
+		}, raw: withPDF, wantAttach: true},
 		{name: "files only cannot archive body-only mail", policy: emailaccounts.IntakePolicy{
-			Selection: emailaccounts.IntakeEveryMessage,
-			Content:   emailaccounts.IntakeFilesOnly,
-		}, raw: textOnly, wantDrop: "files_only"},
+			Rules: []emailaccounts.IntakeRule{{
+				Selection: emailaccounts.IntakeEveryMessage,
+				Content:   emailaccounts.IntakeFilesOnly,
+			}},
+		}, raw: textOnly},
+		{name: "rules are ORed", policy: emailaccounts.IntakePolicy{
+			Rules: []emailaccounts.IntakeRule{
+				{Selection: emailaccounts.IntakeMessagesWithFiles, Content: emailaccounts.IntakeFilesOnly},
+				{Selection: emailaccounts.IntakeMatchingMessages, Content: emailaccounts.IntakeEmailAndFiles, SubjectTerms: "distribution advice"},
+			},
+		}, envelope: &imap.Envelope{Subject: "Distribution Advice available"}, raw: textOnly, wantContent: emailaccounts.IntakeEmailAndFiles},
+		{name: "email and files wins after files only", policy: emailaccounts.IntakePolicy{
+			Rules: []emailaccounts.IntakeRule{
+				{Selection: emailaccounts.IntakeMessagesWithFiles, Content: emailaccounts.IntakeFilesOnly},
+				{Selection: emailaccounts.IntakeMatchingMessages, Content: emailaccounts.IntakeEmailAndFiles, SubjectTerms: "invoice"},
+			},
+		}, raw: withPDF, wantContent: emailaccounts.IntakeEmailAndFiles, wantAttach: true},
+		{name: "email and files wins before files only", policy: emailaccounts.IntakePolicy{
+			Rules: []emailaccounts.IntakeRule{
+				{Selection: emailaccounts.IntakeMatchingMessages, Content: emailaccounts.IntakeEmailAndFiles, SubjectTerms: "invoice"},
+				{Selection: emailaccounts.IntakeMessagesWithFiles, Content: emailaccounts.IntakeFilesOnly},
+			},
+		}, raw: withPDF, wantContent: emailaccounts.IntakeEmailAndFiles, wantAttach: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hasAttachment, drop := shouldImport(
-				&emailaccounts.Account{IntakePolicy: tt.policy}, envelope, tt.raw,
+			testEnvelope := tt.envelope
+			if testEnvelope == nil {
+				testEnvelope = envelope
+			}
+			hasAttachment, content := shouldImport(
+				&emailaccounts.Account{IntakePolicy: tt.policy}, testEnvelope, tt.raw,
 			)
-			if drop != tt.wantDrop || hasAttachment != tt.wantAttach {
-				t.Fatalf("drop=%q attachment=%v, want %q/%v", drop, hasAttachment, tt.wantDrop, tt.wantAttach)
+			if content != tt.wantContent || hasAttachment != tt.wantAttach {
+				t.Fatalf("content=%q attachment=%v, want %q/%v", content, hasAttachment, tt.wantContent, tt.wantAttach)
 			}
 		})
 	}

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 )
@@ -52,9 +53,9 @@ const (
 	IntakeFilesOnly     IntakeContent = "files_only"
 )
 
-// IntakePolicy is one provider-neutral mailbox filter. Populated matching
-// fields are ANDed; comma- or newline-separated values within a field are ORed.
-type IntakePolicy struct {
+// IntakeRule is one provider-neutral mailbox filter. Populated matching fields
+// are ANDed; comma- or newline-separated values within a field are ORed.
+type IntakeRule struct {
 	Selection       IntakeSelection `json:"selection"`
 	Content         IntakeContent   `json:"content"`
 	From            string          `json:"from,omitempty"`
@@ -63,51 +64,78 @@ type IntakePolicy struct {
 	AttachmentNames string          `json:"attachment_names,omitempty"`
 }
 
+// IntakePolicy accepts a message when any rule matches. The evaluator resolves
+// multiple matches by preferring email_and_files over files_only.
+type IntakePolicy struct {
+	Rules []IntakeRule `json:"rules"`
+}
+
 func DefaultIntakePolicy() IntakePolicy {
-	return IntakePolicy{Selection: IntakeEveryMessage, Content: IntakeEmailAndFiles}
+	return IntakePolicy{Rules: []IntakeRule{{
+		Selection: IntakeEveryMessage,
+		Content:   IntakeEmailAndFiles,
+	}}}
 }
 
 func NormalizeIntakePolicy(p IntakePolicy) (IntakePolicy, error) {
-	if p.Selection == "" {
-		p.Selection = IntakeEveryMessage
+	if p.Rules == nil {
+		return DefaultIntakePolicy(), nil
 	}
-	if p.Content == "" {
-		p.Content = IntakeEmailAndFiles
+	if len(p.Rules) == 0 || len(p.Rules) > 20 {
+		return IntakePolicy{}, errors.New("emailaccounts: intake_policy must contain between 1 and 20 rules")
 	}
-	p.From = strings.TrimSpace(p.From)
-	p.Recipients = strings.TrimSpace(p.Recipients)
-	p.SubjectTerms = strings.TrimSpace(p.SubjectTerms)
-	p.AttachmentNames = strings.TrimSpace(p.AttachmentNames)
-
-	switch p.Selection {
-	case IntakeEveryMessage, IntakeMessagesWithFiles:
-		if p.From != "" || p.Recipients != "" || p.SubjectTerms != "" || p.AttachmentNames != "" {
-			return IntakePolicy{}, errors.New("emailaccounts: matching criteria require selection=matching")
+	p.Rules = append([]IntakeRule(nil), p.Rules...)
+	for i := range p.Rules {
+		rule, err := normalizeIntakeRule(p.Rules[i])
+		if err != nil {
+			return IntakePolicy{}, fmt.Errorf("emailaccounts: intake_policy.rules[%d]: %w", i, err)
 		}
-	case IntakeMatchingMessages:
-		if p.From == "" && p.Recipients == "" && p.SubjectTerms == "" && p.AttachmentNames == "" {
-			return IntakePolicy{}, errors.New("emailaccounts: matching selection requires at least one criterion")
-		}
-	default:
-		return IntakePolicy{}, fmt.Errorf("emailaccounts: unsupported intake selection %q", p.Selection)
-	}
-	if p.Content != IntakeEmailAndFiles && p.Content != IntakeFilesOnly {
-		return IntakePolicy{}, fmt.Errorf("emailaccounts: unsupported intake content %q", p.Content)
-	}
-	for name, value := range map[string]string{
-		"from": p.From, "recipients": p.Recipients,
-		"subject_terms": p.SubjectTerms, "attachment_names": p.AttachmentNames,
-	} {
-		if len(value) > 8192 {
-			return IntakePolicy{}, fmt.Errorf("emailaccounts: intake_policy.%s must be at most 8192 bytes", name)
-		}
-	}
-	for _, pattern := range SplitPolicyValues(p.AttachmentNames) {
-		if _, err := path.Match(strings.ToLower(pattern), "sample.pdf"); err != nil {
-			return IntakePolicy{}, fmt.Errorf("emailaccounts: invalid attachment filename pattern %q", pattern)
-		}
+		p.Rules[i] = rule
 	}
 	return p, nil
+}
+
+func normalizeIntakeRule(rule IntakeRule) (IntakeRule, error) {
+	if rule.Selection == "" {
+		rule.Selection = IntakeEveryMessage
+	}
+	if rule.Content == "" {
+		rule.Content = IntakeEmailAndFiles
+	}
+	rule.From = strings.TrimSpace(rule.From)
+	rule.Recipients = strings.TrimSpace(rule.Recipients)
+	rule.SubjectTerms = strings.TrimSpace(rule.SubjectTerms)
+	rule.AttachmentNames = strings.TrimSpace(rule.AttachmentNames)
+
+	switch rule.Selection {
+	case IntakeEveryMessage, IntakeMessagesWithFiles:
+		if rule.From != "" || rule.Recipients != "" || rule.SubjectTerms != "" || rule.AttachmentNames != "" {
+			return IntakeRule{}, errors.New("matching criteria require selection=matching")
+		}
+	case IntakeMatchingMessages:
+		if rule.From == "" && rule.Recipients == "" && rule.SubjectTerms == "" && rule.AttachmentNames == "" {
+			return IntakeRule{}, errors.New("matching selection requires at least one criterion")
+		}
+	default:
+		return IntakeRule{}, fmt.Errorf("unsupported intake selection %q", rule.Selection)
+	}
+	if rule.Content != IntakeEmailAndFiles && rule.Content != IntakeFilesOnly {
+		return IntakeRule{}, fmt.Errorf("unsupported intake content %q", rule.Content)
+	}
+	for name, value := range map[string]string{
+		"from": rule.From, "recipients": rule.Recipients,
+		"subject_terms": rule.SubjectTerms, "attachment_names": rule.AttachmentNames,
+	} {
+		if len(value) > 8192 {
+			return IntakeRule{}, fmt.Errorf("%s must be at most 8192 bytes", name)
+		}
+	}
+	for _, pattern := range SplitPolicyValues(rule.AttachmentNames) {
+		if _, err := path.Match(strings.ToLower(pattern), "sample.pdf"); err != nil {
+			return IntakeRule{}, fmt.Errorf("invalid attachment filename pattern %q", pattern)
+		}
+	}
+	return rule, nil
 }
 
 func ParseIntakePolicy(raw string) (IntakePolicy, error) {
@@ -115,8 +143,13 @@ func ParseIntakePolicy(raw string) (IntakePolicy, error) {
 		return DefaultIntakePolicy(), nil
 	}
 	var p IntakePolicy
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&p); err != nil {
 		return IntakePolicy{}, fmt.Errorf("emailaccounts: decode intake_policy: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return IntakePolicy{}, errors.New("emailaccounts: decode intake_policy: multiple JSON values")
 	}
 	return NormalizeIntakePolicy(p)
 }

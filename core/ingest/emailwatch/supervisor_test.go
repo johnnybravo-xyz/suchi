@@ -50,9 +50,11 @@ func TestFingerprintIncludesRuntimePolicyAndSecret(t *testing.T) {
 		func() *emailaccounts.Account {
 			c := *base
 			c.IntakePolicy = emailaccounts.IntakePolicy{
-				Selection: emailaccounts.IntakeMatchingMessages,
-				Content:   emailaccounts.IntakeEmailAndFiles,
-				From:      "@example.com",
+				Rules: []emailaccounts.IntakeRule{{
+					Selection: emailaccounts.IntakeMatchingMessages,
+					Content:   emailaccounts.IntakeEmailAndFiles,
+					From:      "@example.com",
+				}},
 			}
 			return &c
 		}(),

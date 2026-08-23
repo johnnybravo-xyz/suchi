@@ -83,8 +83,8 @@ Suchi reads mail only and needs no SMTP configuration.
 1. Open **Settings > Mailboxes** and select **Add mailbox**.
 2. Choose the provider, owner, display name, and mailbox username.
 3. Enter an app password or complete Microsoft sign-in.
-4. Choose which messages to accept and whether to keep the email, its files, or
-   both.
+4. Add one or more intake rules for the messages to accept and choose whether
+   each rule keeps the email and its files or files only.
 5. Choose whether accepted messages stay unchanged, are marked read, or move to
    another folder.
 6. Under **Advanced**, set **Sync mail from**. New accounts default to the
@@ -139,17 +139,23 @@ Without a processed folder, Suchi leaves server read state unchanged unless
 
 ## Intake policy and automations
 
-Each mailbox accepts every message, messages with files, or messages matching
-the filled sender, recipient, subject, and filename conditions. Conditions are
-combined with AND; comma-separated values inside one condition are alternatives.
-Sender and recipient entries accept full addresses or `@domain` suffixes.
-Filename entries are globs such as `*.pdf` or `invoice-*`.
+Each mailbox has 1 to 20 intake rules. A rule accepts every message, messages
+with files, or messages matching its filled sender, recipient, subject, and
+filename conditions. Rules are alternatives (OR), while conditions inside one
+matching rule are combined with AND. Comma-separated values inside one
+condition are alternatives. Sender and recipient entries accept full addresses
+or `@domain` suffixes. Filename entries are globs such as `*.pdf` or
+`invoice-*`.
 
-Accepted messages can retain both the email and its files or files only. A
-rejected message never enters the archive, Automations, or document history and
-is left untouched on the mail server. Preview reads only envelope metadata and
-attachment filenames for at most 25 recent messages and returns at most five
-matching samples.
+Each rule can retain both the email and its files or files only. When a message
+matches multiple rules with different choices, Suchi retains the email and its
+files. For example, use one files-only rule for messages with attachments and a
+second email-and-files rule for subjects containing `distribution advice`.
+
+A message rejected by every rule never enters the archive, Automations, or
+document history and is left untouched on the mail server. Preview reads only
+envelope metadata and attachment filenames for at most 25 recent messages and
+returns at most five matching samples.
 
 Consumption automations can filter on sender, subject, source folder, and
 attachment presence. Use them to assign correspondents, tags, document types,

@@ -137,7 +137,10 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		"provider":"fastmail",
 		"username":"a@example.com",
 		"password":"hunter2",
-		"intake_policy":{"selection":"matching","content":"files_only","from":"@example.com","attachment_names":"*.pdf"},
+		"intake_policy":{"rules":[
+			{"selection":"files","content":"files_only"},
+			{"selection":"matching","content":"email_and_files","from":"@example.com","subject_terms":"distribution advice"}
+		]},
 		"mark_seen":true,
 		"enabled":true
 	}`
@@ -158,10 +161,12 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	if !out.MarkSeen {
 		t.Fatal("mark_seen was not persisted")
 	}
-	if out.IntakePolicy.Selection != emailaccounts.IntakeMatchingMessages ||
-		out.IntakePolicy.Content != emailaccounts.IntakeFilesOnly ||
-		out.IntakePolicy.AttachmentNames != "*.pdf" {
-		t.Fatalf("intake policy was not persisted: %+v", out.IntakePolicy)
+	rules := out.IntakePolicy.Rules
+	if len(rules) != 2 ||
+		rules[0].Selection != emailaccounts.IntakeMessagesWithFiles || rules[0].Content != emailaccounts.IntakeFilesOnly ||
+		rules[1].Selection != emailaccounts.IntakeMatchingMessages || rules[1].Content != emailaccounts.IntakeEmailAndFiles ||
+		rules[1].From != "@example.com" || rules[1].SubjectTerms != "distribution advice" {
+		t.Fatalf("intake policy was not persisted in rules shape: %+v", rules)
 	}
 	// SyncSince defaults to ~time.Now() when the caller omits it —
 	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
@@ -228,8 +233,11 @@ func TestEmailAccounts_Create_Validation(t *testing.T) {
 			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","poll_interval_min":1441}`,
 			"poll_interval_min"},
 		{"matching_policy_without_criteria",
-			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","intake_policy":{"selection":"matching","content":"email_and_files"}}`,
+			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","intake_policy":{"rules":[{"selection":"matching","content":"email_and_files"}]}}`,
 			"matching selection requires"},
+		{"legacy_flat_intake_policy",
+			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","intake_policy":{"selection":"files","content":"files_only"}}`,
+			"bad_json"},
 		{"invalid_ca_file",
 			fmt.Sprintf(`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","tls_ca_file":%q}`, filepath.Join(t.TempDir(), "missing.pem")),
 			"tls_ca_file"},
