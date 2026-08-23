@@ -33,6 +33,8 @@ import (
 // walks each boot. Order is stable so the log lines are readable.
 var kindsToCheck = []string{"ocr", "llm", "content"}
 
+const proposalTargetPreview = 10
+
 // EnsureProposals is the boot-time entrypoint. Idempotent.
 //
 // `engine` is the approvals engine (already Set-Default'd by main.go).
@@ -112,10 +114,15 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 		return nil
 	}
 	// Case 4: no pending run, but stale > 0. Start one.
+	targets, err := ProposalTargets(ctx, d, kind, current, proposalTargetPreview)
+	if err != nil {
+		return fmt.Errorf("load rescan-proposal targets for %s: %w", kind, err)
+	}
 	vars := map[string]any{
-		"kind":            kind,
-		"current_version": current,
-		"stale_count":     stale,
+		"kind":             kind,
+		"current_version":  current,
+		"stale_count":      stale,
+		"target_documents": targets,
 	}
 	runID, err := engine.Start(ctx, ProposalSlug, 0, vars, systemActor())
 	if err != nil {

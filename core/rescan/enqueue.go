@@ -33,6 +33,12 @@ import (
 // If postingest.Kind ever changes, this constant must move with it.
 const PostIngestKind = "post-ingest"
 
+// runnableDocumentWhere is shared by automatic proposal counting and the
+// approval handler's eventual selection. Encrypted PDFs cannot advance their
+// pipeline versions until a password is supplied, so proposing them creates a
+// rescan loop with no possible successful outcome.
+const runnableDocumentWhere = `COALESCE(d.encryption_state, '') != 'encrypted'`
+
 // Options is the filter + version snapshot passed by callers.
 // Every filter field is optional; the empty Options selects every
 // live doc (rare — usually paired with at least one filter).
@@ -53,6 +59,9 @@ type Options struct {
 	// upgrade proposals set this to 1 so enabling the classifier does not
 	// reinterpret never-classified documents as stale results.
 	MinimumVersion int
+	// OnlyRunnable excludes documents parked behind an operator action such as
+	// PDF decryption. Automatic proposals set this; explicit CLI rescans do not.
+	OnlyRunnable bool
 
 	// Pipeline version constants at the caller's binary. Passed in
 	// so this package doesn't import postingest or the LLM plugin.
@@ -72,6 +81,13 @@ type Row struct {
 	// HasContent — used by the CLI's --estimate to guess whether a
 	// doc still needs OCR or is content-populated already.
 	HasContent bool
+}
+
+// ProposalTarget is the bounded document preview attached to a rescan
+// approval. Titles are displayed as document links in the approval details.
+type ProposalTarget struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
 }
 
 // Validate returns an error if Options carries a nonsense
@@ -191,6 +207,9 @@ func buildFilters(opts Options) (string, []any) {
 			args = append(args, opts.MinimumVersion)
 		}
 	}
+	if opts.OnlyRunnable {
+		b.WriteString(" AND " + runnableDocumentWhere)
+	}
 	if len(opts.IDs) > 0 {
 		// Explicit id list — used by the SPA's rescan bulk action.
 		// Combines with trashed_at IS NULL so trashed picks silently drop.
@@ -269,26 +288,84 @@ func CountProposalStale(ctx context.Context, d *db.DB, kind string, current int)
 	return countStale(ctx, d, kind, current, minimum, true)
 }
 
+// ProposalTargets returns a deterministic, bounded preview using the exact
+// eligibility predicate used by CountProposalStale.
+func ProposalTargets(ctx context.Context, d *db.DB, kind string, current, limit int) ([]ProposalTarget, error) {
+	if limit <= 0 {
+		return []ProposalTarget{}, nil
+	}
+	minimum := 0
+	if kind == "llm" {
+		minimum = 1
+	}
+	where, args, err := proposalWhere(kind, current, minimum)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, limit)
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT d.id, COALESCE(d.title, '')
+		FROM documents d
+		WHERE `+where+`
+		ORDER BY d.id
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	targets := []ProposalTarget{}
+	for rows.Next() {
+		var target ProposalTarget
+		if err := rows.Scan(&target.ID, &target.Title); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
 func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int, proposal bool) (int, error) {
+	if proposal {
+		where, args, err := proposalWhere(kind, current, minimum)
+		if err != nil {
+			return 0, err
+		}
+		var n int
+		err = d.Read.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM documents d WHERE `+where, args...).Scan(&n)
+		return n, err
+	}
 	col, _, ok := staleColumn(Options{Stale: kind})
 	if !ok {
 		return 0, fmt.Errorf("rescan: unknown kind %q", kind)
 	}
-	query := `SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL AND ` + col + ` < ?`
+	query := `SELECT COUNT(*) FROM documents d WHERE d.trashed_at IS NULL AND d.` + col + ` < ?`
 	args := []any{current}
 	if minimum > 0 {
-		query += ` AND ` + col + ` >= ?`
+		query += ` AND d.` + col + ` >= ?`
 		args = append(args, minimum)
-	}
-	if proposal {
-		query += ` AND NOT EXISTS (
-			SELECT 1 FROM jobs j
-			 WHERE j.doc_id = documents.id
-			   AND j.kind = 'post-ingest'
-			   AND j.state IN ('pending', 'running', 'dead')
-		)`
 	}
 	var n int
 	err := d.Read.QueryRowContext(ctx, query, args...).Scan(&n)
 	return n, err
+}
+
+func proposalWhere(kind string, current, minimum int) (string, []any, error) {
+	col, _, ok := staleColumn(Options{Stale: kind})
+	if !ok {
+		return "", nil, fmt.Errorf("rescan: unknown kind %q", kind)
+	}
+	where := `d.trashed_at IS NULL AND d.` + col + ` < ?`
+	args := []any{current}
+	if minimum > 0 {
+		where += ` AND d.` + col + ` >= ?`
+		args = append(args, minimum)
+	}
+	where += ` AND ` + runnableDocumentWhere + ` AND NOT EXISTS (
+		SELECT 1 FROM jobs j
+		 WHERE j.doc_id = d.id
+		   AND j.kind = 'post-ingest'
+		   AND j.state IN ('pending', 'running', 'dead')
+	)`
+	return where, args, nil
 }

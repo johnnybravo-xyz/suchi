@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
@@ -183,6 +184,33 @@ func TestCountProposalStale_ExcludesDocumentsAlreadyNeedingProcessing(t *testing
 	}
 }
 
+func TestCountProposalStale_ExcludesEncryptedDocuments(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	encrypted := seedDoc(t, ctx, d, owner, "sha-encrypted", 0)
+	seedDoc(t, ctx, d, owner, "sha-runnable", 0)
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET encryption_state = 'encrypted' WHERE id = ?`, encrypted); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := rescan.CountProposalStale(ctx, d, "ocr", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("proposal stale count = %d, want only the runnable document", got)
+	}
+	// Explicit stale queries retain their broad diagnostic behavior.
+	got, err = rescan.CountStale(ctx, d, "ocr", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("explicit stale count = %d, want both documents", got)
+	}
+}
+
 func TestEnqueue_StaleOCR(t *testing.T) {
 	ctx := context.Background()
 	d, owner := setupDB(t)
@@ -266,5 +294,35 @@ func TestEnqueue_NoMatches(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("no-op case: got %d jobs, want 0", n)
+	}
+}
+
+func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	encrypted := seedDoc(t, ctx, d, owner, "sha-encrypted", 0)
+	runnable := seedDoc(t, ctx, d, owner, "sha-runnable", 0)
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET encryption_state = 'encrypted' WHERE id = ?`, encrypted); err != nil {
+		t.Fatal(err)
+	}
+
+	h := rescan.NewHandler(d, rescan.Versions{OCR: 1})
+	result, err := h.Handle(ctx,
+		approvals.Run{Vars: map[string]any{"kind": "ocr"}},
+		approvals.State{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Event != "success" || result.Vars["enqueued"] != 1 {
+		t.Fatalf("handler result = %#v, want one enqueued document", result)
+	}
+	var docID int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT doc_id FROM jobs WHERE kind = 'post-ingest'`).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if docID != runnable {
+		t.Fatalf("enqueued doc %d, want runnable doc %d", docID, runnable)
 	}
 }

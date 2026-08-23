@@ -39,6 +39,10 @@ changing its endpoint, model, key, timeout, threshold, or egress setting does
 not create a proposal. Those configuration changes require an explicit
 selected rescan.
 
+Password-protected PDFs waiting for decryption are also excluded. A rescan
+cannot advance them while the password gate is closed; supplying a password
+already re-enqueues the document through the current pipeline.
+
 The Tasks card reports the pipeline, target revision, and matching document
 count. Its actions are:
 

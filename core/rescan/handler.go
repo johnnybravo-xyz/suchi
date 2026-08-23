@@ -73,6 +73,7 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 	opts := Options{
 		Stale:          kind,
 		SampleSize:     sampleSize,
+		OnlyRunnable:   true,
 		OCRVersion:     h.versions.OCR,
 		LLMVersion:     h.versions.LLM,
 		ContentVersion: h.versions.Content,

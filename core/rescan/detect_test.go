@@ -62,6 +62,18 @@ func TestDetect_StartsRun_WhenStaleFound(t *testing.T) {
 	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
 		t.Fatalf("expected 1 running proposal, got %d", got)
 	}
+	var targets int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT json_array_length(json_extract(r.vars_json, '$.target_documents'))
+		FROM approval_runs r
+		JOIN approval_defs def ON def.id = r.def_id
+		WHERE def.slug = ? AND r.state = 'running'
+	`, rescan.ProposalSlug).Scan(&targets); err != nil {
+		t.Fatal(err)
+	}
+	if targets != 2 {
+		t.Fatalf("proposal target preview has %d documents, want 2", targets)
+	}
 }
 
 func TestDetect_Idempotent_SameVersionNoDoubleStart(t *testing.T) {
@@ -167,5 +179,22 @@ func TestDetect_LLMDoesNotProposeNeverProcessedDocuments(t *testing.T) {
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
 		t.Fatalf("version-zero LLM docs opened %d proposal runs, want 0", got)
+	}
+}
+
+func TestDetect_DoesNotProposeEncryptedDocuments(t *testing.T) {
+	ctx := context.Background()
+	e, d, owner := newDetectorEngine(t)
+	doc := seedDoc(t, ctx, d, owner, "sha-encrypted", 0)
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET encryption_state = 'encrypted' WHERE id = ?`, doc); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
+		t.Fatalf("encrypted document opened %d proposal runs, want 0", got)
 	}
 }
