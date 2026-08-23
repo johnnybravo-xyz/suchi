@@ -33,17 +33,15 @@
   ]
 
   const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
-  // Inline-previewable formats: archive_blob is always PDF, and browsers
-  // render PDF + common images + plain text natively. Everything else
-  // (docx/xlsx/pptx, epub, eml, unknown) can't be iframed without
-  // triggering a save/download dialog, so we swap the iframe for a
-  // small "no inline preview" panel and lean on the extracted-text card
-  // below. Keeps parity with previewPath's server-side content-type.
+  // Inline-previewable formats: archive_blob is always PDF, browsers render
+  // common media natively, and the server turns stored email bodies into a
+  // sandboxed HTML preview. Other formats swap the iframe for a download panel.
   const previewable = $derived.by(() => {
     if (!doc) return false
     if (doc.archive_blob) return true
     const m = (doc.mime_type || '').toLowerCase().split(';')[0].trim()
     if (m === 'application/pdf') return true
+    if (m === 'message/rfc822') return true
     if (m.startsWith('image/')) {
       return ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/avif'].includes(m)
     }
