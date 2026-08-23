@@ -371,13 +371,13 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// core/pipeline/eml/ for the parser + docs/formats.mdx#email.
 	if eml.Recognized(mime) {
 		filesOnly := emailFilesOnlyFromPayload(e.Payload)
-		deduped, err := h.handleEmail(ctx, log, e.DocID, origBytes, filesOnly)
+		retired, err := h.handleEmail(ctx, log, e.DocID, origBytes, filesOnly)
 		if err != nil {
 			return fmt.Errorf("email: %w", err)
 		}
-		if deduped {
-			// The doc was soft-deleted as a Message-ID duplicate.
-			// Skip render/classify — there's no live row to render.
+		if retired {
+			// Duplicate and files-only source rows are staging documents.
+			// Skip render/classify after they have been removed.
 			return nil
 		}
 		return h.postContentSteps(ctx, log, e.DocID)
@@ -862,6 +862,16 @@ func (h *Handler) softDeleteParent(ctx context.Context, docID int64) error {
 	})
 }
 
+// deleteEmailStagingParent removes an email row that only existed long enough
+// to deduplicate or fan out attachments. User Trash is reserved for documents
+// a user or automation can restore; files-only source messages are neither.
+func (h *Handler) deleteEmailStagingParent(ctx context.Context, docID int64) error {
+	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM documents WHERE id = ?`, docID)
+		return err
+	})
+}
+
 // applyPreConsumeMetadata writes the tags + custom_fields produced by
 // the pre-consume script. All-or-nothing per doc: one tx wraps every
 // insert. Best-effort per row inside the tx — an unknown tag/field
@@ -938,11 +948,11 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 //
 // Owner + jd_category for children inherit from the parent. Children
 // point back via email_parent_id (migration 0014).
-// handleEmail returns (deduped, err). When deduped=true the caller MUST
-// skip render / classify — the doc row has been soft-deleted because
-// another doc under the same owner already carries this Message-ID.
+// handleEmail returns (retired, err). When retired=true the caller MUST skip
+// render / classify because the staging row has been deleted after deduplication
+// or attachment fanout.
 //
-// filesOnly=true (from the mailbox intake policy) tells us to soft-delete the
+// filesOnly=true (from the mailbox intake policy) tells us to delete the
 // parent after successful attachment fanout, and to enhance each child with the
 // email metadata that would otherwise have lived on the parent
 // (subject prefix on title, email Date on source_mtime, sender via
@@ -954,7 +964,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 		return false, h.updateDoc(ctx, parentID, "", "", 0)
 	}
 	// Message-ID dedup. If ANOTHER doc under the same owner already
-	// carries this Message-ID, this doc is a duplicate — soft-delete
+	// carries this Message-ID, this doc is a duplicate — remove the staging row
 	// it and stop. Same guarantee the IMAP path enforces at insert;
 	// the fs-watch/upload paths don't know Message-ID until we parse.
 	if parsed.MessageID != "" {
@@ -976,7 +986,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 			}); err != nil {
 				return true, err
 			}
-			return true, h.softDeleteParent(ctx, parentID)
+			return true, h.deleteEmailStagingParent(ctx, parentID)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			log.Warn("post-ingest.email.dedup_check", "err", err.Error())
 		}
@@ -1048,9 +1058,9 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 		}
 		childrenCreated++
 	}
-	// files_only accounts: the operator only wanted the
-	// attachments filed. Retire the parent .eml row so it doesn't
-	// clutter the doc list. Guarded on childrenCreated > 0 so a
+	// files_only accounts: the operator only wanted the attachments filed.
+	// Remove the temporary parent .eml row so it cannot appear in Documents or
+	// Trash. Guarded on childrenCreated > 0 so a
 	// misconfigured account (flag on but no attachments this poll,
 	// which shouldn't happen because the gate would drop) still
 	// leaves the operator with SOMETHING to look at rather than a
@@ -1059,7 +1069,7 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 		log.Info("post-ingest.email.parent_retired",
 			"parent_id", parentID, "children", childrenCreated,
 			"reason", "files_only")
-		return true, h.softDeleteParent(ctx, parentID)
+		return true, h.deleteEmailStagingParent(ctx, parentID)
 	}
 	return false, nil
 }
@@ -1150,7 +1160,7 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 //
 // parsed is the enclosing email — used for source_mtime (Date) and,
 // under filesOnly, for the subject prefix on the child's title
-// (the parent .eml gets soft-deleted so subject would otherwise be
+// (the parent .eml gets deleted so subject would otherwise be
 // lost). email_parent_id is set to nil when filesOnly so the
 // child doesn't dangle-point at a trashed row.
 func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logger, parentID, ownerID, jdCategoryID int64, index int, att eml.Attachment, parsed *eml.Email, filesOnly bool) error {
@@ -1162,7 +1172,7 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 	if title == "" {
 		title = fmt.Sprintf("attachment-%d", index)
 	}
-	// files_only: the parent row is about to be soft-deleted, so
+	// files_only: the parent row is about to be deleted, so
 	// prefix the subject onto the child title so the operator can still
 	// see which email it came from. Skip if subject is empty or already
 	// equals the filename (e.g. "Invoice.pdf" mail with a "Invoice.pdf"
@@ -1182,10 +1192,8 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 	if parsed != nil && !parsed.Date.IsZero() {
 		sourceMtime = parsed.Date.Unix()
 	}
-	// Under filesOnly the parent gets soft-deleted; a stored
-	// email_parent_id → trashed-row FK ref is dangling by design (the
-	// column is ON DELETE SET NULL) but writing NULL up-front is
-	// cleaner and keeps parent-scoped joins honest.
+	// Under filesOnly the staging parent gets deleted. Write NULL up-front so
+	// attachment rows never rely on an ON DELETE side effect.
 	var parentRef any
 	if !filesOnly {
 		parentRef = parentID

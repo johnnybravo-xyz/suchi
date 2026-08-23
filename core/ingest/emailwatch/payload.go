@@ -20,7 +20,7 @@ type PostIngestPayload struct {
 	EmailFolder        string `json:"email_folder,omitempty"`
 	EmailHasAttachment bool   `json:"email_has_attachment"`
 	// EmailFilesOnly reflects the intake policy's content scope. When true,
-	// post-ingest soft-deletes the parent .eml row
+	// post-ingest deletes the temporary parent .eml row
 	// after its attachment children land — the email body itself is
 	// not something the operator wants filed, only the attachments +
 	// their inherited email metadata (subject prefix on child title,

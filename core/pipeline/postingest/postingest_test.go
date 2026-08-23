@@ -162,6 +162,46 @@ func TestHandleRoutingContracts(t *testing.T) {
 	}
 }
 
+func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	parentID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(msgConvertedEmail))
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	retired, err := h.handleEmail(ctx, h.log, parentID, []byte(msgConvertedEmail), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retired {
+		t.Fatal("files-only email was not retired")
+	}
+
+	var parentCount, trashCount int
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM documents WHERE id = ?`, parentID).Scan(&parentCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM documents WHERE trashed_at IS NOT NULL`).Scan(&trashCount); err != nil {
+		t.Fatal(err)
+	}
+	if parentCount != 0 || trashCount != 0 {
+		t.Fatalf("parent/trash rows = %d/%d, want 0/0", parentCount, trashCount)
+	}
+
+	var title, mime string
+	var parentRef sql.NullInt64
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT title, mime_type, email_parent_id
+		FROM documents
+	`).Scan(&title, &mime, &parentRef); err != nil {
+		t.Fatal(err)
+	}
+	if title != "[Invoice attached] invoice.pdf" || mime != "application/pdf" || parentRef.Valid {
+		t.Fatalf("attachment = (%q, %q, parent=%v), want inherited title/PDF/no parent", title, mime, parentRef)
+	}
+}
+
 func assertPostContentEffects(t *testing.T, d *db.DB, docID int64, completed bool, wantContent string) {
 	t.Helper()
 	ctx := context.Background()
