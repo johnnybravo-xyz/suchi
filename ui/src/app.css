@@ -345,6 +345,42 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 }
 .setup-banner span { flex: 1; min-width: 240px; }
 
+.setup-reminder {
+  position: fixed;
+  right: 20px;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.setup-reminder-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.setup-reminder-head > div { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.setup-reminder-head b { font-size: .88rem; }
+.setup-reminder-head span { color: var(--muted); font-size: .76rem; line-height: 1.4; }
+.setup-reminder-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--tint);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.setup-reminder-close { width: 28px; height: 28px; flex: none; padding: 0; justify-content: center; }
+.setup-reminder .btn { justify-self: start; }
+@media (max-width: 620px) {
+  .setup-reminder { right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+
 /* ---------- bulk selection ---------- */
 .bulkbar {
   position: sticky; top: 0; z-index: 5;

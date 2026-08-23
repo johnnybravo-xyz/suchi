@@ -113,6 +113,7 @@ func Delete(ctx context.Context, database *db.DB, key string) error {
 // SetupState is the wizard's view of onboarding progress.
 type SetupState struct {
 	CompletedAt       *int64 `json:"completed_at,omitempty"` // unix seconds
+	StartedAt         *int64 `json:"started_at,omitempty"`   // first admin creation
 	Intent            string `json:"intent,omitempty"`
 	RecommendedPreset string `json:"recommended_preset,omitempty"`
 	CurrentPreset     string `json:"current_preset,omitempty"`
@@ -121,6 +122,15 @@ type SetupState struct {
 // LoadSetupState reads the wizard's state. Missing keys → zero-value.
 func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 	s := &SetupState{}
+	var startedAt sql.NullInt64
+	if err := database.Read.QueryRowContext(ctx,
+		`SELECT MIN(created_at) FROM users WHERE role = 'admin'`).Scan(&startedAt); err != nil {
+		return nil, fmt.Errorf("read setup start: %w", err)
+	}
+	if startedAt.Valid && startedAt.Int64 > 0 {
+		value := startedAt.Int64
+		s.StartedAt = &value
+	}
 	var completedAt int64
 	if err := Get(ctx, database, KeySetupCompletedAt, &completedAt); err == nil {
 		s.CompletedAt = &completedAt

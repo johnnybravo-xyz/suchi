@@ -165,6 +165,29 @@ func TestSetupState_Empty(t *testing.T) {
 	if s.CompletedAt != nil {
 		t.Error("fresh setup should not have completed_at")
 	}
+	if s.StartedAt != nil {
+		t.Error("setup without an admin should not have started_at")
+	}
+}
+
+func TestSetupState_StartsWithFirstAdmin(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO users(email, display_name, role, created_at, updated_at)
+		VALUES ('member@example.test', 'Member', 'member', 50, 50),
+		       ('later@example.test', 'Later admin', 'admin', 200, 200),
+		       ('first@example.test', 'First admin', 'admin', 100, 100)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	s, err := settings.LoadSetupState(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.StartedAt == nil || *s.StartedAt != 100 {
+		t.Fatalf("started_at = %v, want 100", s.StartedAt)
+	}
 }
 
 func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
