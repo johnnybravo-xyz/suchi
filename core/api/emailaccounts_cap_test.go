@@ -57,6 +57,7 @@ func capMux(s *Server) *http.ServeMux {
 	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
 	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
 	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/{id}/preview", s.PreviewEmailAccount)
 	return mux
 }
 
@@ -144,6 +145,12 @@ func TestEmailAccounts_member_with_cap(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("foreign TEST status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	// PREVIEW foreign -> 404.
+	rec = capCall(t, s, "POST",
+		"/api/email-accounts/"+strconv.FormatInt(foreign.ID, 10)+"/preview", `{}`, member)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign PREVIEW status=%d body=%s", rec.Code, rec.Body.String())
+	}
 
 	// GET own row → 200.
 	rec = capCall(t, s, "GET",
@@ -203,6 +210,7 @@ func TestEmailAccounts_member_without_cap(t *testing.T) {
 		{"PATCH", "/api/email-accounts/" + strconv.FormatInt(other.ID, 10)},
 		{"DELETE", "/api/email-accounts/" + strconv.FormatInt(other.ID, 10)},
 		{"POST", "/api/email-accounts/" + strconv.FormatInt(other.ID, 10) + "/test"},
+		{"POST", "/api/email-accounts/" + strconv.FormatInt(other.ID, 10) + "/preview"},
 	}
 	for _, c := range paths {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {

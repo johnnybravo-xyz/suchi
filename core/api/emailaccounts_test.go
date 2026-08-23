@@ -64,6 +64,7 @@ func muxFor(s *Server) *http.ServeMux {
 	mux.HandleFunc("PATCH /api/email-accounts/{id}", s.PatchEmailAccount)
 	mux.HandleFunc("DELETE /api/email-accounts/{id}", s.DeleteEmailAccount)
 	mux.HandleFunc("POST /api/email-accounts/{id}/test", s.TestEmailAccount)
+	mux.HandleFunc("POST /api/email-accounts/{id}/preview", s.PreviewEmailAccount)
 	mux.HandleFunc("POST /api/email-accounts/oauth/start", s.StartEmailAccountOAuth)
 	mux.HandleFunc("POST /api/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
 	mux.HandleFunc("POST /api/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
@@ -104,6 +105,7 @@ func TestEmailAccounts_AdminGate(t *testing.T) {
 		{"PATCH", "/api/email-accounts/1"},
 		{"DELETE", "/api/email-accounts/1"},
 		{"POST", "/api/email-accounts/1/test"},
+		{"POST", "/api/email-accounts/1/preview"},
 		{"POST", "/api/email-accounts/oauth/start"},
 		{"POST", "/api/email-accounts/oauth/complete"},
 		{"POST", "/api/email-accounts/1/oauth/revoke"},
@@ -135,6 +137,7 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 		"provider":"fastmail",
 		"username":"a@example.com",
 		"password":"hunter2",
+		"intake_policy":{"selection":"matching","content":"files_only","from":"@example.com","attachment_names":"*.pdf"},
 		"mark_seen":true,
 		"enabled":true
 	}`
@@ -154,6 +157,11 @@ func TestEmailAccounts_Create_HappyPath(t *testing.T) {
 	}
 	if !out.MarkSeen {
 		t.Fatal("mark_seen was not persisted")
+	}
+	if out.IntakePolicy.Selection != emailaccounts.IntakeMatchingMessages ||
+		out.IntakePolicy.Content != emailaccounts.IntakeFilesOnly ||
+		out.IntakePolicy.AttachmentNames != "*.pdf" {
+		t.Fatalf("intake policy was not persisted: %+v", out.IntakePolicy)
 	}
 	// SyncSince defaults to ~time.Now() when the caller omits it —
 	// keeps "add mailbox" zero-config safe. Non-nil is the contract.
@@ -219,6 +227,9 @@ func TestEmailAccounts_Create_Validation(t *testing.T) {
 		{"poll_interval_too_large",
 			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","poll_interval_min":1441}`,
 			"poll_interval_min"},
+		{"matching_policy_without_criteria",
+			`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","intake_policy":{"selection":"matching","content":"email_and_files"}}`,
+			"matching selection requires"},
 		{"invalid_ca_file",
 			fmt.Sprintf(`{"name":"x","owner_id":1,"provider":"fastmail","username":"a@example.com","password":"p","tls_ca_file":%q}`, filepath.Join(t.TempDir(), "missing.pem")),
 			"tls_ca_file"},

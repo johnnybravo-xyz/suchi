@@ -20,7 +20,6 @@ const (
 	maxFolderBytes         = 1024
 	maxUsernameBytes       = 320
 	maxOAuthAccountIDBytes = 1024
-	maxAllowlistBytes      = 8192
 )
 
 // ValidatePollInterval bounds watcher scheduling to a positive interval no
@@ -82,8 +81,8 @@ func listWhere(ctx context.Context, database *db.DB, where string, args []any) (
 		SELECT id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
-		       COALESCE(oauth_account_id, ''), attachments_only,
-		       COALESCE(from_allowlist, ''), sync_since, enabled,
+		       COALESCE(oauth_account_id, ''), intake_policy,
+		       sync_since, enabled,
 		       mark_seen, last_uid_seen, uidvalidity_seen,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
@@ -110,8 +109,8 @@ func Get(ctx context.Context, database *db.DB, id int64) (*Account, error) {
 		SELECT id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
-		       COALESCE(oauth_account_id, ''), attachments_only,
-		       COALESCE(from_allowlist, ''), sync_since, enabled,
+		       COALESCE(oauth_account_id, ''), intake_policy,
+		       sync_since, enabled,
 		       mark_seen, last_uid_seen, uidvalidity_seen,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at
@@ -130,21 +129,26 @@ type scanner interface {
 
 func scanAccount(s scanner) (Account, error) {
 	var a Account
-	var useTLS, attachOnly, enabled, markSeen int
+	var useTLS, enabled, markSeen int
 	var lastUID, uidValidity int64
 	var syncSince sql.NullInt64
+	var intakePolicy string
 	if err := s.Scan(&a.ID, &a.Name, &a.OwnerID, &a.Provider, &a.Host, &a.Port, &useTLS,
 		&a.TLSCAFile, &a.Folder, &a.ProcessedFolder,
 		&a.PollIntervalMin, &a.AuthMethod, &a.Username, &a.SealedSecret,
-		&a.OAuthAccountID, &attachOnly,
-		&a.FromAllowlist, &syncSince, &enabled,
+		&a.OAuthAccountID, &intakePolicy,
+		&syncSince, &enabled,
 		&markSeen, &lastUID, &uidValidity,
 		&a.LastSyncAt, &a.LastError,
 		&a.CreatedAt, &a.UpdatedAt); err != nil {
 		return Account{}, err
 	}
 	a.UseTLS = useTLS == 1
-	a.AttachmentsOnly = attachOnly == 1
+	policy, err := ParseIntakePolicy(intakePolicy)
+	if err != nil {
+		return Account{}, err
+	}
+	a.IntakePolicy = policy
 	a.Enabled = enabled == 1
 	a.MarkSeen = markSeen == 1
 	a.LastUIDSeen = uint32(lastUID)
@@ -166,25 +170,34 @@ func Create(ctx context.Context, database *db.DB, a Account) (*Account, error) {
 	if a.PollIntervalMin == 0 {
 		a.PollIntervalMin = DefaultPollIntervalMin
 	}
+	policy, err := NormalizeIntakePolicy(a.IntakePolicy)
+	if err != nil {
+		return nil, err
+	}
+	a.IntakePolicy = policy
 	if err := validateNew(a); err != nil {
+		return nil, err
+	}
+	policyJSON, err := MarshalIntakePolicy(a.IntakePolicy)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now().Unix()
 	var id int64
-	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
+	err = database.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO email_accounts(
 				name, owner_id, provider, host, port, use_tls, tls_ca_file,
 				folder, processed_folder, poll_interval_min, auth_method,
-				username, sealed_secret, oauth_account_id, attachments_only,
-				from_allowlist, sync_since, enabled, mark_seen, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				username, sealed_secret, oauth_account_id, intake_policy,
+				sync_since, enabled, mark_seen, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.Name, a.OwnerID, string(a.Provider), a.Host, a.Port, boolInt(a.UseTLS),
 			nullIfEmpty(a.TLSCAFile),
 			a.Folder, nullIfEmpty(a.ProcessedFolder), a.PollIntervalMin,
 			string(a.AuthMethod), a.Username, a.SealedSecret,
-			nullIfEmpty(a.OAuthAccountID), boolInt(a.AttachmentsOnly),
-			nullIfEmpty(a.FromAllowlist), nullIfZeroI64(a.SyncSince),
+			nullIfEmpty(a.OAuthAccountID), policyJSON,
+			nullIfZeroI64(a.SyncSince),
 			boolInt(a.Enabled), boolInt(a.MarkSeen),
 			now, now)
 		if err != nil {
@@ -226,7 +239,7 @@ func validateNew(a Account) error {
 		return err
 	}
 	if err := validateTextFields(a.Name, a.Host, a.TLSCAFile, a.Folder,
-		a.ProcessedFolder, a.Username, a.OAuthAccountID, a.FromAllowlist); err != nil {
+		a.ProcessedFolder, a.Username, a.OAuthAccountID); err != nil {
 		return err
 	}
 	_, err := LoadTLSRootCAs(a.TLSCAFile)
@@ -235,6 +248,13 @@ func validateNew(a Account) error {
 
 // Patch applies a sparse update. sql.ErrNoRows if id is gone.
 func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Account, error) {
+	if p.IntakePolicy != nil {
+		normalized, err := NormalizeIntakePolicy(*p.IntakePolicy)
+		if err != nil {
+			return nil, err
+		}
+		p.IntakePolicy = &normalized
+	}
 	if err := validatePatch(p); err != nil {
 		return nil, err
 	}
@@ -286,11 +306,12 @@ func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Acc
 	if p.OAuthAccountID != nil {
 		add("oauth_account_id", nullIfEmpty(*p.OAuthAccountID))
 	}
-	if p.AttachmentsOnly != nil {
-		add("attachments_only", boolInt(*p.AttachmentsOnly))
-	}
-	if p.FromAllowlist != nil {
-		add("from_allowlist", nullIfEmpty(*p.FromAllowlist))
+	if p.IntakePolicy != nil {
+		raw, err := MarshalIntakePolicy(*p.IntakePolicy)
+		if err != nil {
+			return nil, err
+		}
+		add("intake_policy", raw)
 	}
 	if p.SyncSince != nil {
 		// wire `sync_since: 0` clears the column (NULL, sync-all);
@@ -377,10 +398,10 @@ func validatePatch(p AccountPatch) error {
 	return validateTextFields(valueOrEmpty(p.Name), valueOrEmpty(p.Host),
 		valueOrEmpty(p.TLSCAFile), valueOrEmpty(p.Folder),
 		valueOrEmpty(p.ProcessedFolder), valueOrEmpty(p.Username),
-		valueOrEmpty(p.OAuthAccountID), valueOrEmpty(p.FromAllowlist))
+		valueOrEmpty(p.OAuthAccountID))
 }
 
-func validateTextFields(name, host, caFile, folder, processedFolder, username, oauthID, allowlist string) error {
+func validateTextFields(name, host, caFile, folder, processedFolder, username, oauthID string) error {
 	fields := []struct {
 		name  string
 		value string
@@ -393,7 +414,6 @@ func validateTextFields(name, host, caFile, folder, processedFolder, username, o
 		{"processed_folder", processedFolder, maxFolderBytes},
 		{"username", username, maxUsernameBytes},
 		{"oauth_account_id", oauthID, maxOAuthAccountIDBytes},
-		{"from_allowlist", allowlist, maxAllowlistBytes},
 	}
 	for _, field := range fields {
 		if len(field.value) > field.max {
@@ -415,8 +435,8 @@ func getInTx(ctx context.Context, tx *sql.Tx, id int64) (Account, error) {
 		SELECT id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
-		       COALESCE(oauth_account_id, ''), attachments_only,
-		       COALESCE(from_allowlist, ''), sync_since, enabled,
+		       COALESCE(oauth_account_id, ''), intake_policy,
+		       sync_since, enabled,
 		       mark_seen, last_uid_seen, uidvalidity_seen,
 		       COALESCE(last_sync_at, 0), COALESCE(last_error, ''),
 		       created_at, updated_at

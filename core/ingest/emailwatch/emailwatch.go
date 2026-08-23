@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -59,35 +60,124 @@ const (
 
 var errMessageTooLarge = errors.New("emailwatch: raw message too large")
 
+type importOutcome uint8
+
+const (
+	outcomeSkipped importOutcome = iota
+	outcomeImported
+	outcomeDeduplicated
+	outcomeIgnored
+)
+
+func (o importOutcome) updatesMailbox() bool {
+	return o == outcomeImported || o == outcomeDeduplicated
+}
+
 // DefaultMaxAttach returns the effective per-attachment cap. Read at
 // call time so a config file loaded from main.runServe reaches it.
 func DefaultMaxAttach() int64 {
 	return pipeconfig.Bytes("SUCHI_EMAIL_MAX_ATTACH", 25*1024*1024)
 }
 
-// shouldImport is the pre-ingest gate. Splitting it out of importOne
-// lets the unit tests exercise the drop paths without spinning up a
-// CAS + DB fixture.
-//
-// Returns:
-//   - hasAttachment: cached result of the MIME walk. importOne reuses
-//     this for the post-ingest payload so we don't parse twice.
-//   - fromHeader:    the address we compared against the allowlist,
-//     surfaced so the caller can log it on drop.
-//   - drop:          "" means pass the gate. Non-empty is the reason
-//     tag: "from_allowlist" or "attachments_only".
-func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw []byte) (hasAttachment bool, fromHeader string, drop string) {
+// shouldImport applies one provider-neutral policy before the message enters
+// CAS. The attachment flag is reused by the post-ingest payload.
+func shouldImport(account *emailaccounts.Account, envelope *imap.Envelope, raw []byte) (hasAttachment bool, drop string) {
+	attachmentNames := AttachmentNames(raw)
+	return len(attachmentNames) > 0, evaluatePolicy(account.IntakePolicy, envelope, attachmentNames)
+}
+
+func evaluatePolicy(policy emailaccounts.IntakePolicy, envelope *imap.Envelope, attachmentNames []string) string {
+	hasAttachment := len(attachmentNames) > 0
+	if policy.Selection == "" {
+		policy = emailaccounts.DefaultIntakePolicy()
+	}
+
+	if policy.Content == emailaccounts.IntakeFilesOnly && !hasAttachment {
+		return "files_only"
+	}
+	switch policy.Selection {
+	case emailaccounts.IntakeMessagesWithFiles:
+		if !hasAttachment {
+			return "files_required"
+		}
+	case emailaccounts.IntakeMatchingMessages:
+		if policy.From != "" && !MatchAddressCriteria(envelopeSender(envelope), policy.From) {
+			return "from"
+		}
+		if policy.Recipients != "" && !matchAnyAddress(envelopeRecipients(envelope), policy.Recipients) {
+			return "recipients"
+		}
+		if policy.SubjectTerms != "" && !containsAny(envelopeSubject(envelope), policy.SubjectTerms) {
+			return "subject"
+		}
+		if policy.AttachmentNames != "" && !matchAnyFilename(attachmentNames, policy.AttachmentNames) {
+			return "attachment_names"
+		}
+	}
+	return ""
+}
+
+func envelopeSender(envelope *imap.Envelope) string {
 	if envelope != nil && len(envelope.From) > 0 && envelope.From[0] != nil {
-		fromHeader = envelope.From[0].Address()
+		return envelope.From[0].Address()
 	}
-	if !MatchFromAllowlist(fromHeader, account.FromAllowlist) {
-		return false, fromHeader, "from_allowlist"
+	return ""
+}
+
+func envelopeRecipients(envelope *imap.Envelope) []string {
+	if envelope == nil {
+		return nil
 	}
-	hasAttachment = HasAttachment(raw)
-	if account.AttachmentsOnly && !hasAttachment {
-		return hasAttachment, fromHeader, "attachments_only"
+	addresses := make([]string, 0, len(envelope.To)+len(envelope.Cc))
+	for _, address := range envelope.To {
+		if address != nil {
+			addresses = append(addresses, address.Address())
+		}
 	}
-	return hasAttachment, fromHeader, ""
+	for _, address := range envelope.Cc {
+		if address != nil {
+			addresses = append(addresses, address.Address())
+		}
+	}
+	return addresses
+}
+
+func envelopeSubject(envelope *imap.Envelope) string {
+	if envelope == nil {
+		return ""
+	}
+	return envelope.Subject
+}
+
+func matchAnyAddress(addresses []string, criteria string) bool {
+	for _, address := range addresses {
+		if MatchAddressCriteria(address, criteria) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(value, criteria string) bool {
+	value = strings.ToLower(value)
+	for _, term := range emailaccounts.SplitPolicyValues(criteria) {
+		if strings.Contains(value, strings.ToLower(term)) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchAnyFilename(names []string, criteria string) bool {
+	for _, pattern := range emailaccounts.SplitPolicyValues(criteria) {
+		pattern = strings.ToLower(pattern)
+		for _, name := range names {
+			if matched, _ := path.Match(pattern, strings.ToLower(name)); matched {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Config carries process-wide knobs shared by every Watcher. Per-
@@ -312,10 +402,11 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	go func() { done <- c.UidFetch(seqset, items, msgs) }()
 
 	var (
-		seenUIDs   []uint32
-		failedUIDs []uint32
-		cycleErrs  []error
-		cycleErrN  int
+		completedUIDs []uint32
+		mailboxUIDs   []uint32
+		failedUIDs    []uint32
+		cycleErrs     []error
+		cycleErrN     int
 	)
 	recordCycleErr := func(err error) {
 		cycleErrN++
@@ -344,7 +435,7 @@ func (w *Watcher) cycle(ctx context.Context) error {
 						"size_at_least": limit + 1,
 					},
 				})
-				seenUIDs = append(seenUIDs, m.Uid)
+				completedUIDs = append(completedUIDs, m.Uid)
 				continue
 			}
 			w.log.Warn("emailwatch.materialize_failed",
@@ -353,7 +444,7 @@ func (w *Watcher) cycle(ctx context.Context) error {
 			recordCycleErr(fmt.Errorf("uid %d materialize: %w", m.Uid, err))
 			continue
 		}
-		imported, err := w.importOne(ctx, raw, msgID, m)
+		outcome, err := w.importOne(ctx, raw, msgID, m)
 		if err != nil {
 			w.log.Warn("emailwatch.import_failed",
 				"uid", m.Uid, "msg_id", msgID, "err", err.Error())
@@ -361,14 +452,17 @@ func (w *Watcher) cycle(ctx context.Context) error {
 			recordCycleErr(fmt.Errorf("uid %d import: %w", m.Uid, err))
 			continue
 		}
-		if imported {
+		if outcome == outcomeImported {
 			w.log.Info("emailwatch.imported",
 				"uid", m.Uid, "msg_id", msgID, "bytes", len(raw))
 		}
-		seenUIDs = append(seenUIDs, m.Uid)
+		completedUIDs = append(completedUIDs, m.Uid)
+		if outcome.updatesMailbox() {
+			mailboxUIDs = append(mailboxUIDs, m.Uid)
+		}
 	}
 	fetchErr := <-done
-	vanishedUIDs := missingUIDs(uids, seenUIDs, failedUIDs)
+	vanishedUIDs := missingUIDs(uids, completedUIDs, failedUIDs)
 	if fetchErr == nil {
 		if len(vanishedUIDs) > 0 {
 			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
@@ -399,9 +493,9 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	//                              cursor below is what makes the poll
 	//                              idempotent
 	bookkeepingOK := true
-	if len(seenUIDs) > 0 {
+	if len(mailboxUIDs) > 0 {
 		markSet := new(imap.SeqSet)
-		markSet.AddNum(seenUIDs...)
+		markSet.AddNum(mailboxUIDs...)
 		switch {
 		case w.account.ProcessedFolder != "":
 			if err := c.UidMove(markSet, w.account.ProcessedFolder); err != nil {
@@ -426,7 +520,7 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	// failed UID. Those later messages are harmlessly deduplicated if the
 	// server still returns them on the next poll. A fetch-level error keeps the
 	// old cursor because the client cannot know which requested UIDs were lost.
-	checkpointUIDs := append(seenUIDs, vanishedUIDs...)
+	checkpointUIDs := append(completedUIDs, vanishedUIDs...)
 	nextUID := nextUIDCheckpoint(lastUID, checkpointUIDs, failedUIDs, fetchErr == nil && bookkeepingOK)
 	if nextUID > lastUID || w.account.UIDValiditySeen != uidValidity {
 		if err := emailaccounts.UpdateUIDCursor(ctx, w.db, w.account.ID, nextUID, uidValidity); err != nil {
@@ -682,28 +776,27 @@ func (w *Watcher) rawMessageLimit() int64 {
 	return w.maxAttach*2 + 8*1024
 }
 
-// importOne is the write side: pre-ingest gates (from-allowlist,
-// attachments-only) then dedup by Message-ID, put the raw bytes into
-// CAS, insert a documents row with mime=message/rfc822, and enqueue
+// importOne applies the mailbox intake policy, deduplicates by Message-ID, puts
+// the raw bytes into CAS, inserts a message/rfc822 document, and enqueues
 // post-ingest (which fans out attachments as children via
 // core/pipeline/eml).
 //
-// Returns (imported, err) where imported=false is either "gate
-// dropped it", "already known" (dedup hit), or "size cap tripped".
-// err is only for hard failures the outer loop should log.
-func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *imap.Message) (bool, error) {
+// The outcome distinguishes accepted and deduplicated messages, which may be
+// moved or marked read, from ignored messages, which only advance the local
+// cursor. Errors are reserved for failures the poll loop should retry.
+func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *imap.Message) (importOutcome, error) {
 	if len(raw) == 0 {
-		return false, errors.New("empty message body")
+		return outcomeSkipped, errors.New("empty message body")
 	}
 
-	// Pre-ingest gates (from-allowlist + attachments-only). Extracted
+	// Apply the mailbox intake policy before CAS or database writes. Extracted
 	// so unit tests can exercise the drop paths without a CAS + DB
 	// fixture; whatever `shouldImport` returns is the authoritative
 	// decision.
-	hasAttachment, fromHeader, drop := shouldImport(w.account, m.Envelope, raw)
+	hasAttachment, drop := shouldImport(w.account, m.Envelope, raw)
 	if drop != "" {
-		w.log.Debug("emailwatch.gate_drop", "reason", drop, "from", fromHeader)
-		return false, nil
+		w.log.Debug("emailwatch.gate_drop", "reason", drop)
+		return outcomeIgnored, nil
 	}
 
 	// Dedup: message-ID + owner scope. Same ID under a different
@@ -717,15 +810,15 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		`, w.account.OwnerID, msgID).Scan(&existing)
 		if err == nil {
 			w.log.Debug("emailwatch.dedup", "msg_id", msgID, "existing", existing)
-			return false, w.recordMailboxSource(ctx, existing)
+			return outcomeDeduplicated, w.recordMailboxSource(ctx, existing)
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			return false, err
+			return outcomeSkipped, err
 		}
 	}
 
 	ref, err := w.cas.Put(bytes.NewReader(raw))
 	if err != nil {
-		return false, fmt.Errorf("cas put: %w", err)
+		return outcomeSkipped, fmt.Errorf("cas put: %w", err)
 	}
 
 	// Owner-scoped alive-blob dedup — the same .eml bytes might already
@@ -737,9 +830,9 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	`, w.account.OwnerID, ref.SHA256).Scan(&existingID)
 	if err == nil {
 		w.log.Debug("emailwatch.blob_dedup", "existing", existingID, "sha", ref.SHA256)
-		return false, w.recordMailboxSource(ctx, existingID)
+		return outcomeDeduplicated, w.recordMailboxSource(ctx, existingID)
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return false, err
+		return outcomeSkipped, err
 	}
 
 	title := ""
@@ -758,12 +851,13 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 
 	inbox, err := jd.InboxCategoryID(ctx, w.db)
 	if err != nil {
-		return false, fmt.Errorf("inbox category: %w", err)
+		return outcomeSkipped, fmt.Errorf("inbox category: %w", err)
 	}
 
-	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment, w.account.AttachmentsOnly)
+	filesOnly := w.account.IntakePolicy.Content == emailaccounts.IntakeFilesOnly
+	payload, err := BuildPostIngestPayload(ref.SHA256, ref.Size, "message/rfc822", title, w.account.Folder, m.Envelope, hasAttachment, filesOnly)
 	if err != nil {
-		return false, fmt.Errorf("marshal post-ingest payload: %w", err)
+		return outcomeSkipped, fmt.Errorf("marshal post-ingest payload: %w", err)
 	}
 
 	if err := w.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -790,14 +884,14 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		}
 		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
 	}); err != nil {
-		return false, fmt.Errorf("db write: %w", err)
+		return outcomeSkipped, fmt.Errorf("db write: %w", err)
 	}
 	// Nudge the dispatcher so the eml.Parse fanout doesn't wait for
 	// the next poll tick.
 	if w.disp != nil {
 		w.disp.Nudge()
 	}
-	return true, nil
+	return outcomeImported, nil
 }
 
 func (w *Watcher) mailboxSourceDetail() string {

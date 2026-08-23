@@ -3,13 +3,13 @@ package emailwatch
 import (
 	"net/mail"
 	"strings"
+
+	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 )
 
-// MatchFromAllowlist is a pre-ingest gate: it lets the poll loop drop
-// messages whose From doesn't match an owner-configured set of allowed
-// senders before the message ever hits storage or the pipeline. An
-// empty allowlist means "no filter configured" — accept everything —
-// so a NULL/empty column in the accounts table is a safe default.
+// MatchAddressCriteria reports whether an address matches a comma- or
+// newline-separated list of full addresses and @domain suffixes. An empty list
+// accepts everything.
 //
 // Entries are either a full email address (case-insensitive equality
 // on the address part, display name ignored) or a `@domain` suffix
@@ -21,7 +21,7 @@ import (
 // net/mail; malformed ones fall through to raw-string equality against
 // each entry so operators can still gate on the literal header text
 // when a sender emits something net/mail refuses.
-func MatchFromAllowlist(from, allowlist string) bool {
+func MatchAddressCriteria(from, allowlist string) bool {
 	allowlist = strings.TrimSpace(allowlist)
 	if allowlist == "" {
 		return true
@@ -40,7 +40,7 @@ func MatchFromAllowlist(from, allowlist string) bool {
 	}
 	rawLower := strings.ToLower(from)
 
-	for entry := range strings.SplitSeq(allowlist, ",") {
+	for _, entry := range emailaccounts.SplitPolicyValues(allowlist) {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue

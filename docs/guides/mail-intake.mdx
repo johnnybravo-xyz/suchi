@@ -83,12 +83,15 @@ Suchi reads mail only and needs no SMTP configuration.
 1. Open **Settings > Mailboxes** and select **Add mailbox**.
 2. Choose the provider, owner, display name, and mailbox username.
 3. Enter an app password or complete Microsoft sign-in.
-4. Select the folder and poll interval.
-5. Optionally choose a processed folder or enable marking messages as read.
-6. Set **Sync mail from**. New accounts default to the current time so adding a
-   mailbox does not import years of history unexpectedly.
-7. Optionally restrict senders or require attachments.
-8. Save, then run **Test connection**.
+4. Choose which messages to accept and whether to keep the email, its files, or
+   both.
+5. Choose whether accepted messages stay unchanged, are marked read, or move to
+   another folder.
+6. Under **Advanced**, set **Sync mail from**. New accounts default to the
+   current time so adding a mailbox does not import years of history
+   unexpectedly.
+7. Save, then run **Test connection**. Use **Preview matches** while editing to
+   check the policy against recent, unchecked messages.
 
 The supervisor starts or reloads the mailbox within seconds. Adding, editing,
 disabling, deleting, testing, signing in, or changing mailbox credentials does
@@ -134,11 +137,19 @@ cannot permanently block the mailbox cursor.
 Without a processed folder, Suchi leaves server read state unchanged unless
 **Mark messages as read** is enabled.
 
-## Filters and automations
+## Intake policy and automations
 
-The sender allowlist accepts full addresses or `@domain` suffixes. Empty means
-all senders. **Attachments only** drops messages without attachments before
-creating a document.
+Each mailbox accepts every message, messages with files, or messages matching
+the filled sender, recipient, subject, and filename conditions. Conditions are
+combined with AND; comma-separated values inside one condition are alternatives.
+Sender and recipient entries accept full addresses or `@domain` suffixes.
+Filename entries are globs such as `*.pdf` or `invoice-*`.
+
+Accepted messages can retain both the email and its files or files only. A
+rejected message never enters the archive, Automations, or document history and
+is left untouched on the mail server. Preview reads only envelope metadata and
+attachment filenames for at most 25 recent messages and returns at most five
+matching samples.
 
 Consumption automations can filter on sender, subject, source folder, and
 attachment presence. Use them to assign correspondents, tags, document types,
@@ -160,8 +171,8 @@ The built-in poller is the simpler default.
   use a Google app password. There is no Google OAuth fallback in v0.1.
 - **Provider rejects credentials:** verify that the credential is an app
   password and the plan or organization allows IMAP.
-- **Messages missing:** inspect `sync_since`, sender allowlist, attachments-only
-  mode, source folder, and the mailbox row's last error.
+- **Messages missing:** inspect **Sync mail from**, the intake policy, source
+  folder, and the mailbox row's last error. Preview the policy before saving it.
 - **Changes seem ignored:** wait a few seconds for supervisor reconciliation,
   then inspect `emailwatch.supervisor` logs. Do not restart Suchi.
 

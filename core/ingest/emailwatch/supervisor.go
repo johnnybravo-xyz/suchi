@@ -227,13 +227,8 @@ func fingerprint(a *emailaccounts.Account) string {
 	b.WriteByte('\x1f')
 	b.Write(a.SealedSecret)
 	b.WriteByte('\x1f')
-	if a.AttachmentsOnly {
-		b.WriteByte('1')
-	} else {
-		b.WriteByte('0')
-	}
-	b.WriteByte('\x1f')
-	b.WriteString(a.FromAllowlist)
+	policy, _ := emailaccounts.MarshalIntakePolicy(a.IntakePolicy)
+	b.WriteString(policy)
 	b.WriteByte('\x1f')
 	if a.MarkSeen {
 		b.WriteByte('1')

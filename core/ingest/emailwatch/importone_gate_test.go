@@ -8,121 +8,73 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 )
 
-// TestShouldImport exercises the two pre-ingest gates in isolation —
-// unit-testing the pure decision function keeps the CAS+DB round-
-// trip out of the gate coverage. The importOne integration path is
-// exercised by the existing emailwatch_test.go suite.
 func TestShouldImport(t *testing.T) {
-	// A minimal multipart/mixed message with one PDF attachment. Enough
-	// for HasAttachment to return true. Line endings are CRLF
-	// per RFC 5322.
 	withPDF := []byte(
 		"From: sender@example.com\r\n" +
-			"Subject: bill\r\n" +
+			"Subject: August invoice\r\n" +
 			"MIME-Version: 1.0\r\n" +
-			"Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n" +
-			"\r\n" +
-			"--BOUND\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"\r\n" +
-			"see attached\r\n" +
-			"--BOUND\r\n" +
-			"Content-Type: application/pdf; name=\"bill.pdf\"\r\n" +
-			"Content-Disposition: attachment; filename=\"bill.pdf\"\r\n" +
-			"\r\n" +
-			"%PDF-1.4 stub\r\n" +
-			"--BOUND--\r\n",
+			"Content-Type: multipart/mixed; boundary=BOUND\r\n\r\n" +
+			"--BOUND\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n" +
+			"--BOUND\r\nContent-Type: application/pdf; name=bill.pdf\r\n" +
+			"Content-Disposition: attachment; filename=bill.pdf\r\n\r\n" +
+			"%PDF-1.4 stub\r\n--BOUND--\r\n",
 	)
-	// A plain-text-only message with no attachment.
 	textOnly := []byte(
-		"From: sender@example.com\r\n" +
-			"Subject: note\r\n" +
-			"MIME-Version: 1.0\r\n" +
-			"Content-Type: text/html; charset=utf-8\r\n" +
-			"\r\n" +
-			"<p>hello</p>\r\n",
+		"From: sender@example.com\r\nSubject: note\r\n" +
+			"Content-Type: text/plain; charset=utf-8\r\n\r\nhello\r\n",
 	)
-
-	envSender := &imap.Envelope{
-		From: []*imap.Address{{MailboxName: "sender", HostName: "example.com"}},
-	}
-	envOther := &imap.Envelope{
-		From: []*imap.Address{{MailboxName: "mallory", HostName: "evil.example"}},
+	envelope := &imap.Envelope{
+		From:    []*imap.Address{{MailboxName: "sender", HostName: "example.com"}},
+		To:      []*imap.Address{{MailboxName: "finance", HostName: "house.test"}},
+		Subject: "August invoice",
 	}
 
-	cases := []struct {
-		name         string
-		account      *emailaccounts.Account
-		envelope     *imap.Envelope
-		raw          []byte
-		wantDrop     string
-		wantHasAttch bool
+	tests := []struct {
+		name       string
+		policy     emailaccounts.IntakePolicy
+		raw        []byte
+		wantDrop   string
+		wantAttach bool
 	}{
-		{
-			name: "empty allowlist and attachments-only off accepts anything",
-			account: &emailaccounts.Account{
-				FromAllowlist:   "",
-				AttachmentsOnly: false,
-			},
-			envelope:     envSender,
-			raw:          textOnly,
-			wantDrop:     "",
-			wantHasAttch: false,
-		},
-		{
-			name: "non-matching allowlist drops before CAS write",
-			account: &emailaccounts.Account{
-				FromAllowlist:   "alice@example.com, @bescom.co.in",
-				AttachmentsOnly: false,
-			},
-			envelope:     envOther,
-			raw:          withPDF,
-			wantDrop:     "from_allowlist",
-			wantHasAttch: false,
-		},
-		{
-			name: "attachments-only with no attachment drops",
-			account: &emailaccounts.Account{
-				FromAllowlist:   "",
-				AttachmentsOnly: true,
-			},
-			envelope:     envSender,
-			raw:          textOnly,
-			wantDrop:     "attachments_only",
-			wantHasAttch: false,
-		},
-		{
-			name: "attachments-only with a PDF attachment passes",
-			account: &emailaccounts.Account{
-				FromAllowlist:   "",
-				AttachmentsOnly: true,
-			},
-			envelope:     envSender,
-			raw:          withPDF,
-			wantDrop:     "",
-			wantHasAttch: true,
-		},
-		{
-			name: "allowlist match plus attachment passes",
-			account: &emailaccounts.Account{
-				FromAllowlist:   "@example.com",
-				AttachmentsOnly: true,
-			},
-			envelope:     envSender,
-			raw:          withPDF,
-			wantDrop:     "",
-			wantHasAttch: true,
-		},
+		{name: "default accepts email", raw: textOnly},
+		{name: "files mode rejects body only", policy: emailaccounts.IntakePolicy{
+			Selection: emailaccounts.IntakeMessagesWithFiles,
+			Content:   emailaccounts.IntakeEmailAndFiles,
+		}, raw: textOnly, wantDrop: "files_required"},
+		{name: "files mode accepts attachment", policy: emailaccounts.IntakePolicy{
+			Selection: emailaccounts.IntakeMessagesWithFiles,
+			Content:   emailaccounts.IntakeFilesOnly,
+		}, raw: withPDF, wantAttach: true},
+		{name: "matching fields are ANDed", policy: emailaccounts.IntakePolicy{
+			Selection: emailaccounts.IntakeMatchingMessages,
+			Content:   emailaccounts.IntakeEmailAndFiles,
+			From:      "@example.com", Recipients: "finance@house.test",
+			SubjectTerms: "invoice", AttachmentNames: "*.pdf",
+		}, raw: withPDF, wantAttach: true},
+		{name: "sender mismatch rejects", policy: emailaccounts.IntakePolicy{
+			Selection: emailaccounts.IntakeMatchingMessages,
+			Content:   emailaccounts.IntakeEmailAndFiles,
+			From:      "trusted@elsewhere.test",
+		}, raw: withPDF, wantDrop: "from", wantAttach: true},
+		{name: "one failed criterion rejects", policy: emailaccounts.IntakePolicy{
+			Selection:    emailaccounts.IntakeMatchingMessages,
+			Content:      emailaccounts.IntakeEmailAndFiles,
+			From:         "@example.com",
+			SubjectTerms: "receipt",
+		}, raw: withPDF, wantDrop: "subject", wantAttach: true},
+		{name: "files only cannot archive body-only mail", policy: emailaccounts.IntakePolicy{
+			Selection: emailaccounts.IntakeEveryMessage,
+			Content:   emailaccounts.IntakeFilesOnly,
+		}, raw: textOnly, wantDrop: "files_only"},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			hasAttch, _, drop := shouldImport(tc.account, tc.envelope, tc.raw)
-			if drop != tc.wantDrop {
-				t.Fatalf("drop=%q want %q", drop, tc.wantDrop)
-			}
-			if hasAttch != tc.wantHasAttch {
-				t.Fatalf("hasAttachment=%v want %v", hasAttch, tc.wantHasAttch)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasAttachment, drop := shouldImport(
+				&emailaccounts.Account{IntakePolicy: tt.policy}, envelope, tt.raw,
+			)
+			if drop != tt.wantDrop || hasAttachment != tt.wantAttach {
+				t.Fatalf("drop=%q attachment=%v, want %q/%v", drop, hasAttachment, tt.wantDrop, tt.wantAttach)
 			}
 		})
 	}

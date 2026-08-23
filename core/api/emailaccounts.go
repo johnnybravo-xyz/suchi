@@ -165,9 +165,8 @@ type emailAccountInput struct {
 	// /oauth/complete call that ran without an account_id: the SPA
 	// holds the bytes for one create request and passes them here so
 	// xoauth2 rows can be constructed in a single POST.
-	SealedSecretB64 *string `json:"sealed_secret_b64,omitempty"`
-	AttachmentsOnly *bool   `json:"attachments_only,omitempty"`
-	FromAllowlist   *string `json:"from_allowlist,omitempty"`
+	SealedSecretB64 *string                     `json:"sealed_secret_b64,omitempty"`
+	IntakePolicy    *emailaccounts.IntakePolicy `json:"intake_policy,omitempty"`
 	// SyncSince is the unix-seconds initial-sync horizon. On create,
 	// omit to default to time.Now() (SPA "add mailbox" only pulls fresh
 	// mail). Send 0 to explicitly opt out (sync all UIDs after the durable
@@ -313,11 +312,8 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if in.OAuthAccountID != nil {
 		acc.OAuthAccountID = strings.TrimSpace(*in.OAuthAccountID)
 	}
-	if in.AttachmentsOnly != nil {
-		acc.AttachmentsOnly = *in.AttachmentsOnly
-	}
-	if in.FromAllowlist != nil {
-		acc.FromAllowlist = strings.TrimSpace(*in.FromAllowlist)
+	if in.IntakePolicy != nil {
+		acc.IntakePolicy = *in.IntakePolicy
 	}
 	// Initial-sync horizon. Omitted → "from now on"; explicit 0 → no
 	// date floor (all UIDs after the durable cursor).
@@ -502,8 +498,7 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		ProcessedFolder: trimStringPtr(in.ProcessedFolder),
 		PollIntervalMin: in.PollIntervalMin,
 		Username:        trimStringPtr(in.Username),
-		AttachmentsOnly: in.AttachmentsOnly,
-		FromAllowlist:   trimStringPtr(in.FromAllowlist),
+		IntakePolicy:    in.IntakePolicy,
 		SyncSince:       in.SyncSince,
 		Enabled:         in.Enabled,
 		MarkSeen:        in.MarkSeen,
@@ -737,6 +732,71 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Connected — mailbox reachable.",
 	})
+}
+
+// PreviewEmailAccount evaluates a proposed policy against at most 25 recent,
+// unchecked messages. Only envelope fields and attachment filenames are read.
+func (s *Server) PreviewEmailAccount(w http.ResponseWriter, r *http.Request) {
+	p, isAdmin := s.requireCapability(w, r, authz.CapMailboxes)
+	if p == nil {
+		return
+	}
+	id, ok := s.pathID(w, r)
+	if !ok {
+		return
+	}
+	acc, err := emailaccounts.Get(r.Context(), s.DB, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "email_accounts.preview.get", err)
+		return
+	}
+	if !isAdmin && acc.OwnerID != p.UserID {
+		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+		return
+	}
+	var body struct {
+		IntakePolicy *emailaccounts.IntakePolicy `json:"intake_policy,omitempty"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	policy := acc.IntakePolicy
+	if body.IntakePolicy != nil {
+		policy = *body.IntakePolicy
+	}
+	if _, err := emailaccounts.NormalizeIntakePolicy(policy); err != nil {
+		s.writeError(w, http.StatusBadRequest, "validation", err.Error())
+		return
+	}
+
+	previewAccount := *acc
+	previewAccount.Enabled = true
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	watcher, err := emailwatch.New(ctx, &previewAccount, emailwatch.Config{}, s.DB,
+		nil, nil, s.EmailwatchAEAD, s.EmailwatchMSAL, s.Log)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "validation", err.Error())
+		return
+	}
+	if watcher == nil {
+		s.writeError(w, http.StatusBadRequest, "mailbox_unavailable",
+			"The mailbox owner is disabled or no longer available")
+		return
+	}
+	result, err := watcher.PreviewPolicy(ctx, policy)
+	if err != nil {
+		s.Log.Warn("api.email_accounts.preview", "account_id", id, "err", err.Error())
+		s.writeError(w, http.StatusBadGateway, "preview_failed",
+			"Could not inspect the mailbox; check the connection and try again")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 // ---------- oauth device-code ----------
@@ -1046,8 +1106,7 @@ func accountAuditView(a *emailaccounts.Account) map[string]any {
 		"auth_method":       string(a.AuthMethod),
 		"username":          a.Username,
 		"oauth_account_id":  a.OAuthAccountID,
-		"attachments_only":  a.AttachmentsOnly,
-		"from_allowlist":    a.FromAllowlist,
+		"intake_policy":     a.IntakePolicy,
 		"sync_since":        syncSinceAudit(a.SyncSince),
 		"enabled":           a.Enabled,
 		"mark_seen":         a.MarkSeen,

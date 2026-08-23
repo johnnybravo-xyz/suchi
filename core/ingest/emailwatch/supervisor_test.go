@@ -47,7 +47,15 @@ func TestFingerprintIncludesRuntimePolicyAndSecret(t *testing.T) {
 	wantDifferent := []*emailaccounts.Account{
 		func() *emailaccounts.Account { c := *base; c.ProcessedFolder = "Processed"; return &c }(),
 		func() *emailaccounts.Account { c := *base; c.MarkSeen = true; return &c }(),
-		func() *emailaccounts.Account { c := *base; c.FromAllowlist = "@example.com"; return &c }(),
+		func() *emailaccounts.Account {
+			c := *base
+			c.IntakePolicy = emailaccounts.IntakePolicy{
+				Selection: emailaccounts.IntakeMatchingMessages,
+				Content:   emailaccounts.IntakeEmailAndFiles,
+				From:      "@example.com",
+			}
+			return &c
+		}(),
 		func() *emailaccounts.Account { c := *base; c.SealedSecret = []byte("rotated"); return &c }(),
 	}
 	for i, changed := range wantDifferent {

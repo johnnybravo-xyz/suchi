@@ -19,13 +19,13 @@ type PostIngestPayload struct {
 	EmailSubject       string `json:"email_subject,omitempty"`
 	EmailFolder        string `json:"email_folder,omitempty"`
 	EmailHasAttachment bool   `json:"email_has_attachment"`
-	// EmailAttachmentsOnly reflects the account row's attachments_only
-	// flag. When true, post-ingest soft-deletes the parent .eml row
+	// EmailFilesOnly reflects the intake policy's content scope. When true,
+	// post-ingest soft-deletes the parent .eml row
 	// after its attachment children land — the email body itself is
 	// not something the operator wants filed, only the attachments +
 	// their inherited email metadata (subject prefix on child title,
 	// email Date on source_mtime, sender via correspondent inheritance).
-	EmailAttachmentsOnly bool `json:"email_attachments_only"`
+	EmailFilesOnly bool `json:"email_files_only"`
 }
 
 // BuildPostIngestPayload marshals a PostIngestPayload from the CAS
@@ -39,18 +39,18 @@ type PostIngestPayload struct {
 // from the poll loop's own state, not the message body.
 //
 // Attachment presence is passed in rather than synthesized so the
-// caller keeps ownership of that walk (see HasAllowlistedAttachment).
+// caller keeps ownership of that MIME walk.
 // The bool is emitted unconditionally (no omitempty) so downstream
 // matchers can distinguish "false" from "absent".
-func BuildPostIngestPayload(sha256 string, size int64, mimeType, filename, folder string, envelope *imap.Envelope, hasAttachment, attachmentsOnly bool) ([]byte, error) {
+func BuildPostIngestPayload(sha256 string, size int64, mimeType, filename, folder string, envelope *imap.Envelope, hasAttachment, filesOnly bool) ([]byte, error) {
 	p := PostIngestPayload{
-		SHA256:               sha256,
-		Size:                 size,
-		MimeType:             mimeType,
-		Filename:             filename,
-		EmailFolder:          folder,
-		EmailHasAttachment:   hasAttachment,
-		EmailAttachmentsOnly: attachmentsOnly,
+		SHA256:             sha256,
+		Size:               size,
+		MimeType:           mimeType,
+		Filename:           filename,
+		EmailFolder:        folder,
+		EmailHasAttachment: hasAttachment,
+		EmailFilesOnly:     filesOnly,
 	}
 	if envelope != nil {
 		p.EmailSubject = envelope.Subject
