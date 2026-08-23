@@ -184,11 +184,17 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Replace path — mirrors applyPreset in core/jd/presets.go.
 		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			// Park docs on the current system category; delete + re-seed.
+			// Documents temporarily point at the deleted tree while it is
+			// replaced. Validate those FKs against the final transaction state.
+			if _, err := tx.ExecContext(r.Context(), `PRAGMA defer_foreign_keys = ON`); err != nil {
+				return fmt.Errorf("defer foreign keys: %w", err)
+			}
+			// Park every doc, including trash, on the current system category;
+			// trashed documents must remain restorable after replacement.
 			if _, err := tx.ExecContext(r.Context(), `
 				UPDATE documents SET jd_category_id = (
 					SELECT id FROM jd_categories WHERE system = 1 LIMIT 1
-				) WHERE trashed_at IS NULL
+				)
 			`); err != nil {
 				return fmt.Errorf("park docs: %w", err)
 			}
@@ -204,14 +210,14 @@ func (s *Server) ImportTaxonomy(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			// Repoint parked docs to the new inbox.
+			// Repoint every parked doc to the new inbox.
 			var newInbox int64
 			if err := tx.QueryRowContext(r.Context(),
 				`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.Context(), `
-				UPDATE documents SET jd_category_id = ? WHERE trashed_at IS NULL
+				UPDATE documents SET jd_category_id = ?
 			`, newInbox); err != nil {
 				return err
 			}

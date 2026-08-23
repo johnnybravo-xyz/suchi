@@ -66,14 +66,18 @@ func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
 		t.Fatalf("pick non-inbox: %v", err)
 	}
 
-	// Insert a doc there — simulates the state the wizard's second
-	// preset-apply lands in.
+	// Insert one visible filed doc and one trashed doc. The latter is not
+	// visible in the wizard, but its category FK must survive replacement.
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO documents(
 			owner_id, title, original_blob, original_size,
 			jd_category_id, created_at, added_at, updated_at
-		) VALUES (1, 'test.md', 'sha-x', 1, ?, 0, 0, 0)
-	`, nonInboxID); err != nil {
+		) VALUES (1, 'test.md', 'sha-x', 1, ?, 0, 0, 0);
+		INSERT INTO documents(
+			owner_id, title, original_blob, original_size,
+			jd_category_id, created_at, added_at, updated_at, trashed_at
+		) VALUES (1, 'trashed.md', 'sha-trash', 1, ?, 0, 0, 0, 1)
+	`, nonInboxID, nonInboxID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,12 +100,12 @@ func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
 		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInboxID); err != nil {
 		t.Fatal(err)
 	}
-	var got int64
+	var parked int
 	if err := d.Read.QueryRowContext(ctx,
-		`SELECT jd_category_id FROM documents WHERE title = 'test.md'`).Scan(&got); err != nil {
+		`SELECT COUNT(*) FROM documents WHERE jd_category_id = ?`, newInboxID).Scan(&parked); err != nil {
 		t.Fatal(err)
 	}
-	if got != newInboxID {
-		t.Errorf("doc jd_category_id = %d, want new inbox %d", got, newInboxID)
+	if parked != 2 {
+		t.Errorf("docs on new inbox = %d, want 2", parked)
 	}
 }
