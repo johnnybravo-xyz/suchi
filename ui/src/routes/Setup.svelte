@@ -7,7 +7,7 @@
   import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
 
-  let { notify, onDone } = $props()
+  let { notify, onDone, onTaxonomyChanged } = $props()
 
   const STEPS = [
     { name: 'archive',     label: 'Your archive' },
@@ -65,6 +65,7 @@
   }
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
   let intent = $state('')
+  let filingTreeChosen = $state(false)
   let showAllPresets = $state(false)
   let jdTab = $state('presets')
   let llm = $state({
@@ -82,6 +83,7 @@
 
   setupState().then(st => {
     intent = st?.intent || ''
+    filingTreeChosen = !!st?.filing_tree_chosen
     const selected = st?.current_preset || st?.recommended_preset
     if (selected) preset.preset_id = selected
     showAllPresets = intent === 'custom'
@@ -118,7 +120,10 @@
 
   async function saveArchive() {
     await saveIntent()
-    return applyPreset(preset)
+    const result = await applyPreset(preset)
+    filingTreeChosen = true
+    await onTaxonomyChanged?.()
+    return result
   }
 
   async function loadLLM() {
@@ -244,11 +249,12 @@
         <span class="grow">{s.label}</span>
       </button>
     {/each}
-    <button class="btn primary" style="margin-top:14px;justify-content:center" onclick={finish} disabled={busy}>
+    <button class="btn primary" style="margin-top:14px;justify-content:center" onclick={finish}
+            disabled={busy || !filingTreeChosen} title={filingTreeChosen ? '' : 'Choose a filing tree first'}>
       Finish setup
     </button>
     <p class="sub" style="font-size:.72rem;color:var(--faint);margin-top:8px">
-      Every step is optional. Nothing is blocked while this is open, and every step can be revisited later.
+      Choose a filing tree to finish setup. Every other step is optional and can be revisited later.
     </p>
   </aside>
 
@@ -267,7 +273,9 @@
       </div>
 
       {#if intent}
-        <h3 class="section-heading">Choose a filing tree</h3>
+        <h3 class="section-heading">Choose a filing tree
+          {#if !filingTreeChosen}<span class="pill warn" style="margin-left:8px">Required to finish setup</span>{/if}
+        </h3>
         <p class="wiz-p">Start with the recommendation or compare every ready-made tree. You can switch later.</p>
         {#if ENABLE_SETUP_TAXONOMY_IMPORT}
           <span class="seg" style="margin-bottom:14px">
@@ -308,7 +316,9 @@
           <div class="toolbar">
             <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
                     onclick={() => saveAnd(saveArchive, 'Archive setup saved')}>Apply filing tree</button>
-            <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveIntent, 'Archive direction saved')}>Keep the current tree</button>
+            {#if filingTreeChosen}
+              <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveIntent, 'Archive direction saved')}>Keep the current tree</button>
+            {/if}
           </div>
         {/if}
       {:else}
