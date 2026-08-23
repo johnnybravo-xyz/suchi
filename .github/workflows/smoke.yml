@@ -186,7 +186,7 @@ jobs:
 
       - name: Sanity-check list endpoints return arrays
         run: |
-          for path in "/api/tasks/?state=done" "/api/tags/" "/api/rules/"; do
+          for path in "/api/tasks/?state=done" "/api/tags/" "/api/automations/"; do
               curl -sf "http://127.0.0.1:$HOST_PORT$path" \
                   -H "Authorization: Token $API_TOKEN" \
                   | python3 -c "import json,sys; r=json.load(sys.stdin).get('results'); sys.exit(0 if isinstance(r, list) else 1)" \

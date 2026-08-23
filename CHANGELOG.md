@@ -1,102 +1,73 @@
 # Changelog
 
-Every user-visible change lands here. Format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
-follow [SemVer](https://semver.org/spec/v2.0.0.html).
-
-Section conventions:
-
-- **Added** — new features, endpoints, subcommands, config knobs.
-- **Changed** — behavior changes that a user or integrator would
-  notice (URL renames, default flips, response-shape edits).
-- **Removed** — features / endpoints / knobs gone.
-- **Fixed** — bug fixes.
-- **Security** — vulnerabilities patched, defense-in-depth
-  tightenings. Always call these out separately.
-
-Migration notes get their own **Migration** callouts inside a section
-when they need operator action, such as environment-variable renames or
-schema compatibility notes.
+Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
-Everything since the last tag lands here and rolls into the next
-version header when a tag is cut.
-
-### Removed
-
-- Removed the noisy activity bell and drawer. Approvals and failed jobs remain
-  on their dedicated page, while the audit-backed events API remains available
-  to integrations.
-
-### Fixed
-
-- Document access controls now open from the top toolbar instead of interrupting
-  the metadata and related-document flow.
-- Public share pages now identify the person and configured Suchi hostname,
-  including before password entry, without exposing email addresses. The share
-  dialog previews this recipient identity before creating a link.
-- Mailbox source labels now follow account renames while retaining their
-  recorded identity after the account is deleted.
-- The optional model no longer adds a competing sender when email headers or
-  explicit metadata already supplied a correspondent.
-
-## [0.1.0] - 2026-08-22
+## [0.1.0-beta.1] - 2026-08-23
 
 ### Added
 
 - A local-first document archive in one Go binary with an embedded responsive
-  web UI, SQLite storage, content-addressed blobs, full-text search, metadata,
-  saved views, document versions, ACLs, and Johnny.Decimal filing trees.
-- Intent-led setup, ready-made filing-tree presets, and deterministic
-  Automations with a visual builder, JSON inspection, and human approvals.
-- Intake through browser or API upload, watched folders, IMAP mailboxes, and
-  Paperless-ngx bundles, including guided Microsoft sign-in and app-password
-  guidance for Gmail and iCloud.
-- An optional fixed classifier for local Ollama or hosted OpenAI-compatible
-  endpoints, with sealed keys, explicit hosted-egress consent, confidence
-  controls, validation, and review below the configured threshold.
-- Document details now show every distinct upload, mailbox, watched-folder, or
-  import source, when Suchi first saw it, and the source-carried date.
+  web UI, SQLite storage, content-addressed files, full-text search, metadata,
+  saved views, document versions, access controls, and Johnny.Decimal filing
+  trees.
+- Intent-led setup with ready-made filing trees, watched folders, IMAP mailbox
+  intake, browser and API uploads, and Paperless-ngx bundle imports.
+- Guided Microsoft sign-in plus app-password setup for Gmail, iCloud, and other
+  IMAP providers.
+- Composable mailbox intake rules with per-rule message matching, attachment
+  handling, and a bounded live preview.
+- Rules-first classification with optional local Ollama or hosted
+  OpenAI-compatible classification, confidence controls, and human review.
+- Source history for repeated uploads, mailbox messages, watched files, and
+  imports, including the source-carried date.
+- Sandboxed inline previews for archived email bodies, with remote content
+  blocked to avoid tracking requests.
+- Deterministic automations, document sharing, API tokens, MCP access, and
+  audit-backed approvals.
 
 ### Changed
 
-- Repeated owner-scoped content now reuses the existing document and records a
-  distinct acquisition source without rerunning extraction or classification.
-- Office, OpenDocument, RTF, EPUB, and spreadsheet extraction now uses anydoc v0.2.2.
-- Local archive matching now runs before user automations and exposes live review and auto-apply thresholds in classification settings.
-- The optional model now uses one confidence threshold; fixed classifier plumbing no longer appears as editable automations.
-- Mailbox poll intervals are bounded to 1–1440 minutes, source changes reset UID cursors, and disabled owners stop being polled.
-- Automation actions are validated when saved, malformed trigger patterns are rejected, and a failed action rolls back the affected automation.
-- `PUBLIC_URL` must be a valid HTTP(S) origin; secure-cookie behavior follows its scheme behind reverse proxies.
-- Release publishing now requires a SemVer tag, matching changelog entry, and a real Suchi Microsoft client ID.
-
-### Removed
-
-- Removed the unclaimed mobile handshake endpoints and coarse API-token scope aliases.
-- Removed JSON/YAML config-file parsing; operator config files are TOML or HuML.
-- Local JSON and form login now consistently use `email` instead of a `username` alias.
-- Removed legacy single-mailbox environment seeding and the unused session-key-file setting.
-- Removed the invalid `remove_owner` automation action; documents always have an owner.
+- Duplicate content owned by the same user reuses its document while recording
+  every distinct source.
+- Configuration from an explicit file or environment remains authoritative over
+  stored web settings.
+- Fresh installations start with a neutral System/Inbox baseline. Setup requires
+  an explicit filing-tree or Blank choice before it can be completed.
+- The activity drawer is hidden until notifications have a clear user-facing
+  purpose; approvals and failed jobs remain available on their dedicated page.
 
 ### Fixed
 
-- Taxonomy CLI imports now honor flags after the input filename, apply merge-mode imports with explicit collision remaps, and export the same portable seeds as the admin API.
-- Beta and release-candidate images now receive documented moving channel tags instead of leaving prerelease quick-start commands pointed at an unpublished `latest` image.
-- Preview and download routes now enforce document ACLs, and new document versions retain the predecessor's grants.
-- Bulk trash/delete uses delete permission, multi-tag filtering happens before pagination, and malformed FTS queries return `400` instead of server errors.
-- Upload progress now follows the durable ingest job, while scan-split retries fill missing children before retiring the parent.
-- Mailbox tests use the saved TLS mode and custom CA, oversized messages no longer block the cursor, and concurrent Outlook deletions do not mark the mailbox unhealthy.
-- Existing archive categories are no longer overwritten by local classification; only Inbox or unset categories are eligible.
-- Filesystem-watch settings restore the previous values when a live reload fails.
-- Activity polling returns the newest visible tail and keeps document, approval, and actor-owned events within their authorization boundary.
-- Explicit config-file and environment fields now remain authoritative over stored web settings.
-- Invalid empty listener addresses fail during configuration instead of reaching the healthcheck path.
+- Ignored mailbox messages advance the intake cursor without being moved or
+  marked read, and attachment filtering matches the files Suchi can ingest.
+- Attachment-only mailbox intake removes temporary source messages after
+  fanout instead of filling Trash with system-created email rows.
+- Document previews, downloads, sharing, versions, bulk actions, and activity
+  feeds consistently enforce access controls.
+- Classification preserves explicit categories and correspondents, validates
+  provider output, and reports uncertain suggestions for review.
+- Setup, mailbox polling, watched folders, durable ingest jobs, taxonomy import,
+  and configuration reloads recover cleanly from invalid or partial work.
+- Filing-tree replacement preserves live and trashed documents, including when
+  existing documents are queued for refiling.
+- Fresh incomplete installations show admins a dismissible setup reminder in
+  the sidenav, with a mobile dashboard fallback, for 48 hours. Setup remains
+  available from Settings, while completion hides the reminder immediately.
+- Password-protected PDFs waiting for decryption no longer generate recurring
+  pipeline-rescan approvals that cannot advance them.
+- Pipeline-rescan approval details identify the affected documents with links
+  before an operator approves the work.
 
 ### Security
 
-- Browser session identifiers are stored as SHA-256 digests, disabled users are rejected immediately, and `POST /api/logout` revokes the active session or token.
-- First-run setup tokens expire after 24 hours, reject weak passwords, and serialize concurrent submissions.
-- Public demo visitors no longer share a known-password administrator; scratch users can mutate only their own documents.
-- Internal and upstream failures no longer expose provider, database, filesystem, or cryptographic details in API responses.
-- Local login equalizes unknown-account password work and rejects external protocol-relative redirect targets.
+- Session identifiers and API tokens are stored as digests; provider keys,
+  mailbox credentials, and saved document passwords are sealed at rest.
+- First-run setup expires, rejects weak passwords, and serializes concurrent
+  submissions.
+- Public demo users are isolated, and API errors avoid exposing internal,
+  provider, filesystem, database, or cryptographic details.
+
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...HEAD
+[0.1.0-beta.1]: https://github.com/johnnybravo-xyz/suchi/releases/tag/v0.1.0-beta.1

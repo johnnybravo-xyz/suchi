@@ -116,7 +116,7 @@ func TestHasAttachment(t *testing.T) {
 		{"bare octet-stream attachment is preserved", emlOctetStream, true},
 		{"bare pdf attachment", emlBarePDF, true},
 		{"multipart with pdf attachment", emlMultipartWithPDF, true},
-		{"multipart with inline pdf (filename set)", emlMultipartInlinePDF, true},
+		{"multipart with inline pdf is not archived", emlMultipartInlinePDF, false},
 		{"multipart/alternative body-only, no attachments", emlMultipartNoAttachments, false},
 		{"text/plain attachment counts", emlPlainTextAttachment, true},
 		{"garbage input returns false, no panic", emlMalformed, false},

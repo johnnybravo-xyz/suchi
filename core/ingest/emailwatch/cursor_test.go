@@ -40,6 +40,19 @@ func TestConcurrentDeleteFetchError(t *testing.T) {
 	}
 }
 
+func TestImportOutcomeMailboxUpdates(t *testing.T) {
+	for _, outcome := range []importOutcome{outcomeSkipped, outcomeIgnored} {
+		if outcome.updatesMailbox() {
+			t.Fatalf("outcome %d must not move or mark a message read", outcome)
+		}
+	}
+	for _, outcome := range []importOutcome{outcomeImported, outcomeDeduplicated} {
+		if !outcome.updatesMailbox() {
+			t.Fatalf("outcome %d should apply configured mailbox bookkeeping", outcome)
+		}
+	}
+}
+
 func TestMissingUIDs(t *testing.T) {
 	got := missingUIDs(
 		[]uint32{11, 12, 13, 14},
