@@ -4,7 +4,7 @@
   // value on edit means "keep the stored secret".
   import { untrack } from 'svelte'
   import { createEmailAccount, patchEmailAccount, deleteEmailAccount,
-           testEmailAccount, revokeEmailOAuth } from './api.js'
+           testEmailAccount, previewEmailAccount, revokeEmailOAuth } from './api.js'
   import { session } from './session.svelte.js'
   import Icon from './Icon.svelte'
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
@@ -71,6 +71,7 @@
   const seedSyncSince = isEdit
     ? unixToLocalInput(seed.sync_since)
     : unixToLocalInput(Math.floor(Date.now() / 1000))
+  const seedPolicy = seed.intake_policy || { selection: 'all', content: 'email_and_files' }
 
   // Members can't pick an owner — server forces owner_id to their own
   // user id. Seed the form so the save-button guard passes without
@@ -90,9 +91,13 @@
     poll_interval_min: seed.poll_interval_min || 10,
     username: seed.username || '',
     password: '',
-    attachments_only: seed.attachments_only ?? 0,
-    mark_seen: seed.mark_seen ?? false,
-    from_allowlist: seed.from_allowlist || '',
+    intake_selection: seedPolicy.selection || 'all',
+    intake_content: seedPolicy.content || 'email_and_files',
+    intake_from: seedPolicy.from || '',
+    intake_recipients: seedPolicy.recipients || '',
+    intake_subject_terms: seedPolicy.subject_terms || '',
+    intake_attachment_names: seedPolicy.attachment_names || '',
+    after_ingest: seed.processed_folder ? 'move' : (seed.mark_seen ? 'read' : 'leave'),
     sync_since: seedSyncSince,
     oauth_account_id: seed.oauth_account_id || '',
     sealed_secret_b64: '',
@@ -103,6 +108,21 @@
   let busy = $state(false)
   let oauthOpen = $state(false)
   let signedInAs = $state('')
+  let preview = $state(null)
+  let previewError = $state('')
+
+  function intakePolicy() {
+    return {
+      selection: form.intake_selection,
+      content: form.intake_content,
+      ...(form.intake_selection === 'matching' ? {
+        from: form.intake_from.trim(),
+        recipients: form.intake_recipients.trim(),
+        subject_terms: form.intake_subject_terms.trim(),
+        attachment_names: form.intake_attachment_names.trim(),
+      } : {}),
+    }
+  }
 
   function applyPreset() {
     const p = presets[form.provider]
@@ -135,6 +155,14 @@
       if (!Number.isInteger(pollInterval) || pollInterval < 1 || pollInterval > 1440) {
         throw new Error('Poll interval must be between 1 and 1440 minutes.')
       }
+      const policy = intakePolicy()
+      if (policy.selection === 'matching' &&
+          !policy.from && !policy.recipients && !policy.subject_terms && !policy.attachment_names) {
+        throw new Error('Add at least one matching condition.')
+      }
+      if (form.after_ingest === 'move' && !form.processed_folder.trim()) {
+        throw new Error('Choose a folder for processed messages.')
+      }
       const body = {
         name: form.name,
         owner_id: Number(form.owner_id) || 0,
@@ -144,13 +172,12 @@
         use_tls: !!form.use_tls,
 		...(viewerRole === 'admin' ? { tls_ca_file: form.tls_ca_file } : {}),
         folder: form.folder,
-        processed_folder: form.processed_folder,
+        processed_folder: form.after_ingest === 'move' ? form.processed_folder : '',
         poll_interval_min: pollInterval,
         username: form.username,
         password: form.password,
-        attachments_only: !!form.attachments_only,
-        mark_seen: !!form.mark_seen,
-        from_allowlist: form.from_allowlist,
+        intake_policy: policy,
+        mark_seen: form.after_ingest === 'read',
         enabled: !!form.enabled,
       }
       if (!isEdit && form.oauth_account_id) body.oauth_account_id = form.oauth_account_id
@@ -158,7 +185,7 @@
       // Strip empty strings so PATCH stays sparse and POST doesn't send
       // an empty password for OAuth accounts.
       for (const k of Object.keys(body)) {
-        if (body[k] === '' || body[k] === null || body[k] === undefined) delete body[k]
+        if ((body[k] === '' && k !== 'processed_folder') || body[k] === null || body[k] === undefined) delete body[k]
       }
       if (!isEdit && !body.tls_ca_file) delete body.tls_ca_file
       // sync_since is always sent (0 = "sync all"), otherwise a cleared
@@ -185,6 +212,16 @@
       notify?.(r?.message || (r?.ok ? 'Mailbox reachable.' : 'Test failed.'))
     } catch (ex) {
       notify?.(ex.data?.message || ex.message || 'Test failed.')
+    } finally { busy = false }
+  }
+
+  async function previewPolicy() {
+    if (!isEdit) return
+    previewError = ''; preview = null; busy = true
+    try {
+      preview = await previewEmailAccount(account.id, intakePolicy())
+    } catch (ex) {
+      previewError = ex.data?.message || ex.message || 'Could not preview this mailbox.'
     } finally { busy = false }
   }
 
@@ -238,6 +275,11 @@
   const shortOAuthID = $derived(
     form.oauth_account_id ? form.oauth_account_id.slice(0, 8) + '…' : ''
   )
+  const intakeSummary = $derived(
+    (form.intake_selection === 'all' ? 'Every message' :
+      form.intake_selection === 'files' ? 'Messages with files' : 'Messages matching these conditions') +
+    (form.intake_content === 'files_only' ? ' · keep files only' : ' · keep email and files')
+  )
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -289,31 +331,6 @@
     {#if displayedProviderHelp}
       <p class="sub" style="margin:-6px 0 10px;color:var(--muted);font-size:.82rem">{displayedProviderHelp}</p>
     {/if}
-
-    <div class="toolbar" style="margin-bottom:0">
-      <div class="field" style="flex:2;min-width:200px">
-        <label for="ma-host">Host</label>
-        <input id="ma-host" class="input mono" bind:value={form.host} placeholder="imap.example.com" />
-      </div>
-      <div class="field" style="max-width:110px">
-        <label for="ma-port">Port</label>
-        <input id="ma-port" class="input mono" type="number" bind:value={form.port} />
-      </div>
-      <div class="field" style="max-width:110px;justify-content:flex-end">
-        <label for="ma-tls">TLS</label>
-        <label style="display:flex;gap:6px;align-items:center;padding:8px 0">
-          <input id="ma-tls" type="checkbox" bind:checked={form.use_tls} /> Use TLS
-        </label>
-      </div>
-    </div>
-
-	{#if viewerRole === 'admin'}
-		<div class="field">
-			<label for="ma-ca">TLS CA file (optional)</label>
-			<input id="ma-ca" class="input mono" bind:value={form.tls_ca_file}
-					 placeholder="/etc/ssl/certs/custom.pem" />
-		</div>
-	{/if}
 
     <div class="toolbar" style="margin-bottom:0">
       <div class="field" style="flex:1;min-width:200px">
@@ -373,59 +390,151 @@
       </div>
     {/if}
 
-    <div class="toolbar" style="margin-bottom:0">
-      <div class="field" style="flex:1;min-width:150px">
-        <label for="ma-folder">Folder</label>
-        <input id="ma-folder" class="input mono" bind:value={form.folder} />
+    <section class="intake-panel" aria-labelledby="intake-heading">
+      <div class="intake-heading">
+        <div>
+          <h4 id="intake-heading">Mail to archive</h4>
+          <span>{intakeSummary}</span>
+        </div>
       </div>
-      <div class="field" style="flex:1;min-width:150px">
-        <label for="ma-pfolder">Processed folder (optional)</label>
+
+      <div class="field">
+        <span class="field-label">Accept</span>
+        <span class="seg choice-row" aria-label="Messages to accept">
+          <button type="button" class:on={form.intake_selection === 'all'}
+                  onclick={() => (form.intake_selection = 'all')}>Every message</button>
+          <button type="button" class:on={form.intake_selection === 'files'}
+                  onclick={() => (form.intake_selection = 'files')}>With files</button>
+          <button type="button" class:on={form.intake_selection === 'matching'}
+                  onclick={() => (form.intake_selection = 'matching')}>Matching</button>
+        </span>
+      </div>
+
+      {#if form.intake_selection === 'matching'}
+        <div class="condition-grid">
+          <div class="field">
+            <label for="ma-from">From</label>
+            <input id="ma-from" class="input" bind:value={form.intake_from}
+                   placeholder="billing@example.com, @trusted.org" />
+          </div>
+          <div class="field">
+            <label for="ma-recipients">To or Cc</label>
+            <input id="ma-recipients" class="input" bind:value={form.intake_recipients}
+                   placeholder="receipts@example.com" />
+          </div>
+          <div class="field">
+            <label for="ma-subject">Subject contains</label>
+            <input id="ma-subject" class="input" bind:value={form.intake_subject_terms}
+                   placeholder="invoice, statement" />
+          </div>
+          <div class="field">
+            <label for="ma-filename">File name</label>
+            <input id="ma-filename" class="input mono" bind:value={form.intake_attachment_names}
+                   placeholder="*.pdf, invoice-*" />
+          </div>
+        </div>
+      {/if}
+
+      <div class="field">
+        <span class="field-label">Keep</span>
+        <span class="seg choice-row" aria-label="Content to archive">
+          <button type="button" class:on={form.intake_content === 'email_and_files'}
+                  onclick={() => (form.intake_content = 'email_and_files')}>Email and files</button>
+          <button type="button" class:on={form.intake_content === 'files_only'}
+                  onclick={() => (form.intake_content = 'files_only')}>Files only</button>
+        </span>
+      </div>
+
+      {#if isEdit}
+        <div class="preview-row">
+          <button class="btn sm" disabled={busy} onclick={previewPolicy}>Preview matches</button>
+          {#if preview}
+            <b>{preview.matched} of {preview.inspected} new messages match</b>
+          {/if}
+        </div>
+        {#if previewError}<div class="err compact-error">{previewError}</div>{/if}
+        {#if preview?.samples?.length}
+          <div class="preview-list">
+            {#each preview.samples as sample}
+              <div>
+                <b>{sample.subject || '(no subject)'}</b>
+                <span>{sample.from || 'Unknown sender'}</span>
+                {#if sample.attachments?.length}<small>{sample.attachments.join(', ')}</small>{/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+    </section>
+
+    <div class="field">
+      <span class="field-label">After archiving</span>
+      <span class="seg choice-row" aria-label="After archiving">
+        <button type="button" class:on={form.after_ingest === 'leave'}
+                onclick={() => (form.after_ingest = 'leave')}>Leave unchanged</button>
+        <button type="button" class:on={form.after_ingest === 'read'}
+                onclick={() => (form.after_ingest = 'read')}>Mark read</button>
+        <button type="button" class:on={form.after_ingest === 'move'}
+                onclick={() => (form.after_ingest = 'move')}>Move</button>
+      </span>
+    </div>
+    {#if form.after_ingest === 'move'}
+      <div class="field">
+        <label for="ma-pfolder">Move to folder</label>
         <input id="ma-pfolder" class="input mono" bind:value={form.processed_folder}
                placeholder="Processed" />
       </div>
-      <div class="field" style="max-width:140px">
-        <label for="ma-poll">Poll every (min)</label>
-        <input id="ma-poll" class="input" type="number" min="1" max="1440" step="1"
-               bind:value={form.poll_interval_min} />
+    {/if}
+
+    <details class="advanced-settings">
+      <summary>Advanced</summary>
+      <div class="advanced-body">
+        <div class="toolbar" style="margin-bottom:0">
+          <div class="field" style="flex:2;min-width:200px">
+            <label for="ma-host">Host</label>
+            <input id="ma-host" class="input mono" bind:value={form.host} placeholder="imap.example.com" />
+          </div>
+          <div class="field" style="max-width:110px">
+            <label for="ma-port">Port</label>
+            <input id="ma-port" class="input mono" type="number" bind:value={form.port} />
+          </div>
+          <div class="field tls-field">
+            <span class="field-label">TLS</span>
+            <span class="switch-control">
+              <button id="ma-tls" type="button" class="switch" role="switch"
+                      aria-checked={form.use_tls} aria-label="Use TLS"
+                      onclick={() => (form.use_tls = !form.use_tls)}></button>
+              <span>{form.use_tls ? 'On' : 'Off'}</span>
+            </span>
+          </div>
+        </div>
+
+        {#if viewerRole === 'admin'}
+          <div class="field">
+            <label for="ma-ca">TLS CA file</label>
+            <input id="ma-ca" class="input mono" bind:value={form.tls_ca_file}
+                   placeholder="/etc/ssl/certs/custom.pem" />
+          </div>
+        {/if}
+
+        <div class="toolbar" style="margin-bottom:0">
+          <div class="field" style="flex:1;min-width:150px">
+            <label for="ma-folder">Source folder</label>
+            <input id="ma-folder" class="input mono" bind:value={form.folder} />
+          </div>
+          <div class="field" style="max-width:140px">
+            <label for="ma-poll">Poll every (min)</label>
+            <input id="ma-poll" class="input" type="number" min="1" max="1440" step="1"
+                   bind:value={form.poll_interval_min} />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="ma-since">Sync mail from</label>
+          <input id="ma-since" class="input" type="datetime-local" bind:value={form.sync_since} />
+        </div>
       </div>
-    </div>
-
-    <div class="field">
-      <label for="ma-since">Sync mail from</label>
-      <input id="ma-since" class="input" type="datetime-local"
-             bind:value={form.sync_since} />
-      <span class="sub" style="font-size:.76rem;color:var(--faint)">
-        Older messages are ignored. Clear this field to sync the whole archive.
-      </span>
-    </div>
-
-    <div class="field">
-      <label for="ma-att">Attachments</label>
-      <label style="display:flex;gap:6px;align-items:center">
-        <input id="ma-att" type="checkbox" bind:checked={form.attachments_only} />
-        Ingest attachments only (skip the message body)
-      </label>
-    </div>
-
-    <div class="field">
-      <label for="ma-seen">After ingest</label>
-      <label style="display:flex;gap:6px;align-items:center">
-        <input id="ma-seen" type="checkbox" bind:checked={form.mark_seen} />
-        Mark messages as read on the server
-      </label>
-      <span class="sub" style="font-size:.76rem;color:var(--faint)">
-        Off (default) leaves your unread state untouched — suchi tracks a UID cursor so nothing is re-imported.
-      </span>
-    </div>
-
-    <div class="field">
-      <label for="ma-allow">From allowlist</label>
-      <input id="ma-allow" class="input mono" bind:value={form.from_allowlist}
-             placeholder="alice@example.com, @trusted.org" />
-      <span class="sub" style="font-size:.76rem;color:var(--faint)">
-        Optional — comma-separated addresses or @domain suffixes.
-      </span>
-    </div>
+    </details>
 
     {#if isEdit}
       <div class="field">
@@ -464,3 +573,43 @@
     onSuccess={onOAuthSuccess}
     onClose={() => (oauthOpen = false)} />
 {/if}
+
+<style>
+  .intake-panel {
+    display: grid;
+    gap: 14px;
+    margin: 16px 0;
+    padding: 16px 0;
+    border-block: 1px solid var(--line);
+  }
+  .intake-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+  .intake-heading h4 { margin: 0 0 3px; font-size: .95rem; }
+  .intake-heading span { color: var(--muted); font-size: .78rem; }
+  .choice-row { width: max-content; max-width: 100%; }
+  .condition-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .preview-row { display: flex; align-items: center; gap: 10px; font-size: .78rem; }
+  .compact-error { margin: 0; }
+  .preview-list { border-left: 2px solid var(--accent); padding-left: 12px; }
+  .preview-list > div { display: grid; gap: 2px; padding: 5px 0; }
+  .preview-list b { font-size: .8rem; }
+  .preview-list span, .preview-list small { color: var(--muted); font-size: .74rem; }
+  .advanced-settings { margin-top: 14px; border-top: 1px solid var(--line); }
+  .advanced-settings summary {
+    width: max-content;
+    padding: 12px 0 4px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: .8rem;
+    font-weight: 650;
+  }
+  .advanced-body { display: grid; gap: 10px; padding-top: 8px; }
+  .tls-field { min-width: 92px; justify-content: end; }
+
+  @media (max-width: 620px) {
+    .condition-grid { grid-template-columns: 1fr; }
+    .choice-row { display: grid; width: 100%; }
+    .choice-row button { min-height: 38px; }
+    .preview-row { align-items: start; flex-direction: column; }
+    .tls-field { justify-content: start; }
+  }
+</style>
