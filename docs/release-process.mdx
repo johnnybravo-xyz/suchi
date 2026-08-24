@@ -81,6 +81,124 @@ The workflow builds standard and full multi-architecture images, cross-platform
 binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
 the changelog. Tag pushes alone do not publish anything.
 
+## Publishing container images without Actions
+
+GHCR images can be built and pushed directly when Actions is unavailable. Build
+from the release tag, never from a different branch with the release version
+injected: the image contents must agree with the Git tag.
+
+Set the release coordinates on every build machine:
+
+```sh
+export VERSION=v0.1.0-beta.1
+export IMAGE=ghcr.io/johnnybravo-xyz/suchi
+export CACHE_AMD64="$IMAGE:buildcache-amd64"
+export CACHE_ARM64="$IMAGE:buildcache-arm64"
+```
+
+Check out that exact tag in a detached worktree or fresh clone:
+
+```sh
+git worktree add --detach "/tmp/suchi-$VERSION" "$VERSION"
+cd "/tmp/suchi-$VERSION"
+```
+
+Authenticate with a classic GitHub personal access token carrying
+`write:packages`. The login username is the personal account that owns the
+token, which may differ from the organization in `IMAGE`:
+
+```sh
+printf '%s' "$CR_PAT" |
+  docker login ghcr.io -u "$GITHUB_USER" --password-stdin
+unset CR_PAT
+```
+
+### Build on native architecture hosts
+
+Rust compilation for `anydoc` is very slow through QEMU. A cancelled
+`cargo build` step is not cached because its Docker layer never completes. For
+a faster multi-architecture release, build AMD64 on an x86-64 Linux host and
+ARM64 on an Apple Silicon or Linux ARM64 host, push temporary architecture
+tags, and combine them into the public manifest.
+
+On the x86-64 Linux host:
+
+```sh
+docker buildx build \
+  --file Dockerfile \
+  --target standard \
+  --platform linux/amd64 \
+  --build-arg VERSION="$VERSION" \
+  --tag "$IMAGE:$VERSION-amd64" \
+  --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
+  --label org.opencontainers.image.version="$VERSION" \
+  --label org.opencontainers.image.licenses=AGPL-3.0 \
+  --cache-from type=registry,ref="$CACHE_AMD64" \
+  --cache-to type=registry,ref="$CACHE_AMD64",mode=max \
+  --provenance=mode=max \
+  --sbom=true \
+  --push .
+```
+
+On the native ARM64 host, after checking out the same tag and logging into
+GHCR:
+
+```sh
+docker buildx build \
+  --file Dockerfile \
+  --target standard \
+  --platform linux/arm64 \
+  --build-arg VERSION="$VERSION" \
+  --tag "$IMAGE:$VERSION-arm64" \
+  --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
+  --label org.opencontainers.image.version="$VERSION" \
+  --label org.opencontainers.image.licenses=AGPL-3.0 \
+  --cache-from type=registry,ref="$CACHE_ARM64" \
+  --cache-to type=registry,ref="$CACHE_ARM64",mode=max \
+  --provenance=mode=max \
+  --sbom=true \
+  --push .
+```
+
+After both builds are present in GHCR, create the versioned and moving beta
+manifests:
+
+```sh
+docker buildx imagetools create \
+  --tag "$IMAGE:$VERSION" \
+  --tag "$IMAGE:beta" \
+  "$IMAGE:$VERSION-amd64" \
+  "$IMAGE:$VERSION-arm64"
+```
+
+Confirm that both platform manifests are available:
+
+```sh
+docker buildx imagetools inspect "$IMAGE:$VERSION"
+docker pull --platform linux/amd64 "$IMAGE:$VERSION"
+docker pull --platform linux/arm64 "$IMAGE:$VERSION"
+```
+
+The first successful native build seeds its architecture's registry cache.
+Later local releases import those caches, while the release workflow imports
+both native caches and maintains its own GitHub Actions cache. Because the
+`anydoc` source commit and build instructions are pinned independently of the
+Suchi version, its completed Rust layer is reused until that pin or recipe
+changes. Cargo registry and target cache mounts also retain incremental work in
+the local BuildKit builder when a compile is interrupted before its image layer
+can be exported.
+
+The `full` image follows the same process with `--target full` and temporary
+tags ending in `-full-amd64` and `-full-arm64`; publish the final tags as
+`$VERSION-full` and `beta-full`.
+
+The first command-line push creates a private, unlinked GHCR package by
+default. In the package settings, make it public, connect it to the Suchi
+repository, and grant that repository Actions access so later workflow pushes
+can update it. Direct local publication does not reproduce the workflow's
+keyless Cosign signatures or GitHub release artifacts; handle those separately
+before calling the release complete.
+
 ## Automation
 
 - `checks.yml` is the single manual entry point for repository validation.

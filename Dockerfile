@@ -8,6 +8,7 @@ ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa0
 FROM ${RUST_IMAGE} AS anydoc-build
 ARG ANYDOC_TAG=v0.2.2
 ARG ANYDOC_COMMIT=c9d4eee742f66dd79c45e02c93f75996e671c2c4
+ARG TARGETARCH
 RUN apk add --no-cache git musl-dev pkgconfig
 WORKDIR /src
 RUN git init . && \
@@ -15,9 +16,11 @@ RUN git init . && \
     git fetch --depth 1 origin "${ANYDOC_COMMIT}" && \
     git checkout --detach FETCH_HEAD && \
     test "$(git rev-parse HEAD)" = "${ANYDOC_COMMIT}"
-RUN cargo build --release --example convert
-RUN cp target/release/examples/convert /out-anydoc && \
-    strip /out-anydoc && \
+RUN --mount=type=cache,id=anydoc-cargo-${TARGETARCH},target=/var/cache/cargo,sharing=locked \
+    --mount=type=cache,id=anydoc-target-${TARGETARCH},target=/src/target,sharing=locked \
+    CARGO_HOME=/var/cache/cargo cargo build --release --example convert && \
+    cp target/release/examples/convert /out-anydoc
+RUN strip /out-anydoc && \
     if [ -s LICENSE ]; then cp LICENSE /out-anydoc-license; \
     elif [ -s LICENSE-MIT ]; then cp LICENSE-MIT /out-anydoc-license; \
     else echo "anydoc license file not found" >&2; exit 1; fi
