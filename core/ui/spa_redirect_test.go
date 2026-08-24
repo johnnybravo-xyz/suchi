@@ -13,6 +13,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func TestRootRedirectsToSPA(t *testing.T) {
@@ -71,5 +74,48 @@ func TestSPACachePolicy(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Errorf("%s Cache-Control = %q", path, got)
+	}
+}
+
+func TestExternalLoginOwnsBrowserEntryPoints(t *testing.T) {
+	s := newUISrv(t)
+	s.LoginPath = "/oidc/login"
+	mux := http.NewServeMux()
+	s.Register(mux)
+	s.RegisterSPA(mux)
+
+	for _, path := range []string{"/", "/login", "/bootstrap", "/app/"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusFound {
+			t.Errorf("GET %s: status=%d, want 302", path, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != "/oidc/login" {
+			t.Errorf("GET %s: Location=%q, want /oidc/login", path, got)
+		}
+	}
+
+	assets, err := fs.Glob(spaFS, "spa/dist/assets/index-*.js")
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("hashed SPA entry assets = %v, err = %v", assets, err)
+	}
+	assetPath := "/app/" + strings.TrimPrefix(assets[0], "spa/dist/")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, assetPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET %s: status=%d, want 200", assetPath, rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/app/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{
+		Kind: "user", UserID: 1, Email: "admin@example.test", Role: "admin",
+	}))
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Errorf("authenticated GET /app/: status=%d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<meta name="suchi-login-path" content="/oidc/login" />`) {
+		t.Errorf("authenticated GET /app/: shell missing OIDC login path")
 	}
 }

@@ -4,10 +4,10 @@
 // state stays in one place. The two coexist during migration; when
 // the SPA takes over /, retire the template routes one by one.
 //
-// The SPA renders its own login and every data call is enforced by
-// the API auth chain (session cookie or Token header), same as the
-// mobile apps. That's why RequireUI is NOT applied here — the shell
-// is public by design; auth is where the data is.
+// Without OIDC, the SPA renders its own login and every data call is enforced
+// by the API auth chain. When an external login path is configured, anonymous
+// shell requests redirect there instead. RequireUI is not applied wholesale
+// because hashed assets must remain directly cacheable.
 
 package ui
 
@@ -17,6 +17,8 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 )
 
 //go:embed all:spa/dist
@@ -28,6 +30,7 @@ var spaFS embed.FS
 // rewrite is a no-op if the source title ever changes.
 var spaTitleTag = []byte(`<title>suchi</title>`)
 var spaTitleTagDemo = []byte(`<title>suchi · Demo</title>`)
+var spaLoginPathTag = []byte(`<meta name="suchi-login-path" content="/login" />`)
 
 // RegisterSPA mounts the Svelte app at /app. Deep links via the hash
 // router work without a server-side catch-all — the URL segments
@@ -61,6 +64,10 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 	if err == nil && s.DemoMode {
 		shell = bytes.Replace(shell, spaTitleTag, spaTitleTagDemo, 1)
 	}
+	if err == nil && s.usesExternalLogin() {
+		externalLoginTag := []byte(`<meta name="suchi-login-path" content="` + s.LoginPath + `" />`)
+		shell = bytes.Replace(shell, spaLoginPathTag, externalLoginTag, 1)
+	}
 
 	mux.HandleFunc("GET /app/", func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
@@ -77,6 +84,13 @@ func (s *Server) RegisterSPA(mux *http.ServeMux) {
 				files.ServeHTTP(w, r)
 				return
 			}
+		}
+		// When an external identity provider owns browser sign-in, do not
+		// expose a dead local-password shell. Hashed assets stay public above
+		// so the callback can render the SPA without an extra asset round trip.
+		if s.usesExternalLogin() && auth.FromContext(r.Context()) == nil {
+			http.Redirect(w, r, s.LoginPath, http.StatusFound)
+			return
 		}
 		// Fresh-instance guard: with the setup token still unclaimed
 		// there is no user to sign in as, so the SPA's login form is a

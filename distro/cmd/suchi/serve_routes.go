@@ -19,15 +19,18 @@ import (
 
 func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *blob.CAS, metrics *httpx.Metrics, la *localauth.Plugin, oa *oidcauth.Plugin, log *slog.Logger) error {
 	registerOperationalRoutes(mux, d, metrics, cfg.PprofEnabled, log)
+	oidcEnabled := cfg.OIDCIssuerURL != ""
 
-	mux.HandleFunc("POST /setup", la.SetupHandler)
-	mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
-	mux.HandleFunc("POST /api/login", la.LoginHandler)
-	mux.HandleFunc("POST /api/token/", la.LoginHandler)
 	mux.HandleFunc("POST /api/logout", la.LogoutHandler)
 	if oa != nil {
 		mux.HandleFunc("GET /oidc/login", oa.LoginHandler)
 		mux.HandleFunc("GET /oidc/callback", oa.CallbackHandler)
+	}
+	if !oidcEnabled {
+		mux.HandleFunc("POST /setup", la.SetupHandler)
+		mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
+		mux.HandleFunc("POST /api/login", la.LoginHandler)
+		mux.HandleFunc("POST /api/token/", la.LoginHandler)
 	}
 
 	if !cfg.UIDisabled {
@@ -39,7 +42,11 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 		if err != nil {
 			return fmt.Errorf("create UI server: %w", err)
 		}
-		uiServer.LoginSubmit = la.LoginFormHandler
+		if oidcEnabled {
+			uiServer.LoginPath = "/oidc/login"
+		} else {
+			uiServer.LoginSubmit = la.LoginFormHandler
+		}
 		uiServer.SetupPendingFn = func() bool {
 			return !cfg.DemoMode && la.SetupToken() != ""
 		}

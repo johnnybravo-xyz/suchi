@@ -20,6 +20,10 @@ import (
 )
 
 func openTestPlugin(t *testing.T) *Plugin {
+	return openTestPluginWithOptions(t, Options{})
+}
+
+func openTestPluginWithOptions(t *testing.T, opts Options) *Plugin {
 	t.Helper()
 	ctx := context.Background()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "t.db"))
@@ -35,11 +39,18 @@ func openTestPlugin(t *testing.T) *Plugin {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	p, err := New(ctx, d, log, false, false)
+	p, err := NewWithOptions(ctx, d, log, false, false, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestNewWithOptions_DisablesLocalSetup(t *testing.T) {
+	p := openTestPluginWithOptions(t, Options{DisableSetup: true})
+	if got := p.SetupToken(); got != "" {
+		t.Fatalf("OIDC-only plugin minted local setup token %q", got)
+	}
 }
 
 func TestEnsureDevAdmin_Refusals(t *testing.T) {
