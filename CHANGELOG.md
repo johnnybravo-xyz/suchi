@@ -59,6 +59,8 @@ Notable user-visible changes to Suchi are recorded here.
   pipeline-rescan approvals that cannot advance them.
 - Pipeline-rescan approval details identify the affected documents with links
   before an operator approves the work.
+- Saved views and document deep links apply their text, filing category, tag,
+  correspondent, type, sensitivity, and ordering filters consistently.
 
 ### Security
 

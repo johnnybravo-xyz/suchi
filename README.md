@@ -147,3 +147,10 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 
 Works with [Johnny.Decimal](https://johnnydecimal.com), a trademark of
 Coruscade Pty Ltd. Suchi is independent and not endorsed by them.
+
+## License
+
+Suchi is made available under the [GNU Affero General Public License v3.0](LICENSE)
+beginning with its first public release. Before that release, its repository
+and container images were private development artifacts and were not
+distributed to any third party.
