@@ -1,0 +1,167 @@
+---
+title: "Approvals"
+description: "Durable human decisions, document suggestions, ordered review states, and timeouts."
+---
+
+Approvals pause a workflow for a human decision. An approval definition is a
+versioned state machine; each run records its current state, open tasks, and
+append-only transitions. Advancement and timeout checks use the existing
+durable job queue.
+
+Use [Automations](/automations) for deterministic event-driven actions. Use
+approvals when a person's explicit choice controls what happens next.
+
+## Model
+
+- A **definition** stores a versioned JSON state machine under a stable slug.
+- A **run** binds one definition version to a document and current state.
+- A **task** asks one user or resolved role to choose from declared options.
+- A **transition** records the previous state, next state, trigger, actor, and
+  time.
+
+Runs are `running`, `done`, `failed`, or `cancelled`. Tasks are `open`,
+`claimed`, `resolved`, or `expired`.
+
+## Definition
+
+```json
+{
+  "start": "review",
+  "states": {
+    "review": {
+      "kind": "approve",
+      "assignee": "user:5",
+      "prompt": "Approve this invoice?",
+      "choices": ["approve", "reject"],
+      "timeout_sec": 86400,
+      "on": {
+        "approve": "approved",
+        "reject": "rejected",
+        "timeout": "rejected"
+      }
+    },
+    "approved": {"kind": "end"},
+    "rejected": {"kind": "end"}
+  }
+}
+```
+
+Validation requires a real start state, valid state names, known state kinds,
+valid transition targets, and a mapping for every approval choice. Assignees
+use `user:<id>`, `document_owner`, or a registered `role:<name>` resolver.
+`document_owner` resolves when a document-bound run creates its task. The
+shipped `role:admin` resolver assigns a shared task visible to administrators.
+
+Built-in state kinds are:
+
+- `system`: emits a routing event without creating a task
+- `approve`: creates a human task and waits for a choice or timeout
+- `end`: completes the run and expires remaining tasks
+
+Additional kinds can be registered in a custom distribution through
+`Engine.RegisterHandler`.
+
+Handlers can return a transactional effect with their routing event. Suchi
+runs that effect in the same transaction as the transition, which keeps a
+human-approved write retry-safe when the durable job is redelivered.
+
+## API flow
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/approvals/definitions` | Register a new definition version |
+| `GET` | `/api/approvals/definitions/{slug}` | Read the active definition |
+| `POST` | `/api/approvals/definitions/{slug}/start` | Start a run with document change access; admin-only without a document |
+| `GET` | `/api/approvals/runs/{id}` | Read a run with document view access; admin-only without a document |
+| `POST` | `/api/approvals/tasks/{id}/resolve` | Submit a declared choice |
+| `POST` | `/api/approvals/runs/{id}/cancel` | Cancel a running run |
+
+Register the example under `invoice-approval`:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/approvals/definitions \
+  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"slug":"invoice-approval","spec":<definition-json>}'
+```
+
+Then start it:
+
+```sh
+curl -X POST \
+  http://127.0.0.1:8000/api/approvals/definitions/invoice-approval/start \
+  -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"doc_id":17}'
+```
+
+The assignee resolves the resulting task from the Approvals screen or API. A
+resolution enqueues the next advancement; the HTTP request does not run the
+whole state machine inline.
+
+## Timeouts and recovery
+
+Entering a state with `timeout_sec` records a deadline. A recurring durable
+timeout sweep enqueues a `timeout` advancement for due runs and expires their
+open tasks. The definition must map `timeout` when timeout behavior is desired.
+
+Handlers are retry-safe. Interrupted internal approval jobs are reclaimed on
+startup, while a completed or cancelled run ignores redelivered advancement.
+Cancelling records a transition and expires open tasks.
+
+Approval jobs appear in `/api/tasks/`; filter by `kind=approval:` when
+investigating a stalled run. Application logs use `component=approvals`.
+
+## Document suggestions
+
+Archive matching and low-confidence LLM title classification use the shipped
+`document-change` definition. Each suggestion becomes an approval assigned to
+the document owner with its field, proposed value, confidence, source, and
+supporting document IDs stored in the run variables. Applying a suggestion
+changes the document through the approval transition; rejecting it only closes
+the run. Repeated classifiers do not open a duplicate active review for the
+same document, field, and value.
+
+Classification decisions are independent per field. A confident category can
+file a document immediately while lower-confidence correspondent or tag
+suggestions remain in Approvals. The Approvals screen shows the current filing
+category alongside the exact proposed action so those reviews are not mistaken
+for a second filing decision.
+
+If a pending suggestion becomes true before it is reviewed, the existing
+approval sweep closes it as `system:satisfied` and records
+`document.suggestion_satisfied` in the audit log. It does not linger as an
+actionable approval or disappear without history.
+
+This is also the extension pattern for future human-in-the-loop actions: a
+producer starts an approval in its existing transaction, and a typed handler
+performs the approved write. Suchi does not maintain a second proposal table or
+resolution API.
+
+## Rescan proposals
+
+Suchi ships a `rescan-proposal` definition. When a code, extraction schema, or
+prompt version makes stored processing results stale, Suchi creates one admin
+review task per affected pipeline kind. The choices are:
+
+- rescan every stale document
+- rescan a random sample of 20 when more than 20 documents match
+- dismiss the proposal
+
+Configuration changes alone do not create a proposal or automatically rescan
+the archive. LLM documents that have never completed classification are also
+excluded from automatic upgrade proposals. Documents already queued for
+post-ingest work, already surfaced as failed jobs, or waiting for a PDF
+password do not create a second rescan prompt. Operators can always select
+documents and run an explicit rescan.
+
+## Current limits
+
+- A run has one current state; parallel branches are not supported.
+- Definitions are managed as JSON through the API rather than a visual editor
+  or watched directory.
+- A `role:admin` task is shared by all administrators until one resolves it;
+  assignment is not round-robin.
+
+See [API](/api) for request and error payloads and
+[Pipeline versions](/pipeline-versions) for stale-result semantics.

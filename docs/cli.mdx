@@ -1,0 +1,402 @@
+---
+title: "CLI reference"
+description: "Reference for every suchi subcommand and flag."
+---
+
+```
+suchi <subcommand> [flags]
+```
+
+Configuration comes from HuML or TOML files with environment-variable
+overrides. See [config](/config).
+
+## `suchi serve`
+
+Runs the HTTP server. Blocks until SIGINT/SIGTERM.
+
+- Applies embedded migrations up to the current schema version.
+- Creates a neutral System / Inbox baseline until a filing tree is selected.
+- Starts the durable-outbox dispatcher.
+- Logs the effective egress surface at INFO.
+- Listens on `LISTEN_ADDR` (default `:8000`).
+
+## `suchi healthcheck`
+
+Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server
+answers `200`, non-zero otherwise. Wired as the Docker `HEALTHCHECK`, so the
+image does not depend on `wget` or `curl` for readiness checks.
+
+## `suchi import [flags]`
+
+Point `--from` at your existing DMS's export bundle. See
+[importer](/importer) for the full walkthrough.
+
+### Flags
+
+| Flag                    | Required                | Purpose                                                                                                    |
+| ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `--from <path>`         | yes                     | Path to the exporter output dir.                                                                           |
+| `--owner-email <email>` | yes, unless `--dry-run` | User that will own imported documents.                                                                     |
+| `--dry-run`             | no                      | Parse + report counts without writing.                                                                     |
+| `--flat`                | no                      | Every doc → inbox. Skip JD resolution.                                                                     |
+| `--map-jd <path>`       | no                      | HuML or TOML rules: source metadata → JD code.                                                             |
+| `--auto-jd`             | no                      | Apply built-in JD heuristics (deterministic keyword matches). Off by default — inbox is the safe fallback. |
+| `--verify`              | no                      | Dry-diff the bundle against the live DB. No writes.                                                        |
+| `--report <path>`       | no                      | Write the import report. Defaults to `./import-report.md`.                                                |
+
+<Info>
+  Category-resolution flags (`--flat`, `--map-jd`, `--auto-jd`) are mutually
+  exclusive.
+</Info>
+
+## `suchi gc [flags]`
+
+Mark-and-sweep the CAS: walks every blob under `$DATA_DIR/blobs/`
+and deletes anything **not referenced** by a document original, archive,
+decrypted copy, thumbnail, or user avatar. Trashed document rows still count.
+The blob's on-disk mtime gates a grace window — a fresh-uploaded blob whose
+database row is still in a pending write won't be reclaimed.
+
+Dry-run by default. Nothing is deleted until you pass `--apply`.
+
+### Flags
+
+| Flag                      | Default          | Purpose                                             |
+| ------------------------- | ---------------- | --------------------------------------------------- |
+| `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this. Longer is safer.        |
+| `--apply`                 | off              | Actually delete candidate blobs. Otherwise dry-run. |
+| `--verbose`               | off              | Log every kept and every candidate blob.            |
+
+<Info>
+  Recommended cadence: nightly `suchi gc --apply` via cron once the instance is
+  a few weeks old. The design doc keeps this deliberately manual — automatic gc
+  on hostile data is how you lose files.
+</Info>
+
+## `suchi taxonomy validate <file>`
+
+Validate a `suchi-taxonomy/v1` file. Silent on success (exit 0);
+positioned errors on stderr with a non-zero exit. What the
+[suchi-presets](https://github.com/suchi-dms/suchi-presets) repo's
+CI runs against every preset file.
+
+```bash
+suchi taxonomy validate presets/uk/landlord.toml && echo ok
+```
+
+## `suchi taxonomy import <file> [flags]`
+
+Apply a `suchi-taxonomy/v1` file to the local instance. Dry-run by
+default; prints the count summary (areas, categories, keyword
+keyword automations and other preset automations).
+
+### Flags
+
+| Flag             | Required | Purpose                                                         |
+| ---------------- | -------- | --------------------------------------------------------------- |
+| `--apply`        | no       | Actually write. Default is dry-run.                             |
+| `--skip-seeds`   | no       | Only touch the JD tree — no preset automations. |
+| `--format <fmt>` | no       | Override extension-based detection: `huml` or `toml`.           |
+| `--remap <a:b>`  | no       | Merge collision: move incoming code `a` to `b`, or use `a:skip`. Repeatable. |
+
+Replace mode fires when the archive has no filed documents (the
+wizard case); merge mode fires when documents exist. Merge applies
+additively and requires a `--remap` choice for each code collision.
+
+```bash
+suchi taxonomy import presets/uk/landlord.toml
+# Dry-run — pass --apply to write.
+suchi taxonomy import presets/uk/landlord.toml --apply
+```
+
+## `suchi taxonomy export [flags]`
+
+Round-trip the current tree, preset-owned keyword automations, and other preset-owned
+automations into a `suchi-taxonomy/v1` file on stdout. Stored row IDs are
+converted back to portable category codes and taxonomy names. Default format
+is HuML.
+
+| Flag             | Purpose                              |
+| ---------------- | ------------------------------------ |
+| `--format <fmt>` | Output `huml` (default) or `toml`.   |
+
+```bash
+suchi taxonomy export --format toml > my-tree.toml
+```
+
+## `suchi taxonomy merge [flags]`
+
+Admin operation for post-import cleanup: after years of use (or a
+big import), taxonomy tables accumulate near-duplicates
+("BESCOM" and "Bescom", "Tax" and "TAX"). Merge picks one, moves
+every reference from the other, deletes the source, and rewrites
+any automations that referenced the source name.
+
+Dry-run by default. Reports how many docs would move before you
+commit.
+
+### Flags
+
+| Flag                 | Required | Purpose                                               |
+| -------------------- | -------- | ----------------------------------------------------- |
+| `--kind <k>`         | yes      | One of `tag`, `correspondent`, `document_type`.       |
+| `--from-name <name>` | yes      | The row to delete. Every reference moves to `--into`. |
+| `--into-name <name>` | yes      | The row that absorbs the references.                  |
+| `--apply`            | no       | Actually merge. Default is dry-run.                   |
+
+Example:
+
+```bash
+suchi taxonomy merge --kind tag \
+    --from-name "BESCOM" --into-name "Bescom"
+
+# Ready to commit?
+suchi taxonomy merge --kind tag \
+    --from-name "BESCOM" --into-name "Bescom" --apply
+```
+
+## `suchi doctor`
+
+One-shot diagnostic report. Prints:
+
+- Managed egress destinations for OIDC, enabled mailboxes, Microsoft OAuth,
+  and the active LLM endpoint, with credentials removed
+- Presence of optional pipeline binaries on `PATH`; versions are not queried
+- Database schema version compared with the embedded target
+- Imported taxonomy preset, version, and content hash when available
+- `$DATA_DIR` writability
+- Operational indicators: last-backup age (WARN past 2× `BACKUP_INTERVAL`),
+  dead-job count, oldest running job (WARN >15m), effective upload cap,
+  last boot's orphaned-job reclaim count, one sampled CAS shard, and the
+  `audit_events` row total against the retention window
+
+It does not test remote connectivity, available disk space, every CAS shard,
+or operator-script egress. Use `--scrub-cas` for the explicit full CAS hash
+walk.
+
+### Flags
+
+| Flag                   | Purpose                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| `--scrub-cas`          | Stream and hash every CAS blob; report corrupt content and database references that are missing on disk. |
+| `--quarantine-corrupt` | Move corrupt files to `$DATA_DIR/blobs/quarantine/`. Requires `--scrub-cas`; missing blobs are never modified. |
+
+Non-zero exit only on hard errors. Missing optional binaries print but
+don't fail — the ingest pipeline degrades gracefully. An explicit CAS
+scrub also exits non-zero on missing or corrupt content. Useful for air-gap
+verification and support tickets.
+
+```sh
+suchi doctor            # human-readable
+suchi doctor --scrub-cas
+```
+
+Run `--quarantine-corrupt` only while the server and workers are stopped. The
+report-only scrub streams files without modifying them; quarantine moves each
+bad path out of the live CAS for later inspection or restoration.
+
+## `suchi mcp [flags]`
+
+Start a Model Context Protocol server that adapts the REST
+surface into MCP tools. See [MCP guide](/mcp) for the client-side
+setup + tool reference.
+
+### Flags
+
+| Flag            | Purpose                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `--http <addr>` | Streamable HTTP listener address (for example `127.0.0.1:7000`). The listener has no separate auth; protect any non-loopback binding. Omit for stdio. |
+| `--url <url>`   | suchi API base URL. Overrides `SUCHI_URL` env.                                           |
+| `--token <hex>` | Scoped API token. Overrides `SUCHI_TOKEN` env.                                           |
+
+The binary also responds to `suchi-mcp` when invoked via symlink — the
+argv[0] dispatcher rewrites the command so `command: "suchi-mcp"` in a
+Claude Desktop config stays clean.
+
+Uses a scoped API token, not an admin token. Every MCP call is
+attributed to that token's owner in the audit log.
+
+## `suchi demo [flags]`
+
+Seed `$DATA_DIR` from the versioned manifest maintained by
+[`suchi-demo`](https://github.com/suchi-dms/suchi-demo).
+
+### Flags
+
+| Flag                   | Purpose                                                                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-dir <dir>`     | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`.                                                                                                               |
+| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/suchi-dms/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile.    |
+| `--corpus-url <url>`   | HTTPS URL of a compatible corpus tarball. Verified against a `.sha256` sidecar if present. Defaults to the release tested with this Suchi build.                                             |
+| `--corpus-dir <path>`  | Use an already extracted corpus directory. Skips download and extraction.                                                                                                                   |
+| `--fetch-only`         | Download, verify, and extract the corpus into the local cache without writing the database.                                                                                                 |
+
+Without a corpus flag, `suchi demo` downloads the tested corpus release. A
+different manifest version is rejected so showcase images cannot silently run
+against an untested data contract. Corpus input is capped at 256 MiB compressed,
+1 GiB extracted, and 10,000 archive entries; checksum sidecars are capped at
+4 KiB.
+
+The manifest owns fixtures, metadata, saved views, and symbolic automations.
+Same-name views and automations are preserved on repeat runs, and existing
+documents are reported rather than duplicated. See [demo instance](/demo-instance)
+for the runtime and deployment boundaries.
+
+## `suchi refile [flags]`
+
+Rerun `document_added` automations and enqueue a render/move job for every live
+document after a preset, automation, or path-template change. Full walkthrough
+at [Refile](/refile).
+
+### Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--skip-automations` | Enqueue render only. Use when only the storage-path template changed. |
+| `--skip-render` | Rerun automations only. |
+| `--owner-id <id>` | Restrict to documents owned by this user. `0` means every owner. |
+
+Safe against a live server — uploads that arrive mid-sweep use the
+normal postingest chain and land under the new tree automatically.
+
+## `suchi rescan [flags]`
+
+Re-run the content-extraction pipeline (qpdf → OCR → content write →
+automations → render → thumb → post-classify) against
+originals for a **selected set** of docs. Sibling to `refile`; the
+split is:
+
+- **`refile`** = re-run `document_added` automations and enqueue a render job.
+  Cheap, changes filing metadata. Use after preset, path-template, or automation edits.
+- **`rescan`** = re-run everything, including OCR against the
+  original blob. Expensive but authoritative — this is the tool for
+  "I swapped tesseract for ocrmypdf" or "I upgraded the LLM
+  classifier model."
+
+Every rescan is explicit + selectable + previewable. There is no
+"rescan all" default and no background auto-rescan — the operator
+picks the set every time.
+
+### Filters (compose with AND)
+
+| Flag                          | Purpose                                                                                                                                                                                               |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--stale <ocr\|llm\|content>` | Signature-driven. Docs whose `pipeline_version_<kind>` lags the current binary's constant. Bump the constant in code when the pipeline output shape changes; only the affected docs rescan next time. |
+| `--jd <code>`                 | Restrict to a single JD category id.                                                                                                                                                                  |
+| `--tag <name>`                | Docs carrying this tag.                                                                                                                                                                               |
+| `--correspondent <name>`      | Docs whose primary correspondent matches this name.                                                                                                                                                   |
+| `--older-than <duration>`     | Docs created before now-DURATION (Go duration syntax, e.g. `720h` for 30 days).                                                                                                                       |
+| `--newer-than <duration>`     | Docs created after now-DURATION.                                                                                                                                                                      |
+| `--only-failed`               | Docs whose last `post-ingest` job hit `state='dead'` in the outbox.                                                                                                                                   |
+| `--only-no-ocr`               | Docs with empty `content` — never OCR'd or OCR silently failed.                                                                                                                                       |
+| `--sample <N>`                | Randomly cap the matching set to N (post-filter). Useful for smoke-testing a rescan on a small subset before the full run.                                                                            |
+
+### Pre-flight
+
+| Flag         | Purpose                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`  | Print the affected count + a sample of IDs; enqueue nothing.                                                                           |
+| `--estimate` | Print rough wall-clock and LLM-cost estimates. Coarse — the point is to warn when the operator asked for 5000 docs, not to be precise. |
+| `--yes`      | Skip the confirmation prompt that fires when the affected count ≥ 100.                                                                 |
+
+### How it works under the hood
+
+Each matching doc gets a fresh `post-ingest` job in the durable
+outbox. When `suchi serve` is running (or the next boot picks the
+job up), those drain through the same chain a fresh upload runs.
+Idempotent — re-running against the same doc bumps its
+`pipeline_version_*` markers but doesn't otherwise diverge. Batched
+in groups of 200 so a crash mid-run leaves the outbox consistent.
+
+Signature semantics — each pipeline step reads a version constant
+and writes it onto the doc on success:
+
+- `pipeline_version_content` bumps when the content-extraction
+  chain changes (new format handler, byte-cap change, etc.).
+- `pipeline_version_ocr` bumps when the OCR engine or its data
+  changes.
+- `pipeline_version_llm` bumps when the classifier's prompt or validated
+  result contract changes (constant lives in the plugin package). Operator
+  endpoint, model, key, timeout, and threshold changes use an explicit
+  selected rescan instead of stale detection.
+
+Bumping the constant in code, rebuilding, and running
+`suchi rescan --stale <kind>` catches only affected docs — the
+selective alternative to a bulldozer.
+
+### Examples
+
+```bash
+# What would change if we rescanned every doc whose OCR is stale?
+suchi rescan --stale ocr --dry-run --estimate
+
+# Actually do it, but sanity-check with 20 random docs first.
+suchi rescan --stale ocr --sample 20
+
+# All docs in JD 22 (Tax) older than a year, forced-retry.
+suchi rescan --jd 22 --older-than 8760h --yes
+
+# Every doc that ever landed in the dead-letter queue.
+suchi rescan --only-failed
+```
+
+### Discovery via the Tasks inbox
+
+The CLI is the surgical path: you pick filters, run the command, and own the
+outcome. The Tasks inbox discovers older successful pipeline results after a
+code revision bump. Its card offers **Rescan all**, **Try 20 first** when more
+than 20 documents match, and **Dismiss**. Both surfaces route through
+`core/rescan.Enqueue`.
+
+Dismiss cleanly closes the run; the card doesn't come back until
+the next version bump. If someone rescans out-of-band and the stale
+count hits zero, the detector cancels the pending run on the next
+boot.
+
+A kind whose current version reports as `0` is disabled, and any pending
+proposal for it is cancelled. Automatic LLM proposals also exclude stored
+version `0`, which means classification never completed. Enabling a classifier
+therefore affects new ingests without turning the existing archive into an
+upgrade proposal. An explicit `--stale llm` command still includes those
+documents. See [Pipeline versions](/pipeline-versions) for the full boundary.
+
+## `suchi export --out FILE.zip`
+
+Portable takeout of live document originals and selected metadata. Writes a zip
+containing the original bytes of every live document plus a
+`documents/<name>-<id>.json` sidecar in the standard suchi format
+(see [formats § JSON sidecar](/formats#json-sidecar-spec)), plus
+flat JSON dumps of the taxonomy tables (tags, correspondents,
+document types, storage paths, custom fields, JD categories).
+
+```sh
+suchi export --out /tmp/my-suchi.zip                 # this instance's default admin
+suchi export --out /tmp/user-5.zip --owner-id 5      # scope to one owner
+suchi export --out /tmp/full.zip --all               # every owner (careful — big)
+```
+
+After extracting the zip, placing each original beside its sidecar in an
+fs-watch staging directory restores title, source date, correspondents, tags,
+and JD category. Follow the [fresh-instance restore guide](/guides/export-import)
+for the safe copy order and verification steps. This is not a full metadata
+round trip: per-document custom
+field values and notes are omitted, while exported `sensitivity`, `mime_type`,
+and `sha256` sidecar fields are currently informational and ignored on ingest.
+MIME and SHA-256 are recomputed from the bytes, and sensitivity uses the target
+instance default.
+
+**Not included** in this version:
+
+- Avatars, thumbnails (derived — regenerate on re-import).
+- Document versions history.
+- Approvals + audit history.
+- Share links + saved views.
+- Per-document custom-field values and notes.
+
+Bumps to the export format land a new `version` in `manifest.json`
+so importers can gate on it.
+
+## `suchi version`
+
+Prints the binary version, build revision, and the Go version it was compiled
+with.

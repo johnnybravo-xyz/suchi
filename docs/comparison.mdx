@@ -1,0 +1,147 @@
+---
+title: "Comparison"
+description: "A sourced comparison with Paperless-ngx, Papra, and Docspell."
+---
+
+The self-hosted document-management space has mature alternatives. This page
+focuses on operational shape and documented features, not a universal ranking.
+
+**Snapshot date:** 2026-08-22. Read each project's current documentation before
+choosing; all four projects are active.
+
+<Warning>
+  This comparison is maintained by the suchi project. It is not an independent
+  review, and only suchi's performance numbers were measured here.
+</Warning>
+
+## At a glance
+
+| Project | Default operational shape | License |
+| --- | --- | --- |
+| **suchi** | One Go process, SQLite, filesystem CAS; document converters are optional | AGPL-3.0 |
+| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker | GPL-3.0 |
+| **Papra** | Packaged Node application with SQLite and filesystem storage by default | AGPL-3.0 |
+| **Docspell** | Separate REST and joex processes; embedded H2 by default; full-text search is optional | AGPL-3.0 |
+
+Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configuration/),
+[Papra configuration](https://docs.papra.app/self-hosting/configuration/), and
+[Docspell prerequisites](https://docspell.org/docs/install/prereq/).
+
+## Feature snapshot
+
+Legend: ✅ documented as shipped · ◐ partial or different shape · ➖ not
+documented as shipped
+
+### Ingest and extraction
+
+| Feature | suchi | Paperless-ngx | Papra | Docspell |
+| --- | :---: | :---: | :---: | :---: |
+| Upload API | ✅ | ✅ | ✅ | ✅ |
+| Watched folder | ✅ | ✅ | ✅ | ✅ (CLI watcher) |
+| Mail intake | ✅ (IMAP) | ✅ (IMAP) | ◐ (intake address/relay) | ✅ (IMAP) |
+| OCR | ✅ | ✅ | ✅ | ✅ |
+| Office-document extraction | ✅ | ✅ (optional Tika) | ✅ | ✅ |
+| Pre-consume script hook | ✅ | ✅ | ➖ | ➖ |
+| Scan splitting and blank-page removal | ✅ | ✅ | ➖ | ➖ |
+
+Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
+[Papra features](https://docs.papra.app/),
+[Papra folder ingestion](https://docs.papra.app/guides/setup-ingestion-folder/), and
+[Docspell features](https://docspell.org/docs/features/).
+
+### Organization and automation
+
+| Feature | suchi | Paperless-ngx | Papra | Docspell |
+| --- | :---: | :---: | :---: | :---: |
+| Tags | ✅ | ✅ | ✅ | ✅ |
+| Correspondent metadata | ✅ (multiple roles) | ✅ (one per document) | ➖ | ✅ |
+| Document types | ✅ | ✅ | ➖ | ◐ (tag categories/folders) |
+| Typed custom fields/properties | ✅ | ✅ | ✅ | ✅ |
+| Deterministic classification | ✅ | ✅ | ✅ | ◐ (metadata analysis) |
+| Optional LLM assistance | ✅ (fixed classification) | ✅ (suggestions/chat) | ✅ (auto-tagging) | ➖ |
+| Human approval tasks | ✅ | ➖ | ➖ | ➖ |
+
+Paperless and Papra have broader AI surfaces than earlier versions of this
+page stated. See the [Paperless-ngx FAQ](https://docs.paperless-ngx.com/faq/)
+and [Papra auto-tagging guide](https://docs.papra.app/guides/auto-tagging/).
+
+### API and access
+
+| Feature | suchi | Paperless-ngx | Papra | Docspell |
+| --- | :---: | :---: | :---: | :---: |
+| Documented REST API | ✅ | ✅ | ✅ | ✅ |
+| Public share links | ✅ (expiry/password) | ✅ (expiry) | ✅ (expiry/password) | ✅ (optional password) |
+| Multi-user ownership | ✅ | ✅ | ✅ (organizations) | ✅ (collectives) |
+| Fine-grained object permissions | ✅ | ✅ | ◐ (organization roles) | ➖ |
+| MCP server | ✅ | ➖ | ➖ | ➖ |
+
+Sources: [Paperless-ngx API](https://docs.paperless-ngx.com/api/),
+[Papra API reference](https://docs.papra.app/resources/api-endpoints/),
+[Papra v26.5.0 changelog](https://docs.papra.app/changelog/), and
+[Docspell API](https://docspell.org/docs/api/intro/). Docspell explicitly lists
+fine-grained permissions as a limitation.
+
+## Resource profile
+
+The suchi release benchmark measures a 25.5 MB stripped binary, 31.9 MB median
+idle RSS, 86 ms cold start to `/healthz`, and 625 accepted upload requests/s in
+the 10-user x 20-document scenario. Upload acceptance is measured separately
+from asynchronous extraction. See
+[`hack/bench/`](https://github.com/johnnybravo-xyz/suchi/tree/main/hack/bench)
+for the harness and machine details.
+
+This project has not run equivalent controlled benchmarks for the alternatives,
+so it does not publish comparative RAM, image-size, startup, or throughput
+figures. Container size and idle memory are not interchangeable with total
+operational cost.
+
+## Choosing deliberately
+
+### Paperless-ngx
+
+Choose Paperless-ngx when ecosystem maturity, mobile clients, extensive
+documentation, PDF editing, and a broad workflow surface matter more than
+minimizing process count. SQLite is available by default; PostgreSQL is
+recommended for larger or multi-user installations. A Redis-compatible broker
+is required.
+
+### Papra
+
+Choose Papra for a focused modern UI, organizations, SQLite-first deployment,
+folder and email-relay ingestion, configurable extraction backends, built-in
+LLM auto-tagging, and expiring or password-protected share links. Papra's
+feature landing page lagged its v26.5.0 changelog at this snapshot, so the
+shipped changelog takes precedence here.
+
+### Docspell
+
+Choose Docspell for multi-file items, strong query capabilities, scalable REST
+and joex processes, IMAP integration, and optional Solr or PostgreSQL full-text
+search. Its embedded H2 setup avoids an external database, but fine-grained
+permissions and document versioning are documented limitations.
+
+### suchi
+
+Choose suchi when one process, a filesystem CAS, low measured idle memory,
+Johnny.Decimal presets, multi-party correspondents, approval tasks, an audit
+feed, and MCP tools fit the problem. Do not choose it for ecosystem maturity or
+proven compatibility with existing Paperless mobile clients; v0.1 remains a beta.
+
+## Portability
+
+- **Paperless-ngx to suchi:** `suchi import --from <dir>` consumes a compatible
+  Paperless export bundle.
+- **suchi backup/takeout:** `suchi export --out FILE.zip` writes originals,
+  sidecars, and taxonomy for re-import into suchi.
+- **suchi to another DMS:** there is no destination-specific exporter. The
+  takeout is documented and uses ordinary files plus JSON sidecars, but mapping
+  it into another product remains migration work.
+
+## Update history
+
+- **2026-08-22:** Re-ran the release benchmark and rechecked the linked feature
+  documentation against the current product surfaces.
+- **2026-08-18:** Rechecked official documentation; corrected database,
+  full-text search, audit, sharing, permissions, OCR, LLM, and licensing claims.
+  Removed unmeasured performance estimates for other projects.
+- **2026-08-05:** Initial version.

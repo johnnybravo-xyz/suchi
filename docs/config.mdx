@@ -1,0 +1,434 @@
+---
+title: "Configuration"
+description: "Boot configuration, live settings, defaults, and precedence."
+---
+
+## Precedence
+
+Suchi first resolves boot configuration, last wins:
+
+```text
+defaults < config file < process environment
+```
+
+Environment values therefore beat file values. This is useful for container
+overrides where the file lives in an image layer and the environment comes
+from the run command.
+
+A small, explicit set of administrator-managed values can also be changed live
+through the web UI. For those values only, the effective chain is:
+
+```text
+defaults < stored web setting < config file < process environment
+```
+
+Configuration is resolved per field. A stored value fills an otherwise
+unconfigured field, while a config-file or process-environment value pins that
+field and wins. Stored changes to unpinned fields apply without a restart.
+File and environment changes are read at process start. See [Live database
+settings](#live-database-settings) for the complete stored list.
+
+Command flags, where available, override environment values for that command.
+Mailbox rows and the Mailboxes UI are authoritative for account-specific IMAP
+configuration.
+
+## Config file (optional)
+
+**Recommended format: TOML.** Explicit typing and no indentation
+surprises. HUML is the documented alternative.
+
+Format is picked from file extension:
+
+| Extension | Parser |
+|---|---|
+| `.toml` | **recommended** - `github.com/BurntSushi/toml` |
+| `.huml` | [HUML](https://huml.io) - human-oriented structured data |
+
+### Search paths
+
+The first file found wins:
+
+1. `$SUCHI_CONFIG` — explicit path override (highest priority)
+2. `$XDG_CONFIG_HOME/suchi/config.<ext>`
+3. `$HOME/.config/suchi/config.<ext>`
+4. `/etc/suchi/config.<ext>`
+5. `./suchi.<ext>` (cwd)
+
+Within each directory, Suchi's documented formats are probed in the
+order **toml → huml**.
+
+Setting `SUCHI_CONFIG` is an explicit instruction: a missing or unreadable path,
+or a path to a directory, stops startup with an error. When `SUCHI_CONFIG` is
+unset, finding no file in the normal search paths is valid and built-in defaults
+plus environment values are used.
+
+### File shape
+
+Keys mirror env var names in `lower_snake_case`. `PUBLIC_URL` becomes
+`public_url`; `BODY_LIMIT` becomes `body_limit`. Nested tables
+flatten with underscores:
+
+```toml
+admin_email = "admin@example.com"
+
+[oidc]
+issuer_url = "https://id.example.com"
+client_id = "suchi"
+```
+
+is equivalent to:
+
+```
+ADMIN_EMAIL=admin@example.com
+OIDC_ISSUER_URL=https://id.example.com
+OIDC_CLIENT_ID=suchi
+```
+
+`admin_email` stays top-level because its environment name is `ADMIN_EMAIL`;
+putting it inside `[oidc]` would produce the unused `OIDC_ADMIN_EMAIL` key.
+
+Arrays become CSV strings: `ocr_languages = ["eng", "deu"]` matches
+`OCR_LANGUAGES=eng,deu`.
+
+Full samples:
+
+- [`config.example.toml`](https://github.com/johnnybravo-xyz/suchi/blob/main/docs/config.example.toml) (recommended)
+- [`config.example.huml`](https://github.com/johnnybravo-xyz/suchi/blob/main/docs/config.example.huml)
+
+`SUCHI_CONFIG` opts the operator into a specific file and bypasses the search
+order. Environment values still override that file. Direct secrets and their
+`_FILE` forms are treated as one setting, so a direct secret in the
+environment overrides a file-side secret-file path.
+
+## Environment variables — boot configuration
+
+## Required
+
+| Env var      | Purpose                                                                                                               |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_URL` | External URL. Used for cookies, OIDC callbacks, and share-link URLs. Must be an absolute `http` or `https` origin with a host and no path, userinfo, query, or fragment. Suchi does not support subpath hosting. |
+
+## Storage & runtime
+
+| Env var                           | Default                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATA_DIR`                        | `/data`                  | Root of `blobs/`, `suchi.db` + WAL, `backups/`, `config.toml`, `staging/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `LISTEN_ADDR`                     | `:8000`                  | HTTP listener.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `LOG_LEVEL`                       | `info`                   | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `SUCHI_PPROF`                     | (unset)                  | Set to `1` to expose admin-authenticated `/debug/pprof/*` endpoints. Disable after profiling.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `TRUSTED_PROXY_CIDRS`             | (unset)                  | Comma-separated proxy networks allowed to supply `X-Forwarded-For` identities for login, share-link, and demo rate limits. The direct TCP peer must match; suchi then walks the header right-to-left and selects the first untrusted address. Leave unset when connecting directly. Configure the proxy to append or replace this header. |
+| `BODY_LIMIT`                      | `500M`                   | Request-body and fs-watch file-size cap. `0` disables the cap. Accepts `K`/`M`/`G` suffixes or raw bytes. |
+| `BACKUP_INTERVAL`                 | `24h`                    | `VACUUM INTO` snapshot cadence as a Go duration such as `30m`, `24h`, or `168h`. Writes `$DATA_DIR/backups/suchi-<ts>.db`; `0` disables. |
+| `BACKUP_KEEP`                     | `7`                      | Retention — after each snapshot, prune all-but-the-latest N. `0` keeps everything (documented; not the default).                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `AUDIT_RETENTION_DAYS`            | `20`                     | Sliding window over `audit_events`. Rows older than this get pruned on the same tick as the backup snapshot. Range `0–100`; `0` disables (audit log grows forever). Directly bounds the storage growth path the `GET /api/events/` feed sits on.                                                                                                                                                                                                                                                                                |
+| `OCR_LANGUAGES`                   | `eng`                    | Comma-separated Tesseract language packs handed to every OCR call. Keep this to the languages you actually receive because each pack adds work and memory use. Detected document languages are stored on `documents.languages`; they do not change this operator setting. Common Indian scripts include `hin`, `kan`, `tam`, `tel`, `ben`, `mar`, `guj`, `pan`, `mal`, and `urd`. |
+| `PDF_MAX_CONTENT_BYTES`           | `8M`                     | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit.                                                                                                                                                                                                                                                                                                                                                                         |
+| `ANYDOC_MAX_CONTENT_BYTES`        | `32M`                    | Cap on Markdown extracted from EPUB and office documents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `DJVU_MAX_CONTENT_BYTES`          | `32M`                    | Cap on `djvutxt` output length. Same reasoning as EPUB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `OCR_ENGINE`                      | `auto`                   | Scanned-PDF OCR engine. `auto` picks `tesseract` when the tessocr binaries (`pdftoppm` + `tesseract`) are on PATH, else `ocrmypdf`. Explicit values force one engine. `tesseract` is ~4× smaller in the image but produces no searchable-PDF archive.                                                                                                                                                                                                                                                                           |
+| `SCAN_BLANK_REMOVAL`              | `auto`                   | `auto` (default) → detect and strip blank pages from the working copy before OCR. `off` → skip. The CAS original is untouched either way.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `SCAN_BLANK_WHITENESS_THRESHOLD`  | `0.995`                  | Fraction of mean pixel intensity above which a page is considered blank. Range `(0.0, 1.0]`. Lower it (e.g. `0.98`) if your scanner leaves grey background; raise it (`0.999`) to only strip truly white pages.                                                                                                                                                                                                                                                                                                                 |
+| `SCAN_SPLIT_ENABLED`              | `off`                    | `on` → detect QR separator sheets and fan out one child document per segment. Opt-in only. See [formats#multi-doc-splitting](/formats#multi-doc-splitting-on-qr-separator-sheets).                                                                                                                                                                                                                                                                                                                                              |
+| `SCAN_SPLIT_TOKEN`                | `SUCHI-SPLIT`            | QR payload that marks a separator page. Case-sensitive; the value your `qrencode` (or equivalent) encodes on the printed separator.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `SCAN_SPLIT_DPI`                  | `150`                    | Rasterization DPI for QR detection. Range `[72, 600]`. Bump if your separator QRs are small or your scans are low-res.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `INGEST_PASSWORDS_FILE`           | (unset)                  | Optional path to a newline-separated list of candidate PDF passwords tried before an encrypted PDF is parked in `encryption_state='encrypted'`. Blank lines and `#` comments are skipped. Reloaded per-doc so operators can append passwords without restart. Chmod 600 recommended — the file holds secrets.                                                                                                                                                                                                                   |
+| `DECRYPT_KEY_FILE`                | `$DATA_DIR/.decrypt-key` | Path to the AES-256-GCM key that seals remembered PDF passwords, mailbox credentials and OAuth caches, and setup-wizard LLM API keys. Auto-generated 0600 on first boot. **Losing this file makes every corresponding ciphertext unusable** — back up `$DATA_DIR` wholesale, not just `suchi.db`.                                                                                                                                                                                         |
+| `PRE_CONSUME_SCRIPT`              | (unset)                  | Optional path to an operator-defined executable that runs on every doc before any built-in ingest logic. See [preconsume](/preconsume) for the contract (argv, env vars, stdout JSON envelope).                                                                                                                                                                                                                                                                                                                                 |
+| `SUCHI_UI_DISABLED`               | (unset)                  | Set to `1` or `true` to turn off the built-in browser UI at boot. When enabled, `/`, `/app/*` (Svelte SPA), `/login`, `/bootstrap`, `/preview/{id}`, `/download/{id}`, `/assets/*` don't register — only `/api/*`, `/healthz`, `/readyz`, `/metrics` are served. Blob access for headless callers keeps working via the `/api/documents/{id}/{preview,download}` mirrors (see [api](/api#get-apidocumentsidpreview)). For deployments where a self-hosted SPA fronts `/api/` externally. Auth (Token/Bearer/OIDC) is unchanged. |
+| `SUCHI_DEMO_MODE`                 | (unset)                  | Set to `1` or `true` to enable public-showcase behaviour: SPA renders a persistent "resets daily" banner, `GET /api/demo/mode` reports `enabled=true`. Consumed by the [demo instance](/demo-instance) deploy — no normal deployment should set it.                                                                                                                                                                                                                                                                             |
+| `SUCHI_DEMO_GLOBAL_RPS`           | `5`                      | Per-IP request rate for demo session mint and upgrade endpoints; burst is twice this value. `0` disables the cap. Range `0–10000`.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `SUCHI_DEMO_SCRATCH_TTL_MINUTES`  | `30`                     | When demo mode is on, bounds how long a per-visitor scratch user (email `visitor-*@demo.local`) survives before the reset ticker sweeps them and their uploads. Ticker cadence is `ceil(TTL/2)` minutes. Range `1–1440`.                                                                                                                                                                                                                                                                                                        |
+
+## Ingest pipeline timeouts
+
+Every ingest stage runs inside `core/sandbox` with a hard per-invocation
+deadline. Defaults are tuned for small home-servers processing typical
+1–20 MB PDFs; larger files (multi-hundred-page reports, big scan sets)
+routinely need higher caps. Each knob accepts any Go duration string —
+`60s`, `2m`, `1h30m`. An invalid value logs a warning and falls back
+to the default so a typo doesn't kill ingest.
+
+| Env var                      | Default | Stage                                                                                                              |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `SUCHI_QPDF_TIMEOUT`         | `30s`   | `qpdf --remove-restrictions --decrypt` normalization. Linear in page count; bump for PDFs with thousands of pages. |
+| `SUCHI_PDFINSPECTOR_TIMEOUT` | `30s`   | `pdftotext` text-native probe. Roughly 5–10 ms per page; bump for very long documents.                             |
+| `SUCHI_ANYDOC_TIMEOUT`       | `30s`   | Office / image conversion via the `anydoc` binary. Bump for large `.docx` / `.xlsx` / archive-like inputs.         |
+| `SUCHI_OCRMYPDF_TIMEOUT`     | `10m`   | Full-chain `ocrmypdf` OCR. Scales with page count × DPI × language count.                                          |
+| `SUCHI_TESSERACT_TIMEOUT`    | `10m`   | Native `pdftoppm` → `tesseract` OCR chain. Same scaling as `ocrmypdf`.                                             |
+| `SUCHI_PAGEANALYZE_TIMEOUT`  | `60s`   | `pdftoppm` rasterization for blank-page detection. Bump when `SCAN_BLANK_REMOVAL=auto` runs on very long PDFs.     |
+
+Set these when the job dispatcher parks a doc in `state='dead'` with a
+`... timeout after 30s` `last_error`. Retries are capped at 5 by
+`MaxAttempts`, so a permanently-slow stage burns ~5 × timeout of wall
+clock before the doc dead-letters — raising the cap once beats the
+retry churn.
+
+## Ingest pipeline max-sizes
+
+The user-facing content-extraction caps (`PDF_MAX_CONTENT_BYTES`,
+`ANYDOC_MAX_CONTENT_BYTES`, `DJVU_MAX_CONTENT_BYTES` above) bound what
+gets written to `documents.content`. The knobs here bound sandbox-level
+outputs — the intermediate PDFs and shell payloads. Same failure mode
+as the timeouts (typo warns + falls back). Byte suffixes `K`/`M`/`G`
+are base-2; bare numbers are raw bytes.
+
+| Env var                       | Default | Stage                                                                                                                                                                |
+| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SUCHI_QPDF_MAX_SIZE`         | `100M`  | qpdf's normalized output cap. Very large legitimate PDFs (multi-hundred-MB scan books) need this bumped or qpdf.Normalize errors before pdf-inspector sees the file. |
+| `SUCHI_OCRMYPDF_MAX_ARCHIVE`  | `200M`  | OCRmyPDF's searchable-PDF output cap. High-DPI OCR grows the archive relative to the input; if OCR runs but the archive is truncated, bump this.                     |
+| `SUCHI_EMAIL_MAX_ATTACH`      | `25M`   | email-ingest per-attachment cap. Attachments over this are skipped (with a log line); the parent email doc still lands.                                              |
+| `SUCHI_PRECONSUME_TIMEOUT`    | `5m`    | Wall-clock deadline for a `PRE_CONSUME_SCRIPT` invocation.                                                                                                           |
+| `SUCHI_PRECONSUME_MAX_STDOUT` | `1M`    | Preconsume's stdout JSON envelope size. Bump if the envelope carries a lot of metadata.                                                                              |
+| `SUCHI_PRECONSUME_MAX_OUTPUT` | `200M`  | Preconsume's `SUCHI_OUTPUT` produced-file cap (the modified doc bytes).                                                                                              |
+
+## TLS
+
+If a reverse proxy terminates TLS (recommended), leave these unset.
+For proxy-less installs, set both:
+
+| Env var         | Purpose          |
+| --------------- | ---------------- |
+| `TLS_CERT_FILE` | Cert file (PEM). |
+| `TLS_KEY_FILE`  | Key file (PEM).  |
+
+## Local auth
+
+No config needed. On first boot with no admin user, suchi prints a
+one-time **setup token** to the log at WARN. POST it to `/setup` with
+an email + password to create the admin.
+
+## Dev mode
+
+Suchi runs in exactly one of three modes. Dev, demo, and production are
+mutually exclusive by design — no half-blends, no cross-cutting
+overrides, one login codepath.
+
+| Mode           | Gate                                  | First user                                   | Login endpoints                                  |
+| -------------- | ------------------------------------- | -------------------------------------------- | ------------------------------------------------ |
+| **developer**  | `SUCHI_DEV=1` on a local `PUBLIC_URL` | fixed `dev@suchi.local` / `devdevdev` upsert | `POST /login`, `POST /api/token/`                |
+| **demo**       | `SUCHI_DEMO_MODE=1`                   | anonymous visitor scratch users              | `POST /api/demo/session`                         |
+| **production** | neither flag set                      | `/setup` token → admin                       | `POST /login`, `POST /api/token/`, OIDC callback |
+
+Dev-mode's only effect on the running system is guaranteeing the fixed
+admin row exists with a known password. Login uses the same endpoints
+production uses — no dev-only mint helper, nothing new to learn.
+
+| Env var     | Default | Purpose                                                                                                                                |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `SUCHI_DEV` | (unset) | Set to `1` to enable dev-mode. Auto-provisions the fixed `dev@suchi.local` admin at boot; refuses to arm outside the guardrails below. |
+
+The auto-provisioned admin is fixed: **email `dev@suchi.local`,
+password `devdevdev`**. That's not a placeholder — the plan is that
+you copy those two strings into `/login` (browser) or a `POST /api/token/`
+curl. Rotating the credentials is not a dev-mode concern; if you need
+a different admin, use production mode.
+
+Boot log line to grep for:
+
+```
+level=WARN msg=main.dev.ready
+  email=dev@suchi.local
+  password=devdevdev
+  browser="open http://localhost:8000/login and sign in with the above"
+  curl_token=curl -X POST http://localhost:8000/api/token/ -H 'Accept: application/json' -H 'Content-Type: application/json' -d '{"email":"dev@suchi.local","password":"devdevdev"}'
+```
+
+Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
+
+- **Refuses non-local `PUBLIC_URL`** — allows `localhost`,
+  `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+  `::1`, bare hostnames without dots, and any `*.local` name.
+  Anything else exits non-zero.
+- **Refuses when `OIDC_ISSUER_URL` is set** — single auth path only.
+  Drop OIDC env vars for the dev iteration or use a separate DATA_DIR.
+- **Refuses when `SUCHI_DEMO_MODE=1` is set** — dev and demo are
+  mutually exclusive; both signalled together is a misconfiguration,
+  not a valid combination.
+- **Refuses if any admin other than `dev@suchi.local` already exists** —
+  closes the accidental-prod lateral-takeover path. An operator with a
+  legit `owner@example.com` admin who happens to boot with `SUCHI_DEV=1`
+  plus a loopback URL would otherwise gain a second admin row carrying
+  the public default credentials; instead the boot exits with
+  `localauth: refusing to arm dev-mode — 1 other admin(s) already exist`.
+- **Refuses to promote existing non-admin accounts** — if a member row
+  with email `dev@suchi.local` exists, boot fails rather than silently
+  making them admin.
+- **Does not resurrect a disabled admin** — a manually quarantined
+  admin stays quarantined across dev restarts.
+- **Emits an audit event** (`dev_admin.provision`) on every arm so
+  post-hoc "was this row dev-created?" queries are easy.
+
+Multi-account testing: dev-mode only touches the `dev@suchi.local` row.
+Every other users-table row (`alice@ex.com`, `bob@ex.com`) survives
+restarts untouched. Create additional users via
+`POST /api/admin/users/` with the dev admin's token; they persist
+across dev-mode restarts as normal. Second _admin_ rows will block the
+next `SUCHI_DEV=1` boot — the right behaviour; drop the extra admin
+before restarting dev-mode, or launch without `SUCHI_DEV=1`.
+
+<Warning>
+  Dev-mode is a DX shortcut, not a production feature. The refusals above are
+  the primary defence; the credentials are public and any network-reachable
+  attacker who lands on a misconfigured prod box would gain admin. If you see
+  `main.dev.ready` in a prod log, something is misconfigured.
+</Warning>
+
+## OIDC
+
+All-or-nothing group. Set the whole set or none:
+
+| Env var                                           | Purpose                                                                                                           |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `OIDC_ISSUER_URL`                                 | e.g. `https://id.example.com`                                                                                     |
+| `OIDC_CLIENT_ID`                                  | From your IdP.                                                                                                    |
+| `OIDC_CLIENT_SECRET` or `OIDC_CLIENT_SECRET_FILE` | The secret. `_FILE` variant reads from disk (docker/k8s secrets).                                                 |
+| `ADMIN_EMAIL`                                     | Required when OIDC is enabled. The email that gets admin role on first login. Everyone else defaults to `member`. |
+
+<Info>
+  Any OIDC provider works: Pocket-ID, Authentik, Keycloak, Microsoft Entra,
+  Google.
+</Info>
+
+When OIDC is configured, it owns interactive sign-in: anonymous browser entry
+points redirect to the provider, and local bootstrap/password-login endpoints
+are disabled. Existing Suchi sessions and scoped API tokens remain valid; API
+tokens are still the supported path for unattended clients. The health and
+readiness endpoints remain public for container orchestration.
+
+## Filesystem-watch ingest
+
+| Env var                 | Default                               | Purpose                                                                                                                                             |
+| ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INGEST_FS_OWNER_EMAIL` | (unset = idle)                        | User that owns docs picked up from the staging dir. Setting this activates the watcher.                                                             |
+| `INGEST_FS_DIR`         | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
+
+The setup wizard exposes the same values as database-backed overrides. Saving a
+new directory or owner validates it, stops the old watcher, drains the new
+directory, and starts watching immediately.
+
+## Email ingest (IMAP polling)
+
+Mailboxes live in the `email_accounts` table: one row per mailbox,
+per-account owner, provider preset, auth mode (password or
+`xoauth2`), sealed secret at rest, per-account folder / poll
+interval, and typed intake policy. The supervisor
+picks up UI and API changes without a restart. Configure accounts in **Settings
+→ Mailboxes** or through `/api/email-accounts`; there is no boot-time
+single-mailbox seed.
+
+| Env var | Purpose |
+| --- | --- |
+| `INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT` | Optional Microsoft/Outlook public-client ID override. It wins over the config file and Suchi's shipped registration. The ID is public and no client secret is used. Applied at process start. |
+| `INGEST_IMAP_OAUTH_SCOPES_MICROSOFT` | Advanced comma-separated resource-scope override for Microsoft OAuth. Unset uses Exchange `IMAP.AccessAsUser.All`; MSAL adds its required OIDC scopes, including `offline_access`. |
+
+**How polling works.** For every enabled row, every poll interval
+(new accounts default to 10 min), suchi opens the folder, searches
+for UIDs above its durable high-water mark,
+fetches each message's raw body, stores it in the CAS as
+`message/rfc822`, and enqueues a post-ingest job. `core/pipeline/eml`
+then fans out one child document per attachment. A configured processed
+folder moves completed mail; otherwise server read state stays untouched
+unless `mark_seen` is explicitly enabled. A failed UID holds the cursor before
+that message so a later success cannot silently skip it.
+
+The intake policy is evaluated locally after the normal UID/date search.
+Accepted messages may retain the email and its files or files only. Rejected
+messages advance the local cursor but are not stored, moved, or marked read.
+
+**Dedup** is by `Message-ID` — a doc with the same Message-ID under
+the same owner is skipped on re-polls. Safe across restarts + across
+transports (the same email that also arrived via mbsync + fs-watch
+won't double-ingest).
+
+**Bridge tip.** The built-in Proton relay preset uses
+`protonmail-bridge:143` without TLS because that hop stays on the local
+container network; Bridge owns the encrypted upstream connection. Enter the
+Bridge-generated password in the same modal. Use the custom preset and a CA
+file only when your own relay exposes a TLS listener.
+
+## LLM classifier (optional; egress on)
+
+Off by default. Setting these turns the classifier on; non-local
+endpoints require the egress ack.
+
+| Env var                             | Purpose                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LLM_ENDPOINT_URL`                  | e.g. `http://127.0.0.1:11434/v1` for Ollama, or an OpenAI-compatible URL. Unset = classifier disabled.                                                  |
+| `LLM_MODEL`                         | Model identifier passed to the endpoint (e.g. `llama3.1:8b`).                                                                                           |
+| `LLM_API_KEY` or `LLM_API_KEY_FILE` | Optional; blank for local Ollama, required for hosted endpoints.                                                                                        |
+| `LLM_EGRESS_ACK`                    | Must be `true` for non-local endpoints. Loopback, private, link-local, `.local`, and `.localhost` endpoints skip the check.                         |
+| `LLM_CONFIDENCE_THRESHOLD`          | Auto-apply cutoff from `0.50` to `0.95`; default `0.70`. When configured, it wins over the stored web setting.                                            |
+
+The setup wizard AEAD-seals API keys before writing them to `settings` and
+never reads plaintext keys back. It exposes masked status, a synthetic
+connection test with validated synthetic fields and latency, a live confidence
+slider, an explicit key-clear action, and a local-only switch. Compose installs
+can reach host Ollama at `http://host.suchi.local:11434/v1`.
+As described under [Precedence](#precedence), config-file and environment
+values pin their individual classifier fields. Unpinned activation,
+configuration changes, key rotation or clearing, disable, and re-enable apply
+to the running process immediately.
+
+## MCP client env (for `suchi mcp` / `suchi-mcp` symlink)
+
+The MCP subcommand acts as a client to a running suchi instance —
+these tell it how to reach the API. Flags override env.
+
+| Env var       | Purpose                                                              |
+| ------------- | -------------------------------------------------------------------- |
+| `SUCHI_URL`   | Base URL, e.g. `http://127.0.0.1:8000`. Also honored by `--url`.     |
+| `SUCHI_TOKEN` | Scoped API token from `POST /api/token/`. Also honored by `--token`. |
+
+## Config file loader itself
+
+| Env var           | Purpose                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `SUCHI_CONFIG`    | Explicit override for the config file path. Bypasses the search order entirely.                      |
+| `XDG_CONFIG_HOME` | Standard XDG variable; feeds the search path. Falls back to `$HOME/.config` when unset.              |
+| `HOME`            | Standard shell variable; the config search reads `$HOME/.config/suchi/config.*` as one of the paths. |
+
+## Live database settings
+
+The operator-facing settings below live in the `settings` table and are set via
+the setup wizard or related admin screens. This is the complete list of stored
+values that participate in runtime configuration. A stored value fills a field
+only when that field is absent from the config file and process environment.
+The running LLM, filesystem watcher, OCR configuration, and backup schedule
+reload after a successful save; pinned fields retain their boot value.
+
+| Key                                                                                                   | Purpose                                                                                                      |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `backup.interval_hours`                                                                               | Backup cadence in hours when `BACKUP_INTERVAL` is not configured.                                            |
+| `ingest.fs_watch_dir` / `ingest.fs_watch_owner`                                                       | Wizard-written fs-watcher values for fields not pinned at boot.                                              |
+| `preset`                                                                                              | Current filing-tree preset.                                                                                  |
+| `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local archive-matching controls.                                                    |
+| `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live LLM classifier config. `_sealed` is AEAD-encrypted with the settings key.                                |
+| `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
+| `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
+| `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |
+
+## Secrets convention
+
+Every secret env var has a `_FILE` variant. The file's contents (trimmed
+of trailing newlines) becomes the value. Matches docker + k8s secret
+mounts. Secrets are never logged.
+
+Confirmed `_FILE` variants today:
+
+- `OIDC_CLIENT_SECRET_FILE`
+- `LLM_API_KEY_FILE`
+
+If both variants are set in the same source, `_FILE` wins. Either environment
+variant overrides either config-file variant.
+
+## Egress surface
+
+<Note>
+  A stock install makes **zero outbound connections** (principle 8). At boot,
+  suchi logs `main.egress.surface` listing every effective outbound path — OIDC
+  discovery, database-backed IMAP polling, and cloud LLM
+  endpoints. Destinations are redacted to safe origins. `outbound: none` is the
+  safe default; `suchi doctor` reads the same inventory from the current database.
+</Note>
+
+See [privacy](/privacy) for the full posture.

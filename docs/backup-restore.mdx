@@ -1,0 +1,130 @@
+---
+title: "Backup and restore"
+description: "Create a consistent backup of the database, blobs, and credential key, then test recovery."
+---
+
+Suchi keeps persistent application state under `DATA_DIR`:
+
+```text
+$DATA_DIR/
+  suchi.db              SQLite metadata, users, jobs, FTS, and audit events
+  suchi.db-wal          live SQLite WAL file
+  suchi.db-shm          live SQLite shared-memory file
+  blobs/                original and derived content-addressed files
+  rendered/             rebuildable filing-tree projection
+  backups/              built-in database snapshots
+  .decrypt-key          key for sealed database credentials
+  config.toml           optional file configuration
+```
+
+## What a complete backup needs
+
+Back up a consistent `suchi.db` snapshot together with `blobs/`,
+`.decrypt-key`, and any operator configuration stored in the
+directory. The database without `blobs/` has metadata but no document bytes.
+The database without `.decrypt-key` cannot open sealed mailbox, OAuth,
+PDF-password, or LLM credentials.
+
+`rendered/`, `suchi.db-wal`, and `suchi.db-shm` do not need independent copies.
+The rendered tree is generated state; WAL files are meaningful only with the
+database at the same instant.
+
+The mbsync deployment keeps credentials and Maildir state outside `DATA_DIR`;
+back up its deployment directory separately when that path is used.
+
+## Built-in database snapshots
+
+Every `BACKUP_INTERVAL` (default `24h`), Suchi creates a consistent SQLite
+snapshot at:
+
+```text
+$DATA_DIR/backups/suchi-<UTC timestamp>.db
+```
+
+It retains the newest `BACKUP_KEEP` snapshots, defaulting to seven.
+`BACKUP_INTERVAL=0` disables the loop. These snapshots contain only the
+database; pair one with the blob tree and keys for disaster recovery.
+
+## Backup methods
+
+### Stop and copy
+
+Stopping Suchi before copying the directory is the simplest consistent method:
+
+```sh
+systemctl stop suchi
+tar -czf suchi-backup-$(date -u +%F).tar.gz -C /var/lib suchi
+systemctl start suchi
+```
+
+### Online copy
+
+For an online point-in-time copy, use SQLite's backup command, then copy the
+immutable blobs and keys:
+
+```sh
+mkdir -p /snap/suchi
+sqlite3 "$DATA_DIR/suchi.db" '.backup /snap/suchi/suchi.db'
+rsync -a --delete "$DATA_DIR/blobs/" /snap/suchi/blobs/
+install -m 600 "$DATA_DIR/.decrypt-key" /snap/suchi/.decrypt-key
+```
+
+Do not run `suchi gc --apply` while making this online copy. A concurrent hard
+delete and garbage-collection pass could remove a blob still referenced by the
+database snapshot. Extra blobs copied after the snapshot are harmless.
+
+Filesystem snapshots such as ZFS, btrfs, or LVM are also suitable when they
+capture the whole data directory atomically. Encrypted backup tools such as
+restic or Borg can archive the resulting snapshot off-host.
+
+Do not copy only a live `suchi.db`, copy WAL files separately, or omit blobs.
+
+## Restore
+
+1. Stop the target process.
+2. Move the existing `DATA_DIR` aside rather than deleting it immediately.
+3. Restore the database, blobs, credential key, and configuration into an empty directory.
+4. Set ownership and restrictive key permissions.
+5. Start Suchi. Newer binaries apply missing migrations automatically.
+6. Check `/readyz`, open known documents, run a search, and test one sealed
+   integration such as a mailbox connection.
+
+```sh
+systemctl stop suchi
+mv /var/lib/suchi /var/lib/suchi.old
+mkdir -p /var/lib/suchi
+tar -xzf suchi-backup-2026-08-19.tar.gz -C /var/lib
+chown -R suchi:suchi /var/lib/suchi
+chmod 600 /var/lib/suchi/.decrypt-key
+systemctl start suchi
+```
+
+The restore drill included in the manually dispatched `checks` workflow
+confirms that built-in snapshots open and pass SQLite integrity checks. It does
+not validate an operator's blob or off-host backup, so restore those into a
+scratch instance periodically.
+
+## Upgrade and rollback
+
+Before an upgrade, take a complete backup using one of the methods above and
+keep the deployment pinned to an explicit version. Pull or install the new
+version, recreate or restart the single Suchi instance, then verify `/readyz`
+and run `suchi doctor`.
+
+Database migrations are one-way. To roll back after a migration, stop Suchi,
+restore the complete pre-upgrade data directory, install the previous binary or
+image, and verify readiness again. Do not run an older binary against a database
+opened by a newer release.
+
+## Retention and garbage collection
+
+Choose retention based on recovery needs and applicable law. Deleting a
+document does not remove bytes from existing snapshots or external backups.
+
+`suchi gc` reports unreferenced CAS blobs; `suchi gc --apply` removes them.
+Take a recoverable backup before applying garbage collection after a large
+deletion. See [CLI](/cli#suchi-gc-flags).
+
+Moving to another host uses the same procedure: create a consistent backup,
+restore it under the destination `DATA_DIR`, update ownership and `PUBLIC_URL`,
+then point the reverse proxy or DNS to the new instance.

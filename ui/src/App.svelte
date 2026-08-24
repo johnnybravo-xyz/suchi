@@ -1,0 +1,425 @@
+<script>
+  import { route, go } from './lib/router.svelte.js'
+  import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, mintDemoSession, getDemoAnonToken, getToken } from './lib/api.js'
+  import Icon from './lib/Icon.svelte'
+  import Login from './routes/Login.svelte'
+  import Dashboard from './routes/Dashboard.svelte'
+  import Omnibox from './lib/Omnibox.svelte'
+  import Lazy from './lib/Lazy.svelte'
+  import BrandMark from './lib/BrandMark.svelte'
+
+  const archiveBundle = () => import('./lib/archiveBundle.js')
+  const manageBundle = () => import('./lib/manageBundle.js')
+  const bundled = (load, name) => () => load().then(m => ({ default: m[name] }))
+  const lazyRoutes = {
+    documents:   bundled(archiveBundle, 'Documents'),
+    detail:      bundled(archiveBundle, 'DocumentDetail'),
+    search:      bundled(archiveBundle, 'Search'),
+    upload:      bundled(archiveBundle, 'Upload'),
+    uploadBox:   bundled(archiveBundle, 'UploadBox'),
+    trash:       bundled(archiveBundle, 'Trash'),
+    views:       bundled(archiveBundle, 'Views'),
+    tasks:       bundled(manageBundle, 'Tasks'),
+    automations: bundled(manageBundle, 'Automations'),
+    settings:    bundled(manageBundle, 'Settings'),
+    setup:       bundled(manageBundle, 'Setup'),
+    admin:       bundled(manageBundle, 'Admin'),
+    demo:        bundled(manageBundle, 'Demo'),
+  }
+
+  let mobileNavOpen = $state(false)
+  let uploadOpen = $state(false)
+  let dragDepth = $state(0)   // window-level drop target (except on #/upload)
+  const initials = $derived((session.user?.display_name || session.user?.email || '?')
+    .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
+  let jdTree = $state([])            // [{lo, name, categories:[…]}]
+  let openAreas = $state(loadOpenAreas())
+  let inboxCategory = $state(null)
+  let inboxCount = $state(0)
+  let recentDocs = $state([])
+  let st = $state(null)                 // /api/stats/ snapshot
+  const hasFilingIndex = $derived(jdTree.some(area => area.categories.some(category => !category.system)))
+  let setupNeeded = $state(false)
+  let setupReminderKey = ''
+  const setupReminderSeconds = 48 * 60 * 60
+  let demoMode = $state(false)
+  let demoBannerDismissed = $state(loadDemoDismissed())
+  function loadDemoDismissed() {
+    try { return sessionStorage.getItem('suchi.demo.bannerDismissed') === '1' } catch { return false }
+  }
+  function dismissDemoBanner() {
+    demoBannerDismissed = true
+    try { sessionStorage.setItem('suchi.demo.bannerDismissed', '1') } catch {}
+  }
+  function setupDismissalKey(startedAt) {
+    const userID = Number(session.user?.user_id || 0)
+    return userID && startedAt ? `suchi.setup.reminder.dismissed.${userID}.${startedAt}` : ''
+  }
+  function setupReminderWasDismissed(key) {
+    if (!key) return false
+    try { return localStorage.getItem(key) === '1' } catch { return false }
+  }
+  function dismissSetupReminder() {
+    setupNeeded = false
+    try { if (setupReminderKey) localStorage.setItem(setupReminderKey, '1') } catch {}
+    notify('Setup reminder closed. Setup is always available in Settings.')
+  }
+  let toast = $state('')
+  let toastTimer
+  let pollTimer
+
+  export function notify(msg) {
+    toast = msg
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => (toast = ''), 2400)
+  }
+
+  function loadOpenAreas() {
+    try { return new Set(JSON.parse(localStorage.getItem('suchi.jd.open') || '[]')) } catch { return new Set() }
+  }
+  function toggleArea(lo) {
+    openAreas.has(lo) ? openAreas.delete(lo) : openAreas.add(lo)
+    openAreas = new Set(openAreas)
+    try { localStorage.setItem('suchi.jd.open', JSON.stringify([...openAreas])) } catch {}
+  }
+
+  initTheme()
+
+  // Demo visitors receive a read token and a synthetic session. api.js upgrades
+  // the token on the first write; regular deployments continue through whoami.
+  fetch('/api/demo/mode')
+    .then(r => r.ok ? r.json() : null)
+    .then(async j => {
+      if (j?.enabled) demoMode = true
+      if (j?.enabled && !getToken() && !getDemoAnonToken()) {
+        try { await mintDemoSession() } catch {}
+      }
+      await refreshSession()
+      if (!session.user && j?.enabled && getDemoAnonToken()) {
+        session.user = {
+          user_id: 0,
+          email: 'visitor@demo.local',
+          display_name: 'Demo visitor',
+          role: 'member',
+          demo: 'anon',
+        }
+        session.checked = true
+      }
+      if (session.user) boot()
+      // Preserve demo deep links; redirect only the first default-route visit.
+      if (j?.enabled && session.user?.demo === 'anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {
+        try {
+          if (sessionStorage.getItem('suchi.demo.landed') !== '1') {
+            sessionStorage.setItem('suchi.demo.landed', '1')
+            go('#/demo')
+          }
+        } catch {}
+      }
+    })
+    .catch(async () => {
+      await refreshSession()
+      if (session.user) boot()
+    })
+
+  async function boot() {
+    clearInterval(pollTimer)
+    const categories = loadTaxonomy()
+    // Keep a fresh-install reminder on the dashboard for 48 hours, or until
+    // the admin explicitly finishes the wizard. Server time survives browsers
+    // and prevents an old localStorage dismissal leaking into a new install.
+    const setup = session.user?.role === 'admin'
+      ? setupState().then(state => {
+          const startedAt = Number(state?.started_at || 0)
+          const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
+          setupReminderKey = setupDismissalKey(startedAt)
+          setupNeeded = !state?.completed_at && withinWindow && !setupReminderWasDismissed(setupReminderKey)
+        }).catch(() => {})
+      : Promise.resolve()
+    await Promise.all([pollStats(), categories, setup])
+    pollTimer = setInterval(pollStats, 60_000)
+  }
+
+  async function loadTaxonomy() {
+    try {
+      const cats = await listJDCategories()
+      if (!cats?.results) return
+      buildTree(cats.results)
+      revealPendingInbox()
+    } catch {}
+  }
+
+  function buildTree(cats) {
+    const areas = new Map()
+    inboxCategory = null
+    for (const c of cats) {
+      const lo = Number(c.area_code)
+      if (!areas.has(lo)) areas.set(lo, { lo, name: c.area_name, categories: [] })
+      areas.get(lo).categories.push(c)
+      if (c.system || (st?.inbox_category_id ? c.id === st.inbox_category_id : /inbox/i.test(c.name))) inboxCategory = c
+    }
+    jdTree = [...areas.values()].sort((a, b) => a.lo - b.lo)
+  }
+
+  function revealPendingInbox() {
+    if (inboxCount > 0 && inboxCategory) {
+      const lo = Number(inboxCategory.area_code)
+      if (!openAreas.has(lo)) toggleArea(lo)
+    }
+  }
+
+  async function pollStats() {
+    try {
+      st = await fetchStats()
+      inboxCount = st?.inbox_count ?? 0
+      revealPendingInbox()
+    } catch {}
+  }
+
+  async function loadRecentDocuments() {
+    try {
+      const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
+      recentDocs = r?.results || []
+    } catch {}
+  }
+
+  function refreshVisibleData() {
+    pollStats()
+    if (page === 'dashboard') loadRecentDocuments()
+  }
+
+  async function globalDrop(e) {
+    e.preventDefault()
+    dragDepth = 0
+    if (page === 'upload' || !session.user) return   // upload page has its own zone
+    const files = [...(e.dataTransfer?.files || [])]
+    if (!files.length) return
+    notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
+    let ok = 0, dup = 0, fail = 0
+    for (const f of files) {
+      try {
+        const result = await uploadDocument(f)
+        result?.deduplicated ? dup++ : ok++
+      }
+      catch { fail++ }
+    }
+    notify([ok && `${ok} uploaded`, dup && `${dup} duplicate${dup === 1 ? '' : 's'}`, fail && `${fail} failed`].filter(Boolean).join(' · '))
+    refreshVisibleData()
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') { mobileNavOpen = false; uploadOpen = false }
+  }
+
+  $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false })
+  const page = $derived(route.parts[0] || 'dashboard')
+  $effect(() => {
+    if (session.user && page === 'dashboard') loadRecentDocuments()
+  })
+  const nav = [
+    { hash: '#/dashboard',   ico: 'gauge',  label: 'Dashboard',   key: 'dashboard' },
+    { hash: '#/documents',   ico: 'docs',   label: 'Documents',   key: 'documents' },
+    { hash: '#/inbox',       ico: 'inbox',  label: 'Inbox',       key: 'inbox' },
+    { hash: '#/views',       ico: 'eye',    label: 'Views',       key: 'views' },
+    { hash: '#/tasks',       ico: 'tasks',  label: 'Approvals',   key: 'tasks' },
+    { hash: '#/automations', ico: 'zap',    label: 'Automations', key: 'automations' },
+    { hash: '#/trash',       ico: 'trash',  label: 'Trash',       key: 'trash' },
+  ]
+  const PAGES = [
+    ...nav.map(n => ({ href: n.hash, label: n.label, ico: n.ico })),
+    { href: '#/search',   label: 'Search results', ico: 'search' },
+    { href: '#/settings', label: 'Settings', ico: 'settings' },
+  ]
+  const COMMANDS = $derived([
+    { label: 'Upload documents',       ico: 'upload', run: () => (uploadOpen = true) },
+    { label: session.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+      ico: session.theme === 'dark' ? 'sun' : 'moon',
+      run: () => setTheme(session.theme === 'dark' ? 'light' : 'dark') },
+    { label: 'Sign out', ico: 'out', run: signOut },
+  ])
+</script>
+
+<svelte:window onkeydown={onKey}
+  ondragenter={(e) => { if (e.dataTransfer?.types?.includes('Files') && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
+  ondragleave={() => (dragDepth = Math.max(0, dragDepth - 1))}
+  ondragover={(e) => { if (dragDepth > 0) e.preventDefault() }}
+  ondrop={globalDrop} />
+
+{#if dragDepth > 0}
+  <div class="dropveil" aria-hidden="true">
+    <div class="dropveil-inner"><b>Drop to upload</b><span>anywhere works — the pipeline takes it from here</span></div>
+  </div>
+{/if}
+
+{#if !session.checked}
+  <div class="login-wrap"><div class="skel" style="width:220px"></div></div>
+{:else if !session.user}
+  <Login onSignedIn={() => { boot(); go('#/dashboard') }} />
+{:else}
+  <div class="shell">
+    {#if mobileNavOpen}
+      <button class="mobile-nav-veil" aria-label="Close navigation" onclick={() => (mobileNavOpen = false)}></button>
+    {/if}
+    <aside class="sidebar" class:mobile-open={mobileNavOpen}>
+      <a class="brand" href="#/dashboard" aria-label="suchi home">
+        <BrandMark />
+        <b>suchi</b>
+      </a>
+
+      {#if setupNeeded}
+        <aside class="setup-reminder setup-reminder-side" aria-label="Setup wizard">
+          <div class="setup-reminder-head">
+            <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
+            <div>
+              <b>Choose your filing tree</b>
+              <span>Required to finish setup. You can reopen Setup anytime from Settings.</span>
+            </div>
+            <button class="btn sm setup-reminder-close" onclick={dismissSetupReminder}
+                    title="Close setup reminder" aria-label="Close setup reminder">
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+          <a role="button" class="btn primary sm" href="#/setup" onclick={() => (mobileNavOpen = false)}>Continue setup</a>
+        </aside>
+      {/if}
+
+      <nav class="nav">
+        {#each nav as n}
+          <a href={n.hash} class:on={page === n.key} onclick={() => (mobileNavOpen = false)}>
+            <Icon name={n.ico} />{n.label}
+            {#if n.key === 'inbox' && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
+            {#if n.key === 'tasks' && (st?.pending_approvals ?? 0) > 0}<span class="badge">{st.pending_approvals}</span>{/if}
+          </a>
+        {/each}
+        {#if session.user?.role === 'admin'}
+          <a href="#/admin" class:on={page === 'admin'} onclick={() => (mobileNavOpen = false)}>
+            <Icon name="shield" />Admin
+          </a>
+        {/if}
+      </nav>
+
+      {#if hasFilingIndex}
+        <div class="side-head">Index</div>
+        <nav class="jd-tree">
+          {#each jdTree as area (area.lo)}
+            {@const areaPending = inboxCategory && Number(inboxCategory.area_code) === area.lo ? inboxCount : 0}
+            <button class="area-toggle" onclick={() => toggleArea(area.lo)}
+                    aria-expanded={openAreas.has(area.lo)}>
+              <span class="chev" class:open={openAreas.has(area.lo)}><Icon name="chev" size={12} /></span>
+              <span class="code">{area.lo}–{area.lo + 9}</span>
+              <span class="area">{area.name}</span>
+              {#if areaPending > 0 && !openAreas.has(area.lo)}<span class="badge">{areaPending}</span>{/if}
+            </button>
+            {#if openAreas.has(area.lo)}
+              {#each area.categories as c (c.id)}
+                <a href={`#/documents?jd=${c.id}`} class:on={route.query.get('jd') == c.id} onclick={() => (mobileNavOpen = false)}>
+                  <span class="code">{c.code}</span>{c.name}
+                  {#if inboxCategory && c.id === inboxCategory.id && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
+                </a>
+              {/each}
+            {/if}
+          {/each}
+        </nav>
+      {/if}
+
+      <div class="side-user">
+        <a class="side-user-btn" href="#/settings" aria-label="Profile & settings" onclick={() => (mobileNavOpen = false)}>
+          <span class="avatar sm">
+            {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{initials}{/if}
+          </span>
+          <span class="side-user-meta">
+            <b>{session.user?.display_name || session.user?.email || 'Account'}</b>
+            <span>{session.user?.role || 'member'}</span>
+          </span>
+        </a>
+        <button class="side-user-out" onclick={signOut} title="Sign out" aria-label="Sign out">
+          <Icon name="out" size={14} />
+        </button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <button class="btn mobile-menu" onclick={() => (mobileNavOpen = !mobileNavOpen)}
+                aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'} title="Navigation">
+          <Icon name={mobileNavOpen ? 'x' : 'menu'} size={17} />
+        </button>
+        <h1>
+          {#if page === 'doc'}Document
+          {:else if page === 'tasks'}Approvals
+          {:else}{page[0].toUpperCase() + page.slice(1)}{/if}
+        </h1>
+        <Omnibox pages={session.user?.role === 'admin'
+				? [...PAGES, { href: '#/admin', label: 'Admin', ico: 'shield' }]
+          : PAGES} commands={COMMANDS} />
+        <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
+          <Icon name="upload" size={15} /><span>Upload</span>
+        </button>
+        <button class="btn sm" style="padding:8px 11px" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')} title="Switch theme">
+          <Icon name={session.theme === 'dark' ? 'sun' : 'moon'} size={15} />
+        </button>
+      </div>
+
+      {#if setupNeeded && page === 'dashboard'}
+        <aside class="setup-reminder setup-reminder-mobile" aria-label="Setup wizard">
+          <div class="setup-reminder-head">
+            <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
+            <div>
+              <b>Choose your filing tree</b>
+              <span>Required to finish setup. You can reopen Setup anytime from Settings.</span>
+            </div>
+            <button class="btn sm setup-reminder-close" onclick={dismissSetupReminder}
+                    title="Close setup reminder" aria-label="Close setup reminder">
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+          <a role="button" class="btn primary sm" href="#/setup">Continue setup</a>
+        </aside>
+      {/if}
+
+      {#if demoMode && !demoBannerDismissed}
+        <div class="setup-banner">
+          <span><b>You're on the public demo.</b> Resets daily at 00:00 UTC — don't upload confidential documents.</span>
+          <a role="button" class="btn sm" href="#/demo">Tour</a>
+          <button class="btn sm" onclick={dismissDemoBanner}>Dismiss</button>
+        </div>
+      {/if}
+
+      <div class="content">
+        {#if page === 'dashboard'}<Dashboard {st} {inboxCategory} recent={recentDocs} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify }} />
+        {:else if page === 'doc'}<Lazy load={lazyRoutes.detail} props={{ id: route.parts[1], notify }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory }} />
+        {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
+        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
+		{:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin' }} />
+        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify }} />
+        {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify }} />
+        {:else if page === 'admin' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.admin} props={{ notify }} />
+        {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} />
+		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: loadTaxonomy, onDone: () => { setupNeeded = false; go('#/dashboard') } }} />
+        {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />
+        {:else}<div class="empty">Nothing filed under <code>#{route.path}</code>. <a href="#/dashboard">Back to the dashboard</a></div>
+        {/if}
+      </div>
+    </div>
+  </div>
+
+  {#if uploadOpen}
+    <div class="modal-veil" onclick={() => (uploadOpen = false)} role="presentation">
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents" tabindex="-1">
+        <div class="modal-head">
+          <h3>Upload</h3>
+          <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}><Icon name="x" size={13} /></button>
+        </div>
+        <Lazy load={lazyRoutes.uploadBox} props={{ notify }} />
+      </div>
+    </div>
+  {/if}
+
+{/if}
+
+{#if toast}<div class="toast">{toast}</div>{/if}

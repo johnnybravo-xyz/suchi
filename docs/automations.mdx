@@ -1,0 +1,107 @@
+---
+title: "Automations"
+description: "Deterministic filing with typed triggers and ordered metadata actions."
+---
+
+Automations are Suchi's deterministic filing layer. Each automation combines
+one or more event filters with an ordered action list, lives in SQLite, and can
+be managed in the Automations screen or through the API. Human decisions
+belong in [Approvals](/approvals).
+
+## Triggers
+
+| Trigger | Timing |
+| --- | --- |
+| `consumption` | When source context is available, before extraction |
+| `document_added` | After extraction and local archive matching |
+| `document_updated` | After an explicit metadata update |
+
+Triggers can filter by source path, filename, mail rule, tag, correspondent,
+document type, title or content regex, sender, subject, mailbox folder, and
+attachment presence. Multiple filters on one trigger use AND. Multiple
+triggers on an automation use OR.
+
+## Actions
+
+The visual builder exposes title, tag, correspondent, document type,
+Johnny.Decimal category, storage path, owner, and custom-field assignment.
+The JSON view remains available for inspecting the complete automation.
+
+The server exposes the current builder vocabulary and parameter schemas at
+`GET /api/automations/schema`. Actions run in order inside one transaction;
+failure rolls back that automation and is recorded in structured logs. Trigger
+types and glob or regular-expression filters are validated when a rule is
+saved, so malformed rules do not silently sit idle.
+Automations do not re-trigger themselves from their own writes, so dependent
+actions should stay in one automation.
+
+Assignment and removal actions are designed to converge when retried.
+
+Example:
+
+```json
+{
+  "name": "Acme invoices",
+  "order": 20,
+  "enabled": true,
+  "triggers": [
+    {
+      "type": 2,
+      "filter_has_correspondent": 12,
+      "filter_content_matching": "invoice|bill"
+    }
+  ],
+  "actions": [
+    {"type": "assign_document_type", "params": {"document_type_id": 3}},
+    {"type": "assign_tags", "params": {"tag_ids": [7]}},
+    {"type": "assign_title", "params": {"template": "Acme invoice {{date}}"}}
+  ]
+}
+```
+
+Title templates support `{{title}}`, `{{correspondent}}`,
+`{{document_type}}`, and `{{date}}`. Unknown placeholders remain visible
+so a typo does not silently erase text. Use IDs, not display names, in action
+parameters.
+
+## Classification order
+
+For a newly extracted document Suchi runs:
+
+1. local archive matching, when enabled
+2. user automations in configured order
+3. the optional LLM classifier
+
+Archive matching learns from visible, FTS-similar documents. Strong matches
+fill unresolved filing metadata; uncertain matches are offered for human
+review. Its enable switch and review/auto-apply thresholds live with
+classification settings rather than appearing as editable automations.
+
+The optional model has one confidence threshold. Confident validated results
+apply directly, while uncertain results keep current metadata, add
+`needs-review`, and can offer a title suggestion. See
+[LLM classifier](/llm-classifier).
+
+## Preset ownership
+
+Filing-tree presets seed a small starter set of automations. Editing a
+preset-owned automation creates a user-owned copy and disables the original.
+Reapplying the preset does not overwrite the copy. The Automations screen
+keeps preset-owned entries in a collapsed **Built-in automations** list so
+user-created rules remain easy to scan.
+
+## API
+
+Automations use `/api/automations/`; updates replace supplied trigger and
+action arrays wholesale. Writes require administrator access. Complete
+payload and error contracts live in [API](/api).
+
+Every successful metadata mutation is audited. Failures include the document
+and action kind in structured logs without document content.
+
+## Current limits
+
+- Filters are structural plus title/content regexes, not an arbitrary
+  expression language.
+- There are no scheduled triggers or built-in user-notification actions.
+- Custom code cannot run as an automation action. Use a typed plugin instead.

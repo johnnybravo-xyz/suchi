@@ -1,0 +1,96 @@
+---
+title: "Privacy and encryption"
+description: "Outbound connections, stored secrets, logs, deletion, and operator responsibilities."
+---
+
+Suchi stores documents that may contain financial, identity, health, or legal
+information. The stock application has no telemetry, update ping, remote asset,
+cloud OCR, or cloud search dependency.
+
+## Outbound connections
+
+Outbound traffic occurs only when an operator configures or uses an integration:
+
+| Integration | Data sent |
+| --- | --- |
+| OIDC | Discovery, authorization, and token requests to the configured issuer |
+| IMAP intake | Mailbox credentials or OAuth tokens and mailbox reads |
+| Microsoft mailbox sign-in | Device-code and token requests to Microsoft |
+| Hosted LLM classification | Extracted document text and bounded classification context |
+| Operator pre-consume script | Whatever the operator's executable chooses to send |
+
+Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
+do not require that acknowledgement, but they are still network destinations
+chosen by the operator. Suchi logs a redacted inventory of its managed egress
+destinations at boot; `suchi doctor` prints the same inventory without exposing
+credentials. A pre-consume script is not network-isolated and its destinations
+cannot be inventoried by Suchi; constrain process or container egress when
+needed.
+
+## Encryption
+
+Use TLS at the reverse proxy or configure `TLS_CERT_FILE` and `TLS_KEY_FILE`.
+For storage, full-volume encryption is the recommended baseline because it
+covers original blobs, derived files, SQLite metadata, FTS text, thumbnails,
+and generated views together.
+
+Suchi seals these database values with AES-256-GCM before storing them:
+
+- remembered PDF passwords
+- mailbox passwords and OAuth credentials
+- setup-managed LLM API keys
+
+The key is generated at `$DATA_DIR/.decrypt-key` with restrictive permissions.
+Possession of a database copy alone does not reveal those values. Possession of
+both the database and key does.
+
+API tokens and browser session identifiers are stored as digests. Back up the
+entire data directory so the database, blobs, and credential key remain a
+recoverable set.
+
+Browser cookies are marked Secure when `PUBLIC_URL` uses HTTPS. Signing out
+deletes the current session, revokes the current API token when applicable, and
+expires the browser cookie.
+
+Suchi does not provide application-level encryption for original blobs or
+SQLite content in v0.1. Use encrypted storage and encrypted off-host backups
+when the host or backup medium is outside your trust boundary.
+
+## Logs and audit data
+
+Application logs use identifiers, sizes, states, and hashes rather than OCR or
+document text. Audit events record metadata changes and request IDs, not
+document content or plaintext credentials. Health and metrics endpoints expose
+operational state, not archive content.
+
+Unexpected server and LLM-provider failures are sanitized before reaching the
+UI. A mailbox owner or administrator running **Test connection** receives the
+mail provider's connection or authentication diagnostic so they can repair the
+account; it is not exposed to other users. **Preview matches** reads at most 25
+unchecked messages using IMAP envelope metadata and attachment filenames, then
+returns at most five matching samples to the authorized user. Message bodies
+are not downloaded, persisted, or logged by preview. The LLM connection test returns
+validated synthetic classification fields and latency, never raw model output
+or archive text.
+
+## Deletion and retention
+
+Deleting a document first moves it to trash. Blob bytes remain until no live
+reference exists and an operator runs `suchi gc --apply`. Database snapshots
+and external backups retain earlier copies according to their own retention
+policy.
+
+Share links are random, revocable bearer tokens. Revoking a link stops future
+access but cannot retract a file a recipient already downloaded.
+
+## Operator checklist
+
+- Restrict host and `DATA_DIR` access.
+- Use TLS and an accurate `PUBLIC_URL`.
+- Encrypt the volume and off-host backups where required.
+- Protect `.decrypt-key`, API tokens, and provider credentials.
+- Enable only the integrations whose egress you accept.
+- Test restore and deletion procedures before relying on them.
+
+See [Backup and restore](/backup-restore), [Configuration](/config), and
+[Security policy](https://github.com/johnnybravo-xyz/suchi/blob/main/SECURITY.md).

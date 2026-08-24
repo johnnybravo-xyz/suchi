@@ -1,0 +1,104 @@
+---
+title: "Public demo mode"
+description: "Seed and run a disposable, guarded suchi instance."
+---
+
+`suchi demo` seeds a fresh `DATA_DIR` from a versioned corpus manifest.
+`SUCHI_DEMO_MODE=1` adds the runtime controls needed for a disposable public
+showcase.
+
+The mechanism ships in the main binary. Corpus and deployment artifacts are
+maintained separately in
+[`suchi-dms/suchi-demo`](https://github.com/suchi-dms/suchi-demo).
+
+## Seed data
+
+```bash
+PUBLIC_URL=http://localhost:8000 \
+DATA_DIR=./demo-data \
+SUCHI_DEMO_MODE=1 \
+suchi demo
+```
+
+Useful flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--data-dir <path>` | Override `DATA_DIR` for this command. |
+| `--corpus-file <path>` | Seed from a local corpus bundle. |
+| `--corpus-url <url>` | Fetch and seed a remote corpus bundle. |
+| `--corpus-dir <path>` | Seed from an already extracted corpus. |
+| `--fetch-only` | Download and validate without writing rows. |
+
+Without a corpus flag, the command fetches the release tested with this build.
+The hosted image embeds that tarball and seeds only when its dedicated data
+volume has no database. Normal `suchi serve` startup never fetches content.
+Local and remote corpus archives share the same limits: 256 MiB compressed,
+1 GiB extracted, 10,000 entries, and a 4 KiB checksum sidecar.
+
+## Runtime controls
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUCHI_DEMO_MODE` | off | Enables the demo API, SPA banner, guards, and reset ticker. |
+| `SUCHI_DEMO_GLOBAL_RPS` | `5` | Per-IP rate for session mint and upgrade; `0` disables it. |
+| `SUCHI_DEMO_SCRATCH_TTL_MINUTES` | `30` | Lifetime of writable visitor accounts and their uploads. |
+
+Demo mode refuses to start alongside `SUCHI_DEV=1` or OIDC. Use a dedicated
+`DATA_DIR`; demo credentials and retention rules are intentionally unsuitable
+for a normal archive.
+
+## Visitor sessions
+
+`POST /api/demo/session` returns a signed anonymous token for read-only
+browsing. It requires no database write. The SPA stores it in session storage
+and sends it as `X-Suchi-Demo-Token`.
+
+The first mutation receives `demo_upgrade_required`. The SPA calls
+`POST /api/demo/session/upgrade`, receives a regular API token for a scratch
+user, and retries the request. Scratch users can upload and modify their own
+documents but cannot read another visitor's uploads or mutate shared
+configuration and taxonomy. The seeded corpus remains read-only and visible to
+every visitor.
+
+Both session endpoints use a per-IP token bucket. The default is 5 requests
+per second with a burst of 10.
+
+## Shared-state guard
+
+`httpx.DemoReadOnly` permits reads and document-scoped writes. It rejects
+mutations to shared surfaces including:
+
+- admin settings and setup state
+- taxonomy and automations
+- users, groups, ACLs, and tokens
+- storage paths, mail settings, saved views, and share links
+
+Rejected shared writes return `403` with `code: "demo_read_only"`.
+Document handlers still enforce ownership, so the broader document route
+allowance does not let a scratch visitor change the corpus or another
+visitor's upload.
+
+## Expiry and cleanup
+
+Scratch users use the `visitor-*@demo.local` pattern. The reset ticker runs at
+half the configured TTL and deletes expired matching users, their documents,
+and CAS blobs that no other document references. It cannot select ordinary
+users or seeded demo rows. CAS deletion happens after the database transaction;
+an interrupted cleanup leaves an orphan that `suchi gc` can reclaim.
+
+The sibling deployment resets by recreating its dedicated volume and letting
+the image entrypoint seed it again. Suchi does not expose a partial in-place
+reset that could leave corpus blobs or metadata behind.
+
+## Deployment boundaries
+
+- Put the instance behind TLS and an edge request-size limit.
+- Keep `BACKUP_INTERVAL=0` unless demo state is intentionally retained.
+- Keep LLM, OIDC, mail intake, and other outbound integrations disabled.
+- Monitor session mint rates, disk use, and `audit_events`.
+- Treat visitor uploads as untrusted and disposable.
+
+The main repository does not promise a hosted public instance. Availability,
+fixtures, automations, DNS, image version pairing, and reset operations belong
+to the separate demo project.

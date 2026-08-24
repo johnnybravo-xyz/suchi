@@ -1,0 +1,416 @@
+// Full-text search + autocomplete over documents_fts (title + content).
+// Same FTS5 index the UI list already queries — this exposes it via a
+// dedicated JSON endpoint mobile clients can drive directly.
+//
+// Query grammar supports the common FTS5 forms:
+//   - plain words → OR-ed prefix match
+//   - quoted phrase → exact
+//   - column-scoped ("title:receipt")
+//
+// Plain input is reduced to safe tokens. Explicit FTS syntax is passed to
+// SQLite and malformed expressions return a stable 400 response.
+
+package api
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"github.com/johnnybravo-xyz/suchi/core/auth"
+)
+
+// SearchHit is one row in a search response. Preserves the pattern
+// mobile clients already accept from /api/documents/{id} — same field
+// names — with a per-hit `rank` score from FTS5.
+type SearchHit struct {
+	ID        int64   `json:"id"`
+	Title     string  `json:"title"`
+	Snippet   string  `json:"snippet"`
+	Rank      float64 `json:"rank"`
+	CreatedAt int64   `json:"created_at"`
+	MIME      string  `json:"mime_type,omitempty"`
+}
+
+// Ranking constants. BM25F weights favour title matches over body-text
+// matches so a query like "invoice" ranks a doc titled "Invoice 2026"
+// above one that merely mentions the word in its OCR content.
+// Recency decay adds an exponential preference for fresher docs, so a
+// same-relevance new upload outranks a 3-year-old with the same score.
+//
+// Half-life = 30 days. `k=0.5` is modest: the recency term shifts BM25
+// by at most 0.5, which nudges genuinely-close matches without ever
+// flipping a much-more-relevant older doc below a marginal newer one.
+// Callers can disable with `?recency=off` to see raw BM25F ordering.
+const (
+	bm25TitleWeight   = 3.0
+	bm25ContentWeight = 1.0
+	recencyBoost      = 0.5
+	recencyHalfLifeS  = 30 * 24 * 3600 // 30 days in seconds
+)
+
+// Search — GET /api/search/?q=<terms>&page=<n>&page_size=<n>&recency=off.
+// Empty q returns an empty envelope (no error).
+//
+// Ranking: BM25F (title-weighted) blended with an exponential
+// recency-decay boost. `?recency=off` disables the recency term for
+// operators who want raw BM25F ordering.
+//
+// Trashed documents are excluded. Non-admin callers are ACL- or demo-scoped.
+func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
+	principal := auth.FromContext(r.Context())
+	if principal == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+		return
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("q"))
+	if raw == "" {
+		s.writeJSON(w, http.StatusOK,
+			BuildEnvelope(r, 0, PageParams{Page: 1, PageSize: 25}, []SearchHit{}))
+		return
+	}
+	query := sanitizeFTS5(raw)
+
+	// Structured filters. Each optional; combined with AND at the SQL
+	// layer. Missing values → no filter for that facet.
+	//   ?tags__id__in=1,2,3           → docs tagged with ANY of those tags
+	//   ?correspondents__id__in=4,5   → docs linked to ANY of those correspondents
+	//   ?document_type__id=7          → single-value FK filter
+	//   ?jd_category_id=42            → single-value FK filter
+	//
+	// The __in filters use EXISTS subqueries so a doc with N tags
+	// doesn't multiply the outer row set.
+	extra, extraArgs := buildSearchFilters(r)
+
+	// Visibility filter — non-admins only see docs they own or hold an
+	// ACL grant on (directly or via any of their groups). Without this
+	// the FTS snippet would leak content to unauthorized viewers.
+	// Public demo visitors see only the seeded corpus and their own uploads.
+	if principal.Role != "admin" {
+		groups, err := s.principalGroups(r.Context(), principal.UserID)
+		if err != nil {
+			s.serverErr(w, "search.load_groups", err)
+			return
+		}
+		vf, vargs := documentVisibilityWhere(principal, groups)
+		extra += " AND " + vf
+		extraArgs = append(extraArgs, vargs...)
+	}
+
+	// Count first for the envelope; FTS5 COUNT is a scan but cheap
+	// against the doc corpora we target.
+	countArgs := append([]any{query}, extraArgs...)
+	var total int
+	if err := s.DB.Read.QueryRowContext(r.Context(), `
+		SELECT COUNT(*)
+		FROM documents_fts
+		JOIN documents d ON d.id = documents_fts.rowid
+		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL`+extra,
+		countArgs...).Scan(&total); err != nil {
+		if isFTSQueryError(err, raw) {
+			s.writeFTSQueryError(w, "search", raw, err)
+			return
+		}
+		s.serverErr(w, "search.count", err)
+		return
+	}
+
+	p := ParsePageParams(r, 25, 100)
+
+	// Ranking expression. BM25F is bm25() with per-column weights —
+	// SQLite FTS5 accepts them positionally in the same order as the
+	// CREATE VIRTUAL TABLE column list (title, content). Recency term
+	// uses `1/(1 + age/half_life)` — a hyperbolic decay that
+	// approximates exp() without needing SQLite's math extensions
+	// (which modernc/sqlite doesn't always link). Numerically:
+	// half_life-old = 0.5x, 2*half_life = 0.33x, 4*half_life = 0.2x.
+	// Subtracting drops the score (bm25 is negative-is-more-relevant),
+	// so a newer doc gets a *more negative* score and outranks.
+	recencyDisabled := r.URL.Query().Get("recency") == "off"
+	rankExpr := "bm25(documents_fts, ?, ?)"
+	rankArgs := []any{bm25TitleWeight, bm25ContentWeight}
+	if !recencyDisabled {
+		rankExpr = "bm25(documents_fts, ?, ?) - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?))"
+		rankArgs = []any{bm25TitleWeight, bm25ContentWeight, recencyBoost, float64(recencyHalfLifeS)}
+	}
+
+	// Query args (positional, matching the SQL's `?` order):
+	//   1. rankArgs  — for the SELECT's rank column expression
+	//   2. query     — for the MATCH
+	//   3. extraArgs — for the WHERE filter fragments
+	//   4. rankArgs  — for the ORDER BY (same expression, needs its own binds)
+	//   5. PageSize, Offset — for the LIMIT clause
+	queryArgs := append([]any{}, rankArgs...)
+	queryArgs = append(queryArgs, query)
+	queryArgs = append(queryArgs, extraArgs...)
+	queryArgs = append(queryArgs, rankArgs...)
+	queryArgs = append(queryArgs, p.PageSize, p.Offset())
+	rows, err := s.DB.Read.QueryContext(r.Context(), `
+		SELECT d.id, d.title,
+		       snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20),
+		       `+rankExpr+`,
+		       d.created_at,
+		       COALESCE(d.mime_type, '')
+		FROM documents_fts
+		JOIN documents d ON d.id = documents_fts.rowid
+		WHERE documents_fts MATCH ? AND d.trashed_at IS NULL`+extra+`
+		ORDER BY `+rankExpr+`
+		LIMIT ? OFFSET ?
+	`, queryArgs...)
+	if err != nil {
+		if isFTSQueryError(err, raw) {
+			s.writeFTSQueryError(w, "search", raw, err)
+			return
+		}
+		s.serverErr(w, "search.query", err)
+		return
+	}
+	defer rows.Close()
+
+	var out []SearchHit
+	for rows.Next() {
+		var h SearchHit
+		if err := rows.Scan(&h.ID, &h.Title, &h.Snippet, &h.Rank,
+			&h.CreatedAt, &h.MIME); err != nil {
+			s.serverErr(w, "search.scan", err)
+			return
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "search.iterate", err)
+		return
+	}
+	if out == nil {
+		out = []SearchHit{}
+	}
+	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
+}
+
+func isFTSQueryError(err error, raw string) bool {
+	msg := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"fts5: syntax error",
+		"malformed match expression",
+		"unterminated string",
+	} {
+		if strings.Contains(msg, fragment) {
+			return true
+		}
+	}
+	if _, column, ok := strings.Cut(msg, "no such column:"); ok {
+		fields := strings.Fields(strings.TrimSpace(column))
+		return len(fields) > 0 && strings.Contains(strings.ToLower(raw), fields[0]+":")
+	}
+	return false
+}
+
+func (s *Server) writeFTSQueryError(w http.ResponseWriter, operation, raw string, err error) {
+	s.Log.Info("api."+operation+".query_error", "err", err.Error(), "q", raw)
+	s.writeError(w, http.StatusBadRequest, "bad_query", "malformed search query")
+}
+
+// AutocompleteSuggestion is one entry in the autocomplete response.
+// Kind narrows a mobile client's UI ("tag", "correspondent", etc.);
+// value is the token itself. Simple + fast to render.
+type AutocompleteSuggestion struct {
+	Value string `json:"value"`
+	Kind  string `json:"kind"`
+	ID    int64  `json:"id,omitempty"`
+}
+
+// Autocomplete — GET /api/autocomplete/?q=<prefix>&kind=<tag|corr|type>.
+//
+// Aggregates suggestions across tags, correspondents, and
+// document_types by prefix (case-insensitive). Limit 20 total per
+// call (across kinds) — this is a keystroke-triggered endpoint, not
+// pagination territory.
+//
+// `?kind` narrows to one facet ("tag", "correspondent", "document_type").
+// Empty q returns [] without hitting the DB.
+func (s *Server) Autocomplete(w http.ResponseWriter, r *http.Request) {
+	if s.requireAuth(w, r) == nil {
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" || len(q) > 100 {
+		s.writeJSON(w, http.StatusOK,
+			map[string]any{"results": []AutocompleteSuggestion{}})
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	limit := 20
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 50 {
+		limit = v
+	}
+	// LIKE with a trailing wildcard, ESCAPE so literal `%` in user
+	// input can't glob the whole table.
+	needle := escapeLike(q) + "%"
+
+	out := make([]AutocompleteSuggestion, 0, limit)
+	if kind == "" || kind == "tag" {
+		remaining := limit - len(out)
+		if remaining > 0 {
+			out = append(out, s.autoQueryOne(r, "tags", "name", "tag", needle, remaining)...)
+		}
+	}
+	if kind == "" || kind == "correspondent" {
+		remaining := limit - len(out)
+		if remaining > 0 {
+			out = append(out, s.autoQueryOne(r, "correspondents", "name", "correspondent", needle, remaining)...)
+		}
+	}
+	if kind == "" || kind == "document_type" {
+		remaining := limit - len(out)
+		if remaining > 0 {
+			out = append(out, s.autoQueryOne(r, "document_types", "name", "document_type", needle, remaining)...)
+		}
+	}
+	s.writeJSON(w, http.StatusOK,
+		map[string]any{"results": out})
+}
+
+func (s *Server) autoQueryOne(r *http.Request, table, col, kind, needle string, limit int) []AutocompleteSuggestion {
+	if !isSafeTable(table) && table != "tags" {
+		return nil
+	}
+	rows, err := s.DB.Read.QueryContext(r.Context(),
+		`SELECT id, `+col+` FROM `+table+` WHERE `+col+` LIKE ? ESCAPE '\' ORDER BY `+col+` LIMIT ?`,
+		needle, limit)
+	if err != nil {
+		s.Log.Warn("api.autocomplete.query", "table", table, "err", err.Error())
+		return nil
+	}
+	defer rows.Close()
+	var out []AutocompleteSuggestion
+	for rows.Next() {
+		var id int64
+		var val string
+		if err := rows.Scan(&id, &val); err != nil {
+			return out
+		}
+		out = append(out, AutocompleteSuggestion{Value: val, Kind: kind, ID: id})
+	}
+	if err := rows.Err(); err != nil {
+		s.Log.Warn("api.autocomplete.iterate", "table", table, "err", err.Error())
+		return nil
+	}
+	return out
+}
+
+// sanitizeFTS5 turns plain input into a safe prefix query:
+//   - collapse whitespace
+//   - drop control characters
+//   - explicit quotes, NEAR(), and title/content scopes pass through
+//     to SQLite's parser
+//   - otherwise, split on whitespace and OR the terms with a trailing
+//     `*` prefix on each — matches how mobile search bars typically
+//     want to behave (type "acme in", get hits on "acme invoice")
+func sanitizeFTS5(raw string) string {
+	// A quick pass — if it looks like FTS5 already, trust it.
+	lower := strings.ToLower(raw)
+	if strings.ContainsAny(raw, `"`) || strings.Contains(lower, "near(") ||
+		strings.Contains(lower, "title:") || strings.Contains(lower, "content:") {
+		return strings.TrimSpace(raw)
+	}
+	fields := strings.Fields(raw)
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		// Drop leading `-` since our sanitizer doesn't handle NOT.
+		f = strings.TrimLeft(f, "-")
+		if f == "" {
+			continue
+		}
+		// FTS5 word chars — Unicode letters + digits + underscore.
+		// Runewise so non-Latin scripts (Devanagari, Kannada, Tamil,
+		// CJK, Cyrillic, etc.) tokenise correctly; a byte-level
+		// alphanumeric filter would have silently dropped every
+		// Indian-language query into an empty match. Aggressive on
+		// symbols on purpose — the alternative is exposing FTS5
+		// parser errors.
+		var buf strings.Builder
+		buf.Grow(len(f))
+		for _, r := range f {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+				buf.WriteRune(r)
+			}
+		}
+		token := buf.String()
+		if token == "" {
+			continue
+		}
+		parts = append(parts, token+"*")
+	}
+	if len(parts) == 0 {
+		return `""` // safe no-match
+	}
+	return strings.Join(parts, " OR ")
+}
+
+// buildSearchFilters converts DRF-style query params into an extra
+// SQL fragment (`AND ...`) plus its bind args. Every filter is
+// optional; the fragment is empty when no filter params are set.
+//
+// Values go through ParseCSVInts (which drops non-int / zero / negative
+// tokens) or strconv.ParseInt with a positive-only guard, so no user
+// input reaches the SQL as a literal.
+func buildSearchFilters(r *http.Request) (string, []any) {
+	var (
+		frag strings.Builder
+		args []any
+	)
+	if ids := ParseCSVInts(r, "tags__id__in"); len(ids) > 0 {
+		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id = d.id AND dt.tag_id IN (")
+		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString("))")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if ids := ParseCSVInts(r, "correspondents__id__in"); len(ids) > 0 {
+		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_correspondents dc WHERE dc.document_id = d.id AND dc.correspondent_id IN (")
+		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString("))")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if v := r.URL.Query().Get("document_type__id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
+			frag.WriteString(" AND d.document_type_id = ?")
+			args = append(args, id)
+		}
+	}
+	if v := r.URL.Query().Get("jd_category_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
+			frag.WriteString(" AND d.jd_category_id = ?")
+			args = append(args, id)
+		}
+	}
+	// Sensitivity — a mobile "hide confidential" toggle would flip this.
+	if v := r.URL.Query().Get("sensitivity"); v != "" && SensitivityLevels[v] {
+		frag.WriteString(" AND d.sensitivity = ?")
+		args = append(args, v)
+	}
+	// Language — `?lang=de` narrows to docs whose detected/user-set
+	// language(s) include the given code. Storage format is
+	// comma-bracketed (,de,en,) so a LIKE with commas both sides
+	// dodges the `de` vs `deu` false-match trap. Silently ignored
+	// when the value isn't a 2-3-letter ISO code.
+	if v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang"))); v != "" && len(v) >= 2 && len(v) <= 3 {
+		frag.WriteString(" AND d.languages LIKE ?")
+		args = append(args, "%,"+v+",%")
+	}
+	return frag.String(), args
+}
+
+// placeholders returns "?, ?, ?" for n args.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
+}
+
+// escapeLike is shared with task and taxonomy prefix filters.

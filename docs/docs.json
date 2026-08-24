@@ -1,0 +1,97 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "suchi",
+  "description": "Document management as one Go binary. SQLite-first and zero egress by default.",
+  "colors": {
+    "primary": "#0c6b58",
+    "light": "#12a488",
+    "dark": "#075042"
+  },
+  "logo": {
+    "light": "/logo-light.svg",
+    "dark": "/logo-dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["index"]
+          },
+          {
+            "group": "Getting started",
+            "pages": ["getting-started"]
+          },
+          {
+            "group": "Reference",
+            "pages": ["config", "cli", "api", "importer", "formats"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "architecture",
+              "jd",
+              "similar-docs",
+              "llm-classifier",
+              "pipeline-versions",
+              "privacy",
+              "permissions",
+              "automations",
+              "approvals",
+              "plugins",
+              "mcp"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": ["refile", "preconsume", "demo-instance", "backup-restore"]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides",
+              "guides/export-import",
+              "guides/mcp-connect",
+              "guides/mail-intake",
+              "guides/mail-intake-oauth",
+              "guides/mail-mbsync",
+              "guides/external-app"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "spa-architecture",
+              "release-process"
+            ]
+          },
+          {
+            "group": "Alternatives",
+            "pages": ["comparison"]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Home",
+        "href": "https://suchi.page"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/johnnybravo-xyz/suchi"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/johnnybravo-xyz/suchi"
+    }
+  }
+}

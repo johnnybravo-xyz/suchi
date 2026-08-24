@@ -1,0 +1,132 @@
+---
+title: "Plugins"
+description: "Compile-linked authentication, durable-job, and audit extensions."
+---
+
+Suchi plugins are Go packages compiled into a distribution. There is no runtime
+shared-object loader or plugin marketplace inside the server. This keeps the
+runtime dependency graph and executable code visible at build time.
+
+`plugin-api/` contains the small set of interfaces shared by core and plugins:
+
+| Interface | Purpose | Registration |
+| --- | --- | --- |
+| `Authenticator` | Establish a principal for an HTTP request | Add to the authentication chain |
+| `Subscriber` | Consume one or more durable job kinds | `dispatcher.Register` |
+| `AuditSink` | Receive committed audit events | `audit.RegisterSink` |
+
+`Principal`, `Event`, `AuditEvent`, and `BlobRef` are boundary value types.
+Business services, database helpers, and format-specific contracts remain in
+`core` rather than expanding `plugin-api`.
+
+## Subscriber contract
+
+```go
+type Subscriber interface {
+    Kinds() []string
+    Handle(context.Context, Event) error
+}
+```
+
+The dispatcher may retry an event, so `Handle` must be idempotent. Persist a
+deduplication key or use a unique database constraint before applying an
+observable side effect. Respect context cancellation and return failures so the
+job can retry or become visible as dead.
+
+Do network and subprocess work outside a database transaction. Open one short
+write transaction only after the external result is available. State needed
+after restart belongs in the database or event payload, not a package-level
+cache.
+
+Minimal shape:
+
+```go
+type Handler struct {
+    db *db.DB
+}
+
+func (h *Handler) Kinds() []string { return []string{"example:run"} }
+
+func (h *Handler) Handle(ctx context.Context, event pluginapi.Event) error {
+    result, err := performBoundedWork(ctx, event)
+    if err != nil {
+        return err
+    }
+    return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+        _, err := tx.ExecContext(ctx, `
+            INSERT INTO example_results(job_id, value)
+            VALUES (?, ?)
+            ON CONFLICT(job_id) DO NOTHING
+        `, event.Payload["job_id"], result)
+        return err
+    })
+}
+```
+
+Register the handler while assembling the binary:
+
+```go
+dispatcher.Register(example.New(database))
+```
+
+Every produced job kind must have a registered consumer. An unknown kind
+otherwise remains unclaimed in the outbox.
+
+## Authenticator contract
+
+```go
+type Authenticator interface {
+    Name() string
+    Authenticate(*http.Request) (*Principal, error)
+}
+```
+
+Return `(nil, nil)` when the request does not use your authentication scheme so
+the next authenticator can try. Return an error when your scheme is present but
+invalid; silently falling through would allow an authentication downgrade.
+
+An authenticator should resolve the external identity to a Suchi user and
+return only the principal fields needed by authorization and audit. Put roles,
+group membership, and object policy in the authorization layer rather than in
+provider-specific token parsing.
+
+Register more specific authenticators before general local session and token
+handling. See `plugins/oidc` and `plugins/local-auth` for shipped examples.
+
+## Audit sink contract
+
+```go
+type AuditSink interface {
+    Kind() string
+    Emit(context.Context, AuditEvent) error
+}
+```
+
+Register with `audit.RegisterSink`. The local `audit_events` table remains the
+durable record. Sink delivery is best effort and happens after the database
+write, so `Emit` must be fast or hand work to its own bounded buffer. Never add
+document content or plaintext credentials to an audit event.
+
+## Package and build wiring
+
+Shipped plugins live in the root module. An external plugin normally has its
+own `go.mod`, depends on `plugin-api`, and may depend on narrowly required
+`core` packages when it needs database or sandbox helpers. Construct it from a
+private distribution entry point; add its module to `go.work` only while
+developing it beside Suchi.
+
+Rebuild and test the final binary after changing plugins. Dependencies become
+part of that binary, so prefer the standard library and existing helpers.
+
+## Boundaries
+
+- Do not rewrite original CAS blobs. Store a derived blob and update metadata.
+- Use `core/sandbox` for external commands rather than raw `os/exec`.
+- Keep write transactions free of HTTP, model, and subprocess calls.
+- Do not create a plugin interface for behavior owned by one shipped core
+  package.
+- Test subscribers directly with a migrated temporary database; test
+  authenticators with `httptest` requests.
+
+Reference implementations include `plugins/local-auth`, `plugins/oidc`,
+`plugins/llm-classifier`, and `core/pipeline/postingest`.

@@ -1,0 +1,89 @@
+---
+title: "Refile"
+description: "Re-run document-added automations and rebuild rendered paths after filing changes."
+---
+
+Refile applies the current filing configuration to existing live documents. Use
+it after changing a filing-tree preset, document-added automations, or the
+rendered storage-path template.
+
+## What it does
+
+For each document that was live when the run began, Refile can:
+
+1. rerun enabled `document_added` automations against current metadata
+2. enqueue a durable render job for the current storage-path template
+
+It does not rerun extraction, OCR, local archive matching, or the LLM
+classifier. Use a selected [rescan](/pipeline-versions#explicit-rescans) for
+those operations. Trashed documents are skipped.
+
+Automation effects are additive. Removing an automation does not undo tags or
+other metadata it wrote earlier. Built-in assignment actions generally
+converge when repeated.
+
+## Preset changes
+
+Replacing a filing tree after documents exist requires explicit confirmation:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/admin/setup/preset \
+  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"preset_id":"household","refile":true}'
+```
+
+Suchi moves affected documents to the new inbox, installs the tree, then runs
+the refile pass. Without `refile: true`, the request is rejected while filed
+documents exist.
+
+## Admin API
+
+`POST /api/admin/refile` runs both passes for every owner by default:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/admin/refile \
+  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"skip_automations":false,"skip_render":false,"owner_id":0}'
+```
+
+The response reports work attempted, not a transactional archive-wide commit:
+
+```json
+{
+  "docs_scanned": 4231,
+  "automations_applied": 87,
+  "render_enqueued": 4231,
+  "errors": 0,
+  "elapsed_ms": 5240
+}
+```
+
+Failures on one document are counted and logged while the sweep continues.
+Render work runs asynchronously through the durable queue.
+
+## CLI
+
+```sh
+suchi refile
+suchi refile --skip-render       # automations only
+suchi refile --skip-automations  # render only
+suchi refile --owner-id 5
+```
+
+The CLI opens the same database directly. It can run while `suchi serve` is
+active: document IDs are snapshotted at the start, and uploads arriving later
+use the current automations and render configuration through normal ingest.
+
+## Operational notes
+
+- A large run can enqueue many render jobs. Monitor the Approvals screen or
+  `GET /api/tasks/?include=jobs` for failures.
+- Refile only considers the documents live at its start. Newly ingested
+  documents do not need inclusion because they use current configuration.
+- Repeating a render pass is supported; the rendered tree is a rebuildable
+  projection, not the metadata source of truth.
+
+See [Automations](/automations), [Filing trees](/jd), and
+[Pipeline versions](/pipeline-versions).

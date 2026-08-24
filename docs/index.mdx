@@ -1,0 +1,83 @@
+---
+title: "suchi"
+description: "Lightweight, self-hosted document management with guided filing and an integration-friendly API."
+---
+
+<Frame>
+  <img
+    src="/hero-light.svg"
+    alt="suchi filing cabinet mark"
+    className="block dark:hidden"
+    style={{ width: "96px", margin: "0 auto" }}
+  />
+  <img
+    src="/hero-dark.svg"
+    alt="suchi filing cabinet mark"
+    className="hidden dark:block"
+    style={{ width: "96px", margin: "0 auto" }}
+  />
+</Frame>
+
+**Suchi** is a self-hosted document management system delivered as one Go
+binary with SQLite, content-addressed storage, a Svelte interface, and an HTTP
+API. Its name comes from Sanskrit _suchi_: an index, catalog, or list.
+
+<Warning>
+  Suchi is a **v0.1 beta candidate** for evaluation and non-critical archives.
+  Interfaces and storage behavior may still change before 1.0.
+</Warning>
+
+## Product shape
+
+- **Small operational footprint.** No database server, cache, message broker,
+  telemetry service, or remote UI assets. Reproducible measurements live with
+  the benchmark harness rather than being treated as a cross-host guarantee.
+- **Guided filing.** Setup asks what you are organizing, recommends a
+  Johnny.Decimal filing tree, and can install small starter automations.
+- **Broad intake.** Uploads, watched folders, IMAP mailboxes, common office and
+  image formats, OCR, encrypted PDFs, and portable bundles feed one durable
+  pipeline.
+- **Search and workflow.** FTS5 search, saved views, automations, approval
+  reviews, rescans, and rendered filesystem views are built in.
+- **Optional LLM classification.** Local or hosted OpenAI-compatible models can
+  propose metadata after extraction. v0.1 does not provide custom extractors or
+  archive chat.
+- **Controlled sharing and integration.** Users, groups, object ACLs, share
+  links, scoped tokens, OIDC, a documented HTTP API, and MCP use the same
+  application boundary.
+- **Explicit egress.** Stock Suchi has no telemetry or cloud dependency.
+  Configured mail, identity, and hosted LLM integrations are visible
+  to the operator. Operator-provided pre-consume scripts are unrestricted
+  processes and sit outside that inventory.
+
+## Start here
+
+<CardGroup cols={2}>
+  <Card title="Getting started" icon="rocket" href="/getting-started">
+    Install Suchi and complete the first-run wizard.
+  </Card>
+  <Card title="Filing trees" icon="folder-tree" href="/jd">
+    Choose a preset, understand its starters, or import a custom taxonomy.
+  </Card>
+  <Card title="Mail intake" icon="envelope" href="/guides/mail-intake">
+    Connect Outlook, Gmail, Fastmail, iCloud, Zoho, or another IMAP server.
+  </Card>
+  <Card title="LLM classifier" icon="wand-magic-sparkles" href="/llm-classifier">
+    Configure optional local or hosted document classification.
+  </Card>
+  <Card title="Supported formats" icon="file-lines" href="/formats">
+    Check extraction behavior and required host tools.
+  </Card>
+  <Card title="Backup and restore" icon="box-archive" href="/backup-restore">
+    Back up SQLite, blobs, keys, and configuration as one recoverable set.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/config">
+    Review environment, file, and live settings.
+  </Card>
+  <Card title="API" icon="terminal" href="/api">
+    Integrate clients, scripts, and external applications.
+  </Card>
+</CardGroup>
+
+See [Comparison](/comparison) for an honest view of Suchi alongside mature
+alternatives and [Architecture](/architecture) for system boundaries.

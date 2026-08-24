@@ -1,0 +1,117 @@
+---
+title: "Johnny.Decimal filing trees"
+description: "Intent-led presets, starter automations, custom taxonomies, and filing invariants."
+---
+
+Suchi uses [Johnny.Decimal](https://johnnydecimal.com/) areas and categories as
+its filing tree. Every document belongs to a category; uncertain classification
+lands in the preset's inbox rather than disappearing into an unfiled state.
+
+## Presets
+
+The setup wizard recommends a preset from the operator's stated intent:
+
+| Intent | Preset | Focus |
+| --- | --- | --- |
+| Personal | `solo` | Identity, housing, money, tax, health |
+| Household | `household` | Shared admin, finance, health, family activities |
+| Freelance | `freelance` | Clients, projects, invoices, expenses, tax |
+| Small business | `smb_billing` | Customers, vendors, payroll, compliance |
+| Choose myself | none | Compare the complete catalog |
+
+`blank` provides only a system inbox for operators building a tree from
+scratch. It requires explicit confirmation.
+
+Each non-blank preset includes a small set of keyword automations that assign
+likely categories. Setup can install or skip these starters. They are
+examples, not a promise that every document will classify correctly.
+
+Preset-owned automations are identifiable and editable in the Automations
+screen. Editing one creates a user-owned copy and disables the preset original.
+Reapplying the same preset does not overwrite user-owned copies.
+
+## Changing the tree
+
+Changing a filing tree on an archive with categorized documents requires an
+explicit refile choice. Suchi moves documents to the new inbox, applies the new
+tree, reruns filing automations, and updates the rendered filesystem view. Without
+that confirmation, the API refuses the replacement.
+
+Reapplying the current preset can restore its starter rows without replacing
+the tree. Use [Refile](/refile) when automations or paths change independently of the
+preset.
+
+## Custom taxonomy files
+
+The `suchi-taxonomy/v1` format supports TOML and HuML. A file contains:
+
+- preset identity, version, name, inbox code, and optional description
+- areas and their category codes and names
+- optional keywords
+- optional starter automations with symbolic category, tag, document-type, or
+  correspondent references
+
+Manage custom taxonomies from **Admin > Taxonomy** or the CLI:
+
+```sh
+suchi taxonomy validate my-tree.toml
+suchi taxonomy import my-tree.toml --apply
+suchi taxonomy export --format huml > current-tree.huml
+```
+
+Taxonomy import is intentionally absent from the first-run filing-tree picker
+in v0.1; it remains available after setup under Admin and through the CLI.
+Suchi never fetches taxonomy files automatically.
+
+Minimal TOML example:
+
+```toml
+format = "suchi-taxonomy/v1"
+id = "personal-custom"
+version = 1
+name = "Personal custom"
+inbox = 49
+
+[[areas]]
+code = 10
+name = "Life admin"
+
+[[areas.categories]]
+code = 11
+name = "Identity"
+
+[[areas]]
+code = 40
+name = "System"
+
+[[areas.categories]]
+code = 49
+name = "Inbox"
+```
+
+## Invariants
+
+- Every document has a live `jd_category_id`.
+- The configured system inbox cannot be deleted.
+- Category codes are unique.
+- A category code belongs to its area's ten-number range.
+- The rendered tree is generated from database metadata and blob references.
+
+## API
+
+`GET /api/jd/categories/` lists the tree and accepts `q` and `area` filters.
+Rows include area and category labels for grouped pickers. Document responses
+include denormalized category code, category name, and area name. Change a
+document's category with:
+
+```json
+{"jd_category_id": 17}
+```
+
+See [API](/api#get-apijdcategories) for payloads and [Automations](/automations)
+for filing actions.
+
+<Note>
+  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is an independent
+  implementation and is not affiliated with or endorsed by them.
+</Note>

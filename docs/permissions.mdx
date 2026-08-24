@@ -1,0 +1,111 @@
+---
+title: "Permissions"
+description: "Owners, administrators, groups, object ACLs, scopes, and share links."
+---
+
+Every document has an owner. Object ACLs can grant another user or group view,
+change, or delete access without granting administrator privileges.
+
+## Access model
+
+For an authenticated request, Suchi evaluates access in this order:
+
+1. Administrators are allowed.
+2. The object owner is allowed.
+3. User and group grants are combined; the effective bits must include the
+   requested permission.
+4. Otherwise access is denied.
+
+Anonymous callers have no object access except through a valid share link.
+Grants add access and cannot reduce an owner's rights.
+
+| Bit | Permission |
+| ---: | --- |
+| `1` | view |
+| `2` | change |
+| `4` | delete |
+| `3` | view and change |
+| `7` | view, change, and delete |
+
+`object_acls` supports `document`, `tag`, `correspondent`, `document_type`, and
+`storage_path`. Principals are users or groups. Reapplying a grant replaces its
+permission bits.
+
+## Enforcement
+
+Document detail, download, preview, versions, correspondents, custom fields,
+mutation, trash, and restore endpoints enforce object permissions. Document
+lists, FTS search, saved views, statistics, and similar-document retrieval put
+visibility restrictions inside their database queries so hidden rows do not
+leak through counts, snippets, or pagination.
+
+Taxonomy mutation endpoints enforce grants on existing taxonomy objects.
+Taxonomy names remain shared vocabulary for authenticated users, so list and
+autocomplete endpoints do not hide labels by object ACL.
+
+API token scopes and object permissions are separate gates. A token needs the
+endpoint's scope and the principal must be allowed to access the object.
+
+## Groups
+
+Administrators manage users and groups under **Admin**. Group membership makes
+one grant apply to several users.
+
+The equivalent API surface is:
+
+```text
+GET    /api/groups/
+POST   /api/groups/
+GET    /api/groups/{id}
+PATCH  /api/groups/{id}
+DELETE /api/groups/{id}
+GET    /api/groups/{id}/members
+POST   /api/groups/{id}/members
+DELETE /api/groups/{id}/members/{user_id}
+```
+
+A group with active grants cannot be deleted. Revoke those grants first so
+access does not disappear accidentally.
+
+## ACL API
+
+ACL management is currently exposed through the JSON API:
+
+```text
+GET    /api/acls/{kind}/{id}
+PUT    /api/acls/{kind}/{id}
+DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
+```
+
+Administrators can grant user 5 view and change access to document 17 with:
+
+```sh
+curl -X PUT http://localhost:8000/api/acls/document/17 \
+  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"principal_kind":"user","principal_id":5,"perm_bits":3}'
+```
+
+Use `principal_kind: "group"` and a group ID for a group grant. The API is
+idempotent: an identical PUT is a no-op and deleting a missing grant succeeds.
+
+## Share links
+
+Share links are time-bounded anonymous bearer access, not ACL entries. They are
+useful for sending selected documents to someone who has no Suchi account.
+Revoking a share link does not change user or group grants.
+
+Automations can change ownership but v0.1 does not include a general ACL-grant
+automation action. Approval definitions are governed by their own task and
+assignee rules rather than object ACLs.
+
+## Multi-user setup
+
+1. Create users under **Admin** or through `/api/admin/users`.
+2. Create groups for recurring sharing boundaries such as household or finance.
+3. Grant access to individual documents through the ACL API.
+4. Verify list, search, preview, edit, and delete behavior as a non-admin user.
+
+An object with no ACL grants remains visible only to its owner and
+administrators. See [Architecture](/architecture) for the authorization
+invariants and [API](/api) for complete payloads.

@@ -1,0 +1,1676 @@
+---
+title: "HTTP API"
+description: "JSON endpoints under /api/ for clients and integrations."
+---
+
+This guide lists the supported routes and fully describes the contracts with
+non-obvious semantics. Suchi does not currently publish a complete generated
+client schema; integrations should pin the Suchi release they target and use
+the stable JSON fields documented here.
+
+All endpoints under `/api/` return JSON. Everything else is either a
+UI page (HTML), a static asset, or a blob stream. Every request gets
+an `X-Request-Id` header — carry it into bug reports.
+
+## Endpoint index (compact)
+
+| Group                   | Routes                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health / metrics        | `/healthz`, `/readyz`, `/metrics`                                                                                                                                                     |
+| Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `/oidc/login` and `/oidc/callback`                                                                                                               |
+| Auth (JSON)             | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`                                                                          |
+| Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET /api/trash/`                                                                 |
+| Doc extras              | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                                                       |
+| Taxonomy                | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                            |
+| Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
+| Mail intake             | `/api/email-accounts/*` (requires `mailboxes`; admins see all rows, members see their own)                                                                                            |
+| Saved views             | `/api/saved_views/` (POST body `{name, filter_json, display, position, shared}`; GET `?include=shared` also returns other users' shared views)                                         |
+| Activity feed           | `GET /api/events/` (cursor over audit_events; `events:read` scope)                                                                                                                    |
+| Dashboard counters      | `GET /api/stats/` (visibility-scoped one-shot)                                                                                                                                        |
+| Blob mirrors            | `GET /api/documents/{id}/preview`, `GET /api/documents/{id}/download` — same handlers as `/preview/{id}` and `/download/{id}`, mounted on `/api` so headless deploys keep blob access |
+| Automations             | `/api/automations/` CRUD ([guide](/automations))                                                                                                                                      |
+| Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
+| Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
+| Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
+| Admin                   | `/api/admin/users`, `/api/admin/setup/*`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}`                                                |
+
+## Auth
+
+Two credential shapes, both routed through the same auth chain:
+
+- **Cookie** — set by `POST /login` (form-encoded) when OIDC is disabled, or
+  by the OIDC callback when it is enabled. OIDC configuration disables local
+  bootstrap/password login and redirects anonymous browser entry points to the
+  provider. Cookies are HttpOnly + SameSite=Lax; Secure when `PUBLIC_URL` uses
+  HTTPS.
+- **Token** — `Authorization: Token <hex>` header. suchi's canonical
+  scheme for API clients.
+- **Bearer** — `Authorization: Bearer <hex>` also accepted for the
+  same API token, because many HTTP clients default to Bearer.
+  Ambiguity vs OIDC bearer tokens is resolved by shape: suchi tokens
+  are exactly 64 lowercase hex chars; anything else with `Bearer`
+  scheme falls through to the OIDC authenticator.
+
+## Endpoints (selected — see index above for the full list)
+
+### `GET /healthz`
+
+Process-alive. Cheap. Never touches the DB. Suitable for k8s
+liveness probes.
+
+**200** `{"status":"ok"}`
+
+### `GET /readyz`
+
+DB-reachable + schema at the expected `user_version`. Suitable for
+load-balancer readiness gating.
+
+**200** `{"status":"ok","user_version":<int>}`
+**503** `{"status":"db_unreachable"|"schema_stale", ...}`
+
+### `GET /metrics`
+
+Prometheus exposition. **Admin auth required**: anonymous requests return 401
+and authenticated non-admin requests return 403. Per-route request counts and
+job-queue depth are internals a public scraper should not see. Send
+`Authorization: Token <admin-token>` on scrapes.
+
+When `SUCHI_PPROF=1`, `/debug/pprof/*` has the same admin-authenticated
+boundary. Health probes (`/healthz`, `/readyz`) stay public.
+
+Metrics include:
+
+- `suchi_http_requests_total{method,route,status}`
+- `suchi_http_request_duration_seconds{method,route}` (histogram)
+- `suchi_jobs_pending`, `suchi_jobs_running` (gauges)
+- `suchi_jobs_retries_total{kind}`, `suchi_jobs_dead_total{kind}`
+- Standard Go runtime + process collectors.
+
+### `POST /setup`
+
+First-boot admin creation. Consumes the one-time setup token minted
+at boot when no users exist. `409 Conflict` if already initialized.
+
+Request:
+
+```json
+{
+  "token": "<hex>",
+  "email": "you@example.com",
+  "display_name": "You (Admin)",
+  "password": "..."
+}
+```
+
+### `POST /api/login`
+
+Local-password login. Send a JSON body in both cases; the `Accept` header decides
+the response shape:
+
+- `Accept: application/json` plants a session cookie and returns
+  `{"token": "<hex>"}` for an API client.
+- Without that header, the endpoint plants a session cookie and returns 204;
+  this is the SPA path.
+
+The separate `POST /login` browser form accepts URL-encoded fields and redirects
+after setting the same kind of session cookie.
+
+**401** on bad credentials. One error path covers every failure mode.
+
+### `GET /api/whoami`
+
+Returns the authenticated Principal + profile fields. The SPA reads
+`display_name` for the topbar avatar menu and `avatar_url` for the
+image (initials fallback until an avatar is set).
+
+```json
+{
+  "kind": "user|token",
+  "user_id": 1,
+  "email": "you@example.com",
+  "display_name": "You (Admin)",
+  "instance_host": "suchi.example.com",
+  "role": "admin|member",
+  "authn_by": "local-auth|oidc",
+  "avatar_url": "/api/users/1/avatar"
+}
+```
+
+`display_name` + `avatar_url` are omitted when unset. `instance_host` comes
+from the configured `PUBLIC_URL` and lets the SPA preview the identity shown on
+public share pages. **401** if anonymous.
+
+### `POST /api/logout`
+
+Revokes the current browser session and, when the request authenticated with an
+API token, that token. The SPA calls this endpoint before returning to the login
+screen.
+
+**204 No Content** on success. Logging out is idempotent.
+
+### `PATCH /api/users/me`
+
+Update the caller's profile. Body accepts `display_name` only in the
+current pass:
+
+```json
+{ "display_name": "Ritesh S." }
+```
+
+- `display_name` — trimmed, 1–120 chars.
+- `email` — refused with `400 {"code": "email_change_unsupported"}`.
+  Email is the local-auth identifier; changing it needs a password
+  challenge + a dedicated flow (not yet wired).
+- Empty body → `400 {"code": "no_fields"}`.
+
+Successful writes emit an audit event
+(`user.display_name_changed`, old→new) and return the fresh
+`UserSelf` shape.
+
+### `POST /api/users/me/avatar`
+
+Multipart upload with field name `avatar`. Server-side hardening:
+
+- Content-Type sniffed on the first 512 bytes; only `image/png` and
+  `image/jpeg` accepted (a `.png` filename over plain text is
+  refused).
+- Size cap 2 MiB; dimensions cap 2048×2048 (checked via
+  `image.DecodeConfig` before allocating the decoded frame).
+- The image is **decoded and re-encoded as PNG**. EXIF and any
+  post-image polyglot bytes never survive; the on-disk representation
+  is normalized. The original upload bytes are not stored.
+- Blob lands in the CAS; `users.avatar_sha` gets the fresh SHA-256.
+
+Returns the fresh `UserSelf` on success. Emits
+`user.avatar_changed` audit event with old + new sha.
+
+### `GET /api/users/{id}/avatar`
+
+Serves any user's avatar as `image/png`. Immutable ETag
+(`users.avatar_sha`) + `Cache-Control: max-age=31536000, immutable` —
+a new upload rotates the sha and invalidates every cached client
+automatically. Returns `404` if unset.
+
+### `GET /api/documents/`
+
+Paginated ACL-scoped document list. Every SPA list view + mobile
+client walks the archive through this. Scope: `documents:read`.
+
+Query params (all optional):
+
+| Param                                | Effect                                                                                                                      |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `page`, `page_size`                  | Standard DRF paging (default 50, cap 200).                                                                                  |
+| `ordering`                           | `-created_at` (default), `created_at`, `-updated_at`, `updated_at`, `-title`, `title`. Unknown values fall back to default. |
+| `jd_category_id`                     | Exact filing-chip match.                                                                                                    |
+| `sensitivity`                        | One of `public`, `internal`, `confidential`, `restricted`.                                                                  |
+| `document_type__id`                  | Exact document type.                                                                                                        |
+| `tags__id__in`                       | CSV of tag ids; result must carry **every** id (AND).                                                                       |
+| `correspondents__id__in`             | CSV of correspondent ids; result matches **any** (OR).                                                                      |
+| `q`                                  | Full-text search via FTS5 MATCH over title + content.                                                                       |
+| `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
+| `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
+
+Non-admin callers get the same ACL fragment the detail + patch
+endpoints use — a member sees only owned docs plus explicit grants
+(direct or via group). Admins bypass.
+
+**Row shape** (slimmer than `GET /{id}`; no `content` field — request
+detail for that):
+
+```json
+{
+  "count": 42,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 91,
+      "title": "March electricity bill",
+      "mime_type": "application/pdf",
+      "original_size": 16841,
+      "jd_category_id": 31,
+      "jd_category_code": 31,
+      "jd_category_name": "Utilities",
+      "jd_area_name": "Home",
+      "sensitivity": "",
+      "thumb_sha": "ab12...",
+      "created_at": 1746662400,
+      "updated_at": 1746662400,
+      "tags": ["utilities", "bescom"],
+      "correspondents": ["BESCOM"]
+    }
+  ]
+}
+```
+
+`thumb_sha` non-empty means the row has a thumbnail at
+`/api/documents/{id}/thumb` (client can render immediately without
+a HEAD probe).
+
+### `POST /api/documents/`
+
+Multipart upload. Streams the file into the CAS by SHA-256, then commits the
+document row and first durable job together. An unreferenced CAS object left by
+a failed database commit is harmless and is reclaimed by `suchi gc`. MIME is
+sniffed server-side; the multipart Content-Type header is a hint only.
+
+**201 Created** `{ "id": ..., "sha256": "...", "size": ..., "mime_type": ..., "title": "..." }`
+
+Dedup state machine:
+
+- Hash matches an existing **live** doc → records the upload as another
+  source and returns `200 OK`. The document row and CAS blob are reused;
+  extraction and classification do not run again:
+
+  ```json
+  {
+    "id": 4271,
+    "sha256": "...",
+    "size": 16841,
+    "mime_type": "application/pdf",
+    "title": "BESCOM electricity bill Aug 2026",
+    "deduplicated": true
+  }
+  ```
+
+  Repeating the same uploader and filename does not add another source row.
+  A different uploader, filename, mailbox, watched path, or import source does.
+  Dedup remains owner-scoped.
+
+- Hash matches only a **trashed** doc → clears `trashed_at`, returns
+  `200 OK` with `"restored": true`.
+- Fresh hash → new row, `201 Created`.
+
+### `GET /api/documents/{id}`
+
+Full projection of one document: title, extracted content (post-OCR),
+MIME, blobs, JD category, tags (slug list), correspondents. Trashed
+docs are visible with `trashed_at` set so mobile clients can render
+the undelete flow.
+
+**200 OK**
+
+```json
+{
+  "id": 1,
+  "title": "Electricity bill March 2026",
+  "content": "Electricity bill for March 2026...",
+  "original_blob": "sha256hex...",
+  "original_size": 16841,
+  "archive_blob": "sha256hex...",
+  "archive_size": 62114,
+  "mime_type": "application/pdf",
+  "jd_category_id": 17,
+  "jd_category_code": 31,
+  "jd_category_name": "Utilities",
+  "jd_area_name": "Home",
+  "created_at": 1793491200,
+  "added_at": 1793494800,
+  "updated_at": 1793491200,
+  "sources": [
+    {
+      "kind": "mailbox",
+      "label": "Personal Outlook",
+      "detail": "ritesh@example.com / INBOX",
+      "observed_at": 1793494800
+    }
+  ],
+  "tags": ["utilities", "electricity"],
+  "correspondents": [{ "id": 3, "name": "BESCOM", "role": "sender" }],
+  "languages": "de,en",
+  "languages_locked": false
+}
+```
+
+`sources` lists the distinct acquisition places that observed the document,
+oldest first. It is separate from version history and document relationships:
+a version supersedes, a link coexists, and a source only explains how the bytes
+entered the archive. A mailbox source's `label` follows the configured
+mailbox's current display name. Suchi retains the name captured at ingest and
+uses it if that mailbox is later deleted; `detail` remains the observed address
+and folder. `added_at` is when Suchi ingested the document;
+`created_at` and optional `source_mtime` carry upstream dates.
+
+`jd_category_code` / `jd_category_name` / `jd_area_name` are denormalized
+from the JD tree so API clients can render a filing chip
+without a second round-trip. See [`GET /api/jd/categories/`](#get-apijdcategories)
+for the picker enumeration. `jd_area_code` is deliberately omitted —
+the category's own `code` encodes the area (e.g. 31 → area 30–39).
+
+`languages` is a CSV of ISO-639-1 codes detected by the LLM classifier or
+provided through metadata; it is empty when nothing was detected.
+`languages_locked` is `true` once a user
+has set the value via PATCH — future automatic detection won't
+overwrite it. Set `languages` (as CSV string or JSON array) via
+`PATCH /api/documents/{id}` to correct the detection; passing an
+empty value clears both the value and the lock.
+
+Empty lists always serialize as `[]` (never `null`) so mobile clients
+can iterate them safely.
+
+### `GET /api/languages/`
+
+Language facet — distinct codes present across live documents
+with per-code counts. Powers the SPA's search-page language
+filter and the doc-detail chip picker. Ordered by count
+descending, then code ascending.
+
+**200 OK**
+
+```json
+{
+  "languages": [
+    { "code": "en", "count": 812 },
+    { "code": "de", "count": 143 },
+    { "code": "kn", "count": 27 }
+  ]
+}
+```
+
+Filter the search endpoint by language via
+[`GET /api/search/?lang=de`](#get-apisearch). The filter uses a
+comma-bracketed LIKE against `documents.languages` so 2-letter
+codes don't false-match 3-letter neighbours (`de` vs `deu`).
+
+### `GET /api/jd/categories/`
+
+Read-only listing of every category in the current JD tree, with
+`area_code` + `area_name` denormalized onto each row so a picker
+can render a grouped tree in one request. Used by mobile pickers,
+the SPA's file-under dropdown, MCP tools that need to resolve
+`jd_category_id`, and external clients enumerating the taxonomy.
+
+Query params (both optional):
+
+- `?q=<prefix>` — case-insensitive prefix match on the category
+  code OR name. `?q=22` and `?q=tax` both match `22 Tax`.
+- `?area=<code>` — scope to one area's 10-slot range. `?area=20`
+  returns categories 20–29.
+
+DRF envelope. Read-only — creation happens via preset swap
+(`POST /api/admin/setup/preset`), not per-row insert.
+
+**200 OK**
+
+```json
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 4,
+      "code": 22,
+      "name": "Tax",
+      "description": "annual filings",
+      "area_code": 20,
+      "area_name": "Money",
+      "system": false
+    }
+  ]
+}
+```
+
+### `GET /api/events/`
+
+Cursor-based activity feed over the audit log for integrations
+that need a near-term change stream without polling `/api/documents/` and
+`/api/tasks/` on a timer.
+
+Scope: **`events:read`**. Browser sessions have it implicitly; API tokens need
+the exact scope.
+
+Query params (all optional):
+
+- `?since_id=<id>` — return rows with `id > since_id`. First call
+  omits it and receives the newest visible tail in chronological order;
+  every subsequent call passes the previous response's `latest_id`.
+  `audit_events.id` is a strictly-increasing INTEGER PK.
+- `?kinds=a,b,c` — comma-separated allow-list. Unknown kinds
+  silently return nothing (no error), so a client rolling out a new
+  kind name never breaks on an older server.
+- `?limit=<n>` — 1–200, default 100. The server always reads at
+  most 2× this before visibility filtering, so a very restrictive
+  ACL setup with `limit=100` still returns quickly.
+
+**Visibility rules** (enforced server-side, not documentation-only):
+
+- Rows with `object_kind="document"` are filtered through the same
+  ACL fragment the list endpoints apply. A member never sees an event
+  about a doc they can't read.
+- Approval-task rows are visible to the exact `user:<id>` or `role:<role>`
+  assignee. Admins can see the complete approval feed.
+- Other non-document rows are visible only to the user or API token that
+  produced them. Admins can see the complete feed, including operational
+  kinds such as `job.dead` and `backup.written`.
+- Server-lifecycle / janitor kinds (`server.start`, `audit.pruned`,
+  `jobs.reclaimed`) are hidden from the feed for every caller,
+  admin included. They still land in `audit_events` for the durable
+  trail; read the table directly (or a SIEM sink) if you need them.
+
+**Summary rendering.** `summary` is a pre-rendered one-liner
+("Ingested March rent") so clients don't need a title lookup per row.
+The privacy invariant applies — summaries carry titles and kinds
+only, never document content or OCR text.
+
+**Kinds currently emitted** (non-exhaustive; new emit points land in
+new server versions and appear here as they arrive):
+
+| Kind                                      | Fires when                                        |
+| ----------------------------------------- | ------------------------------------------------- |
+| `document.create`                         | upload API landed a new doc row                   |
+| `document.ingested`                       | post-ingest pipeline finished (OCR + render done) |
+| `document.ingest.deduplicated`            | ingest reused an existing owner-scoped document   |
+| `document.ingest.skipped`                 | ingest producer refused the file (oversize etc.)  |
+| `document.update` / `.trash` / `.restore` | metadata mutations                                |
+| `document.correspondent.add` / `.remove`  | correspondent link changed                        |
+| `document.custom_field.set`               | custom field value set                            |
+| `document.decrypt`                        | password-protected PDF unlocked                   |
+| `document.version.create`                 | new version of an existing doc uploaded           |
+| `approval.task_created`                   | approval flow spawned a human-in-the-loop task    |
+| `job.dead` (admin only)                   | outbox job exhausted retries                      |
+| `backup.written` (admin only)             | VACUUM INTO snapshot landed                       |
+
+**200 OK**
+
+```json
+{
+  "results": [
+    {
+      "id": 4182,
+      "kind": "document.ingested",
+      "created_at": 1754441523,
+      "doc_id": 91,
+      "summary": "Ingested March rent"
+    },
+    {
+      "id": 4183,
+      "kind": "job.dead",
+      "created_at": 1754441599,
+      "summary": "A background job gave up after retries"
+    }
+  ],
+  "latest_id": 4183
+}
+```
+
+**Cursor state** is a client concern: save `latest_id` and pass it back as
+`since_id` on the next call. The server intentionally stores no per-consumer
+cursor.
+
+**Feed horizon.** Audit rows are pruned on the backup ticker per
+`AUDIT_RETENTION_DAYS` (default `20`, cap `100`). `since_id` stays
+valid across purges — IDs only grow — but a client that comes back
+after the retention window has elapsed sees a clean empty diff, not
+"the history it missed." This feed is a near-term change stream, not
+a permanent record. Long-horizon consumers should read `audit_events`
+via a SIEM sink instead.
+
+### `GET /api/presets/`
+
+Admin-only preset catalog for the setup wizard. Returns one row per
+built-in preset defined in `core/jd/presets.go`; the wizard renders
+the area list as a tree preview so an operator can see what a preset
+actually contains before applying. No envelope — the population is
+bounded (five presets today).
+
+**200 OK**
+
+```json
+[
+  {
+    "id": "solo",
+    "name": "Solo",
+    "description": "Personal filing, no business.",
+    "areas": [
+      { "code": 10, "name": "Life",  "category_count": 6 },
+      { "code": 20, "name": "Money", "category_count": 4 }
+    ]
+  },
+  ...
+]
+```
+
+`blank: true` marks the empty preset (no areas), which the wizard
+gates behind an explicit confirm checkbox. Categories aren't included
+per row — they'd bloat the payload, and the wizard doesn't render them
+in the picker step. Once a preset is applied via
+`POST /api/admin/setup/preset`, the tree becomes visible through
+`/api/jd/categories/`.
+
+### `GET /api/admin/setup/state`
+
+Admin-only setup progress and onboarding defaults. `intent` is stored locally
+and is used only to recommend a filing tree. `current_preset` is the last tree
+applied; `recommended_preset` is derived from the current intent.
+
+```json
+{
+  "completed": false,
+  "steps": { "welcome": "done" },
+  "intent": "household",
+  "recommended_preset": "household",
+  "current_preset": ""
+}
+```
+
+### `POST /api/admin/setup/intent`
+
+Admin-only. Body: `{"intent":"personal|household|freelance|small_business|custom"}`.
+The response returns the selected intent and mapped preset (`solo`, `household`,
+`freelance`, `smb_billing`, or blank for `custom`). It neither applies a tree
+nor hides setup capabilities.
+
+### `POST /api/admin/taxonomy/import`
+
+Admin-only. Accepts a `suchi-taxonomy/v1` file (HuML or TOML)
+and either previews the diff (dry-run) or applies it.
+
+**Request body**
+
+```json
+{
+  "content": "format = \"suchi-taxonomy/v1\"\n...",
+  "format": "toml",
+  "apply": false,
+  "skip_seeds": false,
+  "remaps": { "12": 15 }
+}
+```
+
+`format` may be `"huml"`, `"toml"`, or empty (auto-detect
+from content). `apply=false` returns the diff without writing —
+call again with `apply=true` after the operator confirms.
+
+`remaps` is only consulted in merge mode. Keys are incoming preset
+category codes (as JSON strings — JSON object keys can't be
+integers). Values are `0` to skip the category, or a fresh code in
+the same decade to import under. Any collision not covered by
+`remaps` fails the apply with `409` and the outstanding collisions
+listed in the response.
+
+**200 OK** (dry-run and successful apply share the same shape)
+
+```json
+{
+  "preset_id": "uk-landlord",
+  "preset_version": 1,
+  "content_sha256": "…",
+  "mode": "replace",
+  "areas_incoming": 3,
+  "categories_incoming": 6,
+  "categories_to_add": [11, 12, 13],
+  "collisions": [],
+  "keywords_to_seed": 14,
+  "automations_to_seed": 2,
+  "applied": true
+}
+```
+
+`mode` is `"replace"` when the archive is empty of filed docs,
+`"merge"` otherwise. Merge apply lands additively per spec §3 (never
+renames or deletes); user-owned copy-on-write forks are never
+touched.
+
+### `GET /api/admin/taxonomy/export`
+
+Admin-only. Round-trips the current tree plus preset-owned keyword
+automations back into a `suchi-taxonomy/v1` file. Format via query:
+`?format=huml|toml` (default: `huml`). Emits
+`Content-Disposition: attachment; filename="taxonomy.<ext>"`.
+
+### `GET /api/stats/`
+
+Dashboard counters in one round-trip. Replaces four `page_size=1` list
+probes plus two task lists — same numbers, one query. Every count is
+visibility-scoped per principal via the same WHERE fragment the list
+endpoints use.
+
+Scope: **`documents:read`**.
+
+**200 OK**
+
+```json
+{
+  "documents_total": 4182,
+  "trash_count": 12,
+  "inbox_count": 3,
+  "inbox_category_id": 49,
+  "pending_approvals": 2,
+  "dead_jobs": 1,
+  "ingested_7d": 57
+}
+```
+
+`inbox_category_id` echoes the current JD inbox pointer so a client
+can navigate to `#/documents?jd=49` without name-matching. `dead_jobs`
+is admin-only (members see `0`); `pending_approvals` scopes to the
+caller's own assignee for members and to the full open queue for
+admins. `ingested_7d` counts live docs created in the last 7 days —
+useful for a sparkline; not a filing-date metric.
+
+### `POST /api/documents/bulk_edit`
+
+Batch metadata mutation across N documents in one write transaction.
+The SPA multi-select actions (bulk refile, bulk trash) call this
+instead of looping N PATCHes.
+
+Scope: `documents:write`. Cap: 500 documents per call.
+
+**Request**
+
+```json
+{
+  "documents": [1, 42, 91],
+  "method": "set_jd_category",
+  "parameters": { "jd_category_id": 22 }
+}
+```
+
+**Methods**
+
+| method                   | parameters                                                                                                                                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `set_correspondent`      | `{correspondent_id}`                                                                                                                                                                                                         |
+| `set_document_type`      | `{document_type_id}`                                                                                                                                                                                                         |
+| `set_storage_path`       | `{storage_path_id}`                                                                                                                                                                                                          |
+| `set_jd_category`        | `{jd_category_id}`                                                                                                                                                                                                           |
+| `set_sensitivity`        | `{sensitivity}` — one of `""`, `public`, `internal`, `confidential`, `restricted`                                                                                                                                            |
+| `add_tag`                | `{tag_id}` — idempotent (INSERT OR IGNORE)                                                                                                                                                                                   |
+| `remove_tag`             | `{tag_id}`                                                                                                                                                                                                                   |
+| `trash` (alias `delete`) | `{}`                                                                                                                                                                                                                         |
+| `restore`                | `{}`                                                                                                                                                                                                                         |
+| `rescan_enqueue`         | `{}` — enqueue one `post-ingest` job per selected doc; the same path `suchi rescan` uses. Content, OCR, LLM classify all re-run. Response `ok: true` per id means "enqueued", not "completed" — the job runs asynchronously. |
+
+**Response**
+
+```json
+{
+  "method": "set_jd_category",
+  "total": 3,
+  "applied": 2,
+  "results": [
+    { "id": 1, "ok": true },
+    { "id": 42, "ok": true },
+    { "id": 91, "ok": false, "code": "forbidden" }
+  ]
+}
+```
+
+**Behavior**
+
+- Every id is ACL-checked per the same rule as `PATCH
+/api/documents/{id}`. Refused ids appear in the array with
+  `ok: false, code: "forbidden"`; the rest still run.
+- One `documents.bulk_edit` audit event per call (with `method` +
+  `total` + `applied`), not per doc — the granular outcome lives in
+  the response array.
+- All authorized ids run inside a single `WriteTx`. A per-id error
+  inside the tx aborts the whole batch by design — partial writes
+  would leave the archive in a half-state.
+
+The `{documents, method, parameters}` body is Suchi's stable bulk-edit
+contract for the SPA and external clients.
+
+### `GET /api/search/`
+
+Full-text search over `documents_fts` (title + content). Scope:
+`documents:read`. Non-admin callers are ACL-scoped identically to
+the list surface — the FTS snippet cannot leak content the caller
+can't see.
+
+**Query params**:
+
+| Param                                                | Purpose                                                                                                                          |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `q`                                                  | The user's raw query string. Empty → empty envelope.                                                                             |
+| `page`, `page_size`                                  | Standard pagination (default 25, max 100).                                                                                       |
+| `recency`                                            | `off` disables the recency-decay term in ranking.                                                                                |
+| `tags__id__in`, `correspondents__id__in`             | CSV IDs; doc matches ANY.                                                                                                        |
+| `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters.                                                                                                            |
+| `lang`                                               | ISO-639-1 code (`de`, `kn`). Narrows to docs whose `languages` includes the code. Silently ignored if not 2–3 lowercase letters. |
+
+**Ranking — BM25F + recency decay.** The ORDER BY is:
+
+```
+bm25(documents_fts, 3.0, 1.0)
+  - 0.5 / (1.0 + (now - created_at) / 30_days)
+```
+
+- `bm25(documents_fts, 3.0, 1.0)` is BM25F with per-column weights
+  passed to SQLite FTS5's built-in `bm25()`. Title matches carry
+  3× the weight of content matches — a doc titled "Invoice 2026"
+  outranks a doc that merely mentions "invoice" deep in body text.
+- The subtracted term is a hyperbolic recency boost with a 30-day
+  half-life. New docs get up to `-0.5` off their raw BM25F score;
+  30-day-old docs get `-0.25`; year-old docs get `-0.04`. The boost
+  is modest by design — it nudges genuinely-close matches without
+  ever flipping a much-more-relevant older doc below a marginal
+  newer one. Set `?recency=off` for raw BM25F ordering.
+- Hyperbolic decay `1/(1 + age/half_life)` is used instead of true
+  `exp()` because modernc/sqlite doesn't always link SQLite's math
+  extensions. The two curves agree closely at the range we care
+  about (0–2 half-lives).
+
+**Response shape** — `{count, next, previous, results}` DRF envelope.
+Each hit carries `{id, title, snippet, rank, created_at, mime_type}`
+where `snippet` wraps the matching span in `<mark>...</mark>`.
+
+### `GET /api/documents/{id}/similar`
+
+"Documents like this" — pure-Go FTS5 more-like-this backed by the
+existing full-text index. Extracts the top-10 tokens from the source
+doc's title + first ~4 KiB of content, runs them as an FTS5
+`MATCH` query, ranks by **BM25F (same title 3× / content 1×
+weights as `/api/search/`)**, and returns the top N. Scope:
+`documents:read`. Visibility-scoped identically to the list surface;
+the source doc is always excluded from its own results. No recency
+term here — "similar" is about content, not freshness.
+
+```json
+{
+  "results": [
+    {
+      "id": 91,
+      "title": "April electricity bill",
+      "mime_type": "application/pdf",
+      "jd_category_id": 31,
+      "created_at": 1746662400,
+      "score": 8.42
+    },
+    {
+      "id": 108,
+      "title": "March electricity bill",
+      "mime_type": "application/pdf",
+      "jd_category_id": 31,
+      "created_at": 1744070400,
+      "score": 7.11
+    }
+  ],
+  "method": "fts",
+  "matched_on_title_only": false
+}
+```
+
+Score is `-bm25(documents_fts)` so higher = more similar (matches
+the wire convention other suchi score fields already use). `?limit=N`
+takes 1–50, default 10.
+
+`matched_on_title_only` is `true` when the source doc's extracted
+content is empty and the pipeline could only match on the title. The
+SPA renders this as a warning pill on the results card because the
+match quality drops sharply without body vocabulary. The endpoint
+also drops rows whose BM25 score falls below the noise floor —
+see [similar documents](/similar-docs) for the full ranking story.
+
+`method` reports the ranking backend (`"fts"`). Semantic embedding retrieval is
+not shipped in v0.1.
+
+### `GET /api/documents/{id}/thumb`
+
+Page-1 thumbnail rendered at ingest time from the archive PDF via
+`pdftoppm -f 1 -l 1 -r 40 -png`. PNG bytes; immutable ETag equal to
+`documents.thumb_sha`. Serve with
+`Cache-Control: private, max-age=31536000, immutable` so the SPA's
+list view can request one URL per doc and every subsequent scroll is
+a 304.
+
+Scope: `documents:read`. ACL rule matches `GET /api/documents/{id}`.
+
+Returns **404** when:
+
+- The doc has no archive PDF (image originals, EPUB, `.msg`, etc.).
+- The instance ran the ingest without `pdftoppm` on PATH; the pipeline
+  logged the skip.
+- The doc was ingested before thumbnails shipped and hasn't been
+  re-rendered.
+
+The SPA treats a 404 as "no thumbnail" and falls back to its
+title-initials placeholder — no error state on the row.
+
+**Sensitivity gate.** Mirrors `/preview/{id}`. When the doc is
+`confidential` or `restricted`, the endpoint returns **202** with a
+small JSON body (`{"sensitivity":"…","gated":true,"reveal_url":"?reveal=1"}`)
+and `Cache-Control: no-store` unless the caller passes `?reveal=1`.
+The SPA passes `reveal=1` on the list view (the caller is already
+authorized to view the doc) and blurs the returned bytes client-side;
+a direct URL scan without `reveal=1` cannot pull the raw first page.
+
+### `DELETE /api/documents/{id}`
+
+Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
+later. `204 No Content` on success, `404` if the doc isn't live.
+
+### `POST /api/documents/{id}/restore`
+
+Clears `trashed_at`. Idempotent — restoring a live doc returns
+`200 OK` with `{"affected": 0}`.
+
+### `GET /api/tasks/`
+
+Read the durable-outbox queue: what Suchi is doing right now, what
+crashed, and what is queued.
+
+Query parameters:
+
+| Param     | Default | Purpose                                                                                                                                                           |
+| --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`   | (unset) | Filter to one state: `pending`, `running`, `done`, `dead`. Default hides `done` because a healthy instance drowns the response in completions.                    |
+| `limit`   | `50`    | Max rows to return. Capped at `200`.                                                                                                                              |
+| `doc_id`  | (unset) | Filter to the jobs for one document.                                                                                                                              |
+| `kind`    | (unset) | Literal prefix filter on the internal job kind.                                                                                                                  |
+| `include` | (both)  | `jobs` returns only the durable outbox; `approvals` returns only human approvals. Default returns both. |
+
+Response shape:
+
+```json
+{
+  "counts": {
+    "pending": 0,
+    "running": 0,
+    "done": 12,
+    "dead": 1,
+    "approvals_open": 2
+  },
+  "results": [
+    {
+      "id": 42,
+      "kind": "post-ingest",
+      "state": "dead",
+      "attempts": 5,
+      "doc_id": 17,
+      "last_error": "ocrmypdf: page 3 timeout",
+      "created_at": 1785779486,
+      "updated_at": 1785779523,
+      "next_run_at": 1785779486
+    }
+  ],
+  "approval_tasks": [
+    {
+      "id": 9,
+      "run_id": 3,
+      "approval_id": 1,
+      "approval_name": "invoice-approval",
+      "doc_id": 42,
+      "doc_title": "August bank statement.pdf",
+      "doc_jd_category_id": 8,
+      "doc_jd_category_code": 24,
+      "doc_jd_category_name": "Receipts",
+      "doc_has_thumbnail": true,
+      "state_key": "review",
+      "assignee": "user:5",
+      "prompt": "Approve invoice?",
+      "choices": ["approve", "reject"],
+      "status": "open",
+      "deadline_at": 1785782400,
+      "created_at": 1785779486
+    }
+  ]
+}
+```
+
+Timestamps are Unix seconds.
+
+`approval_tasks` are scoped to the caller: an entry appears only if the
+task's `assignee` resolves to the current user. Terminal statuses
+(`resolved`, `expired`) are omitted. Resolve one via
+`POST /api/approvals/tasks/{task_id}/resolve`. `approvals_open` in
+`counts` is the true open-inbox size, unaffected by `limit`. Document-bound
+tasks include the current title and filing category plus a thumbnail-presence
+flag so clients can identify the document without fetching its extracted text.
+API tokens need `documents:read` to list tasks and `documents:write` to resolve
+an approval; browser sessions continue to use the signed-in user's access.
+
+Administrators can resolve dead outbox rows directly:
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| POST | `/api/tasks/{id}/retry` | Reset a dead job to pending with a fresh retry budget and wake the dispatcher. |
+| POST | `/api/tasks/{id}/dismiss` | Remove an acknowledged dead job while retaining an audit event. |
+
+Both return `404 not_found` unless the referenced row is currently dead.
+Neither response returns the stored provider error.
+
+Document suggestions from archive matching and the optional LLM classifier
+also appear in `approval_tasks`. Their `approval_name` is `document-change`;
+the `vars` object carries the suggested field, value, confidence, source, and
+supporting document IDs. Suggestions are field-specific: a document can be
+filed under a category while a lower-confidence tag, correspondent, title, or
+document-type suggestion still waits for review.
+
+### Automations surface: `/api/automations/*`
+
+Automations combine triggers, conditions, and actions that fire on document
+events. Full guide at [automations](/automations).
+
+| Method | Path                    | Auth   |
+| ------ | ----------------------- | ------ |
+| GET    | `/api/automations/`     | authed |
+| POST   | `/api/automations/`     | admin  |
+| GET    | `/api/automations/{id}` | authed |
+| PATCH  | `/api/automations/{id}` | admin  |
+| DELETE | `/api/automations/{id}` | admin  |
+
+`PATCH` is sparse — send only the fields you want to change. The SPA's
+Enable/Disable button posts `{"enabled": false}`; a full-edit form posts
+name + order + enabled + triggers + actions. When `triggers` or
+`actions` is present, its value replaces the child rows wholesale (an
+empty array clears them); leave the key out to keep them as-is.
+
+### Approvals surface: `/api/approvals/*`
+
+State-machine engine for human-in-the-loop review chains. Six
+endpoints:
+
+| Method | Path                                     | Auth              |
+| ------ | ---------------------------------------- | ----------------- |
+| POST   | `/api/approvals/definitions`             | admin; tokens need `documents:write`          |
+| GET    | `/api/approvals/definitions/{slug}`      | authed; tokens need `documents:read`           |
+| POST   | `/api/approvals/definitions/{slug}/start` | document change ACL; admin without a document; tokens need `documents:write` |
+| GET    | `/api/approvals/runs/{id}`               | document view ACL; admin without a document; tokens need `documents:read`   |
+| POST   | `/api/approvals/tasks/{task_id}/resolve` | assignee or admin; tokens also need `documents:write` |
+| POST   | `/api/approvals/runs/{id}/cancel`        | admin; tokens need `documents:write`           |
+
+See the [approvals guide](/approvals) for the spec shape, error
+codes, timeout behavior, and a worked invoice-approval example.
+
+### Permissions surface: `/api/groups/*` + `/api/acls/*`
+
+Named user collections plus polymorphic per-object grants. Full
+guide at [permissions](/permissions).
+
+| Method | Path                                                | Auth                               |
+| ------ | --------------------------------------------------- | ---------------------------------- |
+| GET    | `/api/groups/`                                      | authed                             |
+| POST   | `/api/groups/`                                      | admin                              |
+| GET    | `/api/groups/{id}`                                  | authed                             |
+| PATCH  | `/api/groups/{id}`                                  | admin                              |
+| DELETE | `/api/groups/{id}`                                  | admin (refuses while grants exist) |
+| GET    | `/api/groups/{id}/members`                          | authed                             |
+| POST   | `/api/groups/{id}/members`                          | admin                              |
+| DELETE | `/api/groups/{id}/members/{uid}`                    | admin                              |
+| GET    | `/api/acls/{kind}/{id}`                             | authed                             |
+| PUT    | `/api/acls/{kind}/{id}`                             | admin                              |
+| DELETE | `/api/acls/{kind}/{id}?principal_kind&principal_id` | admin                              |
+
+`{kind}` is one of `document|tag|correspondent|document_type|storage_path`.
+Perm bits are `view=1`, `change=2`, `delete=4` — OR them for
+combinations.
+
+### `POST /api/share_links/` — multi-doc bundles
+
+A share link covers 1–200 documents under a single opaque token.
+Bundles work by design: pass an array on POST, and the recipient sees
+one landing page with every doc listed. API tokens need `documents:write`.
+
+**Request**
+
+```json
+{
+  "doc_ids": [42, 91, 108],
+  "label": "Everything for the accountant",
+  "password": "optional",
+  "expires_in_sec": 604800
+}
+```
+
+- `doc_ids`: 1–200; members can share their own documents and administrators
+  can share any live document.
+- `label`: optional human string shown on the landing page, up to 200 bytes.
+- `password`: optional, up to 1024 bytes. It is Argon2id-hashed at rest.
+- `expires_in_sec`: seconds from creation, from `0` (no expiry) through one
+  year.
+
+**Response** carries the fresh `token`, the absolute `public_url` resolved from
+`PUBLIC_URL`, and the `shared_by` + `instance_host` identity recipients see.
+
+**Public paths** (unauthenticated, rate-limited):
+
+- `GET /s/{token}` — content-negotiated on the `Accept` header. A
+  browser (`Accept: text/html`) gets a small landing page with the
+  bundle label, `Shared by <display name> · <instance host>`, a password form
+  when required, and one download row per doc. The identity appears before the
+  password form. If the display name is empty, the page shows only
+  `Shared from <instance host>`. Programmatic callers that accept
+  `application/json` get
+  `{label, shared_by, instance_host, requires_password, docs:[{id, title, mime_type, original_size, download}]}`.
+- `POST /s/{token}` — password-form submission from the HTML landing.
+  Verifies the password server-side and sets a one-hour HttpOnly,
+  SameSite=Strict unlock cookie scoped to `Path=/s/{token}`. The cookie
+  contains a signed proof, not the entered password.
+- `GET /s/{token}/{doc_id}/download` — streaming download of one doc
+  from the bundle. API clients can send the password in
+  `X-Suchi-Share-Password`; browsers use the unlock cookie above. Passwords
+  are not accepted in URLs, where they can leak into history and proxy logs.
+
+List owned links with `GET /api/share_links/` (`documents:read` for API
+tokens). Revoke via `DELETE /api/share_links/{id}` (`documents:write`) — the
+share token becomes 404 immediately (no soft delete).
+
+### `GET /api/documents/{id}/correspondents/`
+
+List the correspondents attached to a document, grouped by role.
+Bank statement = `{sender: HDFC, recipient: account holder}`;
+invoice = `{sender: vendor, recipient: customer}`. Roles are
+`sender`, `recipient`, `cc`, `other`.
+
+Response:
+
+```json
+{
+  "results": [
+    { "id": 42, "name": "HDFC Bank", "role": "sender" },
+    { "id": 87, "name": "Alice Sharma", "role": "recipient" }
+  ]
+}
+```
+
+### `POST /api/documents/{id}/correspondents/`
+
+Add a correspondent. Body: `{"name": "...", "role": "sender|recipient|cc|other"}`.
+Upserts the correspondent by name. `role=sender` also mirrors to
+`documents.correspondent_id` when no primary is set — the single-
+correspondent code paths (list column, existing automations) still find
+the sender.
+
+### `DELETE /api/documents/{id}/correspondents/{cid}/{role}`
+
+Remove one junction row. `204` on success.
+
+### `POST /api/documents/{id}/decrypt`
+
+Attempt to decrypt a document currently in `encryption_state='encrypted'`.
+
+**Body:** `{"password": "...", "remember": true, "label": "opt"}`
+
+- `password` — required. The user password for the PDF.
+- `remember` — optional. When `true`, the password is AEAD-sealed with the
+  server's `.decrypt-key` and stored in `decryption_passwords` for the
+  doc's owner. Future encrypted uploads by the same owner auto-try it.
+- `label` — optional operator-visible tag ("BofA 2024") attached to
+  the stored password.
+
+On success: writes the decrypted bytes into the CAS as
+`decrypted_blob`, flips state to `'decrypted'`, re-enqueues post-ingest.
+Returns `204 No Content`.
+
+Failure modes:
+
+- `400 bad_password` — qpdf rejected the password
+- `400 empty_password` — body missing the field
+- `404 not_found` — no encrypted doc with that id, or not yours
+- `503 decrypt_disabled` — server started without `.decrypt-key`
+
+### `POST /api/documents/decrypt-batch`
+
+Apply one password to N docs. Useful for monthly bank statements where
+every account shares a password.
+
+**Body:**
+
+```json
+{
+  "doc_ids": [42, 43, 44],
+  "password": "hunter2",
+  "remember": true,
+  "label": "Bank X 2026"
+}
+```
+
+**200 OK**
+
+```json
+{
+  "results": [
+    { "doc_id": 42, "ok": true },
+    { "doc_id": 43, "ok": true },
+    { "doc_id": 44, "ok": false, "reason": "bad_password" }
+  ]
+}
+```
+
+`remember=true` fires ONCE per batch and only when at least one doc
+succeeded — no point sealing a password that unlocked nothing.
+
+### `GET /api/documents/pending-decryption`
+
+List of docs awaiting a password. Owner-scoped for non-admins.
+
+**200 OK**
+
+```json
+{
+  "results": [
+    {
+      "id": 42,
+      "title": "statement.pdf",
+      "original_blob": "sha256hex...",
+      "original_size": 65432,
+      "created_at": 1785783054,
+      "mime_type": "application/pdf"
+    }
+  ]
+}
+```
+
+### `PUT /api/documents/{id}/custom_fields/{field}`
+
+Write a typed custom-field value. `{field}` accepts either the numeric
+field id OR the field name.
+
+**Body:** `{"value": <T>}` where `<T>` matches the field's `data_type`:
+
+| data_type            | Accepted `value` shape                                                 |
+| -------------------- | ---------------------------------------------------------------------- |
+| `text`, `url`        | string                                                                 |
+| `number`, `monetary` | number OR numeric string                                               |
+| `date`               | ISO string `"YYYY-MM-DD"` OR unix seconds                              |
+| `bool`               | boolean OR any of `"yes"`/`"no"`/`"1"`/`"0"`                           |
+| `select`             | string; must appear in the field's `extra_data.choices`                |
+| `multi`              | `["a","b"]` OR comma-separated string; each element must be in choices |
+| `documentlink`       | integer document id; refuses trashed/missing targets                   |
+
+`url` validates as `http`/`https`. Empty value ⇒ row is deleted.
+
+Returns `204 No Content` on success, `400` with a `code` on validation
+failure, `403` if the doc isn't yours, `404` if either the doc or the
+field doesn't exist. A successful write enqueues a storage-path
+re-render if the field is referenced in the template.
+
+### `DELETE /api/documents/{id}/custom_fields/{field}`
+
+Remove the value row for one (doc, field) pair. `204` on success.
+
+### `GET /api/documents/{id}/versions/`
+
+Every version in the chain that {id} belongs to, oldest → newest.
+{id} can be any node — root, middle, head. `is_head=true` marks the
+latest non-trashed version.
+
+```json
+{
+  "results": [
+    {
+      "id": 5,
+      "title": "Lease 2024",
+      "sha256": "...",
+      "size": 12345,
+      "mime_type": "application/pdf",
+      "created_at": 1785783054,
+      "is_head": false
+    },
+    {
+      "id": 8,
+      "title": "Lease 2026",
+      "sha256": "...",
+      "size": 12890,
+      "mime_type": "application/pdf",
+      "created_at": 1785783100,
+      "previous_version_id": 5,
+      "is_head": true
+    }
+  ]
+}
+```
+
+### `POST /api/documents/{id}/versions/`
+
+Upload a new version of {id}. Multipart, same shape as
+`POST /api/documents/`. Result row's `previous_version_id` = {id}.
+Default carry-forward: title (if uploader gave a bland filename)
+and JD category (a filed doc's version stays filed).
+
+### `GET /api/tags/`
+
+Read tags with optional parent-filter. Query params:
+
+| Param                          | Purpose                                    |
+| ------------------------------ | ------------------------------------------ |
+| `parent_id=<int>`              | Only children of this tag                  |
+| `parent_id=null`               | Only roots (tags with no parent)           |
+| `page=<n>`, `page_size=<n>`    | Standard pagination (default 100, max 500) |
+| `ordering=[-]name\|created_at` | Sort key; `-` prefix for descending        |
+| (none)                         | Every tag                                  |
+
+Response is the standard **pagination envelope**:
+
+```json
+{
+  "count": 12,
+  "next": "/api/tags/?page=2&ordering=-name",
+  "previous": "",
+  "results": [
+    /* TagView objects */
+  ]
+}
+```
+
+`next`/`previous` are omitted (or empty string) when there's no
+neighbor page. `count` is the total matching the current filter,
+not the length of `results`. Each `TagView` carries `parent_id`
+(nullable) and `child_count` so the UI renders the shallow tree
+without extra round-trips.
+
+### `POST /api/tags/`
+
+Admin-only. Body: `{"name": "...", "slug": "...", "color": "#..."}` —
+only `name` is required. Slug defaults to `slug.Make(name)`;
+color defaults to `#a6cee3` at the DB level. Returns `201 {"id": <int>}`
+on success, `409 conflict` when the name or slug already exists.
+
+### `PATCH /api/tags/{id}`
+
+Admin-only. Body: any subset of `{name, slug, color}`. Empty body
+returns `400 no_fields`. Same `409 conflict` on unique collision.
+Parent moves live on `PATCH /api/tags/{id}/parent` (below) — that
+endpoint owns the cycle-check invariant and is not duplicated here.
+
+### `DELETE /api/tags/{id}`
+
+Admin-only. Returns `204 No Content` on success, `404 not_found`
+otherwise. `document_tags` rows cascade via ON DELETE CASCADE;
+children of the deleted tag re-root via ON DELETE SET NULL (the
+nested-tag migration set that up so a deleted parent doesn't
+orphan its subtree).
+
+### `PATCH /api/tags/{id}/parent`
+
+Admin-only. Body: `{"parent_id": <int-or-null>}`. Rejects
+self-parent (`400 self_parent`) and cycles (`400 cycle`). See
+architecture doc for the "no inheritance in search" call.
+
+## LLM classifier settings
+
+These endpoints are admin-only. The model remains optional; local archive
+matching and automations keep running when it is disabled.
+
+### `GET /api/admin/settings/llm`
+
+Returns masked persisted and runtime state. `has_api_key` is the only key
+signal; plaintext key material is never returned.
+
+```json
+{
+  "enabled": true,
+  "active": true,
+  "endpoint_url": "http://127.0.0.1:11434/v1",
+  "model": "qwen2.5:7b",
+  "egress_ack": false,
+  "has_api_key": false,
+  "confidence_threshold": 0.7,
+  "archive_enabled": true,
+  "archive_auto_threshold": 0.9,
+  "archive_review_threshold": 0.5
+}
+```
+
+### `POST /api/admin/settings/llm`
+
+Body: `{enabled, endpoint_url, model, api_key, clear_api_key, egress_ack,
+confidence_threshold, archive_enabled, archive_auto_threshold,
+archive_review_threshold}`. The model threshold must be between `0.50` and
+`0.95`. The archive review threshold must be `0.50` to `0.90`; the archive
+auto-apply threshold must be `0.55` to `0.95` and greater than review.
+Enabling requires an HTTP(S) endpoint and model. Non-local endpoints require
+`egress_ack=true`. A blank `api_key` preserves any stored key; a non-blank key
+is AEAD-sealed before the settings transaction commits. `clear_api_key=true`
+stores an encrypted empty value for web-managed configuration. A key supplied
+by the config file or environment remains authoritative. It cannot be combined
+with a non-empty key. Disabling preserves the saved endpoint and takes effect
+when that endpoint is not pinned by the config file or environment.
+
+The response reports whether the saved configuration is `active`. The durable
+subscriber is present from boot, so first activation, configuration changes,
+key rotation, disable, and re-enable all apply immediately.
+
+### `POST /api/admin/settings/llm/test`
+
+Accepts the same connection fields without saving them. A blank candidate key
+uses the already-resolved stored or environment key. The server sends fixed
+synthetic text and returns success only when the endpoint responds with a model
+result that passes production validation.
+
+```json
+{
+  "ok": true,
+  "message": "Classifier responded with a valid result.",
+  "result": {
+    "title": "Synthetic utility bill",
+    "correspondent": "Example Energy",
+    "tags": ["utility"],
+    "jd_category": 30,
+    "confidence": 0.86,
+    "language": "en",
+    "elapsed_ms": 218
+  }
+}
+```
+
+The result is the validated synthetic classification only. Raw provider output
+and archive content are never returned.
+
+## Runtime setup settings
+
+`GET /api/admin/settings/preferences` returns the effective backup interval and
+OCR language list. `POST` to the same path with
+`{backup_interval_hours, ocr_languages}` resets the backup scheduler and
+replaces the language snapshot used by future OCR jobs immediately.
+
+`GET /api/admin/settings/ingest` returns the effective watched directory and
+owner. `POST` with `{fs_watch_dir, fs_watch_owner_email}` validates that the
+owner is active, stops the old watcher, and starts the replacement before the
+request succeeds. Both fields are required together.
+
+## Email accounts (multi-mailbox intake)
+
+Multi-mailbox intake lives under `/api/email-accounts`. One
+row per mailbox: per-account owner, provider preset, derived auth mode
+(password or `xoauth2`), sealed secret at rest, per-account folder,
+poll cadence, and one provider-neutral intake policy. Edits
+are picked up by the poller supervisor without a restart. The
+sealed secret (`sealed_secret`) is **never** returned in responses.
+
+Representative account row:
+
+```json
+{
+  "id": 4,
+  "name": "Work Outlook",
+  "owner_id": 2,
+  "provider": "microsoft",
+  "host": "outlook.office365.com",
+  "port": 993,
+  "use_tls": true,
+  "tls_ca_file": "",
+  "folder": "INBOX",
+  "processed_folder": "",
+  "poll_interval_min": 5,
+  "auth_method": "xoauth2",
+  "username": "you@example.com",
+  "oauth_account_id": "you@example.com",
+  "intake_policy": {
+    "rules": [
+      {
+        "selection": "files",
+        "content": "files_only"
+      },
+      {
+        "selection": "matching",
+        "content": "email_and_files",
+        "from": "bills@bescom.co.in, @invoice.stripe.com",
+        "recipients": "receipts@example.com",
+        "subject_terms": "invoice, statement",
+        "attachment_names": "*.pdf, invoice-*"
+      }
+    ]
+  },
+  "sync_since": 1786681757,
+  "enabled": true,
+  "mark_seen": false,
+  "last_uid_seen": 4127,
+  "uidvalidity_seen": 991,
+  "last_sync_at": 1786682662,
+  "last_error": "",
+  "created_at": 1785558600,
+  "updated_at": 1786682662
+}
+```
+
+### `GET /api/email-accounts`
+
+Requires the `mailboxes` capability. Admins see every configured row;
+members see only rows they own. Response:
+
+```json
+{
+  "accounts": [
+    /* Account rows as above */
+  ],
+  "capabilities": {
+    "microsoft_oauth": {
+      "ready": true,
+      "reason": ""
+    }
+  }
+}
+```
+
+`sealed_secret` is stripped from every row.
+Published builds report Microsoft OAuth ready through Suchi's shipped public
+client registration. `ready=false` means the build lacks a usable registration
+or the deployment override is invalid.
+
+### `POST /api/email-accounts`
+
+Requires the `mailboxes` capability. Admins may set `owner_id`;
+members always create rows owned by themselves. Body:
+
+| Field                                    | Purpose                                                                                                                                                                                                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                   | Human label shown in the admin list.                                                                                                                                                                                                                  |
+| `owner_id`                               | User that owns docs ingested from this mailbox.                                                                                                                                                                                                       |
+| `provider`                               | One of `microsoft`, `gmail`, `fastmail`, `icloud`, `proton`, `zoho`, `custom`. Presets auto-fill missing host / port / use_tls and select the supported authentication method.                                                                       |
+| `host`, `port`, `use_tls`, `tls_ca_file` | Connection knobs. Omit when a preset covers them. `tls_ca_file` is an admin-only server filesystem path.                                                                                                                                            |
+| `folder`, `processed_folder`             | Folder to poll and optional destination for completed messages. Empty leaves messages in place.                                                                                                                                                      |
+| `poll_interval_min`                      | Poll cadence from 1 to 1440 minutes. New accounts default to 10.                                                                                                                                                                                     |
+| `username`                               | Mailbox address.                                                                                                                                                                                                                                      |
+| `password`                               | App password for Gmail, Fastmail, iCloud, or Zoho; Bridge password for Proton; password or app password for custom IMAP. Sealed on write. Microsoft mailboxes reject this field.                                                                     |
+| `sealed_secret_b64`                      | Sealed MSAL cache from `/oauth/complete`. Required when creating a Microsoft mailbox after a device-code flow.                                                                                                                                       |
+| `oauth_account_id`                       | Address returned by `/oauth/complete`. Stored alongside the sealed cache.                                                                                                                                                                             |
+| `intake_policy`                          | Typed selection and content policy described below. Rejected messages never enter CAS, SQLite, or Automations.                                                                                                                                         |
+| `sync_since`                             | Unix seconds — initial-sync horizon. Omit to default to `now()` at create (only new mail is pulled). Send `0` to remove the date floor. On `PATCH`, `0` clears the cutoff. The UID cursor still prevents re-import. Watcher maps non-zero values onto IMAP `SEARCH SINCE`. |
+| `enabled`                                | Whether the supervisor should poll this row.                                                                                                                                                                                                          |
+| `mark_seen`                              | Opt in to marking completed messages `\Seen` when no processed folder is configured. Default false.                                                                                                                                                  |
+
+`intake_policy.rules` contains 1 to 20 rules. Each rule has a `selection` of
+`all`, `files`, or `matching` and a `content` of `email_and_files` or
+`files_only`. Rules are ORed: a message is accepted when any rule matches.
+When more than one matching rule selects different content, `email_and_files`
+wins.
+
+A `matching` rule accepts `from`, `recipients` (To or Cc), case-insensitive
+`subject_terms`, and case-insensitive `attachment_names` globs. Populated
+criteria inside that rule are ANDed; comma- or newline-separated values inside
+one criterion are ORed. A matching rule requires at least one criterion. `all`
+and `files` rules do not accept matching criteria. The pre-v0.1 API accepts only
+the `rules` shape; the former flat policy shape is not supported.
+
+Returns `201 {"id": <int>}` on success.
+
+### `GET /api/email-accounts/{id}`
+
+Requires the `mailboxes` capability. Members can read only their own
+rows. `sealed_secret` is omitted.
+
+### `PATCH /api/email-accounts/{id}`
+
+Requires the `mailboxes` capability. Sparse update — send only the
+fields you want to change. Members can update only their own rows, cannot
+reassign ownership, and cannot set `tls_ca_file`. Provider and authentication method are immutable;
+create a new mailbox to change providers. Other fields match `POST`. `password` is
+sealed on write; sending an empty `password` leaves the stored
+credential untouched.
+
+### `DELETE /api/email-accounts/{id}`
+
+Requires the `mailboxes` capability. Members can delete only their own
+rows. Returns `204 No Content`.
+
+### `POST /api/email-accounts/{id}/test`
+
+Requires the `mailboxes` capability. Members can test only their own
+rows. Dials the row's host, attempts auth using the stored credential
+(password or refreshed OAuth token), then logs out.
+Never 500s on a connect-refused — that's user data being wrong,
+not a server bug. The result clears or updates `last_error` while preserving
+`last_sync_at`, because a connection test is not a mailbox poll.
+
+```json
+{ "ok": true,  "message": "Connected — mailbox reachable." }
+{ "ok": false, "message": "login: 535 Authentication failed" }
+```
+
+### `POST /api/email-accounts/{id}/preview`
+
+Requires the `mailboxes` capability. Evaluates the supplied `intake_policy`
+against at most 25 recent messages above the mailbox cursor and returns up to
+five matching envelope samples. Suchi fetches IMAP envelope metadata and
+BODYSTRUCTURE only; message bodies are not downloaded, stored, or logged.
+
+```json
+{
+  "intake_policy": {
+    "rules": [
+      {
+        "selection": "files",
+        "content": "files_only"
+      },
+      {
+        "selection": "matching",
+        "content": "email_and_files",
+        "subject_terms": "distribution advice"
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "inspected": 18,
+  "matched": 4,
+  "samples": [
+    {
+      "from": "billing@example.com",
+      "subject": "August invoice",
+      "attachments": ["invoice-august.pdf"]
+    }
+  ]
+}
+```
+
+### `POST /api/email-accounts/oauth/start`
+
+Requires the `mailboxes` capability. Kicks off a Microsoft device-code
+flow. Published builds use Suchi's shipped registration; a deployment may
+override it through the config file or environment. The server returns
+`503 no_msal` only when no usable registration is available. Body:
+
+```json
+{ "provider": "microsoft" }
+```
+
+Response:
+
+```json
+{
+  "flow_handle": "b6d3…",
+  "user_code": "GK7X-4H9L",
+  "verification_url": "https://microsoft.com/devicelogin",
+  "expires_at": 1786682962,
+  "message": "Open the URL in any browser and enter the code."
+}
+```
+
+The handle remains valid until the returned `expires_at` time, capped at 15
+minutes. Suchi polls Microsoft in the background, independently of ordinary
+HTTP request deadlines.
+
+### `POST /api/email-accounts/oauth/complete`
+
+Requires the `mailboxes` capability. Members can complete the flow
+only against their own `account_id`. Body:
+
+```json
+{ "flow_handle": "b6d3…", "account_id": 4 }
+```
+
+`account_id` is optional. When present, suchi seals the fresh MSAL
+cache into that row's `sealed_secret`, confirms its `xoauth2` auth method,
+and enables the mailbox. While Microsoft is still waiting for the user, the endpoint
+returns `202 Accepted`:
+
+```json
+{ "status": "pending" }
+```
+
+Clients should check again after a short delay. A completed flow returns:
+
+```json
+{
+  "ok": true,
+  "username": "you@example.com",
+  "oauth_account_id": "you@example.com"
+}
+```
+
+When `account_id` is omitted (create flow), suchi returns the
+sealed cache in-band so the caller can attach it to a fresh
+`POST /api/email-accounts`:
+
+```json
+{
+  "ok": true,
+  "username": "you@example.com",
+  "oauth_account_id": "you@example.com",
+  "sealed_secret_b64": "<base64 sealed MSAL cache>"
+}
+```
+
+### `POST /api/email-accounts/{id}/oauth/revoke`
+
+Requires the `mailboxes` capability. Members can revoke only their own
+rows. Clears the stored `sealed_secret`, sets `enabled=false`, and
+keeps `auth_method=xoauth2`. The poller stops touching the row immediately;
+sign in with Microsoft again to replace the credential and re-enable it. Also revoke Microsoft-side at
+[mysignins.microsoft.com](https://mysignins.microsoft.com/security-info)
+to invalidate the refresh token upstream.
+
+### Public-demo surface: `/api/demo/*`
+
+Only meaningful when `SUCHI_DEMO_MODE=1` (see [demo-instance](/demo-instance)).
+Every endpoint below returns `404 {"code":"demo_disabled"}` on a normal
+deployment, so third-party clients can probe safely.
+
+```
+GET  /api/demo/mode              → 200 {"enabled": true|false, "next_reset_unix": <int>?}
+POST /api/demo/session           → 200 {"kind":"anon", "token":"demoanon.<...>", "expires_unix":<int>, "header":"X-Suchi-Demo-Token"}
+POST /api/demo/session/upgrade   → 200 {"kind":"scratch", "token":"<64hex>", "header":"Authorization"}
+```
+
+- `mode` is unauthenticated — the SPA calls it on boot to decide
+  whether to render the demo banner. Cache-safe.
+- `session` is unauthenticated — mints a signed anonymous token
+  scoped read-only. No DB write; the token verifies statelessly via
+  HMAC-SHA256 against a per-instance secret at `$DATA_DIR/.demo-anon-key`.
+  TTL defaults to 15 minutes. Send back in `X-Suchi-Demo-Token` on
+  subsequent calls, or trade up via `session/upgrade`.
+- `session/upgrade` requires a valid anonymous token. Provisions a
+  scratch user `visitor-<hex>@demo.local`, mints a real API token
+  bound to it, returns the token. The SPA then swaps its
+  `X-Suchi-Demo-Token` header for `Authorization: Token <new>`.
+
+Any mutation from an anonymous demo caller returns
+`403 {"code":"demo_upgrade_required"}` except the upgrade endpoint itself.
+Clients that follow the redirect-to-upgrade convention (auto-retry on
+that code) get transparent write access without shipping login UI.
+
+### `GET /oidc/login` / `GET /oidc/callback`
+
+OIDC login flow. Only registered when OIDC is configured. State token
+is a signed cookie; the callback plants a session cookie via
+`local-auth`'s `IssueSession` (one code path mints all cookies).
+
+## Errors
+
+Standard shape when a handler returns JSON:
+
+```json
+{ "error": "human message", "code": "snake_case_kind" }
+```
+
+`code` is programmatically stable across releases; `error` is not.
+Responses with status `500` or `502` use generic messages. Provider, database,
+filesystem, and cryptographic details stay in the server log with the request
+ID instead of crossing the API boundary.
