@@ -115,7 +115,9 @@ scan_split_dpi = 150
 # ingest_passwords_file = "/etc/suchi/decrypt-passwords.txt"
 
 # --------------------------------------------------------------------
-# OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
+# OIDC (all-or-nothing group; empty issuer disables OIDC entirely).
+# When enabled, OIDC owns browser sign-in and local password login/bootstrap
+# are disabled. Existing sessions and scoped Suchi API tokens remain valid.
 # --------------------------------------------------------------------
 
 # admin_email = "you@example.com"        # granted admin on first login

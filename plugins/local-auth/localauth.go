@@ -58,9 +58,22 @@ type Plugin struct {
 	setupTokenIssuedAt time.Time
 }
 
-// New wires the plugin. If no users exist yet, a setup token is generated
-// and logged at Warn so an operator following the log can copy-paste it.
+// Options controls local-auth boot behavior without changing its session and
+// API-token responsibilities.
+type Options struct {
+	// DisableSetup prevents the local password bootstrap path from being
+	// minted. OIDC deployments use their configured admin identity instead.
+	DisableSetup bool
+}
+
+// New wires the plugin with local password bootstrap enabled.
 func New(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode bool) (*Plugin, error) {
+	return NewWithOptions(ctx, d, log, cookieSecure, demoMode, Options{})
+}
+
+// NewWithOptions wires the plugin. If no users exist yet and setup is enabled,
+// a setup token is generated and logged for the operator.
+func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode bool, opts Options) (*Plugin, error) {
 	p := &Plugin{
 		db: d, log: log.With("plugin", Name),
 		cookieSecure: cookieSecure, demoMode: demoMode,
@@ -69,7 +82,7 @@ func New(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecure, demoMode
 	if err != nil {
 		return nil, err
 	}
-	if empty {
+	if empty && !opts.DisableSetup {
 		if err := p.mintSetupToken(); err != nil {
 			return nil, err
 		}

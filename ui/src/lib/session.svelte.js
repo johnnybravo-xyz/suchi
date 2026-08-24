@@ -1,4 +1,5 @@
 import { logout, whoami, setToken, setDemoAnonToken } from './api.js'
+import { getLoginPath, usesExternalLogin } from './login.js'
 
 export const session = $state({
   user: null,        // { user_id, email, role, ... } | null
@@ -22,7 +23,11 @@ export async function signOut() {
   setToken(null)
   setDemoAnonToken(null)
   session.user = null
-  location.hash = '#/login'
+  if (usesExternalLogin()) {
+    location.assign(getLoginPath())
+  } else {
+    location.hash = '#/login'
+  }
 }
 
 export function initTheme() {
