@@ -102,6 +102,9 @@ async function mockAPI(page, options = {}) {
       count: options.documents?.length || 0,
       results: options.documents || [],
     }
+    else if (path === '/api/saved_views/') body = {
+      results: options.savedViews || [],
+    }
     else if (path === '/api/email-accounts') body = {
       accounts: [
         {
@@ -294,7 +297,51 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
     await page.getByRole('button', { name: 'Open navigation' }).click()
   }
   await page.locator('.area-toggle').filter({ hasText: 'Life admin' }).click()
-  await expect(page.locator('a[href="#/documents?jd=11"]')).toContainText('Identity')
+  await expect(page.locator('a[href="#/documents?jd_category_id=11"]')).toContainText('Identity')
+})
+
+test('opens dashboard views with canonical document filters', async ({ page }) => {
+  const filters = {
+    q: 'distribution advice',
+    tags__id__in: '2',
+    correspondents__id__in: '3',
+    document_type__id: '4',
+    jd_category_id: '6',
+    sensitivity: 'confidential',
+    ordering: 'title',
+  }
+  await mockAPI(page, {
+    savedViews: [{
+      id: 8,
+      name: '22 Investments',
+      filter_json: JSON.stringify(filters),
+      position: 0,
+      shared: false,
+    }],
+  })
+  await page.goto('/#/dashboard')
+
+  const view = page.locator('.views a.view').filter({ hasText: '22 Investments' })
+  await expect(view).toHaveCount(1)
+  const href = await view.getAttribute('href')
+  const linkParams = new URLSearchParams(href.split('?')[1])
+  for (const [key, value] of Object.entries(filters)) {
+    expect(linkParams.get(key)).toBe(value)
+  }
+  expect(linkParams.has('jd')).toBe(false)
+
+  const documentRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' &&
+      url.searchParams.get('jd_category_id') === filters.jd_category_id &&
+      url.searchParams.get('q') === filters.q
+  })
+  await view.click()
+  const requestParams = new URL((await documentRequest).url()).searchParams
+  for (const [key, value] of Object.entries(filters)) {
+    expect(requestParams.get(key)).toBe(value)
+  }
+  await expect(page).toHaveURL(/#\/documents\?.*jd_category_id=6/)
 })
 
 test('offers Microsoft sign-in without exposing registration controls', async ({ page }) => {

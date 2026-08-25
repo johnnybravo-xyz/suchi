@@ -312,7 +312,7 @@
             </button>
             {#if openAreas.has(area.lo)}
               {#each area.categories as c (c.id)}
-                <a href={`#/documents?jd=${c.id}`} class:on={route.query.get('jd') == c.id} onclick={() => (mobileNavOpen = false)}>
+                <a href={`#/documents?jd_category_id=${c.id}`} class:on={route.query.get('jd_category_id') == c.id} onclick={() => (mobileNavOpen = false)}>
                   <span class="code">{c.code}</span>{c.name}
                   {#if inboxCategory && c.id === inboxCategory.id && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
                 </a>

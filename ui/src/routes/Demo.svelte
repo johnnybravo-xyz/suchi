@@ -14,7 +14,7 @@
       icon: 'search' },
     { title: 'Browse the Johnny Decimal tree',
       hint: 'Jump to Finance & Tax (JD 22) and see the real filing structure.',
-      href: '#/documents?jd=22',
+      href: '#/documents?jd_category_id=22',
       icon: 'docs' },
     { title: 'Similar documents',
       hint: 'Click any bill; the "Similar" strip clusters the rest of its household.',

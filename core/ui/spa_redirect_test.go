@@ -41,14 +41,14 @@ func TestRootRedirectPreservesQueryString(t *testing.T) {
 	s.Register(mux)
 
 	rec := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/?jd=42&q=insurance", nil)
+	r := httptest.NewRequest("GET", "/?jd_category_id=42&q=insurance", nil)
 	mux.ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status=%d, want 302", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/app/?jd=42&q=insurance" {
-		t.Errorf("Location = %q, want /app/?jd=42&q=insurance", got)
+	if got := rec.Header().Get("Location"); got != "/app/?jd_category_id=42&q=insurance" {
+		t.Errorf("Location = %q, want /app/?jd_category_id=42&q=insurance", got)
 	}
 }
 

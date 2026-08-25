@@ -14,17 +14,31 @@
   let loading = $state(true)
   let err = $state('')
   let tags = $state([]), correspondents = $state([]), types = $state([])
-  let fTag = $state(''), fCorr = $state(''), fType = $state(''), fSens = $state('')
-  let ordering = $state('-created_at')
+  const fQuery = $derived(route.query.get('q') || '')
+  const fTag = $derived(route.query.get('tags__id__in') || '')
+  const fCorr = $derived(route.query.get('correspondents__id__in') || '')
+  const fType = $derived(route.query.get('document_type__id') || '')
+  const fSens = $derived(route.query.get('sensitivity') || '')
+  const ordering = $derived(route.query.get('ordering') || '-created_at')
   let dateFrom = $state('')   // yyyy-mm-dd → created_at__gte (unix)
   let dateTo = $state('')
   let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
   const isInbox = $derived(inbox != null)
-  const jdFilter = $derived(route.query.get('jd') || '')
+  const jdFilter = $derived(route.query.get('jd_category_id') || '')
   // Keep thumbnail reveal behavior aligned with core/api.IsHighSensitivity.
   const isHigh = (s) => s === 'confidential' || s === 'restricted'
+
+  function setRouteFilter(key, value) {
+    const params = new URLSearchParams(route.query)
+    const normalized = String(value ?? '').trim()
+    if (normalized) params.set(key, normalized)
+    else params.delete(key)
+    page = 1
+    const query = params.toString()
+    location.hash = `#/documents${query ? `?${query}` : ''}`
+  }
 
   async function loadFacets() {
     try {
@@ -39,6 +53,7 @@
     try {
       const params = {
         page, page_size: pageSize, ordering,
+        q: fQuery,
         tags__id__in: fTag, correspondents__id__in: fCorr,
         document_type__id: fType, sensitivity: fSens,
         jd_category_id: isInbox ? inbox?.id : jdFilter,
@@ -201,7 +216,7 @@
 
   loadFacets()
   loadJDCats()
-  $effect(() => { page; ordering; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
+  $effect(() => { page; ordering; fQuery; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
   $effect(() => {
     const fn = () => { if (document.visibilityState === 'visible') load({ background: true }) }
     document.addEventListener('visibilitychange', fn)
@@ -249,19 +264,23 @@
 
 {#if !isInbox}
   <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select, input[type="date"]')) e.target.blur() }}>
-    <select class="input" bind:value={fTag}>
+    <input class="input" type="search" value={fQuery} placeholder="Search text"
+           onchange={(e) => setRouteFilter('q', e.target.value)}
+           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setRouteFilter('q', e.currentTarget.value) } }}
+           style="min-width:150px" />
+    <select class="input" value={fTag} onchange={(e) => setRouteFilter('tags__id__in', e.target.value)}>
       <option value="">All tags</option>
       {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
     </select>
-    <select class="input" bind:value={fCorr}>
+    <select class="input" value={fCorr} onchange={(e) => setRouteFilter('correspondents__id__in', e.target.value)}>
       <option value="">All correspondents</option>
       {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
     </select>
-    <select class="input" bind:value={fType}>
+    <select class="input" value={fType} onchange={(e) => setRouteFilter('document_type__id', e.target.value)}>
       <option value="">All types</option>
       {#each types as t}<option value={t.id}>{t.name}</option>{/each}
     </select>
-    <select class="input" bind:value={fSens}>
+    <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
       <option value="">Any sensitivity</option>
       <option value="public">Public</option>
       <option value="internal">Internal</option>
@@ -279,7 +298,7 @@
     </span>
     <button class="btn sm" onclick={load} title="Refresh"><Icon name="chev" size={13} /></button>
     <a class="btn sm" href="#/trash" title="Trash"><Icon name="trash" size={13} /></a>
-    <select class="input" bind:value={ordering}>
+    <select class="input" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
       <option value="-created_at">Newest first</option>
       <option value="created_at">Oldest first</option>
       <option value="title">Title A–Z</option>

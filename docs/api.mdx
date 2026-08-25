@@ -644,7 +644,7 @@ Scope: **`documents:read`**.
 ```
 
 `inbox_category_id` echoes the current JD inbox pointer so a client
-can navigate to `#/documents?jd=49` without name-matching. `dead_jobs`
+can navigate to `#/documents?jd_category_id=49` without name-matching. `dead_jobs`
 is admin-only (members see `0`); `pending_approvals` scopes to the
 caller's own assignee for members and to the full open queue for
 admins. `ingested_7d` counts live docs created in the last 7 days —
