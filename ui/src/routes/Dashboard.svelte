@@ -1,6 +1,6 @@
 <script>
   import { listDocuments, listSavedViews } from '../lib/api.js'
-  import { fmtDate } from '../lib/format.js'
+  import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
   let { st, inboxCategory, recent } = $props()
@@ -82,7 +82,7 @@
       <div class="index">
         {#each recent as d (d.id)}
           <a class="irow" href={`#/doc/${d.id}`}>
-            <span class="dot accent"></span>
+            <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
             {#if d.jd_category_code}<span class="chip" title={d.jd_category_name}>{d.jd_category_code}</span>{/if}
             <span class="title grow">{d.title || `Document #${d.id}`}</span>
             <span class="sub">{fmtDate(d.created_at)}</span>
