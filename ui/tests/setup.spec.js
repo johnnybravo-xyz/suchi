@@ -11,7 +11,10 @@ const presets = [
 async function mockAPI(page, options = {}) {
   let taxonomyApplied = false
   await page.route('**/preview/**', async route => {
-    await route.fulfill({ contentType: 'text/html', body: '<p>Document preview</p>' })
+    await route.fulfill({
+      contentType: 'text/html',
+      body: options.previewHTML || '<p>Document preview</p>',
+    })
   })
   await page.route('**/api/**', async route => {
     const request = route.request()
@@ -523,6 +526,11 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await page.locator('.area-toggle').filter({ hasText: 'Life admin' }).click()
   await expect(page.locator('a[href="#/documents?jd=11"]')).toContainText('Identity')
   await expect(page.locator('.jd-tree a[href="#/documents?jd=49"]')).toHaveCount(0)
+
+  await page.goto('/#/settings')
+  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
+  await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
 })
 
 test('uses the demo category database id in document links', async ({ page }) => {
@@ -1003,11 +1011,10 @@ test('keeps list rows stable when a thumbnail is missing', async ({ page }) => {
 })
 
 test('previews archived email bodies inline', async ({ page }) => {
-  await page.route('**/preview/42', route => route.fulfill({
-    contentType: 'text/html',
-    body: '<!doctype html><html><body><h1>Distribution advice</h1></body></html>',
-  }))
-  await mockAPI(page, { documentMime: 'message/rfc822' })
+  await mockAPI(page, {
+    documentMime: 'message/rfc822',
+    previewHTML: '<!doctype html><html><body><h1>Distribution advice</h1></body></html>',
+  })
   await page.goto('/#/doc/42')
 
   const preview = page.getByTitle('Document preview')
@@ -1016,7 +1023,7 @@ test('previews archived email bodies inline', async ({ page }) => {
   await expect(preview.contentFrame().getByRole('heading', { name: 'Distribution advice' })).toBeVisible()
 })
 
-test('names scoped tokens and groups metadata reviews by document', async ({ page }) => {
+test('names scoped tokens and account vault records', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/settings')
 
@@ -1025,8 +1032,6 @@ test('names scoped tokens and groups metadata reviews by document', async ({ pag
   await expect(page.getByText('Archive search')).toBeVisible()
   await expect(page.getByTitle('documents:read')).toHaveText('Read only')
   await expect(page.getByText('Authorization: Token <token>', { exact: true })).toBeVisible()
-  await page.getByRole('heading', { name: 'Mailboxes' }).scrollIntoViewIfNeeded()
-  await expect(page.getByText('Receipts and statements from Gmail')).toBeVisible()
   await page.getByRole('heading', { name: 'Saved decryption passwords' }).scrollIntoViewIfNeeded()
   await expect(page.getByText('Axis Bank Atlas Credit Card Statement ending 0194.pdf')).toBeVisible()
   await page.getByLabel('Token name').fill('Readonly tablet')
@@ -1038,6 +1043,10 @@ test('names scoped tokens and groups metadata reviews by document', async ({ pag
     name: 'Readonly tablet', scopes: 'documents:read,documents:write',
   })
   await expect(page.locator('#minted')).toHaveValue('new-token-secret')
+})
+
+test('groups metadata reviews by document', async ({ page }) => {
+  await mockAPI(page)
 
   await page.goto('/#/tasks')
   await expect(page.getByRole('link', { name: 'HDFC receipt.pdf', exact: true })).toBeVisible()
@@ -1075,7 +1084,7 @@ test('shows affected document titles in rescan details', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
-test('persists switches and edits mailbox intake on mobile', async ({ page }) => {
+test('persists user and automation switches', async ({ page }) => {
   await mockAPI(page, {
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
@@ -1098,10 +1107,17 @@ test('persists switches and edits mailbox intake on mobile', async ({ page }) =>
   await automationSwitch.click()
   expect((await automationPatch).postDataJSON()).toEqual({ enabled: false })
   await expect(automationSwitch).toHaveAttribute('aria-checked', 'false')
+})
+
+test('edits mailbox intake on a narrow screen', async ({ page }) => {
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
 
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto('/#/settings')
-  await page.getByRole('heading', { name: 'Mailboxes' }).scrollIntoViewIfNeeded()
+  await page.goto('/#/settings?tab=archive&section=mail')
+  await expect(page.getByRole('heading', { name: 'Email intake' })).toBeVisible()
   await page.getByRole('button', { name: 'Edit' }).nth(2).click()
   const mailboxSwitch = page.getByRole('switch', { name: 'Poll this mailbox' })
   await expect(mailboxSwitch).toHaveAttribute('aria-checked', 'true')
