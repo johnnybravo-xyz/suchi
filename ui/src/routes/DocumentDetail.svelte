@@ -11,6 +11,7 @@
 
   let doc = $state(null)
   let versions = $state([])
+  let loading = $state(true)
   let err = $state('')
   let revealed = $state(false)
   let editingTitle = $state(false)
@@ -25,6 +26,7 @@
   let accessOpen = $state(false)
   let trashOpen = $state(false)
   let trashBusy = $state(false)
+  let loadVersion = 0
 
   const ACCESS_LEVELS = [
     ['1', 'View'],
@@ -61,23 +63,42 @@
   })
 
   async function load() {
+    const version = ++loadVersion
+    const documentID = id
+    loading = true
     err = ''
+    doc = null
+    versions = []
+    similar = null
     access = null
     canManageAccess = false
     try {
-      doc = await getDocument(id)
-      titleDraft = doc.title
-      documentVersions(id).then(v => (versions = v?.results || v || [])).catch(() => {})
-      similarDocs(id).then(r => (similar = r)).catch(() => (similar = null))
-      loadAccess()
-    } catch (ex) { err = ex.message || 'Could not load this document.' }
+      const loaded = await getDocument(documentID)
+      if (version !== loadVersion) return
+      doc = loaded
+      titleDraft = loaded.title
+      documentVersions(documentID)
+        .then((result) => { if (version === loadVersion) versions = result?.results || result || [] })
+        .catch(() => {})
+      similarDocs(documentID)
+        .then((result) => { if (version === loadVersion) similar = result })
+        .catch(() => { if (version === loadVersion) similar = null })
+      loadAccess(documentID, version)
+    } catch (ex) {
+      if (version === loadVersion) err = ex.message || 'Could not load this document.'
+    } finally {
+      if (version === loadVersion) loading = false
+    }
   }
 
-  async function loadAccess() {
+  async function loadAccess(documentID = id, version = loadVersion) {
     try {
-      access = await listGrants('document', id)
+      const result = await listGrants('document', documentID)
+      if (version !== loadVersion) return
+      access = result
       canManageAccess = true
     } catch (ex) {
+      if (version !== loadVersion) return
       access = null
       canManageAccess = false
       if (ex.status !== 403) notify?.(ex.message || 'Could not load document access')
@@ -242,28 +263,39 @@
 <div class="toolbar">
   <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
   <span class="spacer"></span>
-  {#if highSensitivity}
-    <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
-         (inside the preview) still works — this one gives a symmetric
-         way to re-hide without navigating away and back. -->
-    <button class="btn sm" onclick={() => (revealed = !revealed)}
-            title={revealed ? 'Hide preview + extracted text' : 'Reveal preview + extracted text'}>
-      <Icon name="eye" size={13} /> {revealed ? 'Hide' : 'Reveal'}
-    </button>
+  {#if doc}
+    {#if highSensitivity}
+      <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
+           (inside the preview) still works — this one gives a symmetric
+           way to re-hide without navigating away and back. -->
+      <button class="btn sm" onclick={() => (revealed = !revealed)}
+              title={revealed ? 'Hide preview + extracted text' : 'Reveal preview + extracted text'}>
+        <Icon name="eye" size={13} /> {revealed ? 'Hide' : 'Reveal'}
+      </button>
+    {/if}
+    <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
+    {#if canManageAccess}
+      <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> Access</button>
+    {/if}
+    {#if canShareLinks}
+      <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
+    {/if}
+    <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
   {/if}
-  <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
-  {#if canManageAccess}
-    <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> Access</button>
-  {/if}
-  {#if canShareLinks}
-    <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
-  {/if}
-  <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
 </div>
 
-{#if err}<div class="err">{err}</div>{/if}
-
-{#if doc}
+{#if loading}
+  <div class="detail" aria-label="Loading document">
+    <div class="preview"><div class="skel" style="width:28%;height:14px"></div></div>
+    <div class="card" style="align-self:start">
+      <div class="skel" style="width:55%;height:18px;margin-bottom:18px"></div>
+      <div class="skel" style="width:82%;margin-bottom:10px"></div>
+      <div class="skel" style="width:68%"></div>
+    </div>
+  </div>
+{:else if err}
+  <div class="err">{err}</div>
+{:else if doc}
   <div class="detail">
     <div class="preview" class:blurred>
       {#if blurred}

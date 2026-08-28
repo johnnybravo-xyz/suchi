@@ -35,6 +35,7 @@
     inbox?.id || '', dateFrom, dateTo,
   ]))
   let loadedFilterKey = ''
+  let loadVersion = 0
 
   function setRouteFilter(key, value) {
     const params = new URLSearchParams(route.query)
@@ -54,6 +55,7 @@
   }
 
   async function load({ background = false } = {}) {
+    const version = ++loadVersion
     if (!background) loading = true
     err = ''
     try {
@@ -67,10 +69,16 @@
         created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
       }
       const res = await listDocuments(params)
+      if (version !== loadVersion) return
       docs = res?.results || []
       count = res?.count ?? docs.length
-    } catch (ex) { err = ex.message || 'Could not load documents.' }
-    finally { if (!background) loading = false }
+      const visibleIDs = new Set(docs.map((document) => document.id))
+      sel = new Set([...sel].filter((id) => visibleIDs.has(id)))
+    } catch (ex) {
+      if (version === loadVersion) err = ex.message || 'Could not load documents.'
+    } finally {
+      if (version === loadVersion) loading = false
+    }
   }
 
   async function fileTo(doc, jdId) {
@@ -219,7 +227,9 @@
   $effect(() => {
     const key = activeFilterKey
     uploadBus.revision
-    if (loadedFilterKey && loadedFilterKey !== key && page !== 1) {
+    const filterChanged = loadedFilterKey && loadedFilterKey !== key
+    if (filterChanged) clearSel()
+    if (filterChanged && page !== 1) {
       loadedFilterKey = key
       page = 1
       return

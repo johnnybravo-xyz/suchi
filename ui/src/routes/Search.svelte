@@ -13,9 +13,10 @@
   let err = $state('')
   let searched = $state(false)
   let languages = $state([])
+  let runVersion = 0
 
   // Load the language facet once on mount so the filter chips have
-  // observed codes + counts to render. Cheap — one query per session.
+  // observed codes + counts to render.
   ;(async () => {
     try {
       const res = await listLanguages()
@@ -24,27 +25,42 @@
   })()
 
   async function run() {
+    const version = ++runVersion
     const query = q.trim()
     if (!query) { hits = []; count = 0; searched = false; return }
+    const requestPage = page
+    const requestLang = lang
     loading = true; err = ''; searched = true
     try {
-      const params = { page, page_size: 25 }
-      if (lang) params.lang = lang
+      const params = { page: requestPage, page_size: 25 }
+      if (requestLang) params.lang = requestLang
       const res = await search(query, params)
+      if (version !== runVersion) return
       hits = res?.results || []
       count = res?.count ?? hits.length
-    } catch (ex) { err = ex.status === 400 ? 'That query has unbalanced quotes or operators.' : (ex.message || 'Search failed.') }
-    finally { loading = false }
+    } catch (ex) {
+      if (version === runVersion) {
+        err = ex.status === 400 ? 'That query has unbalanced quotes or operators.' : (ex.message || 'Search failed.')
+      }
+    } finally {
+      if (version === runVersion) loading = false
+    }
+  }
+
+  function navigateToQuery() {
+    const params = new URLSearchParams()
+    if (q.trim()) params.set('q', q.trim())
+    if (lang) params.set('lang', lang)
+    const query = params.toString()
+    const hash = `#/search${query ? `?${query}` : ''}`
+    if (location.hash === hash) run()
+    else go(hash)
   }
 
   function setLang(code) {
     lang = code === lang ? '' : code
     page = 1
-    const params = new URLSearchParams()
-    if (q.trim()) params.set('q', q.trim())
-    if (lang) params.set('lang', lang)
-    go(`#/search?${params.toString()}`)
-    if (q.trim()) run()
+    navigateToQuery()
   }
 
   function safeSnippet(t) {
@@ -54,11 +70,7 @@
 
   function submit(e) {
     e.preventDefault(); page = 1
-    const params = new URLSearchParams()
-    if (q.trim()) params.set('q', q.trim())
-    if (lang) params.set('lang', lang)
-    go(`#/search?${params.toString()}`)
-    run()
+    navigateToQuery()
   }
   // Sync q FROM the URL when the URL changes — but never read q inside
   // this effect, or every keystroke would re-fire it and clobber the
@@ -76,7 +88,10 @@
       lang = rl
       page = 1
       if (rq) run()
-      else { hits = []; count = 0; searched = false }
+      else {
+        runVersion++
+        hits = []; count = 0; searched = false; loading = false; err = ''
+      }
     }
   })
   queueMicrotask(() => { if (q) run() })  // initial query from the URL

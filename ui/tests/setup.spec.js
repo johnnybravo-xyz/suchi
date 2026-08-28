@@ -17,6 +17,10 @@ async function mockAPI(page, options = {}) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     const thumb = path.match(/^\/api\/documents\/(\d+)\/thumb\/?$/)
+    const documentDetail = path.match(/^\/api\/documents\/(\d+)$/)
+    const documentVersions = path.match(/^\/api\/documents\/(\d+)\/versions\/$/)
+    const similarDocuments = path.match(/^\/api\/documents\/(\d+)\/similar$/)
+    const documentAccess = path.match(/^\/api\/acls\/document\/(\d+)$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -101,10 +105,24 @@ async function mockAPI(page, options = {}) {
       fs_watch_dir: '',
       fs_watch_owner_email: '',
     }
-    else if (path === '/api/documents/') body = {
-      count: options.documentsCount ?? options.documents?.length ?? 0,
-      results: options.documents || [],
+    else if (path === '/api/documents/') {
+      const query = new URL(request.url()).searchParams.get('q') || ''
+      const response = options.documentsByQuery?.[query]
+      if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
+      const documents = response?.documents ?? options.documents ?? []
+      body = {
+        count: response?.count ?? options.documentsCount ?? documents.length,
+        results: documents,
+      }
     }
+    else if (path === '/api/search/') {
+      const query = new URL(request.url()).searchParams.get('q') || ''
+      const response = options.searchByQuery?.[query]
+      if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
+      const results = response?.results || []
+      body = { count: response?.count ?? results.length, results }
+    }
+    else if (path === '/api/languages/') body = { languages: [] }
     else if (path === '/api/saved_views/') body = {
       results: options.savedViews || [],
     }
@@ -174,30 +192,36 @@ async function mockAPI(page, options = {}) {
         ],
       } : { counts: {}, results: [] }
     }
-    else if (path === '/api/documents/42') body = {
-      id: 42,
-      title: 'Electricity bill',
-      content: options.documentContent || '',
-      original_blob: 'abc',
-      original_size: 2048,
-      mime_type: options.documentMime || 'application/pdf',
-      sensitivity: options.documentSensitivity || '',
-      jd_category_id: 1,
-      created_at: 1780000000,
-      added_at: 1780100000,
-      updated_at: 1780100000,
-      source_mtime: 1779900000,
-      sources: [
-        { kind: 'mailbox', label: 'user@example.test', detail: 'user@example.test / INBOX', observed_at: 1780100000 },
-        { kind: 'mailbox', label: 'Personal Outlook', detail: 'archive@example.test / Receipts', observed_at: 1780150000 },
-        { kind: 'upload', label: 'Admin', detail: 'bill.pdf', observed_at: 1780200000 },
-      ],
-      tags: [],
-      correspondents: [],
+    else if (documentDetail) {
+      const documentID = Number(documentDetail[1])
+      const response = options.documentDetails?.[documentID]
+      if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
+      body = {
+        id: documentID,
+        title: documentID === 42 ? 'Electricity bill' : `Document ${documentID}`,
+        content: options.documentContent || '',
+        original_blob: 'abc',
+        original_size: 2048,
+        mime_type: options.documentMime || 'application/pdf',
+        sensitivity: options.documentSensitivity || '',
+        jd_category_id: 1,
+        created_at: 1780000000,
+        added_at: 1780100000,
+        updated_at: 1780100000,
+        source_mtime: 1779900000,
+        sources: [
+          { kind: 'mailbox', label: 'user@example.test', detail: 'user@example.test / INBOX', observed_at: 1780100000 },
+          { kind: 'mailbox', label: 'Personal Outlook', detail: 'archive@example.test / Receipts', observed_at: 1780150000 },
+          { kind: 'upload', label: 'Admin', detail: 'bill.pdf', observed_at: 1780200000 },
+        ],
+        tags: [],
+        correspondents: [],
+        ...response?.document,
+      }
     }
-    else if (path === '/api/documents/42/versions/') body = { results: [] }
-    else if (path === '/api/documents/42/similar') body = { results: [] }
-    else if (path === '/api/acls/document/42') body = { results: [], principals: [] }
+    else if (documentVersions) body = { results: [] }
+    else if (similarDocuments) body = { results: [] }
+    else if (documentAccess) body = { results: [], principals: [] }
 
     await route.fulfill({ json: body })
   })
@@ -471,6 +495,83 @@ test('loads the filing tree once for every archive screen', async ({ page }) => 
   await expect(page.getByRole('heading', { name: 'Electricity bill' })).toBeVisible()
 
   expect(taxonomyRequests).toBe(1)
+})
+
+test('keeps the newest document filter response', async ({ page }) => {
+  await mockAPI(page, {
+    documentsByQuery: {
+      slow: {
+        delay: 300,
+        documents: [{ id: 41, title: 'Old response', created_at: 1780000000, tags: [] }],
+      },
+      fast: {
+        documents: [{ id: 42, title: 'Current response', created_at: 1780000000, tags: [] }],
+      },
+    },
+  })
+
+  const slowRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' && url.searchParams.get('q') === 'slow'
+  })
+  await page.goto('/#/documents?q=slow')
+  await slowRequest
+  await page.evaluate(() => { location.hash = '#/documents?q=fast' })
+
+  await expect(page.getByText('Current response')).toBeVisible()
+  await page.waitForTimeout(350)
+  await expect(page.getByText('Old response')).toHaveCount(0)
+})
+
+test('keeps the newest document detail response', async ({ page }) => {
+  await mockAPI(page, {
+    documentDetails: {
+      42: { delay: 300, document: { title: 'Old detail' } },
+      43: { document: { title: 'Current detail' } },
+    },
+  })
+
+  const oldRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/documents/42')
+  await page.goto('/#/doc/42')
+  await oldRequest
+  await page.evaluate(() => { location.hash = '#/doc/43' })
+
+  await expect(page.getByRole('heading', { name: 'Current detail' })).toBeVisible()
+  await page.waitForTimeout(350)
+  await expect(page.getByRole('heading', { name: 'Old detail' })).toHaveCount(0)
+})
+
+test('runs a changed search once and keeps its newest response', async ({ page }) => {
+  const queries = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/search/') queries.push(url.searchParams.get('q'))
+  })
+  await mockAPI(page, {
+    searchByQuery: {
+      paris: {
+        delay: 300,
+        results: [{ id: 41, title: 'Old Paris result', created_at: 1780000000 }],
+      },
+      london: {
+        results: [{ id: 42, title: 'Current London result', created_at: 1780000000 }],
+      },
+    },
+  })
+
+  const firstRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/search/' && url.searchParams.get('q') === 'paris'
+  })
+  await page.goto('/#/search?q=paris')
+  await firstRequest
+  await page.getByPlaceholder('Search document text').fill('london')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+
+  await expect(page.getByText('Current London result')).toBeVisible()
+  await page.waitForTimeout(350)
+  await expect(page.getByText('Old Paris result')).toHaveCount(0)
+  expect(queries).toEqual(['paris', 'london'])
 })
 
 test('resets document pagination when route filters change', async ({ page }) => {
