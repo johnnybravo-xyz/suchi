@@ -83,7 +83,6 @@
          autocomplete="off" spellcheck="false" aria-label="Search or run a command"
          onfocus={() => (open = true)} oninput={(e) => { open = true; idx = -1; search(e.target.value) }}
          onkeydown={onKey} />
-  <kbd>⌘K</kbd>
 
   {#if open}
     <div class="omni-drop" role="listbox">
@@ -119,7 +118,7 @@
       {#if q.trim()}
         <button class="omni-row all" class:hot={idx === -1}
                 onmousedown={(e) => { e.preventDefault(); activate(-1) }}>
-          <Icon name="search" size={13} /><span class="grow">Search everything for “{q.trim()}”</span><kbd>⏎</kbd>
+          <Icon name="search" size={13} /><span class="grow">Search everything for “{q.trim()}”</span>
         </button>
       {/if}
     </div>

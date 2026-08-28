@@ -4,7 +4,8 @@
   let { placement = 'side', onClose, onContinue } = $props()
 </script>
 
-<aside class="setup-reminder setup-reminder-{placement}" aria-label="Setup wizard">
+<aside class="setup-reminder" class:setup-reminder-side={placement === 'side'}
+       class:setup-reminder-mobile={placement === 'mobile'} aria-label="Setup wizard">
   <div class="setup-reminder-head">
     <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
     <div>

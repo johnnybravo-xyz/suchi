@@ -224,7 +224,7 @@
           <h3 id="new-view-title">Create a view</h3>
           <p>Choose the documents this shortcut should open.</p>
         </div>
-        <button type="button" class="btn sm" onclick={closeCreate} disabled={saving} aria-label="Close create view"><Icon name="x" size={13} /></button>
+        <button type="button" class="btn sm" onclick={closeCreate} disabled={saving} title="Close" aria-label="Close create view"><Icon name="x" size={13} /></button>
       </div>
 
       <div class="field name-field">

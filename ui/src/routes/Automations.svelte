@@ -181,7 +181,7 @@
       }
       case 'assign_jd_category': {
         const jd = jdCategories.find(x => x.id === p.jd_category_id)
-        return jd ? `Assign JD category → ${jd.code} · ${jd.name}` : 'Assign JD category'
+        return jd ? `Assign filing category → ${jd.code} · ${jd.name}` : 'Assign filing category'
       }
       case 'assign_title':
         return p.template ? `Set title → “${p.template}”` : 'Set title'
@@ -276,7 +276,7 @@
             {#each facets.correspondents as x}<option value={x.id}>from: {x.name}</option>{/each}
           </select>
           {#if editing.triggers.length > 1}
-            <button class="btn sm" onclick={() => editing.triggers.splice(i, 1)} title="Remove"><Icon name="x" size={12} /></button>
+            <button class="btn sm" onclick={() => editing.triggers.splice(i, 1)} title="Remove trigger" aria-label={`Remove trigger ${i + 1}`}><Icon name="x" size={12} /></button>
           {/if}
         </div>
       {/each}
@@ -317,7 +317,7 @@
             <input class="input" style="max-width:130px" type="number" placeholder="id" bind:value={a.params[Object.keys(a.params)[0]]} />
           {/if}
           {#if editing.actions.length > 1}
-            <button class="btn sm" onclick={() => editing.actions.splice(i, 1)} title="Remove"><Icon name="x" size={12} /></button>
+            <button class="btn sm" onclick={() => editing.actions.splice(i, 1)} title="Remove action" aria-label={`Remove action ${i + 1}`}><Icon name="x" size={12} /></button>
           {/if}
         </div>
       {/each}
@@ -360,7 +360,7 @@
       </span>
       <button class="btn sm" onclick={() => openEditor(a)}>Edit</button>
       {#if !a.preset_slug}
-        <button class="btn sm danger" onclick={() => remove(a)}><Icon name="trash" size={13} /></button>
+        <button class="btn sm danger" onclick={() => remove(a)} title="Delete automation" aria-label={`Delete ${a.name}`}><Icon name="trash" size={13} /></button>
       {/if}
     {/if}
     {#if readOnly && peekID === a.id}

@@ -17,7 +17,7 @@
       href: '#/search?lang=de',
       icon: 'search' },
     { title: 'Browse the Johnny Decimal tree',
-      hint: 'Jump to Finance & Tax (JD 22) and see the real filing structure.',
+      hint: 'Jump to Finance & Tax (category 22) and see the real filing structure.',
       jdCode: 22,
       icon: 'docs' },
     { title: 'Similar documents',

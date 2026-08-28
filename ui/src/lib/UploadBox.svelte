@@ -60,10 +60,8 @@
     send([...e.dataTransfer.files])
   }
 
-  // Sparse-PATCH helper for the details panel's editable fields (JD
-  // + sensitivity). Tags are read-only here — full editing lives on
-  // /#/doc/{id} where the vocab autocomplete lives too. Keeping the
-  // vocab decisions in one place avoids drift (tax vs taxes vs Tax).
+  // The upload queue only exposes fields that are safe to change before
+  // processing finishes. Managed metadata remains read-only here.
   async function patch(q, body, msg) {
     if (!q.id) return
     try {

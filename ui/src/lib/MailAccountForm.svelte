@@ -320,7 +320,7 @@
        role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit mailbox' : 'Add mailbox'} tabindex="-1">
     <div class="modal-head">
       <h3>{isEdit ? 'Edit mailbox' : 'Add mailbox'}</h3>
-      <button class="btn sm" onclick={() => onClose?.(false)}><Icon name="x" size={13} /></button>
+      <button class="btn sm" onclick={() => onClose?.(false)} title="Close" aria-label="Close mailbox form"><Icon name="x" size={13} /></button>
     </div>
 
     {#if err}<div class="err" style="margin-bottom:10px">{err}</div>{/if}

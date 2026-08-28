@@ -354,7 +354,7 @@
           <span class="dot"></span>
           <span class="title grow">{g.name}</span>
           <button class="btn sm" onclick={() => toggleMembers(g)}>{openGroup?.id === g.id ? 'Hide members' : 'Members'}</button>
-          <button class="btn sm danger" onclick={() => rmGroup(g)}><Icon name="trash" size={13} /></button>
+          <button class="btn sm danger" onclick={() => rmGroup(g)} title="Delete group" aria-label={`Delete ${g.name}`}><Icon name="trash" size={13} /></button>
           {#if openGroup?.id === g.id}
             <div style="flex-basis:100%;padding:8px 0 2px 20px">
               {#each openGroup.members as mrow ((mrow.user_id ?? mrow.id))}
@@ -410,7 +410,7 @@
           <span class="dot"></span>
           <span class="grow"><input class="inline-edit" value={f.name} onchange={(e) => renameField(f, e.target.value)} /></span>
           <span class="chip">{f.data_type}</span>
-          <button class="btn sm danger" onclick={() => rmField(f)}><Icon name="trash" size={13} /></button>
+          <button class="btn sm danger" onclick={() => rmField(f)} title="Delete field" aria-label={`Delete ${f.name}`}><Icon name="trash" size={13} /></button>
         </div>
       {:else}
         <div class="irow"><span class="sub">No custom fields yet.</span></div>
@@ -450,7 +450,7 @@
           <span class="grow"><input class="inline-edit" value={row.name} onchange={(e) => renameTaxon(row, e.target.value)} /></span>
           {#if row.child_count}<span class="sub">{row.child_count} children</span>{/if}
           {#if row.document_count != null}<span class="sub">{row.document_count} docs</span>{/if}
-          <button class="btn sm danger" onclick={() => rmTaxon(row)}><Icon name="trash" size={13} /></button>
+          <button class="btn sm danger" onclick={() => rmTaxon(row)} title="Delete entry" aria-label={`Delete ${row.name}`}><Icon name="trash" size={13} /></button>
         </div>
       {:else}
         <div class="irow"><span class="sub">Nothing here yet.</span></div>
@@ -489,7 +489,7 @@
          role="dialog" aria-modal="true" aria-label="Import taxonomy" tabindex="-1">
       <div class="modal-head">
         <h3>Import a taxonomy</h3>
-        <button class="btn sm" onclick={() => (taxImpOpen = false)}><Icon name="x" size={13} /></button>
+        <button class="btn sm" onclick={() => (taxImpOpen = false)} title="Close" aria-label="Close taxonomy import"><Icon name="x" size={13} /></button>
       </div>
       <TaxonomyImport {notify} onApplied={() => { taxImpOpen = false; loadTaxa() }} />
     </div>

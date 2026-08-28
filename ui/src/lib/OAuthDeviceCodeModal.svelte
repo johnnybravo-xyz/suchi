@@ -108,7 +108,7 @@
        role="dialog" aria-modal="true" aria-label="Sign in with Microsoft" tabindex="-1">
     <div class="modal-head">
       <h3>Sign in with Microsoft</h3>
-      <button class="btn sm" onclick={() => onClose?.(false)}><Icon name="x" size={13} /></button>
+      <button class="btn sm" onclick={() => onClose?.(false)} title="Close" aria-label="Close Microsoft sign-in"><Icon name="x" size={13} /></button>
     </div>
 
     {#if err}

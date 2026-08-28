@@ -325,11 +325,8 @@
       <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
       <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
     </span>
-    <span class="kbdhint" title="Keyboard: j/k move · x select · shift-click range · Enter open" aria-label="Keyboard shortcuts: j and k to move, x to select, shift-click for a range, Enter to open">
-      <kbd>j</kbd><kbd>k</kbd><kbd>x</kbd><kbd>⏎</kbd>
-    </span>
     <button class="btn sm" onclick={load} title="Refresh" aria-label="Refresh documents"><Icon name="refresh" size={13} /></button>
-    <a class="btn sm" href="#/trash" title="Trash"><Icon name="trash" size={13} /></a>
+    <a class="btn sm" href="#/trash" title="Trash" aria-label="Open trash"><Icon name="trash" size={13} /></a>
     <select class="input" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
       <option value="-created_at">Newest first</option>
       <option value="created_at">Oldest first</option>
@@ -421,7 +418,7 @@
                 <option value="">Refile…</option>
                 {#each jdCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
               </select>
-              <button class="btn sm danger" title="Trash"
+              <button class="btn sm danger" title="Trash" aria-label={`Trash ${d.title || `document ${d.id}`}`}
                       onclick={(e) => { e.preventDefault(); e.stopPropagation(); trashRequest = { kind: 'one', doc: d } }}>
                 <Icon name="trash" size={12} /></button>
             </span>
@@ -466,7 +463,7 @@
          role="dialog" aria-modal="true" aria-label="Bulk unlock" tabindex="-1">
       <div class="modal-head">
         <h3>Try one password against {sel.size} document{sel.size === 1 ? '' : 's'}</h3>
-        <button class="btn sm" onclick={() => (bulkDecOpen = false)}><Icon name="x" size={13} /></button>
+        <button class="btn sm" onclick={() => (bulkDecOpen = false)} title="Close" aria-label="Close bulk unlock"><Icon name="x" size={13} /></button>
       </div>
       <p class="sub" style="margin:0 0 10px">
         The server tries this password against every selected document that's still encrypted.

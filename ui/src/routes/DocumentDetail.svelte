@@ -347,7 +347,7 @@
             {:else if doc.jd_category_code}
               <span class="chip">{doc.jd_category_code} {doc.jd_category_name}</span>
               <span class="sub" style="margin-left:6px">{doc.jd_area_name}</span>
-            {:else}<span class="chip">jd {doc.jd_category_id}</span>{/if}
+            {:else}<span class="chip">Category #{doc.jd_category_id}</span>{/if}
           </dd>
           <dt>Sensitivity</dt>
           <dd>
@@ -454,7 +454,6 @@
               {#each similar.results.slice(0, 6) as sd (sd.id)}
                 <a class="irow" href={`#/doc/${sd.id}`} style="padding:8px 4px">
                   <span class="dot"></span>
-                  {#if sd.jd_category_id}<span class="chip">jd</span>{/if}
                   <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
                   <span class="sub">{fmtDate(sd.created_at)}</span>
                 </a>
@@ -496,7 +495,7 @@
     <div class="modal" style="width:min(620px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') accessOpen = false }} role="dialog" aria-label="Document access" tabindex="-1">
       <div class="modal-head">
         <h3>Access to “{doc?.title || `Document #${id}`}” <span class="pill">{access.results?.length || 0}</span></h3>
-        <button class="btn sm" onclick={() => (accessOpen = false)} aria-label="Close access"><Icon name="x" size={13} /></button>
+        <button class="btn sm" onclick={() => (accessOpen = false)} title="Close" aria-label="Close access"><Icon name="x" size={13} /></button>
       </div>
       <form class="toolbar" style="margin-bottom:{access.results?.length ? '10px' : '0'}" onsubmit={grantAccess}>
         <select class="input" style="flex:1;max-width:none;min-width:180px" bind:value={accessDraft.principal} aria-label="Person or group">
@@ -560,7 +559,7 @@
     <div class="modal" style="width:min(520px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') shareOpen = false }} role="dialog" aria-label="Share document" tabindex="-1">
       <div class="modal-head">
         <h3>Share “{doc?.title || `Document #${id}`}”</h3>
-        <button class="btn sm" onclick={() => (shareOpen = false)}><Icon name="x" size={13} /></button>
+        <button class="btn sm" onclick={() => (shareOpen = false)} title="Close" aria-label="Close sharing"><Icon name="x" size={13} /></button>
       </div>
       <p class="sub" style="color:var(--muted);font-size:.82rem;margin:0 0 12px">
         Anyone with the link can view and download. No account needed on their side.

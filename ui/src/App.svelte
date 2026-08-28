@@ -393,7 +393,8 @@
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
-        <button class="btn sm" style="padding:8px 11px" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')} title="Switch theme">
+        <button class="btn sm" style="padding:8px 11px" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')}
+                title="Switch theme" aria-label={`Use ${session.theme === 'dark' ? 'light' : 'dark'} theme`}>
           <Icon name={session.theme === 'dark' ? 'sun' : 'moon'} size={15} />
         </button>
       </div>
@@ -436,7 +437,8 @@
       <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents" tabindex="-1">
         <div class="modal-head">
           <h3>Upload</h3>
-          <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}><Icon name="x" size={13} /></button>
+          <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}
+                  title="Close upload" aria-label="Close upload"><Icon name="x" size={13} /></button>
         </div>
         <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories }} />
       </div>

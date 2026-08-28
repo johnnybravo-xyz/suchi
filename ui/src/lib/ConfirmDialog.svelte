@@ -24,7 +24,7 @@
        role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" tabindex="-1">
     <div class="modal-head">
       <h3 id="confirm-dialog-title">{title}</h3>
-      <button class="btn sm" disabled={busy} onclick={cancel} title="Close"><Icon name="x" size={13} /></button>
+      <button class="btn sm" disabled={busy} onclick={cancel} title="Close" aria-label="Close confirmation"><Icon name="x" size={13} /></button>
     </div>
     <p class="sub" style="margin:0;color:var(--muted)">{message}</p>
     <div class="toolbar" style="margin:16px 0 0">
