@@ -42,6 +42,7 @@
   let st = $state(null)                 // /api/stats/ snapshot
   const hasFilingIndex = $derived(jdTree.some(area => area.categories.some(category => !category.system)))
   let setupNeeded = $state(false)
+  let setupEngaged = $state(false)
   let setupReminderKey = ''
   const setupReminderSeconds = 48 * 60 * 60
   let demoMode = $state(false)
@@ -61,10 +62,22 @@
     if (!key) return false
     try { return localStorage.getItem(key) === '1' } catch { return false }
   }
-  function dismissSetupReminder() {
+  function acknowledgeSetupReminder() {
     setupNeeded = false
+    setupEngaged = true
     try { if (setupReminderKey) localStorage.setItem(setupReminderKey, '1') } catch {}
+  }
+  function dismissSetupReminder() {
+    acknowledgeSetupReminder()
     notify('Setup reminder closed. Setup is always available in Settings.')
+  }
+  function openSetupFromReminder() {
+    acknowledgeSetupReminder()
+    mobileNavOpen = false
+  }
+  function handleSetupTaxonomyChanged() {
+    acknowledgeSetupReminder()
+    return loadTaxonomy()
   }
   let toast = $state('')
   let toastTimer
@@ -126,15 +139,16 @@
   async function boot() {
     clearInterval(pollTimer)
     const categories = loadTaxonomy()
-    // Keep a fresh-install reminder on the dashboard for 48 hours, or until
-    // the admin explicitly finishes the wizard. Server time survives browsers
-    // and prevents an old localStorage dismissal leaking into a new install.
+    // Keep a fresh-install reminder for 48 hours, until the admin opens it,
+    // dismisses it, or chooses a filing tree. Server time prevents an old
+    // browser-local acknowledgement leaking into a new installation.
     const setup = session.user?.role === 'admin'
       ? setupState().then(state => {
           const startedAt = Number(state?.started_at || 0)
           const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
           setupReminderKey = setupDismissalKey(startedAt)
-          setupNeeded = !state?.completed_at && withinWindow && !setupReminderWasDismissed(setupReminderKey)
+          setupNeeded = !state?.completed_at && !state?.filing_tree_chosen && withinWindow && !setupReminderWasDismissed(setupReminderKey)
+          setupEngaged = !setupNeeded
         }).catch(() => {})
       : Promise.resolve()
     await Promise.all([pollStats(), categories, setup])
@@ -280,7 +294,7 @@
               <Icon name="x" size={13} />
             </button>
           </div>
-          <a role="button" class="btn primary sm" href="#/setup" onclick={() => (mobileNavOpen = false)}>Continue setup</a>
+          <a role="button" class="btn primary sm" href="#/setup" onclick={openSetupFromReminder}>Continue setup</a>
         </aside>
       {/if}
 
@@ -369,7 +383,7 @@
               <Icon name="x" size={13} />
             </button>
           </div>
-          <a role="button" class="btn primary sm" href="#/setup">Continue setup</a>
+          <a role="button" class="btn primary sm" href="#/setup" onclick={acknowledgeSetupReminder}>Continue setup</a>
         </aside>
       {/if}
 
@@ -390,11 +404,11 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
 		{:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin' }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1' }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} />
-		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: loadTaxonomy, onDone: () => { setupNeeded = false; go('#/dashboard') } }} />
+		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />
         {:else}<div class="empty">Nothing filed under <code>#{route.path}</code>. <a href="#/dashboard">Back to the dashboard</a></div>
         {/if}

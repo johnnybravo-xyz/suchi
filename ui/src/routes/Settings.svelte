@@ -9,7 +9,10 @@
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
 
-  let { notify, initialTab = '', initialSection = '', onTaxonomyChanged } = $props()
+  let {
+    notify, initialTab = '', initialSection = '', onTaxonomyChanged,
+    setupEngaged = false, onSetupEngaged,
+  } = $props()
   let tokens = $state([])
   let err = $state('')
   let newName = $state('')
@@ -19,7 +22,10 @@
   // --- setup wizard state (admin only; quiet on 403) ---
   let setup = $state(null)
   setupState().then(st => (setup = st)).catch(() => {})
-  const setupDone = $derived(!!setup?.completed_at)
+  const setupNeedsAttention = $derived(
+    setup !== null && !setup?.completed_at &&
+    !setup?.filing_tree_chosen && !setupEngaged
+  )
   const archiveSelected = $derived(session.user?.role === 'admin' && initialTab === 'archive')
 
 
@@ -142,7 +148,7 @@
         <div class="skel" style="width:28%"></div>
         <div class="skel" style="width:76%"></div>
       </div>
-    {:else if setupDone}
+    {:else if !setupNeedsAttention}
       <ArchiveSettings {notify} {initialSection} {onTaxonomyChanged} />
     {:else}
       <section class="setup-row settings-section" aria-label="Setup wizard">
@@ -150,17 +156,17 @@
           <b>Setup is incomplete</b>
           <span>Finish the guided archive setup before changing archive-wide settings.</span>
         </div>
-        <a role="button" class="btn sm primary" href="#/setup">Continue setup</a>
+        <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
       </section>
     {/if}
   {:else}
-    {#if setup !== null && !setupDone}
+    {#if setupNeedsAttention}
       <section class="setup-row settings-section" aria-label="Setup wizard">
         <div>
           <b>Setup is incomplete</b>
           <span>Finish the guided archive configuration when you are ready.</span>
         </div>
-        <a role="button" class="btn sm primary" href="#/setup">Continue setup</a>
+        <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
       </section>
     {/if}
   <section class="settings-section" aria-labelledby="profile-heading">

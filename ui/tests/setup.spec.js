@@ -217,6 +217,12 @@ test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) =
     expect(reminderBox.y).toBeGreaterThanOrEqual(topbarBox.y + topbarBox.height - 1)
   }
 
+  await page.goto('/#/settings')
+  const setupRow = page.getByRole('region', { name: 'Setup wizard' })
+  await expect(setupRow.getByText('Setup is incomplete')).toBeVisible()
+  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/setup')
+  await page.goto('/#/dashboard')
+
   await reminder.getByRole('button', { name: 'Close setup reminder' }).click()
   await expect(reminder).toHaveCount(0)
   await expect(page.getByText('Setup reminder closed. Setup is always available in Settings.')).toBeVisible()
@@ -224,14 +230,15 @@ test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) =
   await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
 
   await page.goto('/#/settings')
-  const setupRow = page.getByRole('region', { name: 'Setup wizard' })
-  await expect(setupRow.getByText('Setup is incomplete')).toBeVisible()
-  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/setup')
+  await expect(setupRow).toHaveCount(0)
+  await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
 })
 
 test('shows the dashboard setup reminder only to fresh incomplete admins', async ({ browser }) => {
   const cases = [
     { setupCompletedAt: Math.floor(Date.now() / 1000) },
+    { filingTreeChosen: true },
     { setupStartedAt: Math.floor(Date.now() / 1000) - 49 * 60 * 60 },
     { userRole: 'member' },
   ]
@@ -243,6 +250,43 @@ test('shows the dashboard setup reminder only to fresh incomplete admins', async
     await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
     await context.close()
   }
+})
+
+test('acknowledges the setup reminder when setup is opened', async ({ page }) => {
+  await mockAPI(page, { setupStartedAt: Math.floor(Date.now() / 1000) })
+  await page.goto('/#/dashboard')
+
+  const reminder = page.getByRole('complementary', { name: 'Setup wizard' })
+  await reminder.getByRole('button', { name: 'Continue setup' }).click()
+  await expect(page).toHaveURL(/#\/setup$/)
+  await expect(reminder).toHaveCount(0)
+
+  await page.goto('/#/dashboard')
+  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+
+  await page.goto('/#/settings')
+  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
+  await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
+})
+
+test('opens Archive configuration after choosing a filing tree', async ({ page }) => {
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    currentPreset: 'solo',
+    setupCompletedAt: null,
+  })
+  await page.goto('/#/settings?tab=archive')
+
+  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
+  const configuration = page.getByRole('region', { name: 'Archive configuration' })
+  await expect(configuration).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Filing tree/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Email intake/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /Classification/ }).last()).toBeVisible()
+  await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
 })
 
 test('separates completed archive administration from account settings', async ({ page }) => {
@@ -348,6 +392,8 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await page.getByRole('button', { name: 'Apply filing tree' }).click()
 
   await expect(finish).toBeEnabled()
+  await page.goto('/#/dashboard')
+  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
   await expect(indexHeading).toHaveCount(1)
   if ((page.viewportSize()?.width || 0) <= 860) {
     await page.getByRole('button', { name: 'Open navigation' }).click()
