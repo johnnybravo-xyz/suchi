@@ -1,18 +1,19 @@
 <script>
   import { listSavedViews, createSavedView, deleteSavedView,
-           listTags, listCorrespondents, listDocumentTypes, listJDCategories } from '../lib/api.js'
+           listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, canShare = false, startCreate = false } = $props()
+  let { notify, canShare = false, startCreate = false, jdCategories = [] } = $props()
   let views = $state([])
   let loading = $state(true)
   let saving = $state(false)
   let createOpen = $state(false)
   let startCreateHandled = $state(false)
   let nameInput = $state()
-  let tags = $state([]), corrs = $state([]), types = $state([]), jdCats = $state([])
+  let tags = $state([]), corrs = $state([]), types = $state([])
+  const filingCategories = $derived(jdCategories.filter((category) => !category.is_area))
   let facetsPromise
   let nv = $state(emptyView())
 
@@ -43,7 +44,7 @@
   function filterSummary(filters) {
     const summary = []
     if (filters.q) summary.push(`Search: “${filters.q}”`)
-    if (filters.jd_category_id) summary.push(nameFor(jdCats, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
+    if (filters.jd_category_id) summary.push(nameFor(filingCategories, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
     if (filters.tags__id__in) summary.push(`Tag: ${nameFor(tags, filters.tags__id__in, 'Selected tag')}`)
     if (filters.correspondents__id__in) summary.push(nameFor(corrs, filters.correspondents__id__in, 'Selected correspondent'))
     if (filters.document_type__id) summary.push(nameFor(types, filters.document_type__id, 'Selected type'))
@@ -64,7 +65,6 @@
       listTags().then((r) => (tags = r?.results || r || [])),
       listCorrespondents().then((r) => (corrs = r?.results || r || [])),
       listDocumentTypes().then((r) => (types = r?.results || r || [])),
-      listJDCategories().then((r) => (jdCats = (r?.results || r || []).filter((c) => !c.is_area))),
     ])
     return facetsPromise
   }
@@ -225,7 +225,7 @@
           <label for="view-category">Filing category</label>
           <select id="view-category" class="input" bind:value={nv.jd}>
             <option value="">Any category</option>
-            {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+            {#each filingCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
           </select>
         </div>
         <div class="field">

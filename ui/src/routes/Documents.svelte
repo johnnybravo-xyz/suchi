@@ -1,5 +1,5 @@
 <script>
-  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
+  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, isHighSensitivity, sensDot } from '../lib/format.js'
@@ -8,7 +8,7 @@
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
-  let { notify, inbox = null } = $props()
+  let { notify, inbox = null, jdCategories = [] } = $props()
 
   let docs = $state([])
   let count = $state(0)
@@ -101,11 +101,6 @@
       } catch (ex) { notify?.(ex.message || 'Could not trash it') }
     }
     trashBusy = false
-  }
-
-  let jdCats = $state([])
-  async function loadJDCats() {
-    try { jdCats = (await listJDCategories())?.results || [] } catch {}
   }
 
   // ---- selection + bulk actions ----
@@ -221,7 +216,6 @@
   }
 
   loadFacets()
-  loadJDCats()
   $effect(() => {
     const key = activeFilterKey
     uploadBus.revision
@@ -251,7 +245,7 @@
     <select class="input" style="max-width:190px" disabled={bulkBusy}
             onchange={(e) => e.target.value && bulkRefile(e.target.value)}>
       <option value="">File under…</option>
-      {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+      {#each jdCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
     </select>
     <select class="input" style="max-width:160px" disabled={bulkBusy}
             onchange={(e) => bulkSens(e.target.value)}>
@@ -388,12 +382,12 @@
               </button>
               {#if unlockErr[d.id]}<span class="sub" style="color:var(--danger)">{unlockErr[d.id]}</span>{/if}
             </span>
-          {:else if isInbox && jdCats.length}
+          {:else if isInbox && jdCategories.length}
             <select class="input" style="padding:3px 8px;font-size:.76rem;max-width:150px"
                     onclick={(e) => e.preventDefault()}
                     onchange={(e) => { e.preventDefault(); if (e.target.value) fileTo(d, e.target.value) }}>
               <option value="">File under…</option>
-              {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+              {#each jdCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
             </select>
           {:else}
             <span class="hoveracts" role="group" aria-label="Quick actions">
@@ -401,7 +395,7 @@
                       onclick={(e) => e.preventDefault()}
                       onchange={(e) => { e.preventDefault(); if (e.target.value) fileTo(d, e.target.value) }}>
                 <option value="">Refile…</option>
-                {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+                {#each jdCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
               </select>
               <button class="btn sm danger" title="Trash"
                       onclick={(e) => { e.preventDefault(); e.stopPropagation(); trashRequest = { kind: 'one', doc: d } }}>

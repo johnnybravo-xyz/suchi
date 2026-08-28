@@ -411,18 +411,18 @@
 
       <div class="content">
         {#if page === 'dashboard'}<Dashboard {st} {inboxCategory} recent={recentDocs} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify }} />
-        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories: demoCategories }} />
+        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories: demoCategories }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, jdCategories: demoCategories }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
-		{:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin' }} />
-        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify }} />
+        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories: demoCategories }} />
+        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories: demoCategories }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1' }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', jdCategories: demoCategories }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories: demoCategories }} />
-		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
+        {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
         {/if}
       </div>
@@ -437,7 +437,7 @@
           <h3>Upload</h3>
           <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}><Icon name="x" size={13} /></button>
         </div>
-        <Lazy load={lazyRoutes.uploadBox} props={{ notify }} />
+        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories: demoCategories }} />
       </div>
     </div>
   {/if}

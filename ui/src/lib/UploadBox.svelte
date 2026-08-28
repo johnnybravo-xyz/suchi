@@ -1,19 +1,13 @@
 <script>
-  import { uploadDocument, getDocument, patchDocument, listJDCategories, listTasks } from '../lib/api.js'
+  import { uploadDocument, getDocument, patchDocument, listTasks } from '../lib/api.js'
   import { SENSITIVITY_OPTIONS, fmtBytes } from '../lib/format.js'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify } = $props()
+  let { notify, jdCategories = [] } = $props()
   let over = $state(false)
   let queue = $state([])
   let fileInput
-
-  // JD categories power the "File under…" picker in the details panel.
-  // Fetched once per modal open; tags stay a free-text input so we skip
-  // the extra facet call.
-  let jdCats = $state([])
-  listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
 
   // Poll the durable post-ingest job while refreshing the document details.
   async function hydrate(entry) {
@@ -132,7 +126,7 @@
                       onchange={(e) => e.target.value && patch(q, { jd_category_id: Number(e.target.value) }, 'Filed')}
                       value={q.doc?.jd_category_id ?? ''}>
                 <option value="" disabled>file under…</option>
-                {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+                {#each jdCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
               </select>
               <select class="input" style="max-width:140px;padding:5px 8px;font-size:.8rem"
                       aria-label="Sensitivity"

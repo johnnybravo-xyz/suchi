@@ -1,8 +1,8 @@
 <script>
   import UploadBox from '../lib/UploadBox.svelte'
-  let { notify } = $props()
+  let { notify, jdCategories = [] } = $props()
 </script>
 
 <div class="upload-wrap">
-  <UploadBox {notify} />
+  <UploadBox {notify} {jdCategories} />
 </div>

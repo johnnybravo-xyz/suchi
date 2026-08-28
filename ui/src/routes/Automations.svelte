@@ -1,10 +1,10 @@
 <script>
   import { listAutomations, createAutomation, patchAutomation, deleteAutomation,
-           listTags, listCorrespondents, listDocumentTypes, listJDCategories,
+           listTags, listCorrespondents, listDocumentTypes,
            automationsSchema } from '../lib/api.js'
   import Icon from '../lib/Icon.svelte'
 
-	let { notify, readOnly = false } = $props()
+  let { notify, readOnly = false, jdCategories = [] } = $props()
   let items = $state([])
   let loading = $state(true)
 	let err = $state('')
@@ -46,12 +46,11 @@
   }
   async function loadFacets() {
     try {
-      const [t, c, d, j] = await Promise.all([listTags(), listCorrespondents(), listDocumentTypes(), listJDCategories()])
+      const [t, c, d] = await Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
       facets = {
         tags: t?.results || [],
         correspondents: c?.results || [],
         types: d?.results || [],
-        jdCategories: j?.results || [],
       }
     } catch {}
   }
@@ -170,7 +169,7 @@
         return name ? `Set document type → ${name}` : 'Set document type'
       }
       case 'assign_jd_category': {
-        const jd = (facets.jdCategories || []).find(x => x.id === p.jd_category_id)
+        const jd = jdCategories.find(x => x.id === p.jd_category_id)
         return jd ? `Assign JD category → ${jd.code} · ${jd.name}` : 'Assign JD category'
       }
       case 'assign_title':
@@ -293,7 +292,7 @@
           {:else if a.type === 'assign_jd_category'}
             <select class="input" bind:value={a.params.jd_category_id}>
               <option value={0}>choose…</option>
-              {#each facets.jdCategories || [] as x}<option value={x.id}>{x.code} · {x.name}</option>{/each}
+              {#each jdCategories as x}<option value={x.id}>{x.code} · {x.name}</option>{/each}
             </select>
           {:else if a.type === 'assign_custom_field'}
             <input class="input" style="max-width:110px" type="number" placeholder="field id" bind:value={a.params.field_id} />

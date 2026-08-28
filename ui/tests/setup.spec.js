@@ -450,6 +450,29 @@ test('does not request a document for an invalid detail route', async ({ page })
   expect(invalidRequests).toEqual([])
 })
 
+test('loads the filing tree once for every archive screen', async ({ page }) => {
+  let taxonomyRequests = 0
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/jd/categories/') taxonomyRequests++
+  })
+  await mockAPI(page, {
+    jdCategories: [{ id: 6, area_code: 20, area_name: 'Finance', code: 22, name: 'Investments' }],
+  })
+
+  await page.goto('/#/documents')
+  await expect(page.getByText('No documents match.')).toBeVisible()
+  await page.evaluate(() => { location.hash = '#/views' })
+  await expect(page.getByRole('heading', { name: 'Shortcuts into the archive' })).toBeVisible()
+  await page.evaluate(() => { location.hash = '#/automations' })
+  await expect(page.getByText('Tag utility bills')).toBeVisible()
+  await page.evaluate(() => { location.hash = '#/upload' })
+  await expect(page.getByText('Drop documents here')).toBeVisible()
+  await page.evaluate(() => { location.hash = '#/doc/42' })
+  await expect(page.getByRole('heading', { name: 'Electricity bill' })).toBeVisible()
+
+  expect(taxonomyRequests).toBe(1)
+})
+
 test('resets document pagination when route filters change', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 100,

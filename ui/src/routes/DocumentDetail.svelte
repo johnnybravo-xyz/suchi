@@ -1,5 +1,5 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, listJDCategories, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
@@ -7,7 +7,7 @@
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
-  let { id, notify } = $props()
+  let { id, notify, jdCategories = [] } = $props()
 
   let doc = $state(null)
   let versions = $state([])
@@ -18,7 +18,6 @@
   let editingLanguages = $state(false)
   let languagesDraft = $state('')
   let shareURL = $state('')
-  let jdCats = $state([])
   let similar = $state(null)   // {results, method} | null
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
@@ -53,7 +52,7 @@
   })
   const areaGroups = $derived.by(() => {
     const m = new Map()
-    for (const c of jdCats) {
+    for (const c of jdCategories) {
       const lo = Number(c.area_code)
       if (!m.has(lo)) m.set(lo, { lo, name: c.area_name, categories: [] })
       m.get(lo).categories.push(c)
@@ -70,7 +69,6 @@
       titleDraft = doc.title
       documentVersions(id).then(v => (versions = v?.results || v || [])).catch(() => {})
       similarDocs(id).then(r => (similar = r)).catch(() => (similar = null))
-      listJDCategories().then(r => (jdCats = r?.results || [])).catch(() => {})
       loadAccess()
     } catch (ex) { err = ex.message || 'Could not load this document.' }
   }
@@ -304,7 +302,7 @@
         <dl class="kv" style="margin-top:12px">
           <dt>Filed under</dt>
           <dd>
-            {#if jdCats.length}
+            {#if jdCategories.length}
               <select class="input" style="padding:4px 8px;font-size:.8rem"
                       value={doc.jd_category_id}
                       onchange={(e) => save({ jd_category_id: Number(e.target.value) }, 'Refiled')}>
