@@ -39,9 +39,12 @@
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
   let taxonomyLoaded = $state(false)
+  let taxonomyError = $state('')
   let inboxCount = $state(0)
-  let recentDocs = $state([])
+  let recentDocs = $state(undefined)
+  let recentError = $state('')
   let st = $state(null)                 // /api/stats/ snapshot
+  let statsError = $state('')
   const filingTree = $derived(jdTree
     .map((area) => ({ ...area, categories: area.categories.filter((category) => !category.system) }))
     .filter((area) => area.categories.length))
@@ -160,12 +163,13 @@
   }
 
   async function loadTaxonomy() {
+    taxonomyError = ''
     try {
       const cats = await listJDCategories()
       if (!cats?.results) return
       buildTree(cats.results)
       revealPendingInbox()
-    } catch {}
+    } catch (ex) { taxonomyError = ex.message || 'Could not load the filing tree.' }
     finally { taxonomyLoaded = true }
   }
 
@@ -191,21 +195,33 @@
   async function pollStats() {
     try {
       st = await fetchStats()
+      statsError = ''
       inboxCount = st?.inbox_count ?? 0
       revealPendingInbox()
-    } catch {}
+    } catch (ex) {
+      if (!st) statsError = ex.message || 'Could not load archive status.'
+    }
   }
 
-  async function loadRecentDocuments() {
+  async function loadRecentDocuments({ background = recentDocs !== undefined } = {}) {
+    if (!background) {
+      recentDocs = undefined
+      recentError = ''
+    }
     try {
       const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
       recentDocs = r?.results || []
-    } catch {}
+    } catch (ex) {
+      if (!background) {
+        recentDocs = []
+        recentError = ex.message || 'Could not load recent documents.'
+      }
+    }
   }
 
   function refreshVisibleData() {
     pollStats()
-    if (page === 'dashboard') loadRecentDocuments()
+    if (page === 'dashboard') loadRecentDocuments({ background: true })
   }
 
   async function globalDrop(e) {
@@ -395,7 +411,7 @@
       {/if}
 
       <div class="content">
-        {#if page === 'dashboard'}<Dashboard {st} {inboxCategory} recent={recentDocs} />
+        {#if page === 'dashboard'}<Dashboard {st} {statsError} {inboxCategory} {taxonomyLoaded} {taxonomyError} recent={recentDocs} {recentError} onRetryRecent={loadRecentDocuments} />
         {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories }} />
         {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories }} />
         {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories }} />

@@ -8,6 +8,7 @@
   let { notify, canShare = false, startCreate = false, jdCategories = [] } = $props()
   let views = $state([])
   let loading = $state(true)
+  let loadError = $state('')
   let saving = $state(false)
   let createOpen = $state(false)
   let startCreateHandled = $state(false)
@@ -15,6 +16,8 @@
   let tags = $state([]), corrs = $state([]), types = $state([])
   const filingCategories = $derived(jdCategories.filter((category) => !category.is_area))
   let facetsPromise
+  let facetsError = $state('')
+  let loadVersion = 0
   let nv = $state(emptyView())
 
   function emptyView() {
@@ -22,14 +25,20 @@
   }
 
   async function load() {
+    const version = ++loadVersion
     loading = true
+    loadError = ''
     try {
       const r = await listSavedViews({ include: 'shared' })
+      if (version !== loadVersion) return
       const raw = r?.results || r || []
       views = raw.map(view => ({ ...view, filters: parseSavedViewFilters(view.filter_json) }))
       if (views.length) loadFacets()
-    } catch (ex) { notify?.(ex.message || 'Could not load views') }
-    finally { loading = false }
+    } catch (ex) {
+      if (version === loadVersion) loadError = ex.message || 'Could not load saved views.'
+    } finally {
+      if (version === loadVersion) loading = false
+    }
   }
 
   function href(v) {
@@ -61,11 +70,17 @@
 
   function loadFacets() {
     if (facetsPromise) return facetsPromise
+    facetsError = ''
     facetsPromise = Promise.allSettled([
       listTags().then((r) => (tags = r?.results || r || [])),
       listCorrespondents().then((r) => (corrs = r?.results || r || [])),
       listDocumentTypes().then((r) => (types = r?.results || r || [])),
-    ])
+    ]).then((results) => {
+      if (results.some((result) => result.status === 'rejected')) {
+        facetsError = 'Some filters could not be loaded.'
+        facetsPromise = null
+      }
+    })
     return facetsPromise
   }
 
@@ -157,6 +172,12 @@
           </div>
         {/each}
       </div>
+    {:else if loadError}
+      <div class="empty views-empty">
+        <b>Could not load saved views</b>
+        <span>{loadError}</span>
+        <button class="btn sm" onclick={load}><Icon name="refresh" size={13} /> Retry</button>
+      </div>
     {:else if views.length === 0}
       <div class="empty views-empty">
         <span class="empty-mark"><Icon name="eye" size={25} /></span>
@@ -220,6 +241,12 @@
         <span>Filters</span>
         <small>Leave any field open to include everything</small>
       </div>
+      {#if facetsError}
+        <div class="err facet-error">
+          <span>{facetsError}</span>
+          <button type="button" class="btn sm" onclick={loadFacets}>Retry</button>
+        </div>
+      {/if}
       <div class="filter-grid">
         <div class="field">
           <label for="view-category">Filing category</label>

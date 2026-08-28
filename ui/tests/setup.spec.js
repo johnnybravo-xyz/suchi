@@ -39,6 +39,10 @@ async function mockAPI(page, options = {}) {
       await route.fulfill({ status: 500, json: { error: 'taxonomy unavailable' } })
       return
     }
+    if (options.failPaths?.includes(path)) {
+      await route.fulfill({ status: 500, json: { error: options.failureMessage || 'forced request failure' } })
+      return
+    }
     let body = { results: [], count: 0 }
 
     if (path === '/api/demo/mode') body = { enabled: false }
@@ -81,7 +85,7 @@ async function mockAPI(page, options = {}) {
       ],
     }
     else if (path === '/api/automations/') body = {
-      results: [{
+      results: options.automations ?? [{
         id: 7, name: 'Tag utility bills', enabled: true, order: 0,
         triggers: [{ type: 2 }],
         actions: [{ id: 1, type: 'assign_tags', params: { tag_ids: [] } }],
@@ -125,6 +129,12 @@ async function mockAPI(page, options = {}) {
       if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
       const results = response?.results || []
       body = { count: response?.count ?? results.length, results }
+    }
+    else if (path === '/api/autocomplete/') {
+      const query = new URL(request.url()).searchParams.get('q') || ''
+      const response = options.autocompleteByQuery?.[query]
+      if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
+      body = { results: response?.results || [] }
     }
     else if (path === '/api/languages/') body = { languages: [] }
     else if (path === '/api/saved_views/') body = {
@@ -387,6 +397,68 @@ test('mounts only the selected settings surface', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Users', exact: true })).toBeVisible()
   expect(requestedPaths).not.toContain('/api/tokens/')
   expect(requestedPaths).not.toContain('/api/decryption-passwords/')
+  expect(requestedPaths).not.toContain('/api/groups/')
+  expect(requestedPaths).not.toContain('/api/custom_fields/')
+  expect(requestedPaths).not.toContain('/api/tags/')
+
+  const groupsRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/groups/')
+  await page.getByRole('button', { name: 'Groups', exact: true }).click()
+  await groupsRequest
+  await expect(page.getByText(/No groups yet/)).toBeVisible()
+  expect(requestedPaths).not.toContain('/api/custom_fields/')
+  expect(requestedPaths).not.toContain('/api/tags/')
+})
+
+test('keeps failed configuration reads out of editable forms', async ({ page }) => {
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    failPaths: ['/api/admin/settings/llm'],
+    failureMessage: 'classification settings unavailable',
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  await expect(page.getByText('classification settings unavailable')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save classifier' })).toHaveCount(0)
+})
+
+test('distinguishes mailbox and saved-view failures from empty data', async ({ page }) => {
+  await mockAPI(page, {
+    failPaths: ['/api/email-accounts', '/api/saved_views/'],
+    failureMessage: 'archive data unavailable',
+  })
+  await page.goto('/#/setup')
+  await page.getByRole('button', { name: 'Email intake' }).click()
+  await expect(page.getByText('archive data unavailable')).toBeVisible()
+  await expect(page.getByText('No mailboxes connected.')).toHaveCount(0)
+
+  await page.evaluate(() => { location.hash = '#/views' })
+  await expect(page.getByText('Could not load saved views', { exact: true })).toBeVisible()
+  await expect(page.getByText('No saved views yet')).toHaveCount(0)
+})
+
+test('distinguishes a recent-document failure from an empty archive', async ({ page }) => {
+  await mockAPI(page, {
+    failPaths: ['/api/documents/'],
+    failureMessage: 'recent documents unavailable',
+  })
+  await page.goto('/#/dashboard')
+
+  await expect(page.getByText('recent documents unavailable')).toBeVisible()
+  await expect(page.getByText('Nothing here yet.')).toHaveCount(0)
+})
+
+test('does not report healthy pipeline metrics when status fails', async ({ page }) => {
+  await mockAPI(page, {
+    failPaths: ['/api/stats/'],
+    failureMessage: 'archive status unavailable',
+  })
+  await page.goto('/#/dashboard')
+
+  await expect(page.locator('.metrics').getByText('archive status unavailable')).toHaveCount(2)
+  await expect(page.getByText('pipeline healthy')).toHaveCount(0)
+  await expect(page.getByText('none pending')).toHaveCount(0)
 })
 
 test('keeps capable member mailboxes in account settings', async ({ page }) => {
@@ -591,6 +663,29 @@ test('runs a changed search once and keeps its newest response', async ({ page }
   expect(queries).toEqual(['paris', 'london'])
 })
 
+test('keeps the newest command-palette suggestions', async ({ page }) => {
+  await mockAPI(page, {
+    autocompleteByQuery: {
+      old: { delay: 300, results: [{ id: 41, title: 'Old suggestion' }] },
+      new: { results: [{ id: 42, title: 'Current suggestion' }] },
+    },
+  })
+  await page.goto('/#/dashboard')
+
+  const input = page.getByRole('searchbox', { name: 'Search or run a command' })
+  const oldRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/autocomplete/' && url.searchParams.get('q') === 'old'
+  })
+  await input.fill('old')
+  await oldRequest
+  await input.fill('new')
+
+  await expect(page.getByText('Current suggestion')).toBeVisible()
+  await page.waitForTimeout(350)
+  await expect(page.getByText('Old suggestion')).toHaveCount(0)
+})
+
 test('resets document pagination when route filters change', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 100,
@@ -709,6 +804,21 @@ test('limits dashboard count requests and defers empty-view facets', async ({ pa
   const facets = page.waitForRequest(request => new URL(request.url()).pathname === '/api/tags/')
   await page.getByRole('button', { name: 'New view' }).click()
   await facets
+})
+
+test('defers automation facets until an empty workspace is edited', async ({ page }) => {
+  const facetRequests = []
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname
+    if (['/api/tags/', '/api/correspondents/', '/api/document_types/'].includes(path)) facetRequests.push(path)
+  })
+  await mockAPI(page, { automations: [] })
+  await page.goto('/#/automations')
+
+  await expect(page.getByText('No automations yet.')).toBeVisible()
+  expect(facetRequests).toEqual([])
+  await page.getByRole('button', { name: 'New automation' }).click()
+  await expect.poll(() => new Set(facetRequests).size).toBe(3)
 })
 
 test('keeps saved views ahead of the creation form', async ({ page }) => {

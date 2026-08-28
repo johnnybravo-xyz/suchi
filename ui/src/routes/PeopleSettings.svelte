@@ -15,15 +15,27 @@
   let nu = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })
   let users = $state([])
   let usersLoaded = $state(false)
+  let usersLoading = $state(false)
+  let usersError = $state('')
   let userBusy = $state(false)
+  let usersLoadVersion = 0
 
   async function loadUsers() {
+    const version = ++usersLoadVersion
+    usersLoading = true
+    usersError = ''
     try {
       const r = await adminListUsers()
+      if (version !== usersLoadVersion) return
       users = r?.results || []
     } catch (ex) {
-      notify?.(ex.message || 'Could not load users')
-    } finally { usersLoaded = true }
+      if (version === usersLoadVersion) usersError = ex.message || 'Could not load users.'
+    } finally {
+      if (version === usersLoadVersion) {
+        usersLoaded = true
+        usersLoading = false
+      }
+    }
   }
 
   async function createUser(e) {
@@ -70,6 +82,9 @@
 
   // ---------- groups ----------
   let groups = $state([])
+  let groupsLoaded = $state(false)
+  let groupsLoading = $state(false)
+  let groupsError = $state('')
   let ngName = $state('')
   let openGroup = $state(null)      // {id, members: []}
   let addUID = $state('')
@@ -79,7 +94,15 @@
     return users.filter(u => !memberIDs.has(Number(u.id)))
   }
   async function loadGroups() {
-    try { const r = await listGroups(); groups = r?.results || r || [] } catch {}
+    groupsLoading = true
+    groupsError = ''
+    try {
+      const r = await listGroups()
+      groups = r?.results || r || []
+      groupsLoaded = true
+    } catch (ex) {
+      groupsError = ex.message || 'Could not load groups.'
+    } finally { groupsLoading = false }
   }
   async function addGroup(e) {
     e.preventDefault()
@@ -117,10 +140,21 @@
 
   // ---------- custom fields ----------
   let fields = $state([])
+  let fieldsLoaded = $state(false)
+  let fieldsLoading = $state(false)
+  let fieldsError = $state('')
   let nf = $state({ name: '', data_type: 'text' })
   const FIELD_TYPES = ['text', 'number', 'date', 'bool', 'select', 'multi', 'url', 'monetary', 'documentlink']
   async function loadFields() {
-    try { const r = await listCustomFields(); fields = r?.results || r || [] } catch {}
+    fieldsLoading = true
+    fieldsError = ''
+    try {
+      const r = await listCustomFields()
+      fields = r?.results || r || []
+      fieldsLoaded = true
+    } catch (ex) {
+      fieldsError = ex.message || 'Could not load custom fields.'
+    } finally { fieldsLoading = false }
   }
   async function addField(e) {
     e.preventDefault()
@@ -160,10 +194,30 @@
     } catch (ex) { notify?.(ex.message || 'Export failed') }
   }
   let taxRows = $state([])
+  let taxRowsLoaded = $state(false)
+  let taxRowsKind = $state('')
+  let taxRowsLoading = $state(false)
+  let taxRowsError = $state('')
+  let taxLoadVersion = 0
   let ntName = $state('')
   async function loadTaxa() {
+    const version = ++taxLoadVersion
+    const kind = taxon
     const spec = TAXA.find(t => t.kind === taxon)
-    try { const r = await spec.load(); taxRows = r?.results || r || [] } catch { taxRows = [] }
+    taxRowsLoading = true
+    taxRowsLoaded = false
+    taxRowsError = ''
+    try {
+      const r = await spec.load()
+      if (version !== taxLoadVersion || kind !== taxon) return
+      taxRows = r?.results || r || []
+      taxRowsKind = kind
+      taxRowsLoaded = true
+    } catch (ex) {
+      if (version === taxLoadVersion) taxRowsError = ex.message || `Could not load ${spec.label.toLowerCase()}.`
+    } finally {
+      if (version === taxLoadVersion) taxRowsLoading = false
+    }
   }
   async function addTaxon(e) {
     e.preventDefault()
@@ -182,12 +236,23 @@
     catch (ex) { notify?.(ex.message || 'Could not delete (in use?)') }
   }
 
-  loadGroups(); loadFields()
-  $effect(() => { taxon; loadTaxa() })
-  // Reload roster whenever the users tab regains focus — cheap and keeps
-  // Keep capability chips in sync with every capability-gated surface.
-  // may have changed in the meantime.
-  $effect(() => { if (tab === 'users') loadUsers() })
+  let loadedTab = ''
+  let loadedTaxon = ''
+  $effect(() => {
+    const selected = tab
+    if (selected === loadedTab) return
+    loadedTab = selected
+    if (selected === 'users') loadUsers()
+    else if (selected === 'groups') { loadGroups(); loadUsers() }
+    else if (selected === 'fields') loadFields()
+  })
+  $effect(() => {
+    const selected = tab === 'taxonomy' ? taxon : ''
+    if (!selected) { loadedTaxon = ''; return }
+    if (selected === loadedTaxon) return
+    loadedTaxon = selected
+    loadTaxa()
+  })
 </script>
 
 <span class="seg people-tabs">
@@ -230,7 +295,9 @@
     </form>
 
     <h3 style="margin-top:18px">Users</h3>
-    {#if !usersLoaded}
+    {#if usersError}
+      <div class="settings-load-state err"><span>{usersError}</span><button class="btn sm" onclick={loadUsers}>Retry</button></div>
+    {:else if !usersLoaded || usersLoading}
       <p class="sub">Loading…</p>
     {:else if users.length === 0}
       <p class="sub">No users yet.</p>
@@ -276,6 +343,11 @@
       <input class="input" style="flex:1;max-width:320px" placeholder="New group name, e.g. family" bind:value={ngName} />
       <button class="btn primary sm"><Icon name="plus" size={13} /> Create group</button>
     </form>
+    {#if groupsError}
+      <div class="settings-load-state err"><span>{groupsError}</span><button class="btn sm" onclick={loadGroups}>Retry</button></div>
+    {:else if !groupsLoaded || groupsLoading}
+      <p class="sub">Loading…</p>
+    {:else}
     <div class="index">
       {#each groups as g (g.id)}
         <div class="irow" style="flex-wrap:wrap">
@@ -315,6 +387,7 @@
         <div class="irow"><span class="sub">No groups yet — create one to share documents with several people at once.</span></div>
       {/each}
     </div>
+    {/if}
   </div>
 
 {:else if tab === 'fields'}
@@ -326,6 +399,11 @@
       </select>
       <button class="btn primary sm"><Icon name="plus" size={13} /> Create field</button>
     </form>
+    {#if fieldsError}
+      <div class="settings-load-state err"><span>{fieldsError}</span><button class="btn sm" onclick={loadFields}>Retry</button></div>
+    {:else if !fieldsLoaded || fieldsLoading}
+      <p class="sub">Loading…</p>
+    {:else}
     <div class="index">
       {#each fields as f (f.id)}
         <div class="irow">
@@ -338,6 +416,7 @@
         <div class="irow"><span class="sub">No custom fields yet.</span></div>
       {/each}
     </div>
+    {/if}
   </div>
 
 {:else if tab === 'taxonomy'}
@@ -359,6 +438,11 @@
       <input class="input" style="flex:1;max-width:300px" placeholder={`New ${TAXA.find(t => t.kind === taxon).label.toLowerCase().replace(/s$/, '')} name`} bind:value={ntName} />
       <button class="btn primary sm"><Icon name="plus" size={13} /> Create</button>
     </form>
+    {#if taxRowsError}
+      <div class="settings-load-state err"><span>{taxRowsError}</span><button class="btn sm" onclick={loadTaxa}>Retry</button></div>
+    {:else if !taxRowsLoaded || taxRowsKind !== taxon || taxRowsLoading}
+      <p class="sub">Loading…</p>
+    {:else}
     <div class="index">
       {#each taxRows as row (row.id)}
         <div class="irow">
@@ -372,6 +456,7 @@
         <div class="irow"><span class="sub">Nothing here yet.</span></div>
       {/each}
     </div>
+    {/if}
   </div>
 
 {/if}
@@ -385,6 +470,7 @@
   .capability-option span { display: flex; flex-direction: column; }
   .capability-option b { font-weight: 600; }
   .capability-option small { color: var(--muted); }
+  .settings-load-state { display:flex;align-items:center;justify-content:space-between;gap:12px; }
   @media (max-width: 600px) {
     .user-row > .grow { flex-basis: 100%; }
   }

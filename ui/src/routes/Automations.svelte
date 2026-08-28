@@ -7,12 +7,14 @@
   let { notify, readOnly = false, jdCategories = [] } = $props()
   let items = $state([])
   let loading = $state(true)
-	let err = $state('')
-	let editing = $state(null)        // null | working copy (id present = edit)
+  let err = $state('')
+  let editing = $state(null)        // null | working copy (id present = edit)
   let mode = $state('builder')      // 'builder' | 'json'
   let jsonDraft = $state('')
   let draftErr = $state('')
   let facets = $state({ tags: [], correspondents: [], types: [] })
+  let facetsPromise
+  let facetsError = $state('')
   let peekID = $state(null)
   let builtInsOpen = $state(false)
   let toggleID = $state(null)
@@ -41,33 +43,42 @@
     try {
       const res = await listAutomations()
       items = res?.results || res || []
+      if (items.length) loadFacets()
     } catch (ex) { err = ex.message || 'Could not load automations.' }
     finally { loading = false }
   }
-  async function loadFacets() {
-    try {
-      const [t, c, d] = await Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
-      facets = {
-        tags: t?.results || [],
-        correspondents: c?.results || [],
-        types: d?.results || [],
-      }
-    } catch {}
+  function loadFacets() {
+    if (facetsPromise) return facetsPromise
+    facetsError = ''
+    facetsPromise = Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
+      .then(([tags, correspondents, types]) => {
+        facets = {
+          tags: tags?.results || [],
+          correspondents: correspondents?.results || [],
+          types: types?.results || [],
+        }
+      })
+      .catch((ex) => {
+        facetsError = ex.message || 'Could not load metadata choices.'
+        facetsPromise = null
+      })
+    return facetsPromise
   }
 
-	function openEditor(a) {
-	  editing = a ? JSON.parse(JSON.stringify(a)) : blank()
-	  mode = 'builder'
+  function openEditor(a) {
+    loadFacets()
+    editing = a ? JSON.parse(JSON.stringify(a)) : blank()
+    mode = 'builder'
     draftErr = ''
   }
   function switchMode(m) {
     draftErr = ''
     if (m === 'json') {
-		try { jsonDraft = JSON.stringify(editing, null, 2); mode = 'json' }
+      try { jsonDraft = JSON.stringify(editing, null, 2); mode = 'json' }
       catch (ex) { draftErr = ex.message; return }
     }
     else {
-		try { editing = JSON.parse(jsonDraft); mode = 'builder' }
+      try { editing = JSON.parse(jsonDraft); mode = 'builder' }
       catch { draftErr = 'Fix the JSON before switching back to the builder.' }
     }
   }
@@ -77,16 +88,16 @@
   function actionKindChanged(a) {
     const spec = ACTION_KINDS.find(k => k.kind === a.type)
     a.params = Object.fromEntries((spec?.params || []).map(p => [p, p === 'tag_ids' ? [] : p === 'template' || p === 'value' ? '' : 0]))
-	}
+  }
 
   async function save() {
     draftErr = ''
     let body
     if (mode === 'json') {
-	  try { body = JSON.parse(jsonDraft) }
+      try { body = JSON.parse(jsonDraft) }
       catch (ex) { draftErr = ex.message || 'Not valid JSON.'; return }
     } else {
-	  try { body = editing }
+      try { body = editing }
       catch (ex) { draftErr = ex.message; return }
     }
     if (!body.name?.trim()) { draftErr = 'Give it a name.'; return }
@@ -95,7 +106,7 @@
       if (k.endsWith('_id')) a.params[k] = Number(a.params[k]) || 0
       else if (k === 'tag_ids') a.params[k] = (a.params[k] || []).map(Number)
     try {
-		if (body.id) await patchAutomation(body.id, body)
+      if (body.id) await patchAutomation(body.id, body)
       else await createAutomation(body)
       editing = null
       notify?.('Automation saved')
@@ -185,7 +196,7 @@
     }
   }
 
-  load(); loadFacets()
+  load()
 </script>
 
 <div class="toolbar">
@@ -206,11 +217,16 @@
       </h3>
       <span class="spacer"></span>
       <span class="seg">
-		<button class:on={mode === 'builder'} onclick={() => switchMode('builder')}>Builder</button>
+        <button class:on={mode === 'builder'} onclick={() => switchMode('builder')}>Builder</button>
         <button class:on={mode === 'json'} onclick={() => switchMode('json')}>JSON</button>
       </span>
     </div>
     {#if draftErr}<div class="err">{draftErr}</div>{/if}
+    {#if facetsError}
+      <div class="err" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span>{facetsError}</span><button class="btn sm" onclick={loadFacets}>Retry</button>
+      </div>
+    {/if}
     {#if duplicate}
       <div class="err" style="border-left:3px solid var(--accent);background:var(--surface-2)">
         <div style="margin-bottom:6px">
@@ -229,8 +245,8 @@
       </div>
     {/if}
 
-	{#if mode === 'json'}
-	  <textarea class="input" rows="16" bind:value={jsonDraft} spellcheck="false"></textarea>
+    {#if mode === 'json'}
+      <textarea class="input" rows="16" bind:value={jsonDraft} spellcheck="false"></textarea>
     {:else}
       <div class="toolbar">
         <input class="input" style="flex:1" placeholder="Name, e.g. Tag utility bills" bind:value={editing.name} />

@@ -11,8 +11,10 @@
   let accounts = $state([])
   let capabilities = $state({ microsoft_oauth: { ready: false, reason: '' } })
   let loaded = $state(false)
+  let loadError = $state('')
   let openForm = $state(null)      // null | {mode, account?}
   let busy = $state(false)
+  let loadVersion = 0
 
   const PROVIDER_LABELS = {
     microsoft: 'Microsoft',
@@ -35,13 +37,19 @@
   }
 
   async function load() {
+    const version = ++loadVersion
+    loaded = false
+    loadError = ''
     try {
       const r = await listEmailAccounts()
+      if (version !== loadVersion) return
       accounts = r?.accounts || []
       capabilities = r?.capabilities || capabilities
     } catch (ex) {
-      notify?.(ex.data?.message || ex.message || 'Could not load mailboxes')
-    } finally { loaded = true }
+      if (version === loadVersion) loadError = ex.data?.message || ex.message || 'Could not load mailboxes.'
+    } finally {
+      if (version === loadVersion) loaded = true
+    }
   }
 
   function relTime(value) {
@@ -97,6 +105,11 @@
 
 {#if !loaded}
   <p class="mailbox-empty">Loading…</p>
+{:else if loadError}
+  <div class="mailbox-error">
+    <span>{loadError}</span>
+    <button class="btn sm" onclick={load}><Icon name="refresh" size={13} /> Retry</button>
+  </div>
 {:else if accounts.length === 0}
   <p class="mailbox-empty">No mailboxes connected.</p>
 {:else}
@@ -149,6 +162,7 @@
 <style>
   .mailbox-toolbar { display:flex;justify-content:flex-start;margin-bottom:14px }
   .mailbox-empty { color:var(--muted);font-size:.84rem;margin:0;padding:14px 0;border-top:1px solid var(--line) }
+  .mailbox-error { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem }
   .mailbox-list { border-top:1px solid var(--line) }
   .mbx-row {
     display:grid;grid-template-columns:auto minmax(220px,1fr) auto minmax(120px,auto) auto;

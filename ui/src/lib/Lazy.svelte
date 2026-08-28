@@ -20,4 +20,17 @@
     This view failed to load, likely because the server was updated.
     <a href={location.href} onclick={() => location.reload()}>Reload</a>
   </div>
+{:else}
+  <div class="route-loading" aria-label="Loading view">
+    <div class="skel"></div>
+    <div class="skel"></div>
+    <div class="skel"></div>
+  </div>
 {/if}
+
+<style>
+  .route-loading { display:grid;gap:12px;width:min(100%,760px);padding:8px 0; }
+  .route-loading .skel:nth-child(1) { width:34%;height:16px; }
+  .route-loading .skel:nth-child(2) { width:100%; }
+  .route-loading .skel:nth-child(3) { width:72%; }
+</style>

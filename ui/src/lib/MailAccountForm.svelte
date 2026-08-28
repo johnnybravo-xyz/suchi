@@ -199,7 +199,7 @@
         host: form.host,
         port: Number(form.port) || 993,
         use_tls: !!form.use_tls,
-		...(viewerRole === 'admin' ? { tls_ca_file: form.tls_ca_file } : {}),
+      ...(viewerRole === 'admin' ? { tls_ca_file: form.tls_ca_file } : {}),
         folder: form.folder,
         processed_folder: form.after_ingest === 'move' ? form.processed_folder : '',
         poll_interval_min: pollInterval,

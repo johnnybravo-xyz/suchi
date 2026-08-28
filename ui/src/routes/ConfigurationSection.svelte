@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte'
   import { setupState, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
@@ -29,11 +30,32 @@
     { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
   ]
   let presets = $state(FALLBACK_PRESETS)
-  const loaded = new Set()
+  let loaded = $state(new Set())
+  let loading = $state(new Set())
+  let loadErrors = $state({})
+  const LOAD_ERROR_MESSAGES = {
+    setup: 'Could not load the filing-tree settings.',
+    users: 'Could not load archive users.',
+    ingest: 'Could not load watched-folder settings.',
+    llm: 'Could not load classification settings.',
+    preferences: 'Could not load OCR and backup settings.',
+  }
+
   function loadOnce(key, fn) {
-    if (loaded.has(key)) return
-    loaded.add(key)
-    fn()
+    if (loaded.has(key) || loading.has(key)) return
+    loading = new Set([...loading, key])
+    loadErrors = { ...loadErrors, [key]: '' }
+    Promise.resolve()
+      .then(fn)
+      .then(() => { loaded = new Set([...loaded, key]) })
+      .catch((ex) => {
+        loadErrors = { ...loadErrors, [key]: ex.message || LOAD_ERROR_MESSAGES[key] || 'Could not load this configuration.' }
+      })
+      .finally(() => {
+        const next = new Set(loading)
+        next.delete(key)
+        loading = next
+      })
   }
 
   let busy = $state(false)
@@ -73,23 +95,19 @@
   }
 
   async function loadSetup() {
-    try {
-      const state = await setupState()
-      intent = state?.intent || ''
-      filingTreeChosen = !!state?.filing_tree_chosen
-      onFilingTreeChosen?.(filingTreeChosen)
-      const selected = state?.current_preset || state?.recommended_preset
-      if (selected) preset.preset_id = selected
-      if (setup) showAllPresets = intent === 'custom'
-    } catch {}
+    const state = await setupState()
+    intent = state?.intent || ''
+    filingTreeChosen = !!state?.filing_tree_chosen
+    onFilingTreeChosen?.(filingTreeChosen)
+    const selected = state?.current_preset || state?.recommended_preset
+    if (selected) preset.preset_id = selected
+    if (setup) showAllPresets = intent === 'custom'
   }
 
   async function loadUsers() {
-    try {
-      const result = await adminListUsers()
-      mailUsers = result?.results || result || []
-      seedSourceOwner()
-    } catch {}
+    const result = await adminListUsers()
+    mailUsers = result?.results || result || []
+    seedSourceOwner()
   }
 
   function seedSourceOwner() {
@@ -99,7 +117,7 @@
   }
   async function createSetupUser() {
     const result = await adminCreateUser(user)
-    await loadUsers()
+    try { await loadUsers() } catch {}
     return result
   }
 
@@ -123,46 +141,71 @@
   }
 
   async function loadLLM() {
-    try {
-      const st = await getLLMSettings()
-      llmStatus = st
-      llm.enabled = !!st?.enabled
-      llm.endpoint_url = st?.endpoint_url || 'http://host.suchi.local:11434/v1'
-      llm.model = st?.model || 'qwen2.5:7b'
-      llm.egress_ack = !!st?.egress_ack
-      llm.confidence_threshold = st?.confidence_threshold ?? 0.7
-      llm.archive_enabled = st?.archive_enabled ?? true
-      llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
-      llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
-      llm.api_key = ''
-      llm.clear_api_key = false
-      llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
-    } catch {}
+    const st = await getLLMSettings()
+    llmStatus = st
+    llm.enabled = !!st?.enabled
+    llm.endpoint_url = st?.endpoint_url || 'http://host.suchi.local:11434/v1'
+    llm.model = st?.model || 'qwen2.5:7b'
+    llm.egress_ack = !!st?.egress_ack
+    llm.confidence_threshold = st?.confidence_threshold ?? 0.7
+    llm.archive_enabled = st?.archive_enabled ?? true
+    llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
+    llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
+    llm.api_key = ''
+    llm.clear_api_key = false
+    llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
   }
   async function loadPreferences() {
-    try {
-      const current = await getPreferences()
-      prefs.backup_interval_hours = current?.backup_interval_hours ?? 24
-      prefs.ocr_languages = (current?.ocr_languages || ['eng']).join(',')
-    } catch {}
+    const current = await getPreferences()
+    prefs.backup_interval_hours = current?.backup_interval_hours ?? 24
+    prefs.ocr_languages = (current?.ocr_languages || ['eng']).join(',')
   }
   async function loadIngest() {
-    try {
-      const current = await getIngestSettings()
-      ingest.fs_watch_dir = current?.fs_watch_dir || ''
-      ingest.fs_watch_owner_email = current?.fs_watch_owner_email || ''
-      seedSourceOwner()
-    } catch {}
+    const current = await getIngestSettings()
+    ingest.fs_watch_dir = current?.fs_watch_dir || ''
+    ingest.fs_watch_owner_email = current?.fs_watch_owner_email || ''
+    seedSourceOwner()
   }
+  const loadFunctions = {
+    setup: loadSetup,
+    users: loadUsers,
+    ingest: loadIngest,
+    llm: loadLLM,
+    preferences: loadPreferences,
+  }
+  const requiredLoadKeys = $derived(({
+    archive: ['setup'],
+    users: ['users'],
+    sources: ['users', 'ingest'],
+    mail: ['users'],
+    llm: ['llm'],
+    preferences: ['preferences'],
+  })[section] || [])
+  const activeLoadFailure = $derived.by(() => {
+    const key = requiredLoadKeys.find((candidate) => loadErrors[candidate])
+    return key ? { key, message: loadErrors[key] } : null
+  })
+  const activeLoading = $derived(requiredLoadKeys.some((key) => loading.has(key) || !loaded.has(key)))
+
+  function retryLoad(key) {
+    const next = new Set(loaded)
+    next.delete(key)
+    loaded = next
+    loadOnce(key, loadFunctions[key])
+  }
+
   $effect(() => {
-    if (section === 'archive') {
-      loadOnce('setup', loadSetup)
-      loadOnce('presets', loadPresets)
-    }
-    if (section === 'users' || section === 'sources' || section === 'mail') loadOnce('users', loadUsers)
-    if (section === 'sources') loadOnce('ingest', loadIngest)
-    if (section === 'llm') loadOnce('llm', loadLLM)
-    if (section === 'preferences') loadOnce('preferences', loadPreferences)
+    const selected = section
+    untrack(() => {
+      if (selected === 'archive') {
+        loadOnce('setup', loadSetup)
+        loadOnce('presets', loadPresets)
+      }
+      if (selected === 'users' || selected === 'sources' || selected === 'mail') loadOnce('users', loadUsers)
+      if (selected === 'sources') loadOnce('ingest', loadIngest)
+      if (selected === 'llm') loadOnce('llm', loadLLM)
+      if (selected === 'preferences') loadOnce('preferences', loadPreferences)
+    })
   })
 
   async function saveAnd(fn, label) {
@@ -226,6 +269,21 @@
 </script>
 
 <div class="configuration-section">
+  {#if activeLoadFailure}
+    <div class="configuration-load-error">
+      <div class="err">{activeLoadFailure.message}</div>
+      <div class="toolbar">
+        <button class="btn sm" onclick={() => retryLoad(activeLoadFailure.key)}>Retry</button>
+        {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button>{/if}
+      </div>
+    </div>
+  {:else if activeLoading}
+    <div class="configuration-loading" aria-label="Loading configuration">
+      <div class="skel" style="width:32%;height:16px"></div>
+      <div class="skel" style="width:78%"></div>
+      <div class="skel" style="width:62%"></div>
+    </div>
+  {:else}
     {#if err}<div class="err">{err}</div>{/if}
 
     {#if section === 'archive'}
@@ -352,23 +410,23 @@
       </div>
 
     {:else if section === 'llm'}
-	  <h3>Classification</h3>
-	  <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills details that remain unresolved.</p>
-	  <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
-	  {#if llm.archive_enabled}
-		<div class="field">
-		  <label for="archive-auto">Apply archive matches at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
-		  <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
-			 bind:value={llm.archive_auto_threshold}
-			 onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
-		</div>
-		<div class="field">
-		  <label for="archive-review">Offer uncertain matches for review at · {Number(llm.archive_review_threshold).toFixed(2)}</label>
-		  <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
-			 bind:value={llm.archive_review_threshold} />
-		</div>
-	  {/if}
-	  <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
+      <h3>Classification</h3>
+      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills details that remain unresolved.</p>
+      <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
+      {#if llm.archive_enabled}
+        <div class="field">
+          <label for="archive-auto">Apply archive matches at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
+          <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
+                 bind:value={llm.archive_auto_threshold}
+                 onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
+        </div>
+        <div class="field">
+          <label for="archive-review">Offer uncertain matches for review at · {Number(llm.archive_review_threshold).toFixed(2)}</label>
+          <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
+                 bind:value={llm.archive_review_threshold} />
+        </div>
+      {/if}
+      <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
           <span class="pill ok">Classifier active</span>
@@ -419,7 +477,7 @@
         <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-				onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Use local classification only</button>
+                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Use local classification only</button>
       </div>
       {#if llmTestError}
         <div class="test-result failed">
@@ -438,7 +496,7 @@
     {:else if section === 'automations'}
       <h3>Automations</h3>
       <p class="wiz-p">Your preset can install starter filing automations. Preset-owned automations show their filing-tree owner; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
-		<p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
+      <p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
         {#if setup}
@@ -463,6 +521,7 @@
         {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Defaults are fine</button>{/if}
       </div>
     {/if}
+  {/if}
   </div>
 
 <style>
@@ -487,6 +546,8 @@
     padding: 7px 10px; margin-top: 12px; font-size: .82rem;
   }
   .test-result.failed { border-left-color: var(--danger); }
+  .configuration-loading { display:grid;gap:12px;padding:8px 0; }
+  .configuration-load-error .toolbar { margin-top:10px; }
   @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .intent-grid { grid-template-columns: 1fr; } }
   .preset {

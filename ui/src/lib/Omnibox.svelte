@@ -10,6 +10,7 @@
   let idx = $state(-1)
   let docs = $state([])
   let box, input, timer
+  let searchVersion = 0
 
   function matches(label) {
     const s = q.trim().toLowerCase()
@@ -28,13 +29,16 @@
   const total = $derived(items.length)
 
   function search(v) {
+    const version = ++searchVersion
     clearTimeout(timer)
     if (!v.trim()) { docs = []; return }
     timer = setTimeout(async () => {
       try {
         const r = await autocomplete(v.trim(), 6)
-        docs = (r?.results || r || []).slice(0, 6)
-      } catch { docs = [] }
+        if (version === searchVersion) docs = (r?.results || r || []).slice(0, 6)
+      } catch {
+        if (version === searchVersion) docs = []
+      }
     }, 160)
   }
 
@@ -48,7 +52,11 @@
     }
     close()
   }
-  function close() { open = false; idx = -1; q = ''; docs = []; input?.blur() }
+  function close() {
+    searchVersion++
+    clearTimeout(timer)
+    open = false; idx = -1; q = ''; docs = []; input?.blur()
+  }
 
   function onKey(e) {
     if (e.key === 'Escape') { close(); return }

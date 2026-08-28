@@ -4,7 +4,10 @@
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { st, inboxCategory, recent } = $props()
+  let {
+    st, statsError = '', inboxCategory, taxonomyLoaded = false, taxonomyError = '', recent,
+    recentError = '', onRetryRecent,
+  } = $props()
   const inboxCount = $derived(st?.inbox_count ?? 0)
   const pending = $derived(st?.pending_approvals ?? 0)
   const dead = $derived(st?.dead_jobs ?? 0)
@@ -15,12 +18,15 @@
   let viewsLoading = $state(true)
   let viewsError = $state('')
   let viewTotal = $state(0)
+  let loadVersion = 0
 
   async function load() {
+    const version = ++loadVersion
     viewsLoading = true
     viewsError = ''
     try {
       const res = await listSavedViews({ include: 'shared' })
+      if (version !== loadVersion) return
       const raw = res?.results || res || []
       viewTotal = res?.count ?? raw.length
       const sorted = raw.map(v => ({
@@ -36,16 +42,20 @@
         else selected.push(shared)
       }
 
-      views = await Promise.all(selected.map(async (view) => {
+      const loadedViews = await Promise.all(selected.map(async (view) => {
         try {
           const result = await listDocuments({ ...view.filters, page_size: 1 })
           return { ...view, count: result?.count ?? 0 }
         } catch { return view }
       }))
+      if (version === loadVersion) views = loadedViews
     } catch (ex) {
+      if (version !== loadVersion) return
       views = []
       viewsError = ex.message || 'Could not load views.'
-    } finally { viewsLoading = false }
+    } finally {
+      if (version === loadVersion) viewsLoading = false
+    }
   }
 
   function filterSummary(f) {
@@ -71,17 +81,19 @@
   <a class="metric card" href="#/inbox" class:attn={inboxCount > 0}>
     <span class="m-label"><Icon name="inbox" size={14} /> Inbox</span>
     <span class="m-value">{inboxCategory ? inboxCount : '—'}</span>
-    <span class="m-sub">{inboxCount > 0 ? 'waiting to be filed' : 'everything is filed'}</span>
+    <span class="m-sub">{inboxCategory
+      ? (inboxCount > 0 ? 'waiting to be filed' : 'everything is filed')
+      : (taxonomyLoaded ? (taxonomyError || 'inbox unavailable') : 'loading archive structure')}</span>
   </a>
   <a class="metric card" href="#/tasks" class:attn={pending > 0}>
     <span class="m-label"><Icon name="tasks" size={14} /> Approvals</span>
-    <span class="m-value">{pending}</span>
-    <span class="m-sub">{pending > 0 ? 'waiting on you' : 'none pending'}</span>
+    <span class="m-value">{st ? pending : '—'}</span>
+    <span class="m-sub">{st ? (pending > 0 ? 'waiting on you' : 'none pending') : (statsError || 'loading archive status')}</span>
   </a>
   <a class="metric card" href="#/tasks" class:bad={dead > 0}>
     <span class="m-label"><Icon name="zap" size={14} /> Failed jobs</span>
-    <span class="m-value">{dead}</span>
-    <span class="m-sub">{dead > 0 ? 'dead-lettered — needs attention' : 'pipeline healthy'}</span>
+    <span class="m-value">{st ? dead : '—'}</span>
+    <span class="m-sub">{st ? (dead > 0 ? 'dead-lettered — needs attention' : 'pipeline healthy') : (statsError || 'loading archive status')}</span>
   </a>
 </div>
 
@@ -91,7 +103,15 @@
       <h3>Recently added</h3>
       <a class="btn sm" href="#/documents">All documents</a>
     </div>
-    {#if recent?.length}
+    {#if recent === undefined}
+      <div class="index" aria-label="Loading recent documents">
+        {#each Array(3) as _}<div class="irow"><div class="skel" style="width:68%"></div></div>{/each}
+      </div>
+    {:else if recentError}
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:.86rem">
+        <span>{recentError}</span><button class="btn sm" onclick={() => onRetryRecent?.({ background: false })}>Retry</button>
+      </div>
+    {:else if recent.length}
       <div class="index">
         {#each recent as d (d.id)}
           <a class="irow" href={`#/doc/${d.id}`}>

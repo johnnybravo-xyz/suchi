@@ -16,6 +16,7 @@
   let loading = $state(true)
   let err = $state('')
   let tags = $state([]), correspondents = $state([]), types = $state([])
+  let facetError = $state('')
   const fQuery = $derived(route.query.get('q') || '')
   const fTag = $derived(route.query.get('tags__id__in') || '')
   const fCorr = $derived(route.query.get('correspondents__id__in') || '')
@@ -48,10 +49,11 @@
   }
 
   async function loadFacets() {
+    facetError = ''
     try {
       const [t, c, d] = await Promise.all([listTags(), listCorrespondents(), listDocumentTypes()])
       tags = t?.results || []; correspondents = c?.results || []; types = d?.results || []
-    } catch {}
+    } catch (ex) { facetError = ex.message || 'Some document filters could not be loaded.' }
   }
 
   async function load({ background = false } = {}) {
@@ -326,7 +328,7 @@
     <span class="kbdhint" title="Keyboard: j/k move · x select · shift-click range · Enter open" aria-label="Keyboard shortcuts: j and k to move, x to select, shift-click for a range, Enter to open">
       <kbd>j</kbd><kbd>k</kbd><kbd>x</kbd><kbd>⏎</kbd>
     </span>
-    <button class="btn sm" onclick={load} title="Refresh"><Icon name="chev" size={13} /></button>
+    <button class="btn sm" onclick={load} title="Refresh" aria-label="Refresh documents"><Icon name="refresh" size={13} /></button>
     <a class="btn sm" href="#/trash" title="Trash"><Icon name="trash" size={13} /></a>
     <select class="input" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
       <option value="-created_at">Newest first</option>
@@ -335,6 +337,11 @@
       <option value="-title">Title Z–A</option>
     </select>
   </div>
+  {#if facetError}
+    <div class="err" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+      <span>{facetError}</span><button class="btn sm" onclick={loadFacets}>Retry filters</button>
+    </div>
+  {/if}
 {/if}
 
 {#if loading}
