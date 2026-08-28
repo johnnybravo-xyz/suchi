@@ -14,7 +14,7 @@
 
   async function load() {
     try {
-      const res = await listSavedViews()
+      const res = await listSavedViews({ include: 'shared' })
       const raw = res?.results || res || []
       views = raw.map(v => ({
         ...v,
@@ -95,7 +95,7 @@
 
   <div>
     <div class="dash-head">
-      <h3>Your views</h3>
+      <h3>Views</h3>
       <a class="btn sm" href="#/views?new=1"><Icon name="plus" size={13} /> New view</a>
     </div>
     {#if views.length}
@@ -110,7 +110,7 @@
       </div>
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
-        No custom views yet. Saved views appear here with a live document count.
+        No saved views yet. Create one in Views to keep a useful document filter close by.
       </div>
     {/if}
   </div>

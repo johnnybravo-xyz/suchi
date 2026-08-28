@@ -1,7 +1,7 @@
 <script>
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, mintDemoSession, getDemoAnonToken, getToken } from './lib/api.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, getDemoAnonToken, getToken } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
@@ -102,8 +102,7 @@
 
   // Demo visitors receive a read token and a synthetic session. api.js upgrades
   // the token on the first write; regular deployments continue through whoami.
-  fetch('/api/demo/mode')
-    .then(r => r.ok ? r.json() : null)
+  getDemoMode()
     .then(async j => {
       if (j?.enabled) demoMode = true
       if (j?.enabled && !getToken() && !getDemoAnonToken()) {
@@ -228,6 +227,8 @@
 
   $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false })
   const page = $derived(route.parts[0] || 'dashboard')
+  const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
+  const demoCategories = $derived(jdTree.flatMap((area) => area.categories))
   $effect(() => {
     if (session.user && page === 'dashboard') loadRecentDocuments()
   })
@@ -245,6 +246,23 @@
     { href: '#/search',   label: 'Search results', ico: 'search' },
     { href: '#/settings', label: 'Settings', ico: 'settings' },
   ]
+  const pageTitle = $derived(
+    nav.find((item) => item.key === page)?.label || ({
+      doc: 'Document',
+      search: 'Search results',
+      upload: 'Upload',
+      settings: 'Settings',
+      demo: 'Demo',
+      setup: 'Setup',
+    })[page] || 'Page not found'
+  )
+  $effect(() => {
+    if (!session.user) return
+    if (page === 'login') go('#/dashboard')
+    if (page === 'settings' && route.query.get('tab') === 'archive' && session.user.role !== 'admin') {
+      go('#/settings')
+    }
+  })
   const COMMANDS = $derived([
     { label: 'Upload documents',       ico: 'upload', run: () => (uploadOpen = true) },
     { label: session.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
@@ -354,11 +372,7 @@
                 aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'} title="Navigation">
           <Icon name={mobileNavOpen ? 'x' : 'menu'} size={17} />
         </button>
-        <h1>
-          {#if page === 'doc'}Document
-          {:else if page === 'tasks'}Approvals
-          {:else}{page[0].toUpperCase() + page.slice(1)}{/if}
-        </h1>
+        <h1>{pageTitle}</h1>
         <Omnibox pages={session.user?.role === 'admin'
 				? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'Users and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} />
@@ -398,7 +412,7 @@
       <div class="content">
         {#if page === 'dashboard'}<Dashboard {st} {inboxCategory} recent={recentDocs} />
         {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify }} />
-        {:else if page === 'doc'}<Lazy load={lazyRoutes.detail} props={{ id: route.parts[1], notify }} />
+        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify }} />
         {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
@@ -407,10 +421,9 @@
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1' }} />
-        {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} />
+        {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories: demoCategories }} />
 		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
-        {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />
-        {:else}<div class="empty">Nothing filed under <code>#{route.path}</code>. <a href="#/dashboard">Back to the dashboard</a></div>
+        {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
         {/if}
       </div>
     </div>

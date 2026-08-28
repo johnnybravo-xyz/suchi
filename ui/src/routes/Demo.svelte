@@ -2,6 +2,10 @@
   // Public demo shortcuts into populated SPA views; App hides this route elsewhere.
 
   import Icon from '../lib/Icon.svelte'
+  import { documentListHash } from '../lib/documentFilters.js'
+
+  let { jdCategories = [] } = $props()
+  const financeCategory = $derived(jdCategories.find((category) => Number(category.code) === 22))
 
   const cards = [
     { title: 'Search across the archive',
@@ -14,7 +18,7 @@
       icon: 'search' },
     { title: 'Browse the Johnny Decimal tree',
       hint: 'Jump to Finance & Tax (JD 22) and see the real filing structure.',
-      href: '#/documents?jd=22',
+      jdCode: 22,
       icon: 'docs' },
     { title: 'Similar documents',
       hint: 'Click any bill; the "Similar" strip clusters the rest of its household.',
@@ -33,6 +37,11 @@
       href: '#/upload',
       icon: 'inbox' },
   ]
+
+  function cardHref(card) {
+    if (!card.jdCode) return card.href
+    return financeCategory ? documentListHash({ jd_category_id: financeCategory.id }) : '#/documents'
+  }
 </script>
 
 <div class="demo-wrap">
@@ -43,7 +52,7 @@
 
   <div class="grid">
     {#each cards as c}
-      <a class="card" href={c.href}>
+      <a class="card" href={cardHref(c)}>
         <span class="ico"><Icon name={c.icon} size={18} /></span>
         <div class="body">
           <b>{c.title}</b>

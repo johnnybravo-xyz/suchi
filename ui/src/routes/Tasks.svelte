@@ -1,5 +1,5 @@
 <script>
-  import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob } from '../lib/api.js'
+  import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -209,7 +209,7 @@
                  href={`#/doc/${group.document.doc_id}`}
                  aria-label={`Open ${group.document.doc_title || `document ${group.document.doc_id}`}`}>
                 {#if group.document.doc_has_thumbnail}
-                  <img src={`/api/documents/${group.document.doc_id}/thumb/`} alt="" loading="lazy" />
+                  <img src={thumbPath(group.document.doc_id)} alt="" loading="lazy" />
                 {:else}
                   <Icon name="docs" size={22} />
                 {/if}

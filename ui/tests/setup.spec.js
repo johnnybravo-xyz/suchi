@@ -43,7 +43,7 @@ async function mockAPI(page, options = {}) {
       capabilities: options.capabilities || ['mailboxes'],
     }
     else if (path === '/api/stats/') body = {
-      documents: 0,
+      documents_total: options.documentsCount ?? options.documents?.length ?? 0,
       inbox_count: 0,
       pending_approvals: 0,
       dead_jobs: 0,
@@ -102,7 +102,7 @@ async function mockAPI(page, options = {}) {
       fs_watch_owner_email: '',
     }
     else if (path === '/api/documents/') body = {
-      count: options.documents?.length || 0,
+      count: options.documentsCount ?? options.documents?.length ?? 0,
       results: options.documents || [],
     }
     else if (path === '/api/saved_views/') body = {
@@ -403,6 +403,56 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await expect(page.locator('a[href="#/documents?jd=11"]')).toContainText('Identity')
 })
 
+test('uses the demo category database id in document links', async ({ page }) => {
+  await mockAPI(page, {
+    jdCategories: [{
+      id: 6, code: 22, name: 'Finance and tax', area_code: 20, area_name: 'Money',
+    }],
+  })
+  await page.goto('/#/demo')
+
+  const link = page.getByRole('link', { name: /Browse the Johnny Decimal tree/ })
+  await expect(link).toHaveAttribute('href', '#/documents?jd=6')
+})
+
+test('does not request a document for an invalid detail route', async ({ page }) => {
+  const invalidRequests = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.includes('/api/documents/not-a-number')) {
+      invalidRequests.push(request.url())
+    }
+  })
+  await mockAPI(page)
+  await page.goto('/#/doc/not-a-number')
+
+  await expect(page.getByText('Page not found.')).toBeVisible()
+  expect(invalidRequests).toEqual([])
+})
+
+test('resets document pagination when route filters change', async ({ page }) => {
+  await mockAPI(page, {
+    documentsCount: 100,
+    documents: [{ id: 42, title: 'Electricity bill', created_at: 1780000000, tags: [] }],
+  })
+  await page.goto('/#/documents')
+
+  const secondPage = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' && url.searchParams.get('page') === '2'
+  })
+  await page.getByRole('button', { name: /Next/ }).click()
+  await secondPage
+
+  const filteredFirstPage = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' &&
+      url.searchParams.get('page') === '1' && url.searchParams.get('jd_category_id') === '6'
+  })
+  await page.evaluate(() => { location.hash = '#/documents?jd=6' })
+  await filteredFirstPage
+  await expect(page.getByText(/page 1 of 2/)).toBeVisible()
+})
+
 test('opens dashboard views through user-facing document routes', async ({ page }) => {
   const filters = {
     q: 'distribution advice',
@@ -455,7 +505,7 @@ test('starts view creation from the dashboard action', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/dashboard')
 
-  await expect(page.getByText('No custom views yet. Saved views appear here with a live document count.')).toBeVisible()
+  await expect(page.getByText('No saved views yet. Create one in Views to keep a useful document filter close by.')).toBeVisible()
   await page.getByRole('link', { name: 'New view' }).click()
   await expect(page).toHaveURL(/#\/views\?new=1$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
@@ -499,6 +549,33 @@ test('gates saved-view sharing for members by capability', async ({ page }) => {
   await page.reload()
   await page.getByRole('button', { name: 'New view' }).click()
   await expect(page.getByRole('dialog').getByLabel('Share this view')).toBeVisible()
+})
+
+test('shows shared views without offering to delete another users view', async ({ page }) => {
+  await mockAPI(page, {
+    userRole: 'member',
+    capabilities: [],
+    savedViews: [{
+      id: 8,
+      owner_id: 2,
+      name: 'Shared tax review',
+      filter_json: JSON.stringify({ q: 'tax' }),
+      position: 0,
+      shared: true,
+    }],
+  })
+
+  const sharedRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/saved_views/' && url.searchParams.get('include') === 'shared'
+  })
+  await page.goto('/#/dashboard')
+  await sharedRequest
+  await expect(page.locator('.views').getByRole('link', { name: /Shared tax review/ })).toBeVisible()
+
+  await page.goto('/#/views')
+  await expect(page.getByRole('link', { name: /Shared tax review/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Delete Shared tax review' })).toHaveCount(0)
 })
 
 test('lets admins grant saved-view sharing to members', async ({ page }) => {

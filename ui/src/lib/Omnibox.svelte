@@ -1,6 +1,7 @@
 <script>
   // Combined command palette and document autocomplete.
   import { autocomplete } from './api.js'
+  import { go } from './router.svelte.js'
   import Icon from './Icon.svelte'
 
   let { pages = [], commands = [] } = $props()
@@ -41,9 +42,9 @@
     if (i >= 0 && items[i]) {
       const it = items[i]
       if (it.kind === 'cmd') it.run?.()
-      else if (it.href) location.hash = it.href.replace(/^#/, '')
+      else if (it.href) go(it.href)
     } else if (q.trim()) {
-      location.hash = `/search?q=${encodeURIComponent(q.trim())}`
+      go(`#/search?q=${encodeURIComponent(q.trim())}`)
     }
     close()
   }

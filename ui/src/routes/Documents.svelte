@@ -30,6 +30,11 @@
   const isInbox = $derived(inbox != null)
   const jdFilter = $derived(route.query.get('jd') || '')
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
+  const activeFilterKey = $derived(JSON.stringify([
+    ordering, fQuery, fTag, fCorr, fType, fSens, jdFilter,
+    inbox?.id || '', dateFrom, dateTo,
+  ]))
+  let loadedFilterKey = ''
 
   function setRouteFilter(key, value) {
     const params = new URLSearchParams(route.query)
@@ -217,7 +222,18 @@
 
   loadFacets()
   loadJDCats()
-  $effect(() => { page; ordering; fQuery; fTag; fCorr; fType; fSens; jdFilter; inbox; dateFrom; dateTo; uploadBus.revision; load() })
+  $effect(() => {
+    const key = activeFilterKey
+    uploadBus.revision
+    if (loadedFilterKey && loadedFilterKey !== key && page !== 1) {
+      loadedFilterKey = key
+      page = 1
+      return
+    }
+    loadedFilterKey = key
+    page
+    load()
+  })
   $effect(() => {
     const fn = () => { if (document.visibilityState === 'visible') load({ background: true }) }
     document.addEventListener('visibilitychange', fn)

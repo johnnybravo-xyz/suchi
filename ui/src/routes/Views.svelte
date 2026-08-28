@@ -22,7 +22,7 @@
   async function load() {
     loading = true
     try {
-      const r = await listSavedViews()
+      const r = await listSavedViews({ include: 'shared' })
       const raw = r?.results || r || []
       views = raw.map(view => ({ ...view, filters: parseSavedViewFilters(view.filter_json) }))
     } catch (ex) { notify?.(ex.message || 'Could not load views') }
@@ -79,7 +79,7 @@
         name: nv.name.trim(),
         filter_json: JSON.stringify(filters),
         display: 'list',
-        position: views.length,
+        position: views.filter((view) => !view.owner_id).length,
         shared: canShare && nv.shared,
       })
       nv = emptyView()
@@ -118,7 +118,7 @@
   <header class="views-intro">
     <div>
       <span class="eyebrow">Saved searches</span>
-      <h2>Your shortcuts into the archive</h2>
+      <h2>Shortcuts into the archive</h2>
       <p>Keep the document filters you return to. Open a view to pick up exactly where you left off.</p>
     </div>
     <button class="btn primary new-view" onclick={openCreate}>
@@ -155,13 +155,13 @@
     {:else}
       <div class="view-list">
         {#each views as v (v.id)}
-          <div class="view-row">
+          <div class="view-row" class:shared-view={!!v.owner_id}>
             <a class="view-link" href={href(v)}>
               <span class="view-mark"><Icon name="eye" size={17} /></span>
               <span class="view-copy">
                 <span class="view-name">
                   <strong>{v.name}</strong>
-                  {#if v.shared}<span class="pill ok">Shared</span>{/if}
+                  {#if v.shared}<span class="pill ok" title={v.owner_id ? `Shared by user #${v.owner_id}` : 'Shared with every user'}>Shared</span>{/if}
                 </span>
                 <span class="filter-summary">
                   {#each filterSummary(v.filters) as filter}
@@ -171,9 +171,11 @@
               </span>
               <span class="open-view" aria-hidden="true"><Icon name="chev" size={15} /></span>
             </a>
-            <button class="delete-view" onclick={() => remove(v)} title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`}>
-              <Icon name="trash" size={14} />
-            </button>
+            {#if !v.owner_id}
+              <button class="delete-view" onclick={() => remove(v)} title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`}>
+                <Icon name="trash" size={14} />
+              </button>
+            {/if}
           </div>
         {/each}
       </div>
@@ -253,7 +255,7 @@
           <input type="checkbox" bind:checked={nv.shared} />
           <span>
             <strong>Share this view</strong>
-            <small>Make it available on every user's dashboard.</small>
+            <small>Show it in every user's Views list and dashboard.</small>
           </span>
         </label>
       {/if}
@@ -285,6 +287,7 @@
 
   .view-list { display: flex; flex-direction: column; }
   .view-row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; min-height: 78px; border-bottom: 1px solid var(--line); transition: background .14s ease; }
+  .view-row.shared-view { grid-template-columns: minmax(0, 1fr); }
   .view-row:last-child { border-bottom: 0; }
   .view-row:hover { background: var(--tint); }
   .view-link { display: flex; align-items: center; gap: 13px; min-width: 0; padding: 13px 8px 13px 17px; color: inherit; text-decoration: none; }

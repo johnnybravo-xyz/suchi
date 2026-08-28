@@ -58,6 +58,8 @@ export async function mintDemoSession() {
   return j
 }
 
+export const getDemoMode = () => api.get('/api/demo/mode')
+
 async function upgradeDemoSession() {
   const anon = getDemoAnonToken()
   if (!anon) return null
@@ -73,7 +75,7 @@ async function upgradeDemoSession() {
   return j
 }
 
-export const api = {
+const api = {
   get: (p) => req('GET', p),
   post: (p, b) => req('POST', p, b),
   patch: (p, b) => req('PATCH', p, b),
@@ -94,7 +96,7 @@ function singleFlightGet(path) {
   return pending
 }
 
-export function qs(params) {
+function qs(params) {
   const u = new URLSearchParams()
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null && v !== '') u.set(k, v)
@@ -207,7 +209,7 @@ export const thumbPath = (id, reveal) => `/api/documents/${id}/thumb${reveal ? '
 export const automationsSchema = () => api.get('/api/automations/schema')
 export const listPresets = () => api.get('/api/presets/')
 
-export const listSavedViews = () => api.get('/api/saved_views/')
+export const listSavedViews = (params) => api.get(`/api/saved_views/${qs(params)}`)
 export const createSavedView = (b) => api.post('/api/saved_views/', b)
 export const deleteSavedView = (id) => api.del(`/api/saved_views/${id}`)
 
