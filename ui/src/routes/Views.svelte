@@ -2,6 +2,7 @@
   import { listSavedViews, createSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes, listJDCategories } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
+  import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, canShare = false, startCreate = false } = $props()
@@ -44,7 +45,7 @@
     if (filters.tags__id__in) summary.push(`Tag: ${nameFor(tags, filters.tags__id__in, 'Selected tag')}`)
     if (filters.correspondents__id__in) summary.push(nameFor(corrs, filters.correspondents__id__in, 'Selected correspondent'))
     if (filters.document_type__id) summary.push(nameFor(types, filters.document_type__id, 'Selected type'))
-    if (filters.sensitivity) summary.push(filters.sensitivity[0].toUpperCase() + filters.sensitivity.slice(1))
+    if (filters.sensitivity) summary.push(sensitivityLabel(filters.sensitivity))
     if (filters.ordering) summary.push(filters.ordering === 'title' ? 'Title order' : filters.ordering === '-created_at' ? 'Newest first' : 'Custom order')
     return summary.length ? summary : ['All documents']
   }
@@ -240,10 +241,9 @@
           <label for="view-sensitivity">Sensitivity</label>
           <select id="view-sensitivity" class="input" bind:value={nv.sens}>
             <option value="">Any sensitivity</option>
-            <option value="public">Public</option>
-            <option value="internal">Internal</option>
-            <option value="confidential">Confidential</option>
-            <option value="restricted">Restricted</option>
+            {#each SENSITIVITY_OPTIONS as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
           </select>
         </div>
       </div>

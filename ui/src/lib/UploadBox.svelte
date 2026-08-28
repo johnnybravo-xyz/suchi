@@ -1,6 +1,6 @@
 <script>
   import { uploadDocument, getDocument, patchDocument, listJDCategories, listTasks } from '../lib/api.js'
-  import { fmtBytes } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, fmtBytes } from '../lib/format.js'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -139,10 +139,9 @@
                       value={q.doc?.sensitivity ?? ''}
                       onchange={(e) => patch(q, { sensitivity: e.target.value }, 'Sensitivity set')}>
                 <option value="">sensitivity…</option>
-                <option value="public">public</option>
-                <option value="internal">internal</option>
-                <option value="confidential">confidential</option>
-                <option value="restricted">restricted</option>
+                {#each SENSITIVITY_OPTIONS as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
               </select>
               <a class="btn sm" href={`#/doc/${q.id}`}>Open</a>
             </div>

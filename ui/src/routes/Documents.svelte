@@ -1,8 +1,10 @@
 <script>
   import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, listJDCategories, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
-  import { route } from '../lib/router.svelte.js'
+  import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
-  import { fmtDate, sensDot } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, fmtDate, isHighSensitivity, sensDot } from '../lib/format.js'
+  import { session } from '../lib/session.svelte.js'
+  import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
@@ -27,8 +29,7 @@
   const pageSize = 50
   const isInbox = $derived(inbox != null)
   const jdFilter = $derived(route.query.get('jd') || '')
-  // Keep thumbnail reveal behavior aligned with core/api.IsHighSensitivity.
-  const isHigh = (s) => s === 'confidential' || s === 'restricted'
+  const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
 
   function setRouteFilter(key, value) {
     const params = new URLSearchParams(route.query)
@@ -37,7 +38,7 @@
     else params.delete(key)
     page = 1
     const query = params.toString()
-    location.hash = `#/documents${query ? `?${query}` : ''}`
+    go(`#/documents${query ? `?${query}` : ''}`)
   }
 
   async function loadFacets() {
@@ -210,7 +211,7 @@
     } else if (e.key === 'x' && lastIdx >= 0) {
       e.preventDefault(); toggleSel(lastIdx)
     } else if (e.key === 'Enter' && lastIdx >= 0 && docs[lastIdx]) {
-      location.hash = `#/doc/${docs[lastIdx].id}`
+      go(`#/doc/${docs[lastIdx].id}`)
     }
   }
 
@@ -239,11 +240,13 @@
     <select class="input" style="max-width:160px" disabled={bulkBusy}
             onchange={(e) => bulkSens(e.target.value)}>
       <option value="" selected disabled>Sensitivity…</option>
-      <option value="public">Public</option>
-      <option value="internal">Internal</option>
-      <option value="confidential">Confidential</option>
+      {#each SENSITIVITY_OPTIONS as option (option.value)}
+        <option value={option.value}>{option.label}</option>
+      {/each}
     </select>
-    <button class="btn sm" disabled={bulkBusy} onclick={bulkShare}><Icon name="link" size={12} /> Share</button>
+    {#if canShareLinks}
+      <button class="btn sm" disabled={bulkBusy} onclick={bulkShare}><Icon name="link" size={12} /> Share</button>
+    {/if}
     {#if anyLockedSelected}
       <button class="btn sm" disabled={bulkBusy} onclick={() => (bulkDecOpen = true)}
               title="Try one password against every encrypted doc in the selection">
@@ -282,9 +285,9 @@
     </select>
     <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
       <option value="">Any sensitivity</option>
-      <option value="public">Public</option>
-      <option value="internal">Internal</option>
-      <option value="confidential">Confidential</option>
+      {#each SENSITIVITY_OPTIONS as option (option.value)}
+        <option value={option.value}>{option.label}</option>
+      {/each}
     </select>
     <input class="input" type="date" bind:value={dateFrom} title="Added on or after" style="max-width:150px" />
     <input class="input" type="date" bind:value={dateTo} title="Added on or before" style="max-width:150px" />
@@ -323,7 +326,7 @@
     <div class="dgrid">
       {#each docs as d, i (d.id)}
         <a class="card gcard" href={`#/doc/${d.id}`} class:selected={sel.has(d.id)}>
-          <span class="gthumb" class:blurred={isHigh(d.sensitivity)}><img src={thumbPath(d.id, isHigh(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
+          <span class="gthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
           <span class="gmeta">
             <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
                    onclick={(e) => e.stopPropagation()}
@@ -343,7 +346,7 @@
                onclick={(e) => e.stopPropagation()}
                onchange={(e) => toggleSel(i, e)}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />
-        <span class="rthumb" class:blurred={isHigh(d.sensitivity)}><img src={thumbPath(d.id, isHigh(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
+        <span class="rthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
         {#if d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_category_code}</span>{/if}
         <span class="title grow">{d.title || `Document #${d.id}`}</span>

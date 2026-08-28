@@ -1,8 +1,9 @@
 <script>
   import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, listJDCategories, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
-  import { fmtDate, fmtBytes, sensDot } from '../lib/format.js'
+  import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
+  import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
@@ -32,7 +33,9 @@
     ['7', 'Full control'],
   ]
 
-  const blurred = $derived(doc?.sensitivity === 'confidential' && !revealed)
+  const highSensitivity = $derived(isHighSensitivity(doc?.sensitivity))
+  const blurred = $derived(highSensitivity && !revealed)
+  const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   // Inline-previewable formats: archive_blob is always PDF, browsers render
   // common media natively, and the server turns stored email bodies into a
   // sandboxed HTML preview. Other formats swap the iframe for a download panel.
@@ -241,7 +244,7 @@
 <div class="toolbar">
   <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
   <span class="spacer"></span>
-  {#if doc?.sensitivity === 'confidential'}
+  {#if highSensitivity}
     <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
          (inside the preview) still works — this one gives a symmetric
          way to re-hide without navigating away and back. -->
@@ -253,6 +256,8 @@
   <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
   {#if canManageAccess}
     <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> Access</button>
+  {/if}
+  {#if canShareLinks}
     <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
   {/if}
   <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
@@ -265,13 +270,13 @@
     <div class="preview" class:blurred>
       {#if blurred}
         <div class="reveal">
-          <span class="pill danger">Confidential</span>
+          <span class="pill danger">{sensitivityLabel(doc.sensitivity)}</span>
           <button class="btn" onclick={() => (revealed = true)}><Icon name="eye" size={14} /> Reveal preview</button>
         </div>
       {:else if previewable}
         <!-- direct URL: session cookie authenticates; server CSP sandboxes;
              streaming + immutable-ETag caching come back for free -->
-        <iframe src={previewPath(id, doc.sensitivity === 'confidential')} title="Document preview"></iframe>
+        <iframe src={previewPath(id, highSensitivity)} title="Document preview"></iframe>
       {:else}
         <div class="reveal">
           <span class="pill">{doc.mime_type || 'unknown format'}</span>
@@ -317,12 +322,13 @@
           <dt>Sensitivity</dt>
           <dd>
             <select class="input" style="padding:4px 8px;font-size:.8rem"
+                    aria-label="Sensitivity"
                     value={doc.sensitivity || ''}
                     onchange={(e) => save({ sensitivity: e.target.value || null }, 'Sensitivity saved')}>
               <option value="">Unset</option>
-              <option value="public">Public</option>
-              <option value="internal">Internal</option>
-              <option value="confidential">Confidential</option>
+              {#each SENSITIVITY_OPTIONS as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
             </select>
           </dd>
           <dt>Added</dt><dd>{fmtDate(doc.added_at || doc.created_at)}</dd>
@@ -441,7 +447,7 @@
           <h3 style="display:flex;align-items:center;gap:8px">
             Extracted text
             {#if blurred}
-              <span class="pill danger" style="font-size:.7rem">Confidential</span>
+              <span class="pill danger" style="font-size:.7rem">{sensitivityLabel(doc.sensitivity)}</span>
               <button class="btn sm" style="margin-left:auto" onclick={() => (revealed = true)}><Icon name="eye" size={12} /> Reveal</button>
             {/if}
           </h3>

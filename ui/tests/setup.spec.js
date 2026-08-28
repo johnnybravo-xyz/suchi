@@ -10,6 +10,9 @@ const presets = [
 
 async function mockAPI(page, options = {}) {
   let taxonomyApplied = false
+  await page.route('**/preview/**', async route => {
+    await route.fulfill({ contentType: 'text/html', body: '<p>Document preview</p>' })
+  })
   await page.route('**/api/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -174,10 +177,11 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/documents/42') body = {
       id: 42,
       title: 'Electricity bill',
-      content: '',
+      content: options.documentContent || '',
       original_blob: 'abc',
       original_size: 2048,
       mime_type: options.documentMime || 'application/pdf',
+      sensitivity: options.documentSensitivity || '',
       jd_category_id: 1,
       created_at: 1780000000,
       added_at: 1780100000,
@@ -551,6 +555,43 @@ test('shows every document source and the source date', async ({ page }) => {
   await expect(page.getByText('first seen', { exact: true })).toBeVisible()
   await expect(page.getByText('Source date', { exact: true })).toBeVisible()
   await expect(page.getByText('Created', { exact: true })).toHaveCount(0)
+})
+
+test('protects restricted previews like confidential documents', async ({ page }) => {
+  await mockAPI(page, {
+    documentSensitivity: 'restricted',
+    documentContent: 'Account number 1234',
+  })
+  await page.goto('/#/doc/42')
+
+  const preview = page.locator('.preview')
+  await expect(preview.getByText('Restricted')).toBeVisible()
+  await expect(preview.locator('iframe')).toHaveCount(0)
+  await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'true')
+  await expect(page.getByLabel('Sensitivity')).toHaveValue('restricted')
+
+  await preview.getByRole('button', { name: 'Reveal preview' }).click()
+  await expect(preview.locator('iframe')).toHaveAttribute('src', '/preview/42?reveal=1')
+  await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'false')
+})
+
+test('shows share controls only with the share-links capability', async ({ page }) => {
+  const documents = [{
+    id: 42, title: 'Electricity bill', mime_type: 'application/pdf',
+    created_at: 1780000000, sensitivity: '', tags: [],
+  }]
+  await mockAPI(page, { userRole: 'member', capabilities: [], documents })
+  await page.goto('/#/documents')
+
+  await page.getByLabel('Select Electricity bill').check()
+  await expect(page.locator('.bulkbar').getByRole('button', { name: 'Share' })).toHaveCount(0)
+  await page.goto('/#/doc/42')
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Share' })).toHaveCount(0)
+
+  await page.unrouteAll({ behavior: 'wait' })
+  await mockAPI(page, { userRole: 'member', capabilities: ['share_links'], documents })
+  await page.reload()
+  await expect(page.locator('.toolbar').getByRole('button', { name: 'Share' })).toBeVisible()
 })
 
 test('keeps list rows stable when a thumbnail is missing', async ({ page }) => {
