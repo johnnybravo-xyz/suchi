@@ -4,6 +4,7 @@
            adminListUsers } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
   import { fmtDate } from '../lib/format.js'
+  import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
 
@@ -112,10 +113,7 @@
   // Admin sees everyone's mailboxes and needs the user roster for the
   // owner picker; a member only sees their own rows (server filters)
   // and has no picker, so we skip the admin-only /users fetch for them.
-  const mailboxesVisible = $derived(
-    session.user?.role === 'admin' ||
-    (session.user?.capabilities || []).includes('mailboxes')
-  )
+  const mailboxesVisible = $derived(hasCapability(session.user, 'mailboxes'))
   let mbxUsers = $state([])
   async function loadMbxUsers() {
     if (session.user?.role !== 'admin') { mbxUsers = []; return }

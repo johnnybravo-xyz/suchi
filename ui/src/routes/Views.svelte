@@ -1,7 +1,7 @@
 <script>
   import { listSavedViews, createSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes, listJDCategories } from '../lib/api.js'
-  import { documentListHash } from '../lib/documentFilters.js'
+  import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, canShare = false, startCreate = false } = $props()
@@ -22,18 +22,14 @@
     loading = true
     try {
       const r = await listSavedViews()
-      views = r?.results || r || []
+      const raw = r?.results || r || []
+      views = raw.map(view => ({ ...view, filters: parseSavedViewFilters(view.filter_json) }))
     } catch (ex) { notify?.(ex.message || 'Could not load views') }
     finally { loading = false }
   }
 
   function href(v) {
-    try {
-      const f = JSON.parse(v.filter_json || '{}')
-      const p = new URLSearchParams()
-      for (const [k, val] of Object.entries(f)) if (val !== '' && val != null) p.set(k, val)
-      return documentListHash(Object.fromEntries(p))
-    } catch { return '#/documents' }
+    return documentListHash(v.filters)
   }
 
   function nameFor(items, id, fallback, format = (item) => item.name) {
@@ -41,11 +37,7 @@
     return item ? format(item) : fallback
   }
 
-  function filterSummary(v) {
-    let filters
-    try { filters = JSON.parse(v.filter_json || '{}') }
-    catch { return ['Saved filters'] }
-
+  function filterSummary(filters) {
     const summary = []
     if (filters.q) summary.push(`Search: “${filters.q}”`)
     if (filters.jd_category_id) summary.push(nameFor(jdCats, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
@@ -171,7 +163,7 @@
                   {#if v.shared}<span class="pill ok">Shared</span>{/if}
                 </span>
                 <span class="filter-summary">
-                  {#each filterSummary(v) as filter}
+                  {#each filterSummary(v.filters) as filter}
                     <span>{filter}</span>
                   {/each}
                 </span>

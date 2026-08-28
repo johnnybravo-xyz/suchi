@@ -2,6 +2,7 @@
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, mintDemoSession, getDemoAnonToken, getToken } from './lib/api.js'
+  import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
   import Dashboard from './routes/Dashboard.svelte'
@@ -33,9 +34,7 @@
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
-  const canShareViews = $derived(
-    session.user?.role === 'admin' || (session.user?.capabilities || []).includes('share_views')
-  )
+  const canShareViews = $derived(hasCapability(session.user, 'share_views'))
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)

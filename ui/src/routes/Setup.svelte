@@ -6,6 +6,7 @@
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
+  import { USER_CAPABILITIES } from '../lib/capabilities.js'
 
   let { notify, onDone, onTaxonomyChanged } = $props()
 
@@ -49,14 +50,6 @@
   let err = $state('')
 
   // step-local form state
-  // KNOWN_CAPS mirrors core/authz/capabilities.go. Admin-grantable
-  // feature switches on top of the "member" role; admins are implicitly
-  // capable of everything so the checkboxes only render for members.
-  const KNOWN_CAPS = [
-    { slug: 'mailboxes',   label: 'Manage own mailboxes' },
-    { slug: 'share_links', label: 'Create share links' },
-    { slug: 'share_views', label: 'Share saved views' },
-  ]
   let user = $state({ email: '', password: '', display_name: '', role: 'member', capabilities: [] })
   let mailUsers = $state([])
   function toggleCap(slug) {
@@ -346,11 +339,11 @@
       {#if user.role === 'member'}
         <div class="field">
           <span class="input-label">Capabilities</span>
-          {#each KNOWN_CAPS as c (c.slug)}
+          {#each USER_CAPABILITIES as c (c.key)}
             <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:4px">
-              <input type="checkbox" checked={user.capabilities.includes(c.slug)}
-                     onchange={() => toggleCap(c.slug)} />
-              {c.label}
+              <input type="checkbox" checked={user.capabilities.includes(c.key)}
+                     onchange={() => toggleCap(c.key)} />
+              {c.setupLabel}
             </label>
           {/each}
         </div>

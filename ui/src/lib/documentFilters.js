@@ -9,3 +9,12 @@ export function documentListHash(filters = {}) {
   const query = params.toString()
   return `#/documents${query ? `?${query}` : ''}`
 }
+
+export function parseSavedViewFilters(raw = '{}') {
+  try {
+    const filters = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return filters && typeof filters === 'object' && !Array.isArray(filters) ? filters : {}
+  } catch {
+    return {}
+  }
+}

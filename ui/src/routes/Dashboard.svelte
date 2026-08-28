@@ -1,6 +1,6 @@
 <script>
   import { listDocuments, listSavedViews } from '../lib/api.js'
-  import { documentListHash } from '../lib/documentFilters.js'
+  import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -16,11 +16,11 @@
     try {
       const res = await listSavedViews()
       const raw = res?.results || res || []
-      views = raw.map(v => {
-        let filters = {}
-        try { filters = JSON.parse(v.filter_json || '{}') } catch {}
-        return { ...v, filters, count: null }
-      }).sort((a, b) => a.position - b.position)
+      views = raw.map(v => ({
+        ...v,
+        filters: parseSavedViewFilters(v.filter_json),
+        count: null,
+      })).sort((a, b) => a.position - b.position)
       // live counts, one cheap page_size=1 call per view
       for (const v of views) {
         listDocuments({ ...v.filters, page_size: 1 })

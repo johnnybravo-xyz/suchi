@@ -6,18 +6,12 @@
            createTaxon, patchTaxon, deleteTaxon, exportTaxonomy } from '../lib/api.js'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
   import Icon from '../lib/Icon.svelte'
+  import { USER_CAPABILITIES } from '../lib/capabilities.js'
 
   let { notify } = $props()
   let tab = $state('users')
 
   // ---------- users ----------
-  // Keep backend capability keys next to the copy shown to administrators.
-  const KNOWN_CAPS = [
-    { key: 'mailboxes', label: 'Manage mailboxes', description: 'Connect and manage their own mail intake.' },
-    { key: 'share_links', label: 'Create share links', description: 'Share documents using revocable links.' },
-    { key: 'share_views', label: 'Share saved views', description: "Publish saved views to every user's dashboard." },
-  ]
-
   let nu = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })
   let users = $state([])
   let usersLoaded = $state(false)
@@ -224,7 +218,7 @@
         <fieldset class="capabilities">
           <legend>Additional access</legend>
           <div class="capability-options">
-            {#each KNOWN_CAPS as cap (cap.key)}
+            {#each USER_CAPABILITIES as cap (cap.key)}
               <label class="capability-option">
                 <input type="checkbox" checked={nu.capabilities.includes(cap.key)} onchange={() => toggleNewCap(cap.key)} />
                 <span><b>{cap.label}</b><small>{cap.description}</small></span>
@@ -252,7 +246,7 @@
             </span>
             <span class="pill">{u.role}</span>
             {#if u.role !== 'admin'}
-              {#each KNOWN_CAPS as cap (cap.key)}
+              {#each USER_CAPABILITIES as cap (cap.key)}
                 <span class="switch-control">
                   <span>{cap.label}</span>
                   <button type="button" class="switch" role="switch"
