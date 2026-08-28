@@ -6,7 +6,7 @@
   import ConfigurationSection from './ConfigurationSection.svelte'
   import PeopleSettings from './PeopleSettings.svelte'
 
-  let { notify, initialSection = '', onTaxonomyChanged } = $props()
+  let { notify, initialSection = '', onTaxonomyChanged, setupSnapshot = null } = $props()
 
   const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.map((item) => item.name))
   const current = $derived(configurableSections.has(initialSection) ? initialSection : 'overview')
@@ -26,11 +26,14 @@
   }
 
   async function loadOverview() {
+    const setupRequest = setupSnapshot ? Promise.resolve(setupSnapshot) : setupState()
     const [setup, users, ingest, llm, preferences, mail, automations] = await Promise.allSettled([
-      setupState(), adminListUsers(), getIngestSettings(), getLLMSettings(),
+      setupRequest, adminListUsers(), getIngestSettings(), getLLMSettings(),
       getPreferences(), listEmailAccounts(), listAutomations(),
     ])
-    const next = {}
+    const next = Object.fromEntries(ARCHIVE_SETTINGS_ITEMS.map((item) => [
+      item.name, status('Unavailable', 'Could not load status', 'warn'),
+    ]))
 
     if (setup.status === 'fulfilled') {
       const preset = setup.value?.current_preset

@@ -304,13 +304,14 @@ test('separates completed archive administration from account settings', async (
   await expect(page.getByRole('navigation', { name: 'Settings areas' })).toBeVisible()
   await expect(page.locator('.sidebar .nav').getByRole('link', { name: 'Admin' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Archive configuration' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Mailboxes' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
 
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
   const configuration = page.getByRole('region', { name: 'Archive configuration' })
   await expect(configuration).toBeVisible()
   await expect(configuration.getByRole('heading', { name: 'Processing' })).toBeVisible()
-  const administration = configuration.getByRole('link', { name: /Users and metadata/ }).last()
+  const administration = configuration.getByRole('link', { name: /People and metadata/ }).last()
   await expect(administration).toHaveAttribute('href', '#/settings?tab=archive&section=users')
   await administration.click()
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users$/)
@@ -346,6 +347,26 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
 })
 
+test('mounts only the selected settings surface', async ({ page }) => {
+  const requestedPaths = []
+  page.on('request', request => requestedPaths.push(new URL(request.url()).pathname))
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/settings?tab=archive&section=users')
+
+  await expect(page.getByRole('button', { name: 'Users', exact: true })).toBeVisible()
+  expect(requestedPaths).not.toContain('/api/tokens/')
+  expect(requestedPaths).not.toContain('/api/decryption-passwords/')
+})
+
+test('keeps capable member mailboxes in account settings', async ({ page }) => {
+  await mockAPI(page, { userRole: 'member', capabilities: ['mailboxes'] })
+  await page.goto('/#/settings')
+  await expect(page.getByRole('heading', { name: 'Mailboxes' })).toBeVisible()
+})
+
 test('guides intent, filing tree, and LLM mode without exposing import', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/setup')
@@ -359,7 +380,7 @@ test('guides intent, filing tree, and LLM mode without exposing import', async (
   await page.getByRole('button', { name: 'Compare all filing trees' }).click()
   await expect(filingTrees.getByText('Household', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Classification (LLM)' }).click()
+  await page.getByRole('button', { name: 'Classification' }).click()
   await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
   await expect(page.locator('#l-confidence')).toHaveAttribute('min', '0.5')
   await expect(page.locator('#l-confidence')).toHaveAttribute('max', '0.95')
@@ -510,6 +531,43 @@ test('starts view creation from the dashboard action', async ({ page }) => {
   await expect(page).toHaveURL(/#\/views\?new=1$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
   await expect(page.getByLabel('View name')).toBeFocused()
+})
+
+test('limits dashboard count requests and defers empty-view facets', async ({ page }) => {
+  const countRequests = []
+  const facetRequests = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '1') {
+      countRequests.push(url.toString())
+    }
+    if (['/api/tags/', '/api/correspondents/', '/api/document_types/'].includes(url.pathname)) {
+      facetRequests.push(url.pathname)
+    }
+  })
+
+  await mockAPI(page, {
+    savedViews: Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      name: `View ${index + 1}`,
+      filter_json: JSON.stringify({ q: `query ${index + 1}` }),
+      position: index,
+      shared: false,
+    })),
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.getByRole('link', { name: 'View all 6 saved views' })).toBeVisible()
+  await expect.poll(() => countRequests.length).toBe(4)
+
+  await page.unrouteAll({ behavior: 'wait' })
+  await mockAPI(page)
+  await page.goto('/#/views')
+  await expect(page.getByText('No saved views yet')).toBeVisible()
+  expect(facetRequests).toEqual([])
+
+  const facets = page.waitForRequest(request => new URL(request.url()).pathname === '/api/tags/')
+  await page.getByRole('button', { name: 'New view' }).click()
+  await facets
 })
 
 test('keeps saved views ahead of the creation form', async ({ page }) => {

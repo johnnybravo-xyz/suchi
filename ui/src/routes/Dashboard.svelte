@@ -10,24 +10,42 @@
   const dead = $derived(st?.dead_jobs ?? 0)
 
   const total = $derived(st?.documents_total ?? null)
-  let views = $state([])          // saved views + live counts
+  const dashboardViewLimit = 4
+  let views = $state([])
+  let viewsLoading = $state(true)
+  let viewsError = $state('')
+  let viewTotal = $state(0)
 
   async function load() {
+    viewsLoading = true
+    viewsError = ''
     try {
       const res = await listSavedViews({ include: 'shared' })
       const raw = res?.results || res || []
-      views = raw.map(v => ({
+      viewTotal = res?.count ?? raw.length
+      const sorted = raw.map(v => ({
         ...v,
         filters: parseSavedViewFilters(v.filter_json),
         count: null,
       })).sort((a, b) => a.position - b.position)
-      // live counts, one cheap page_size=1 call per view
-      for (const v of views) {
-        listDocuments({ ...v.filters, page_size: 1 })
-          .then(r => { v.count = r?.count ?? 0; views = [...views] })
-          .catch(() => {})
+
+      const selected = sorted.slice(0, dashboardViewLimit)
+      const shared = sorted.find((view) => view.owner_id)
+      if (shared && !selected.includes(shared)) {
+        if (selected.length === dashboardViewLimit) selected[selected.length - 1] = shared
+        else selected.push(shared)
       }
-    } catch {}
+
+      views = await Promise.all(selected.map(async (view) => {
+        try {
+          const result = await listDocuments({ ...view.filters, page_size: 1 })
+          return { ...view, count: result?.count ?? 0 }
+        } catch { return view }
+      }))
+    } catch (ex) {
+      views = []
+      viewsError = ex.message || 'Could not load views.'
+    } finally { viewsLoading = false }
   }
 
   function filterSummary(f) {
@@ -98,7 +116,13 @@
       <h3>Views</h3>
       <a class="btn sm" href="#/views?new=1"><Icon name="plus" size={13} /> New view</a>
     </div>
-    {#if views.length}
+    {#if viewsLoading}
+      <div class="card" style="color:var(--muted);font-size:.86rem">Loading views…</div>
+    {:else if viewsError}
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:.86rem">
+        <span>{viewsError}</span><button class="btn sm" onclick={load}>Retry</button>
+      </div>
+    {:else if views.length}
       <div class="views">
         {#each views as v (v.id)}
           <a class="card view" href={documentListHash(v.filters)}>
@@ -108,6 +132,7 @@
           </a>
         {/each}
       </div>
+      {#if viewTotal > views.length}<a class="sub" href="#/views">View all {viewTotal} saved views</a>{/if}
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
         No saved views yet. Create one in Views to keep a useful document filter close by.

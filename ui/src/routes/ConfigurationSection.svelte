@@ -29,7 +29,6 @@
     { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
   ]
   let presets = $state(FALLBACK_PRESETS)
-  listPresets().then(r => { const rows = r?.results || r || []; if (rows.length) presets = rows }).catch(() => {})
   const loaded = new Set()
   function loadOnce(key, fn) {
     if (loaded.has(key)) return
@@ -65,14 +64,25 @@
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '' })
 
-  setupState().then(st => {
-    intent = st?.intent || ''
-    filingTreeChosen = !!st?.filing_tree_chosen
-    onFilingTreeChosen?.(filingTreeChosen)
-    const selected = st?.current_preset || st?.recommended_preset
-    if (selected) preset.preset_id = selected
-    if (setup) showAllPresets = intent === 'custom'
-  }).catch(() => {})
+  async function loadPresets() {
+    try {
+      const result = await listPresets()
+      const rows = result?.results || result || []
+      if (rows.length) presets = rows
+    } catch {}
+  }
+
+  async function loadSetup() {
+    try {
+      const state = await setupState()
+      intent = state?.intent || ''
+      filingTreeChosen = !!state?.filing_tree_chosen
+      onFilingTreeChosen?.(filingTreeChosen)
+      const selected = state?.current_preset || state?.recommended_preset
+      if (selected) preset.preset_id = selected
+      if (setup) showAllPresets = intent === 'custom'
+    } catch {}
+  }
 
   async function loadUsers() {
     try {
@@ -145,6 +155,10 @@
     } catch {}
   }
   $effect(() => {
+    if (section === 'archive') {
+      loadOnce('setup', loadSetup)
+      loadOnce('presets', loadPresets)
+    }
     if (section === 'users' || section === 'sources' || section === 'mail') loadOnce('users', loadUsers)
     if (section === 'sources') loadOnce('ingest', loadIngest)
     if (section === 'llm') loadOnce('llm', loadLLM)
@@ -309,7 +323,7 @@
       </div>
 
     {:else if section === 'sources'}
-      <h3>Ingest sources</h3>
+      <h3>Watched folder</h3>
       <p class="wiz-p">Point suchi at a folder (a scanner target, a synced directory) and everything dropped there becomes a document. Uploads and the API work regardless.</p>
       <div class="field"><label for="i-dir">Watched directory (on the server)</label>
         <input id="i-dir" class="input mono" placeholder="/data/staging" bind:value={ingest.fs_watch_dir} /></div>
@@ -322,7 +336,7 @@
         </select></div>
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !ingest.fs_watch_dir || !ingest.fs_watch_owner_email}
-                onclick={() => saveAnd(() => saveIngestSettings(ingest), 'Ingest source saved')}>Save source</button>
+                onclick={() => saveAnd(() => saveIngestSettings(ingest), 'Watched folder saved')}>Save folder</button>
         {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Uploads only</button>{/if}
       </div>
 
@@ -434,7 +448,7 @@
       </div>
 
     {:else if section === 'preferences'}
-      <h3>OCR & backups</h3>
+      <h3>OCR and backups</h3>
       <div class="field"><label for="p-ocr">OCR languages (comma-separated tesseract codes)</label>
         <input id="p-ocr" class="input mono" placeholder="eng,hin,nep" bind:value={prefs.ocr_languages} /></div>
       <div class="field"><label for="p-bk">Database snapshot interval (hours, 0 disables)</label>

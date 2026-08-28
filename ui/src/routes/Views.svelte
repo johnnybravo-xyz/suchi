@@ -13,6 +13,7 @@
   let startCreateHandled = $state(false)
   let nameInput = $state()
   let tags = $state([]), corrs = $state([]), types = $state([]), jdCats = $state([])
+  let facetsPromise
   let nv = $state(emptyView())
 
   function emptyView() {
@@ -25,6 +26,7 @@
       const r = await listSavedViews({ include: 'shared' })
       const raw = r?.results || r || []
       views = raw.map(view => ({ ...view, filters: parseSavedViewFilters(view.filter_json) }))
+      if (views.length) loadFacets()
     } catch (ex) { notify?.(ex.message || 'Could not load views') }
     finally { loading = false }
   }
@@ -51,8 +53,20 @@
   }
 
   function openCreate() {
+    loadFacets()
     createOpen = true
     queueMicrotask(() => nameInput?.focus())
+  }
+
+  function loadFacets() {
+    if (facetsPromise) return facetsPromise
+    facetsPromise = Promise.allSettled([
+      listTags().then((r) => (tags = r?.results || r || [])),
+      listCorrespondents().then((r) => (corrs = r?.results || r || [])),
+      listDocumentTypes().then((r) => (types = r?.results || r || [])),
+      listJDCategories().then((r) => (jdCats = (r?.results || r || []).filter((c) => !c.is_area))),
+    ])
+    return facetsPromise
   }
 
   function closeCreate() {
@@ -108,10 +122,6 @@
     }
   })
   load()
-  listTags().then((r) => (tags = r?.results || r || [])).catch(() => {})
-  listCorrespondents().then((r) => (corrs = r?.results || r || [])).catch(() => {})
-  listDocumentTypes().then((r) => (types = r?.results || r || [])).catch(() => {})
-  listJDCategories().then((r) => (jdCats = (r?.results || r || []).filter((c) => !c.is_area))).catch(() => {})
 </script>
 
 <div class="views-page">

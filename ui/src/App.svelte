@@ -374,7 +374,7 @@
         </button>
         <h1>{pageTitle}</h1>
         <Omnibox pages={session.user?.role === 'admin'
-				? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'Users and metadata', ico: 'shield' }]
+				? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} />
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>

@@ -1,17 +1,17 @@
 export const SETUP_STEPS = [
-  { name: 'archive', label: 'Your archive' },
+  { name: 'archive', label: 'Filing tree' },
   { name: 'users', label: 'People' },
-  { name: 'sources', label: 'Ingest sources' },
+  { name: 'sources', label: 'Watched folder' },
   { name: 'mail', label: 'Email intake' },
-  { name: 'llm', label: 'Classification (LLM)' },
+  { name: 'llm', label: 'Classification' },
   { name: 'automations', label: 'Automations' },
-  { name: 'preferences', label: 'OCR & backups' },
+  { name: 'preferences', label: 'OCR and backups' },
 ]
 
 export const ARCHIVE_SETTINGS_GROUPS = [
   {
     name: 'structure',
-    label: 'Structure & administration',
+    label: 'Structure and access',
     description: 'How documents are organized and administered.',
     items: [
       {
@@ -20,7 +20,7 @@ export const ARCHIVE_SETTINGS_GROUPS = [
         href: '#/settings?tab=archive&section=archive',
       },
       {
-        name: 'users', label: 'Users and metadata', icon: 'shield',
+        name: 'users', label: 'People and metadata', icon: 'shield',
         description: 'Manage users, groups, custom fields, and taxonomy.',
         href: '#/settings?tab=archive&section=users',
       },
