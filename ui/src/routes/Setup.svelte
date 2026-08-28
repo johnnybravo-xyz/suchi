@@ -55,6 +55,7 @@
   const KNOWN_CAPS = [
     { slug: 'mailboxes',   label: 'Manage own mailboxes' },
     { slug: 'share_links', label: 'Create share links' },
+    { slug: 'share_views', label: 'Share saved views' },
   ]
   let user = $state({ email: '', password: '', display_name: '', role: 'member', capabilities: [] })
   let mailUsers = $state([])

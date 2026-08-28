@@ -1,15 +1,22 @@
 <script>
-  // Saved views as a first-class destination: create, share, reorder-by-name,
-  // and jump straight into the filtered Documents list.
   import { listSavedViews, createSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes, listJDCategories } from '../lib/api.js'
+  import { documentListHash } from '../lib/documentFilters.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify } = $props()
+  let { notify, canShare = false, startCreate = false } = $props()
   let views = $state([])
   let loading = $state(true)
+  let saving = $state(false)
+  let createOpen = $state(false)
+  let startCreateHandled = $state(false)
+  let nameInput = $state()
   let tags = $state([]), corrs = $state([]), types = $state([]), jdCats = $state([])
-  let nv = $state({ name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false })
+  let nv = $state(emptyView())
+
+  function emptyView() {
+    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false }
+  }
 
   async function load() {
     loading = true
@@ -25,13 +32,46 @@
       const f = JSON.parse(v.filter_json || '{}')
       const p = new URLSearchParams()
       for (const [k, val] of Object.entries(f)) if (val !== '' && val != null) p.set(k, val)
-      return `#/documents?${p}`
+      return documentListHash(Object.fromEntries(p))
     } catch { return '#/documents' }
+  }
+
+  function nameFor(items, id, fallback, format = (item) => item.name) {
+    const item = items.find((candidate) => String(candidate.id) === String(id))
+    return item ? format(item) : fallback
+  }
+
+  function filterSummary(v) {
+    let filters
+    try { filters = JSON.parse(v.filter_json || '{}') }
+    catch { return ['Saved filters'] }
+
+    const summary = []
+    if (filters.q) summary.push(`Search: “${filters.q}”`)
+    if (filters.jd_category_id) summary.push(nameFor(jdCats, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
+    if (filters.tags__id__in) summary.push(`Tag: ${nameFor(tags, filters.tags__id__in, 'Selected tag')}`)
+    if (filters.correspondents__id__in) summary.push(nameFor(corrs, filters.correspondents__id__in, 'Selected correspondent'))
+    if (filters.document_type__id) summary.push(nameFor(types, filters.document_type__id, 'Selected type'))
+    if (filters.sensitivity) summary.push(filters.sensitivity[0].toUpperCase() + filters.sensitivity.slice(1))
+    if (filters.ordering) summary.push(filters.ordering === 'title' ? 'Title order' : filters.ordering === '-created_at' ? 'Newest first' : 'Custom order')
+    return summary.length ? summary : ['All documents']
+  }
+
+  function openCreate() {
+    createOpen = true
+    queueMicrotask(() => nameInput?.focus())
+  }
+
+  function closeCreate() {
+    if (saving) return
+    createOpen = false
+    nv = emptyView()
   }
 
   async function create(e) {
     e.preventDefault()
-    if (!nv.name.trim()) return
+    if (!nv.name.trim() || saving) return
+
     const filters = {}
     if (nv.q) filters.q = nv.q
     if (nv.tag) filters.tags__id__in = nv.tag
@@ -39,65 +79,275 @@
     if (nv.type) filters.document_type__id = nv.type
     if (nv.jd) filters.jd_category_id = nv.jd
     if (nv.sens) filters.sensitivity = nv.sens
+
+    saving = true
     try {
-      await createSavedView({ name: nv.name.trim(), filter_json: JSON.stringify(filters), display: 'list', position: views.length, shared: nv.shared })
-      nv = { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false }
+      await createSavedView({
+        name: nv.name.trim(),
+        filter_json: JSON.stringify(filters),
+        display: 'list',
+        position: views.length,
+        shared: canShare && nv.shared,
+      })
+      nv = emptyView()
+      createOpen = false
       notify?.('View saved')
-      load()
+      await load()
     } catch (ex) { notify?.(ex.message || 'Could not save the view') }
+    finally { saving = false }
   }
 
   async function remove(v) {
     if (!confirm(`Delete the view “${v.name}”?`)) return
-    try { await deleteSavedView(v.id); views = views.filter(x => x.id !== v.id); notify?.('View deleted') }
-    catch (ex) { notify?.(ex.message || 'Could not delete') }
+    try {
+      await deleteSavedView(v.id)
+      views = views.filter((x) => x.id !== v.id)
+      notify?.('View deleted')
+    } catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
 
+  $effect(() => {
+    if (!startCreate) {
+      startCreateHandled = false
+    } else if (!startCreateHandled) {
+      startCreateHandled = true
+      openCreate()
+    }
+  })
   load()
-  listTags().then(r => (tags = r?.results || r || [])).catch(() => {})
-  listCorrespondents().then(r => (corrs = r?.results || r || [])).catch(() => {})
-  listDocumentTypes().then(r => (types = r?.results || r || [])).catch(() => {})
-  listJDCategories().then(r => (jdCats = (r?.results || r || []).filter(c => !c.is_area))).catch(() => {})
+  listTags().then((r) => (tags = r?.results || r || [])).catch(() => {})
+  listCorrespondents().then((r) => (corrs = r?.results || r || [])).catch(() => {})
+  listDocumentTypes().then((r) => (types = r?.results || r || [])).catch(() => {})
+  listJDCategories().then((r) => (jdCats = (r?.results || r || []).filter((c) => !c.is_area))).catch(() => {})
 </script>
 
-<div class="content-narrow" style="max-width:860px">
-  <p class="sub" style="color:var(--muted);margin:0 0 16px;font-size:.88rem">
-    A view is a saved filter that lives here, on your dashboard, and (if shared)
-    on everyone else's too.
-  </p>
+<div class="views-page">
+  <header class="views-intro">
+    <div>
+      <span class="eyebrow">Saved searches</span>
+      <h2>Your shortcuts into the archive</h2>
+      <p>Keep the document filters you return to. Open a view to pick up exactly where you left off.</p>
+    </div>
+    <button class="btn primary new-view" onclick={openCreate}>
+      <Icon name="plus" size={15} /> New view
+    </button>
+  </header>
 
-  <form class="card" style="margin-bottom:18px" onsubmit={create}>
-    <h3>New view</h3>
-    <div class="toolbar" style="margin:10px 0 0">
-      <input class="input" style="flex:2;min-width:150px" placeholder="Name, e.g. Tax to review" bind:value={nv.name} required />
-      <input class="input" style="flex:2;min-width:130px" placeholder="Search text (optional)" bind:value={nv.q} />
-      <select class="input" bind:value={nv.jd}><option value="">Any category</option>{#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}</select>
+  <section class="views-panel" aria-labelledby="saved-views-heading">
+    <div class="panel-head">
+      <div>
+        <h3 id="saved-views-heading">Saved views</h3>
+        <span aria-live="polite">{loading ? 'Loading' : `${views.length} ${views.length === 1 ? 'view' : 'views'}`}</span>
+      </div>
+      <span class="panel-hint">Select a view to open its matching documents</span>
     </div>
-    <div class="toolbar" style="margin:10px 0 0">
-      <select class="input" bind:value={nv.tag}><option value="">Any tag</option>{#each tags as t}<option value={t.id}>{t.name}</option>{/each}</select>
-      <select class="input" bind:value={nv.corr}><option value="">Any correspondent</option>{#each corrs as c}<option value={c.id}>{c.name}</option>{/each}</select>
-      <select class="input" bind:value={nv.type}><option value="">Any type</option>{#each types as t}<option value={t.id}>{t.name}</option>{/each}</select>
-      <select class="input" bind:value={nv.sens}><option value="">Any sensitivity</option><option value="public">Public</option><option value="internal">Internal</option><option value="confidential">Confidential</option></select>
-      <label class="wiz-check" style="margin:0" title="Visible on every user's dashboard"><input type="checkbox" bind:checked={nv.shared} /> Shared</label>
-      <button class="btn primary sm">Save view</button>
-    </div>
-  </form>
 
-  {#if loading}
-    <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:50%"></div></div>{/each}</div>
-  {:else if views.length === 0}
-    <div class="empty"><Icon name="eye" size={50} /><b>No views yet.</b><span>Save a filter above for quick access to matching documents.</span></div>
-  {:else}
-    <div class="index">
-      {#each views as v (v.id)}
-        <a class="irow" href={href(v)}>
-          <span class="dot"></span>
-          <span class="title grow">{v.name}</span>
-          {#if v.shared}<span class="pill ok">shared</span>{/if}
-          <span class="sub mono" style="font-size:.66rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{v.filter_json}</span>
-          <button class="btn sm danger" onclick={(e) => { e.preventDefault(); remove(v) }} title="Delete view"><Icon name="trash" size={12} /></button>
-        </a>
-      {/each}
-    </div>
-  {/if}
+    {#if loading}
+      <div class="view-list" aria-label="Loading saved views">
+        {#each Array(3) as _}
+          <div class="view-row loading-row">
+            <span class="view-mark skeleton-mark"></span>
+            <div class="loading-copy">
+              <div class="skel" style="width:38%"></div>
+              <div class="skel" style="width:68%"></div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else if views.length === 0}
+      <div class="empty views-empty">
+        <span class="empty-mark"><Icon name="eye" size={25} /></span>
+        <b>No saved views yet</b>
+      </div>
+    {:else}
+      <div class="view-list">
+        {#each views as v (v.id)}
+          <div class="view-row">
+            <a class="view-link" href={href(v)}>
+              <span class="view-mark"><Icon name="eye" size={17} /></span>
+              <span class="view-copy">
+                <span class="view-name">
+                  <strong>{v.name}</strong>
+                  {#if v.shared}<span class="pill ok">Shared</span>{/if}
+                </span>
+                <span class="filter-summary">
+                  {#each filterSummary(v) as filter}
+                    <span>{filter}</span>
+                  {/each}
+                </span>
+              </span>
+              <span class="open-view" aria-hidden="true"><Icon name="chev" size={15} /></span>
+            </a>
+            <button class="delete-view" onclick={() => remove(v)} title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`}>
+              <Icon name="trash" size={14} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
+
+{#if createOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal-veil" onclick={closeCreate} role="presentation">
+    <div class="modal create-modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') closeCreate() }} role="dialog" aria-modal="true" aria-labelledby="new-view-title" tabindex="-1">
+      <form onsubmit={create}>
+      <div class="modal-head create-head">
+        <div>
+          <h3 id="new-view-title">Create a view</h3>
+          <p>Choose the documents this shortcut should open.</p>
+        </div>
+        <button type="button" class="btn sm" onclick={closeCreate} disabled={saving} aria-label="Close create view"><Icon name="x" size={13} /></button>
+      </div>
+
+      <div class="field name-field">
+        <label for="view-name">View name</label>
+        <input id="view-name" class="input" placeholder="e.g. Tax documents to review" bind:this={nameInput} bind:value={nv.name} required />
+      </div>
+
+      <div class="field search-field">
+        <label for="view-search">Contains text <span>Optional</span></label>
+        <input id="view-search" class="input" placeholder="Words in the title or document" bind:value={nv.q} />
+      </div>
+
+      <div class="filter-heading">
+        <span>Filters</span>
+        <small>Leave any field open to include everything</small>
+      </div>
+      <div class="filter-grid">
+        <div class="field">
+          <label for="view-category">Filing category</label>
+          <select id="view-category" class="input" bind:value={nv.jd}>
+            <option value="">Any category</option>
+            {#each jdCats as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="view-tag">Tag</label>
+          <select id="view-tag" class="input" bind:value={nv.tag}>
+            <option value="">Any tag</option>
+            {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="view-correspondent">Correspondent</label>
+          <select id="view-correspondent" class="input" bind:value={nv.corr}>
+            <option value="">Any correspondent</option>
+            {#each corrs as c}<option value={c.id}>{c.name}</option>{/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="view-type">Document type</label>
+          <select id="view-type" class="input" bind:value={nv.type}>
+            <option value="">Any type</option>
+            {#each types as t}<option value={t.id}>{t.name}</option>{/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="view-sensitivity">Sensitivity</label>
+          <select id="view-sensitivity" class="input" bind:value={nv.sens}>
+            <option value="">Any sensitivity</option>
+            <option value="public">Public</option>
+            <option value="internal">Internal</option>
+            <option value="confidential">Confidential</option>
+            <option value="restricted">Restricted</option>
+          </select>
+        </div>
+      </div>
+
+      {#if canShare}
+        <label class="share-option">
+          <input type="checkbox" bind:checked={nv.shared} />
+          <span>
+            <strong>Share this view</strong>
+            <small>Make it available on every user's dashboard.</small>
+          </span>
+        </label>
+      {/if}
+
+      <div class="form-actions">
+        <button type="button" class="btn" onclick={closeCreate} disabled={saving}>Cancel</button>
+        <button class="btn primary" disabled={saving || !nv.name.trim()}>{saving ? 'Saving…' : 'Save view'}</button>
+      </div>
+      </form>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .views-page { max-width: 960px; margin: 0 auto; }
+  .views-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin: 10px 0 26px; }
+  .views-intro > div { max-width: 610px; }
+  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .66rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+  .views-intro h2 { font-size: 1.55rem; line-height: 1.18; }
+  .views-intro p { margin: 8px 0 0; color: var(--muted); font-size: .9rem; }
+  .new-view { flex: none; padding: 9px 16px; }
+
+  .views-panel { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 17px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .panel-head > div { display: flex; align-items: baseline; gap: 9px; }
+  .panel-head h3 { font-size: .9rem; }
+  .panel-head span { color: var(--muted); font-size: .72rem; }
+  .panel-hint { text-align: right; }
+
+  .view-list { display: flex; flex-direction: column; }
+  .view-row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; min-height: 78px; border-bottom: 1px solid var(--line); transition: background .14s ease; }
+  .view-row:last-child { border-bottom: 0; }
+  .view-row:hover { background: var(--tint); }
+  .view-link { display: flex; align-items: center; gap: 13px; min-width: 0; padding: 13px 8px 13px 17px; color: inherit; text-decoration: none; }
+  .view-mark { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 9px; background: var(--tint); color: var(--accent); }
+  .view-copy { display: flex; flex: 1; flex-direction: column; gap: 7px; min-width: 0; }
+  .view-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .view-name strong { overflow: hidden; font-size: .9rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .filter-summary { display: flex; gap: 5px; min-width: 0; overflow: hidden; }
+  .filter-summary > span { overflow: hidden; max-width: 220px; padding: 2px 7px; border-radius: 5px; background: var(--surface-2); color: var(--muted); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
+  .open-view { display: grid; place-items: center; width: 30px; height: 30px; flex: none; color: var(--faint); transition: transform .14s ease, color .14s ease; }
+  .view-row:hover .open-view { transform: translateX(2px); color: var(--accent); }
+  .delete-view { align-self: stretch; width: 48px; border: 0; border-left: 1px solid transparent; background: transparent; color: var(--faint); opacity: 0; transition: opacity .14s ease, color .14s ease, background .14s ease; }
+  .view-row:hover .delete-view, .delete-view:focus-visible { opacity: 1; }
+  .delete-view:hover { border-left-color: var(--line); background: var(--danger-soft); color: var(--danger); }
+
+  .loading-row { display: flex; align-items: center; gap: 13px; padding: 13px 17px; }
+  .loading-row:hover { background: transparent; }
+  .skeleton-mark { border-color: var(--line); background: var(--surface-2); }
+  .loading-copy { display: grid; flex: 1; gap: 10px; }
+  .views-empty { padding: 64px 20px; }
+  .empty-mark { display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--accent); }
+  .views-empty > span:not(.empty-mark) { max-width: 390px; }
+
+  .create-modal { width: min(720px, 94vw); }
+  .create-head { align-items: flex-start; margin-bottom: 20px; }
+  .create-head h3 { font-size: 1.08rem; }
+  .create-head p { margin: 3px 0 0; color: var(--muted); font-size: .82rem; }
+  .create-modal .field { margin-bottom: 14px; }
+  .field label span { margin-left: 5px; color: var(--faint); font-size: .68rem; font-weight: 500; }
+  .name-field .input { font-weight: 600; }
+  .search-field { padding-bottom: 3px; }
+  .filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .filter-heading span { font-size: .78rem; font-weight: 700; }
+  .filter-heading small { color: var(--muted); font-size: .7rem; }
+  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .share-option { display: flex; align-items: flex-start; gap: 10px; margin-top: 3px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
+  .share-option input { margin-top: 3px; accent-color: var(--accent); }
+  .share-option span { display: flex; flex-direction: column; gap: 1px; }
+  .share-option strong { font-size: .8rem; }
+  .share-option small { color: var(--muted); font-size: .72rem; }
+  .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+  @media (hover: none) {
+    .delete-view { opacity: 1; }
+  }
+
+  @media (max-width: 620px) {
+    .views-intro { align-items: flex-start; flex-direction: column; gap: 16px; margin-top: 2px; }
+    .new-view { width: 100%; justify-content: center; }
+    .panel-head { align-items: flex-start; }
+    .panel-hint { display: none; }
+    .filter-summary { max-width: 100%; }
+    .filter-summary > span { max-width: 170px; }
+    .filter-grid { grid-template-columns: 1fr; }
+    .modal-veil { padding-top: 3vh; }
+    .create-modal { max-height: 94vh; }
+  }
+</style>

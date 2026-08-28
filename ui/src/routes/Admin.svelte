@@ -15,6 +15,7 @@
   const KNOWN_CAPS = [
     { key: 'mailboxes', label: 'Manage mailboxes', description: 'Connect and manage their own mail intake.' },
     { key: 'share_links', label: 'Create share links', description: 'Share documents using revocable links.' },
+    { key: 'share_views', label: 'Share saved views', description: "Publish saved views to every user's dashboard." },
   ]
 
   let nu = $state({ email: '', display_name: '', password: '', role: 'member', capabilities: [] })

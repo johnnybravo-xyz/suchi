@@ -37,7 +37,7 @@ async function mockAPI(page, options = {}) {
       display_name: 'Admin',
       role: options.userRole || 'admin',
       authn_by: 'local',
-      capabilities: ['mailboxes'],
+      capabilities: options.capabilities || ['mailboxes'],
     }
     else if (path === '/api/stats/') body = {
       documents: 0,
@@ -297,10 +297,10 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
     await page.getByRole('button', { name: 'Open navigation' }).click()
   }
   await page.locator('.area-toggle').filter({ hasText: 'Life admin' }).click()
-  await expect(page.locator('a[href="#/documents?jd_category_id=11"]')).toContainText('Identity')
+  await expect(page.locator('a[href="#/documents?jd=11"]')).toContainText('Identity')
 })
 
-test('opens dashboard views with canonical document filters', async ({ page }) => {
+test('opens dashboard views through user-facing document routes', async ({ page }) => {
   const filters = {
     q: 'distribution advice',
     tags__id__in: '2',
@@ -321,14 +321,17 @@ test('opens dashboard views with canonical document filters', async ({ page }) =
   })
   await page.goto('/#/dashboard')
 
+  await expect(page.getByRole('link', { name: 'New view' })).toHaveAttribute('href', '#/views?new=1')
   const view = page.locator('.views a.view').filter({ hasText: '22 Investments' })
   await expect(view).toHaveCount(1)
   const href = await view.getAttribute('href')
   const linkParams = new URLSearchParams(href.split('?')[1])
   for (const [key, value] of Object.entries(filters)) {
+    if (key === 'jd_category_id') continue
     expect(linkParams.get(key)).toBe(value)
   }
-  expect(linkParams.has('jd')).toBe(false)
+  expect(linkParams.get('jd')).toBe(filters.jd_category_id)
+  expect(linkParams.has('jd_category_id')).toBe(false)
 
   const documentRequest = page.waitForRequest(request => {
     const url = new URL(request.url())
@@ -341,7 +344,67 @@ test('opens dashboard views with canonical document filters', async ({ page }) =
   for (const [key, value] of Object.entries(filters)) {
     expect(requestParams.get(key)).toBe(value)
   }
-  await expect(page).toHaveURL(/#\/documents\?.*jd_category_id=6/)
+  await expect(page).toHaveURL(/#\/documents\?.*jd=6/)
+  expect(page.url()).not.toContain('jd_category_id')
+})
+
+test('starts view creation from the dashboard action', async ({ page }) => {
+  await mockAPI(page)
+  await page.goto('/#/dashboard')
+
+  await expect(page.getByText('No custom views yet. Saved views appear here with a live document count.')).toBeVisible()
+  await page.getByRole('link', { name: 'New view' }).click()
+  await expect(page).toHaveURL(/#\/views\?new=1$/)
+  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
+  await expect(page.getByLabel('View name')).toBeFocused()
+})
+
+test('keeps saved views ahead of the creation form', async ({ page }) => {
+  await mockAPI(page, {
+    savedViews: [{
+      id: 8,
+      name: 'Private investments',
+      filter_json: JSON.stringify({ q: 'distribution advice', sensitivity: 'confidential' }),
+      position: 0,
+      shared: false,
+    }],
+  })
+  await page.goto('/#/views')
+
+  await expect(page.getByRole('link', { name: /Private investments/ })).toBeVisible()
+  await expect(page.getByText('Search: “distribution advice”')).toBeVisible()
+  await expect(page.getByText('Confidential', { exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Create a view' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'New view' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByLabel('View name')).toBeFocused()
+  await expect(dialog.getByLabel('Share this view')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+})
+
+test('gates saved-view sharing for members by capability', async ({ page }) => {
+  const options = { userRole: 'member', capabilities: [] }
+  await mockAPI(page, options)
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'New view' }).click()
+  await expect(page.getByRole('dialog').getByLabel('Share this view')).toHaveCount(0)
+
+  options.capabilities = ['share_views']
+  await page.reload()
+  await page.getByRole('button', { name: 'New view' }).click()
+  await expect(page.getByRole('dialog').getByLabel('Share this view')).toBeVisible()
+})
+
+test('lets admins grant saved-view sharing to members', async ({ page }) => {
+  await mockAPI(page)
+  await page.goto('/#/admin')
+
+  await expect(page.getByRole('switch', {
+    name: 'Share saved views capability for member@example.test',
+  })).toBeVisible()
 })
 
 test('offers Microsoft sign-in without exposing registration controls', async ({ page }) => {

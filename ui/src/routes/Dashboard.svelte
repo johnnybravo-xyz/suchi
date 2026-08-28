@@ -1,5 +1,6 @@
 <script>
   import { listDocuments, listSavedViews } from '../lib/api.js'
+  import { documentListHash } from '../lib/documentFilters.js'
   import { fmtDate, sensDot } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -27,12 +28,6 @@
           .catch(() => {})
       }
     } catch {}
-  }
-
-  function viewHash(v) {
-    const p = new URLSearchParams()
-    for (const [k, val] of Object.entries(v.filters)) if (val !== '' && val != null) p.set(k, val)
-    return `#/documents?${p.toString()}`
   }
 
   function filterSummary(f) {
@@ -101,12 +96,12 @@
   <div>
     <div class="dash-head">
       <h3>Your views</h3>
-      <a class="btn sm" href="#/settings">Manage</a>
+      <a class="btn sm" href="#/views?new=1"><Icon name="plus" size={13} /> New view</a>
     </div>
     {#if views.length}
       <div class="views">
         {#each views as v (v.id)}
-          <a class="card view" href={viewHash(v)}>
+          <a class="card view" href={documentListHash(v.filters)}>
             <span class="m-label">{v.name}</span>
             <span class="m-value" style="font-size:1.6rem">{v.count ?? '…'}</span>
             <span class="m-sub mono" style="font-size:.68rem">{filterSummary(v.filters)}</span>
@@ -115,8 +110,7 @@
       </div>
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
-        No custom views yet. Create one in <a href="#/views">Views</a> — a saved filter
-        (say, <i>“confidential in 22 Tax”</i>) shows up here with a live count.
+        No custom views yet. Saved views appear here with a live document count.
       </div>
     {/if}
   </div>

@@ -33,6 +33,9 @@
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
+  const canShareViews = $derived(
+    session.user?.role === 'admin' || (session.user?.capabilities || []).includes('share_views')
+  )
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
@@ -312,7 +315,7 @@
             </button>
             {#if openAreas.has(area.lo)}
               {#each area.categories as c (c.id)}
-                <a href={`#/documents?jd_category_id=${c.id}`} class:on={route.query.get('jd_category_id') == c.id} onclick={() => (mobileNavOpen = false)}>
+                <a href={`#/documents?jd=${c.id}`} class:on={route.query.get('jd') == c.id} onclick={() => (mobileNavOpen = false)}>
                   <span class="code">{c.code}</span>{c.name}
                   {#if inboxCategory && c.id === inboxCategory.id && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
                 </a>
@@ -396,7 +399,7 @@
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1' }} />
         {:else if page === 'admin' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.admin} props={{ notify }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} />
 		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: loadTaxonomy, onDone: () => { setupNeeded = false; go('#/dashboard') } }} />

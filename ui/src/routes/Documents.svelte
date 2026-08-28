@@ -26,7 +26,7 @@
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
   const isInbox = $derived(inbox != null)
-  const jdFilter = $derived(route.query.get('jd_category_id') || '')
+  const jdFilter = $derived(route.query.get('jd') || '')
   // Keep thumbnail reveal behavior aligned with core/api.IsHighSensitivity.
   const isHigh = (s) => s === 'confidential' || s === 'restricted'
 
