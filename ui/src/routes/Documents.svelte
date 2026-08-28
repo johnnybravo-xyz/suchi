@@ -8,7 +8,7 @@
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
 
-  let { notify, inbox = null, jdCategories = [] } = $props()
+  let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [] } = $props()
 
   let docs = $state([])
   let count = $state(0)
@@ -27,12 +27,12 @@
   let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
-  const isInbox = $derived(inbox != null)
+  const isInbox = $derived(inboxMode)
   const jdFilter = $derived(route.query.get('jd') || '')
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   const activeFilterKey = $derived(JSON.stringify([
     ordering, fQuery, fTag, fCorr, fType, fSens, jdFilter,
-    inbox?.id || '', dateFrom, dateTo,
+    inbox?.id || '', taxonomyLoaded, dateFrom, dateTo,
   ]))
   let loadedFilterKey = ''
   let loadVersion = 0
@@ -58,6 +58,13 @@
     const version = ++loadVersion
     if (!background) loading = true
     err = ''
+    if (isInbox && !inbox?.id) {
+      docs = []
+      count = 0
+      loading = !taxonomyLoaded
+      if (taxonomyLoaded) err = 'The inbox is unavailable.'
+      return
+    }
     try {
       const params = {
         page, page_size: pageSize, ordering,

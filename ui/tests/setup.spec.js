@@ -35,6 +35,10 @@ async function mockAPI(page, options = {}) {
       }
       return
     }
+    if (path === '/api/jd/categories/' && options.taxonomyFailure) {
+      await route.fulfill({ status: 500, json: { error: 'taxonomy unavailable' } })
+      return
+    }
     let body = { results: [], count: 0 }
 
     if (path === '/api/demo/mode') body = { enabled: false }
@@ -446,6 +450,7 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   }
   await page.locator('.area-toggle').filter({ hasText: 'Life admin' }).click()
   await expect(page.locator('a[href="#/documents?jd=11"]')).toContainText('Identity')
+  await expect(page.locator('.jd-tree a[href="#/documents?jd=49"]')).toHaveCount(0)
 })
 
 test('uses the demo category database id in document links', async ({ page }) => {
@@ -472,6 +477,18 @@ test('does not request a document for an invalid detail route', async ({ page })
 
   await expect(page.getByText('Page not found.')).toBeVisible()
   expect(invalidRequests).toEqual([])
+})
+
+test('does not show all documents when the inbox category is unavailable', async ({ page }) => {
+  const documentRequests = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/documents/') documentRequests.push(request.url())
+  })
+  await mockAPI(page, { taxonomyFailure: true })
+  await page.goto('/#/inbox')
+
+  await expect(page.getByText('The inbox is unavailable.')).toBeVisible()
+  expect(documentRequests).toEqual([])
 })
 
 test('loads the filing tree once for every archive screen', async ({ page }) => {

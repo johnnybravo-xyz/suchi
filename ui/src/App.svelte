@@ -9,6 +9,7 @@
   import Omnibox from './lib/Omnibox.svelte'
   import Lazy from './lib/Lazy.svelte'
   import BrandMark from './lib/BrandMark.svelte'
+  import SetupReminder from './lib/SetupReminder.svelte'
 
   const archiveBundle = () => import('./lib/archiveBundle.js')
   const manageBundle = () => import('./lib/manageBundle.js')
@@ -37,10 +38,14 @@
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
+  let taxonomyLoaded = $state(false)
   let inboxCount = $state(0)
   let recentDocs = $state([])
   let st = $state(null)                 // /api/stats/ snapshot
-  const hasFilingIndex = $derived(jdTree.some(area => area.categories.some(category => !category.system)))
+  const filingTree = $derived(jdTree
+    .map((area) => ({ ...area, categories: area.categories.filter((category) => !category.system) }))
+    .filter((area) => area.categories.length))
+  const hasFilingIndex = $derived(filingTree.length > 0)
   let setupNeeded = $state(false)
   let setupEngaged = $state(false)
   let setupReminderKey = ''
@@ -161,6 +166,7 @@
       buildTree(cats.results)
       revealPendingInbox()
     } catch {}
+    finally { taxonomyLoaded = true }
   }
 
   function buildTree(cats) {
@@ -225,10 +231,15 @@
     if (e.key === 'Escape') { mobileNavOpen = false; uploadOpen = false }
   }
 
+  async function handleSignOut() {
+    clearInterval(pollTimer)
+    await signOut()
+  }
+
   $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false })
   const page = $derived(route.parts[0] || 'dashboard')
   const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
-  const demoCategories = $derived(jdTree.flatMap((area) => area.categories))
+  const jdCategories = $derived(jdTree.flatMap((area) => area.categories))
   $effect(() => {
     if (session.user && page === 'dashboard') loadRecentDocuments()
   })
@@ -268,7 +279,7 @@
     { label: session.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
       ico: session.theme === 'dark' ? 'sun' : 'moon',
       run: () => setTheme(session.theme === 'dark' ? 'light' : 'dark') },
-    { label: 'Sign out', ico: 'out', run: signOut },
+    { label: 'Sign out', ico: 'out', run: handleSignOut },
   ])
 </script>
 
@@ -300,20 +311,7 @@
       </a>
 
       {#if setupNeeded}
-        <aside class="setup-reminder setup-reminder-side" aria-label="Setup wizard">
-          <div class="setup-reminder-head">
-            <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
-            <div>
-              <b>Choose your filing tree</b>
-              <span>Required to finish setup. You can reopen Setup anytime from Settings.</span>
-            </div>
-            <button class="btn sm setup-reminder-close" onclick={dismissSetupReminder}
-                    title="Close setup reminder" aria-label="Close setup reminder">
-              <Icon name="x" size={13} />
-            </button>
-          </div>
-          <a role="button" class="btn primary sm" href="#/setup" onclick={openSetupFromReminder}>Continue setup</a>
-        </aside>
+        <SetupReminder onClose={dismissSetupReminder} onContinue={openSetupFromReminder} />
       {/if}
 
       <nav class="nav">
@@ -329,7 +327,7 @@
       {#if hasFilingIndex}
         <div class="side-head">Index</div>
         <nav class="jd-tree">
-          {#each jdTree as area (area.lo)}
+          {#each filingTree as area (area.lo)}
             {@const areaPending = inboxCategory && Number(inboxCategory.area_code) === area.lo ? inboxCount : 0}
             <button class="area-toggle" onclick={() => toggleArea(area.lo)}
                     aria-expanded={openAreas.has(area.lo)}>
@@ -360,7 +358,7 @@
             <span>{session.user?.role || 'member'}</span>
           </span>
         </a>
-        <button class="side-user-out" onclick={signOut} title="Sign out" aria-label="Sign out">
+        <button class="side-user-out" onclick={handleSignOut} title="Sign out" aria-label="Sign out">
           <Icon name="out" size={14} />
         </button>
       </div>
@@ -374,7 +372,7 @@
         </button>
         <h1>{pageTitle}</h1>
         <Omnibox pages={session.user?.role === 'admin'
-				? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
+          ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} />
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
@@ -385,20 +383,7 @@
       </div>
 
       {#if setupNeeded && page === 'dashboard'}
-        <aside class="setup-reminder setup-reminder-mobile" aria-label="Setup wizard">
-          <div class="setup-reminder-head">
-            <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
-            <div>
-              <b>Choose your filing tree</b>
-              <span>Required to finish setup. You can reopen Setup anytime from Settings.</span>
-            </div>
-            <button class="btn sm setup-reminder-close" onclick={dismissSetupReminder}
-                    title="Close setup reminder" aria-label="Close setup reminder">
-              <Icon name="x" size={13} />
-            </button>
-          </div>
-          <a role="button" class="btn primary sm" href="#/setup" onclick={acknowledgeSetupReminder}>Continue setup</a>
-        </aside>
+        <SetupReminder placement="mobile" onClose={dismissSetupReminder} onContinue={openSetupFromReminder} />
       {/if}
 
       {#if demoMode && !demoBannerDismissed}
@@ -411,17 +396,17 @@
 
       <div class="content">
         {#if page === 'dashboard'}<Dashboard {st} {inboxCategory} recent={recentDocs} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories: demoCategories }} />
-        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories: demoCategories }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, jdCategories: demoCategories }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories }} />
+        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
-        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories: demoCategories }} />
-        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories: demoCategories }} />
+        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories }} />
+        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', jdCategories: demoCategories }} />
-        {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories: demoCategories }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', jdCategories }} />
+        {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
         {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
         {/if}
@@ -437,7 +422,7 @@
           <h3>Upload</h3>
           <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}><Icon name="x" size={13} /></button>
         </div>
-        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories: demoCategories }} />
+        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories }} />
       </div>
     </div>
   {/if}

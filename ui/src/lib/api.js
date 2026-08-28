@@ -9,11 +9,10 @@ export function setToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : loc
 export function getDemoAnonToken() { try { return sessionStorage.getItem(DEMO_ANON_KEY) } catch { return null } }
 export function setDemoAnonToken(t) { try { t ? sessionStorage.setItem(DEMO_ANON_KEY, t) : sessionStorage.removeItem(DEMO_ANON_KEY) } catch {} }
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(status, code, message, data) { super(message || code || `HTTP ${status}`); this.status = status; this.code = code; this.data = data }
 }
 
-export { req }
 async function req(method, path, body, opts = {}) {
   const res = await sendOnce(method, path, body, opts)
   // `_noUpgrade` prevents recursion when the upgrade endpoint refuses a token.

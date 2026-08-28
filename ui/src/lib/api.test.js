@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ApiError, req } from './api.js'
+import { login } from './api.js'
 
-test('uses the canonical API error message', async () => {
+test('uses the API-provided error message', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({
     code: 'oauth_failed',
@@ -13,9 +13,8 @@ test('uses the canonical API error message', async () => {
   })
   try {
     await assert.rejects(
-      () => req('POST', '/api/email-accounts/oauth/complete', {}),
-      (err) => err instanceof ApiError &&
-        err.code === 'oauth_failed' &&
+      () => login('admin@example.test', 'wrong-password'),
+      (err) => err.status === 400 && err.code === 'oauth_failed' &&
         err.message === 'Microsoft did not complete sign-in',
     )
   } finally {

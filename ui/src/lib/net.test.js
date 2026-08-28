@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isLocalEndpoint, isLocalHost } from './net.js'
+import { isLocalEndpoint } from './net.js'
 
 test('recognizes local hosts accepted by the backend', () => {
   const hosts = [
-    '', 'localhost', 'service.localhost', 'host.local', '127.2.3.4',
+    'localhost', 'service.localhost', 'host.local', '127.2.3.4',
     '10.0.0.5', '172.31.255.255', '192.168.1.10', '169.254.2.3',
     '::1', 'fc00::1', 'fd12::1', 'fe80::1', '::ffff:192.168.1.10',
   ]
-  for (const host of hosts) assert.equal(isLocalHost(host), true, host)
+  for (const host of hosts) {
+    const bracketed = host.includes(':') ? `[${host}]` : host
+    assert.equal(isLocalEndpoint(`http://${bracketed}:11434/v1`), true, host)
+  }
 })
 
 test('rejects public and malformed hosts', () => {
@@ -16,7 +19,10 @@ test('rejects public and malformed hosts', () => {
     'example.com', 'host.internal', 'host.lan', '8.8.8.8', '172.32.0.1',
     '192.169.1.1', '0127.0.0.1', 'fe00::1',
   ]
-  for (const host of hosts) assert.equal(isLocalHost(host), false, host)
+  for (const host of hosts) {
+    const bracketed = host.includes(':') ? `[${host}]` : host
+    assert.equal(isLocalEndpoint(`http://${bracketed}:11434/v1`), false, host)
+  }
 })
 
 test('extracts the host from endpoint URLs', () => {

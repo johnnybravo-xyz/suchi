@@ -6,11 +6,19 @@ export function isLocalEndpoint(raw) {
   }
 }
 
-export function isLocalHost(raw) {
+function isLocalHost(raw) {
   const host = raw.trim().toLowerCase().replace(/^\[|\]$/g, '')
   if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
 
-  if (host.startsWith('::ffff:')) return isLocalHost(host.slice(7))
+  if (host.startsWith('::ffff:')) {
+    const mapped = host.slice(7)
+    if (mapped.includes('.')) return isLocalHost(mapped)
+    const [high, low] = mapped.split(':').map((part) => Number.parseInt(part, 16))
+    if (Number.isInteger(high) && Number.isInteger(low) && high <= 0xffff && low <= 0xffff) {
+      return isLocalHost(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
+    }
+    return false
+  }
   if (host.includes(':')) {
     if (host === '::1') return true
     const first = Number.parseInt(host.split(':')[0], 16)
