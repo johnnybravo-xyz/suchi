@@ -17,9 +17,9 @@ ui/src/
   App.svelte                  application shell and navigation
   app.css                     global tokens and component styles
   lib/api.js                  typed-by-convention API functions
-  lib/i18n.js                 locale fallback and interpolation helper
-  lib/net.js                  fetch and error handling
-  lib/router.svelte.js        history and route state
+  lib/api.js                  fetch, errors, and named API operations
+  lib/net.js                  local endpoint validation
+  lib/router.svelte.js        hash-route state
   lib/session.svelte.js       current principal and session state
   lib/Lazy.svelte             route-level lazy loading
   lib/*.svelte                shared feature components
@@ -59,7 +59,7 @@ changes, not a browser-memory or container-size claim.
 
 ## Routing and loading
 
-`router.svelte.js` wraps browser history and exposes route state. `App.svelte`
+`router.svelte.js` tracks the URL hash and exposes route state. `App.svelte`
 selects the route component and owns the persistent navigation. Larger routes
 load through `Lazy.svelte`, keeping the startup bundle small without splitting
 every component into its own chunk.
@@ -70,9 +70,10 @@ registry.
 
 ## API conventions
 
-`net.js` owns fetch behavior, JSON errors, and session failures. `api.js` names
-the product operations consumed by components. Route components should call
-those helpers rather than duplicating URLs or response parsing.
+`api.js` owns fetch behavior, JSON errors, and the named product operations
+consumed by components. `net.js` validates user-supplied local endpoints. Route
+components should call API helpers rather than duplicating URLs or response
+parsing.
 
 The SPA uses the same documented endpoints as other clients:
 
@@ -93,13 +94,11 @@ before depending on it in a component.
 
 - Server responses are the source of truth for documents and settings.
 - Session state is shared because every route needs the current principal.
-- Upload progress uses the shared upload bus so navigation does not hide active
-  work.
+- Successful uploads increment a small shared revision so visible document
+  lists can refresh in the same tab.
 - Builder vocabularies come from their focused API endpoints, such as
   `/api/automations/schema`; local values only keep the editor usable while a
   request is unavailable.
-- UI dictionaries use exact locale, base language, then English fallback. Add
-  translations to the existing helper instead of introducing another runtime.
 - Optimistic updates are limited to reversible interactions and must restore
   state on failure.
 

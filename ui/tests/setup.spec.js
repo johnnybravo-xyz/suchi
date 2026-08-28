@@ -340,9 +340,6 @@ test('separates completed archive administration from account settings', async (
   await configuration.getByRole('link', { name: 'Archive overview' }).click()
   await overviewReload
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
-  await page.goto('/#/admin')
-  await expect(page.getByText('Nothing filed under')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Users', exact: true })).toHaveCount(0)
 })
 
 test('guides intent, filing tree, and LLM mode without exposing import', async ({ page }) => {

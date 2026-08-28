@@ -482,7 +482,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .share-preview > strong { color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .share-preview > small { font-size: .78rem; }
 .share-preview > em { font-size: .68rem; font-style: normal; color: var(--faint); }
-.admin-tabs { margin-bottom: 16px; }
+.people-tabs { margin-bottom: 16px; }
 .inline-edit { border: 0; background: none; font: inherit; color: inherit; padding: 2px 4px; border-radius: 4px; width: 100%; }
 .inline-edit:focus { background: var(--surface-2); outline: 1px solid var(--accent); }
 

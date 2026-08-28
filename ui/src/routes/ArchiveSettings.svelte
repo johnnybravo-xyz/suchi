@@ -4,11 +4,11 @@
   import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
   import ConfigurationSection from './ConfigurationSection.svelte'
-  import Admin from './Admin.svelte'
+  import PeopleSettings from './PeopleSettings.svelte'
 
   let { notify, initialSection = '', onTaxonomyChanged } = $props()
 
-  const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.filter((item) => !item.external).map((item) => item.name))
+  const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.map((item) => item.name))
   const current = $derived(configurableSections.has(initialSection) ? initialSection : 'overview')
   const currentItem = $derived(ARCHIVE_SETTINGS_ITEMS.find((item) => item.name === current))
   let statuses = $state({})
@@ -119,7 +119,7 @@
         <span>{currentItem.description}</span>
       </header>
       {#if current === 'users'}
-        <div class="admin-panel"><Admin {notify} /></div>
+        <div class="people-settings"><PeopleSettings {notify} /></div>
       {:else if current === 'automations'}
         <div class="card handoff-card">
           <span class="handoff-icon"><Icon name="zap" size={20} /></span>
@@ -172,7 +172,7 @@
   .section-intro a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: .76rem; font-weight: 600; text-decoration: none; }
   .section-intro > span { color: var(--muted); font-size: .72rem; text-align: right; }
   .section-card { min-height: 360px; }
-  .admin-panel :global(.admin-tabs) { margin-bottom: 14px; }
+  .people-settings :global(.people-tabs) { margin-bottom: 14px; }
   .handoff-card { display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:14px;align-items:center;min-height:112px }
   .handoff-icon { display:grid;place-items:center;width:42px;height:42px;border-radius:10px;background:var(--tint);color:var(--accent) }
   .handoff-copy h3 { margin:0;font-size:.92rem }

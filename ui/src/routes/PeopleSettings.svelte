@@ -185,12 +185,12 @@
   loadGroups(); loadFields()
   $effect(() => { taxon; loadTaxa() })
   // Reload roster whenever the users tab regains focus — cheap and keeps
-  // capability chips in sync with anything the sidebar/mailboxes surface
+  // Keep capability chips in sync with every capability-gated surface.
   // may have changed in the meantime.
   $effect(() => { if (tab === 'users') loadUsers() })
 </script>
 
-<span class="seg admin-tabs">
+<span class="seg people-tabs">
   <button class:on={tab === 'users'} onclick={() => (tab = 'users')}>Users</button>
   <button class:on={tab === 'groups'} onclick={() => (tab = 'groups')}>Groups</button>
   <button class:on={tab === 'fields'} onclick={() => (tab = 'fields')}>Custom fields</button>
