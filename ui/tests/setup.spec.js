@@ -245,6 +245,62 @@ test('shows the dashboard setup reminder only to fresh incomplete admins', async
   }
 })
 
+test('separates completed archive administration from account settings', async ({ page }) => {
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    currentPreset: 'household',
+  })
+  await page.goto('/#/settings')
+
+  await expect(page.getByRole('navigation', { name: 'Settings areas' })).toBeVisible()
+  await expect(page.locator('.sidebar .nav').getByRole('link', { name: 'Admin' })).toHaveCount(0)
+  await expect(page.getByRole('region', { name: 'Archive configuration' })).toHaveCount(0)
+  await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
+
+  await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
+  const configuration = page.getByRole('region', { name: 'Archive configuration' })
+  await expect(configuration).toBeVisible()
+  await expect(configuration.getByRole('heading', { name: 'Processing' })).toBeVisible()
+  const administration = configuration.getByRole('link', { name: /Users and metadata/ }).last()
+  await expect(administration).toHaveAttribute('href', '#/settings?tab=archive&section=users')
+  await administration.click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users$/)
+  await expect(configuration.getByRole('button', { name: 'Users', exact: true })).toBeVisible()
+  await expect(configuration.getByRole('button', { name: 'Groups', exact: true })).toBeVisible()
+  await expect(configuration.getByRole('button', { name: 'Custom fields', exact: true })).toBeVisible()
+  await expect(configuration.getByRole('button', { name: 'Taxonomy', exact: true })).toBeVisible()
+  await configuration.getByRole('link', { name: 'Archive overview' }).click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
+  const automations = configuration.getByRole('link', { name: /Automations/ }).last()
+  await expect(automations).toHaveAttribute('href', '#/settings?tab=archive&section=automations')
+  await automations.click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=automations$/)
+  const openAutomations = configuration.getByRole('button', { name: 'Open automations' })
+  await expect(openAutomations).toHaveAttribute('href', '#/automations')
+  await openAutomations.click()
+  await expect(page).toHaveURL(/#\/automations$/)
+  await page.goto('/#/settings?tab=archive')
+  const classification = configuration.getByRole('link', { name: /Classification/ }).last()
+  await expect(classification).toHaveAttribute('href', '#/settings?tab=archive&section=llm')
+  await classification.click()
+
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=llm$/)
+  await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Skip|Done|Defaults are fine/ })).toHaveCount(0)
+  const overviewReload = page.waitForRequest((request) =>
+    new URL(request.url()).pathname === '/api/admin/settings/preferences'
+  )
+  await configuration.getByRole('link', { name: 'Archive overview' }).click()
+  await overviewReload
+  await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
+  await page.goto('/#/admin')
+  await expect(page.getByText('Nothing filed under')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Users', exact: true })).toHaveCount(0)
+})
+
 test('guides intent, filing tree, and LLM mode without exposing import', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/setup')
@@ -399,8 +455,11 @@ test('gates saved-view sharing for members by capability', async ({ page }) => {
 })
 
 test('lets admins grant saved-view sharing to members', async ({ page }) => {
-  await mockAPI(page)
-  await page.goto('/#/admin')
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/settings?tab=archive&section=users')
 
   await expect(page.getByRole('switch', {
     name: 'Share saved views capability for member@example.test',
@@ -547,9 +606,12 @@ test('shows affected document titles in rescan details', async ({ page }) => {
 })
 
 test('persists switches and edits mailbox intake on mobile', async ({ page }) => {
-  await mockAPI(page)
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
 
-  await page.goto('/#/admin')
+  await page.goto('/#/settings?tab=archive&section=users')
   const userSwitch = page.getByRole('switch', { name: 'User member@example.test active' })
   await expect(userSwitch).toHaveAttribute('aria-checked', 'true')
   const userPatch = page.waitForRequest(request =>

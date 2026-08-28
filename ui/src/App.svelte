@@ -25,7 +25,6 @@
     automations: bundled(manageBundle, 'Automations'),
     settings:    bundled(manageBundle, 'Settings'),
     setup:       bundled(manageBundle, 'Setup'),
-    admin:       bundled(manageBundle, 'Admin'),
     demo:        bundled(manageBundle, 'Demo'),
   }
 
@@ -293,11 +292,6 @@
             {#if n.key === 'tasks' && (st?.pending_approvals ?? 0) > 0}<span class="badge">{st.pending_approvals}</span>{/if}
           </a>
         {/each}
-        {#if session.user?.role === 'admin'}
-          <a href="#/admin" class:on={page === 'admin'} onclick={() => (mobileNavOpen = false)}>
-            <Icon name="shield" />Admin
-          </a>
-        {/if}
       </nav>
 
       {#if hasFilingIndex}
@@ -352,7 +346,7 @@
           {:else}{page[0].toUpperCase() + page.slice(1)}{/if}
         </h1>
         <Omnibox pages={session.user?.role === 'admin'
-				? [...PAGES, { href: '#/admin', label: 'Admin', ico: 'shield' }]
+				? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'Users and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} />
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
@@ -396,10 +390,9 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
 		{:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin' }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1' }} />
-        {:else if page === 'admin' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.admin} props={{ notify }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} />
 		{:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: loadTaxonomy, onDone: () => { setupNeeded = false; go('#/dashboard') } }} />
         {:else if page === 'login'}<Login onSignedIn={() => go('#/dashboard')} />

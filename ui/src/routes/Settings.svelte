@@ -5,10 +5,11 @@
   import { session, refreshSession } from '../lib/session.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import { hasCapability } from '../lib/capabilities.js'
+  import ArchiveSettings from './ArchiveSettings.svelte'
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
 
-  let { notify } = $props()
+  let { notify, initialTab = '', initialSection = '', onTaxonomyChanged } = $props()
   let tokens = $state([])
   let err = $state('')
   let newName = $state('')
@@ -19,11 +20,12 @@
   let setup = $state(null)
   setupState().then(st => (setup = st)).catch(() => {})
   const setupDone = $derived(!!setup?.completed_at)
+  const archiveSelected = $derived(session.user?.role === 'admin' && initialTab === 'archive')
 
 
   let profile = $state({ display_name: session.user?.display_name || '', email: session.user?.email || '' })
   let profileBusy = $state(false)
-  let avatarInput
+  let avatarInput = $state()
   async function saveProfile() {
     profileBusy = true
     try {
@@ -127,6 +129,40 @@
 </script>
 
 <div class="content-narrow settings-page">
+  {#if session.user?.role === 'admin'}
+    <nav class="settings-tabs" aria-label="Settings areas">
+      <a class:on={!archiveSelected} href="#/settings">My account</a>
+      <a class:on={archiveSelected} href="#/settings?tab=archive">Archive configuration</a>
+    </nav>
+  {/if}
+
+  {#if archiveSelected}
+    {#if setup === null}
+      <div class="archive-loading" aria-label="Loading archive settings">
+        <div class="skel" style="width:28%"></div>
+        <div class="skel" style="width:76%"></div>
+      </div>
+    {:else if setupDone}
+      <ArchiveSettings {notify} {initialSection} {onTaxonomyChanged} />
+    {:else}
+      <section class="setup-row settings-section" aria-label="Setup wizard">
+        <div>
+          <b>Setup is incomplete</b>
+          <span>Finish the guided archive setup before changing archive-wide settings.</span>
+        </div>
+        <a role="button" class="btn sm primary" href="#/setup">Continue setup</a>
+      </section>
+    {/if}
+  {:else}
+    {#if setup !== null && !setupDone}
+      <section class="setup-row settings-section" aria-label="Setup wizard">
+        <div>
+          <b>Setup is incomplete</b>
+          <span>Finish the guided archive configuration when you are ready.</span>
+        </div>
+        <a role="button" class="btn sm primary" href="#/setup">Continue setup</a>
+      </section>
+    {/if}
   <section class="settings-section" aria-labelledby="profile-heading">
     <div class="section-heading">
       <h2 id="profile-heading">Profile</h2>
@@ -156,6 +192,7 @@
       </div>
     </div>
   </section>
+
 
   <section class="settings-section" aria-labelledby="tokens-heading">
     <div class="section-heading">
@@ -261,16 +298,8 @@
         <p class="empty-setting">No saved passwords. Unlock a protected document from Inbox to save one.</p>
       {/if}
   </section>
-
-  {#if setup !== null}
-    <section class="setup-row" aria-label="Setup wizard">
-      <div>
-        <b>{setupDone ? 'Setup wizard' : 'Setup is incomplete'}</b>
-        <span>{setupDone ? 'Revisit filing, intake, OCR, classification, or backups.' : 'Finish the guided archive configuration when you are ready.'}</span>
-      </div>
-      <a role="button" class="btn sm" class:primary={!setupDone} href="#/setup">{setupDone ? 'Open setup' : 'Continue setup'}</a>
-    </section>
   {/if}
+
 </div>
 
 <style>
@@ -320,6 +349,11 @@
   .setup-row > div { display:flex;flex-direction:column;gap:3px }
   .setup-row b { font-size:.86rem }
   .setup-row span { color:var(--muted);font-size:.8rem }
+  .settings-tabs { display:flex;gap:4px;margin:-4px 0 28px;border-bottom:1px solid var(--line) }
+  .settings-tabs a { padding:9px 14px;border-bottom:2px solid transparent;color:var(--muted);font-size:.84rem;font-weight:600;text-decoration:none }
+  .settings-tabs a:hover { color:var(--ink) }
+  .settings-tabs a.on { border-color:var(--accent);color:var(--accent) }
+  .archive-loading { display:grid;gap:14px;padding:20px 0 }
   @media (max-width: 760px) {
     .section-heading { flex-direction:column;gap:10px }
     .auth-syntax { align-items:flex-start;width:100% }
