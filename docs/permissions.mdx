@@ -46,6 +46,21 @@ autocomplete endpoints do not hide labels by object ACL.
 API token scopes and object permissions are separate gates. A token needs the
 endpoint's scope and the principal must be allowed to access the object.
 
+## Capabilities
+
+Administrators can grant optional capabilities to individual members under
+**Admin > Users**. Administrators have every capability implicitly.
+
+| Capability | Allows a member to |
+| --- | --- |
+| `mailboxes` | Connect and manage their own mail intake. |
+| `share_links` | Create revocable document share links. |
+| `share_views` | Publish saved views to every user's dashboard. |
+
+Removing `share_views` makes that member's shared views private again. The
+views themselves remain available to their owner, and any member can unshare a
+view after losing the capability.
+
 ## Groups
 
 Administrators manage users and groups under **Admin**. Group membership makes

@@ -24,7 +24,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Taxonomy                | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                            |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
 | Mail intake             | `/api/email-accounts/*` (requires `mailboxes`; admins see all rows, members see their own)                                                                                            |
-| Saved views             | `/api/saved_views/` (POST body `{name, filter_json, display, position, shared}`; GET `?include=shared` also returns other users' shared views)                                         |
+| Saved views             | `/api/saved_views/` (setting `shared: true` requires `share_views`; GET `?include=shared` also returns other users' shared views)                                                     |
 | Activity feed           | `GET /api/events/` (cursor over audit_events; `events:read` scope)                                                                                                                    |
 | Dashboard counters      | `GET /api/stats/` (visibility-scoped one-shot)                                                                                                                                        |
 | Blob mirrors            | `GET /api/documents/{id}/preview`, `GET /api/documents/{id}/download` — same handlers as `/preview/{id}` and `/download/{id}`, mounted on `/api` so headless deploys keep blob access |

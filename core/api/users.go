@@ -413,6 +413,7 @@ func (s *Server) readAdminUser(ctx context.Context, id int64) (AdminUser, error)
 var revokeHooks = map[authz.Capability]func(context.Context, *Server, int64) error{
 	authz.CapMailboxes:  revokeMailboxesFor,
 	authz.CapShareLinks: revokeShareLinksFor,
+	authz.CapShareViews: revokeSharedViewsFor,
 }
 
 // revokeMailboxesFor disables every mailbox owned by userID. Called
@@ -448,6 +449,28 @@ func revokeShareLinksFor(ctx context.Context, s *Server, userID int64) error {
 		return err
 	}
 	s.Log.Info("share_links.capability_revoked", "owner_id", userID, "revoked_count", n)
+	return nil
+}
+
+// revokeSharedViewsFor removes dashboard-wide visibility from every
+// saved view owned by userID. The views remain available to their owner.
+func revokeSharedViewsFor(ctx context.Context, s *Server, userID int64) error {
+	var n int64
+	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE saved_views SET shared = 0, updated_at = ?
+			 WHERE owner_id = ? AND shared = 1`,
+			time.Now().Unix(), userID)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.Log.Info("saved_views.capability_revoked", "owner_id", userID, "unshared_count", n)
 	return nil
 }
 

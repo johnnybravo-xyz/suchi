@@ -24,6 +24,7 @@ type Capability string
 const (
 	CapMailboxes  Capability = "mailboxes"
 	CapShareLinks Capability = "share_links"
+	CapShareViews Capability = "share_views"
 )
 
 // KnownCapabilities gates what the admin API will accept on the wire.
@@ -32,6 +33,7 @@ const (
 var KnownCapabilities = map[Capability]bool{
 	CapMailboxes:  true,
 	CapShareLinks: true,
+	CapShareViews: true,
 }
 
 // Set is a value-typed capability set. Zero-value is the empty set

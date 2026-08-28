@@ -27,12 +27,12 @@ func TestCapabilities_parse_wire(t *testing.T) {
 	}
 
 	// Known slugs pass through.
-	set, err = ParseWire([]string{"mailboxes", "share_links"})
+	set, err = ParseWire([]string{"share_views", "mailboxes", "share_links"})
 	if err != nil {
 		t.Fatalf("known slugs: %v", err)
 	}
 	got := set.SliceStrings()
-	if len(got) != 2 || got[0] != "mailboxes" || got[1] != "share_links" {
+	if len(got) != 3 || got[0] != "mailboxes" || got[1] != "share_links" || got[2] != "share_views" {
 		t.Fatalf("known slugs projection: got %v", got)
 	}
 

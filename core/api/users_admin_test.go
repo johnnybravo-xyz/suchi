@@ -246,6 +246,38 @@ func TestPatchUser_revoke_sharelinks_cascade(t *testing.T) {
 	}
 }
 
+func TestPatchUser_revoke_shared_views_cascade(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `["share_views"]`)
+
+	for i, shared := range []int{1, 1, 0} {
+		if _, err := d.Write.ExecContext(context.Background(), `
+			INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+			VALUES (2, ?, '{}', 'list', ?, ?, 0, 0)
+		`, "view-"+strconv.Itoa(i), i, shared); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/2",
+		`{"capabilities":[]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var total, shared int
+	if err := d.Read.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(shared), 0) FROM saved_views WHERE owner_id = 2`,
+	).Scan(&total, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || shared != 0 {
+		t.Fatalf("saved views after revoke: total=%d shared=%d, want total=3 shared=0", total, shared)
+	}
+}
+
 // TestPatchUser_regrant_does_not_resurrect_share_links pins the
 // invariant that once a share link is revoked (cascade or manual),
 // re-granting the share_links capability MUST NOT bring it back.

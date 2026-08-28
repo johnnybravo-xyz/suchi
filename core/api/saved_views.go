@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 )
 
 // SavedViewRow is the JSON projection of one saved_views row.
@@ -135,6 +136,11 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
+	if in.Shared != nil && *in.Shared {
+		if allowed, _ := s.requireCapability(w, r, authz.CapShareViews); allowed == nil {
+			return
+		}
+	}
 	if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_name", "name is required")
 		return
@@ -224,6 +230,11 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
+	}
+	if in.Shared != nil && *in.Shared {
+		if allowed, _ := s.requireCapability(w, r, authz.CapShareViews); allowed == nil {
+			return
+		}
 	}
 	sets := []string{}
 	args := []any{}
