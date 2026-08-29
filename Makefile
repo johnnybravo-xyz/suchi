@@ -19,7 +19,9 @@ vet:
 
 lint:
 	@tool="$$(command -v staticcheck || printf '%s/bin/staticcheck' "$$(go env GOPATH)")"; \
-	  test -x "$$tool" || go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
+	  want="$(patsubst v%,%,$(STATICCHECK_VERSION))"; actual=""; \
+	  test ! -x "$$tool" || actual="$$($$tool -version 2>/dev/null || true)"; \
+	  case "$$actual" in *"($$want)") ;; *) go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION);; esac; \
 	  for m in $(MODULES); do echo "=== lint $$m ==="; \
 	    ( cd "$$m" && "$$tool" ./... ) || exit 1; \
 	  done
@@ -40,7 +42,10 @@ check: fmt-check vet test lint ui-check
 # external vulnerability databases and may install the pinned scanner.
 security-check:
 	@tool="$$(command -v govulncheck || printf '%s/bin/govulncheck' "$$(go env GOPATH)")"; \
-	  test -x "$$tool" || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); \
+	  actual=""; go_version="$$(go env GOVERSION)"; \
+	  test ! -x "$$tool" || actual="$$($$tool -version 2>/dev/null || true)"; \
+	  case "$$actual" in *"Go: $$go_version"*"Scanner: govulncheck@$(GOVULNCHECK_VERSION)"*) ;; \
+	    *) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION);; esac; \
 	  "$$tool" ./...
 	@cd ui && bun audit
 
@@ -96,10 +101,10 @@ ui-clean:
 	rm -rf core/ui/spa/dist ui/dist ui/node_modules
 
 docs-dev:
-	@cd docs && bunx mint@$(MINT_VERSION) dev
+	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) dev
 
 docs-check:
-	@cd docs && bunx mint@$(MINT_VERSION) broken-links
+	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) broken-links
 
 smoke-ingest:
 	@./hack/local-ingest-test.sh
