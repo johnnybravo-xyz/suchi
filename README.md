@@ -73,8 +73,9 @@ production deployment paths.
 
 ## Images
 
-- `standard` / `beta`: Alpine. Supports all listed formats and indexes scanned
-  PDFs with Tesseract.
+- `standard` / `beta` / `beta-standard`: Alpine. Supports all listed formats
+  and indexes scanned PDFs with Tesseract. The two beta tags resolve to the
+  same image.
 - `full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned PDFs can
   retain a searchable text layer.
 

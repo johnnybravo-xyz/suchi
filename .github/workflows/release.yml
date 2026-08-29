@@ -162,6 +162,9 @@ jobs:
             tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
             tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.channel }}"
+            if [ "${{ needs.notes.outputs.channel }}" = "beta" ]; then
+              tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:beta-standard"
+            fi
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 

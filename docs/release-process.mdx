@@ -175,6 +175,7 @@ manifests:
 docker buildx imagetools create \
   --tag "$IMAGE:$VERSION" \
   --tag "$IMAGE:beta" \
+  --tag "$IMAGE:beta-standard" \
   "$IMAGE:$VERSION-amd64" \
   "$IMAGE:$VERSION-arm64"
 ```
@@ -198,7 +199,9 @@ can be exported.
 
 The `full` image follows the same process with `--target full` and temporary
 tags ending in `-full-amd64` and `-full-arm64`; publish the final tags as
-`$VERSION-full` and `beta-full`.
+`$VERSION-full` and `beta-full`. `beta-standard` is an explicit alias for the
+standard `beta` image and is useful where the selected image variant should be
+obvious from configuration alone.
 
 The first command-line push creates a private, unlinked GHCR package by
 default. In the package settings, make it public, connect it to the Suchi
