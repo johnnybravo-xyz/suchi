@@ -36,6 +36,16 @@
     </nav>
   {/if}
 
+  {#if setupNeedsAttention}
+    <section class="setup-row settings-section" aria-label="Setup wizard">
+      <div>
+        <b>Setup is incomplete</b>
+        <span>Choose a filing tree to finish the guided archive setup.</span>
+      </div>
+      <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
+    </section>
+  {/if}
+
   {#if archiveSelected}
     {#if setupError}
       <div class="err settings-error">
@@ -49,17 +59,9 @@
       </div>
     {:else if !setupNeedsAttention}
       <ArchiveSettings {notify} {initialSection} {onTaxonomyChanged} setupSnapshot={setup} />
-    {:else}
-      <section class="setup-row settings-section" aria-label="Setup wizard">
-        <div>
-          <b>Setup is incomplete</b>
-          <span>Finish the guided archive setup before changing archive-wide settings.</span>
-        </div>
-        <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
-      </section>
     {/if}
   {:else}
-    <AccountSettings {notify} setupIncomplete={setupNeedsAttention} {onSetupEngaged} />
+    <AccountSettings {notify} />
   {/if}
 </div>
 

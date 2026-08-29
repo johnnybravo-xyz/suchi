@@ -155,7 +155,7 @@
       {#if viewTotal > views.length}<a class="sub" href="#/views">View all {viewTotal} saved views</a>{/if}
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
-        No saved views yet. Create one in Views to keep a useful document filter close by.
+        No saved views yet.
       </div>
     {/if}
   </div>

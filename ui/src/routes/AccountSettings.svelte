@@ -7,7 +7,7 @@
   import Icon from '../lib/Icon.svelte'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
 
-  let { notify, setupIncomplete = false, onSetupEngaged } = $props()
+  let { notify } = $props()
   let tokens = $state([])
   let err = $state('')
   let newName = $state('')
@@ -112,15 +112,6 @@
   loadVault()
 </script>
 
-{#if setupIncomplete}
-  <section class="setup-row settings-section" aria-label="Setup wizard">
-    <div>
-      <b>Setup is incomplete</b>
-      <span>Finish the guided archive configuration when you are ready.</span>
-    </div>
-    <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
-  </section>
-{/if}
   <section class="settings-section" aria-labelledby="profile-heading">
     <div class="section-heading">
       <h2 id="profile-heading">Profile</h2>
@@ -298,10 +289,6 @@
   .vault-use { display:flex;align-items:center;gap:6px 14px;min-width:0;color:var(--muted);font-size:.78rem }
   .vault-use a { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
   .linkish { background:none;border:0;padding:0;color:var(--faint);font:inherit;font-style:italic;cursor:pointer }
-  .setup-row { display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0 8px }
-  .setup-row > div { display:flex;flex-direction:column;gap:3px }
-  .setup-row b { font-size:.86rem }
-  .setup-row span { color:var(--muted);font-size:.8rem }
   @media (max-width: 760px) {
     .section-heading { flex-direction:column;gap:10px }
     .auth-syntax { align-items:flex-start;width:100% }
@@ -310,7 +297,6 @@
     .token-create { width:100%;justify-content:center }
     .vault-row { grid-template-columns:minmax(0,1fr) auto;gap:8px 12px }
     .vault-use { grid-column:1 / -1;grid-row:2 }
-    .setup-row { align-items:flex-start }
   }
   @media (max-width: 520px) {
     .profile-layout { grid-template-columns:minmax(0,1fr) }
@@ -319,6 +305,5 @@
     .token-row { flex-wrap:wrap }
     .token-name { flex-basis:calc(100% - 100px) }
     .row-date { order:4;flex-basis:100% }
-    .setup-row { flex-direction:column }
   }
 </style>

@@ -265,6 +265,7 @@ test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) =
   await page.goto('/#/settings')
   const setupRow = page.getByRole('region', { name: 'Setup wizard' })
   await expect(setupRow.getByText('Setup is incomplete')).toBeVisible()
+  await expect(setupRow.getByText('Choose a filing tree to finish the guided archive setup.')).toBeVisible()
   await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/setup')
   await page.goto('/#/dashboard')
 
@@ -770,7 +771,7 @@ test('starts view creation from the dashboard action', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/dashboard')
 
-  await expect(page.getByText('No saved views yet. Create one in Views to keep a useful document filter close by.')).toBeVisible()
+  await expect(page.getByText('No saved views yet.')).toBeVisible()
   await page.getByRole('link', { name: 'New view' }).click()
   await expect(page).toHaveURL(/#\/views\?new=1$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
