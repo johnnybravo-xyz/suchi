@@ -52,7 +52,7 @@ type FetchOptions struct {
 
 // DefaultCorpusURL returns the release asset tested with this build.
 func DefaultCorpusURL(version string) string {
-	return fmt.Sprintf("https://github.com/suchi-dms/suchi-demo/releases/download/corpus-%s/corpus-%s.tar.gz", version, version)
+	return fmt.Sprintf("https://github.com/johnnybravo-xyz/suchi-demo/releases/download/corpus-%s/corpus-%s.tar.gz", version, version)
 }
 
 // Fetch resolves the corpus tarball (local or HTTPS), verifies its

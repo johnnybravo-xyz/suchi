@@ -75,10 +75,9 @@ Dry-run by default. Nothing is deleted until you pass `--apply`.
 
 ## `suchi taxonomy validate <file>`
 
-Validate a `suchi-taxonomy/v1` file. Silent on success (exit 0);
-positioned errors on stderr with a non-zero exit. What the
-[suchi-presets](https://github.com/suchi-dms/suchi-presets) repo's
-CI runs against every preset file.
+Validate a `suchi-taxonomy/v1` file. Silent on success (exit 0), with
+positioned errors on stderr and a non-zero exit otherwise. The same validation
+is suitable for CI that publishes preset files.
 
 ```bash
 suchi taxonomy validate presets/uk/landlord.toml && echo ok
@@ -219,14 +218,14 @@ attributed to that token's owner in the audit log.
 ## `suchi demo [flags]`
 
 Seed `$DATA_DIR` from the versioned manifest maintained by
-[`suchi-demo`](https://github.com/suchi-dms/suchi-demo).
+[`suchi-demo`](https://github.com/johnnybravo-xyz/suchi-demo).
 
 ### Flags
 
 | Flag                   | Purpose                                                                                                                                                                                      |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--data-dir <dir>`     | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`.                                                                                                               |
-| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/suchi-dms/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile.    |
+| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/johnnybravo-xyz/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile.    |
 | `--corpus-url <url>`   | HTTPS URL of a compatible corpus tarball. Verified against a `.sha256` sidecar if present. Defaults to the release tested with this Suchi build.                                             |
 | `--corpus-dir <path>`  | Use an already extracted corpus directory. Skips download and extraction.                                                                                                                   |
 | `--fetch-only`         | Download, verify, and extract the corpus into the local cache without writing the database.                                                                                                 |

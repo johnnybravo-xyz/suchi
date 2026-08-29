@@ -116,7 +116,7 @@ func TestSeedFromManifestDistinguishesNewAndExistingFixtures(t *testing.T) {
 
 func TestDefaultCorpusURL(t *testing.T) {
 	got := demo.DefaultCorpusURL("v0.1.0")
-	want := "https://github.com/suchi-dms/suchi-demo/releases/download/corpus-v0.1.0/corpus-v0.1.0.tar.gz"
+	want := "https://github.com/johnnybravo-xyz/suchi-demo/releases/download/corpus-v0.1.0/corpus-v0.1.0.tar.gz"
 	if got != want {
 		t.Fatalf("DefaultCorpusURL = %q, want %q", got, want)
 	}
