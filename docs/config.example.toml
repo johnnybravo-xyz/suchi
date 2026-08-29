@@ -138,7 +138,8 @@ scan_split_dpi = 150
 # Email ingest (IMAP polling) — shared boot options
 # --------------------------------------------------------------------
 #
-# Mailbox accounts and credentials are managed in Settings → Mailboxes.
+# Mailbox accounts and credentials are managed in
+# Settings → Archive configuration → Email intake.
 # These boot options configure Microsoft OAuth.
 
 # [ingest_imap]
@@ -149,8 +150,8 @@ scan_split_dpi = 150
 # LLM classifier (opt-in)
 # --------------------------------------------------------------------
 #
-# Empty endpoint = classifier disabled. The SPA Admin panel can also
-# write these into DB settings.
+# Empty endpoint = classifier disabled. Archive configuration → Classification
+# can also write these into database settings.
 
 # [llm]
 # endpoint_url = "http://127.0.0.1:11434/v1"    # Ollama by default

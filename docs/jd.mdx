@@ -51,7 +51,8 @@ The `suchi-taxonomy/v1` format supports TOML and HuML. A file contains:
 - optional starter automations with symbolic category, tag, document-type, or
   correspondent references
 
-Manage custom taxonomies from **Admin > Taxonomy** or the CLI:
+Manage custom taxonomies from **Settings > Archive configuration > People and
+metadata > Taxonomy** or the CLI:
 
 ```sh
 suchi taxonomy validate my-tree.toml
@@ -60,8 +61,8 @@ suchi taxonomy export --format huml > current-tree.huml
 ```
 
 Taxonomy import is intentionally absent from the first-run filing-tree picker
-in v0.1; it remains available after setup under Admin and through the CLI.
-Suchi never fetches taxonomy files automatically.
+in v0.1; it remains available after setup under **Taxonomy** and through the
+CLI. Suchi never fetches taxonomy files automatically.
 
 Minimal TOML example:
 

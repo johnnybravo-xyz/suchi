@@ -48,8 +48,9 @@ endpoint's scope and the principal must be allowed to access the object.
 
 ## Capabilities
 
-Administrators can grant optional capabilities to individual members under
-**Admin > Users**. Administrators have every capability implicitly.
+Administrators grant optional capabilities to individual members under
+**Settings > Archive configuration > People and metadata > Users**.
+Administrators have every capability implicitly.
 
 | Capability | Allows a member to |
 | --- | --- |
@@ -57,14 +58,23 @@ Administrators can grant optional capabilities to individual members under
 | `share_links` | Create revocable document share links. |
 | `share_views` | Publish saved views to every user's dashboard. |
 
-Removing `share_views` makes that member's shared views private again. The
-views themselves remain available to their owner, and any member can unshare a
-view after losing the capability.
+The web app labels these capabilities **Manage mailboxes**, **Create share
+links**, and **Share saved views**.
+
+Removing a capability also closes the access it granted:
+
+- Removing `mailboxes` disables the member's mailbox rows without deleting
+  them. Granting it again does not re-enable those rows automatically.
+- Removing `share_links` revokes the member's live share links. Granting it
+  again permits new links but does not restore revoked links.
+- Removing `share_views` makes the member's shared views private. The saved
+  views remain available to their owner.
 
 ## Groups
 
-Administrators manage users and groups under **Admin**. Group membership makes
-one grant apply to several users.
+Administrators manage users and groups under **Settings > Archive
+configuration > People and metadata**. Group membership makes one grant apply
+to several users.
 
 The equivalent API surface is:
 
@@ -116,7 +126,8 @@ assignee rules rather than object ACLs.
 
 ## Multi-user setup
 
-1. Create users under **Admin** or through `/api/admin/users`.
+1. Create users under **Settings > Archive configuration > People and
+   metadata > Users** or through `/api/admin/users`.
 2. Create groups for recurring sharing boundaries such as household or finance.
 3. Grant access to individual documents through the ACL API.
 4. Verify list, search, preview, edit, and delete behavior as a non-admin user.

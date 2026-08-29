@@ -79,13 +79,12 @@ does it.
 The `Similar documents` card on `/#/doc/{id}`:
 
 - Shows up to six results ordered by score (best first).
-- Displays each row's JD category chip and creation date next to the
-  title.
+- Displays each row's title and creation date.
 - Renders the ranking backend as a small pill (`fts` today).
 - Adds the `title-only match` warning pill when the endpoint reports
   `matched_on_title_only: true`.
-- Hides the whole card when the endpoint returns zero results — no
-  awkward "no similar documents" placeholder.
+- Explains when no result clears the score floor, with more specific guidance
+  when only the source title could be compared.
 
 ## What isn't done here
 

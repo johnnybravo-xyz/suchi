@@ -29,8 +29,8 @@ File and environment changes are read at process start. See [Live database
 settings](#live-database-settings) for the complete stored list.
 
 Command flags, where available, override environment values for that command.
-Mailbox rows and the Mailboxes UI are authoritative for account-specific IMAP
-configuration.
+Mailbox rows and the **Email intake** or member **Mailboxes** screen are
+authoritative for account-specific IMAP configuration.
 
 ## Config file (optional)
 
@@ -312,8 +312,10 @@ Mailboxes live in the `email_accounts` table: one row per mailbox,
 per-account owner, provider preset, auth mode (password or
 `xoauth2`), sealed secret at rest, per-account folder / poll
 interval, and typed intake policy. The supervisor
-picks up UI and API changes without a restart. Configure accounts in **Settings
-→ Mailboxes** or through `/api/email-accounts`; there is no boot-time
+picks up UI and API changes without a restart. Administrators configure
+accounts in **Settings > Archive configuration > Email intake**. Members with
+**Manage mailboxes** configure their own accounts in **Settings > My account >
+Mailboxes**. The equivalent API is `/api/email-accounts`; there is no boot-time
 single-mailbox seed.
 
 | Env var | Purpose |
@@ -390,9 +392,9 @@ these tell it how to reach the API. Flags override env.
 ## Live database settings
 
 The operator-facing settings below live in the `settings` table and are set via
-the setup wizard or related admin screens. This is the complete list of stored
-values that participate in runtime configuration. A stored value fills a field
-only when that field is absent from the config file and process environment.
+the setup wizard or **Archive configuration**. This is the complete list of
+stored values that participate in runtime configuration. A stored value fills
+a field only when that field is absent from the config file and process environment.
 The running LLM, filesystem watcher, OCR configuration, and backup schedule
 reload after a successful save; pinned fields retain their boot value.
 

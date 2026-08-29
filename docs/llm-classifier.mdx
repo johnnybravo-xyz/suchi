@@ -13,7 +13,8 @@ compiled into Suchi and can be enabled or reconfigured from the web interface.
 
 ## Configure in the web app
 
-Open **Settings > LLM classifier** during or after setup and choose:
+Open **Settings > Archive configuration > Classification** during or after
+setup and choose:
 
 - **Local model** for Ollama or another endpoint on the trusted network
 - **Hosted endpoint** for a provider on the public internet
@@ -165,8 +166,8 @@ ACL-scoped Ask in v0.3. Neither is part of the v0.1 classifier contract.
   JSON object. Suchi intentionally rejects explanatory prose.
 - **Low confidence:** use a stronger model, improve deterministic automations,
   or keep the conservative threshold and review suggestions in Approvals.
-- **No classification:** inspect LLM status in Settings and durable tasks for a
-  dead `post-classify` job.
+- **No classification:** inspect **Classification** and **Approvals** for a dead
+  `post-classify` job.
 
 See [Privacy](/privacy), [Automations](/automations), and
 [Pipeline versions](/pipeline-versions).

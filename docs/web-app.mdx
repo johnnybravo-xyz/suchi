@@ -1,0 +1,171 @@
+---
+title: "Web app"
+description: "Navigation, setup, settings, saved views, permissions, and document behavior in the Suchi interface."
+---
+
+The web app opens on the working archive, not a product landing page. The
+sidebar, top bar, and settings labels below match the v0.1 interface exactly.
+
+## Main navigation
+
+| Label | What it opens |
+| --- | --- |
+| **Dashboard** | Archive totals, Inbox and Approvals counts, failed jobs, recent documents, and up to four saved views. |
+| **Documents** | The searchable document list, filters, list or grid display, selection, bulk actions, and filing controls. |
+| **Inbox** | Documents in the protected system Inbox that still need filing. |
+| **Views** | Saved document searches and filing shortcuts. |
+| **Approvals** | Human decisions, processing-revision rescan proposals, and **Dead jobs — needs attention**. |
+| **Automations** | Rules that tag, title, and file incoming documents. Administrators can edit them; members see a read-only view. |
+| **Trash** | Soft-deleted documents and **Restore** actions. |
+
+The **Index** appears below the main navigation after a filing tree is chosen.
+It contains only normal filing areas and categories. The protected system
+Inbox is intentionally available through the dedicated **Inbox** item instead
+of being repeated in the Index.
+
+The top bar provides archive search, **Upload**, and the theme control. Search
+suggestions can open a document, filing category, correspondent, tag, document
+type, or page. Selecting **Search everything for** opens **Search results**.
+
+## Dashboard behavior
+
+The four status cards are **Total documents**, **Inbox**, **Approvals**, and
+**Failed jobs**. Counts come from one status request. An unavailable count is
+shown as `—` with its error or loading text; it is never presented as zero or
+as a healthy pipeline.
+
+**Recently added** shows the six newest visible documents. **Views** shows up
+to four saved views and their live counts. If shared views exist, at least one
+is included in those four so archive-wide shortcuts are not hidden by a user's
+private views. Its action is **New view**, and its empty state is **No saved
+views yet.** A read failure is shown as an error with **Retry**, not as an empty
+archive.
+
+## Document URLs and filters
+
+Document-list links use the following hash parameters:
+
+| Filter | Browser parameter | Example |
+| --- | --- | --- |
+| Text | `q` | `#/documents?q=paris` |
+| Filing category database ID | `jd` | `#/documents?jd=6` |
+| Tag | `tags__id__in` | `#/documents?tags__id__in=4` |
+| Correspondent | `correspondents__id__in` | `#/documents?correspondents__id__in=3` |
+| Document type | `document_type__id` | `#/documents?document_type__id=2` |
+| Sensitivity | `sensitivity` | `#/documents?sensitivity=confidential` |
+| Sort order | `ordering` | `#/documents?ordering=title` |
+
+`jd_category_id` is the API and saved-view field. It is translated to `jd`
+when the app creates a browser link and is not a supported browser parameter.
+Changing a URL filter returns the document list to page one. If two requests
+overlap during fast navigation, only the response for the newest route is
+shown.
+
+## Saved views
+
+**New view** opens **Create a view**. A view can combine **Contains text** with
+**Filing category**, **Tag**, **Correspondent**, **Document type**, and
+**Sensitivity**. Empty filters mean all values for that field. With no saved
+views, the list says **No saved views yet**.
+
+Members with **Share saved views**, and all administrators, also see **Share
+this view**. A shared view appears in every user's Views list and dashboard.
+Only its owner can delete it. Removing **Share saved views** from an owner
+makes their shared views private without deleting them.
+
+Filter choices are loaded when the create form or an existing view needs them;
+an empty Views screen does not fetch every vocabulary in advance.
+
+## Settings
+
+Every user has **Settings > My account**:
+
+- **Profile**
+- **API tokens**
+- **Mailboxes**, only for a member with **Manage mailboxes**
+- **Saved decryption passwords**
+
+Administrators also have **Settings > Archive configuration**. Its overview
+uses these exact groups and sections:
+
+| Group | Sections |
+| --- | --- |
+| **Structure and access** | **Filing tree**, **People and metadata** |
+| **Document intake** | **Watched folder**, **Email intake** |
+| **Processing** | **Classification**, **Automations** |
+| **Maintenance** | **OCR and backups** |
+
+**People and metadata** contains **Users**, **Groups**, **Custom fields**, and
+**Taxonomy**. **Automations** hands off to the main Automations screen so the
+rule editor has one home.
+
+Administrators manage every mailbox under **Email intake** and choose its
+owner. A member with **Manage mailboxes** manages only their own rows under
+**My account > Mailboxes**. This separation is deliberate; there is no second
+administrator mailbox editor under My account.
+
+## First-run setup
+
+Before a filing tree is chosen, a new archive contains only its protected
+System/Inbox baseline. No user-facing preset is applied implicitly and the
+sidebar does not show a filing Index.
+
+The setup steps are:
+
+1. **Filing tree**
+2. **People**
+3. **Watched folder**
+4. **Email intake**
+5. **Classification**
+6. **Automations**
+7. **OCR and backups**
+
+Choosing a filing tree is the only required step. **Finish setup** remains
+disabled until that choice is made; every other step is optional and remains
+available later under **Archive configuration**.
+
+For the first 48 hours after the first administrator is created, an incomplete
+archive shows **Choose your filing tree** near the top of the sidebar and on
+the narrow Dashboard layout. Its action is **Continue setup**. The reminder
+disappears when that administrator opens it, closes it, chooses a filing tree,
+finishes setup, or reaches the end of the 48-hour window. Closing it is stored
+in that browser for the current user and installation start, and confirms:
+**Setup reminder closed. Setup is always available in Settings.**
+
+While setup has not yet been engaged with, Settings shows **Setup is
+incomplete**, **Choose a filing tree to finish the guided archive setup.**, and
+**Continue setup**. The Archive configuration tab does not expose its sections
+until that prompt is retired. Opening or closing the reminder, choosing a
+filing tree, or finishing setup retires the prompt and exposes every **Archive
+configuration** section. The optional wizard steps never remain a gate after
+that point.
+
+## Capabilities and sensitive documents
+
+Administrators have all capabilities. Under **People and metadata > Users**,
+they can give a member:
+
+| Interface label | Stored key |
+| --- | --- |
+| **Manage mailboxes** | `mailboxes` |
+| **Create share links** | `share_links` |
+| **Share saved views** | `share_views` |
+
+See [Permissions](/permissions) for revocation effects and object-level access.
+
+Sensitivity choices are **Public**, **Internal**, **Confidential**, and
+**Restricted**; a document without a choice displays **Unset**. Confidential
+and Restricted documents blur list thumbnails and gate the inline preview and
+extracted text behind **Reveal**. **Create share links** controls whether a
+member sees document share actions; it does not bypass document access.
+
+## Loading and failures
+
+Routes that depend on server data have separate loading, empty, and failure
+states. A failed Inbox lookup does not fall back to all documents. A failed
+settings read does not expose an editable form populated with defaults. Fast
+route changes, search changes, and autocomplete requests discard stale
+responses so an older request cannot replace the current screen.
+
+For implementation ownership and the required verification steps, see
+[Frontend architecture](/spa-architecture).

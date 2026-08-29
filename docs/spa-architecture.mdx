@@ -16,8 +16,11 @@ application shell, such as bootstrap and direct preview or download responses.
 ui/src/
   App.svelte                  application shell and navigation
   app.css                     global tokens and component styles
-  lib/api.js                  typed-by-convention API functions
   lib/api.js                  fetch, errors, and named API operations
+  lib/configuration.js        setup and archive-setting labels
+  lib/capabilities.js         member capability labels and checks
+  lib/documentFilters.js      saved-view to browser-route translation
+  lib/format.js               dates, sizes, and sensitivity vocabulary
   lib/net.js                  local endpoint validation
   lib/router.svelte.js        hash-route state
   lib/session.svelte.js       current principal and session state
@@ -53,9 +56,11 @@ JavaScript toolchain. A UI change is incomplete when `ui/dist` differs from the
 embedded copy.
 
 The beta build intentionally uses three JavaScript chunks: the shell, archive
-workflows, and management workflows. At this revision they total about 260 KB
-raw and 84 KB gzip. Treat this as a local bundle budget to remeasure after UI
-changes, not a browser-memory or container-size claim.
+workflows, and management workflows. Keep the shell at or below 35 KB gzip and
+remeasure every chunk after UI changes. At v0.1.0-beta.1 the gzip sizes are
+32.31 KB for the shell, 20.77 KB for archive workflows, 40.11 KB for management
+workflows, and 9.86 KB for CSS. This is a transfer-size budget, not a
+browser-memory or container-size claim.
 
 ## Routing and loading
 
@@ -89,6 +94,23 @@ The SPA uses the same documented endpoints as other clients:
 The [API reference](/api) is authoritative for payloads and scopes. When a UI
 needs a new server capability, add the endpoint contract and integration tests
 before depending on it in a component.
+
+## Interface wording
+
+Product labels have one source in the frontend:
+
+| Vocabulary | Source |
+| --- | --- |
+| Main navigation and page titles | `App.svelte` |
+| Setup steps and Archive configuration sections | `lib/configuration.js` |
+| Member capabilities | `lib/capabilities.js` |
+| Sensitivity choices | `lib/format.js` |
+| Document-list browser parameters | `lib/documentFilters.js` |
+
+Components import these values instead of maintaining local copies. A wording
+or behavior change must update [Web app](/web-app), the focused feature guide,
+and its browser test in the same change. API field names can remain technical;
+visible labels should use the terms documented in the Web app guide.
 
 ## State and interaction
 

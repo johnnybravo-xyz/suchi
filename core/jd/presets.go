@@ -7,7 +7,8 @@
 // package-init time by core/jd/presetfile. This is what makes the
 // built-ins the reference implementations of the taxonomy file format:
 // the same parser powers the wizard picker and the published-preset
-// import path (Admin > Taxonomy > Import) AND the CLI validator.
+// import path (Archive configuration > People and metadata > Taxonomy) AND
+// the CLI validator.
 //
 // A new built-in is a new file. The order is fixed via presetOrder to
 // guarantee a stable display sequence in the wizard picker (blank

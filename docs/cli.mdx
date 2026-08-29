@@ -340,11 +340,11 @@ suchi rescan --jd 22 --older-than 8760h --yes
 suchi rescan --only-failed
 ```
 
-### Discovery via the Tasks inbox
+### Discovery in Approvals
 
 The CLI is the surgical path: you pick filters, run the command, and own the
-outcome. The Tasks inbox discovers older successful pipeline results after a
-code revision bump. Its card offers **Rescan all**, **Try 20 first** when more
+outcome. **Approvals** discovers older successful pipeline results after a code
+revision bump. Its proposal offers **Rescan all**, **Try 20 first** when more
 than 20 documents match, and **Dismiss**. Both surfaces route through
 `core/rescan.Enqueue`.
 

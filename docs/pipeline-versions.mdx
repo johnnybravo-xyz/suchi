@@ -43,8 +43,8 @@ Password-protected PDFs waiting for decryption are also excluded. A rescan
 cannot advance them while the password gate is closed; supplying a password
 already re-enqueues the document through the current pipeline.
 
-The Tasks card reports the pipeline, target revision, and matching document
-count. Its actions are:
+The proposal in **Approvals** reports the pipeline, target revision, and
+matching document count. Its actions are:
 
 - **Rescan all N**: enqueue every matching document.
 - **Try 20 first**: enqueue up to 20 random matches. This only appears when
@@ -77,11 +77,11 @@ decision.
 
 ## Failures
 
-Exhausted or terminal jobs appear under **Dead jobs** in Tasks. Correct the
-underlying problem, then choose **Retry** to reset the same durable row and run
-it again. Choose **Dismiss** when the failure was expected or no longer needs
-attention. Both actions are administrator-only and audited; dismissing a job
-does not delete its document.
+Exhausted or terminal jobs appear under **Dead jobs — needs attention** in
+**Approvals**. Correct the underlying problem, then choose **Retry** to reset
+the same durable row and run it again. Choose **Dismiss** when the failure was
+expected or no longer needs attention. Both actions are administrator-only and
+audited; dismissing a job does not delete its document.
 
 Related pages: [LLM classifier](/llm-classifier), [Approvals](/approvals),
 [CLI](/cli), and [Automations](/automations).
