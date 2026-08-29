@@ -155,7 +155,7 @@ pre-consume decrypt.
 
 For Outlook `.msg` files, `msgconvert` creates a temporary RFC 822
 working copy for this same parsing path. The original CFB bytes remain
-the canonical `original_blob` and downloads retain the
+in `original_blob`, and downloads retain the
 `application/vnd.ms-outlook` MIME type.
 
 **Attachments fan out into sibling docs.** Each attachment gets its
@@ -171,7 +171,7 @@ Attachment children inherit the parent's correspondents (so the
 They do NOT inherit tags or document type — the pipeline (automations,
 LLM classifier) reclassifies each child independently.
 
-**How to feed it in.** Any of the three canonical ingest paths works;
+**How to feed it in.** Any of the three supported ingest paths works;
 suchi doesn't care what put the `.eml` on the disk:
 
 - **`INGEST_FS_DIR`** — a fs-watch on a Maildir or archive folder.

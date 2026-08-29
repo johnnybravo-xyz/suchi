@@ -43,7 +43,7 @@ Two credential shapes, both routed through the same auth chain:
   bootstrap/password login and redirects anonymous browser entry points to the
   provider. Cookies are HttpOnly + SameSite=Lax; Secure when `PUBLIC_URL` uses
   HTTPS.
-- **Token** — `Authorization: Token <hex>` header. suchi's canonical
+- **Token** — `Authorization: Token <hex>` header. suchi's preferred
   scheme for API clients.
 - **Bearer** — `Authorization: Bearer <hex>` also accepted for the
   same API token, because many HTTP clients default to Bearer.

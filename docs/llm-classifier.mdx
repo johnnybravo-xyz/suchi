@@ -117,7 +117,7 @@ archive-wide backfill. Select older documents in **Documents** and use
 **Rescan** when you want the current configuration applied to them.
 
 Config-file and environment values take precedence over stored web settings on
-a field-by-field basis, following the canonical [configuration
+a field-by-field basis, following the documented [configuration
 precedence](/config#precedence). Unpinned fields still reload live. Prefer one
 management path per deployment so partial overrides remain easy to reason
 about.
@@ -150,9 +150,7 @@ does not call the LLM.
 
 v0.1 provides fixed document classification. It does not provide custom prompt
 steps, typed custom-field extractors, arbitrary code in the ingest pipeline,
-or archive question answering. The roadmap keeps typed, validated extraction
-inside the existing automation engine for v0.2, followed by citation-bound,
-ACL-scoped Ask in v0.3. Neither is part of the v0.1 classifier contract.
+or archive question answering.
 
 ## Troubleshooting
 

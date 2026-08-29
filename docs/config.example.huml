@@ -1,6 +1,6 @@
 # suchi — example configuration in HUML (https://huml.io)
 #
-# See docs/config.example.toml for the canonical example — TOML is
+# See docs/config.example.toml for the primary example — TOML is
 # suchi's recommended default. This HUML variant exists for operators
 # who prefer HUML's minimal syntax; the value shape is identical.
 #

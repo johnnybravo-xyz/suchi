@@ -1,7 +1,7 @@
 .PHONY: build test vet lint fmt fmt-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
 
 BIN := $(PWD)/dist/suchi
-MODULES := . plugin-api hack/emlfixtures hack/transcript
+MODULES := . plugin-api hack/emlfixtures
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.817
