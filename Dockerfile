@@ -71,8 +71,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # Full runtime: Debian packages OCRmyPDF and its archive-processing stack.
 FROM ${DEBIAN_IMAGE} AS full
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates \
+
+# Bootstrap TLS before downloading the runtime toolchain. Debian's signed
+# indexes still verify package hashes, while HTTPS avoids stale proxy payloads.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
       djvulibre-bin \
       imagemagick \
       libemail-address-perl \
