@@ -46,10 +46,9 @@ that authenticates callers.
 
 ### `search_documents`
 
-Searches title, extracted text, and filing metadata through `GET /api/search/`.
-The query accepts the same bounded language as the web app, including phrases,
-negation, `jd:`, `tag:`, `from:`, `type:`, `sensitivity:`, `lang:`, `added:`,
-accepted-intelligence `date:` / `date-role:`, and `is:` filters.
+Calls ranked `GET /api/search/` with the same [query language](/query-language)
+as the web app. Matching, BM25, recency, snippets, errors, and ACLs are not
+reimplemented by MCP; see [Search architecture: MCP](/search#mcp).
 
 ```text
 "distribution advice" jd:22 -tag:archived added:>=2026-01-01
@@ -58,10 +57,8 @@ accepted-intelligence `date:` / `date-role:`, and `is:` filters.
 - `query`: required string
 - `page_size`: optional integer, default 10 and maximum 25
 
-Results include document IDs, titles, snippets, ranking, MIME type, and creation
-time, filtered by the token owner's document visibility. The token requires
-`documents:read`; malformed or unresolved queries are returned as API errors
-instead of being interpreted as raw FTS5 syntax.
+Results include document IDs, titles, snippets, rank, MIME type, and creation
+time after token-owner visibility is applied. Requires `documents:read`.
 
 ### `get_document`
 

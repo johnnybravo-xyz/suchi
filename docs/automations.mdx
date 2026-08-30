@@ -72,10 +72,10 @@ For a newly extracted document Suchi runs:
 2. user automations in configured order
 3. the optional LLM classifier
 
-Archive matching learns from visible, FTS-similar documents. Strong matches
-fill unresolved filing metadata; uncertain matches are offered for human
-review. Its enable switch and review/auto-apply thresholds live with
-classification settings rather than appearing as editable automations.
+Archive matching learns from authorized lexical neighbours and then applies
+review/auto-apply thresholds. Tokenization, BM25, ACLs, and its shared
+similar-document implementation are documented in
+[Search architecture: Similar documents](/search#similar-documents).
 
 The optional model has one confidence threshold. Confident validated results
 apply directly, while uncertain results keep current metadata, add

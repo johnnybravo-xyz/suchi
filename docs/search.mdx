@@ -1,0 +1,241 @@
+---
+title: "Search architecture"
+description: "FTS5 indexing, ranking, recency, autocomplete, similarity, Views, MCP, and RAG retrieval."
+---
+
+Suchi has one document index and several search and retrieval paths. This page
+explains how each path selects, ranks, limits, and authorizes results. Query
+syntax lives in [Query language](/query-language).
+
+## Search and retrieval paths
+
+| Feature | Candidate selection | Ordering | Use |
+| --- | --- | --- | --- |
+| Ranked Search | Rich query plus FTS5 text match | Title-weighted BM25 plus optional recency | Find the best documents for a user query. |
+| Documents | Same rich query and legacy visual filters | Explicit list order such as newest or title | Browse and bulk-operate on a stable result set. |
+| Saved Views | Normalized rich query or exact document IDs | Documents ordering | Reopen a live filter or exact snapshot. |
+| Omnibox completion | Active final query token | Prefix vocabulary order | Complete filters without running Search. |
+| Similar documents | Tokens extracted from one source document | BM25 similarity, no recency | Find vocabulary neighbours and archive examples. |
+| Archive matching | Shared similar-document implementation | Configurable similarity thresholds | Propose unresolved filing metadata. |
+| Archive research | Natural-question terms plus reauthorized context | BM25 evidence retrieval, no recency | Give one model a small authorized evidence set. |
+| MCP `search_documents` | Ranked Search API | Same as ranked Search | Give an agent the same scoped search semantics. |
+
+All surfaces apply document visibility inside their database query. Admin bypass,
+owner access, user/group ACLs, and public-demo corpus isolation use the same
+authorization fragments.
+
+## FTS5 index
+
+SQLite owns an external-content FTS5 table with two columns:
+
+```sql
+CREATE VIRTUAL TABLE documents_fts USING fts5 (
+  title,
+  content,
+  content='documents',
+  content_rowid='id',
+  tokenize='porter unicode61 remove_diacritics 2'
+);
+```
+
+- `title` is document metadata.
+- `content` is extracted text from PDF, OCR, email, office-document, barcode, and
+  other ingestion paths.
+- `unicode61` provides Unicode tokenization.
+- `remove_diacritics 2` makes diacritic-insensitive matching consistent for the
+  supported scripts where SQLite can fold it.
+- `porter` supplies stemming for applicable terms.
+
+Insert, delete, and title/content update triggers keep the FTS row synchronized
+with `documents`. The index stores searchable text, not original file bytes.
+
+Suchi currently has no vector index or embedding queue. “Semantic” behavior in
+the product comes from explicit metadata, accepted intelligence, lexical
+similarity, and bounded model synthesis after retrieval—not from hidden vector
+search.
+
+## Ranked Search
+
+`GET /api/search/?q=...` compiles the [rich query language](/query-language)
+into:
+
+1. one positive FTS5 `MATCH` expression for text clauses;
+2. fixed SQL predicates for negation and metadata filters;
+3. the caller's visibility predicate; and
+4. live-document exclusion unless `is:trash` controls trash state.
+
+Text results include a content snippet with `<mark>` around the matching span.
+The snippet window is 20 FTS tokens. Filter-only queries do not join FTS; they
+return an empty snippet and use newest-first ordering.
+
+### BM25 weighting
+
+When text clauses exist, ranking begins with SQLite FTS5 BM25:
+
+```text
+bm25(documents_fts, 3.0, 1.0)
+```
+
+The first weight applies to `title`, the second to `content`. A title match is
+therefore three times as strong as the corresponding body-text contribution.
+SQLite's BM25 rank is ordered ascending: a more negative value is a stronger
+match.
+
+### Recency decay
+
+By default Suchi subtracts a bounded hyperbolic recency term:
+
+```text
+rank = bm25(title=3, content=1)
+       - 0.5 / (1 + age_seconds / 2_592_000)
+```
+
+`2_592_000` seconds is 30 days:
+
+| Document age | Recency contribution |
+| --- | --- |
+| New | `-0.5` |
+| 30 days | `-0.25` |
+| 90 days | `-0.125` |
+| About one year | roughly `-0.04` |
+
+The term breaks ties and nudges close matches; lexical relevance remains the
+main signal. Hyperbolic decay avoids depending on optional SQLite math
+extensions. Use `recency=off` for raw BM25 ordering:
+
+```http
+GET /api/search/?q=invoice&recency=off
+```
+
+### Pagination and wire score
+
+Search defaults to 25 results and caps pages at 100. Each hit includes `id`,
+`title`, marked `snippet`, raw/blended `rank`, `created_at`, and `mime_type`.
+The response uses the standard `{count,next,previous,results}` envelope.
+
+## Documents
+
+`GET /api/documents/?q=...` uses the same parser, resolver, and compiled
+predicates as ranked Search, so both endpoints select the same documents for the
+same rich query and authorization context.
+
+Documents does not apply BM25 or recency ordering. It supports list orders such
+as newest, oldest, updated, and title because the screen is also a bulk-action
+workspace. Legacy URL filters remain additive while older links and imported
+Views migrate to normalized queries.
+
+## Query completion and autocomplete
+
+`GET /api/autocomplete/?q=...` first examines the active final token. If it is a
+recognized query qualifier, the endpoint returns full replacement queries for:
+
+- filter names;
+- Johnny.Decimal categories;
+- tags;
+- correspondents;
+- document types;
+- sensitivity values;
+- accepted date roles; and
+- `is:` states.
+
+The browser debounces requests by 160 ms and discards stale responses. Selecting
+a completion changes the query text; it does not run the query.
+
+When the input is not query-language completion, the endpoint retains its
+bounded taxonomy-prefix behavior for tags, correspondents, and document types.
+It caps combined suggestions at 20 by default and 50 explicitly.
+
+## Similar documents
+
+`GET /api/documents/{id}/similar` uses FTS5 as a local “more like this” reader:
+
+1. Read the source title plus at most the first 4,096 content bytes.
+2. Extract alphanumeric tokens of length four or more.
+3. Remove a small deterministic stopword set.
+4. Select at most ten tokens by frequency, then alphabetically for ties.
+5. OR-join each token as a quoted FTS term.
+6. Exclude the source document and trash.
+7. Apply the caller's visibility predicate.
+8. Rank with title `3.0`, content `1.0`, and no recency term.
+
+The wire `score` is `-bm25`, so a higher positive value is more similar. The UI
+endpoint drops scores below `0.001`; this removes the noise band produced by a
+single calendar-year overlap. Default limit is 10, maximum 50. A source with no
+content falls back to title tokens and sets `matched_on_title_only` so the UI can
+warn that results are noisier.
+
+Archive matching imports this same implementation. It changes thresholds and
+what happens after a match, not tokenization, SQL, ACLs, or ranking.
+
+## Saved Views and Calendar
+
+A live View stores a normalized rich query. A snapshot View stores exact
+`document_ids`. New View visual controls compile into query clauses before
+persistence.
+
+Older/imported Views may use flat fields. Calendar sends `view_id`, never a
+client-reconstructed subset. The intelligence API loads the View only when
+owned or shared, applies its complete filter through the shared document-scope
+predicates, and then reapplies document ACLs. Calendar adds its accepted-date
+range and role after that document scope.
+
+See [Query language: Saved Views](/query-language#saved-views) for serialization
+and Archive research snapshot behavior.
+
+## Archive research retrieval
+
+Archive research is RAG evidence retrieval, not the rich query parser applied to
+the natural-language question.
+
+For each question Suchi:
+
+1. Normalizes up to 64 unique Unicode terms.
+2. Drops common question/document words when useful terms exist.
+3. Keeps at most 12 useful terms.
+4. Converts them to FTS prefixes and OR-joins them for recall.
+5. Ranks title `3.0`, content `1.0`, without recency.
+6. Returns at most six source snippets of about 80 FTS tokens.
+7. Reauthorizes up to three cited context sources from the previous turn.
+8. Adds human-accepted intelligence attached to those sources when permitted.
+
+Prefix-OR raises recall for the small evidence set. The model and citation
+validator then decide whether that evidence is sufficient. A research scope
+can still be a rich query, category, current document, or exact document set;
+the scope is ANDed with the retrieval candidates.
+
+This distinction is why Archive research saves exact source snapshots instead
+of manufacturing a live rich query from question words. See
+[Archive research](/archive-chat) for the model and citation contract.
+
+## MCP
+
+The MCP adapter's `search_documents` tool calls `/api/search/`; it does not have
+a second parser or ranking implementation. Query errors, pagination, scoring,
+and ACLs are therefore identical to HTTP and the web app.
+
+`get_document` retrieves one authorized result after selection. MCP never
+bypasses object authorization.
+
+## Performance and safety bounds
+
+- FTS content stays in SQLite; no network search service is required.
+- Queries are limited to 1 KiB, 64 tokens, and 256 bytes per value.
+- Search pages cap at 100; similar results at 50; Archive research sources at 6.
+- SQL fragments are fixed; all user values use bound parameters.
+- Metadata filter names resolve to IDs before execution.
+- Snippets are returned only after visibility predicates match.
+- Fast route, search, and completion changes discard stale browser responses.
+
+## Maintainer map
+
+| Concern | Source |
+| --- | --- |
+| Rich query lexer/parser/resolver/compiler | `core/searchquery/` |
+| API query resolution and completion | `core/api/search_query.go` |
+| Ranked Search and recency | `core/api/search.go` |
+| Documents filtering and ordering | `core/api/documents_list.go` |
+| Shared document/saved-View predicates | `core/api/document_scope.go` |
+| FTS schema and synchronization triggers | `core/db/migrations/0001_baseline.sql` |
+| Similar-document ranking | `core/similar/similar.go` |
+| Archive research retrieval | `core/api/chat.go` |
+| Browser query completion state | `ui/src/lib/queryAssist.js` |

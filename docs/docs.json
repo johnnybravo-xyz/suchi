@@ -35,7 +35,8 @@
             "pages": [
               "architecture",
               "jd",
-              "similar-docs",
+              "search",
+              "query-language",
               "llm-classifier",
               "archive-chat",
               "pipeline-versions",

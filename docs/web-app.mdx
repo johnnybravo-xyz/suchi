@@ -63,12 +63,11 @@ Changing a URL filter returns the document list to page one. If two requests
 overlap during fast navigation, only the response for the newest route is
 shown.
 
-Search results and Documents accept the same query language documented in the
-[API reference](/api#query-language). Suggestions appear while typing, but a
-query is validated only when the user selects **Search**, presses Enter in the
-Documents search field, or otherwise applies the route. A rejected query is
-shown below the active search surface without replacing it with an empty result
-state.
+Search results and Documents accept the same [query language](/query-language).
+Suggestions appear while typing; validation happens only when the user applies
+the query. A rejected query stays visible with its error instead of becoming an
+empty result. Ranking, recency, completion, similarity, and Archive research
+retrieval are centralized in [Search architecture](/search).
 
 ## Saved views
 
@@ -77,11 +76,10 @@ field with **Filing category**, **Tag**, **Correspondent**, **Document type**,
 and **Sensitivity**. Empty filters mean all values for that field. With no
 saved views, the list says **No saved views yet**.
 
-**Save view** validates the resulting query and every referenced filing value.
-If validation fails, the server message appears inside **Create a view** and
-the dialog stays open for correction. Newly saved views store one normalized
-query string; existing views that use the older flat filter fields remain
-readable.
+**Save view** validates every query and filing value. A failure remains inside
+the open creator for correction. New Views store one normalized rich query;
+older flat filters remain readable. See
+[Query language: Saved Views](/query-language#saved-views).
 
 Members with **Share saved views**, and all administrators, also see **Share
 this view**. A shared view appears in every user's Views list and dashboard.

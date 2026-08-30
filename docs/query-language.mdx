@@ -1,0 +1,276 @@
+---
+title: "Query language"
+description: "Search syntax, filters, escaping, errors, and saved View behavior."
+---
+
+Suchi uses one bounded query language across ranked Search, Documents, saved
+Views, Calendar scopes, and the `search_documents` MCP tool. The parser produces
+a typed query plan; user text is never interpolated into SQL or passed through
+as raw FTS5 syntax.
+
+For indexing, BM25, recency, autocomplete, similar-document search, and Archive
+research retrieval, see [Search architecture](/search).
+
+## Quick examples
+
+```text
+annual report
+"distribution advice" -draft
+jd:22 tag:tax from:"Bagmane Prime"
+title:invoice content:"payment due"
+sensitivity:confidential lang:de
+added:>=2026-01-01 -is:trash
+date:>=2026-09-01 date:<=2026-09-30 date-role:renewal
+from:"Northstar Cloud" tag:renewal -type:quote
+```
+
+Search and Documents compile the same query into the same matching document
+set. Ranked Search adds ranking; Documents applies its selected list ordering.
+
+## Terms, prefixes, and phrases
+
+A bare word is a Unicode-aware prefix term:
+
+```text
+annu rep
+```
+
+This matches terms beginning with both `annu` and `rep`, such as “annual
+report”. Do not type `*`; raw FTS wildcard syntax is rejected.
+
+Double quotes create an exact phrase rather than a prefix:
+
+```text
+"annual report"
+```
+
+Quoted filter values preserve spaces:
+
+```text
+from:"HDFC Bank"
+jd:"22 Investments"
+```
+
+Use `title:` or `content:` to constrain a text term or phrase to one indexed
+column:
+
+```text
+title:invoice
+content:"distribution advice"
+```
+
+Bare `title:` and `content:` values are prefixes. Quoted values are phrases.
+
+## Implicit AND
+
+Whitespace between positive clauses means **AND**:
+
+```text
+invoice renewal
+```
+
+This means “contains an `invoice…` term and a `renewal…` term.” Filters compose
+the same way:
+
+```text
+invoice tag:tax sensitivity:confidential
+```
+
+All three constraints must hold. Do not write `AND`; explicit Boolean operators
+are unsupported.
+
+## Negation
+
+Prefix a term, phrase, or filter with `-` to exclude it:
+
+```text
+invoice -draft
+"distribution advice" -tag:archived
+-is:trash
+-date-role:expiry
+```
+
+Negation applies only to the following clause. There is no grouped negation.
+
+## Filters
+
+| Filter | Values and behavior |
+| --- | --- |
+| `jd:` | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax. |
+| `tag:` | Exact tag name. Multiple positive tag clauses require every tag. |
+| `from:` | Exact correspondent name. Matches the primary or any linked correspondent. |
+| `type:` | Exact document-type name. |
+| `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`. |
+| `lang:` | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`. |
+| `title:` | Prefix or quoted phrase restricted to title. |
+| `content:` | Prefix or quoted phrase restricted to extracted content. |
+| `added:` | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`. |
+| `date:` | Human-accepted date intelligence using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
+| `date-role:` | Accepted date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
+| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires accepted intelligence. |
+
+Examples:
+
+```text
+added:>=2026-01-01 added:<2027-01-01
+date:2026-09-14 date-role:renewal
+is:inbox -is:encrypted
+```
+
+Only `added:` and `date:` accept comparison operators. `tag:>=tax` is rejected.
+Metadata names are resolved before execution. Unknown values return errors;
+ambiguous values return suggestions.
+
+## Escaping
+
+Backslash escapes the next character in bare or quoted text. Use it when a
+literal colon would otherwise start a filter:
+
+```text
+invoice\:2026
+```
+
+Quote values containing whitespace:
+
+```text
+from:"Bagmane Prime"
+```
+
+Inside quotes, escape a quote or backslash:
+
+```text
+from:"Bagmane \"Prime\""
+content:"path C:\\Archive"
+```
+
+A leading `-` means negation. Escape it when it is literal text:
+
+```text
+\-draft
+```
+
+Whitespace, `:`, comparisons, quotes, parentheses, `*`, `^`, `{`, and `}` must
+be quoted or escaped when intended as literal text. Non-whitespace control
+characters are always rejected.
+
+## Unsupported syntax
+
+Suchi does not implement a general Boolean or raw FTS language:
+
+```text
+annual OR report
+annual AND report
+NOT draft
+annual NEAR report
+(annual report)
+annual*
+```
+
+Explicit `OR`, `AND`, `NOT`, and `NEAR`; grouping and precedence; proximity;
+raw FTS5 wildcards, boosts, and columns; and SQL-like expressions are rejected.
+One query remains an AND-composed set of independently negatable clauses.
+
+## Suggestions and completion
+
+The Omnibox and Documents query field recognize an incomplete final qualifier.
+Suggestions cover filter names, Johnny.Decimal categories, tags,
+correspondents, document types, sensitivity values, date roles, and `is:`
+states. Selecting one replaces the active token but does not run the search.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Complete query | 1,024 bytes |
+| Parsed tokens | 64 |
+| One bare or quoted value | 256 bytes |
+
+These are API contracts, not only browser limits.
+
+## Errors
+
+Invalid queries return HTTP `400` with `code: "bad_query"`:
+
+```json
+{
+  "code": "bad_query",
+  "error": "no tag value matches \"missing\" at byte 0",
+  "position": 0,
+  "filter": "tag",
+  "suggestions": []
+}
+```
+
+`position` is a zero-based byte offset in the submitted query. `filter` names
+the failing qualifier. `suggestions` contains closed-vocabulary or ambiguity
+help when available. The web app keeps the active form visible rather than
+turning a failed query into an empty result.
+
+| Input | Result |
+| --- | --- |
+| `corr:bank` | Unknown filter; use `from:`. |
+| `tag:` | Filter requires a value. |
+| `tag:>=tax` | Comparisons unsupported for `tag`. |
+| `"unfinished` | Unterminated quote. |
+| `(annual report)` | Grouping unsupported. |
+| `annual OR report` | `OR` unsupported. |
+| `annual*` | Raw FTS syntax unsupported. |
+| `date:2026-02-30` | Invalid calendar date. |
+
+## URLs and MCP
+
+Send the complete query in one URL-encoded `q` parameter:
+
+```http
+GET /api/search/?q=from%3A%22Northstar%20Cloud%22%20tag%3Arenewal
+GET /api/documents/?q=from%3A%22Northstar%20Cloud%22%20tag%3Arenewal
+```
+
+MCP accepts the same unencoded string:
+
+```json
+{
+  "query": "from:\"Northstar Cloud\" tag:renewal",
+  "page_size": 10
+}
+```
+
+Clients should not split or reinterpret clauses themselves.
+
+## Saved Views
+
+New Views store one normalized query in `filter_json.q`. Visual category, tag,
+correspondent, type, sensitivity, and accepted-date controls are converted into
+the same language before persistence. Normalization quotes or escapes values
+and is stable across parse/serialize round trips.
+
+Older or imported Views may retain flat filter keys. Consumers such as Calendar
+send `view_id`; the server loads an owned or shared View, applies its complete
+filter, and reapplies document ACLs. Clients must not reconstruct partial View
+scopes.
+
+Snapshot Views instead store bounded `document_ids`. They preserve one exact
+source set while still reapplying ACLs whenever opened or shared.
+
+## Archive research and generated Views
+
+Archive research does **not** ask the model to invent a rich query. An earlier
+prototype converted question words into `view_query`, but RAG retrieval used
+prefix-`OR` while saved search text used implicit `AND`; the resulting View
+could differ from the cited sources.
+
+**Save source set** therefore creates an exact snapshot from authorized source
+IDs. A live View that should match future documents is created explicitly with
+this query language.
+
+- RAG retrieval optimizes recall for one answer.
+- Rich queries define stable live filters.
+- Snapshot Views preserve exact cited evidence.
+
+## Security
+
+The compiler emits fixed SQL fragments with bound values. Metadata names become
+internal IDs before execution. Search, Documents, saved View scopes, Calendar,
+and MCP append the caller's visibility predicate inside the database query.
+A query can narrow access; it cannot expand permissions or reveal a private
+View.

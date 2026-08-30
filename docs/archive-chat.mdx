@@ -43,18 +43,13 @@ flowchart LR
     V --> U[Answer, sources, and actions]
 ```
 
-### Term selection
+### Candidate retrieval
 
-Suchi normalizes Unicode letters, marks, digits, and underscores. It considers
-at most 64 unique terms, ranks useful terms ahead of common question words, and
-keeps at most 12. Each selected term becomes a prefix expression and retrieval
-uses `OR` for recall. FTS5 BM25 gives title matches more weight than content
-matches.
-
-This is intentionally a small lexical retrieval layer. It requires no vector
-database, embedding model, background embedding queue, or second provider. A
-future hybrid retriever can replace the candidate step without changing the
-chat, authorization, citation, or intelligence contracts.
+Archive research uses a bounded high-recall lexical candidate pass rather than
+interpreting the natural-language question as a rich query. Term selection,
+prefix-OR behavior, BM25 weights, context-source retrieval, and the distinction
+from ranked Search are centralized in
+[Search architecture: Archive research retrieval](/search#archive-research-retrieval).
 
 ### Evidence bounds
 
@@ -72,7 +67,7 @@ No provider call occurs when retrieval finds no evidence.
 The research drawer supports these server-enforced scopes:
 
 - all accessible archive documents;
-- the current rich-query result;
+- the current [rich-query](/query-language) result;
 - the current Johnny.Decimal category;
 - the current document; or
 - up to 100 explicitly selected documents.
@@ -132,15 +127,9 @@ therefore exposes only the listed documents each viewer can already read.
 Snapshot Views contain at most 100 IDs; archive research currently contributes
 at most six.
 
-Live Views continue to use the rich query language. Date-aware examples:
-
-```text
-date:>=2026-09-01 date:<=2026-09-30
-date-role:renewal is:dated
-tag:insurance date:<=2026-12-31
-```
-
-Only accepted intelligence participates in rich-query date filters.
+Live Views use the explicit [query language](/query-language); accepted
+intelligence participates in its `date:` and `date-role:` filters. Archive
+research never synthesizes that live query from question words.
 
 ## Generic archive intelligence
 

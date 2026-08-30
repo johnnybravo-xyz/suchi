@@ -207,7 +207,7 @@ Query params (all optional):
 | `document_type__id`                  | Exact document type.                                                                                                        |
 | `tags__id__in`                       | CSV of tag ids; result must carry **every** id (AND).                                                                       |
 | `correspondents__id__in`             | CSV of correspondent ids; result matches **any** (OR).                                                                      |
-| `q`                                  | Rich query string shared with ranked search; plain terms use prefix `AND`.                                                   |
+| `q`                                  | [Rich query string](/query-language); Search and Documents share its matching plan.                                              |
 | `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
 | `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
 
@@ -731,27 +731,10 @@ document the caller cannot view.
 | `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters.                                                                                                            |
 | `lang`                                               | ISO-639-1 code (`de`, `kn`). Narrows to docs whose `languages` includes the code. Silently ignored if not 2–3 lowercase letters. |
 
-**Ranking — BM25F + recency decay.** The ORDER BY is:
-
-```
-bm25(documents_fts, 3.0, 1.0)
-  - 0.5 / (1.0 + (now - created_at) / 30_days)
-```
-
-- `bm25(documents_fts, 3.0, 1.0)` is BM25F with per-column weights
-  passed to SQLite FTS5's built-in `bm25()`. Title matches carry
-  3× the weight of content matches — a doc titled "Invoice 2026"
-  outranks a doc that merely mentions "invoice" deep in body text.
-- The subtracted term is a hyperbolic recency boost with a 30-day
-  half-life. New docs get up to `-0.5` off their raw BM25F score;
-  30-day-old docs get `-0.25`; year-old docs get `-0.04`. The boost
-  is modest by design — it nudges genuinely-close matches without
-  ever flipping a much-more-relevant older doc below a marginal
-  newer one. Set `?recency=off` for raw BM25F ordering.
-- Hyperbolic decay `1/(1 + age/half_life)` is used instead of true
-  `exp()` because modernc/sqlite doesn't always link SQLite's math
-  extensions. The two curves agree closely at the range we care
-  about (0–2 half-lives).
+Ranking uses title-weighted BM25 plus an optional bounded recency term.
+`recency=off` returns raw BM25 ordering. Formula, score direction, weights,
+snippet behavior, and filter-only ordering are documented in
+[Search architecture: Ranked Search](/search#ranked-search).
 
 **Response shape** — `{count, next, previous, results}` DRF envelope.
 Each hit carries `{id, title, snippet, rank, created_at, mime_type}`
@@ -759,42 +742,14 @@ where `snippet` wraps the matching span in `<mark>...</mark>`.
 
 #### Query language
 
-`GET /api/search/` and `GET /api/documents/` compile `q` through the
-same parser and return the same matching document set. Plain words are
-Unicode-aware prefix terms joined with implicit `AND`; quoted text is a
-phrase. Prefix a term or filter with `-` to exclude it.
+`GET /api/search/` and `GET /api/documents/` use the same bounded parser and
+matching plan. See [Query language](/query-language) for terms, phrases,
+implicit AND, negation, filters, comparisons, escaping, unsupported syntax,
+limits, completion, and `bad_query` errors.
 
-```text
-"distribution advice" jd:22 from:"Bagmane Prime" -tag:archived added:>=2026-01-01
-```
-
-| Token | Effect |
-| --- | --- |
-| `jd:22`, `jd:"22 Investments"` | Filing category by visible code or category name, never row ID. |
-| `tag:tax` | Exact tag name. |
-| `from:"HDFC Bank"` | Primary or linked correspondent. |
-| `type:statement` | Exact document type name. |
-| `sensitivity:confidential` | `public`, `internal`, `confidential`, or `restricted`. |
-| `lang:de` | Assigned or detected 2–3 letter language code. |
-| `title:invoice`, `content:"distribution advice"` | Restrict a text term to one indexed column. |
-| `added:2026-08-25`, `added:>=2026-01-01` | Added date in UTC; `=`, `>`, `>=`, `<`, and `<=` are supported. |
-| `date:2026-09-14`, `date:>=2026-09-01` | Human-accepted date intelligence; the same comparison operators are supported. |
-| `date-role:renewal` | Accepted date intelligence with one semantic role. |
-| `is:inbox`, `is:trash`, `is:encrypted`, `is:dated` | Current document state or accepted-intelligence presence. |
-
-The parser rejects unknown filters, raw FTS5 expressions, Boolean `OR`,
-grouping, proximity operators, malformed comparisons, unterminated quotes,
-and non-whitespace control characters. Queries are limited to 1 KiB, 64
-tokens, and 256 bytes per value. `400 bad_query` responses include `position`,
-optional `filter`, and optional `suggestions` fields. Positions are byte
-offsets in the query exactly as received, including leading whitespace.
-
-`GET /api/autocomplete/?q=...` recognizes an incomplete qualifier at
-the end of `q`. Suggestions for filter names and values carry `query`,
-the full replacement query string. JD suggestions display visible code
-plus name and insert the visible code. Qualifier completion accepts the same
-1 KiB input limit as the parser. The older plain taxonomy-prefix mode remains
-limited to 100 bytes.
+`GET /api/autocomplete/?q=...` completes the active final query token or falls
+back to bounded taxonomy-prefix suggestions. See
+[Search architecture: Query completion and autocomplete](/search#query-completion-and-autocomplete).
 
 ### Saved-view query validation
 
@@ -809,18 +764,15 @@ categories, tags, correspondents, and document types before writing the row.
 Syntax errors, unknown values, and ambiguous values return `400 invalid_filter`;
 an update that fails validation leaves the stored view unchanged. Existing
 flat filter objects remain readable, while newly created web-app views use `q`
-as their search constraint.
+as their search constraint. See [Query language: Saved Views](/query-language#saved-views).
 
 ### `GET /api/documents/{id}/similar`
 
-"Documents like this" — pure-Go FTS5 more-like-this backed by the
-existing full-text index. Extracts the top-10 tokens from the source
-doc's title + first ~4 KiB of content, runs them as an FTS5
-`MATCH` query, ranks by **BM25F (same title 3× / content 1×
-weights as `/api/search/`)**, and returns the top N. Scope:
-`documents:read`. Visibility-scoped identically to the list surface;
-the source doc is always excluded from its own results. No recency
-term here — "similar" is about content, not freshness.
+Returns authorized lexical neighbours from the shared FTS5 index. The source
+document is excluded. `?limit=N` accepts 1–50 and defaults to 10. Token
+selection, title/content weighting, score floor, title-only fallback, and the
+absence of recency are documented in
+[Search architecture: Similar documents](/search#similar-documents).
 
 ```json
 {
@@ -847,19 +799,9 @@ term here — "similar" is about content, not freshness.
 }
 ```
 
-Score is `-bm25(documents_fts)` so higher = more similar (matches
-the wire convention other suchi score fields already use). `?limit=N`
-takes 1–50, default 10.
+`score` is higher for stronger similarity. `matched_on_title_only` warns that
+the source had no extracted body text. `method` is currently `fts`.
 
-`matched_on_title_only` is `true` when the source doc's extracted
-content is empty and the pipeline could only match on the title. The
-SPA renders this as a warning pill on the results card because the
-match quality drops sharply without body vocabulary. The endpoint
-also drops rows whose BM25 score falls below the noise floor —
-see [similar documents](/similar-docs) for the full ranking story.
-
-`method` reports the ranking backend (`"fts"`). Semantic embedding retrieval is
-not shipped in v0.1.
 
 ### `GET /api/documents/{id}/thumb`
 
