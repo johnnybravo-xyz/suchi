@@ -104,6 +104,13 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	queryPlan, err := s.compileQuery(r.Context(), q.Get("q"))
+	if err != nil {
+		if !s.writeQueryError(w, "intelligence.list", q.Get("q"), err) {
+			s.serverErr(w, "intelligence.compile_query", err)
+		}
+		return
+	}
 	status := strings.TrimSpace(q.Get("status"))
 	if status == "" {
 		status = "accepted"
@@ -124,6 +131,18 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	sortFrom := strings.TrimSpace(q.Get("sort_from"))
 	sortTo := strings.TrimSpace(q.Get("sort_to"))
+	if (sortFrom != "" || sortTo != "") && candidateType == "" {
+		s.writeError(w, http.StatusBadRequest, "bad_range", "type is required with sort bounds")
+		return
+	}
+	if err := intelligence.ValidateSortValue(candidateType, sortFrom); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_sort_from", err.Error())
+		return
+	}
+	if err := intelligence.ValidateSortValue(candidateType, sortTo); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_sort_to", err.Error())
+		return
+	}
 	if sortFrom != "" && sortTo != "" && sortFrom > sortTo {
 		s.writeError(w, http.StatusBadRequest, "bad_range", "sort_from must not be after sort_to")
 		return
@@ -168,6 +187,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		where = append(where, visibility)
 		args = append(args, visibilityArgs...)
 	}
+	where, args = appendQueryPredicates(where, args, queryPlan)
 	whereSQL := strings.Join(where, " AND ")
 	pp := ParsePageParams(r, 100, 500)
 	var total int

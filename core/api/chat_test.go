@@ -235,6 +235,17 @@ func TestValidateChatHistoryBounds(t *testing.T) {
 func TestChatCarriesAuthorizedContextSourcesAcrossFollowUps(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 40, 1, "Indiranagar office lease", "The lease renews on September 1.", "public", false)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO document_intelligence(
+			document_id, intelligence_type, role, value_json, sort_value,
+			raw_text, evidence_text, confidence, status, extractor,
+			extraction_version, created_at, updated_at
+		) VALUES (40, 'date', 'renewal', '{"date":"2026-09-01","precision":"day"}',
+		          '2026-09-01', 'September 1', 'The lease renews on September 1.',
+		          0.95, 'accepted', 'test', 1, 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
 
 	var evidence string
 	s.ChatCompletion = func(_ context.Context, _ string, messages []ChatCompletionMessage, _ int) (string, error) {
@@ -252,14 +263,17 @@ func TestChatCarriesAuthorizedContextSourcesAcrossFollowUps(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(evidence, "Indiranagar office lease") || !strings.Contains(evidence, "September 1") {
+	if !strings.Contains(evidence, "Indiranagar office lease") ||
+		!strings.Contains(evidence, "September 1") ||
+		!strings.Contains(evidence, "Human-accepted intelligence") {
 		t.Fatalf("context evidence missing: %s", evidence)
 	}
 	var out ChatResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Sources) == 0 || out.Sources[0].ID != 40 || !out.Grounded {
+	if len(out.Sources) == 0 || out.Sources[0].ID != 40 || !out.Grounded ||
+		out.Intelligence.Accepted["date"] != 1 || len(out.Sources[0].Intelligence) != 1 {
 		t.Fatalf("response=%+v", out)
 	}
 }

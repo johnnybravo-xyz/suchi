@@ -1,19 +1,32 @@
 <script>
-  import { askArchive } from './api.js'
+  import { askArchive, extractIntelligence } from './api.js'
   import { go } from './router.svelte.js'
   import { sensitivityLabel, sensDot } from './format.js'
   import Icon from './Icon.svelte'
 
-  let { open = false, request = { id: 0, question: '', scope: {} }, onClose, onReturnFocus } = $props()
+  let {
+    open = false,
+    request = { id: 0, question: '', scope: { label: 'All archive' } },
+    status = { provider: '', local: false },
+    canReviewIntelligence = false,
+    onClose,
+    onReturnFocus,
+  } = $props()
   let turns = $state([])
   let draft = $state('')
   let includeSensitive = $state(false)
   let sending = $state(false)
   let controller
-  let composer = $state(), drawer = $state()
+  let composer = $state(), drawer = $state(), transcript = $state()
   let previousFocus
   let wasOpen = false
   let handledRequest = 0
+
+  const prompts = [
+    'Find the next renewal dates',
+    'Summarize documents about a topic',
+    'Compare what two documents say',
+  ]
 
   function completedTurns() {
     return turns.filter(turn => turn.answer && !turn.error)
@@ -36,25 +49,45 @@
     return sources.slice(0, 3).map(source => source.id)
   }
 
+  function requestScope() {
+    const scope = request?.scope || {}
+    return {
+      query: scope.query || '',
+      document_ids: scope.document_ids || [],
+      jd_category_id: scope.jd_category_id || 0,
+    }
+  }
+
   function updateTurn(id, patch) {
     turns = turns.map(turn => turn.id === id ? { ...turn, ...patch } : turn)
+  }
+
+  function revealTurn(id) {
+    requestAnimationFrame(() => {
+      document.getElementById(`research-turn-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
   }
 
   async function send(question = draft) {
     question = question.trim()
     if (!question || sending || question.length > 2000) return
     const prior = history()
-    const turn = { id: Date.now(), question, answer: '', sources: [], citations: [], grounded: false, error: '' }
+    const contextIDs = contextSourceIDs()
+    const turn = {
+      id: Date.now(), question, answer: '', sources: [], citations: [], grounded: false,
+      error: '', extraction: '',
+    }
     turns = [...turns, turn]
     draft = ''
     sending = true
     controller = new AbortController()
+    revealTurn(turn.id)
     try {
       const result = await askArchive({
         question,
         history: prior,
-        context_source_ids: contextSourceIDs(),
-        scope: request?.scope || {},
+        context_source_ids: contextIDs,
+        scope: requestScope(),
         include_sensitive: includeSensitive,
       }, controller.signal)
       updateTurn(turn.id, {
@@ -62,11 +95,14 @@
         sources: result.sources || [],
         citations: result.citations || [],
         grounded: !!result.grounded,
+        intelligence: result.intelligence || {},
       })
     } catch (ex) {
+      const canceled = ex?.name === 'AbortError'
       updateTurn(turn.id, {
-        error: ex?.name === 'AbortError' ? 'Request canceled.' : (ex?.message || 'The archive question could not be answered.'),
+        error: canceled ? 'Request canceled.' : (ex?.message || 'The archive question could not be answered.'),
       })
+      if (canceled && !draft) draft = question
     } finally {
       sending = false
       controller = null
@@ -97,10 +133,69 @@
     go(`#/doc/${id}`)
   }
 
+  function sourceItems(turn) {
+    return turn.sources.map((source, index) => ({ source, number: index + 1 }))
+  }
+
+  function primarySourceItems(turn) {
+    const cited = new Set(turn.citations || [])
+    const items = sourceItems(turn)
+    return cited.size ? items.filter(item => cited.has(item.number)) : items
+  }
+
+  function extraSourceItems(turn) {
+    const primary = new Set(primarySourceItems(turn).map(item => item.number))
+    return sourceItems(turn).filter(item => !primary.has(item.number))
+  }
+
+  function answerParts(answer) {
+    return String(answer || '').split(/(\[\d+\])/g).filter(Boolean).map(part => {
+      const match = part.match(/^\[(\d+)\]$/)
+      return match ? { text: part, citation: Number(match[1]) } : { text: part, citation: 0 }
+    })
+  }
+
+  function focusCitation(turnID, number) {
+    const source = document.getElementById(`research-source-${turnID}-${number}`)
+    source?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    source?.focus()
+  }
+
+  async function extractDates(turn) {
+    if (turn.extraction === 'working') return
+    updateTurn(turn.id, { extraction: 'working' })
+    try {
+      const result = await extractIntelligence({
+        document_ids: turn.sources.map(source => source.id),
+        types: ['date'],
+      })
+      updateTurn(turn.id, { extraction: result?.applied > 0 ? 'queued' : 'unavailable' })
+    } catch (ex) {
+      updateTurn(turn.id, { extraction: ex?.message || 'Could not queue date extraction.' })
+    }
+  }
+
+  function providerLabel() {
+    if (status?.local) return status.provider ? `Local model · ${status.provider}` : 'Local model'
+    return status?.provider || 'Configured hosted model'
+  }
+
+  function acceptedDateCount(turn) {
+    return Number(turn.intelligence?.accepted?.date || 0)
+  }
+
+  function pendingDateCount(turn) {
+    return Number(turn.intelligence?.pending?.date || 0)
+  }
+
+  function sourceIDQuery(turn) {
+    return turn.sources.map(source => source.id).join(',')
+  }
+
   function onKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); close(); return }
     if (e.key !== 'Tab' || !drawer) return
-    const focusable = [...drawer.querySelectorAll('button:not([disabled]), a[href], textarea:not([disabled]), input:not([disabled])')]
+    const focusable = [...drawer.querySelectorAll('button:not([disabled]), a[href], textarea:not([disabled]), input:not([disabled]), summary')]
     if (!focusable.length) return
     const first = focusable[0], last = focusable[focusable.length - 1]
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
@@ -124,125 +219,188 @@
 </script>
 
 {#if open}
-  <button class="chat-veil" aria-label="Close archive questions" onclick={close}></button>
-  <div class="chat-drawer" bind:this={drawer} role="dialog" aria-modal="true" aria-labelledby="chat-title" tabindex="-1" onkeydown={onKey}>
-    <header class="chat-head">
+  <button class="research-veil" aria-label="Close archive research" onclick={close}></button>
+  <div class="research-drawer" bind:this={drawer} role="dialog" aria-modal="true" aria-labelledby="research-title" tabindex="-1" onkeydown={onKey}>
+    <header class="research-head">
       <div>
-        <span class="chat-kicker">Grounded in your documents</span>
-        <h2 id="chat-title">Ask the archive</h2>
+        <span class="research-kicker">Evidence before answers</span>
+        <h2 id="research-title">Archive research</h2>
+        <span class="scope-chip"><Icon name="search" size={11} />{request?.scope?.label || 'All archive'}</span>
       </div>
-      <div class="chat-head-actions">
+      <div class="research-head-actions">
         <button class="btn sm" onclick={clearConversation} disabled={!turns.length && !includeSensitive}>Clear</button>
-        <button class="btn sm icon-only" onclick={close} aria-label="Close archive questions" title="Close"><Icon name="x" size={14} /></button>
+        <button class="btn sm icon-only" onclick={close} aria-label="Close archive research" title="Close"><Icon name="x" size={14} /></button>
       </div>
     </header>
 
-    <div class="chat-transcript" aria-live="polite">
+    <div class="research-transcript" bind:this={transcript} aria-live="polite">
       {#if turns.length === 0}
-        <div class="chat-empty">
-          <span class="chat-empty-mark"><Icon name="ask" size={23} /></span>
-          <b>Ask about what you’ve filed</b>
-          <p>Answers use documents you can already access and always show the retrieved sources.</p>
+        <div class="research-empty">
+          <span class="empty-index">R / 01</span>
+          <span class="research-empty-mark"><Icon name="ask" size={24} /></span>
+          <b>Start with a question, not a search query</b>
+          <p>Suchi retrieves only documents in this scope, then keeps the evidence attached to the answer.</p>
+          <div class="prompt-list">
+            {#each prompts as prompt}
+              <button onclick={() => { draft = prompt; queueMicrotask(() => composer?.focus()) }}>{prompt}<Icon name="chev" size={11} /></button>
+            {/each}
+          </div>
         </div>
       {/if}
+
       {#each turns as turn (turn.id)}
-        <article class="chat-turn">
-          <p class="chat-question">{turn.question}</p>
-          {#if turn.answer}<p class="chat-answer">{turn.answer}</p>{/if}
-          {#if turn.error}<div class="chat-error">{turn.error}</div>{/if}
-          {#if sending && turn === turns[turns.length - 1] && !turn.answer && !turn.error}
-            <div class="chat-thinking"><span></span><span></span><span></span><em>Reading the archive</em></div>
+        <article class="research-turn" id={`research-turn-${turn.id}`}>
+          <header class="turn-question"><span>Question</span><p>{turn.question}</p></header>
+
+          {#if sending && turn === turns.at(-1) && !turn.answer && !turn.error}
+            <div class="research-thinking"><span></span><span></span><span></span><em>Retrieving authorized evidence</em></div>
           {/if}
+
+          {#if turn.answer}
+            <div class="answer-block" class:weak={!turn.grounded}>
+              <span class="answer-label">{turn.grounded ? 'Grounded answer' : 'Evidence check'}</span>
+              <p class="research-answer">
+                {#each answerParts(turn.answer) as part}
+                  {#if part.citation}
+                    <button class="inline-citation" onclick={() => focusCitation(turn.id, part.citation)} aria-label={`Jump to source ${part.citation}`}>{part.text}</button>
+                  {:else}{part.text}{/if}
+                {/each}
+              </p>
+            </div>
+          {/if}
+
+          {#if turn.error}
+            <div class="research-error" role="alert">
+              <span>{turn.error}</span>
+              <button class="btn sm" disabled={sending} onclick={() => send(turn.question)}>Retry</button>
+            </div>
+          {/if}
+
           {#if turn.sources.length}
-            <div class="evidence" aria-label="Sources">
-              <div class="evidence-head"><span>Sources</span><small>{turn.sources.length} retrieved</small></div>
-              {#each turn.sources as source, i (source.id)}
-                <button class="source-card" onclick={() => openSource(source.id)} aria-label={`Open source ${i + 1}: ${source.title}`}>
-                  <span class="source-number">[{i + 1}]</span>
+            <div class="research-actions" aria-label="Research actions">
+              <a class="research-action" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={close}>
+                <Icon name="eye" size={14} /><span><b>Save source set</b><small>{turn.sources.length} exact documents</small></span>
+              </a>
+              {#if canReviewIntelligence}
+                {#if acceptedDateCount(turn) > 0}
+                  <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={close}>
+                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} accepted date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar uses validated facts only</small></span>
+                  </a>
+                {:else if pendingDateCount(turn) > 0 || turn.extraction === 'queued'}
+                  <a class="research-action" href="#/tasks" onclick={close}>
+                    <Icon name="tasks" size={14} /><span><b>{turn.extraction === 'queued' ? 'Extraction queued' : `Review ${pendingDateCount(turn)} date${pendingDateCount(turn) === 1 ? '' : 's'}`}</b><small>Validate candidates in Approvals</small></span>
+                  </a>
+                {:else}
+                  <button class="research-action" disabled={turn.extraction === 'working'} onclick={() => extractDates(turn)}>
+                    <Icon name="calendar" size={14} /><span><b>{turn.extraction === 'working' ? 'Queueing…' : 'Extract dates'}</b><small>From these sources only</small></span>
+                  </button>
+                {/if}
+              {/if}
+            </div>
+            {#if turn.extraction && !['working', 'queued', 'unavailable'].includes(turn.extraction)}
+              <div class="action-error">{turn.extraction}</div>
+            {/if}
+
+            <section class="evidence-stack" aria-label="Evidence sources">
+              <header><span>Evidence</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
+              {#each primarySourceItems(turn) as item (item.source.id)}
+                <button id={`research-source-${turn.id}-${item.number}`} class="source-card cited"
+                        onclick={() => openSource(item.source.id)} aria-label={`Open source ${item.number}: ${item.source.title}`}>
+                  <span class="source-number">[{item.number}]</span>
                   <span class="source-copy">
-                    <strong>{source.title || `Document #${source.id}`}</strong>
-                    <span>{source.snippet}</span>
-                    <small><i class:danger={sensDot(source.sensitivity) === 'danger'}></i>{sensitivityLabel(source.sensitivity)}</small>
+                    <strong>{item.source.title || `Document #${item.source.id}`}</strong>
+                    <span>{item.source.snippet}</span>
+                    <small><i class:danger={sensDot(item.source.sensitivity) === 'danger'}></i>{sensitivityLabel(item.source.sensitivity)}</small>
                   </span>
                   <Icon name="chev" size={13} />
                 </button>
               {/each}
-            </div>
-            <a class="save-view" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={close}>
-              <Icon name="eye" size={14} /> Save these {turn.sources.length} documents
-            </a>
+              {#if extraSourceItems(turn).length}
+                <details class="extra-sources">
+                  <summary>{extraSourceItems(turn).length} additional retrieved source{extraSourceItems(turn).length === 1 ? '' : 's'}</summary>
+                  {#each extraSourceItems(turn) as item (item.source.id)}
+                    <button id={`research-source-${turn.id}-${item.number}`} class="source-card"
+                            onclick={() => openSource(item.source.id)} aria-label={`Open source ${item.number}: ${item.source.title}`}>
+                      <span class="source-number">[{item.number}]</span>
+                      <span class="source-copy">
+                        <strong>{item.source.title || `Document #${item.source.id}`}</strong>
+                        <span>{item.source.snippet}</span>
+                        <small><i class:danger={sensDot(item.source.sensitivity) === 'danger'}></i>{sensitivityLabel(item.source.sensitivity)}</small>
+                      </span>
+                      <Icon name="chev" size={13} />
+                    </button>
+                  {/each}
+                </details>
+              {/if}
+            </section>
           {/if}
         </article>
       {/each}
     </div>
 
-    <footer class="chat-compose">
+    <footer class="research-compose">
       <label class="sensitive-toggle">
         <input type="checkbox" bind:checked={includeSensitive} />
-        <span><b>Include sensitive documents</b><small>For this conversation only</small></span>
+        <span><b>Include Confidential and Restricted</b><small>Evidence is sent to {providerLabel()} for this conversation</small></span>
       </label>
-      <form onsubmit={(e) => { e.preventDefault(); send() }}>
-        <textarea bind:this={composer} bind:value={draft} maxlength="2000" rows="2" placeholder="Ask a question about your documents"
+      <form onsubmit={(event) => { event.preventDefault(); send() }}>
+        <textarea bind:this={composer} bind:value={draft} maxlength="2000" rows="2" placeholder="Ask a question about this scope"
                   aria-label="Question" disabled={sending}
-                  onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}></textarea>
+                  onkeydown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send() } }}></textarea>
         {#if sending}
-          <button type="button" class="btn chat-send" onclick={cancel}>Cancel</button>
+          <button type="button" class="btn research-send" onclick={cancel}>Cancel</button>
         {:else}
-          <button class="btn primary chat-send" disabled={!draft.trim()}><Icon name="ask" size={14} /> Send</button>
+          <button class="btn primary research-send" disabled={!draft.trim()}><Icon name="ask" size={14} /> Ask</button>
         {/if}
       </form>
-      <small class="chat-note">Answers can be incomplete. Check the cited documents.</small>
+      <small class="research-note">Accepted intelligence can support answers; original documents remain the evidence.</small>
     </footer>
   </div>
 {/if}
 
 <style>
-  .chat-veil { position: fixed; inset: 0; z-index: 90; border: 0; background: color-mix(in srgb, var(--ink) 24%, transparent); }
-  .chat-drawer { position: fixed; z-index: 91; inset: 0 0 0 auto; width: min(470px, 100vw); display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); border-left: 1px solid var(--line-strong);
-    box-shadow: -18px 0 48px color-mix(in srgb, var(--ink) 14%, transparent); animation: chat-in .18s ease-out; }
-  .chat-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 19px 15px; border-bottom: 1px solid var(--line); }
-  .chat-kicker { display: block; margin-bottom: 3px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .61rem; font-weight: 700; text-transform: uppercase; }
-  .chat-head h2 { font-size: 1.08rem; }
-  .chat-head-actions { display: flex; gap: 7px; }
-  .icon-only { padding-inline: 9px; }
-  .chat-transcript { overflow-y: auto; padding: 20px 18px 28px; overscroll-behavior: contain; }
-  .chat-empty { min-height: 55%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--muted); }
-  .chat-empty-mark { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 13px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--accent); background: var(--surface); }
-  .chat-empty b { color: var(--ink); font-size: .94rem; }
-  .chat-empty p { max-width: 300px; margin: 6px 0; font-size: .81rem; line-height: 1.55; }
-  .chat-turn + .chat-turn { margin-top: 27px; padding-top: 25px; border-top: 1px solid var(--line); }
-  .chat-question { width: fit-content; max-width: 88%; margin: 0 0 14px auto; padding: 9px 12px; border-radius: 12px 12px 3px 12px; background: var(--tint); color: var(--ink); font-size: .84rem; line-height: 1.45; white-space: pre-wrap; }
-  .chat-answer { margin: 0; color: var(--ink); font-size: .88rem; line-height: 1.65; white-space: pre-wrap; }
-  .chat-error { padding: 10px 12px; border-left: 2px solid var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); color: var(--muted); font-size: .8rem; }
-  .chat-thinking { display: flex; align-items: center; gap: 4px; color: var(--muted); }
-  .chat-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; }
-  .chat-thinking span:nth-child(2) { animation-delay: .16s; }.chat-thinking span:nth-child(3) { animation-delay: .32s; }
-  .chat-thinking em { margin-left: 5px; font-size: .76rem; font-style: normal; }
-  .evidence { margin-top: 17px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
-  .evidence-head { display: flex; justify-content: space-between; padding: 9px 11px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
-  .evidence-head span { font-size: .67rem; font-weight: 700; text-transform: uppercase; }.evidence-head small { color: var(--faint); font-size: .68rem; }
-  .source-card { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 11px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }
-  .source-card:last-child { border-bottom: 0; }.source-card:hover { background: var(--tint); }
-  .source-number { color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .69rem; font-weight: 700; }
-  .source-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-  .source-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
-  .source-copy > span { display: -webkit-box; overflow: hidden; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--muted); font-size: .72rem; line-height: 1.4; }
-  .source-copy small { display: flex; align-items: center; gap: 5px; color: var(--faint); font-size: .65rem; }
-  .source-copy i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }.source-copy i.danger { background: var(--danger); }
-  .source-card > :global(.ico) { margin-top: 3px; color: var(--faint); }
-  .save-view { display: inline-flex; align-items: center; gap: 6px; margin-top: 11px; color: var(--accent); font-size: .76rem; font-weight: 650; text-decoration: none; }
-  .chat-compose { padding: 13px 17px 15px; border-top: 1px solid var(--line-strong); background: var(--surface); }
-  .sensitive-toggle { display: flex; align-items: center; gap: 8px; margin: 0 1px 10px; cursor: pointer; }
-  .sensitive-toggle > span { display: flex; flex-direction: column; }.sensitive-toggle b { font-size: .72rem; font-weight: 600; }.sensitive-toggle small { color: var(--faint); font-size: .63rem; }
-  .chat-compose form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
-  .chat-compose textarea { width: 100%; resize: none; min-height: 50px; max-height: 130px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--ink); font: inherit; font-size: .82rem; line-height: 1.4; }
-  .chat-send { min-height: 38px; }.chat-note { display: block; margin-top: 7px; color: var(--faint); font-size: .62rem; }
-  @keyframes chat-in { from { transform: translateX(24px); opacity: .7; } }
-  @keyframes pulse { to { opacity: .25; transform: translateY(-2px); } }
-  @media (max-width: 640px) {
-    .chat-drawer { width: 100vw; border-left: 0; }.chat-veil { display: none; }
-    .chat-head { padding-top: max(16px, env(safe-area-inset-top)); }.chat-compose { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
-  }
-  @media (prefers-reduced-motion: reduce) { .chat-drawer, .chat-thinking span { animation: none; } }
+  .research-veil { position: fixed; inset: 0; z-index: 90; border: 0; background: color-mix(in srgb, var(--ink) 28%, transparent); backdrop-filter: blur(1px); }
+  .research-drawer { position: fixed; z-index: 91; inset: 0 0 0 auto; width: min(520px, 100vw); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-left: 1px solid var(--line-strong); background: var(--bg); box-shadow: -22px 0 54px color-mix(in srgb, var(--ink) 17%, transparent); animation: research-in .2s ease-out; }
+  .research-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 19px 15px; border-bottom: 1px solid var(--line-strong); background: linear-gradient(145deg, var(--surface), var(--bg)); }
+  .research-kicker { display: block; margin-bottom: 3px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; font-weight: 700; text-transform: uppercase; }
+  .research-head h2 { font-size: 1.13rem; }
+  .scope-chip { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .63rem; }
+  .research-head-actions { display: flex; gap: 7px; }.icon-only { padding-inline: 9px; }
+  .research-transcript { overflow-y: auto; padding: 21px 18px 34px; scroll-padding-top: 16px; overscroll-behavior: contain; }
+  .research-empty { position: relative; min-height: 72%; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; color: var(--muted); }
+  .empty-index { position: absolute; top: 0; left: 0; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; }
+  .research-empty-mark { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 14px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); color: var(--accent); }
+  .research-empty b { color: var(--ink); font-size: .95rem; }
+  .research-empty p { max-width: 340px; margin: 7px 0 18px; font-size: .8rem; line-height: 1.55; }
+  .prompt-list { display: grid; width: min(350px, 100%); gap: 6px; }
+  .prompt-list button { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font: inherit; font-size: .72rem; text-align: left; cursor: pointer; }
+  .prompt-list button:hover { border-color: var(--line-strong); color: var(--ink); transform: translateX(2px); }
+  .research-turn + .research-turn { margin-top: 30px; padding-top: 27px; border-top: 1px solid var(--line-strong); }
+  .turn-question { display: flex; align-items: flex-start; justify-content: flex-end; gap: 9px; }
+  .turn-question > span { margin-top: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .56rem; text-transform: uppercase; }
+  .turn-question p { width: fit-content; max-width: 86%; margin: 0; padding: 9px 12px; border-radius: 12px 12px 3px 12px; background: var(--tint); color: var(--ink); font-size: .82rem; line-height: 1.45; white-space: pre-wrap; }
+  .answer-block { margin-top: 15px; padding-left: 12px; border-left: 2px solid var(--accent); }.answer-block.weak { border-color: var(--faint); }
+  .answer-label { display: block; margin-bottom: 6px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .57rem; font-weight: 700; text-transform: uppercase; }
+  .answer-block.weak .answer-label { color: var(--muted); }
+  .research-answer { margin: 0; color: var(--ink); font-size: .87rem; line-height: 1.68; white-space: pre-wrap; }
+  .inline-citation { display: inline; margin: 0 1px; padding: 0 2px; border: 0; border-radius: 3px; background: var(--tint); color: var(--accent); font: inherit; font-size: .76rem; font-weight: 750; cursor: pointer; vertical-align: baseline; }
+  .inline-citation:hover { text-decoration: underline; }
+  .research-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 13px; padding: 10px 12px; border-left: 2px solid var(--danger); background: var(--danger-soft); color: var(--muted); font-size: .78rem; }
+  .research-thinking { display: flex; align-items: center; gap: 4px; margin-top: 16px; color: var(--muted); }.research-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; }.research-thinking span:nth-child(2) { animation-delay: .16s; }.research-thinking span:nth-child(3) { animation-delay: .32s; }.research-thinking em { margin-left: 5px; font-size: .73rem; font-style: normal; }
+  .research-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 17px; }
+  .research-action { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+  .research-action:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--tint); }.research-action:disabled { opacity: .55; cursor: default; }
+  .research-action > :global(.ico) { flex: none; color: var(--accent); }.research-action span { display: flex; min-width: 0; flex-direction: column; gap: 1px; }.research-action b { font-size: .7rem; }.research-action small { overflow: hidden; color: var(--faint); font-size: .6rem; text-overflow: ellipsis; white-space: nowrap; }
+  .action-error { margin-top: 7px; color: var(--danger); font-size: .68rem; }
+  .evidence-stack { margin-top: 12px; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--surface); }
+  .evidence-stack > header { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); }.evidence-stack > header span { font-size: .63rem; font-weight: 700; text-transform: uppercase; }.evidence-stack > header small { color: var(--faint); font-size: .64rem; }
+  .source-card { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 11px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }.source-card:last-child { border-bottom: 0; }.source-card:hover, .source-card:focus-visible { background: var(--tint); }.source-card.cited { box-shadow: inset 2px 0 var(--accent); }
+  .source-number { color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; font-weight: 700; }.source-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }.source-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .76rem; }.source-copy > span { display: -webkit-box; overflow: hidden; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--muted); font-size: .7rem; line-height: 1.4; }.source-copy small { display: flex; align-items: center; gap: 5px; color: var(--faint); font-size: .63rem; }.source-copy i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }.source-copy i.danger { background: var(--danger); }.source-card > :global(.ico) { margin-top: 3px; color: var(--faint); }
+  .extra-sources summary { padding: 9px 11px; color: var(--muted); font-size: .67rem; cursor: pointer; }.extra-sources[open] summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .research-compose { padding: 12px 16px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
+  .sensitive-toggle { display: flex; align-items: flex-start; gap: 8px; margin: 0 1px 10px; cursor: pointer; }.sensitive-toggle input { margin-top: 2px; }.sensitive-toggle > span { display: flex; flex-direction: column; }.sensitive-toggle b { font-size: .7rem; font-weight: 650; }.sensitive-toggle small { color: var(--faint); font-size: .6rem; line-height: 1.35; }
+  .research-compose form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }.research-compose textarea { width: 100%; resize: none; min-height: 50px; max-height: 130px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--ink); font: inherit; font-size: .8rem; line-height: 1.4; }.research-compose textarea:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); }.research-send { min-height: 38px; }.research-note { display: block; margin-top: 7px; color: var(--faint); font-size: .59rem; }
+  @keyframes research-in { from { transform: translateX(26px); opacity: .72; } } @keyframes pulse { to { opacity: .25; transform: translateY(-2px); } }
+  @media (max-width: 640px) { .research-drawer { width: 100vw; border-left: 0; }.research-veil { display: none; }.research-head { padding-top: max(16px, env(safe-area-inset-top)); }.research-compose { padding-bottom: max(14px, env(safe-area-inset-bottom)); }.research-actions { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .research-drawer, .research-thinking span { animation: none; }.prompt-list button { transform: none; } }
 </style>

@@ -59,18 +59,32 @@ type ChatRequest struct {
 	IncludeSensitive bool                 `json:"include_sensitive"`
 }
 
+type ChatIntelligenceFact struct {
+	Type     string          `json:"type"`
+	Role     string          `json:"role,omitempty"`
+	Value    json.RawMessage `json:"value"`
+	Evidence string          `json:"evidence"`
+}
+
 type ChatSource struct {
-	ID          int64  `json:"id"`
-	Title       string `json:"title"`
-	Snippet     string `json:"snippet"`
-	Sensitivity string `json:"sensitivity,omitempty"`
+	ID           int64                  `json:"id"`
+	Title        string                 `json:"title"`
+	Snippet      string                 `json:"snippet"`
+	Sensitivity  string                 `json:"sensitivity,omitempty"`
+	Intelligence []ChatIntelligenceFact `json:"intelligence,omitempty"`
+}
+
+type ChatIntelligenceSummary struct {
+	Accepted map[string]int `json:"accepted"`
+	Pending  map[string]int `json:"pending"`
 }
 
 type ChatResponse struct {
-	Answer    string       `json:"answer"`
-	Sources   []ChatSource `json:"sources"`
-	Citations []int        `json:"citations"`
-	Grounded  bool         `json:"grounded"`
+	Answer       string                  `json:"answer"`
+	Sources      []ChatSource            `json:"sources"`
+	Citations    []int                   `json:"citations"`
+	Grounded     bool                    `json:"grounded"`
+	Intelligence ChatIntelligenceSummary `json:"intelligence"`
 }
 
 type chatModelAnswer struct {
@@ -184,6 +198,11 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	intelligenceSummary, err := s.loadChatIntelligence(r.Context(), p, sources)
+	if err != nil {
+		s.serverErr(w, "chat.intelligence", err)
+		return
+	}
 
 	release, retryAfter, ok := s.chatGate.enter(p.UserID)
 	if !ok {
@@ -221,6 +240,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		"citation_count", len(citations), "grounded", grounded, "duration_ms", time.Since(started).Milliseconds())
 	s.writeJSON(w, http.StatusOK, ChatResponse{
 		Answer: answer, Sources: sources, Citations: citations, Grounded: grounded,
+		Intelligence: intelligenceSummary,
 	})
 }
 
@@ -538,8 +558,72 @@ func buildChatEvidencePrompt(question string, sources []ChatSource) string {
 	b.WriteString("\n\nUntrusted evidence sources:\n")
 	for i, source := range sources {
 		fmt.Fprintf(&b, "\n[%d] Title: %s\nSensitivity: %s\nContent: %s\n", i+1, source.Title, source.Sensitivity, source.Snippet)
+		if len(source.Intelligence) > 0 {
+			b.WriteString("Human-accepted intelligence:\n")
+			for _, fact := range source.Intelligence {
+				fmt.Fprintf(&b, "- type=%s role=%s value=%s evidence=%s\n",
+					fact.Type, fact.Role, fact.Value, fact.Evidence)
+			}
+		}
 	}
 	return b.String()
+}
+
+func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principal, sources []ChatSource) (ChatIntelligenceSummary, error) {
+	summary := ChatIntelligenceSummary{
+		Accepted: map[string]int{},
+		Pending:  map[string]int{},
+	}
+	allowed := p.Role == "admin"
+	if !allowed {
+		capabilities, err := s.userCapabilities(ctx, p.UserID)
+		if err != nil {
+			return summary, err
+		}
+		allowed = capabilities.Has(authz.CapArchiveIntelligence)
+	}
+	if !allowed || len(sources) == 0 {
+		return summary, nil
+	}
+	sourceIndex := make(map[int64]int, len(sources))
+	args := make([]any, len(sources))
+	for i, source := range sources {
+		sourceIndex[source.ID] = i
+		args[i] = source.ID
+	}
+	rows, err := s.DB.Read.QueryContext(ctx, `
+		SELECT document_id, intelligence_type, role, value_json, evidence_text, status
+		FROM document_intelligence
+		WHERE document_id IN (`+placeholders(len(sources))+`)
+		  AND status IN ('pending', 'accepted')
+		ORDER BY document_id, intelligence_type, role, id
+	`, args...)
+	if err != nil {
+		return summary, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			documentID, sourcePosition int64
+			fact                       ChatIntelligenceFact
+			valueJSON, status          string
+		)
+		if err := rows.Scan(&documentID, &fact.Type, &fact.Role, &valueJSON, &fact.Evidence, &status); err != nil {
+			return summary, err
+		}
+		if !json.Valid([]byte(valueJSON)) {
+			return summary, errors.New("stored intelligence contains invalid JSON")
+		}
+		if status == "accepted" {
+			summary.Accepted[fact.Type]++
+			fact.Value = json.RawMessage(valueJSON)
+			sourcePosition = int64(sourceIndex[documentID])
+			sources[sourcePosition].Intelligence = append(sources[sourcePosition].Intelligence, fact)
+		} else {
+			summary.Pending[fact.Type]++
+		}
+	}
+	return summary, rows.Err()
 }
 
 func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, error) {

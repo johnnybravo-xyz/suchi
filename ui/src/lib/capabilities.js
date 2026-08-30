@@ -6,6 +6,12 @@ export const USER_CAPABILITIES = Object.freeze([
     description: 'Ask grounded questions across documents they can read.',
   }),
   Object.freeze({
+    key: 'archive_intelligence',
+    label: 'Review archive intelligence',
+    setupLabel: 'Review archive intelligence',
+    description: 'Validate extracted facts and use accepted intelligence in archive views.',
+  }),
+  Object.freeze({
     key: 'mailboxes',
     label: 'Manage mailboxes',
     setupLabel: 'Manage own mailboxes',

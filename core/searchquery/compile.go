@@ -101,6 +101,14 @@ func compileFilter(clause ResolvedClause) Predicate {
 		return Predicate{SQL: "d.languages LIKE ?", Args: []any{"%," + clause.Value + ",%"}}
 	case "added":
 		return compileAdded(clause)
+	case "date":
+		return compileDate(clause)
+	case "date-role":
+		sql := "EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted' AND sq_di.intelligence_type = 'date' AND sq_di.role = ?)"
+		if clause.Negated {
+			sql = "NOT " + sql
+		}
+		return Predicate{SQL: sql, Args: []any{clause.Value}}
 	case "is":
 		return compileIs(clause)
 	default:
@@ -131,6 +139,15 @@ func compileAdded(clause ResolvedClause) Predicate {
 	return predicate
 }
 
+func compileDate(clause ResolvedClause) Predicate {
+	sql := "EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted' AND sq_di.intelligence_type = 'date' AND sq_di.sort_value " +
+		string(clause.Operator) + " ?)"
+	if clause.Negated {
+		sql = "NOT " + sql
+	}
+	return Predicate{SQL: sql, Args: []any{clause.Value}}
+}
+
 func compileIs(clause ResolvedClause) Predicate {
 	switch clause.Value {
 	case "inbox":
@@ -148,6 +165,11 @@ func compileIs(clause ResolvedClause) Predicate {
 			return Predicate{SQL: "COALESCE(d.encryption_state, '') != 'encrypted'"}
 		}
 		return Predicate{SQL: "d.encryption_state = 'encrypted'"}
+	case "dated":
+		if clause.Negated {
+			return Predicate{SQL: "NOT EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted')"}
+		}
+		return Predicate{SQL: "EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE sq_di.document_id = d.id AND sq_di.status = 'accepted')"}
 	default:
 		panic("searchquery: unresolved is value " + clause.Value)
 	}

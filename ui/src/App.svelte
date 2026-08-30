@@ -22,6 +22,7 @@
     uploadBox:   bundled(archiveBundle, 'UploadBox'),
     trash:       bundled(archiveBundle, 'Trash'),
     views:       bundled(archiveBundle, 'Views'),
+    calendar:    bundled(archiveBundle, 'Calendar'),
     tasks:       bundled(manageBundle, 'Tasks'),
     automations: bundled(manageBundle, 'Automations'),
     settings:    bundled(manageBundle, 'Settings'),
@@ -36,7 +37,9 @@
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   const canShareViews = $derived(hasCapability(session.user, 'share_views'))
   const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && session.user?.demo !== 'anon' && session.user?.demo !== 'scratch')
+  const canReviewIntelligence = $derived(hasCapability(session.user, 'archive_intelligence') && session.user?.demo !== 'anon' && session.user?.demo !== 'scratch')
   let chatEnabled = $state(false)
+  let chatStatusInfo = $state({ enabled: false, provider: '', local: false })
   let chatOpen = $state(false)
   let ChatDrawer = $state(null)
   let chatRequest = $state({ id: 0, question: '' })
@@ -211,9 +214,18 @@
   }
 
   async function pollChatStatus() {
-    if (!canUseArchiveChat) { chatEnabled = false; return }
-    try { chatEnabled = !!(await chatStatus())?.enabled }
-    catch { chatEnabled = false }
+    if (!canUseArchiveChat) {
+      chatEnabled = false
+      chatStatusInfo = { enabled: false, provider: '', local: false }
+      return
+    }
+    try {
+      chatStatusInfo = await chatStatus()
+      chatEnabled = !!chatStatusInfo?.enabled
+    } catch {
+      chatEnabled = false
+      chatStatusInfo = { enabled: false, provider: '', local: false }
+    }
   }
 
   async function loadRecentDocuments({ background = recentDocs !== undefined } = {}) {
@@ -260,14 +272,43 @@
     if (e.key === 'Escape') { mobileNavOpen = false; uploadOpen = false }
   }
 
-  async function openArchiveChat(question = '', returnFocus = null) {
+  function currentChatScope() {
+    if (page === 'doc' && documentID) {
+      return { label: 'Current document', document_ids: [Number(documentID)] }
+    }
+    const ids = [...new Set((route.query.get('document_ids') || '').split(',')
+      .map(value => Number(value.trim()))
+      .filter(value => Number.isInteger(value) && value > 0))].slice(0, 100)
+    if (ids.length) {
+      return { label: `${ids.length} saved documents`, document_ids: ids }
+    }
+    const query = route.query.get('q') || ''
+    const jd = Number(route.query.get('jd') || 0)
+    if ((page === 'documents' || page === 'search' || page === 'inbox') && (query || jd > 0)) {
+      return {
+        label: page === 'inbox' ? 'Current inbox view' : 'Current document view',
+        query,
+        jd_category_id: jd > 0 ? jd : undefined,
+      }
+    }
+    return { label: 'All archive' }
+  }
+
+  async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
     chatOpen = true
     chatReturnFocus = returnFocus
-    chatRequest = { id: chatRequest.id + 1, question }
+    chatRequest = { id: chatRequest.id + 1, question, scope }
     if (!ChatDrawer) {
       try { ChatDrawer = (await import('./lib/ArchiveChat.svelte')).default }
-      catch { chatOpen = false; notify('Could not open archive questions') }
+      catch { chatOpen = false; notify('Could not open archive research') }
     }
+  }
+
+  function askSelectedDocuments(ids) {
+    openArchiveChat('', null, {
+      label: `${ids.length} selected document${ids.length === 1 ? '' : 's'}`,
+      document_ids: ids,
+    })
   }
 
   async function handleSignOut() {
@@ -282,20 +323,23 @@
   $effect(() => {
     if (session.user && page === 'dashboard') loadRecentDocuments()
   })
-  const nav = [
-    { hash: '#/dashboard',   ico: 'gauge',  label: 'Dashboard',   key: 'dashboard' },
-    { hash: '#/documents',   ico: 'docs',   label: 'Documents',   key: 'documents' },
-    { hash: '#/inbox',       ico: 'inbox',  label: 'Inbox',       key: 'inbox' },
-    { hash: '#/views',       ico: 'eye',    label: 'Views',       key: 'views' },
-    { hash: '#/tasks',       ico: 'tasks',  label: 'Approvals',   key: 'tasks' },
-    { hash: '#/automations', ico: 'zap',    label: 'Automations', key: 'automations' },
-    { hash: '#/trash',       ico: 'trash',  label: 'Trash',       key: 'trash' },
-  ]
-  const PAGES = [
+  const nav = $derived([
+    { hash: '#/dashboard',   ico: 'gauge',    label: 'Dashboard',   key: 'dashboard' },
+    { hash: '#/documents',   ico: 'docs',     label: 'Documents',   key: 'documents' },
+    { hash: '#/inbox',       ico: 'inbox',    label: 'Inbox',       key: 'inbox' },
+    { hash: '#/views',       ico: 'eye',      label: 'Views',       key: 'views' },
+    ...(canReviewIntelligence
+      ? [{ hash: '#/calendar', ico: 'calendar', label: 'Calendar', key: 'calendar' }]
+      : []),
+    { hash: '#/tasks',       ico: 'tasks',    label: 'Approvals',   key: 'tasks' },
+    { hash: '#/automations', ico: 'zap',      label: 'Automations', key: 'automations' },
+    { hash: '#/trash',       ico: 'trash',    label: 'Trash',       key: 'trash' },
+  ])
+  const PAGES = $derived([
     ...nav.map(n => ({ href: n.hash, label: n.label, ico: n.ico })),
     { href: '#/search',   label: 'Search results', ico: 'search' },
     { href: '#/settings', label: 'Settings', ico: 'settings' },
-  ]
+  ])
   const pageTitle = $derived(
     nav.find((item) => item.key === page)?.label || ({
       doc: 'Document',
@@ -312,6 +356,7 @@
     if (page === 'settings' && route.query.get('tab') === 'archive' && session.user.role !== 'admin') {
       go('#/settings')
     }
+    if (page === 'calendar' && !canReviewIntelligence) go('#/dashboard')
   })
   const COMMANDS = $derived([
     { label: 'Upload documents',       ico: 'upload', run: () => (uploadOpen = true) },
@@ -358,7 +403,7 @@
           <a href={n.hash} class:on={page === n.key} onclick={() => (mobileNavOpen = false)}>
             <Icon name={n.ico} />{n.label}
             {#if n.key === 'inbox' && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
-            {#if n.key === 'tasks' && (st?.pending_approvals ?? 0) > 0}<span class="badge">{st.pending_approvals}</span>{/if}
+            {#if n.key === 'tasks' && ((st?.pending_approvals ?? 0) + (canReviewIntelligence ? (st?.pending_intelligence ?? 0) : 0)) > 0}<span class="badge">{(st?.pending_approvals ?? 0) + (canReviewIntelligence ? (st?.pending_intelligence ?? 0) : 0)}</span>{/if}
           </a>
         {/each}
       </nav>
@@ -436,16 +481,17 @@
 
       <div class="content">
         {#if page === 'dashboard'}<Dashboard {st} {statsError} {inboxCategory} {taxonomyLoaded} {taxonomyError} recent={recentDocs} {recentError} onRetryRecent={loadRecentDocuments} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments }} />
         {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
-        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats }} />
+        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
+        {:else if page === 'calendar'}<Lazy load={lazyRoutes.calendar} props={{ initialDocumentIDs: route.query.get('document_ids') || '' }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
         {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
@@ -469,7 +515,7 @@
   {/if}
 
   {#if ChatDrawer}
-    <ChatDrawer open={chatOpen} request={chatRequest} onClose={() => (chatOpen = false)} onReturnFocus={chatReturnFocus} />
+    <ChatDrawer open={chatOpen} request={chatRequest} status={chatStatusInfo} canReviewIntelligence={canReviewIntelligence} onClose={() => (chatOpen = false)} onReturnFocus={chatReturnFocus} />
   {/if}
 
 {/if}

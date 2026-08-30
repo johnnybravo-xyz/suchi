@@ -20,7 +20,7 @@ test('parses saved-view filters defensively', () => {
 
 test('serializes new saved views to one stable query string', () => {
   const query = canonicalSavedViewQuery(
-    { q: '"distribution advice"', tag: '7', corr: '9', type: '10', jd: '6', sens: 'internal' },
+    { q: '"distribution advice"', tag: '7', corr: '9', type: '10', jd: '6', sens: 'internal', dateFrom: '2026-09-01', dateTo: '2026-09-30', dateRole: 'renewal' },
     {
       tags: [{ id: 7, name: 'income tax' }],
       correspondents: [{ id: 9, name: 'Bagmane "Prime"' }],
@@ -30,6 +30,10 @@ test('serializes new saved views to one stable query string', () => {
   )
   assert.equal(
     query,
-    '"distribution advice" tag:"income tax" from:"Bagmane \\"Prime\\"" type:"statement" jd:22 sensitivity:internal',
+    '"distribution advice" tag:"income tax" from:"Bagmane \\"Prime\\"" type:"statement" jd:22 sensitivity:internal date:>=2026-09-01 date:<=2026-09-30 date-role:renewal',
   )
+})
+
+test('serializes exact document snapshots without granting access', () => {
+  assert.equal(documentListHash({ document_ids: [17, 28, 39] }), '#/documents?document_ids=17%2C28%2C39')
 })

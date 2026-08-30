@@ -30,6 +30,7 @@
     mail: 'M4 6h16v12H4zM4.5 7l7.5 6 7.5-6',
     menu: 'M4 6h16M4 12h16M4 18h16',
     ask: 'M5 5h14v11H9l-4 4zM9 9h6M9 12.5h4',
+    calendar: 'M5 6.5h14V20H5zM8 4v5M16 4v5M5 10h14M8.5 13.5h1M12 13.5h1M15.5 13.5h1M8.5 17h1M12 17h1',
   }
 </script>
 

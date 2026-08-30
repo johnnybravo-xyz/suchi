@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 )
 
 type Candidate struct {
@@ -74,6 +76,16 @@ func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery
 					fmt.Sprintf("added value %q must use YYYY-MM-DD", clause.Value), nil)
 			}
 			item.Timestamp = day.Unix()
+		case "date":
+			if err := intelligence.ValidateSortValue(intelligence.TypeDate, clause.Value); err != nil {
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter, err.Error(), nil)
+			}
+		case "date-role":
+			item.Value = strings.ToLower(clause.Value)
+			if !intelligence.ValidRole(intelligence.TypeDate, item.Value) {
+				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
+					fmt.Sprintf("unknown date role %q", clause.Value), intelligence.DateRoles())
+			}
 		case "is":
 			switch clause.Value {
 			case "inbox":
@@ -82,11 +94,11 @@ func Resolve(ctx context.Context, query Query, resolver Resolver) (ResolvedQuery
 					return ResolvedQuery{}, err
 				}
 				item.ID = id
-			case "trash", "encrypted":
+			case "trash", "encrypted", "dated":
 			default:
 				return ResolvedQuery{}, filterError(clause.Position, clause.Filter,
 					fmt.Sprintf("unknown is value %q", clause.Value),
-					[]string{"inbox", "trash", "encrypted"})
+					[]string{"inbox", "trash", "encrypted", "dated"})
 			}
 		default:
 			return ResolvedQuery{}, filterError(clause.Position, clause.Filter,

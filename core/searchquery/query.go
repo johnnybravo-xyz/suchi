@@ -92,6 +92,8 @@ var filterNames = []string{
 	"title",
 	"content",
 	"added",
+	"date",
+	"date-role",
 	"is",
 }
 

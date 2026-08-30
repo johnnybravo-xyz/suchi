@@ -85,7 +85,7 @@ func parseFilter(tokens []token, index int, clause Clause) (Clause, int, error) 
 				fmt.Sprintf("filter %s requires a value after %s", name, op), nil)
 		}
 	}
-	if op != OpEqual && name != "added" {
+	if op != OpEqual && name != "added" && name != "date" {
 		return Clause{}, 0, filterError(tokens[index-1].start, name,
 			fmt.Sprintf("comparisons are not supported for %s", name), nil)
 	}

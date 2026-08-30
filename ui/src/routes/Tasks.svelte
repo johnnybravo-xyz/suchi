@@ -1,28 +1,38 @@
 <script>
-  import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath } from '../lib/api.js'
+  import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
+           listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, onCount } = $props()
+  let { notify, onCount, canReviewIntelligence = false } = $props()
   let tasks = $state([])
   let jobs = $state([])
   let loading = $state(true)
   let err = $state('')
+  let intelligence = $state([])
+  let intelligenceSelection = $state(new Set())
+  let intelligenceBusy = $state(false)
   let busyJobs = $state(new Set())
 
   async function load() {
     loading = true; err = ''
     try {
-      const [wf, jb] = await Promise.all([
+      const [wf, jb, facts] = await Promise.all([
         listTasks({ include: 'approvals', state: 'pending', limit: 200 }),
         listTasks({ include: 'jobs', state: 'dead', limit: 50 }),
+        canReviewIntelligence
+          ? listIntelligence({ status: 'pending', page_size: 200 })
+          : Promise.resolve({ results: [] }),
       ])
-      // `include=approvals` skips the classic tasks branch → server returns
-      // an empty `results` array; the actual approval-task list lives under
-      // `approval_tasks`. Jobs still ride the classic `results` shape.
+      // `include=approvals` skips the classic tasks branch; approval tasks
+      // and generic intelligence candidates use their own response fields.
       tasks = wf?.approval_tasks || []
       jobs = jb?.results || jb || []
-      onCount?.(tasks.length + jobs.length)
+      intelligence = facts?.results || []
+      intelligenceSelection = new Set(
+        intelligence.filter(candidate => Number(candidate.confidence || 0) >= 0.8).map(candidate => candidate.id),
+      )
+      onCount?.(tasks.length + jobs.length + intelligence.length)
     } catch (ex) { err = ex.message || 'Could not load tasks.' }
     finally { loading = false }
   }
@@ -31,7 +41,7 @@
     try {
       await resolveApprovalTask(t.id, { choice })
       tasks = tasks.filter(x => x.id !== t.id)
-      onCount?.(tasks.length + jobs.length)
+      onCount?.(tasks.length + jobs.length + intelligence.length)
       notify?.(`Resolved: ${choice}`)
     } catch (ex) { notify?.(ex.message || 'Could not resolve the task') }
   }
@@ -156,6 +166,71 @@
     return `Filed under ${filed}. Review the remaining metadata suggestions independently.`
   }
 
+  function intelligenceGroups() {
+    const groups = new Map()
+    for (const candidate of intelligence) {
+      if (!groups.has(candidate.document_id)) {
+        groups.set(candidate.document_id, {
+          documentID: candidate.document_id,
+          title: candidate.document_title,
+          thumbnail: candidate.document_has_thumbnail,
+          candidates: [],
+        })
+      }
+      groups.get(candidate.document_id).candidates.push(candidate)
+    }
+    return [...groups.values()]
+  }
+
+  function selectionState(items) {
+    const selected = items.filter(item => intelligenceSelection.has(item.id)).length
+    return { all: selected === items.length && items.length > 0, some: selected > 0 && selected < items.length }
+  }
+
+  function indeterminate(node, value) {
+    node.indeterminate = value
+    return { update(next) { node.indeterminate = next } }
+  }
+
+  function setCandidateSelection(ids, checked) {
+    const next = new Set(intelligenceSelection)
+    for (const id of ids) checked ? next.add(id) : next.delete(id)
+    intelligenceSelection = next
+  }
+
+  function toggleAllIntelligence(checked) {
+    setCandidateSelection(intelligence.map(candidate => candidate.id), checked)
+  }
+
+  function intelligenceValue(candidate) {
+    if (candidate.type === 'date') {
+      const date = candidate.value?.date || candidate.sort_value
+      const formatted = date
+        ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : 'Unknown date'
+      return `${formatted} · ${candidate.role || 'date'}`
+    }
+    return candidate.raw_text || candidate.sort_value || candidate.type
+  }
+
+  async function resolveSelectedIntelligence(decision) {
+    const ids = [...intelligenceSelection]
+    if (!ids.length || intelligenceBusy) return
+    intelligenceBusy = true
+    try {
+      const result = await resolveIntelligence({ candidate_ids: ids, decision })
+      const resolved = new Set((result?.results || []).filter(item => item.ok).map(item => item.id))
+      intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
+      intelligenceSelection = new Set([...intelligenceSelection].filter(id => !resolved.has(id)))
+      onCount?.(tasks.length + jobs.length + intelligence.length)
+      notify?.(`${decision === 'accepted' ? 'Accepted' : 'Rejected'} ${resolved.size} intelligence candidate${resolved.size === 1 ? '' : 's'}`)
+    } catch (ex) {
+      notify?.(ex.message || 'Could not resolve intelligence candidates')
+    } finally {
+      intelligenceBusy = false
+    }
+  }
+
   function retryLabel(job) {
     const count = Number(job.attempts || 0)
     return count === 0 ? 'Not retried' : `${count} ${count === 1 ? 'retry' : 'retries'}`
@@ -196,7 +271,76 @@
 {#if loading}
   <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
 {:else}
-  {#if tasks.length === 0 && jobs.length === 0}
+  {#if intelligence.length > 0}
+    {@const allIntelligence = selectionState(intelligence)}
+    <section class="intelligence-review" aria-labelledby="intelligence-review-title">
+      <header class="intelligence-head">
+        <div>
+          <span class="eyebrow">Human-validated archive facts</span>
+          <h2 id="intelligence-review-title">Intelligence review</h2>
+          <p>{intelligence.length} candidate{intelligence.length === 1 ? '' : 's'} from {intelligenceGroups().length} document{intelligenceGroups().length === 1 ? '' : 's'}.</p>
+        </div>
+        <label class="select-all">
+          <input type="checkbox" checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
+                 onchange={(event) => toggleAllIntelligence(event.currentTarget.checked)} />
+          Select all visible
+        </label>
+      </header>
+
+      <div class="intelligence-groups">
+        {#each intelligenceGroups() as group (group.documentID)}
+          {@const groupSelection = selectionState(group.candidates)}
+          <article class="intelligence-card">
+            <header class="intelligence-document">
+              <input type="checkbox" aria-label={`Select every candidate from ${group.title || `document ${group.documentID}`}`}
+                     checked={groupSelection.all} use:indeterminate={groupSelection.some}
+                     onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
+              <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail}
+                 href={`#/doc/${group.documentID}`} aria-label={`Open ${group.title || `document ${group.documentID}`}`}>
+                {#if group.thumbnail}
+                  <img src={thumbPath(group.documentID)} alt="" loading="lazy" />
+                {:else}
+                  <Icon name="docs" size={20} />
+                {/if}
+              </a>
+              <div>
+                <a href={`#/doc/${group.documentID}`}>{group.title || `Document #${group.documentID}`}</a>
+                <small>{group.candidates.length} candidate{group.candidates.length === 1 ? '' : 's'}</small>
+              </div>
+            </header>
+            <div class="intelligence-candidates">
+              {#each group.candidates as candidate (candidate.id)}
+                <label class="intelligence-candidate">
+                  <input type="checkbox" checked={intelligenceSelection.has(candidate.id)}
+                         onchange={(event) => setCandidateSelection([candidate.id], event.currentTarget.checked)} />
+                  <span class="intelligence-copy">
+                    <span class="intelligence-value">
+                      <strong>{intelligenceValue(candidate)}</strong>
+                      <span class="pill">{candidate.type}</span>
+                      <small>{Math.round(Number(candidate.confidence || 0) * 100)}%</small>
+                    </span>
+                    <span class="intelligence-evidence">“{candidate.evidence_text}”</span>
+                    <small>Original text: {candidate.raw_text}</small>
+                  </span>
+                </label>
+              {/each}
+            </div>
+          </article>
+        {/each}
+      </div>
+
+      <footer class="intelligence-actions">
+        <span>{intelligenceSelection.size} selected</span>
+        <button class="btn sm" disabled={!intelligenceSelection.size || intelligenceBusy}
+                onclick={() => resolveSelectedIntelligence('rejected')}>Reject selected</button>
+        <button class="btn primary sm" disabled={!intelligenceSelection.size || intelligenceBusy}
+                onclick={() => resolveSelectedIntelligence('accepted')}>
+          <Icon name="check" size={13} /> {intelligenceBusy ? 'Saving…' : `Accept ${intelligenceSelection.size}`}
+        </button>
+      </footer>
+    </section>
+  {/if}
+  {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
     <div class="empty"><Icon name="tasks" size={56} /><b>Nothing needs you.</b><span>The archive is running itself.</span></div>
   {:else if tasks.length > 0}
     <h3 style="font-size:.9rem;color:var(--muted);margin:14px 0 8px">Approvals</h3>
@@ -311,6 +455,32 @@
 {/if}
 
 <style>
+  .intelligence-review { margin: 10px 0 28px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+  .intelligence-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, var(--tint), var(--surface)); }
+  .intelligence-head .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; text-transform: uppercase; }
+  .intelligence-head h2 { font-size: 1.22rem; }
+  .intelligence-head p { margin: 5px 0 0; color: var(--muted); font-size: .8rem; }
+  .select-all { display: flex; align-items: center; gap: 7px; flex: none; font-size: .75rem; font-weight: 650; cursor: pointer; }
+  .intelligence-groups { display: grid; gap: 12px; padding: 14px; }
+  .intelligence-card { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
+  .intelligence-document { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 11px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .intelligence-document > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+  .intelligence-document a { overflow: hidden; color: var(--ink); font-size: .84rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .intelligence-document small { color: var(--muted); font-size: .68rem; }
+  .intelligence-thumb { width: 38px; flex-basis: 38px; }
+  .intelligence-candidates { display: flex; flex-direction: column; }
+  .intelligence-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 13px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .intelligence-candidate:last-child { border-bottom: 0; }
+  .intelligence-candidate:hover { background: var(--tint); }
+  .intelligence-candidate > input { margin-top: 3px; }
+  .intelligence-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+  .intelligence-value { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .intelligence-value strong { font-size: .87rem; text-transform: capitalize; }
+  .intelligence-value small { color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .64rem; }
+  .intelligence-evidence { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+  .intelligence-copy > small { color: var(--faint); font-size: .67rem; }
+  .intelligence-actions { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
+  .intelligence-actions > span { margin-right: auto; color: var(--muted); font-size: .72rem; }
   .approval-list { display:flex;flex-direction:column;gap:12px;margin-bottom:22px }
   .document-header { display:flex;gap:14px;align-items:center }
   .document-identity { flex:1;min-width:0 }
@@ -341,5 +511,9 @@
   .rescan-targets a { color:var(--accent) }
   @media (max-width: 560px) {
     .task-thumb { flex-basis:52px;width:52px }
+    .intelligence-head { align-items: flex-start; flex-direction: column; }
+    .intelligence-actions { flex-wrap: wrap; }
+    .intelligence-actions > span { width: 100%; }
+    .intelligence-actions .btn { flex: 1; justify-content: center; }
   }
 </style>

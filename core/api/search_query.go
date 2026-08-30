@@ -153,8 +153,10 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 	switch completion.Filter {
 	case "sensitivity":
 		fixed = []string{"public", "internal", "confidential", "restricted"}
+	case "date-role":
+		fixed = []string{"issued", "due", "start", "end", "expiry", "renewal", "service", "other"}
 	case "is":
-		fixed = []string{"inbox", "trash", "encrypted"}
+		fixed = []string{"inbox", "trash", "encrypted", "dated"}
 	}
 	if fixed != nil {
 		suggestions := make([]AutocompleteSuggestion, 0, len(fixed))

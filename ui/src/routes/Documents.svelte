@@ -1,6 +1,6 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
+  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, isHighSensitivity, sensDot } from '../lib/format.js'
@@ -10,7 +10,8 @@
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
 
-  let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [] } = $props()
+  let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
+        canAskArchive = false, canReviewIntelligence = false, onAskDocuments } = $props()
 
   let docs = $state([])
   let count = $state(0)
@@ -173,6 +174,23 @@
     bulkBusy = false
   }
 
+  async function bulkExtractDates() {
+    const ids = [...sel]
+    bulkBusy = true
+    try {
+      const result = await extractIntelligence({ document_ids: ids, types: ['date'] })
+      const failed = (result?.results || []).filter(item => !item.ok).length
+      notify?.(failed
+        ? `Date extraction queued for ${result?.applied || 0}; ${failed} could not be accessed`
+        : `Date extraction queued for ${result?.applied || ids.length} document${ids.length === 1 ? '' : 's'}`)
+      clearSel()
+    } catch (ex) {
+      notify?.(ex.message || 'Could not queue date extraction')
+    } finally {
+      bulkBusy = false
+    }
+  }
+
   // The postingest retry fills metadata after this optimistic unlock state.
   let unlockPw = $state({})           // { [id]: string }
   let unlockErr = $state({})          // { [id]: string }
@@ -280,6 +298,16 @@
         <option value={option.value}>{option.label}</option>
       {/each}
     </select>
+    {#if canAskArchive}
+      <button class="btn sm" disabled={bulkBusy} onclick={() => onAskDocuments?.([...sel])}>
+        <Icon name="ask" size={12} /> Ask selection
+      </button>
+    {/if}
+    {#if canReviewIntelligence}
+      <button class="btn sm" disabled={bulkBusy} onclick={bulkExtractDates} title="Extract reviewable dates using the configured intelligence pipeline">
+        <Icon name="calendar" size={12} /> Extract dates
+      </button>
+    {/if}
     {#if canShareLinks}
       <button class="btn sm" disabled={bulkBusy} onclick={bulkShare}><Icon name="link" size={12} /> Share</button>
     {/if}

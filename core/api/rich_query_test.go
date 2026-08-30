@@ -110,6 +110,35 @@ func TestRichQueryEndpointParity(t *testing.T) {
 	}
 }
 
+func TestRichQueryAcceptedDateIntelligenceParity(t *testing.T) {
+	s := newListServer(t)
+	matchingID, otherID := seedRichQueryData(t, s)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO document_intelligence(
+			document_id, intelligence_type, role, value_json, sort_value,
+			raw_text, evidence_text, confidence, status, extractor,
+			extraction_version, created_at, updated_at
+		) VALUES
+			(?, 'date', 'renewal', '{"date":"2026-09-14","precision":"day"}',
+			 '2026-09-14', '14 September 2026', 'Renews 14 September 2026',
+			 0.9, 'accepted', 'test', 1, 0, 0),
+			(?, 'date', 'renewal', '{"date":"2026-10-01","precision":"day"}',
+			 '2026-10-01', '1 October 2026', 'Renews 1 October 2026',
+			 0.9, 'pending', 'test', 1, 0, 0)
+	`, matchingID, otherID); err != nil {
+		t.Fatal(err)
+	}
+	query := `date:>=2026-09-01 date:<=2026-09-30 date-role:renewal is:dated`
+	searchCode, searchResult, _ := doSearch(t, s, query, adminPrincipal(1))
+	listCode, listRows, listCount := doList(t, s, "/api/documents/?q="+url.QueryEscape(query), adminPrincipal(1))
+	if searchCode != 200 || listCode != 200 || searchResult.Count != 1 || listCount != 1 {
+		t.Fatalf("search status/count=%d/%d list status/count=%d/%d", searchCode, searchResult.Count, listCode, listCount)
+	}
+	if searchResult.Results[0].ID != matchingID || listRows[0].ID != matchingID {
+		t.Fatalf("search=%+v documents=%+v", searchResult.Results, listRows)
+	}
+}
+
 func TestRichQueryPlainTextUsesPrefixAND(t *testing.T) {
 	s := newListServer(t)
 	matchingID, _ := seedRichQueryData(t, s)

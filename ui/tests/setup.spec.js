@@ -139,7 +139,11 @@ async function mockAPI(page, options = {}) {
       if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
       body = { results: response?.results || [] }
     }
-    else if (path === '/api/chat/status') body = { enabled: !!options.chatEnabled }
+    else if (path === '/api/chat/status') body = {
+      enabled: !!options.chatEnabled,
+      provider: options.chatProvider || 'local.test',
+      local: options.chatLocal ?? true,
+    }
     else if (path === '/api/chat' && request.method() === 'POST') {
       const payload = request.postDataJSON()
       options.chatRequests?.push(payload)
@@ -150,7 +154,33 @@ async function mockAPI(page, options = {}) {
       body = response || {
         answer: 'The archive supports this answer [1].',
         sources: [{ id: 17, title: 'Archive evidence.pdf', snippet: 'Supporting document text', sensitivity: 'internal' }],
-        view_query: payload.question,
+        citations: [1],
+        grounded: true,
+        intelligence: { accepted: {}, pending: {} },
+      }
+    }
+    else if (path === '/api/intelligence/schema') body = {
+      types: [{ type: 'date', label: 'Dates', roles: ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other'] }],
+    }
+    else if (path === '/api/intelligence/' && request.method() === 'GET') {
+      body = { results: options.intelligence || [], count: options.intelligence?.length || 0 }
+    }
+    else if (path === '/api/intelligence/extract' && request.method() === 'POST') {
+      const payload = request.postDataJSON()
+      options.intelligenceRequests?.push({ action: 'extract', ...payload })
+      body = {
+        total: payload.document_ids?.length || 0,
+        applied: payload.document_ids?.length || 0,
+        results: (payload.document_ids || []).map(id => ({ id, ok: true })),
+      }
+    }
+    else if (path === '/api/intelligence/resolve' && request.method() === 'POST') {
+      const payload = request.postDataJSON()
+      options.intelligenceRequests?.push({ action: 'resolve', ...payload })
+      body = {
+        total: payload.candidate_ids?.length || 0,
+        applied: payload.candidate_ids?.length || 0,
+        results: (payload.candidate_ids || []).map(id => ({ id, ok: true })),
       }
     }
     else if (path === '/api/languages/') body = { languages: [] }
@@ -1220,7 +1250,7 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   })
 })
 
-test('keeps omnibox search separate from lazy archive questions and preserves the session', async ({ page }) => {
+test('keeps search separate from scoped archive research and saves exact sources', async ({ page }) => {
   const chatRequests = []
   await mockAPI(page, {
     chatEnabled: true,
@@ -1230,7 +1260,9 @@ test('keeps omnibox search separate from lazy archive questions and preserves th
     chatResponse: {
       answer: 'The lease renews in September [1].',
       sources: [{ id: 17, title: 'Lease agreement.pdf', snippet: 'The renewal date is September 1.', sensitivity: 'internal' }],
-      view_query: 'lease renewal',
+      citations: [1],
+      grounded: true,
+      intelligence: { accepted: {}, pending: {} },
     },
   })
 
@@ -1247,45 +1279,52 @@ test('keeps omnibox search separate from lazy archive questions and preserves th
   await page.goto('/#/dashboard')
   await omnibox.fill('When does the lease renew?')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
-  await expect(page.getByRole('dialog', { name: 'Ask the archive' })).toBeVisible()
-  await expect(page.getByText('The lease renews in September [1].')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Archive research' })).toBeVisible()
+  await expect(page.getByText('The lease renews in September')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Jump to source 1' })).toBeVisible()
   expect(chatRequests).toHaveLength(1)
-  expect(chatRequests[0]).toMatchObject({ question: 'When does the lease renew?', include_sensitive: false, history: [] })
+  expect(chatRequests[0]).toMatchObject({
+    question: 'When does the lease renew?',
+    include_sensitive: false,
+    history: [],
+    context_source_ids: [],
+    scope: { query: '', document_ids: [], jd_category_id: 0 },
+  })
   expect(await page.evaluate(() => performance.getEntriesByType('resource').some(entry => entry.name.includes('ArchiveChat')))).toBe(true)
 
-  await page.getByRole('link', { name: 'Save search as view' }).click()
-  await expect(page).toHaveURL(/#\/views\?new=1&q=lease%20renewal$/)
+  await page.getByRole('link', { name: /Save source set/ }).click()
+  await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
-  await expect(page.getByLabel('Contains text')).toHaveValue('lease renewal')
+  await expect(page.getByText('Exact research snapshot')).toBeVisible()
 
   await page.goto('/#/dashboard')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
-  await expect(page.getByText('The lease renews in September [1].')).toBeVisible()
+  await expect(page.getByText('The lease renews in September')).toBeVisible()
   await page.getByRole('button', { name: 'Open source 1: Lease agreement.pdf' }).click()
   await expect(page).toHaveURL(/#\/doc\/17$/)
 
   await page.getByRole('button', { name: 'Ask the archive' }).click()
-  const sensitive = page.getByLabel('Include sensitive documents')
+  const sensitive = page.getByLabel('Include Confidential and Restricted')
   await sensitive.check()
   await page.getByRole('button', { name: 'Clear' }).click()
-  await expect(page.getByText('Ask about what you’ve filed')).toBeVisible()
+  await expect(page.getByText('Start with a question, not a search query')).toBeVisible()
   await expect(sensitive).not.toBeChecked()
 })
 
-test('supports cancellation, focus return, and the full-screen mobile archive sheet', async ({ page }) => {
+test('supports cancellation, focus return, and the full-screen mobile research desk', async ({ page }) => {
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests: [],
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
-    chatResponse: { delay: 5000, answer: 'Too late', sources: [], view_query: '' },
+    chatResponse: { delay: 5000, answer: 'Too late', sources: [] },
   })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/#/dashboard')
   const omnibox = page.getByLabel('Search or run a command')
   await omnibox.fill('slow question')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Ask the archive' })
+  const dialog = page.getByRole('dialog', { name: 'Archive research' })
   await expect(dialog).toBeVisible()
   await expect.poll(async () => (await dialog.boundingBox()).x).toBe(0)
   await expect.poll(async () => Math.round((await dialog.boundingBox()).width)).toBe(390)
@@ -1295,4 +1334,70 @@ test('supports cancellation, focus return, and the full-screen mobile archive sh
   await expect(dialog).toBeHidden()
   await expect(omnibox).toBeFocused()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('bulk-validates generic intelligence candidates by document', async ({ page }) => {
+  const intelligenceRequests = []
+  await mockAPI(page, {
+    intelligenceRequests,
+    approvalTasks: [],
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    intelligence: [
+      {
+        id: 71, document_id: 17, document_title: 'Lease agreement.pdf',
+        document_has_thumbnail: false, type: 'date', role: 'renewal',
+        value: { date: '2026-09-01', precision: 'day' }, sort_value: '2026-09-01',
+        raw_text: 'September 1, 2026', evidence_text: 'The lease renews on September 1, 2026.',
+        confidence: 0.94, status: 'pending',
+      },
+      {
+        id: 72, document_id: 17, document_title: 'Lease agreement.pdf',
+        document_has_thumbnail: false, type: 'date', role: 'issued',
+        value: { date: '2025-08-12', precision: 'day' }, sort_value: '2025-08-12',
+        raw_text: '12 August 2025', evidence_text: 'Signed on 12 August 2025.',
+        confidence: 0.62, status: 'pending',
+      },
+    ],
+  })
+  await page.goto('/#/tasks')
+
+  await expect(page.getByRole('heading', { name: 'Intelligence review' })).toBeVisible()
+  await expect(page.getByText('Sep 1, 2026 · renewal')).toBeVisible()
+  await expect(page.getByText('1 selected')).toBeVisible()
+  await page.getByRole('checkbox', { name: 'Select every candidate from Lease agreement.pdf' }).check()
+  await page.getByRole('button', { name: 'Accept 2' }).click()
+
+  expect(intelligenceRequests).toContainEqual({
+    action: 'resolve', candidate_ids: [71, 72], decision: 'accepted',
+  })
+  await expect(page.getByRole('heading', { name: 'Intelligence review' })).toHaveCount(0)
+})
+
+test('shows only accepted date intelligence on the calendar', async ({ page }) => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const date = `${year}-${month}-14`
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    intelligence: [{
+      id: 81, document_id: 28, document_title: 'Home insurance renewal notice',
+      document_has_thumbnail: false, type: 'date', role: 'expiry',
+      value: { date, precision: 'day' }, sort_value: date,
+      raw_text: date, evidence_text: `Cover expires on ${date}.`,
+      confidence: 0.97, status: 'accepted',
+    }],
+    savedViews: [{
+      id: 4, name: 'Insurance', filter_json: '{"q":"tag:insurance"}',
+      display: 'list', position: 0, created_at: 0, updated_at: 0,
+    }],
+  })
+  await page.goto('/#/calendar')
+
+  await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Home insurance renewal notice', exact: true })).toBeVisible()
+  await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Document view')).toContainText('Insurance')
 })

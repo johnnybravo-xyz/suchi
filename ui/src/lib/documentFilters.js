@@ -37,5 +37,8 @@ export function canonicalSavedViewQuery(draft, { tags = [], correspondents = [],
   const category = categories.find((item) => String(item.id) === String(draft?.jd))
   if (category) parts.push(`jd:${category.code}`)
   if (draft?.sens) parts.push(`sensitivity:${draft.sens}`)
+  if (draft?.dateFrom) parts.push(`date:>=${draft.dateFrom}`)
+  if (draft?.dateTo) parts.push(`date:<=${draft.dateTo}`)
+  if (draft?.dateRole) parts.push(`date-role:${draft.dateRole}`)
   return parts.join(' ')
 }

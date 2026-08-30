@@ -22,7 +22,7 @@
   let nv = $state(emptyView())
 
   function emptyView() {
-    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', ids: [], shared: false }
+    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', ids: [], shared: false }
   }
 
   function parseDocumentIDs(value) {
@@ -306,6 +306,23 @@
               <option value="">Any sensitivity</option>
               {#each SENSITIVITY_OPTIONS as option (option.value)}
                 <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-date-from">Accepted date from</label>
+            <input id="view-date-from" class="input" type="date" bind:value={nv.dateFrom} />
+          </div>
+          <div class="field">
+            <label for="view-date-to">Accepted date to</label>
+            <input id="view-date-to" class="input" type="date" bind:value={nv.dateTo} />
+          </div>
+          <div class="field">
+            <label for="view-date-role">Accepted date role</label>
+            <select id="view-date-role" class="input" bind:value={nv.dateRole}>
+              <option value="">Every role</option>
+              {#each ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other'] as role}
+                <option value={role}>{role.charAt(0).toUpperCase() + role.slice(1)}</option>
               {/each}
             </select>
           </div>

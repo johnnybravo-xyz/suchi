@@ -63,6 +63,33 @@ func TestResolveAndCompile(t *testing.T) {
 	}
 }
 
+func TestCompileAcceptedIntelligenceFilters(t *testing.T) {
+	parsed, err := Parse(`date:>=2026-09-01 date-role:renewal is:dated`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(context.Background(), parsed, fakeResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Compile(resolved)
+	if len(plan.Predicates) != 3 {
+		t.Fatalf("predicates=%d, want 3", len(plan.Predicates))
+	}
+	if !strings.Contains(plan.Predicates[0].SQL, "document_intelligence") ||
+		!reflect.DeepEqual(plan.Predicates[0].Args, []any{"2026-09-01"}) {
+		t.Fatalf("date predicate=%+v", plan.Predicates[0])
+	}
+	if !reflect.DeepEqual(plan.Predicates[1].Args, []any{"renewal"}) {
+		t.Fatalf("date role predicate=%+v", plan.Predicates[1])
+	}
+	if _, err := Resolve(context.Background(), Query{Clauses: []Clause{{
+		Kind: ClauseFilter, Filter: "date", Value: "2026-02-30", Operator: OpEqual,
+	}}}, fakeResolver{}); err == nil {
+		t.Fatal("invalid date filter was accepted")
+	}
+}
+
 func TestCompileTextScopesAndNegation(t *testing.T) {
 	parsed, err := Parse(`title:invoice content:"distribution advice" -draft`)
 	if err != nil {

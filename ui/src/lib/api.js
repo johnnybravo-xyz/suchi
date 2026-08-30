@@ -119,6 +119,10 @@ export const autocomplete = (q, limit = 8) => api.get(`/api/autocomplete/${qs({ 
 export const listLanguages = () => api.get('/api/languages/')
 export const chatStatus = () => api.get('/api/chat/status')
 export const askArchive = (body, signal) => req('POST', '/api/chat', body, { signal })
+export const intelligenceSchema = () => api.get('/api/intelligence/schema')
+export const listIntelligence = (params) => api.get(`/api/intelligence/${qs(params)}`)
+export const extractIntelligence = (body) => api.post('/api/intelligence/extract', body)
+export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve', body)
 
 // suchi-taxonomy/v1 admin import/export.
 export const importTaxonomy = (b) => api.post('/api/admin/taxonomy/import', b)

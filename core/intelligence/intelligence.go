@@ -58,6 +58,22 @@ func DateRoles() []string {
 	return []string{"issued", "due", "start", "end", "expiry", "renewal", "service", "other"}
 }
 
+func ValidateSortValue(candidateType, value string) error {
+	if value == "" {
+		return nil
+	}
+	switch candidateType {
+	case TypeDate:
+		parsed, err := time.Parse("2006-01-02", value)
+		if err != nil || parsed.Format("2006-01-02") != value {
+			return fmt.Errorf("date sort value %q must use YYYY-MM-DD", value)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown intelligence type %q", candidateType)
+	}
+}
+
 func NewDateCandidate(role, value, precision, rawText, evidence string, confidence float64) (Candidate, error) {
 	dateValue := DateValue{Date: strings.TrimSpace(value), Precision: strings.ToLower(strings.TrimSpace(precision))}
 	encoded, err := json.Marshal(dateValue)

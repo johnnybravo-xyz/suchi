@@ -9,7 +9,7 @@
     recentError = '', onRetryRecent,
   } = $props()
   const inboxCount = $derived(st?.inbox_count ?? 0)
-  const pending = $derived(st?.pending_approvals ?? 0)
+  const pending = $derived((st?.pending_approvals ?? 0) + (st?.pending_intelligence ?? 0))
   const dead = $derived(st?.dead_jobs ?? 0)
 
   const total = $derived(st?.documents_total ?? null)
