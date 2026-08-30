@@ -188,13 +188,18 @@ func TestChatNoEvidenceBoundsHistoryAndProviderFailure(t *testing.T) {
 
 func TestNormalizedChatTermsAreBoundedAndPrioritizeUsefulWords(t *testing.T) {
 	terms := normalizedChatTerms("what can you please tell me about all of the documents that mention lease renewal september 2026")
-	if len(terms) != chatMaxTerms {
+	if len(terms) > chatMaxTerms || len(terms) < 4 {
 		t.Fatalf("term count=%d terms=%v", len(terms), terms)
 	}
 	joined := " " + strings.Join(terms, " ") + " "
 	for _, useful := range []string{" lease ", " renewal ", " september ", " 2026 "} {
 		if !strings.Contains(joined, useful) {
 			t.Fatalf("useful term %q was dropped: %v", useful, terms)
+		}
+	}
+	for _, noise := range []string{" what ", " please ", " about ", " documents "} {
+		if strings.Contains(joined, noise) {
+			t.Fatalf("question word %q was retained: %v", noise, terms)
 		}
 	}
 

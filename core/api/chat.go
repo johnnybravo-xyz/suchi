@@ -287,12 +287,14 @@ type rankedChatTerm struct {
 }
 
 var chatQuestionWords = map[string]bool{
-	"a": true, "an": true, "and": true, "are": true, "can": true, "could": true,
-	"do": true, "does": true, "for": true, "from": true, "how": true, "i": true,
-	"in": true, "is": true, "it": true, "me": true, "my": true, "of": true,
-	"on": true, "please": true, "tell": true, "that": true, "the": true, "this": true,
-	"to": true, "was": true, "what": true, "when": true, "where": true, "which": true,
-	"who": true, "why": true, "with": true, "would": true, "you": true,
+	"a": true, "about": true, "all": true, "an": true, "and": true, "any": true,
+	"are": true, "can": true, "could": true, "do": true, "does": true,
+	"document": true, "documents": true, "for": true, "from": true, "how": true,
+	"i": true, "in": true, "is": true, "it": true, "me": true, "my": true,
+	"of": true, "on": true, "please": true, "tell": true, "that": true,
+	"the": true, "this": true, "to": true, "was": true, "what": true, "when": true,
+	"where": true, "which": true, "who": true, "why": true, "with": true,
+	"would": true, "you": true,
 }
 
 func normalizedChatTerms(question string) []string {
@@ -326,6 +328,17 @@ func normalizedChatTerms(question string) []string {
 		candidates = append(candidates, rankedChatTerm{value: term, index: len(candidates), score: score})
 		if len(candidates) == chatMaxCandidateTerms {
 			break
+		}
+	}
+	if len(candidates) > 0 {
+		useful := make([]rankedChatTerm, 0, len(candidates))
+		for _, candidate := range candidates {
+			if !chatQuestionWords[candidate.value] {
+				useful = append(useful, candidate)
+			}
+		}
+		if len(useful) > 0 {
+			candidates = useful
 		}
 	}
 	if len(candidates) > chatMaxTerms {
