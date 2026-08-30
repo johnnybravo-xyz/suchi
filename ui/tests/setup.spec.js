@@ -48,14 +48,15 @@ async function mockAPI(page, options = {}) {
     }
     let body = { results: [], count: 0 }
 
-    if (path === '/api/demo/mode') body = { enabled: false }
+    if (path === '/api/demo/mode') body = { enabled: !!options.demoMode }
     else if (path === '/api/whoami') body = {
-      user_id: 1,
-      email: 'admin@example.test',
-      display_name: 'Admin',
-      role: options.userRole || 'admin',
-      authn_by: 'local',
-      capabilities: options.capabilities || ['mailboxes'],
+      user_id: options.userID ?? (options.demoSession === 'anon' ? 0 : 1),
+      email: options.demoSession ? 'visitor@demo.local' : 'admin@example.test',
+      display_name: options.demoSession ? 'Demo visitor' : 'Admin',
+      role: options.userRole || (options.demoSession ? 'member' : 'admin'),
+      authn_by: options.demoSession ? 'demo' : 'local',
+      capabilities: options.capabilities ?? ['mailboxes'],
+      ...(options.demoSession ? { demo: options.demoSession } : {}),
     }
     else if (path === '/api/stats/') body = {
       documents_total: options.documentsCount ?? options.documents?.length ?? 0,
@@ -292,6 +293,36 @@ async function mockAPI(page, options = {}) {
     await route.fulfill({ json: body })
   })
 }
+
+test('guides first-time demo visitors and keeps the help launcher available', async ({ page }) => {
+  await mockAPI(page, {
+    demoMode: true,
+    demoSession: 'anon',
+    capabilities: [],
+    chatEnabled: true,
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+
+  await expect(page).toHaveURL(/#\/demo$/)
+  await expect(page.getByRole('heading', { name: 'From a precise query to a grounded answer' })).toBeVisible()
+  await expect(page.getByText('Rich query language', { exact: true })).toBeVisible()
+  await expect(page.getByText('Archive research', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Ask the archive' })).toHaveCount(0)
+  const queryLink = page.getByRole('link', { name: /Run the guided query/ })
+  await expect(queryLink).toHaveAttribute('href', '#/search?q=from%3A%22Northstar%20Cloud%22%20tag%3Arenewal')
+
+  await queryLink.click()
+  await expect(page).toHaveURL(/#\/search\?q=from%3A%22Northstar%20Cloud%22%20tag%3Arenewal$/)
+  await page.getByRole('link', { name: 'Open demo guide' }).click()
+  await expect(page).toHaveURL(/#\/demo$/)
+
+  await page.goto('/#/dashboard')
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  await page.getByRole('link', { name: 'Open demo guide' }).click()
+  await expect(page).toHaveURL(/#\/demo$/)
+})
 
 test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) => {
   await mockAPI(page, { setupStartedAt: Math.floor(Date.now() / 1000) })
@@ -863,6 +894,28 @@ test('keeps an invalid saved view open with the server error', async ({ page }) 
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('alert')).toHaveText('filter key q: no tag value matches "missing" at byte 0')
   await expect(dialog.getByRole('button', { name: 'Save view' })).toBeEnabled()
+})
+
+test('loads recent dashboard documents once per navigation', async ({ page }) => {
+  let recentRequests = 0
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/documents/' && url.searchParams.get('page_size') === '6') {
+      recentRequests++
+    }
+  })
+  await mockAPI(page)
+  await page.goto('/#/dashboard')
+  await expect(page.getByText('Nothing here yet.')).toBeVisible()
+  await expect.poll(() => recentRequests).toBe(1)
+  await page.waitForTimeout(150)
+  expect(recentRequests).toBe(1)
+
+  await page.goto('/#/views')
+  await page.goto('/#/dashboard')
+  await expect.poll(() => recentRequests).toBe(2)
+  await page.waitForTimeout(150)
+  expect(recentRequests).toBe(2)
 })
 
 test('limits dashboard count requests and defers empty-view facets', async ({ page }) => {

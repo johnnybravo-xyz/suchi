@@ -16,6 +16,9 @@ Notable user-visible changes to Suchi are recorded here.
 - A generic human-reviewed intelligence ledger, with conservative single-call
   date extraction, bulk approval, accepted-date Calendar, and rich-query date
   filters.
+- A first-visit public-demo guide for rich queries and the Archive research
+  workflow, plus a persistent help launcher. Public model access remains
+  denied; the tour uses an anonymized Northstar document cluster.
 
 ## [0.1.0-beta.1] - 2026-08-29
 

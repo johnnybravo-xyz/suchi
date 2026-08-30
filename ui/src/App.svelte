@@ -228,7 +228,7 @@
     }
   }
 
-  async function loadRecentDocuments({ background = recentDocs !== undefined } = {}) {
+  async function loadRecentDocuments({ background = false } = {}) {
     if (!background) {
       recentDocs = undefined
       recentError = ''
@@ -461,6 +461,12 @@
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
+        {#if demoMode}
+          <a class="btn sm" class:on={page === 'demo'} style="padding:8px 11px" href="#/demo"
+             title="Open demo guide" aria-label="Open demo guide">
+            <Icon name="help" size={15} />
+          </a>
+        {/if}
         <button class="btn sm" style="padding:8px 11px" onclick={() => setTheme(session.theme === 'dark' ? 'light' : 'dark')}
                 title="Switch theme" aria-label={`Use ${session.theme === 'dark' ? 'light' : 'dark'} theme`}>
           <Icon name={session.theme === 'dark' ? 'sun' : 'moon'} size={15} />

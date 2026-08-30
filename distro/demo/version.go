@@ -11,4 +11,4 @@ package demo
 // against. Bumped in the same PR that lands a corpus-breaking change.
 // Consumers may point at any tarball; the seeder errors clearly on
 // shape mismatch (see seed.go).
-const DemoCorpusVersion = "v0.1.0"
+const DemoCorpusVersion = "v0.1.1"
