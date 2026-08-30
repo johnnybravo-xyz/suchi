@@ -214,9 +214,9 @@
       intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
       intelligenceSelection = new Set([...intelligenceSelection].filter(id => !resolved.has(id)))
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      notify?.(`${decision === 'accepted' ? 'Accepted' : 'Rejected'} ${resolved.size} intelligence candidate${resolved.size === 1 ? '' : 's'}`)
+      notify?.(`${decision === 'accepted' ? 'Approved' : 'Rejected'} ${resolved.size} extracted fact${resolved.size === 1 ? '' : 's'}`)
     } catch (ex) {
-      notify?.(ex.message || 'Could not resolve intelligence candidates')
+      notify?.(ex.message || 'Could not update extracted facts')
     } finally {
       intelligenceBusy = false
     }
@@ -267,9 +267,9 @@
     <section class="intelligence-review" aria-labelledby="intelligence-review-title">
       <header class="intelligence-head">
         <div>
-          <span class="eyebrow">Human-validated archive facts</span>
-          <h2 id="intelligence-review-title">Intelligence review</h2>
-          <p>{intelligence.length} candidate{intelligence.length === 1 ? '' : 's'} from {intelligenceGroups().length} document{intelligenceGroups().length === 1 ? '' : 's'}.</p>
+          <span class="eyebrow">Facts found in your documents</span>
+          <h2 id="intelligence-review-title">Review extracted facts</h2>
+          <p>{intelligence.length} fact{intelligence.length === 1 ? '' : 's'} to review from {intelligenceGroups().length} document{intelligenceGroups().length === 1 ? '' : 's'}.</p>
         </div>
         <label class="select-all">
           <input type="checkbox" checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
@@ -296,7 +296,7 @@
               </a>
               <div>
                 <a href={`#/doc/${group.documentID}`}>{group.title || `Document #${group.documentID}`}</a>
-                <small>{group.candidates.length} candidate{group.candidates.length === 1 ? '' : 's'}</small>
+                <small>{group.candidates.length} fact{group.candidates.length === 1 ? '' : 's'} to review</small>
               </div>
             </header>
             <div class="intelligence-candidates">
@@ -326,7 +326,7 @@
                 onclick={() => resolveSelectedIntelligence('rejected')}>Reject selected</button>
         <button class="btn primary sm" disabled={!intelligenceSelection.size || intelligenceBusy}
                 onclick={() => resolveSelectedIntelligence('accepted')}>
-          <Icon name="check" size={13} /> {intelligenceBusy ? 'Saving…' : `Accept ${intelligenceSelection.size}`}
+          <Icon name="check" size={13} /> {intelligenceBusy ? 'Saving…' : `Approve ${intelligenceSelection.size}`}
         </button>
       </footer>
     </section>

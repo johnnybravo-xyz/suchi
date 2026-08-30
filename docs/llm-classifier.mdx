@@ -1,6 +1,6 @@
 ---
 title: "LLM classifier"
-description: "Optional local or hosted model assistance for classification, grounded archive research, and reviewed intelligence."
+description: "Optional local or hosted model assistance for classification, archive research with citations, and reviewed extracted facts."
 ---
 
 Suchi ships deterministic automations and local archive matching. The
@@ -164,7 +164,7 @@ For an operator configuration change, explicitly select the desired documents
 in the UI and rescan them. [Refile](/refile) reruns deterministic filing but
 does not call the LLM.
 
-## Archive research and intelligence
+## Archive research and extracted facts
 
 Administrators have `archive_chat` and `archive_intelligence` implicitly and
 may grant either capability to members. Archive research performs bounded FTS5
@@ -174,20 +174,20 @@ Its citation check verifies format and source numbers, not whether each claim is
 correct. A View is saved or Approvals/Calendar is opened only after a separate
 user action.
 
-The same classification call may propose reviewable typed intelligence. Dates
-are the first registered type. They are stored in the generic intelligence
+The same classification call may propose typed facts for review. Dates are the
+first registered type. They are stored in the generic `document_intelligence`
 ledger and never reach Calendar, rich-query filters, or later answers until a
-person accepts them.
+person approves them.
 
 See [Archive research](/archive-chat) for the complete retrieval, prompt,
-grounding, source-view, intelligence review, date-format, Calendar, API,
+grounding, source-view, extracted-fact review, date-format, Calendar, API,
 privacy, rate-limit, and maintainer contracts.
 
 ## Current scope
 
 The product provides fixed document classification, transient read-only
 archive research, Views made from retrieved documents, generic human-reviewed
-intelligence, and accepted-date Calendar/query workflows. It does not provide
+facts, and approved-date Calendar/query workflows. It does not provide
 arbitrary model tools, custom code in the ingest pipeline, persistent chat,
 timed calendar events, or implicit rule learning from approvals.
 

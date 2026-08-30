@@ -20,5 +20,5 @@ export function formatIntelligenceValue(candidate) {
   if (candidate?.type === 'date') {
     return `${formatArchiveDate(intelligenceDateValue(candidate))} · ${candidate.role || 'date'}`
   }
-  return candidate?.raw_text || candidate?.sort_value || candidate?.type || 'Intelligence candidate'
+  return candidate?.raw_text || candidate?.sort_value || candidate?.type || 'Extracted fact'
 }

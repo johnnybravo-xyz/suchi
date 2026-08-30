@@ -1560,7 +1560,7 @@ test('suppresses the global Omnibox shortcut behind modal dialogs', async ({ pag
   await expect(page.getByLabel('Search or run a command')).not.toBeFocused()
 })
 
-test('bulk-validates generic intelligence candidates by document', async ({ page }) => {
+test('bulk-approves extracted facts by document', async ({ page }) => {
   const intelligenceRequests = []
   await mockAPI(page, {
     intelligenceRequests,
@@ -1586,19 +1586,19 @@ test('bulk-validates generic intelligence candidates by document', async ({ page
   })
   await page.goto('/#/tasks')
 
-  await expect(page.getByRole('heading', { name: 'Intelligence review' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Review extracted facts' })).toBeVisible()
   await expect(page.getByText('Sep 1, 2026 · renewal')).toBeVisible()
   await expect(page.getByText('1 selected')).toBeVisible()
   await page.getByRole('checkbox', { name: 'Select every candidate from Lease agreement.pdf' }).check()
-  await page.getByRole('button', { name: 'Accept 2' }).click()
+  await page.getByRole('button', { name: 'Approve 2' }).click()
 
   expect(intelligenceRequests).toContainEqual({
     action: 'resolve', candidate_ids: [71, 72], decision: 'accepted',
   })
-  await expect(page.getByRole('heading', { name: 'Intelligence review' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Review extracted facts' })).toHaveCount(0)
 })
 
-test('shows only accepted date intelligence on the calendar', async ({ page }) => {
+test('shows only approved extracted dates on the calendar', async ({ page }) => {
   const intelligenceQueries = []
   const now = new Date()
   const year = now.getFullYear()
@@ -1624,6 +1624,8 @@ test('shows only accepted date intelligence on the calendar', async ({ page }) =
   await page.goto('/#/calendar')
 
   await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible()
+  await expect(page.getByText('Dates from your documents', { exact: true })).toBeVisible()
+  await expect(page.getByText('Only dates reviewed and approved by a person appear here. Each date links to the document it came from.')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Home insurance renewal notice', exact: true })).toBeVisible()
   await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
   const viewSelect = page.getByLabel('Document view')

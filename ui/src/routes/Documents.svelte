@@ -319,7 +319,7 @@
       </button>
     {/if}
     {#if canReviewIntelligence}
-      <button class="btn sm" disabled={bulkBusy} onclick={bulkExtractDates} title="Extract reviewable dates using the configured intelligence pipeline">
+      <button class="btn sm" disabled={bulkBusy} onclick={bulkExtractDates} title="Extract dates for review using the configured model">
         <Icon name="calendar" size={12} /> Extract dates
       </button>
     {/if}

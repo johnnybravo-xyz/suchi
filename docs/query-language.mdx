@@ -105,9 +105,9 @@ Negation applies only to the following clause. There is no grouped negation.
 | `title:` | Prefix or quoted phrase restricted to title. |
 | `content:` | Prefix or quoted phrase restricted to extracted content. |
 | `added:` | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`. |
-| `date:` | Human-accepted date intelligence using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
-| `date-role:` | Accepted date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
-| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires accepted intelligence. |
+| `date:` | Approved extracted date using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
+| `date-role:` | Role of an approved date: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
+| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires an approved extracted date. |
 
 Examples:
 
@@ -119,8 +119,8 @@ is:inbox -is:encrypted
 
 Only `added:` and `date:` accept comparison operators. `tag:>=tax` is rejected.
 All positive `date:` comparisons and `date-role:` clauses must match the same
-accepted date fact. Negated date clauses remain independent `NOT EXISTS`
-conditions. Accepted dates are readable document metadata, so these predicates
+approved date fact. Negated date clauses remain independent `NOT EXISTS`
+conditions. Approved dates are readable document metadata, so these predicates
 require `documents:read`, not `archive_intelligence`.
 Metadata names are resolved before execution. Unknown values return errors;
 ambiguous values return suggestions.

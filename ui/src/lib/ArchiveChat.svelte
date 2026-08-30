@@ -340,7 +340,7 @@
                   </a>
                 {:else if acceptedDateCount(turn) > 0}
                   <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={closeForNavigation}>
-                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} accepted date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar uses validated facts only</small></span>
+                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} approved date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar shows reviewed dates only</small></span>
                   </a>
                 {/if}
               {/if}
@@ -380,7 +380,7 @@
           <button class="btn primary research-send" disabled={!draft.trim()}><Icon name="ask" size={14} /> Ask</button>
         {/if}
       </form>
-      <small class="research-note">Accepted intelligence can support answers; original documents remain the evidence.</small>
+      <small class="research-note">Reviewed facts can support answers; cited documents remain the source.</small>
     </footer>
   </div>
 {/if}

@@ -50,7 +50,7 @@ Insert, delete, and title/content update triggers keep the FTS row synchronized
 with `documents`. The index stores searchable text, not original file bytes.
 
 Suchi currently has no vector index or embedding queue. “Semantic” behavior in
-the product comes from explicit metadata, accepted intelligence, lexical
+the product comes from explicit metadata, approved extracted facts, lexical
 similarity, and bounded model synthesis after retrieval—not from hidden vector
 search.
 
@@ -135,7 +135,7 @@ recognized query qualifier, the endpoint returns full replacement queries for:
 - correspondents;
 - document types;
 - sensitivity values;
-- accepted date roles; and
+- approved date roles; and
 - `is:` states.
 
 The browser debounces requests by 160 ms and discards stale responses. Selecting
@@ -174,9 +174,9 @@ A live View stores a normalized rich query. A snapshot View stores exact
 persistence.
 
 Older/imported Views may use flat fields. Calendar sends `view_id`, never a
-client-reconstructed subset. The intelligence API loads the View only when
+client-reconstructed subset. The extracted-fact API loads the View only when
 owned or shared, applies its complete filter through the shared document-scope
-predicates, and then reapplies document ACLs. Calendar adds its accepted-date
+predicates, and then reapplies document ACLs. Calendar adds its approved-date
 range and role after that document scope.
 
 See [Query language: Saved Views](/query-language#saved-views) for serialization
@@ -199,7 +199,7 @@ For each question Suchi:
    matched passage with its ending.
 7. Reloads up to three cited context sources directly in requested order, with
    fresh ACL, trash, sensitivity, and scope checks.
-8. Adds human-accepted intelligence attached to those sources when permitted.
+8. Adds approved extracted facts attached to those sources when permitted.
 
 Prefix-OR raises recall for the small evidence set. The model and citation
 validator then decide whether that evidence is sufficient. A research scope
@@ -228,7 +228,7 @@ bypasses object authorization.
 - SQL fragments are fixed; all user values use bound parameters.
 - Metadata filter names resolve to IDs before execution.
 - Snippets are returned only after visibility predicates match.
-- Archive evidence includes at most three accepted facts per source and twelve
+- Archive evidence includes at most three approved facts per source and twelve
   total, while fact summaries remain complete.
 - Fast route, search, and completion changes discard stale browser responses.
 

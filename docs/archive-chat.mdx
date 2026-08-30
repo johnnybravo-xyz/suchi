@@ -1,6 +1,6 @@
 ---
 title: "Archive research"
-description: "Grounded document questions, exact source views, and human-validated archive intelligence."
+description: "Document questions with citations, exact source views, and human-reviewed extracted facts."
 ---
 
 Archive research is Suchi's read-only retrieval-augmented generation (RAG)
@@ -10,7 +10,7 @@ model's citation contract, and keeps every source attached to the answer.
 
 The answer surface is read-only. It cannot save a View, start extraction, or
 open another screen on its own. Those actions happen only when the user follows
-a link. Dates are the first intelligence type, and later extractors can use the
+a link. Dates are the first extracted fact type; later extractors can use the
 same storage and review path for other facts.
 
 ## User workflow
@@ -37,7 +37,7 @@ flowchart LR
     C[Prior cited source IDs] --> A[Reauthorize context]
     A --> E[Evidence set]
     F --> E
-    I[Accepted intelligence] --> E
+    I[Approved extracted facts] --> E
     E --> M[One model completion]
     M --> V[Validate JSON and citations]
     V --> U[Answer, sources, and actions]
@@ -58,8 +58,8 @@ from ranked Search are centralized in
 - Provider titles are clamped to 300 Unicode characters and source text to
   1,600. Short documents use their complete extracted text; longer documents
   combine the matched passage with the document end.
-- Accepted facts are limited to three per source and twelve total; the response
-  summary still counts every visible accepted and pending fact.
+- Approved facts are limited to three per source and twelve total; the response
+  summary still counts every visible approved and pending fact.
 - Context IDs are loaded directly in requested order without a prior-term test.
 - Model output is capped at 700 tokens and 6,000 answer characters.
 - One provider call per successful turn.
@@ -145,14 +145,14 @@ therefore exposes only the listed documents each viewer can already read.
 Snapshot Views contain at most 100 IDs; archive research currently contributes
 at most six.
 
-Live Views use the explicit [query language](/query-language); accepted
-intelligence participates in its `date:` and `date-role:` filters. Archive
+Live Views use the explicit [query language](/query-language); approved
+extracted dates participate in its `date:` and `date-role:` filters. Archive
 research never synthesizes that live query from question words.
 
-## Generic archive intelligence
+## Extracted facts and dates
 
 `document_intelligence` is the shared review ledger for extracted facts. Its
-stable columns cover every intelligence type:
+stable columns cover every registered fact type:
 
 - source document;
 - `intelligence_type` and semantic `role`;
@@ -167,7 +167,7 @@ Type-specific validation lives in `core/intelligence`. Adding a type requires a
 small explicit value contract there, an extractor projection, and a UI renderer.
 It does not require a new approval table or state model.
 
-### Date intelligence
+### Date extraction
 
 Dates are extracted in the existing single classification completion. The model
 may propose up to three important lifecycle or actionable dates with roles:
@@ -199,16 +199,16 @@ confidence only preselects a candidate in the review UI; it never accepts it.
 
 ### Review and calendar
 
-The Approvals screen groups intelligence candidates by source document and
-supports selection at candidate, document, and visible-result levels. Accept or
-reject is one bounded, audited transaction with per-document authorization.
+The Approvals screen groups extracted facts by source document and supports
+selection at candidate, document, and visible-result levels. Accept or reject
+is one bounded, audited transaction with per-document authorization.
 
-The Calendar reads only accepted `date` intelligence. It supports month and
-agenda views, date-role filtering, and Saved View scope. Pending or rejected
-facts never appear.
+The Calendar reads only extracted dates a person approved. It supports month
+and agenda views, date-role filtering, and Saved View scope. Pending or rejected
+dates never appear.
 
-Accepted intelligence may be included beside its original source snippet in a
-later archive answer. The original document remains the evidence and is still
+Facts a person approved may be included beside their original source snippet in
+a later archive answer. The original document remains the evidence and is still
 cited.
 
 ## Authorization
@@ -219,16 +219,16 @@ Archive research requires:
 - `documents:read`; and
 - the `archive_chat` capability, implicit for administrators.
 
-Intelligence review, extraction, and Calendar require
-`archive_intelligence`, also implicit for administrators. Accepted dates are
+Reviewing extracted facts, running extraction, and using Calendar require
+`archive_intelligence`, also implicit for administrators. Approved dates are
 readable document metadata, so `documents:read` is sufficient for `date:` and
 `date-role:` predicates. Extraction and review mutations additionally require
 `documents:write` and Change permission on every source document.
 
 Public demo sessions are denied both capabilities.
 
-Retrieval, source snapshots, intelligence lists, accepted intelligence in chat,
-and calendar queries all apply document ACLs inside SQL. Confidential and
+Retrieval, source snapshots, extracted fact lists, approved facts in chat, and
+calendar queries all apply document ACLs inside SQL. Confidential and
 Restricted snippets are excluded from chat until the user enables the
 per-conversation option. With consent off, only unset, Public, and Internal
 sensitivities are eligible; unknown values fail closed.
@@ -311,10 +311,10 @@ Content-Type: application/json
 
 `context_source_ids` accepts at most three cited IDs. The response includes
 `answer`, `sources`, `citations`, `grounded`, and an
-`intelligence` summary. Accepted facts attached to a source appear under that
+`intelligence` summary. Approved facts attached to a source appear under that
 source's `intelligence` field.
 
-### Intelligence
+### Extracted facts
 
 ```http
 GET  /api/intelligence/schema
@@ -368,8 +368,8 @@ Use a real configured model when changing either prompt contract:
 
 1. Classify a long document with a date near the middle.
 2. Confirm the candidate remains pending and includes matching evidence.
-3. Accept it and confirm it appears on Calendar.
-4. Ask a question whose answer uses the accepted date.
+3. Approve it and confirm it appears on Calendar.
+4. Ask a question whose answer uses the approved date.
 5. Confirm the response JSON has valid citations and the source opens.
 6. Ask a pronoun-based follow-up and confirm the prior cited source remains in
    the evidence set.
@@ -384,6 +384,6 @@ and Calendar rendering.
 - Chat is intentionally transient and read-only.
 - The classification call proposes at most three dates per document.
 - Relative dates that cannot be normalized from explicit evidence are ignored.
-- Date intelligence represents all-day archival facts; timed events and
-  timezones are outside the current contract.
-- Intelligence rules are never learned implicitly from one approval.
+- Extracted dates represent all-day archival facts; timed events and timezones
+  are outside the current contract.
+- Fact rules are never learned implicitly from one approval.

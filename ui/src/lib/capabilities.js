@@ -7,9 +7,9 @@ export const USER_CAPABILITIES = Object.freeze([
   }),
   Object.freeze({
     key: 'archive_intelligence',
-    label: 'Review archive intelligence',
-    setupLabel: 'Review archive intelligence',
-    description: 'Validate extracted facts and use accepted intelligence in archive views.',
+    label: 'Review extracted facts',
+    setupLabel: 'Review extracted facts',
+    description: 'Review facts extracted from documents before Suchi uses them in answers, search, and Calendar.',
   }),
   Object.freeze({
     key: 'mailboxes',

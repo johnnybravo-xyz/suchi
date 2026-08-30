@@ -314,15 +314,15 @@
             </select>
           </div>
           <div class="field">
-            <label for="view-date-from">Accepted date from</label>
+            <label for="view-date-from">Approved date from</label>
             <input id="view-date-from" class="input" type="date" bind:value={nv.dateFrom} />
           </div>
           <div class="field">
-            <label for="view-date-to">Accepted date to</label>
+            <label for="view-date-to">Approved date to</label>
             <input id="view-date-to" class="input" type="date" bind:value={nv.dateTo} />
           </div>
           <div class="field">
-            <label for="view-date-role">Accepted date role</label>
+            <label for="view-date-role">Approved date role</label>
             <select id="view-date-role" class="input" bind:value={nv.dateRole}>
               <option value="">Every role</option>
               {#each DATE_ROLES as role}

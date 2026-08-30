@@ -302,7 +302,7 @@ zero rules map — the view row is skipped and reported.
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively    |
 | 6 has tag                                                            | `tags__id__in`            | Full                                       |
 | 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                       |
-| 8-16 date filters (created/added/modified before/after)              | —                         | Failed — importer does not translate source-system date rules; Suchi rich queries support `added:` and accepted `date:` intelligence |
+| 8-16 date filters (created/added/modified before/after)              | —                         | Failed — importer does not translate source-system date rules; Suchi rich queries support `added:` and approved extracted `date:` values |
 | 17 does not have tag                                                 | —                         | Failed — importer does not translate this rule to `-tag:` |
 | 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q`                       | Full                                       |
 | 21 more like this                                                    | —                         | Failed                                     |

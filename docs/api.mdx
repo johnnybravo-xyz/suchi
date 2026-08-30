@@ -646,8 +646,8 @@ Scope: **`documents:read`**.
 
 `inbox_category_id` echoes the current JD inbox pointer so the browser can
 navigate to `#/documents?jd=49` without name-matching. `pending_intelligence`
-is the visible accepted-review queue count for callers with the intelligence
-capability. `dead_jobs`
+is the visible extracted-fact review count for callers with the
+`archive_intelligence` capability. `dead_jobs`
 is admin-only (members see `0`); `pending_approvals` scopes to the
 caller's own assignee for members and to the full open queue for
 admins. `ingested_7d` counts live docs created in the last 7 days —
@@ -1326,9 +1326,9 @@ bounds, and language fields. Every source and context ID is reauthorized with
 fresh ACL, trash, sensitivity, and scope checks.
 
 The response contains at most six sources, structurally validated citations,
-grounding state, and complete intelligence counts. Suchi adds missing inline
+grounding state, and complete extracted-fact counts. Suchi adds missing inline
 markers from the provider's structured citation list. Provider evidence is
-bounded to 300 Unicode characters per title, 1,600 per snippet, three accepted
+bounded to 300 Unicode characters per title, 1,600 per snippet, three approved
 facts per source, and twelve facts total:
 
 ```json
@@ -1370,7 +1370,7 @@ stable insufficient answer. Malformed or out-of-range citations return
 Q&A is read-only. Saving the retrieved documents as a View or opening
 Approvals or Calendar is a separate browser workflow.
 
-## Archive intelligence
+## Extracted facts (`archive_intelligence`)
 
 These endpoints require `archive_intelligence`, implicit for administrators.
 Reads also require `documents:read`; extraction and resolution require
@@ -1379,7 +1379,7 @@ sessions are denied.
 
 ### `GET /api/intelligence/schema`
 
-Returns registered intelligence types and role vocabularies.
+Returns registered extracted-fact types and role vocabularies.
 
 ### `GET /api/intelligence/`
 
@@ -1396,7 +1396,7 @@ Returns the standard pagination envelope. Filters:
 | `q` | Rich document query applied to source documents |
 | `page`, `page_size` | Standard pagination; max 500 |
 
-Stats responses expose the intelligence review count as
+Stats responses expose the pending extracted-fact count as
 `pending_intelligence`. Browser document-list filters use
 `jd_category_id`, `document_type__id`, `tags__id__in`,
 `correspondents__id__in`, `created_at__gte`, and `created_at__lte`.

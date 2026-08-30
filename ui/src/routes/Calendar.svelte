@@ -70,7 +70,7 @@
       if (version !== loadVersion) return
       events = response?.results || []
     } catch (ex) {
-      if (version === loadVersion) error = ex.message || 'Could not load accepted dates.'
+      if (version === loadVersion) error = ex.message || 'Could not load approved dates.'
     } finally {
       if (version === loadVersion) loading = false
     }
@@ -102,9 +102,9 @@
 <div class="calendar-page">
   <header class="calendar-intro">
     <div>
-      <span class="eyebrow">Accepted archive intelligence</span>
+      <span class="eyebrow">Dates from your documents</span>
       <h2>Calendar</h2>
-      <p>Only dates a person has accepted appear here. Every event links back to its evidence.</p>
+      <p>Only dates reviewed and approved by a person appear here. Each date links to the document it came from.</p>
     </div>
     <div class="calendar-filters">
       <label>
@@ -161,12 +161,12 @@
     <aside class="agenda" aria-labelledby="agenda-title">
       <header>
         <span class="eyebrow">Agenda</span>
-        <h3 id="agenda-title">{events.length} accepted date{events.length === 1 ? '' : 's'}</h3>
+        <h3 id="agenda-title">{events.length} approved date{events.length === 1 ? '' : 's'}</h3>
       </header>
       {#if loading && !events.length}
         {#each Array(4) as _}<div class="agenda-skeleton"><div class="skel"></div><div class="skel"></div></div>{/each}
       {:else if !events.length}
-        <div class="agenda-empty"><Icon name="calendar" size={34} /><b>No accepted dates this month</b><span>Review extracted intelligence in Approvals, or choose another document view.</span></div>
+        <div class="agenda-empty"><Icon name="calendar" size={34} /><b>No approved dates this month</b><span>Review extracted dates in Approvals, or choose another document view.</span></div>
       {:else}
         <div class="agenda-list">
           {#each events as event (event.id)}
