@@ -17,7 +17,7 @@ func TestValidateFilterJSON_Allowed(t *testing.T) {
 		`{"jd_category_id":"42","sensitivity":"confidential"}`,
 	}
 	for _, c := range cases {
-		if err := ValidateSavedViewFilterJSON(c); err != nil {
+		if _, err := NormalizeSavedViewFilterJSON(c); err != nil {
 			t.Errorf("valid payload rejected: %q → %v", c, err)
 		}
 	}
@@ -37,8 +37,21 @@ func TestValidateFilterJSON_Rejects(t *testing.T) {
 		{`{"q":"` + strings.Repeat("x", 2100) + `"}`, "size"},
 	}
 	for _, tc := range cases {
-		if err := ValidateSavedViewFilterJSON(tc.in); err == nil {
+		if _, err := NormalizeSavedViewFilterJSON(tc.in); err == nil {
 			t.Errorf("accepted a %s payload: %q", tc.reason, tc.in)
 		}
+	}
+}
+
+func TestNormalizeSavedViewQuery(t *testing.T) {
+	got, err := NormalizeSavedViewFilterJSON(`{"q":"annual   report jd:22"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `{"q":"annual report jd:22"}` {
+		t.Fatalf("normalized=%s", got)
+	}
+	if _, err := NormalizeSavedViewFilterJSON(`{"q":"unknown:value"}`); err == nil {
+		t.Fatal("malformed saved query was accepted")
 	}
 }
