@@ -370,11 +370,19 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 	return result, nil
 }
 
-// Complete runs a bounded plain-text completion through the same runtime,
-// authentication, redirect policy, timeout, and sanitized provider errors as
-// classification. It deliberately exposes no tools or provider-specific
-// actions.
+// Complete runs a bounded plain-text completion through the shared transport.
 func (p *Plugin) Complete(ctx context.Context, system string, messages []CompletionMessage, maxTokens int) (string, error) {
+	return p.complete(ctx, system, messages, maxTokens, false)
+}
+
+// CompleteJSON requests one JSON object through the same transport. Providers
+// that implement the OpenAI-compatible response_format field then constrain
+// decoding before Suchi validates the application-level schema.
+func (p *Plugin) CompleteJSON(ctx context.Context, system string, messages []CompletionMessage, maxTokens int) (string, error) {
+	return p.complete(ctx, system, messages, maxTokens, true)
+}
+
+func (p *Plugin) complete(ctx context.Context, system string, messages []CompletionMessage, maxTokens int, jsonOutput bool) (string, error) {
 	if p == nil {
 		return "", ErrDisabled
 	}
@@ -398,6 +406,9 @@ func (p *Plugin) Complete(ctx context.Context, system string, messages []Complet
 		"messages":    wireMessages,
 		"temperature": 0.1,
 		"max_tokens":  maxTokens,
+	}
+	if jsonOutput {
+		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

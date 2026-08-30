@@ -204,9 +204,10 @@ func TestClassifyHappyPath(t *testing.T) {
 
 func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 	var got struct {
-		Model     string              `json:"model"`
-		Messages  []CompletionMessage `json:"messages"`
-		MaxTokens int                 `json:"max_tokens"`
+		Model          string              `json:"model"`
+		Messages       []CompletionMessage `json:"messages"`
+		MaxTokens      int                 `json:"max_tokens"`
+		ResponseFormat map[string]string   `json:"response_format"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer secret" {
@@ -233,6 +234,16 @@ func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 	}
 	if len(got.Messages) != 3 || got.Messages[0].Role != "system" || got.Messages[0].Content != "trusted system" {
 		t.Fatalf("messages=%+v", got.Messages)
+	}
+	if got.ResponseFormat != nil {
+		t.Fatalf("plain completion response_format=%v", got.ResponseFormat)
+	}
+	if _, err := p.CompleteJSON(context.Background(), "trusted system",
+		[]CompletionMessage{{Role: "user", Content: "question"}}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got.ResponseFormat["type"] != "json_object" {
+		t.Fatalf("JSON completion response_format=%v", got.ResponseFormat)
 	}
 }
 

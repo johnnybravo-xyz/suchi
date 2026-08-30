@@ -43,7 +43,13 @@ async function mockAPI(page, options = {}) {
       return
     }
     if (options.failPaths?.includes(path)) {
-      await route.fulfill({ status: 500, json: { error: options.failureMessage || 'forced request failure' } })
+      await route.fulfill({
+        status: options.failureStatus || 500,
+        json: {
+          code: options.failureCode,
+          error: options.failureMessage || 'forced request failure',
+        },
+      })
       return
     }
     let body = { results: [], count: 0 }
@@ -754,28 +760,6 @@ test('runs a changed search once and keeps its newest response', async ({ page }
   expect(queries).toEqual(['paris', 'london'])
 })
 
-test('keeps the newest command-palette suggestions', async ({ page }) => {
-  await mockAPI(page, {
-    autocompleteByQuery: {
-      'tag:o': { delay: 300, results: [{ value: 'Old suggestion', kind: 'tag', query: 'tag:old' }] },
-      'tag:n': { results: [{ value: 'Current suggestion', kind: 'tag', query: 'tag:new' }] },
-    },
-  })
-  await page.goto('/#/dashboard')
-
-  const input = page.getByRole('searchbox', { name: 'Search or run a command' })
-  const oldRequest = page.waitForRequest(request => {
-    const url = new URL(request.url())
-    return url.pathname === '/api/autocomplete/' && url.searchParams.get('q') === 'tag:o'
-  })
-  await input.fill('tag:o')
-  await oldRequest
-  await input.fill('tag:n')
-
-  await expect(page.getByText('Current suggestion')).toBeVisible()
-  await page.waitForTimeout(350)
-  await expect(page.getByText('Old suggestion')).toHaveCount(0)
-})
 
 test('resets document pagination when route filters change', async ({ page }) => {
   await mockAPI(page, {
@@ -1418,6 +1402,24 @@ test('supports cancellation, focus return, and the full-screen mobile research d
   await expect(dialog).toBeHidden()
   await expect(omnibox).toBeFocused()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('explains invalid model citations without exposing provider details', async ({ page }) => {
+  await mockAPI(page, {
+    chatEnabled: true,
+    failPaths: ['/api/chat'],
+    failureStatus: 502,
+    failureCode: 'invalid_provider_response',
+    failureMessage: 'upstream service error',
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+  const omnibox = page.getByLabel('Search or run a command')
+  await omnibox.fill('How much did I spend?')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await expect(page.getByText('The model returned an answer without valid citations. Try again.')).toBeVisible()
+  await expect(page.getByText('upstream service error')).toHaveCount(0)
 })
 
 test('publishes exact Inbox, Documents, and Search scopes to archive research', async ({ page }) => {

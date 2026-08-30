@@ -118,9 +118,12 @@
     } catch (ex) {
       if (activeRequest !== requestState || requestState.invalidated) return
       const canceled = ex?.name === 'AbortError'
-      updateTurn(turn.id, {
-        error: canceled ? 'Request canceled.' : (ex?.message || 'The archive question could not be answered.'),
-      })
+      const error = canceled
+        ? 'Request canceled.'
+        : ex?.code === 'invalid_provider_response'
+          ? 'The model returned an answer without valid citations. Try again.'
+          : (ex?.message || 'The archive question could not be answered.')
+      updateTurn(turn.id, { error })
       if (canceled && requestState.restoreDraft && !draft) draft = question
     } finally {
       if (activeRequest === requestState) {
@@ -364,7 +367,7 @@
     <footer class="research-compose">
       <label class="sensitive-toggle">
         <input type="checkbox" checked={includeSensitive} disabled={sending} onchange={(event) => setSensitive(event.currentTarget.checked)} />
-        <span><b>Include Confidential and Restricted</b><small>Evidence is sent to {providerLabel()} for this conversation</small></span>
+        <span><b>Include Confidential and Restricted</b><small>Text from the listed documents is sent to {providerLabel()} for this conversation</small></span>
       </label>
       <form onsubmit={(event) => { event.preventDefault(); send() }}>
         <textarea bind:this={composer} bind:value={draft} maxlength="2000" rows="2" placeholder="Ask a question about this scope"

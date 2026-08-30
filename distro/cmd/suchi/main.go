@@ -537,7 +537,7 @@ func runServe() int {
 		for i, message := range messages {
 			pluginMessages[i] = llmclassifier.CompletionMessage{Role: message.Role, Content: message.Content}
 		}
-		return llm.Complete(rctx, system, pluginMessages, maxTokens)
+		return llm.CompleteJSON(rctx, system, pluginMessages, maxTokens)
 	}
 	apiSrv.RuntimePreferencesReader = func(rctx context.Context) (api.RuntimePreferencesStatus, error) {
 		fresh := settings.ResolveRuntimePreferences(rctx, d, settings.RuntimePreferences{

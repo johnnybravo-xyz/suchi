@@ -327,6 +327,34 @@ func TestNormalizedChatTermsAreBoundedAndPrioritizeUsefulWords(t *testing.T) {
 	}
 }
 
+func TestNormalizedChatTermsDropQuestionNoiseAndSingleLetterJoiners(t *testing.T) {
+	terms := normalizedChatTerms("how much did i spend on pisco y nazca?")
+	if got := strings.Join(terms, " "); got != "spend pisco nazca" {
+		t.Fatalf("terms=%q, want %q", got, "spend pisco nazca")
+	}
+}
+
+func TestChatReceiptEvidenceIncludesTrailingTotal(t *testing.T) {
+	s := newChatTestServer(t)
+	content := "Pisco y Nazca receipt " + strings.Repeat("menu item price ", 30) + "Subtotal $67.50 Taxes $6.75 Total $75.74"
+	seedChatDoc(t, s, 1, 1, "Pisco y Nazca", content, "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"The total was $75.74 [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"how much did i spend on pisco y nazca?"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Sources) != 1 || !strings.Contains(response.Sources[0].Snippet, "Total $75.74") {
+		t.Fatalf("receipt evidence=%+v", response.Sources)
+	}
+}
+
 func TestValidateChatHistoryBounds(t *testing.T) {
 	five := make([]ChatHistoryMessage, chatMaxHistory+1)
 	for i := range five {
@@ -415,5 +443,26 @@ func TestChatRejectsInvalidCitationContracts(t *testing.T) {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestParseChatModelAnswerAcceptsNumericStringCitations(t *testing.T) {
+	answer, citations, grounded, err := parseChatModelAnswer(
+		`{"answer":"Supported [1].","citations":["1"],"sufficient":true}`, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "Supported [1]." || !grounded || len(citations) != 1 || citations[0] != 1 {
+		t.Fatalf("answer=%q citations=%v grounded=%t", answer, citations, grounded)
+	}
+}
+
+func TestChatResponseErrorReasonDoesNotEchoMalformedOutput(t *testing.T) {
+	_, _, _, err := parseChatModelAnswer(`{"answer":"private text"`, 1)
+	if err == nil {
+		t.Fatal("malformed response was accepted")
+	}
+	if reason := chatResponseErrorReason(err); reason != "malformed JSON" {
+		t.Fatalf("reason=%q", reason)
 	}
 }

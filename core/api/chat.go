@@ -21,20 +21,22 @@ import (
 )
 
 const (
-	chatMaxQuestionRunes  = 2000
-	chatMaxHistory        = 4
-	chatMaxHistoryBytes   = 12 << 10
-	chatMaxTerms          = 12
-	chatMaxCandidateTerms = 64
-	chatMaxTermRunes      = 64
-	chatMaxSources        = 6
-	chatMaxContextSources = 3
-	chatMaxTitleRunes     = 300
-	chatMaxSnippetRunes   = 1600
-	chatMaxFactsPerSource = 3
-	chatMaxFactsTotal     = 12
-	chatMaxOutputTokens   = 700
-	chatMaxAnswerRunes    = 6000
+	chatMaxQuestionRunes    = 2000
+	chatMaxHistory          = 4
+	chatMaxHistoryBytes     = 12 << 10
+	chatMaxTerms            = 12
+	chatMaxCandidateTerms   = 64
+	chatMaxTermRunes        = 64
+	chatMaxSources          = 6
+	chatMaxContextSources   = 3
+	chatMaxTitleRunes       = 300
+	chatMaxSnippetRunes     = 1600
+	chatFTSSnippetTokens    = 64
+	chatSnippetSegmentRunes = (chatMaxSnippetRunes - 80) / 2
+	chatMaxFactsPerSource   = 3
+	chatMaxFactsTotal       = 12
+	chatMaxOutputTokens     = 700
+	chatMaxAnswerRunes      = 6000
 )
 
 const (
@@ -97,9 +99,36 @@ type ChatResponse struct {
 }
 
 type chatModelAnswer struct {
-	Answer     string `json:"answer"`
-	Citations  []int  `json:"citations"`
-	Sufficient bool   `json:"sufficient"`
+	Answer     string        `json:"answer"`
+	Citations  chatCitations `json:"citations"`
+	Sufficient bool          `json:"sufficient"`
+}
+
+type chatCitations []int
+
+func (citations *chatCitations) UnmarshalJSON(data []byte) error {
+	var values []json.RawMessage
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	out := make(chatCitations, 0, len(values))
+	for _, value := range values {
+		var citation int
+		if err := json.Unmarshal(value, &citation); err != nil {
+			var text string
+			if stringErr := json.Unmarshal(value, &text); stringErr != nil {
+				return errors.New("citation must be an integer")
+			}
+			parsed, parseErr := strconv.Atoi(strings.TrimSpace(text))
+			if parseErr != nil {
+				return errors.New("citation string must contain an integer")
+			}
+			citation = parsed
+		}
+		out = append(out, citation)
+	}
+	*citations = out
+	return nil
 }
 
 type chatStatusResponse struct {
@@ -251,7 +280,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	answer, citations, grounded, err := parseChatModelAnswer(rawAnswer, len(sources))
 	if err != nil {
 		s.Log.Warn("api.chat.invalid_response", "source_ids", chatSourceIDs(sources), "source_count", len(sources),
-			"duration_ms", time.Since(started).Milliseconds())
+			"duration_ms", time.Since(started).Milliseconds(), "reason", chatResponseErrorReason(err))
 		s.writeError(w, http.StatusBadGateway, "invalid_provider_response", "archive research provider returned an invalid grounded answer")
 		return
 	}
@@ -302,10 +331,10 @@ type rankedChatTerm struct {
 
 var chatQuestionWords = map[string]bool{
 	"a": true, "about": true, "all": true, "an": true, "and": true, "any": true,
-	"are": true, "can": true, "could": true, "do": true, "does": true,
+	"are": true, "can": true, "could": true, "did": true, "do": true, "does": true,
 	"document": true, "documents": true, "for": true, "from": true, "how": true,
-	"i": true, "in": true, "is": true, "it": true, "me": true, "my": true,
-	"of": true, "on": true, "please": true, "tell": true, "that": true,
+	"i": true, "in": true, "is": true, "it": true, "me": true, "much": true,
+	"my": true, "of": true, "on": true, "please": true, "tell": true, "that": true,
 	"the": true, "this": true, "to": true, "was": true, "what": true, "when": true,
 	"where": true, "which": true, "who": true, "why": true, "with": true,
 	"would": true, "you": true,
@@ -345,11 +374,22 @@ func normalizedChatTerms(question string) []string {
 		}
 	}
 	if len(candidates) > 0 {
+		hasLongUseful := false
+		for _, candidate := range candidates {
+			if !chatQuestionWords[candidate.value] && utf8.RuneCountInString(candidate.value) > 1 {
+				hasLongUseful = true
+				break
+			}
+		}
 		useful := make([]rankedChatTerm, 0, len(candidates))
 		for _, candidate := range candidates {
-			if !chatQuestionWords[candidate.value] {
-				useful = append(useful, candidate)
+			if chatQuestionWords[candidate.value] {
+				continue
 			}
+			if hasLongUseful && utf8.RuneCountInString(candidate.value) == 1 {
+				continue
+			}
+			useful = append(useful, candidate)
 		}
 		if len(useful) > 0 {
 			candidates = useful
@@ -478,7 +518,13 @@ func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, scope 
 	args = append(args, limit)
 	rows, err := s.DB.Read.QueryContext(ctx, `
 		SELECT d.id, substr(COALESCE(d.title, ''), 1, `+strconv.Itoa(chatMaxTitleRunes)+`),
-		       substr(snippet(documents_fts, 1, '', '', ' … ', 80), 1, `+strconv.Itoa(chatMaxSnippetRunes)+`),
+		       CASE
+		           WHEN length(COALESCE(d.content, '')) <= `+strconv.Itoa(chatMaxSnippetRunes)+`
+		           THEN COALESCE(d.content, '')
+		           ELSE substr(snippet(documents_fts, 1, '', '', ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`), 1, `+strconv.Itoa(chatSnippetSegmentRunes)+`)
+		                || ' … [document end] … '
+		                || substr(COALESCE(d.content, ''), -`+strconv.Itoa(chatSnippetSegmentRunes)+`)
+		       END,
 		       COALESCE(d.sensitivity, '')
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid
@@ -750,6 +796,21 @@ func chatCitationMarkers(answer string) map[int]bool {
 		offset = close + 1
 	}
 	return markers
+}
+
+func chatResponseErrorReason(err error) string {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return "malformed JSON"
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		if typeErr.Field != "" {
+			return "invalid type for " + typeErr.Field
+		}
+		return "invalid JSON field type"
+	}
+	return err.Error()
 }
 
 func chatSourceIDs(sources []ChatSource) []int64 {
