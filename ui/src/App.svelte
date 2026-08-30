@@ -44,6 +44,7 @@
   let ChatDrawer = $state(null)
   let chatRequest = $state({ id: 0, question: '' })
   let chatReturnFocus = $state(null)
+  let visibleChatScope = $state(null)
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
@@ -276,22 +277,12 @@
     if (page === 'doc' && documentID) {
       return { label: 'Current document', document_ids: [Number(documentID)] }
     }
-    const ids = [...new Set((route.query.get('document_ids') || '').split(',')
-      .map(value => Number(value.trim()))
-      .filter(value => Number.isInteger(value) && value > 0))].slice(0, 100)
-    if (ids.length) {
-      return { label: `${ids.length} saved documents`, document_ids: ids }
-    }
-    const query = route.query.get('q') || ''
-    const jd = Number(route.query.get('jd') || 0)
-    if ((page === 'documents' || page === 'search' || page === 'inbox') && (query || jd > 0)) {
-      return {
-        label: page === 'inbox' ? 'Current inbox view' : 'Current document view',
-        query,
-        jd_category_id: jd > 0 ? jd : undefined,
-      }
-    }
+    if (visibleChatScope?.path === route.path) return visibleChatScope.scope
     return { label: 'All archive' }
+  }
+
+  function publishChatScope(scope) {
+    visibleChatScope = { path: route.path, scope }
   }
 
   async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
@@ -316,7 +307,7 @@
     await signOut()
   }
 
-  $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false })
+  $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false; visibleChatScope = null })
   const page = $derived(route.parts[0] || 'dashboard')
   const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
   const jdCategories = $derived(jdTree.flatMap((area) => area.categories))
@@ -384,7 +375,7 @@
 {:else if !session.user}
   <Login onSignedIn={() => { boot(); go('#/dashboard') }} />
 {:else}
-  <div class="shell">
+  <div class="shell" inert={chatOpen}>
     {#if mobileNavOpen}
       <button class="mobile-nav-veil" aria-label="Close navigation" onclick={() => (mobileNavOpen = false)}></button>
     {/if}
@@ -487,10 +478,10 @@
 
       <div class="content">
         {#if page === 'dashboard'}<Dashboard {st} {statsError} {inboxCategory} {taxonomyLoaded} {taxonomyError} recent={recentDocs} {recentError} onRetryRecent={loadRecentDocuments} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
         {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments }} />
-        {:else if page === 'search'}<Lazy load={lazyRoutes.search} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
+        {:else if page === 'search'}<Lazy load={lazyRoutes.search} props={{ onScopeChange: publishChatScope }} />
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
@@ -509,7 +500,7 @@
   {#if uploadOpen}
     <div class="modal-veil" onclick={() => (uploadOpen = false)} role="presentation">
       <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-label="Upload documents" tabindex="-1">
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Upload documents" tabindex="-1">
         <div class="modal-head">
           <h3>Upload</h3>
           <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}

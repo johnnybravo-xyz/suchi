@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 )
 
 func newChatTestServer(t *testing.T) *Server {
@@ -98,6 +100,7 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 	seedChatDoc(t, s, 20, 1, "Trashed lease", "lease secret trash", "public", true)
 	seedChatDoc(t, s, 21, 1, "Confidential lease", "lease confidential", "confidential", false)
 	seedChatDoc(t, s, 22, 1, "Restricted lease", "lease restricted", "restricted", false)
+	seedChatDoc(t, s, 23, 1, "Unknown lease", "lease unknown sensitivity", "secret-new-level", false)
 	seedChatDoc(t, s, 30, 2, "Granted lease", "lease granted evidence", "internal", false)
 	seedChatDoc(t, s, 31, 2, "Hidden lease", "lease hidden evidence", "public", false)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
@@ -128,7 +131,7 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 		t.Fatalf("source count=%d want=%d", len(out.Sources), chatMaxSources)
 	}
 	for _, source := range out.Sources {
-		if source.ID == 20 || source.ID == 21 || source.ID == 22 || source.ID == 30 || source.ID == 31 {
+		if source.ID == 20 || source.ID == 21 || source.ID == 22 || source.ID == 23 || source.ID == 30 || source.ID == 31 {
 			t.Fatalf("excluded source leaked: %+v", source)
 		}
 	}
@@ -153,6 +156,117 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 	}
 	if len(out.Sources) != 1 || out.Sources[0].ID != 21 {
 		t.Fatalf("sensitive opt-in sources=%+v", out.Sources)
+	}
+}
+
+func TestChatBoundsProviderEvidenceButKeepsIntelligenceCounts(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 1, 1, strings.Repeat("界", chatMaxTitleRunes+20),
+		"needle "+strings.Repeat("界", chatMaxSnippetRunes+200), "public", false)
+	for i := 0; i < chatMaxFactsPerSource+4; i++ {
+		if _, err := s.DB.Write.ExecContext(context.Background(), `
+			INSERT INTO document_intelligence(
+				document_id, intelligence_type, role, value_json, sort_value, raw_text,
+				evidence_text, confidence, status, extractor, extraction_version, created_at, updated_at
+			) VALUES (1, 'date', 'renewal', ?, ?, 'raw', ?, 0.9, 'accepted', 'test', 1, 0, 0)
+		`, `{"date":"2026-09-01","note":"`+strings.Repeat("x", chatMaxSnippetRunes+50)+`"}`,
+			fmt.Sprintf("2026-09-%02d", i+1), strings.Repeat("e", chatMaxSnippetRunes+50)+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var prompt string
+	s.ChatCompletion = func(_ context.Context, _ string, messages []ChatCompletionMessage, _ int) (string, error) {
+		prompt = messages[len(messages)-1].Content
+		return `{"answer":"Bounded [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"needle"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) != 1 || utf8.RuneCountInString(out.Sources[0].Title) != chatMaxTitleRunes ||
+		utf8.RuneCountInString(out.Sources[0].Snippet) > chatMaxSnippetRunes {
+		t.Fatalf("unbounded source=%+v", out.Sources)
+	}
+	if len(out.Sources[0].Intelligence) != chatMaxFactsPerSource || out.Intelligence.Accepted["date"] != chatMaxFactsPerSource+4 {
+		t.Fatalf("facts=%d summary=%v", len(out.Sources[0].Intelligence), out.Intelligence)
+	}
+	if utf8.RuneCountInString(prompt) > 12000 {
+		t.Fatalf("provider prompt unexpectedly large: %d runes", utf8.RuneCountInString(prompt))
+	}
+}
+
+func TestChatContextReloadPreservesOrderAndRechecksVisibility(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 41, 1, "First direct context", "context first", "public", false)
+	seedChatDoc(t, s, 42, 1, "Second direct context", "context second", "public", false)
+	seedChatDoc(t, s, 43, 1, "Trashed direct context", "context trashed", "public", true)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Ordered [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"unrelated followup","context_source_ids":[42,43,41]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) < 2 || out.Sources[0].ID != 42 || out.Sources[1].ID != 41 {
+		t.Fatalf("ordered sources=%+v", out.Sources)
+	}
+}
+
+func TestChatAppliesCompleteDocumentScope(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 50, 1, "Scoped needle", "scoped needle evidence", "internal", false)
+	seedChatDoc(t, s, 51, 1, "Other needle", "scoped needle evidence", "internal", false)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES (5, 'scope-tag', 'scope-tag', 0, 0);
+		INSERT INTO correspondents(id, name, slug, created_at, updated_at) VALUES (6, 'Scope Person', 'scope-person', 0, 0);
+		INSERT INTO document_types(id, name, slug, created_at, updated_at) VALUES (7, 'scope-type', 'scope-type', 0, 0);
+		UPDATE documents SET document_type_id = 7, correspondent_id = 6, languages = ',de,', created_at = 100 WHERE id = 50;
+		INSERT INTO document_tags(document_id, tag_id) VALUES (50, 5)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Scoped [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{
+		"question":"scoped needle",
+		"scope":{"sensitivity":"internal","document_type_id":7,"tag_ids":[5],
+		"correspondent_ids":[6],"created_at_gte":90,"created_at_lte":110,"language":"de"}
+	}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) != 1 || out.Sources[0].ID != 50 {
+		t.Fatalf("sources=%+v", out.Sources)
+	}
+}
+
+func TestQueryErrorLogExcludesRawQuery(t *testing.T) {
+	var logs bytes.Buffer
+	s := &Server{Log: slog.New(slog.NewTextHandler(&logs, nil))}
+	_, err := searchquery.Parse(`secret-customer-name corr:broken`)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	rec := httptest.NewRecorder()
+	if !s.writeQueryError(rec, "chat.scope", `secret-customer-name corr:broken`, err) {
+		t.Fatal("query error was not handled")
+	}
+	if strings.Contains(logs.String(), "secret-customer-name") {
+		t.Fatalf("raw query leaked to logs: %s", logs.String())
 	}
 }
 

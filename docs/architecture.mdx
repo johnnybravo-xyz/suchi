@@ -132,8 +132,10 @@ cleanup. Upload limits are enforced before work is scheduled.
 
 Preview and download routes enforce document view permission before reading a
 blob. High-sensitivity previews additionally require an explicit reveal.
-Session-authenticated mutations reject cross-site requests through Fetch
-Metadata checks, and UI responses set CSP, frame, and content-type protections.
+Cookie-session mutations accept same-origin and headerless compatibility
+requests but reject both sibling-origin `same-site` and `cross-site` browser
+requests through Fetch Metadata checks. Token-authenticated integrations are
+exempt. UI responses set CSP, frame, and content-type protections.
 
 ## Classification and workflows
 

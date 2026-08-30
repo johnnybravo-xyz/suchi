@@ -8,10 +8,10 @@ surface. It retrieves evidence from documents the caller may read, sends only
 that bounded evidence to the configured OpenAI-compatible model, validates the
 model's citation contract, and keeps every source attached to the answer.
 
-The same workflow can create an exact saved view from a source set or request
-reviewable document intelligence. Dates are the first intelligence type; the
-storage and approval path are generic so later extractors can add other typed
-facts without another persistence system.
+The answer surface is read-only. It cannot save a View, start extraction, or
+open another screen on its own. Those actions happen only when the user follows
+a link. Dates are the first intelligence type, and later extractors can use the
+same storage and review path for other facts.
 
 ## User workflow
 
@@ -21,8 +21,8 @@ facts without another persistence system.
 3. The server retrieves at most six authorized evidence sources.
 4. The model returns one structured answer with source numbers.
 5. Suchi rejects malformed or out-of-range citations before rendering anything.
-6. The user can open a cited source, save the exact source set as a View, or
-   request date extraction from those documents.
+6. The user can open a cited source or explicitly continue to Views, Approvals,
+   or Calendar when the response exposes the corresponding action.
 
 Follow-up questions carry up to three cited source IDs from the preceding
 successful turn. The server reauthorizes and reloads those sources; prior
@@ -55,8 +55,10 @@ from ranked Search are centralized in
 
 - At most six documents per answer.
 - At most three reauthorized context documents from the prior turn.
-- FTS snippets are approximately 80 tokens.
-- A context fallback reads only a bounded leading passage.
+- Provider titles are clamped to 300 Unicode characters and snippets to 1,600.
+- Accepted facts are limited to three per source and twelve total; the response
+  summary still counts every visible accepted and pending fact.
+- Context IDs are loaded directly in requested order without a prior-term test.
 - Model output is capped at 700 tokens and 6,000 answer characters.
 - One provider call per successful turn.
 
@@ -69,11 +71,14 @@ The research drawer supports these server-enforced scopes:
 - all accessible archive documents;
 - the current [rich-query](/query-language) result;
 - the current Johnny.Decimal category;
+- the exact visible sensitivity, type, tags, correspondents, created-time
+  bounds, and language filters published by Documents or Search;
 - the current document; or
 - up to 100 explicitly selected documents.
 
-Scope narrows retrieval. It never grants access. Every query still applies the
-caller's document visibility predicate.
+Scope fields are additive and reuse the Documents SQL scope builder. Scope
+narrows retrieval; it never grants access. Every query still applies the
+caller's document visibility predicate, trash exclusion, and sensitivity rule.
 
 ## Grounding and citation contract
 
@@ -96,6 +101,10 @@ Validation requires:
 - at least one citation when `sufficient` is true; and
 - no citations when `sufficient` is false.
 
+These checks verify the response format and source numbers. They do not prove
+that every claim follows from the cited text. The reader can open each source to
+check the answer.
+
 An invalid response returns `502 invalid_provider_response`. When the model says
 that evidence is insufficient, Suchi returns a stable insufficient-evidence
 answer and retains the retrieved source boundary.
@@ -111,9 +120,13 @@ Conversation state exists only in the mounted browser application.
 
 - Closing the drawer preserves it.
 - **Clear** deletes it and resets sensitive-document consent.
+- Changing the active scope or configured provider resets both transcript and
+  sensitive consent. Disabling sensitive consent clears accumulated history.
 - Only complete successful user/assistant pairs enter history.
 - Failed and canceled turns cannot poison later role alternation.
-- At most two complete prior turns, 12 KB total, are sent.
+- Only the newest complete pairs fitting four messages and 12 KB are sent.
+- Follow-ups carry only sources actually cited by the preceding successful
+  answer; an uncited retrieval set is never used as implicit context.
 - The server stores no conversation rows.
 
 ## Exact source views
@@ -202,15 +215,18 @@ Archive research requires:
 - the `archive_chat` capability, implicit for administrators.
 
 Intelligence review, extraction, and Calendar require
-`archive_intelligence`, also implicit for administrators. Mutations additionally
-require `documents:write` and Change permission on every source document.
+`archive_intelligence`, also implicit for administrators. Accepted dates are
+readable document metadata, so `documents:read` is sufficient for `date:` and
+`date-role:` predicates. Extraction and review mutations additionally require
+`documents:write` and Change permission on every source document.
 
 Public demo sessions are denied both capabilities.
 
 Retrieval, source snapshots, intelligence lists, accepted intelligence in chat,
 and calendar queries all apply document ACLs inside SQL. Confidential and
 Restricted snippets are excluded from chat until the user enables the
-per-conversation option.
+per-conversation option. With consent off, only unset, Public, and Internal
+sensitivities are eligible; unknown values fail closed.
 
 ## Provider privacy
 
@@ -224,6 +240,10 @@ The model transport is the same one used by classification:
 - provider errors are sanitized.
 
 The drawer identifies the local model or hosted endpoint receiving evidence.
+For each turn the provider receives the question, the allowed complete history
+pairs, and each selected source's title, sensitivity, snippet, and—when the user
+has `archive_intelligence`—accepted fact value and evidence. It receives no ACL
+rows or unrelated document metadata.
 Logs may include source IDs, counts, provider host, model, duration, and
 sanitized failures. They do not include questions, answers, or snippets.
 
@@ -271,13 +291,21 @@ Content-Type: application/json
   "scope": {
     "query": "tag:lease",
     "document_ids": [],
-    "jd_category_id": 0
+    "jd_category_id": 0,
+    "sensitivity": "internal",
+    "document_type_id": 4,
+    "tag_ids": [8],
+    "correspondent_ids": [12],
+    "created_at_gte": 1788134400,
+    "created_at_lte": 1790726399,
+    "language": "en"
   },
   "include_sensitive": false
 }
 ```
 
-The response includes `answer`, `sources`, `citations`, `grounded`, and an
+`context_source_ids` accepts at most three cited IDs. The response includes
+`answer`, `sources`, `citations`, `grounded`, and an
 `intelligence` summary. Accepted facts attached to a source appear under that
 source's `intelligence` field.
 

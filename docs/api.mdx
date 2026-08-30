@@ -638,13 +638,16 @@ Scope: **`documents:read`**.
   "inbox_count": 3,
   "inbox_category_id": 49,
   "pending_approvals": 2,
+  "pending_intelligence": 4,
   "dead_jobs": 1,
   "ingested_7d": 57
 }
 ```
 
-`inbox_category_id` echoes the current JD inbox pointer so a client
-can navigate to `#/documents?jd_category_id=49` without name-matching. `dead_jobs`
+`inbox_category_id` echoes the current JD inbox pointer so the browser can
+navigate to `#/documents?jd=49` without name-matching. `pending_intelligence`
+is the visible accepted-review queue count for callers with the intelligence
+capability. `dead_jobs`
 is admin-only (members see `0`); `pending_approvals` scopes to the
 caller's own assignee for members and to the full open queue for
 admins. `ingested_7d` counts live docs created in the last 7 days —
@@ -1302,19 +1305,30 @@ Returns live runtime availability and a safe provider label:
   "scope": {
     "query": "tag:lease",
     "document_ids": [],
-    "jd_category_id": 0
+    "jd_category_id": 0,
+    "sensitivity": "internal",
+    "document_type_id": 4,
+    "tag_ids": [8],
+    "correspondent_ids": [12],
+    "created_at_gte": 1788134400,
+    "created_at_lte": 1790726399,
+    "language": "en"
   },
   "include_sensitive": false
 }
 ```
 
-History contains at most two complete user/assistant pairs and 12 KB.
-`context_source_ids` contains at most six positive IDs. Scope accepts a rich
-query, up to 100 exact IDs, and an optional JD category. Every source and
-context ID is reauthorized.
+History contains only the newest complete user/assistant pairs fitting four
+messages and 12 KB. `context_source_ids` contains at most three positive cited
+IDs. Scope accepts a rich query, up to 100 exact IDs, and additive category,
+sensitivity, document type, tag IDs, correspondent IDs, inclusive created-time
+bounds, and language fields. Every source and context ID is reauthorized with
+fresh ACL, trash, sensitivity, and scope checks.
 
-The response contains at most six sources, validated citations, grounding
-state, and intelligence counts:
+The response contains at most six sources, structurally validated citations,
+grounding state, and complete intelligence counts. Provider evidence is bounded
+to 300 Unicode characters per title, 1,600 per snippet, three accepted facts
+per source, and twelve facts total:
 
 ```json
 {
@@ -1351,6 +1365,9 @@ failures return `502 provider_failure`; a disabled runtime returns
 `503 model_unavailable`; the per-user/concurrency gate returns
 `429 chat_rate_limited` with `Retry-After`.
 
+Q&A is read-only. Saving a source-set View or opening Approvals or Calendar is a
+separate browser workflow and is not performed by this endpoint.
+
 ## Archive intelligence
 
 These endpoints require `archive_intelligence`, implicit for administrators.
@@ -1376,6 +1393,11 @@ Returns the standard pagination envelope. Filters:
 | `view_id` | Owned or shared saved View; server applies its complete filter and document ACLs |
 | `q` | Rich document query applied to source documents |
 | `page`, `page_size` | Standard pagination; max 500 |
+
+Stats responses expose the intelligence review count as
+`pending_intelligence`. Browser document-list filters use
+`jd_category_id`, `document_type__id`, `tags__id__in`,
+`correspondents__id__in`, `created_at__gte`, and `created_at__lte`.
 
 `view_id` cannot be combined with `q` or `document_ids`. The server resolves
 the View rather than trusting client-reconstructed filters, including legacy

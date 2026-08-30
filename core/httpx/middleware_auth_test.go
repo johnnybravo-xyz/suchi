@@ -37,3 +37,31 @@ func TestRequireAuth(t *testing.T) {
 		}
 	})
 }
+
+func TestSecFetchSiteRejectsSiblingOriginCookieMutations(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	h := SecFetchSite(next)
+	tests := []struct {
+		name, method, site, kind string
+		want                     int
+	}{
+		{"same origin session", http.MethodPost, "same-origin", "user", http.StatusNoContent},
+		{"headerless session", http.MethodPatch, "", "user", http.StatusNoContent},
+		{"same site session", http.MethodPost, "same-site", "user", http.StatusForbidden},
+		{"cross site session", http.MethodDelete, "cross-site", "user", http.StatusForbidden},
+		{"same site token", http.MethodPut, "same-site", "token", http.StatusNoContent},
+		{"safe session read", http.MethodGet, "cross-site", "user", http.StatusNoContent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/api/documents/1", nil)
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{Kind: tc.kind, UserID: 1}))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want=%d", rec.Code, tc.want)
+			}
+		})
+	}
+}

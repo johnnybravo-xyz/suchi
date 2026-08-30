@@ -24,6 +24,7 @@ type documentScope struct {
 	CorrespondentIDs []int64
 	CreatedAtGTE     *int64
 	CreatedAtLTE     *int64
+	Language         string
 }
 
 type documentScopeError struct {
@@ -62,6 +63,9 @@ func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	}
 	if scope.CreatedAtLTE, err = optionalNonNegativeInt(values.Get("created_at__lte")); err != nil {
 		return documentScope{}, &documentScopeError{Code: "bad_created_at_lte", Message: "created_at__lte must be a non-negative unix seconds integer"}
+	}
+	if scope.Language, err = normalizedScopeLanguage(values.Get("lang")); err != nil {
+		return documentScope{}, &documentScopeError{Code: "bad_lang", Message: "lang must be a 2 or 3 letter language code"}
 	}
 	return scope, nil
 }
@@ -159,7 +163,27 @@ func appendDocumentScopePredicates(where []string, args []any, scope documentSco
 		where = append(where, "d.created_at <= ?")
 		args = append(args, *scope.CreatedAtLTE)
 	}
+	if scope.Language != "" {
+		where = append(where, "d.languages LIKE ?")
+		args = append(args, "%,"+scope.Language+",%")
+	}
 	return where, args
+}
+
+func normalizedScopeLanguage(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+	if len(value) < 2 || len(value) > 3 {
+		return "", fmt.Errorf("invalid language code")
+	}
+	for _, r := range value {
+		if r < 'a' || r > 'z' {
+			return "", fmt.Errorf("invalid language code")
+		}
+	}
+	return value, nil
 }
 func (s *Server) loadSavedViewScope(ctx context.Context, principal *pluginapi.Principal, viewID int64) (documentScope, error) {
 	var filterJSON string

@@ -21,17 +21,20 @@ import (
 )
 
 const (
-	chatMaxQuestionRunes   = 2000
-	chatMaxHistory         = 4
-	chatMaxHistoryBytes    = 12 << 10
-	chatMaxTerms           = 12
-	chatMaxCandidateTerms  = 64
-	chatMaxTermRunes       = 64
-	chatMaxSources         = 6
-	chatMaxContextSources  = 3
-	chatMaxOutputTokens    = 700
-	chatMaxAnswerRunes     = 6000
-	chatFallbackSnippetLen = 1200
+	chatMaxQuestionRunes  = 2000
+	chatMaxHistory        = 4
+	chatMaxHistoryBytes   = 12 << 10
+	chatMaxTerms          = 12
+	chatMaxCandidateTerms = 64
+	chatMaxTermRunes      = 64
+	chatMaxSources        = 6
+	chatMaxContextSources = 3
+	chatMaxTitleRunes     = 300
+	chatMaxSnippetRunes   = 1600
+	chatMaxFactsPerSource = 3
+	chatMaxFactsTotal     = 12
+	chatMaxOutputTokens   = 700
+	chatMaxAnswerRunes    = 6000
 )
 
 const (
@@ -45,9 +48,16 @@ type ChatHistoryMessage struct {
 }
 
 type ChatScope struct {
-	Query        string  `json:"query,omitempty"`
-	DocumentIDs  []int64 `json:"document_ids,omitempty"`
-	JDCategoryID int64   `json:"jd_category_id,omitempty"`
+	Query            string  `json:"query,omitempty"`
+	DocumentIDs      []int64 `json:"document_ids,omitempty"`
+	JDCategoryID     int64   `json:"jd_category_id,omitempty"`
+	Sensitivity      string  `json:"sensitivity,omitempty"`
+	DocumentTypeID   int64   `json:"document_type_id,omitempty"`
+	TagIDs           []int64 `json:"tag_ids,omitempty"`
+	CorrespondentIDs []int64 `json:"correspondent_ids,omitempty"`
+	CreatedAtGTE     *int64  `json:"created_at_gte,omitempty"`
+	CreatedAtLTE     *int64  `json:"created_at_lte,omitempty"`
+	Language         string  `json:"language,omitempty"`
 }
 
 type ChatRequest struct {
@@ -160,7 +170,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
-	if in.ContextSourceIDs, err = normalizedPositiveIDs(in.ContextSourceIDs, chatMaxSources); err != nil {
+	if in.ContextSourceIDs, err = normalizedPositiveIDs(in.ContextSourceIDs, chatMaxContextSources); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_context", err.Error())
 		return
 	}
@@ -168,21 +178,35 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_scope", err.Error())
 		return
 	}
+	if in.Scope.TagIDs, err = normalizedPositiveIDs(in.Scope.TagIDs, maxDocumentScopeIDs); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_scope", err.Error())
+		return
+	}
+	if in.Scope.CorrespondentIDs, err = normalizedPositiveIDs(in.Scope.CorrespondentIDs, maxDocumentScopeIDs); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_scope", err.Error())
+		return
+	}
 	in.Scope.Query = strings.TrimSpace(in.Scope.Query)
-	if len(in.Scope.Query) > searchquery.MaxQueryBytes || in.Scope.JDCategoryID < 0 {
+	if len(in.Scope.Query) > searchquery.MaxQueryBytes || in.Scope.JDCategoryID < 0 ||
+		in.Scope.DocumentTypeID < 0 || (in.Scope.CreatedAtGTE != nil && *in.Scope.CreatedAtGTE < 0) ||
+		(in.Scope.CreatedAtLTE != nil && *in.Scope.CreatedAtLTE < 0) ||
+		(in.Scope.Sensitivity != "" && !SensitivityLevels[in.Scope.Sensitivity]) {
+		s.writeError(w, http.StatusBadRequest, "bad_scope", "scope is invalid")
+		return
+	}
+	if in.Scope.Language, err = normalizedScopeLanguage(in.Scope.Language); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_scope", "scope is invalid")
 		return
 	}
 
 	terms := normalizedChatTerms(in.Question)
-	previousTerms := previousChatTerms(in.History)
 	if len(terms) == 0 && len(in.ContextSourceIDs) == 0 {
 		s.writeJSON(w, http.StatusOK, ChatResponse{
 			Answer: chatNoEvidenceAnswer, Sources: []ChatSource{}, Citations: []int{},
 		})
 		return
 	}
-	sources, err := s.retrieveChatSources(r.Context(), terms, previousTerms, in.ContextSourceIDs, in.Scope, in.IncludeSensitive)
+	sources, err := s.retrieveChatSources(r.Context(), terms, in.ContextSourceIDs, in.Scope, in.IncludeSensitive)
 	if err != nil {
 		if in.Scope.Query != "" && s.writeQueryError(w, "chat.scope", in.Scope.Query, err) {
 			return
@@ -266,15 +290,6 @@ func validateChatHistory(history []ChatHistoryMessage) error {
 	}
 	if total > chatMaxHistoryBytes {
 		return errors.New("history exceeds 12 KB")
-	}
-	return nil
-}
-
-func previousChatTerms(history []ChatHistoryMessage) []string {
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == "user" {
-			return normalizedChatTerms(history[i].Content)
-		}
 	}
 	return nil
 }
@@ -381,19 +396,13 @@ func normalizedPositiveIDs(ids []int64, limit int) ([]int64, error) {
 	return out, nil
 }
 
-func (s *Server) retrieveChatSources(ctx context.Context, terms, previousTerms []string, contextIDs []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
+func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contextIDs []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
 	combined := make([]ChatSource, 0, chatMaxSources)
 	seen := make(map[int64]bool, chatMaxSources)
 	if len(contextIDs) > 0 {
-		contextSources, err := s.queryChatFTSSources(ctx, previousTerms, contextIDs, scope, includeSensitive, chatMaxContextSources)
+		contextSources, err := s.queryChatContextSources(ctx, contextIDs, scope, includeSensitive)
 		if err != nil {
 			return nil, err
-		}
-		if len(contextSources) == 0 {
-			contextSources, err = s.queryChatFallbackSources(ctx, contextIDs, scope, includeSensitive, chatMaxContextSources)
-			if err != nil {
-				return nil, err
-			}
 		}
 		for _, source := range contextSources {
 			if !seen[source.ID] {
@@ -403,7 +412,7 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms, previousTerms [
 		}
 	}
 	if len(terms) > 0 && len(combined) < chatMaxSources {
-		currentSources, err := s.queryChatFTSSources(ctx, terms, nil, scope, includeSensitive, chatMaxSources)
+		currentSources, err := s.queryChatFTSSources(ctx, terms, scope, includeSensitive, chatMaxSources)
 		if err != nil {
 			return nil, err
 		}
@@ -426,7 +435,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 	where := []string{"d.trashed_at IS NULL"}
 	args := []any{}
 	if !includeSensitive {
-		where = append(where, "COALESCE(d.sensitivity, '') NOT IN ('confidential', 'restricted')")
+		where = append(where, "COALESCE(d.sensitivity, '') IN ('', 'public', 'internal')")
 	}
 	if p.Role != "admin" {
 		groups, err := s.principalGroups(ctx, p.UserID)
@@ -437,16 +446,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 		where = append(where, visibility)
 		args = append(args, visibilityArgs...)
 	}
-	if len(scope.DocumentIDs) > 0 {
-		where = append(where, "d.id IN ("+placeholders(len(scope.DocumentIDs))+")")
-		for _, id := range scope.DocumentIDs {
-			args = append(args, id)
-		}
-	}
-	if scope.JDCategoryID > 0 {
-		where = append(where, "d.jd_category_id = ?")
-		args = append(args, scope.JDCategoryID)
-	}
+	where, args = appendDocumentScopePredicates(where, args, scope.documentScope())
 	if scope.Query != "" {
 		plan, err := s.compileQuery(ctx, scope.Query)
 		if err != nil {
@@ -457,7 +457,11 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 	return where, args, nil
 }
 
-func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, restrictIDs []int64, scope ChatScope, includeSensitive bool, limit int) ([]ChatSource, error) {
+func (scope ChatScope) documentScope() documentScope {
+	return documentScope(scope)
+}
+
+func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, scope ChatScope, includeSensitive bool, limit int) ([]ChatSource, error) {
 	if len(terms) == 0 || limit <= 0 {
 		return []ChatSource{}, nil
 	}
@@ -471,16 +475,10 @@ func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, restri
 	}
 	where = append([]string{"documents_fts MATCH ?"}, where...)
 	args = append([]any{strings.Join(queryParts, " OR ")}, args...)
-	if len(restrictIDs) > 0 {
-		where = append(where, "d.id IN ("+placeholders(len(restrictIDs))+")")
-		for _, id := range restrictIDs {
-			args = append(args, id)
-		}
-	}
 	args = append(args, limit)
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT d.id, d.title,
-		       snippet(documents_fts, 1, '', '', ' … ', 80),
+		SELECT d.id, substr(COALESCE(d.title, ''), 1, `+strconv.Itoa(chatMaxTitleRunes)+`),
+		       substr(snippet(documents_fts, 1, '', '', ' … ', 80), 1, `+strconv.Itoa(chatMaxSnippetRunes)+`),
 		       COALESCE(d.sensitivity, '')
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid
@@ -494,7 +492,7 @@ func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, restri
 	return scanChatSources(rows, limit)
 }
 
-func (s *Server) queryChatFallbackSources(ctx context.Context, ids []int64, scope ChatScope, includeSensitive bool, limit int) ([]ChatSource, error) {
+func (s *Server) queryChatContextSources(ctx context.Context, ids []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
 	where, args, err := s.chatSourceWhere(ctx, scope, includeSensitive)
 	if err != nil {
 		return nil, err
@@ -503,19 +501,17 @@ func (s *Server) queryChatFallbackSources(ctx context.Context, ids []int64, scop
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	args = append(args, limit)
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT d.id, d.title, substr(COALESCE(d.content, ''), 1, `+strconv.Itoa(chatFallbackSnippetLen)+`),
+		SELECT d.id, substr(COALESCE(d.title, ''), 1, `+strconv.Itoa(chatMaxTitleRunes)+`),
+		       substr(COALESCE(d.content, ''), 1, `+strconv.Itoa(chatMaxSnippetRunes)+`),
 		       COALESCE(d.sensitivity, '')
 		FROM documents d
-		WHERE `+strings.Join(where, " AND ")+`
-		ORDER BY d.id
-		LIMIT ?`, args...)
+		WHERE `+strings.Join(where, " AND "), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	sources, err := scanChatSources(rows, limit)
+	sources, err := scanChatSources(rows, len(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -527,9 +523,6 @@ func (s *Server) queryChatFallbackSources(ctx context.Context, ids []int64, scop
 	for _, id := range ids {
 		if source, ok := byID[id]; ok {
 			ordered = append(ordered, source)
-			if len(ordered) == limit {
-				break
-			}
 		}
 	}
 	return ordered, nil
@@ -548,6 +541,8 @@ func scanChatSources(rows chatRows, limit int) ([]ChatSource, error) {
 		if err := rows.Scan(&source.ID, &source.Title, &source.Snippet, &source.Sensitivity); err != nil {
 			return nil, err
 		}
+		source.Title = truncateRunes(source.Title, chatMaxTitleRunes)
+		source.Snippet = truncateRunes(source.Snippet, chatMaxSnippetRunes)
 		sources = append(sources, source)
 	}
 	return sources, rows.Err()
@@ -603,39 +598,94 @@ func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principa
 		sourceIndex[source.ID] = i
 		args[i] = source.ID
 	}
-	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT document_id, intelligence_type, role, value_json, evidence_text, status
+	countRows, err := s.DB.Read.QueryContext(ctx, `
+		SELECT status, intelligence_type, COUNT(*)
 		FROM document_intelligence
 		WHERE document_id IN (`+placeholders(len(sources))+`)
 		  AND status IN ('pending', 'accepted')
-		ORDER BY document_id, intelligence_type, role, id
+		GROUP BY status, intelligence_type
 	`, args...)
 	if err != nil {
 		return summary, err
 	}
+	for countRows.Next() {
+		var status, factType string
+		var count int
+		if err := countRows.Scan(&status, &factType, &count); err != nil {
+			countRows.Close()
+			return summary, err
+		}
+		if status == "accepted" {
+			summary.Accepted[factType] = count
+		} else {
+			summary.Pending[factType] = count
+		}
+	}
+	if err := countRows.Err(); err != nil {
+		countRows.Close()
+		return summary, err
+	}
+	countRows.Close()
+
+	rows, err := s.DB.Read.QueryContext(ctx, `
+		WITH ranked AS (
+			SELECT document_id, intelligence_type, role, value_json, evidence_text,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY document_id
+				   ORDER BY intelligence_type, role, id
+			       ) AS source_rank
+			FROM document_intelligence
+			WHERE document_id IN (`+placeholders(len(sources))+`)
+			  AND status = 'accepted'
+		)
+		SELECT document_id, intelligence_type, role, value_json,
+		       substr(evidence_text, 1, `+strconv.Itoa(chatMaxSnippetRunes)+`)
+		FROM ranked
+		WHERE source_rank <= `+strconv.Itoa(chatMaxFactsPerSource)+`
+		ORDER BY document_id, intelligence_type, role
+		LIMIT `+strconv.Itoa(chatMaxFactsTotal), args...)
+	if err != nil {
+		return summary, err
+	}
 	defer rows.Close()
+	factsPerSource := make(map[int64]int, len(sources))
+	factsTotal := 0
 	for rows.Next() {
 		var (
 			documentID, sourcePosition int64
 			fact                       ChatIntelligenceFact
-			valueJSON, status          string
+			valueJSON                  string
 		)
-		if err := rows.Scan(&documentID, &fact.Type, &fact.Role, &valueJSON, &fact.Evidence, &status); err != nil {
+		if err := rows.Scan(&documentID, &fact.Type, &fact.Role, &valueJSON, &fact.Evidence); err != nil {
 			return summary, err
 		}
 		if !json.Valid([]byte(valueJSON)) {
 			return summary, errors.New("stored intelligence contains invalid JSON")
 		}
-		if status == "accepted" {
-			summary.Accepted[fact.Type]++
-			fact.Value = json.RawMessage(valueJSON)
+		// SQL enforces both fact limits; these checks keep the provider bound
+		// intact if that query is changed later.
+		if factsPerSource[documentID] < chatMaxFactsPerSource && factsTotal < chatMaxFactsTotal {
+			fact.Value = boundedChatFactValue(valueJSON)
+			fact.Type = truncateRunes(fact.Type, chatMaxTermRunes)
+			fact.Role = truncateRunes(fact.Role, chatMaxTermRunes)
+			fact.Evidence = truncateRunes(fact.Evidence, chatMaxSnippetRunes)
 			sourcePosition = int64(sourceIndex[documentID])
 			sources[sourcePosition].Intelligence = append(sources[sourcePosition].Intelligence, fact)
-		} else {
-			summary.Pending[fact.Type]++
+			factsPerSource[documentID]++
+			factsTotal++
 		}
 	}
 	return summary, rows.Err()
+}
+
+func boundedChatFactValue(valueJSON string) json.RawMessage {
+	if utf8.RuneCountInString(valueJSON) <= chatMaxSnippetRunes {
+		return json.RawMessage(valueJSON)
+	}
+	// Truncating arbitrary JSON would make it invalid. Preserve a bounded,
+	// valid representation that makes the truncation explicit to the model.
+	bounded, _ := json.Marshal(truncateRunes(valueJSON, chatMaxSnippetRunes))
+	return json.RawMessage(bounded)
 }
 
 func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, error) {

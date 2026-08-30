@@ -14,7 +14,7 @@ syntax lives in [Query language](/query-language).
 | Ranked Search | Rich query plus FTS5 text match | Title-weighted BM25 plus optional recency | Find the best documents for a user query. |
 | Documents | Same rich query and legacy visual filters | Explicit list order such as newest or title | Browse and bulk-operate on a stable result set. |
 | Saved Views | Normalized rich query or exact document IDs | Documents ordering | Reopen a live filter or exact snapshot. |
-| Omnibox completion | Active final query token | Prefix vocabulary order | Complete filters without running Search. |
+| Search/Documents completion | Active final query token | Prefix vocabulary order | Complete filters without running Search. |
 | Similar documents | Tokens extracted from one source document | BM25 similarity, no recency | Find vocabulary neighbours and archive examples. |
 | Archive matching | Shared similar-document implementation | Configurable similarity thresholds | Propose unresolved filing metadata. |
 | Archive research | Natural-question terms plus reauthorized context | BM25 evidence retrieval, no recency | Give one model a small authorized evidence set. |
@@ -194,14 +194,16 @@ For each question Suchi:
 3. Keeps at most 12 useful terms.
 4. Converts them to FTS prefixes and OR-joins them for recall.
 5. Ranks title `3.0`, content `1.0`, without recency.
-6. Returns at most six source snippets of about 80 FTS tokens.
-7. Reauthorizes up to three cited context sources from the previous turn.
+6. Returns at most six sources with 300-character titles and 1,600-character snippets.
+7. Reloads up to three cited context sources directly in requested order, with
+   fresh ACL, trash, sensitivity, and scope checks.
 8. Adds human-accepted intelligence attached to those sources when permitted.
 
 Prefix-OR raises recall for the small evidence set. The model and citation
 validator then decide whether that evidence is sufficient. A research scope
-can still be a rich query, category, current document, or exact document set;
-the scope is ANDed with the retrieval candidates.
+can still be a rich query, category, current document, exact document set, or
+the complete visible Documents/Search filter set. The shared document-scope
+predicate builder ANDs every field with the retrieval candidates.
 
 This distinction is why Archive research saves exact source snapshots instead
 of manufacturing a live rich query from question words. See
@@ -224,6 +226,8 @@ bypasses object authorization.
 - SQL fragments are fixed; all user values use bound parameters.
 - Metadata filter names resolve to IDs before execution.
 - Snippets are returned only after visibility predicates match.
+- Archive evidence includes at most three accepted facts per source and twelve
+  total, while fact summaries remain complete.
 - Fast route, search, and completion changes discard stale browser responses.
 
 ## Maintainer map

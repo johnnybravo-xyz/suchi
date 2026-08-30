@@ -98,14 +98,14 @@ func appendQueryPredicates(where []string, args []any, plan searchquery.Plan) ([
 	return where, args
 }
 
-func (s *Server) writeQueryError(w http.ResponseWriter, operation, raw string, err error) bool {
+func (s *Server) writeQueryError(w http.ResponseWriter, operation, _ string, err error) bool {
 	var queryErr *searchquery.Error
 	if !errors.As(err, &queryErr) {
 		return false
 	}
 	if s.Log != nil {
 		s.Log.Info("api."+operation+".query_error",
-			"err", queryErr.Error(), "q", raw, "position", queryErr.Position, "filter", queryErr.Filter)
+			"position", queryErr.Position, "filter", queryErr.Filter)
 	}
 	s.writeJSON(w, http.StatusBadRequest, queryErrorBody{
 		Code:        "bad_query",

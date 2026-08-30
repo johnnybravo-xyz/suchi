@@ -136,6 +136,7 @@ async function mockAPI(page, options = {}) {
     }
     else if (path === '/api/autocomplete/') {
       const query = new URL(request.url()).searchParams.get('q') || ''
+      options.autocompleteQueries?.push(query)
       const response = options.autocompleteByQuery?.[query]
       if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
       body = { results: response?.results || [] }
@@ -1304,11 +1305,13 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
   })
 })
 
-test('keeps search separate from scoped archive research and saves exact sources', async ({ page }) => {
+test('keeps search separate from scoped archive research and saves exact sources', async ({ page }, testInfo) => {
   const chatRequests = []
+  const autocompleteQueries = []
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests,
+    autocompleteQueries,
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
     chatResponse: {
@@ -1325,6 +1328,9 @@ test('keeps search separate from scoped archive research and saves exact sources
   await expect(page.getByRole('button', { name: 'Ask the archive' })).toBeVisible()
   expect(await page.evaluate(() => performance.getEntriesByType('resource').some(entry => entry.name.includes('ArchiveChat')))).toBe(false)
 
+  await omnibox.fill('tag:renewal')
+  await page.waitForTimeout(250)
+  expect(autocompleteQueries).toEqual([])
   await omnibox.fill('lease renewal')
   await omnibox.press('Enter')
   await expect(page).toHaveURL(/#\/search\?q=lease%20renewal$/)
@@ -1334,6 +1340,17 @@ test('keeps search separate from scoped archive research and saves exact sources
   await omnibox.fill('When does the lease renew?')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
   await expect(page.getByRole('dialog', { name: 'Archive research' })).toBeVisible()
+  if ((page.viewportSize()?.width || 0) > 640) {
+    await expect.poll(async () => Math.round((await page.getByRole('dialog', { name: 'Archive research' }).boundingBox()).width)).toBe(520)
+    await expect.poll(async () => {
+      const box = await page.getByRole('dialog', { name: 'Archive research' }).boundingBox()
+      return Math.round(box.x + box.width)
+    }).toBe(page.viewportSize().width)
+  } else {
+    await expect.poll(async () => Math.round((await page.getByRole('dialog', { name: 'Archive research' }).boundingBox()).x)).toBe(0)
+    await expect.poll(async () => Math.round((await page.getByRole('dialog', { name: 'Archive research' }).boundingBox()).width)).toBe(page.viewportSize().width)
+  }
+  await page.screenshot({ path: `/tmp/suchi-archive-chat-${testInfo.project.name}.png`, fullPage: true })
   await expect(page.getByText('The lease renews in September')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Jump to source 1' })).toBeVisible()
   expect(chatRequests).toHaveLength(1)
@@ -1350,11 +1367,23 @@ test('keeps search separate from scoped archive research and saves exact sources
   await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
   await expect(page.getByText('Exact research snapshot')).toBeVisible()
+  await page.getByRole('button', { name: 'Close create view' }).click()
+  await expect(page).toHaveURL(/#\/views$/)
+
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await page.getByRole('link', { name: /Save source set/ }).click()
+  await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
+  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close create view' }).click()
+  await expect(page).toHaveURL(/#\/views$/)
 
   await page.goto('/#/dashboard')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
   await expect(page.getByText('The lease renews in September')).toBeVisible()
-  await page.getByRole('button', { name: 'Open source 1: Lease agreement.pdf' }).click()
+  const source = page.getByRole('link', { name: 'Open source 1: Lease agreement.pdf' })
+  await expect(source).toHaveAttribute('href', '#/doc/17')
+  await source.click()
   await expect(page).toHaveURL(/#\/doc\/17$/)
 
   await page.getByRole('button', { name: 'Ask the archive' }).click()
@@ -1384,10 +1413,133 @@ test('supports cancellation, focus return, and the full-screen mobile research d
   await expect.poll(async () => Math.round((await dialog.boundingBox()).width)).toBe(390)
   await page.getByRole('button', { name: 'Cancel' }).click()
   await expect(page.getByText('Request canceled.')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Question', exact: true })).toHaveValue('slow question')
   await page.getByRole('textbox', { name: 'Question', exact: true }).press('Escape')
   await expect(dialog).toBeHidden()
   await expect(omnibox).toBeFocused()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('publishes exact Inbox, Documents, and Search scopes to archive research', async ({ page }) => {
+  const chatRequests = []
+  const inbox = { id: 9, area_code: 10, area_name: 'Intake', code: 10, name: 'Inbox', system: true }
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests,
+    jdCategories: [inbox],
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+
+  async function ask(question) {
+    await page.getByRole('button', { name: 'Ask the archive' }).click()
+    const composer = page.getByRole('textbox', { name: 'Question', exact: true })
+    await composer.fill(question)
+    await composer.press('Enter')
+    await expect(page.getByText('The archive supports this answer')).toBeVisible()
+    await composer.press('Escape')
+  }
+
+  await page.goto('/#/inbox')
+  await expect(page.getByText('Inbox zero.')).toBeVisible()
+  await ask('inbox scope')
+  expect(chatRequests.at(-1).scope).toMatchObject({ jd_category_id: 9, query: '' })
+
+  await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&document_type__id=4&sensitivity=internal')
+  await page.getByTitle('Added on or after').fill('2026-08-01')
+  await page.getByTitle('Added on or before').fill('2026-08-30')
+  await page.waitForTimeout(50)
+  await ask('full scope')
+  expect(chatRequests.at(-1).scope).toEqual({
+    query: 'needle', document_ids: [41, 42], jd_category_id: 6,
+    sensitivity: 'internal', document_type_id: 4, tag_ids: [5, 8],
+    correspondent_ids: [7], created_at_gte: 1785542400,
+    created_at_lte: 1788134399, language: '',
+  })
+
+  await page.goto('/#/search?q=lease&lang=de')
+  await expect(page.getByText('Nothing matched.')).toBeVisible()
+  await ask('search scope')
+  expect(chatRequests.at(-1).scope).toMatchObject({ query: 'lease', language: 'de' })
+})
+
+test('resets research boundaries and carries only bounded cited follow-up context', async ({ page }) => {
+  const chatRequests = []
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests,
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    chatResponse: (_payload, call) => call === 1 ? {
+      answer: `${'界'.repeat(4200)} [2]`,
+      sources: [
+        { id: 70, title: 'Uncited.pdf', snippet: 'extra', sensitivity: 'public' },
+        { id: 71, title: 'Cited.pdf', snippet: 'evidence', sensitivity: 'internal' },
+      ],
+      citations: [2], grounded: true, intelligence: { accepted: {}, pending: {} },
+    } : undefined,
+  })
+
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  let composer = page.getByRole('textbox', { name: 'Question', exact: true })
+  await composer.fill('first question')
+  await composer.press('Enter')
+  await expect(page.getByRole('link', { name: 'Open source 2: Cited.pdf' })).toBeVisible()
+  await composer.fill('follow up')
+  await composer.press('Enter')
+  await expect.poll(() => chatRequests.length).toBe(2)
+  expect(chatRequests[1].history).toEqual([])
+  expect(chatRequests[1].context_source_ids).toEqual([71])
+
+  const sensitive = page.getByLabel('Include Confidential and Restricted')
+  await sensitive.check()
+  await sensitive.uncheck()
+  await expect(page.getByText('Start with a question, not a search query')).toBeVisible()
+  await expect(sensitive).not.toBeChecked()
+
+  await composer.fill('same scope survives close')
+  await composer.press('Enter')
+  await expect.poll(() => chatRequests.length).toBe(3)
+  await composer.press('Escape')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await expect(page.getByText('same scope survives close')).toBeVisible()
+  await composer.press('Escape')
+
+  await page.goto('/#/doc/42')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await expect(page.getByText('Start with a question, not a search query')).toBeVisible()
+  await expect(page.getByLabel('Include Confidential and Restricted')).not.toBeChecked()
+})
+
+test('clearing an active research request invalidates it without restoring text', async ({ page }) => {
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests: [],
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    chatResponse: { delay: 1000, answer: 'late answer', sources: [], citations: [], grounded: false },
+  })
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const composer = page.getByRole('textbox', { name: 'Question', exact: true })
+  await composer.fill('clear this request')
+  await composer.press('Enter')
+  await page.getByRole('button', { name: 'Clear' }).click()
+  await expect(page.getByText('Start with a question, not a search query')).toBeVisible()
+  await expect(composer).toHaveValue('')
+  await page.waitForTimeout(1100)
+  await expect(page.getByText('late answer')).toHaveCount(0)
+  await expect(page.getByText('Request canceled.')).toHaveCount(0)
+})
+
+test('suppresses the global Omnibox shortcut behind modal dialogs', async ({ page }) => {
+  await mockAPI(page, { setupCompletedAt: Math.floor(Date.now() / 1000), filingTreeChosen: true })
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Upload documents' }).click()
+  await expect(page.getByRole('dialog', { name: 'Upload documents' })).toBeVisible()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
+  await expect(page.getByLabel('Search or run a command')).not.toBeFocused()
 })
 
 test('bulk-validates generic intelligence candidates by document', async ({ page }) => {

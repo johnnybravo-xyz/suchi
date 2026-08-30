@@ -73,15 +73,28 @@ func TestCompileAcceptedIntelligenceFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := Compile(resolved)
-	if len(plan.Predicates) != 3 {
-		t.Fatalf("predicates=%d, want 3", len(plan.Predicates))
+	if len(plan.Predicates) != 2 {
+		t.Fatalf("predicates=%d, want 2", len(plan.Predicates))
 	}
 	if !strings.Contains(plan.Predicates[0].SQL, "document_intelligence") ||
-		!reflect.DeepEqual(plan.Predicates[0].Args, []any{"2026-09-01"}) {
+		strings.Count(plan.Predicates[0].SQL, "EXISTS") != 1 ||
+		!reflect.DeepEqual(plan.Predicates[0].Args, []any{"2026-09-01", "renewal"}) {
 		t.Fatalf("date predicate=%+v", plan.Predicates[0])
 	}
-	if !reflect.DeepEqual(plan.Predicates[1].Args, []any{"renewal"}) {
-		t.Fatalf("date role predicate=%+v", plan.Predicates[1])
+	if !strings.Contains(plan.Predicates[1].SQL, "status = 'accepted'") {
+		t.Fatalf("dated predicate=%+v", plan.Predicates[1])
+	}
+	negated, err := Parse(`-date:2026-09-01 -date-role:renewal`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	negatedResolved, err := Resolve(context.Background(), negated, fakeResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	negatedPlan := Compile(negatedResolved)
+	if len(negatedPlan.Predicates) != 2 || !strings.HasPrefix(negatedPlan.Predicates[0].SQL, "NOT EXISTS") || !strings.HasPrefix(negatedPlan.Predicates[1].SQL, "NOT EXISTS") {
+		t.Fatalf("negated predicates=%+v", negatedPlan.Predicates)
 	}
 	if _, err := Resolve(context.Background(), Query{Clauses: []Clause{{
 		Kind: ClauseFilter, Filter: "date", Value: "2026-02-30", Operator: OpEqual,

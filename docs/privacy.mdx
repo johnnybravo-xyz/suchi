@@ -16,7 +16,7 @@ Outbound traffic occurs only when an operator configures or uses an integration:
 | OIDC | Discovery, authorization, and token requests to the configured issuer |
 | IMAP intake | Mailbox credentials or OAuth tokens and mailbox reads |
 | Microsoft mailbox sign-in | Device-code and token requests to Microsoft |
-| Hosted model assistance | Extracted text and bounded classification context; for an authorized archive question, the question, up to four transient history messages, and up to six ACL-filtered snippets |
+| Hosted model assistance | Extracted text and bounded classification context; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
 | Operator pre-consume script | Whatever the operator's executable chooses to send |
 
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
@@ -76,14 +76,18 @@ or archive text.
 Archive research is read-only and transient. Suchi stores no conversation
 rows, and the browser retains the transcript only while the application is
 mounted. The server retrieves only non-trashed documents the caller may view.
-Confidential and Restricted documents are excluded until the user enables the
-per-conversation option; **Clear** resets that consent. The drawer identifies
-the local or hosted endpoint receiving evidence.
+When sensitive consent is off, only unset, Public, and Internal documents are
+eligible; unknown sensitivity values fail closed. Confidential and Restricted
+documents require the per-conversation option. **Clear**, scope or provider
+changes, and turning that option off clear the relevant in-memory history. The
+drawer identifies the local or hosted endpoint receiving evidence.
 
 The model receives source text as explicitly untrusted evidence and has no
 tools or actions. Previous assistant answers provide continuity, never evidence.
-Follow-up source IDs are reauthorized. Answer JSON and citation numbers are
-validated before rendering.
+Only actually cited follow-up source IDs are reauthorized and reloaded in their
+requested order. Before rendering, Suchi checks the answer JSON and verifies
+that its citation numbers refer to supplied sources. It does not judge whether
+each written claim is correct.
 
 Intelligence candidates are persistent archive metadata rather than chat
 history. They retain bounded evidence, extractor version, review state, and

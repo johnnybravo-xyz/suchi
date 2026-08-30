@@ -155,12 +155,12 @@ func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 	}
 }
 
-// SecFetchSite rejects cross-site state-changing requests where the
+// SecFetchSite rejects non-same-origin state-changing requests where the
 // caller is authenticated by a session cookie. It's the modern
 // browser-shipped CSRF signal — every browser Google can see stamps
 // `Sec-Fetch-Site: same-origin | same-site | cross-site | none` on
 // every request. `SameSite=Lax` on the session cookie already blocks
-// most cross-site forms; this middleware closes the edge cases
+// most cross-site forms; this middleware also rejects sibling origins and closes edge cases
 // (older engines with lax defaults, opaque origins, javascript:
 // redirect chains, subdomain takeovers).
 //
@@ -181,8 +181,10 @@ func SecFetchSite(next http.Handler) http.Handler {
 			return
 		}
 		p := auth.FromContext(r.Context())
-		// Token / bearer calls exempt: forge-proof.
-		if p != nil && (p.Kind == "token" || p.Kind == demoScratchPrincipalKind) {
+		// Only browser sessions rely on ambient cookies. Token, demo-token,
+		// anonymous, and other explicitly authenticated callers are outside the
+		// CSRF threat model for this check.
+		if p == nil || p.Kind != "user" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -191,7 +193,7 @@ func SecFetchSite(next http.Handler) http.Handler {
 		// pass — turning them into 403 across the board would break
 		// curl + integration scripts that don't set the header. The
 		// SameSite=Lax cookie is the fallback line.
-		if site == "" || site == "same-origin" || site == "same-site" || site == "none" {
+		if site == "" || site == "same-origin" || site == "none" {
 			next.ServeHTTP(w, r)
 			return
 		}

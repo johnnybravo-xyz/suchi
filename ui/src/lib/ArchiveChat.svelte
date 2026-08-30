@@ -1,8 +1,8 @@
 <script>
-  import { askArchive, extractIntelligence } from './api.js'
-  import { go } from './router.svelte.js'
-  import { sensitivityLabel, sensDot } from './format.js'
+  import { onDestroy } from 'svelte'
+  import { askArchive } from './api.js'
   import Icon from './Icon.svelte'
+  import ArchiveChatSource from './ArchiveChatSource.svelte'
 
   let {
     open = false,
@@ -16,11 +16,12 @@
   let draft = $state('')
   let includeSensitive = $state(false)
   let sending = $state(false)
-  let controller
-  let composer = $state(), drawer = $state(), transcript = $state()
+  let activeRequest
+  let composer = $state(), drawer = $state()
   let previousFocus
   let wasOpen = false
   let handledRequest = 0
+  let sessionKey = ''
 
   const prompts = [
     'Find the next renewal dates',
@@ -33,19 +34,26 @@
   }
 
   function history() {
-    return completedTurns().slice(-2).flatMap(turn => [
-      { role: 'user', content: turn.question },
-      { role: 'assistant', content: turn.answer },
-    ])
+    const encoder = new TextEncoder()
+    const pairs = []
+    let bytes = 0
+    for (const turn of completedTurns().slice().reverse()) {
+      const pairBytes = encoder.encode(turn.question).byteLength + encoder.encode(turn.answer).byteLength
+      if (pairs.length === 2 || bytes + pairBytes > 12 * 1024) break
+      pairs.unshift([
+        { role: 'user', content: turn.question },
+        { role: 'assistant', content: turn.answer },
+      ])
+      bytes += pairBytes
+    }
+    return pairs.flat()
   }
 
   function contextSourceIDs() {
     const prior = completedTurns().at(-1)
     if (!prior) return []
     const cited = new Set(prior.citations || [])
-    const sources = cited.size
-      ? prior.sources.filter((_, index) => cited.has(index + 1))
-      : prior.sources
+    const sources = prior.sources.filter((_, index) => cited.has(index + 1))
     return sources.slice(0, 3).map(source => source.id)
   }
 
@@ -55,6 +63,13 @@
       query: scope.query || '',
       document_ids: scope.document_ids || [],
       jd_category_id: scope.jd_category_id || 0,
+      sensitivity: scope.sensitivity || '',
+      document_type_id: scope.document_type_id || 0,
+      tag_ids: scope.tag_ids || [],
+      correspondent_ids: scope.correspondent_ids || [],
+      created_at_gte: scope.created_at_gte ?? null,
+      created_at_lte: scope.created_at_lte ?? null,
+      language: scope.language || '',
     }
   }
 
@@ -70,17 +85,19 @@
 
   async function send(question = draft) {
     question = question.trim()
-    if (!question || sending || question.length > 2000) return
+    if (!question || question.length > 2000) return
+    if (sending) { draft = question; return }
     const prior = history()
     const contextIDs = contextSourceIDs()
     const turn = {
       id: Date.now(), question, answer: '', sources: [], citations: [], grounded: false,
-      error: '', extraction: '',
+      error: '',
     }
     turns = [...turns, turn]
     draft = ''
     sending = true
-    controller = new AbortController()
+    const requestState = { controller: new AbortController(), turnID: turn.id, restoreDraft: false, invalidated: false }
+    activeRequest = requestState
     revealTurn(turn.id)
     try {
       const result = await askArchive({
@@ -89,7 +106,8 @@
         context_source_ids: contextIDs,
         scope: requestScope(),
         include_sensitive: includeSensitive,
-      }, controller.signal)
+      }, requestState.controller.signal)
+      if (activeRequest !== requestState || requestState.invalidated) return
       updateTurn(turn.id, {
         answer: result.answer || '',
         sources: result.sources || [],
@@ -98,22 +116,37 @@
         intelligence: result.intelligence || {},
       })
     } catch (ex) {
+      if (activeRequest !== requestState || requestState.invalidated) return
       const canceled = ex?.name === 'AbortError'
       updateTurn(turn.id, {
         error: canceled ? 'Request canceled.' : (ex?.message || 'The archive question could not be answered.'),
       })
-      if (canceled && !draft) draft = question
+      if (canceled && requestState.restoreDraft && !draft) draft = question
     } finally {
-      sending = false
-      controller = null
-      queueMicrotask(() => composer?.focus())
+      if (activeRequest === requestState) {
+        sending = false
+        activeRequest = null
+        queueMicrotask(() => composer?.focus())
+      }
     }
   }
 
-  function cancel() { controller?.abort() }
+  function cancel() {
+    if (!activeRequest) return
+    activeRequest.restoreDraft = true
+    activeRequest.controller.abort()
+  }
+
+  function invalidateRequest() {
+    if (!activeRequest) return
+    activeRequest.invalidated = true
+    activeRequest.controller.abort()
+    activeRequest = null
+    sending = false
+  }
 
   function clearConversation() {
-    cancel()
+    invalidateRequest()
     turns = []
     draft = ''
     includeSensitive = false
@@ -128,24 +161,16 @@
     })
   }
 
-  function openSource(id) {
-    close()
-    go(`#/doc/${id}`)
-  }
-
   function sourceItems(turn) {
     return turn.sources.map((source, index) => ({ source, number: index + 1 }))
   }
 
-  function primarySourceItems(turn) {
+  function sourceGroups(turn) {
     const cited = new Set(turn.citations || [])
     const items = sourceItems(turn)
-    return cited.size ? items.filter(item => cited.has(item.number)) : items
-  }
-
-  function extraSourceItems(turn) {
-    const primary = new Set(primarySourceItems(turn).map(item => item.number))
-    return sourceItems(turn).filter(item => !primary.has(item.number))
+    const primary = cited.size ? items.filter(item => cited.has(item.number)) : items
+    const primaryNumbers = new Set(primary.map(item => item.number))
+    return { primary, extra: items.filter(item => !primaryNumbers.has(item.number)) }
   }
 
   function answerParts(answer) {
@@ -159,20 +184,6 @@
     const source = document.getElementById(`research-source-${turnID}-${number}`)
     source?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     source?.focus()
-  }
-
-  async function extractDates(turn) {
-    if (turn.extraction === 'working') return
-    updateTurn(turn.id, { extraction: 'working' })
-    try {
-      const result = await extractIntelligence({
-        document_ids: turn.sources.map(source => source.id),
-        types: ['date'],
-      })
-      updateTurn(turn.id, { extraction: result?.applied > 0 ? 'queued' : 'unavailable' })
-    } catch (ex) {
-      updateTurn(turn.id, { extraction: ex?.message || 'Could not queue date extraction.' })
-    }
   }
 
   function providerLabel() {
@@ -190,6 +201,25 @@
 
   function sourceIDQuery(turn) {
     return turn.sources.map(source => source.id).join(',')
+  }
+
+  function conversationKey() {
+    return JSON.stringify([requestScope(), status?.provider || '', !!status?.local])
+  }
+
+  function resetSession() {
+    invalidateRequest()
+    turns = []
+    draft = ''
+    includeSensitive = false
+  }
+
+  function setSensitive(next) {
+    if (!next && includeSensitive) {
+      invalidateRequest()
+      turns = []
+    }
+    includeSensitive = next
   }
 
   function onKey(e) {
@@ -213,9 +243,26 @@
   $effect(() => {
     if (!open || !request?.id || request.id === handledRequest) return
     handledRequest = request.id
-    if (request.question?.trim()) send(request.question)
+    const nextSessionKey = conversationKey()
+    if (sessionKey && sessionKey !== nextSessionKey) resetSession()
+    sessionKey = nextSessionKey
+    if (request.question?.trim()) {
+      if (sending) draft = request.question.trim()
+      else send(request.question)
+    }
     else queueMicrotask(() => composer?.focus())
   })
+
+  $effect(() => {
+    if (!sessionKey) return
+    const nextSessionKey = conversationKey()
+    if (sessionKey !== nextSessionKey) {
+      resetSession()
+      sessionKey = nextSessionKey
+    }
+  })
+
+  onDestroy(invalidateRequest)
 </script>
 
 {#if open}
@@ -233,7 +280,7 @@
       </div>
     </header>
 
-    <div class="research-transcript" bind:this={transcript} aria-live="polite">
+    <div class="research-transcript" aria-live="polite">
       {#if turns.length === 0}
         <div class="research-empty">
           <span class="empty-index">R / 01</span>
@@ -277,58 +324,34 @@
           {/if}
 
           {#if turn.sources.length}
+            {@const groups = sourceGroups(turn)}
             <div class="research-actions" aria-label="Research actions">
               <a class="research-action" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={close}>
                 <Icon name="eye" size={14} /><span><b>Save source set</b><small>{turn.sources.length} exact documents</small></span>
               </a>
               {#if canReviewIntelligence}
-                {#if acceptedDateCount(turn) > 0}
+                {#if pendingDateCount(turn) > 0}
+                  <a class="research-action" href="#/tasks" onclick={close}>
+                    <Icon name="tasks" size={14} /><span><b>Review {pendingDateCount(turn)} date{pendingDateCount(turn) === 1 ? '' : 's'}</b><small>Validate candidates in Approvals</small></span>
+                  </a>
+                {:else if acceptedDateCount(turn) > 0}
                   <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={close}>
                     <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} accepted date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar uses validated facts only</small></span>
                   </a>
-                {:else if pendingDateCount(turn) > 0 || turn.extraction === 'queued'}
-                  <a class="research-action" href="#/tasks" onclick={close}>
-                    <Icon name="tasks" size={14} /><span><b>{turn.extraction === 'queued' ? 'Extraction queued' : `Review ${pendingDateCount(turn)} date${pendingDateCount(turn) === 1 ? '' : 's'}`}</b><small>Validate candidates in Approvals</small></span>
-                  </a>
-                {:else}
-                  <button class="research-action" disabled={turn.extraction === 'working'} onclick={() => extractDates(turn)}>
-                    <Icon name="calendar" size={14} /><span><b>{turn.extraction === 'working' ? 'Queueing…' : 'Extract dates'}</b><small>From these sources only</small></span>
-                  </button>
                 {/if}
               {/if}
             </div>
-            {#if turn.extraction && !['working', 'queued', 'unavailable'].includes(turn.extraction)}
-              <div class="action-error">{turn.extraction}</div>
-            {/if}
 
             <section class="evidence-stack" aria-label="Evidence sources">
               <header><span>Evidence</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
-              {#each primarySourceItems(turn) as item (item.source.id)}
-                <button id={`research-source-${turn.id}-${item.number}`} class="source-card cited"
-                        onclick={() => openSource(item.source.id)} aria-label={`Open source ${item.number}: ${item.source.title}`}>
-                  <span class="source-number">[{item.number}]</span>
-                  <span class="source-copy">
-                    <strong>{item.source.title || `Document #${item.source.id}`}</strong>
-                    <span>{item.source.snippet}</span>
-                    <small><i class:danger={sensDot(item.source.sensitivity) === 'danger'}></i>{sensitivityLabel(item.source.sensitivity)}</small>
-                  </span>
-                  <Icon name="chev" size={13} />
-                </button>
+              {#each groups.primary as item (item.source.id)}
+                <ArchiveChatSource {item} turnID={turn.id} cited onOpen={close} />
               {/each}
-              {#if extraSourceItems(turn).length}
+              {#if groups.extra.length}
                 <details class="extra-sources">
-                  <summary>{extraSourceItems(turn).length} additional retrieved source{extraSourceItems(turn).length === 1 ? '' : 's'}</summary>
-                  {#each extraSourceItems(turn) as item (item.source.id)}
-                    <button id={`research-source-${turn.id}-${item.number}`} class="source-card"
-                            onclick={() => openSource(item.source.id)} aria-label={`Open source ${item.number}: ${item.source.title}`}>
-                      <span class="source-number">[{item.number}]</span>
-                      <span class="source-copy">
-                        <strong>{item.source.title || `Document #${item.source.id}`}</strong>
-                        <span>{item.source.snippet}</span>
-                        <small><i class:danger={sensDot(item.source.sensitivity) === 'danger'}></i>{sensitivityLabel(item.source.sensitivity)}</small>
-                      </span>
-                      <Icon name="chev" size={13} />
-                    </button>
+                  <summary>{groups.extra.length} additional retrieved source{groups.extra.length === 1 ? '' : 's'}</summary>
+                  {#each groups.extra as item (item.source.id)}
+                    <ArchiveChatSource {item} turnID={turn.id} onOpen={close} />
                   {/each}
                 </details>
               {/if}
@@ -340,7 +363,7 @@
 
     <footer class="research-compose">
       <label class="sensitive-toggle">
-        <input type="checkbox" bind:checked={includeSensitive} />
+        <input type="checkbox" checked={includeSensitive} disabled={sending} onchange={(event) => setSensitive(event.currentTarget.checked)} />
         <span><b>Include Confidential and Restricted</b><small>Evidence is sent to {providerLabel()} for this conversation</small></span>
       </label>
       <form onsubmit={(event) => { event.preventDefault(); send() }}>
@@ -391,11 +414,8 @@
   .research-action { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
   .research-action:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--tint); }.research-action:disabled { opacity: .55; cursor: default; }
   .research-action > :global(.ico) { flex: none; color: var(--accent); }.research-action span { display: flex; min-width: 0; flex-direction: column; gap: 1px; }.research-action b { font-size: .7rem; }.research-action small { overflow: hidden; color: var(--faint); font-size: .6rem; text-overflow: ellipsis; white-space: nowrap; }
-  .action-error { margin-top: 7px; color: var(--danger); font-size: .68rem; }
   .evidence-stack { margin-top: 12px; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--surface); }
   .evidence-stack > header { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); }.evidence-stack > header span { font-size: .63rem; font-weight: 700; text-transform: uppercase; }.evidence-stack > header small { color: var(--faint); font-size: .64rem; }
-  .source-card { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 11px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }.source-card:last-child { border-bottom: 0; }.source-card:hover, .source-card:focus-visible { background: var(--tint); }.source-card.cited { box-shadow: inset 2px 0 var(--accent); }
-  .source-number { color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; font-weight: 700; }.source-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }.source-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .76rem; }.source-copy > span { display: -webkit-box; overflow: hidden; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--muted); font-size: .7rem; line-height: 1.4; }.source-copy small { display: flex; align-items: center; gap: 5px; color: var(--faint); font-size: .63rem; }.source-copy i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }.source-copy i.danger { background: var(--danger); }.source-card > :global(.ico) { margin-top: 3px; color: var(--faint); }
   .extra-sources summary { padding: 9px 11px; color: var(--muted); font-size: .67rem; cursor: pointer; }.extra-sources[open] summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .research-compose { padding: 12px 16px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
   .sensitive-toggle { display: flex; align-items: flex-start; gap: 8px; margin: 0 1px 10px; cursor: pointer; }.sensitive-toggle input { margin-top: 2px; }.sensitive-toggle > span { display: flex; flex-direction: column; }.sensitive-toggle b { font-size: .7rem; font-weight: 650; }.sensitive-toggle small { color: var(--faint); font-size: .6rem; line-height: 1.35; }

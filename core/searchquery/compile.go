@@ -16,6 +16,13 @@ type Plan struct {
 func Compile(query ResolvedQuery) Plan {
 	plan := Plan{Predicates: make([]Predicate, 0, len(query.Clauses))}
 	positiveText := make([]string, 0, len(query.Clauses))
+	positiveDateIndex := -1
+	positiveDateWhere := []string{
+		"sq_di.document_id = d.id",
+		"sq_di.status = 'accepted'",
+		"sq_di.intelligence_type = 'date'",
+	}
+	positiveDateArgs := []any{}
 	for _, clause := range query.Clauses {
 		if clause.Kind == ClauseText {
 			expression := compileText(clause.Clause)
@@ -29,9 +36,33 @@ func Compile(query ResolvedQuery) Plan {
 			}
 			continue
 		}
+		// Positive accepted-date clauses describe one fact. Keeping them in a
+		// single EXISTS prevents a lower bound on one date and an upper bound or
+		// role on another date from making the document look like a match.
+		// Negated clauses retain their independent NOT EXISTS semantics.
+		if !clause.Negated && (clause.Filter == "date" || clause.Filter == "date-role") {
+			if positiveDateIndex < 0 {
+				positiveDateIndex = len(plan.Predicates)
+				plan.Predicates = append(plan.Predicates, Predicate{})
+			}
+			if clause.Filter == "date" {
+				positiveDateWhere = append(positiveDateWhere, "sq_di.sort_value "+string(clause.Operator)+" ?")
+				positiveDateArgs = append(positiveDateArgs, clause.Value)
+			} else {
+				positiveDateWhere = append(positiveDateWhere, "sq_di.role = ?")
+				positiveDateArgs = append(positiveDateArgs, clause.Value)
+			}
+			continue
+		}
 		plan.Predicates = append(plan.Predicates, compileFilter(clause))
 		if clause.Filter == "is" && clause.Value == "trash" {
 			plan.HasTrashFilter = true
+		}
+	}
+	if positiveDateIndex >= 0 {
+		plan.Predicates[positiveDateIndex] = Predicate{
+			SQL:  "EXISTS (SELECT 1 FROM document_intelligence sq_di WHERE " + strings.Join(positiveDateWhere, " AND ") + ")",
+			Args: positiveDateArgs,
 		}
 	}
 	plan.Match = strings.Join(positiveText, " AND ")

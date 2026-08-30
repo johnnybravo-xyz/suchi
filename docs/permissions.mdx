@@ -55,7 +55,7 @@ Administrators have every capability implicitly.
 | Capability | Allows a member to |
 | --- | --- |
 | `archive_chat` | Ask grounded questions across documents they can read. |
-| `archive_intelligence` | Extract, review, query, and calendar human-validated document facts. |
+| `archive_intelligence` | Extract, review, use in chat, and calendar human-validated document facts. |
 | `mailboxes` | Connect and manage their own mail intake. |
 | `share_links` | Create revocable document share links. |
 | `share_views` | Publish saved views to every user's dashboard. |
@@ -68,6 +68,8 @@ already transient browser memory and create no server-side records.
 Removing a capability also closes the access it granted:
 - Removing `archive_intelligence` hides extraction, intelligence review, and
   Calendar. Existing pending and accepted facts remain stored and auditable.
+  Accepted dates remain readable document metadata: callers with
+  `documents:read` may still use `date:` and `date-role:` predicates.
 - Removing `mailboxes` disables the member's mailbox rows without deleting
   them. Granting it again does not re-enable those rows automatically.
 - Removing `share_links` revokes the member's live share links. Granting it

@@ -6,6 +6,8 @@
   import Icon from '../lib/Icon.svelte'
   import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
 
+  let { onScopeChange } = $props()
+
   let q = $state(route.query.get('q') || '')
   let lang = $state(route.query.get('lang') || '')
   let hits = $state([])
@@ -39,6 +41,13 @@
     try {
       const params = { page: requestPage, page_size: 25 }
       if (requestLang) params.lang = requestLang
+      onScopeChange?.({
+        label: 'Current search results',
+        query,
+        document_ids: [], jd_category_id: 0, sensitivity: '', document_type_id: 0,
+        tag_ids: [], correspondent_ids: [], created_at_gte: null, created_at_lte: null,
+        language: requestLang,
+      })
       const res = await search(query, params)
       if (version !== runVersion) return
       hits = res?.results || []

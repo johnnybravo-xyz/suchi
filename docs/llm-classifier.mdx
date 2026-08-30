@@ -76,10 +76,12 @@ For hosted model assistance, Suchi sends:
 - bounded filing context and a small set of similar-document titles
 - the requested structured-output instructions
 
-For **Archive research**, it instead sends the question, up to four preceding
-messages, and at most six short snippets selected from documents the caller may
-read. Reauthorized context and human-accepted intelligence may accompany those
-same sources. Sensitive snippets require explicit per-conversation consent.
+For **Archive research**, it instead sends the question, newest complete history
+pairs within four messages/12 KB, and at most six sources selected from
+documents the caller may read. Each source contains a title, sensitivity,
+snippet, and—only with `archive_intelligence`—bounded accepted fact value and
+evidence. Only cited context is reauthorized. Sensitive snippets require
+explicit per-conversation consent.
 
 It does not send original PDF or image bytes, unrelated archive content,
 ownership, ACLs, storage paths, or backup information.
@@ -160,6 +162,9 @@ Administrators have `archive_chat` and `archive_intelligence` implicitly and
 may grant either capability to members. Archive research performs bounded FTS5
 retrieval, reauthorizes follow-up source IDs, and validates a structured
 answer/citation contract. It has no model tools or write actions.
+Its citation check verifies format and source numbers, not whether each claim is
+correct. A View is saved or Approvals/Calendar is opened only after a separate
+user action.
 
 The same classification call may propose reviewable typed intelligence. Dates
 are the first registered type. They are stored in the generic intelligence

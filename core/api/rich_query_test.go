@@ -128,6 +128,21 @@ func TestRichQueryAcceptedDateIntelligenceParity(t *testing.T) {
 	`, matchingID, otherID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO document_intelligence(
+			document_id, intelligence_type, role, value_json, sort_value,
+			raw_text, evidence_text, confidence, status, extractor,
+			extraction_version, created_at, updated_at
+		) VALUES
+			(?, 'date', 'renewal', '{"date":"2026-08-01","precision":"day"}',
+			 '2026-08-01', '1 August 2026', 'Renews 1 August 2026',
+			 0.9, 'accepted', 'test', 1, 0, 0),
+			(?, 'date', 'issued', '{"date":"2026-09-15","precision":"day"}',
+			 '2026-09-15', '15 September 2026', 'Issued 15 September 2026',
+			 0.9, 'accepted', 'test', 1, 0, 0)
+	`, otherID, otherID); err != nil {
+		t.Fatal(err)
+	}
 	query := `date:>=2026-09-01 date:<=2026-09-30 date-role:renewal is:dated`
 	searchCode, searchResult, _ := doSearch(t, s, query, adminPrincipal(1))
 	listCode, listRows, listCount := doList(t, s, "/api/documents/?q="+url.QueryEscape(query), adminPrincipal(1))

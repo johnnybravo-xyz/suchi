@@ -5,6 +5,7 @@
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import { DATE_ROLES, intelligenceRoleLabel } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
+  import { go } from '../lib/router.svelte.js'
 
   let { notify, canShare = false, startCreate = false, createQuery = '', createDocumentIDs = '', jdCategories = [] } = $props()
   let views = $state([])
@@ -101,6 +102,7 @@
     createOpen = false
     saveError = ''
     nv = emptyView()
+    if (startCreate) go('#/views')
   }
 
   async function create(e) {
@@ -127,6 +129,7 @@
       })
       nv = emptyView()
       createOpen = false
+      if (startCreate) go('#/views')
       notify?.('View saved')
       await load()
     } catch (ex) { saveError = ex.message || 'Could not save the view.' }

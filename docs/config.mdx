@@ -354,6 +354,10 @@ Off by default. Setting these turns on model-backed classification, authorized
 archive research, and reviewable intelligence extraction; non-local endpoints
 require the egress ack.
 
+Archive research sends only the question, bounded transient history, and
+authorized source title, sensitivity, snippet, plus capability-gated accepted
+fact value/evidence. It stores no live conversation.
+
 | Env var                             | Purpose                                                                                                                                                 |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LLM_ENDPOINT_URL`                  | e.g. `http://127.0.0.1:11434/v1` for Ollama, or an OpenAI-compatible URL. Unset = classifier disabled.                                                  |

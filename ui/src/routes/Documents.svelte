@@ -11,7 +11,7 @@
   import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
-        canAskArchive = false, canReviewIntelligence = false, onAskDocuments } = $props()
+        canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
 
   let docs = $state([])
   let count = $state(0)
@@ -85,6 +85,21 @@
         created_at__gte: dateFrom ? Math.floor(new Date(dateFrom) / 1000) : '',
         created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
       }
+      const csvIDs = (value) => [...new Set(String(value || '').split(',')
+        .map(item => Number(item.trim())).filter(item => Number.isInteger(item) && item > 0))]
+      onScopeChange?.({
+        label: isInbox ? 'Current inbox view' : 'Current document view',
+        query: params.q || '',
+        document_ids: csvIDs(params.document_ids),
+        jd_category_id: Number(params.jd_category_id) || 0,
+        sensitivity: params.sensitivity || '',
+        document_type_id: Number(params.document_type__id) || 0,
+        tag_ids: csvIDs(params.tags__id__in),
+        correspondent_ids: csvIDs(params.correspondents__id__in),
+        created_at_gte: params.created_at__gte === '' ? null : params.created_at__gte,
+        created_at_lte: params.created_at__lte === '' ? null : params.created_at__lte,
+        language: '',
+      })
       const res = await listDocuments(params)
       if (version !== loadVersion) return
       docs = res?.results || []

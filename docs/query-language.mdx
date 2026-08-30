@@ -118,6 +118,10 @@ is:inbox -is:encrypted
 ```
 
 Only `added:` and `date:` accept comparison operators. `tag:>=tax` is rejected.
+All positive `date:` comparisons and `date-role:` clauses must match the same
+accepted date fact. Negated date clauses remain independent `NOT EXISTS`
+conditions. Accepted dates are readable document metadata, so these predicates
+require `documents:read`, not `archive_intelligence`.
 Metadata names are resolved before execution. Unknown values return errors;
 ambiguous values return suggestions.
 
@@ -172,7 +176,7 @@ One query remains an AND-composed set of independently negatable clauses.
 
 ## Suggestions and completion
 
-The Omnibox and Documents query field recognize an incomplete final qualifier.
+The Search and Documents query fields recognize an incomplete final qualifier.
 Suggestions cover filter names, Johnny.Decimal categories, tags,
 correspondents, document types, sensitivity values, date roles, and `is:`
 states. Selecting one replaces the active token but does not run the search.
@@ -249,8 +253,9 @@ send `view_id`; the server loads an owned or shared View, applies its complete
 filter, and reapplies document ACLs. Clients must not reconstruct partial View
 scopes.
 
-Snapshot Views instead store bounded `document_ids`. They preserve one exact
-source set while still reapplying ACLs whenever opened or shared.
+Snapshot Views instead store `document_ids` as an array of 1–100 positive,
+deduplicated IDs. They preserve one exact source set while still reapplying ACLs
+whenever opened or shared.
 
 ## Archive research and generated Views
 
