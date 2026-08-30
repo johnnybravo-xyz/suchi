@@ -260,6 +260,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
 	mux.HandleFunc("GET /api/chat/status", s.GetChatStatus)
 	mux.HandleFunc("POST /api/chat", s.PostChat)
+	mux.HandleFunc("GET /api/intelligence/schema", s.GetIntelligenceSchema)
+	mux.HandleFunc("GET /api/intelligence/", s.ListIntelligence)
+	mux.HandleFunc("POST /api/intelligence/extract", s.ExtractIntelligence)
+	mux.HandleFunc("POST /api/intelligence/resolve", s.ResolveIntelligence)
 
 	// Language facet — distinct languages present in the archive
 	// with per-code doc counts. Powers the search-page facet + doc-

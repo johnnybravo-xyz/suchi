@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
+	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
@@ -22,7 +23,7 @@ import (
 // up. Exported so main.go can read it into the version snapshot
 // it hands to core/rescan (which doesn't import this plugin to
 // keep the dep graph flat).
-const PipelineVersionLLM = 1
+const PipelineVersionLLM = 2
 
 // Handler is the durable-outbox Subscriber that runs the classifier on
 // `post-classify` jobs. Main registers it in a disabled state at boot so the
@@ -79,7 +80,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return nil
 	}
 
-	title, content, err := h.loadDoc(ctx, e.DocID)
+	title, content, sourceBlob, err := h.loadDoc(ctx, e.DocID)
 	if err != nil {
 		return fmt.Errorf("load doc: %w", err)
 	}
@@ -131,7 +132,8 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		"jd_category", res.JDCategory,
 		"has_title", res.Title != "",
 		"has_correspondent", res.Correspondent != "",
-		"tag_count", len(res.Tags))
+		"tag_count", len(res.Tags),
+		"date_count", len(res.Dates))
 
 	// Low-confidence path: apply only the needs-review tag so an
 	// operator sees the doc in the review queue. Leaves title,
@@ -144,6 +146,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
+		if err := replacePendingIntelligenceInTx(ctx, tx, e.DocID, sourceBlob, content, res.Dates, now); err != nil {
+			return err
+		}
 
 		if lowConfidence {
 			if err := upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now); err != nil {
@@ -282,12 +287,12 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	return nil
 }
 
-func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content string, err error) {
+func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, sourceBlob string, err error) {
 	var contentNull sql.NullString
 	err = h.db.ReadQueryRow(ctx, `
-		SELECT title, content FROM documents
+		SELECT title, content, original_blob FROM documents
 		WHERE id = ? AND trashed_at IS NULL
-	`, id).Scan(&title, &contentNull)
+	`, id).Scan(&title, &contentNull, &sourceBlob)
 	if err != nil {
 		return
 	}
@@ -317,6 +322,44 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func replacePendingIntelligenceInTx(ctx context.Context, tx *sql.Tx, docID int64, sourceBlob, content string, dates []DateCandidate, now int64) error {
+	const extractor = "llm-classifier"
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM document_intelligence
+		WHERE document_id = ? AND intelligence_type = ? AND extractor = ? AND status = 'pending'
+	`, docID, intelligence.TypeDate, extractor); err != nil {
+		return err
+	}
+	lowerContent := strings.ToLower(content)
+	for _, date := range dates {
+		candidate, err := intelligence.NewDateCandidate(
+			date.Role, date.Value, date.Precision,
+			date.RawText, date.Evidence, date.Confidence,
+		)
+		if err != nil {
+			return err
+		}
+		var evidenceStart any
+		if index := strings.Index(lowerContent, strings.ToLower(candidate.RawText)); index >= 0 {
+			evidenceStart = index
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO document_intelligence(
+				document_id, intelligence_type, role, value_json, sort_value,
+				raw_text, evidence_text, evidence_start, confidence, status,
+				extractor, source_blob, extraction_version, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+			ON CONFLICT(document_id, intelligence_type, role, value_json, evidence_text, extractor)
+			DO NOTHING
+		`, docID, candidate.Type, candidate.Role, candidate.ValueJSON, candidate.SortValue,
+			candidate.RawText, candidate.EvidenceText, evidenceStart, candidate.Confidence,
+			extractor, sourceBlob, PipelineVersionLLM, now, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {

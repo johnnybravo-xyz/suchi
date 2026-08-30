@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 )
 
@@ -22,13 +23,14 @@ import (
 // scope silently zeroes the operational counters — no 403 that would
 // break a member's dashboard.
 type StatsResponse struct {
-	DocumentsTotal   int64 `json:"documents_total"`
-	TrashCount       int64 `json:"trash_count"`
-	InboxCount       int64 `json:"inbox_count"`
-	InboxCategoryID  int64 `json:"inbox_category_id,omitempty"`
-	PendingApprovals int64 `json:"pending_approvals"`
-	DeadJobs         int64 `json:"dead_jobs"`
-	Ingested7d       int64 `json:"ingested_7d"`
+	DocumentsTotal      int64 `json:"documents_total"`
+	TrashCount          int64 `json:"trash_count"`
+	InboxCount          int64 `json:"inbox_count"`
+	InboxCategoryID     int64 `json:"inbox_category_id,omitempty"`
+	PendingApprovals    int64 `json:"pending_approvals"`
+	PendingIntelligence int64 `json:"pending_intelligence"`
+	DeadJobs            int64 `json:"dead_jobs"`
+	Ingested7d          int64 `json:"ingested_7d"`
 }
 
 // GetStats serves GET /api/stats/. Requires documents:read.
@@ -117,6 +119,23 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		_ = s.DB.Read.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM approval_tasks WHERE assignee = ? AND status IN ('open','claimed')`,
 			me).Scan(&out.PendingApprovals)
+	}
+
+	canReviewIntelligence := isAdmin
+	if !canReviewIntelligence {
+		capabilities, err := s.userCapabilities(ctx, p.UserID)
+		if err != nil {
+			s.serverErr(w, "stats.intelligence_capability", err)
+			return
+		}
+		canReviewIntelligence = capabilities.Has(authz.CapArchiveIntelligence)
+	}
+	if canReviewIntelligence {
+		out.PendingIntelligence, err = intelligenceCountForPrincipal(ctx, s, p, "pending")
+		if err != nil {
+			s.serverErr(w, "stats.intelligence", err)
+			return
+		}
 	}
 
 	// Dead jobs — admin only. Members see 0 so the dashboard doesn't

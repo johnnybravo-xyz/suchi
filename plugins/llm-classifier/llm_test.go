@@ -238,11 +238,11 @@ func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 
 func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	ctx := context.Background()
-	d, docID := openHandlerDocument(t, "Original title", "ambiguous text")
+	d, docID := openHandlerDocument(t, "Original title", "ambiguous text with renewal date September 1, 2026")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2,\"dates\":[{\"role\":\"renewal\",\"value\":\"2026-09-01\",\"precision\":\"day\",\"raw_text\":\"September 1, 2026\",\"evidence\":\"renewal date September 1, 2026\",\"confidence\":0.91}]}"}}]}`))
 	}))
 	defer srv.Close()
 	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
@@ -274,6 +274,16 @@ func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	}
 	if reviewTags != 1 {
 		t.Fatalf("needs-review tags = %d, want 1", reviewTags)
+	}
+	var dateStatus, dateValue string
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT status, sort_value FROM document_intelligence
+		WHERE document_id = ? AND intelligence_type = 'date'
+	`, docID).Scan(&dateStatus, &dateValue); err != nil {
+		t.Fatal(err)
+	}
+	if dateStatus != "pending" || dateValue != "2026-09-01" {
+		t.Fatalf("date candidate status=%q value=%q", dateStatus, dateValue)
 	}
 }
 
@@ -490,6 +500,59 @@ func TestParseChatCompletionValidatesAndNormalizesResult(t *testing.T) {
 	}
 }
 
+func TestSelectClassificationContentKeepsDateWindows(t *testing.T) {
+	content := strings.Repeat("introductory archive text ", 300) +
+		"\nThe policy renewal date is September 14, 2026 and requires action.\n" +
+		strings.Repeat("closing archive text ", 300)
+	selected := selectClassificationContent(content, 900)
+	if !strings.Contains(selected, "renewal date is September 14, 2026") {
+		t.Fatalf("date-bearing middle excerpt was dropped: %s", selected)
+	}
+	if got := len([]rune(selected)); got > 900 {
+		t.Fatalf("selected content has %d runes, want <= 900", got)
+	}
+}
+
+func TestDateSignalCoversStandardFormatsWithoutTreatingNumbersAsDates(t *testing.T) {
+	standard := []string{
+		"2026-09-14", "14/09/2026", "09/14/26", "14 September 2026",
+		"September 14, 2026", "Sept. 14 2026", "2026-09", "09/2026",
+		"2026-09-14T10:30:00Z",
+	}
+	for _, value := range standard {
+		if !documentDateSignal.MatchString(value) {
+			t.Errorf("standard date format was not recognized: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"invoice total 4523", "account 20260914", "serial 123456", "version 2.31",
+	} {
+		if documentDateSignal.MatchString(value) {
+			t.Errorf("ordinary number was treated as a date signal: %q", value)
+		}
+	}
+}
+
+func TestDateCandidatesRequireValidGroundedEvidence(t *testing.T) {
+	result := &Result{Confidence: 0.8, Dates: []DateCandidate{{
+		Role: "renewal", Value: "2026-09-14", Precision: "day",
+		RawText:    "September 14, 2026",
+		Evidence:   "The policy renewal date is September 14, 2026.",
+		Confidence: 0.94,
+	}}}
+	if err := validateResult(result); err != nil {
+		t.Fatal(err)
+	}
+	grounded := groundedDateCandidates(result.Dates,
+		"Terms. The policy renewal date is September 14, 2026. End.")
+	if len(grounded) != 1 {
+		t.Fatalf("grounded dates=%+v", grounded)
+	}
+	if got := groundedDateCandidates(result.Dates, "No matching date appears here."); len(got) != 0 {
+		t.Fatalf("ungrounded date survived: %+v", got)
+	}
+}
+
 func TestParseChatCompletionRejectsUnsafeResultShapes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -499,6 +562,8 @@ func TestParseChatCompletionRejectsUnsafeResultShapes(t *testing.T) {
 		{name: "category", content: `{"confidence":0.8,"jd_category":1000}`},
 		{name: "too many tags", content: `{"confidence":0.8,"tags":["a","b","c","d","e","f"]}`},
 		{name: "bad language", content: `{"confidence":0.8,"language":"not-a-language"}`},
+		{name: "invalid date", content: `{"confidence":0.8,"dates":[{"role":"due","value":"2026-02-30","precision":"day","raw_text":"February 30","evidence":"Due February 30","confidence":0.9}]}`},
+		{name: "invalid date role", content: `{"confidence":0.8,"dates":[{"role":"birthday","value":"2026-02-01","precision":"day","raw_text":"February 1","evidence":"Birthday February 1","confidence":0.9}]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

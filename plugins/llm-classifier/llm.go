@@ -44,6 +44,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -127,15 +128,30 @@ type JDCat struct {
 // called from the post-classify Subscriber (handler.go). No loops or
 // retries live at the plugin layer; the outbox handles job retries.
 
+const MaxExtractedDates = 3
+
+// DateCandidate is a typed, source-grounded all-day date proposed during the
+// same completion that classifies the document. Every candidate remains
+// pending until a user accepts it.
+type DateCandidate struct {
+	Role       string  `json:"role"`
+	Value      string  `json:"value"`
+	Precision  string  `json:"precision"`
+	RawText    string  `json:"raw_text"`
+	Evidence   string  `json:"evidence"`
+	Confidence float64 `json:"confidence"`
+}
+
 // Result is what a classify call returns after parsing the model's JSON.
-// Consumers apply the suggested fields when Confidence >= threshold.
+// Consumers confidence-gate metadata; Dates are always persisted for review.
 type Result struct {
-	Title         string   `json:"title"`
-	Correspondent string   `json:"correspondent"`
-	Tags          []string `json:"tags"`
-	JDCategory    int      `json:"jd_category"`
-	Confidence    float64  `json:"confidence"`
-	Reasoning     string   `json:"reasoning,omitempty"`
+	Title         string          `json:"title"`
+	Correspondent string          `json:"correspondent"`
+	Tags          []string        `json:"tags"`
+	JDCategory    int             `json:"jd_category"`
+	Confidence    float64         `json:"confidence"`
+	Reasoning     string          `json:"reasoning,omitempty"`
+	Dates         []DateCandidate `json:"dates,omitempty"`
 	// Language is the dominant language of the document as the
 	// LLM sees it — an ISO-639-1 code ("de", "en", "kn"), or a
 	// short CSV for genuinely mixed content ("de,en"). Written to
@@ -332,15 +348,19 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		return nil, ErrDisabled
 	}
 	cfg := rt.cfg
-	if utf8.RuneCountInString(content) > cfg.MaxContentChars {
-		content = truncateChars(content, cfg.MaxContentChars) + "\n… [truncated]"
-	}
+	originalContent := content
+	content = selectClassificationContent(content, cfg.MaxContentChars)
 	body := buildRequestBody(cfg.Model, title, content, jdCats, siblingTitles)
 	rb, err := p.doCompletion(ctx, rt, body)
 	if err != nil {
 		return nil, err
 	}
-	return parseChatCompletion(rb)
+	result, err := parseChatCompletion(rb)
+	if err != nil {
+		return nil, err
+	}
+	result.Dates = groundedDateCandidates(result.Dates, originalContent)
+	return result, nil
 }
 
 // Complete runs a bounded plain-text completion through the same runtime,
@@ -436,6 +456,83 @@ func truncateChars(s string, max int) string {
 	return s
 }
 
+var documentDateSignal = regexp.MustCompile(`(?i)(?:\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b|\b\d{4}[-/.](?:0?[1-9]|1[0-2])\b|\b(?:0?[1-9]|1[0-2])[-/.]\d{4}\b|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b)`)
+
+func selectClassificationContent(content string, maxRunes int) string {
+	if utf8.RuneCountInString(content) <= maxRunes {
+		return content
+	}
+	if maxRunes < 600 {
+		return truncateChars(content, maxRunes)
+	}
+	budget := maxRunes - 160
+	headLimit := budget / 2
+	tailLimit := budget / 6
+	excerptLimit := budget - headLimit - tailLimit
+
+	var selected strings.Builder
+	selected.WriteString(truncateChars(content, headLimit))
+	if excerpts := dateContextExcerpts(content, excerptLimit); excerpts != "" {
+		selected.WriteString("\n\n[date-bearing excerpts]\n")
+		selected.WriteString(excerpts)
+	}
+	selected.WriteString("\n\n[end of document]\n")
+	selected.WriteString(lastChars(content, tailLimit))
+	return truncateChars(selected.String(), maxRunes)
+}
+
+func dateContextExcerpts(content string, maxRunes int) string {
+	matches := documentDateSignal.FindAllStringIndex(content, 24)
+	if len(matches) == 0 {
+		return ""
+	}
+	var excerpts strings.Builder
+	usedRunes := 0
+	lastEnd := -1
+	for _, match := range matches {
+		start := max(0, match[0]-180)
+		end := min(len(content), match[1]+260)
+		for start > 0 && !utf8.RuneStart(content[start]) {
+			start--
+		}
+		for end < len(content) && !utf8.RuneStart(content[end]) {
+			end++
+		}
+		if start <= lastEnd {
+			continue
+		}
+		excerpt := strings.TrimSpace(content[start:end])
+		remaining := maxRunes - usedRunes
+		if remaining <= 0 {
+			break
+		}
+		excerpt = truncateChars(excerpt, remaining)
+		if excerpts.Len() > 0 {
+			excerpts.WriteString("\n…\n")
+		}
+		excerpts.WriteString(excerpt)
+		usedRunes += utf8.RuneCountInString(excerpt)
+		lastEnd = end
+	}
+	return excerpts.String()
+}
+
+func lastChars(value string, limit int) string {
+	total := utf8.RuneCountInString(value)
+	if total <= limit {
+		return value
+	}
+	skip := total - limit
+	count := 0
+	for index := range value {
+		if count == skip {
+			return value[index:]
+		}
+		count++
+	}
+	return value
+}
+
 // ---------- helpers, kept unexported + testable ----------
 
 // buildRequestBody assembles the /v1/chat/completions payload with a JSON
@@ -492,6 +589,14 @@ Respond with a JSON object:
   reasoning: one short sentence explaining low confidence, else empty
   language: dominant language as an ISO-639-1 code ("en","de","kn"),
             or a short CSV for mixed content ("de,en"); "" if unclear
+  dates: 0-3 important actionable or lifecycle dates. Each item has:
+         role: issued|due|start|end|expiry|renewal|service|other
+         value: normalized YYYY-MM-DD (use day 01 for month/year precision)
+         precision: day|month|year
+         raw_text: the exact date phrase from the document
+         evidence: a short exact quote that contains the date phrase
+         confidence: 0.0-1.0 for this date
+         Return [] when no date is directly supported by the content.
 
 Return ONLY the JSON object; no prose, no markdown.`
 
@@ -541,6 +646,37 @@ func parseCompletionContent(body []byte) (string, error) {
 	return raw, nil
 }
 
+var validDateRoles = map[string]bool{
+	"issued": true, "due": true, "start": true, "end": true,
+	"expiry": true, "renewal": true, "service": true, "other": true,
+}
+
+var validDatePrecisions = map[string]bool{
+	"day": true, "month": true, "year": true,
+}
+
+func groundedDateCandidates(candidates []DateCandidate, content string) []DateCandidate {
+	if len(candidates) == 0 || strings.TrimSpace(content) == "" {
+		return []DateCandidate{}
+	}
+	normalizedContent := normalizedEvidenceText(content)
+	grounded := make([]DateCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		evidence := normalizedEvidenceText(candidate.Evidence)
+		rawText := normalizedEvidenceText(candidate.RawText)
+		if evidence != "" && rawText != "" &&
+			strings.Contains(normalizedContent, evidence) &&
+			strings.Contains(evidence, rawText) {
+			grounded = append(grounded, candidate)
+		}
+	}
+	return grounded
+}
+
+func normalizedEvidenceText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
 func validateResult(r *Result) error {
 	if r == nil {
 		return errors.New("empty result")
@@ -588,6 +724,53 @@ func validateResult(r *Result) error {
 	} else {
 		r.Language = ""
 	}
+	if len(r.Dates) > MaxExtractedDates {
+		return fmt.Errorf("dates must contain at most %d entries", MaxExtractedDates)
+	}
+	dateSeen := make(map[string]bool, len(r.Dates))
+	dates := make([]DateCandidate, 0, len(r.Dates))
+	for _, candidate := range r.Dates {
+		candidate.Role = strings.ToLower(strings.TrimSpace(candidate.Role))
+		candidate.Value = strings.TrimSpace(candidate.Value)
+		candidate.Precision = strings.ToLower(strings.TrimSpace(candidate.Precision))
+		if !validDateRoles[candidate.Role] {
+			return fmt.Errorf("invalid date role %q", candidate.Role)
+		}
+		if !validDatePrecisions[candidate.Precision] {
+			return fmt.Errorf("invalid date precision %q", candidate.Precision)
+		}
+		parsed, err := time.Parse("2006-01-02", candidate.Value)
+		if err != nil || parsed.Format("2006-01-02") != candidate.Value {
+			return fmt.Errorf("date value %q must be a valid YYYY-MM-DD date", candidate.Value)
+		}
+		if candidate.Precision == "month" && parsed.Day() != 1 {
+			return errors.New("month-precision dates must use day 01")
+		}
+		if candidate.Precision == "year" && (parsed.Month() != time.January || parsed.Day() != 1) {
+			return errors.New("year-precision dates must use January 01")
+		}
+		if math.IsNaN(candidate.Confidence) || math.IsInf(candidate.Confidence, 0) ||
+			candidate.Confidence < 0 || candidate.Confidence > 1 {
+			return errors.New("date confidence must be between 0 and 1")
+		}
+		candidate.RawText, err = cleanResultText(candidate.RawText, 200, "date raw_text")
+		if err != nil {
+			return err
+		}
+		candidate.Evidence, err = cleanResultText(candidate.Evidence, 500, "date evidence")
+		if err != nil {
+			return err
+		}
+		if candidate.RawText == "" || candidate.Evidence == "" {
+			return errors.New("date raw_text and evidence are required")
+		}
+		key := candidate.Role + "\x00" + candidate.Value + "\x00" + candidate.Evidence
+		if !dateSeen[key] {
+			dateSeen[key] = true
+			dates = append(dates, candidate)
+		}
+	}
+	r.Dates = dates
 	return nil
 }
 
