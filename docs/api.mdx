@@ -1326,9 +1326,10 @@ bounds, and language fields. Every source and context ID is reauthorized with
 fresh ACL, trash, sensitivity, and scope checks.
 
 The response contains at most six sources, structurally validated citations,
-grounding state, and complete intelligence counts. Provider evidence is bounded
-to 300 Unicode characters per title, 1,600 per snippet, three accepted facts
-per source, and twelve facts total:
+grounding state, and complete intelligence counts. Suchi adds missing inline
+markers from the provider's structured citation list. Provider evidence is
+bounded to 300 Unicode characters per title, 1,600 per snippet, three accepted
+facts per source, and twelve facts total:
 
 ```json
 {
@@ -1359,9 +1360,10 @@ per source, and twelve facts total:
 ```
 
 No evidence returns the stable no-evidence answer without a provider call.
-Insufficient evidence returns a stable insufficient answer. Malformed or
-out-of-range citations return `502 invalid_provider_response`; provider
-failures return `502 provider_failure`; a disabled runtime returns
+Insufficient evidence, including an answer with no source numbers, returns the
+stable insufficient answer. Malformed or out-of-range citations return
+`502 invalid_provider_response`; provider failures return
+`502 provider_failure`; a disabled runtime returns
 `503 model_unavailable`; the per-user/concurrency gate returns
 `429 chat_rate_limited` with `Retry-After`.
 

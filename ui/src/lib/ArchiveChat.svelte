@@ -303,7 +303,7 @@
           <header class="turn-question"><span>Question</span><p>{turn.question}</p></header>
 
           {#if sending && turn === turns.at(-1) && !turn.answer && !turn.error}
-            <div class="research-thinking"><span></span><span></span><span></span><em>Retrieving authorized evidence</em></div>
+            <div class="research-thinking"><span></span><span></span><span></span><em>Reading the documents…</em></div>
           {/if}
 
           {#if turn.answer}

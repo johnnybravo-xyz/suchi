@@ -1406,6 +1406,7 @@ test('supports cancellation, focus return, and the full-screen mobile research d
   await omnibox.fill('slow question')
   await page.getByRole('button', { name: 'Ask the archive' }).click()
   const dialog = page.getByRole('dialog', { name: 'Archive research' })
+  await expect(page.getByText('Reading the documents…')).toBeVisible()
   await expect(dialog).toBeVisible()
   await expect.poll(async () => (await dialog.boundingBox()).x).toBe(0)
   await expect.poll(async () => Math.round((await dialog.boundingBox()).width)).toBe(390)

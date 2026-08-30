@@ -26,9 +26,10 @@ Notable user-visible changes to Suchi are recorded here.
   from their own response state.
 - Calendar resolves an owned or shared saved View by ID on the server, applies
   its complete filter, and then reapplies document ACLs.
-- Archive research requests provider JSON mode, tolerates numeric citation
-  strings, logs safe structural rejection reasons, and includes receipt totals
-  in bounded evidence passages.
+- Archive research requests provider JSON mode, normalizes structured citations
+  into clickable answer markers, tolerates numeric citation strings, logs safe
+  structural rejection reasons, and includes receipt totals in bounded evidence
+  passages.
 
 ## [0.1.0-beta.1] - 2026-08-29
 

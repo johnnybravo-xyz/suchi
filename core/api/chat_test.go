@@ -425,22 +425,85 @@ func TestChatCarriesAuthorizedContextSourcesAcrossFollowUps(t *testing.T) {
 	}
 }
 
-func TestChatRejectsInvalidCitationContracts(t *testing.T) {
-	tests := []string{
-		`{"answer":"Unsupported [2].","citations":[2],"sufficient":true}`,
-		`{"answer":"Mismatch [1].","citations":[],"sufficient":true}`,
-		`{"answer":"Insufficient [1].","citations":[1],"sufficient":false}`,
+func TestChatRejectsOutOfRangeCitations(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 1, 1, "Lease", "lease evidence", "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Unsupported [2].","citations":[2],"sufficient":true}`, nil
 	}
-	for _, response := range tests {
-		t.Run(response, func(t *testing.T) {
-			s := newChatTestServer(t)
-			seedChatDoc(t, s, 1, 1, "Lease", "lease evidence", "public", false)
-			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
-				return response, nil
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"lease"}`, adminPrincipal(1))
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "invalid_provider_response") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChatAddsMarkersFromStructuredCitations(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 1, 1, "Travel receipt", "previous travel total", "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"The previous travel total was $75.74.","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"how much did I spend on my previous travel"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Answer != "The previous travel total was $75.74. [1]" ||
+		!out.Grounded || len(out.Citations) != 1 || out.Citations[0] != 1 {
+		t.Fatalf("response=%+v", out)
+	}
+}
+
+func TestChatTreatsUncitedProviderAnswerAsInsufficient(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 1, 1, "Travel receipt", "previous travel total", "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"The previous travel total was $75.74.","citations":[],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"how much did I spend on my previous travel"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Answer != chatInsufficientAnswer || out.Grounded || len(out.Citations) != 0 || len(out.Sources) != 1 {
+		t.Fatalf("response=%+v", out)
+	}
+}
+
+func TestParseChatModelAnswerNormalizesCitationPresentation(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantAnswer string
+		wantCited  bool
+	}{
+		{"metadata only", `{"answer":"Supported.","citations":[1],"sufficient":true}`, "Supported. [1]", true},
+		{"marker only", `{"answer":"Supported [1].","citations":[],"sufficient":true}`, "Supported [1].", true},
+		{"missing grounding", `{"answer":"Unsupported.","citations":[],"sufficient":true}`, "Unsupported.", false},
+		{"declared insufficient", `{"answer":"No evidence [1].","citations":[1],"sufficient":false}`, "No evidence [1].", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			answer, citations, grounded, err := parseChatModelAnswer(test.raw, 1)
+			if err != nil {
+				t.Fatal(err)
 			}
-			rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"lease"}`, adminPrincipal(1))
-			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "invalid_provider_response") {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			if answer != test.wantAnswer || grounded != test.wantCited {
+				t.Fatalf("answer=%q citations=%v grounded=%t", answer, citations, grounded)
+			}
+			if test.wantCited && (len(citations) != 1 || citations[0] != 1) {
+				t.Fatalf("citations=%v", citations)
+			}
+			if !test.wantCited && len(citations) != 0 {
+				t.Fatalf("citations=%v", citations)
 			}
 		})
 	}

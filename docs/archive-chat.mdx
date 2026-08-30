@@ -89,7 +89,7 @@ then return this schema:
 
 ```json
 {
-  "answer": "The policy expires on September 14, 2026 [1].",
+  "answer": "The policy expires on September 14, 2026.",
   "citations": [1],
   "sufficient": true
 }
@@ -98,22 +98,21 @@ then return this schema:
 Provider requirements are listed under
 [LLM classifier: Hosted providers](/llm-classifier#hosted-providers).
 
-Validation requires:
-
-- a non-empty bounded answer;
-- unique citation numbers;
-- every citation between `1` and the number of supplied sources;
-- every listed citation to appear as an inline `[n]` marker;
-- at least one citation when `sufficient` is true; and
-- no citations when `sufficient` is false.
+Validation requires a non-empty bounded answer and every citation number to be
+between `1` and the number of supplied sources. The `citations` array is the
+structured grounding contract; Suchi adds any missing inline `[n]` markers
+after validation. Existing inline markers remain accepted for provider
+compatibility, and can supply the citation list when the array is empty.
+Contradictory or out-of-range source numbers are rejected.
 
 These checks verify the response format and source numbers. They do not prove
 that every claim follows from the cited text. The reader can open each source to
 check the answer.
 
-An invalid response returns `502 invalid_provider_response`. When the model says
-that evidence is insufficient, Suchi returns a stable insufficient-evidence
-answer and retains the retrieved source boundary.
+When `sufficient` is false, or a nominally sufficient answer supplies no source
+numbers at all, Suchi returns a stable insufficient-evidence answer and retains
+the retrieved source boundary. Malformed responses and invalid source numbers
+return `502 invalid_provider_response`.
 
 Document text remains untrusted prompt data. The system instruction tells the
 model to ignore role changes and instructions inside evidence. Archive research
