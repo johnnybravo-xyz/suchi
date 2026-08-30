@@ -105,9 +105,9 @@ Negation applies only to the following clause. There is no grouped negation.
 | `title:` | Prefix or quoted phrase restricted to title. |
 | `content:` | Prefix or quoted phrase restricted to extracted content. |
 | `added:` | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`. |
-| `date:` | Approved extracted date using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
-| `date-role:` | Role of an approved date: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
-| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires an approved extracted date. |
+| `date:` | Date available to Calendar using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
+| `date-role:` | Calendar date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
+| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires a date available to Calendar. |
 
 Examples:
 
@@ -119,9 +119,9 @@ is:inbox -is:encrypted
 
 Only `added:` and `date:` accept comparison operators. `tag:>=tax` is rejected.
 All positive `date:` comparisons and `date-role:` clauses must match the same
-approved date fact. Negated date clauses remain independent `NOT EXISTS`
-conditions. Approved dates are readable document metadata, so these predicates
-require `documents:read`, not `archive_intelligence`.
+Calendar date. Negated date clauses remain independent `NOT EXISTS`
+conditions. Dates available to Calendar are readable document metadata, so
+these predicates require `documents:read`, not `archive_intelligence`.
 Metadata names are resolved before execution. Unknown values return errors;
 ambiguous values return suggestions.
 
@@ -244,7 +244,7 @@ Clients should not split or reinterpret clauses themselves.
 ## Saved Views
 
 New Views store one normalized query in `filter_json.q`. Visual category, tag,
-correspondent, type, sensitivity, and accepted-date controls are converted into
+correspondent, type, sensitivity, and document-date controls are converted into
 the same language before persistence. Normalization quotes or escapes values
 and is stable across parse/serialize round trips.
 

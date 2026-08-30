@@ -7,9 +7,9 @@ export const USER_CAPABILITIES = Object.freeze([
   }),
   Object.freeze({
     key: 'archive_intelligence',
-    label: 'Review extracted facts',
-    setupLabel: 'Review extracted facts',
-    description: 'Review facts extracted from documents before Suchi uses them in answers, search, and Calendar.',
+    label: 'Manage document dates',
+    setupLabel: 'Manage document dates',
+    description: 'Extract dates, review uncertain results, and use Calendar dates in answers and search.',
   }),
   Object.freeze({
     key: 'mailboxes',

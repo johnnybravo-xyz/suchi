@@ -1396,6 +1396,10 @@ Returns the standard pagination envelope. Filters:
 | `q` | Rich document query applied to source documents |
 | `page`, `page_size` | Standard pagination; max 500 |
 
+`accepted` is the storage status for a date available to Calendar. It may be
+set automatically by the configured model threshold or by a person's decision
+in Approvals; `reviewed_by` is present only for the latter.
+
 Stats responses expose the pending extracted-fact count as
 `pending_intelligence`. Browser document-list filters use
 `jd_category_id`, `document_type__id`, `tags__id__in`,
@@ -1417,7 +1421,8 @@ fields.
 
 Queues the existing post-ingest pipeline for each authorized document and
 returns `202` with granular per-document results. It does not add another model
-call to the pipeline.
+call to the pipeline. The current confidence threshold and `date_auto_apply`
+setting decide whether each extracted date enters Calendar or stays pending.
 
 ### `POST /api/intelligence/resolve`
 
@@ -1448,6 +1453,7 @@ signal; plaintext key material is never returned.
   "egress_ack": false,
   "has_api_key": false,
   "confidence_threshold": 0.7,
+  "date_auto_apply": true,
   "archive_enabled": true,
   "archive_auto_threshold": 0.9,
   "archive_review_threshold": 0.5
@@ -1457,10 +1463,15 @@ signal; plaintext key material is never returned.
 ### `POST /api/admin/settings/llm`
 
 Body: `{enabled, endpoint_url, model, api_key, clear_api_key, egress_ack,
-confidence_threshold, archive_enabled, archive_auto_threshold,
-archive_review_threshold}`. The model threshold must be between `0.50` and
-`0.95`. The archive review threshold must be `0.50` to `0.90`; the archive
-auto-apply threshold must be `0.55` to `0.95` and greater than review.
+confidence_threshold, date_auto_apply, archive_enabled,
+archive_auto_threshold, archive_review_threshold}`. The model threshold must be
+between `0.50` and `0.95`. When `date_auto_apply` is true, extracted dates at or
+above that threshold enter Calendar; other dates remain pending for Approvals.
+Saving an enabled automatic-date configuration also promotes matching pending
+dates without another model call. Turning it off affects new extraction and
+does not remove existing Calendar dates. The archive review threshold must be
+`0.50` to `0.90`; the archive auto-apply threshold must be `0.55` to `0.95` and
+greater than review.
 Enabling requires an HTTP(S) endpoint and model. Non-local endpoints require
 `egress_ack=true`. A blank `api_key` preserves any stored key; a non-blank key
 is AEAD-sealed before the settings transaction commits. `clear_api_key=true`

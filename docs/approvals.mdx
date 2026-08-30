@@ -139,17 +139,20 @@ the approved write. Reviewable extracted facts use the deliberately separate
 `document_intelligence` ledger because they are bulk metadata decisions, not
 state-machine runs.
 
-## Review extracted facts
+## Review dates
 
-The Approvals screen also hosts pending `document_intelligence` candidates.
-This is one flat review queue shared by registered fact types. Selection works
-per candidate, source document, or visible result set; one bounded API call
-approves or rejects the selected IDs.
+The Approvals screen hosts pending `document_intelligence` candidates. Extracted
+dates appear here when they fall below the model confidence threshold or when
+automatic Calendar dates are disabled. Selection works per date, source
+document, or visible result set.
+
+More than two source-document groups use a two-column desktop grid and a single
+mobile column. The selected-date action bar stays above the list while
+scrolling. One bounded API call adds or rejects the selected IDs.
 
 This review does not create approval definitions, runs, transitions, or one
-task row per fact. The candidate row already carries provenance, confidence,
-source revision, and review state. This keeps a document containing many
-extracted facts cheap to review while preserving an explicit reviewer and
+task row per date. The candidate row already carries provenance, confidence,
+source revision, and review state; a manual decision adds its reviewer and
 timestamp. See [Archive research](/archive-chat#extracted-facts-and-dates).
 
 ## Rescan proposals

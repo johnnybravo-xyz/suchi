@@ -133,7 +133,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		"has_title", res.Title != "",
 		"has_correspondent", res.Correspondent != "",
 		"tag_count", len(res.Tags),
-		"date_count", len(res.Dates))
+		"date_count", len(res.Dates),
+		"date_auto_apply", startRuntime.cfg.DateAutoApply,
+		"auto_apply_threshold", startRuntime.cfg.ConfidenceThreshold)
 
 	// Low-confidence path: apply only the needs-review tag so an
 	// operator sees the doc in the review queue. Leaves title,
@@ -146,7 +148,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		if err := replacePendingIntelligenceInTx(ctx, tx, e.DocID, sourceBlob, content, res.Dates, now); err != nil {
+		if err := replaceDateCandidatesInTx(ctx, tx, e.DocID, sourceBlob, content, res.Dates, startRuntime.cfg.DateAutoApply, threshold, now); err != nil {
 			return err
 		}
 
@@ -324,7 +326,7 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 	return out, rows.Err()
 }
 
-func replacePendingIntelligenceInTx(ctx context.Context, tx *sql.Tx, docID int64, sourceBlob, content string, dates []DateCandidate, now int64) error {
+func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sourceBlob, content string, dates []DateCandidate, autoApply bool, autoApplyThreshold float64, now int64) error {
 	const extractor = "llm-classifier"
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM document_intelligence
@@ -341,6 +343,10 @@ func replacePendingIntelligenceInTx(ctx context.Context, tx *sql.Tx, docID int64
 		if err != nil {
 			return err
 		}
+		status := "pending"
+		if autoApply && candidate.Confidence >= autoApplyThreshold {
+			status = "accepted"
+		}
 		var evidenceStart any
 		if index := strings.Index(lowerContent, strings.ToLower(candidate.RawText)); index >= 0 {
 			evidenceStart = index
@@ -350,11 +356,11 @@ func replacePendingIntelligenceInTx(ctx context.Context, tx *sql.Tx, docID int64
 				document_id, intelligence_type, role, value_json, sort_value,
 				raw_text, evidence_text, evidence_start, confidence, status,
 				extractor, source_blob, extraction_version, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(document_id, intelligence_type, role, value_json, evidence_text, extractor)
 			DO NOTHING
 		`, docID, candidate.Type, candidate.Role, candidate.ValueJSON, candidate.SortValue,
-			candidate.RawText, candidate.EvidenceText, evidenceStart, candidate.Confidence,
+			candidate.RawText, candidate.EvidenceText, evidenceStart, candidate.Confidence, status,
 			extractor, sourceBlob, PipelineVersionLLM, now, now); err != nil {
 			return err
 		}

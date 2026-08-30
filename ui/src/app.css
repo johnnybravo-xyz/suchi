@@ -107,7 +107,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 .side-head {
-  font-size: .64rem; font-weight: 600; letter-spacing: 0; text-transform: uppercase;
+  font-size: .64rem; font-weight: 600; letter-spacing: 0;
   color: var(--faint); padding: 16px 10px 6px;
 }
 .jd-tree a {
@@ -495,7 +495,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   display: grid; gap: 3px; margin: 0 0 14px; padding: 11px 0;
   border-block: 1px solid var(--line); color: var(--muted);
 }
-.share-preview > span { font-size: .7rem; font-weight: 600; text-transform: uppercase; color: var(--faint); }
+.share-preview > span { font-size: .7rem; font-weight: 600; color: var(--faint); }
 .share-preview > strong { color: var(--ink); font-size: .86rem; overflow-wrap: anywhere; }
 .share-preview > small { font-size: .78rem; }
 .share-preview > em { font-size: .68rem; font-style: normal; color: var(--faint); }
@@ -516,7 +516,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .omni-drop { position: absolute; top: calc(100% + 8px); left: 0; right: 0; z-index: 60;
   background: var(--bg); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow);
   padding: 6px; max-height: 60vh; overflow-y: auto; }
-.omni-lbl { font-size: .62rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase;
+.omni-lbl { font-size: .62rem; font-weight: 700; letter-spacing: 0;
   color: var(--faint); padding: 8px 10px 4px; }
 .omni-row { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   border: 0; background: none; font: inherit; color: var(--ink); padding: 8px 10px; border-radius: 8px; cursor: pointer; }

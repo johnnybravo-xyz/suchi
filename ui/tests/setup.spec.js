@@ -105,15 +105,19 @@ async function mockAPI(page, options = {}) {
       triggers: [{ code: 2, type: 'document_added', name: 'After a new document lands' }],
       actions: [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
     }
-    else if (path === '/api/admin/settings/llm') body = {
-      enabled: false,
-      active: false,
-      endpoint_url: 'http://host.suchi.local:11434/v1',
-      model: 'qwen2.5:7b',
-      confidence_threshold: 0.7,
-      archive_enabled: true,
-      archive_auto_threshold: 0.9,
-      archive_review_threshold: 0.5,
+    else if (path === '/api/admin/settings/llm') {
+      if (request.method() === 'POST') options.llmSettingsRequests?.push(request.postDataJSON())
+      body = {
+        enabled: false,
+        active: false,
+        endpoint_url: 'http://host.suchi.local:11434/v1',
+        model: 'qwen2.5:7b',
+        confidence_threshold: 0.7,
+        date_auto_apply: options.dateAutoApply ?? true,
+        archive_enabled: true,
+        archive_auto_threshold: 0.9,
+        archive_review_threshold: 0.5,
+      }
     }
     else if (path === '/api/admin/settings/preferences') body = {
       backup_interval_hours: 24,
@@ -424,10 +428,12 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
 })
 
 test('separates completed archive administration from account settings', async ({ page }) => {
+  const llmSettingsRequests = []
   await mockAPI(page, {
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
     currentPreset: 'household',
+    llmSettingsRequests,
   })
   await page.goto('/#/settings')
 
@@ -467,6 +473,12 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=llm$/)
   await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
+  const dateAutoApply = page.getByLabel('Add dates meeting this score directly to Calendar')
+  await expect(dateAutoApply).toBeChecked()
+  await dateAutoApply.uncheck()
+  await page.getByRole('button', { name: 'Save model' }).click()
+  await expect.poll(() => llmSettingsRequests.length).toBe(1)
+  expect(llmSettingsRequests[0].date_auto_apply).toBe(false)
   await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Skip|Done|Defaults are fine/ })).toHaveCount(0)
   const overviewReload = page.waitForRequest((request) =>
@@ -1560,7 +1572,7 @@ test('suppresses the global Omnibox shortcut behind modal dialogs', async ({ pag
   await expect(page.getByLabel('Search or run a command')).not.toBeFocused()
 })
 
-test('bulk-approves extracted facts by document', async ({ page }) => {
+test('reviews dates in a responsive grid with visible actions', async ({ page }, testInfo) => {
   const intelligenceRequests = []
   await mockAPI(page, {
     intelligenceRequests,
@@ -1582,23 +1594,49 @@ test('bulk-approves extracted facts by document', async ({ page }) => {
         raw_text: '12 August 2025', evidence_text: 'Signed on 12 August 2025.',
         confidence: 0.62, status: 'pending',
       },
+      {
+        id: 73, document_id: 18, document_title: 'Boarding pass.pdf',
+        document_has_thumbnail: false, type: 'date', role: 'service',
+        value: { date: '2026-08-06', precision: 'day' }, sort_value: '2026-08-06',
+        raw_text: '06 Aug 2026', evidence_text: 'Date 06 Aug 2026',
+        confidence: 0.95, status: 'pending',
+      },
+      {
+        id: 74, document_id: 19, document_title: 'Restaurant receipt.pdf',
+        document_has_thumbnail: false, type: 'date', role: 'issued',
+        value: { date: '2025-03-01', precision: 'day' }, sort_value: '2025-03-01',
+        raw_text: '3/1/25', evidence_text: 'Date: 3/1/25, 2:48 PM',
+        confidence: 0.98, status: 'pending',
+      },
     ],
   })
   await page.goto('/#/tasks')
 
-  await expect(page.getByRole('heading', { name: 'Review extracted facts' })).toBeVisible()
-  await expect(page.getByText('Sep 1, 2026 · renewal')).toBeVisible()
-  await expect(page.getByText('1 selected')).toBeVisible()
-  await page.getByRole('checkbox', { name: 'Select every candidate from Lease agreement.pdf' }).check()
-  await page.getByRole('button', { name: 'Approve 2' }).click()
+  await expect(page.getByRole('heading', { name: 'Check dates before they reach Calendar' })).toBeVisible()
+  await expect(page.getByText('Dates needing a quick check', { exact: true })).toBeVisible()
+  expect(await page.getByText('Dates needing a quick check', { exact: true }).evaluate(element => getComputedStyle(element).textTransform)).toBe('none')
+  await expect(page.getByText('3 of 4 dates selected')).toBeVisible()
+  const reviewGrid = page.locator('.intelligence-groups')
+  await expect(reviewGrid).toHaveClass(/review-grid/)
+  const columnCount = await reviewGrid.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+  expect(columnCount).toBe((page.viewportSize()?.width || 0) > 1050 ? 2 : 1)
+  const actions = page.getByRole('group', { name: 'Review selected dates' })
+  await expect(actions).toBeInViewport()
+  expect(await actions.evaluate(element => getComputedStyle(element).position)).toBe('sticky')
+  await page.screenshot({ path: `/tmp/suchi-date-review-${testInfo.project.name}.png`, fullPage: true })
+  await page.getByText('Document text: “Date: 3/1/25, 2:48 PM”').scrollIntoViewIfNeeded()
+  await expect(actions).toBeInViewport()
+  await page.getByLabel('Select all dates').check()
+  await expect(page.getByText('4 of 4 dates selected')).toBeVisible()
+  await page.getByRole('button', { name: 'Add 4 to Calendar' }).click()
 
   expect(intelligenceRequests).toContainEqual({
-    action: 'resolve', candidate_ids: [71, 72], decision: 'accepted',
+    action: 'resolve', candidate_ids: [71, 72, 73, 74], decision: 'accepted',
   })
-  await expect(page.getByRole('heading', { name: 'Review extracted facts' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Check dates before they reach Calendar' })).toHaveCount(0)
 })
 
-test('shows only approved extracted dates on the calendar', async ({ page }) => {
+test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   const intelligenceQueries = []
   const now = new Date()
   const year = now.getFullYear()
@@ -1625,7 +1663,7 @@ test('shows only approved extracted dates on the calendar', async ({ page }) => 
 
   await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible()
   await expect(page.getByText('Dates from your documents', { exact: true })).toBeVisible()
-  await expect(page.getByText('Only dates reviewed and approved by a person appear here. Each date links to the document it came from.')).toBeVisible()
+  await expect(page.getByText('Dates added automatically or approved in Approvals appear here. Each date links to the document it came from.')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Home insurance renewal notice', exact: true })).toBeVisible()
   await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
   const viewSelect = page.getByLabel('Document view')

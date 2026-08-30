@@ -24,15 +24,16 @@ const (
 	KeySetupCompletedAt = "setup.completed_at"
 	KeySetupIntent      = "setup.intent"
 
-	KeyLLMEndpointURL  = "llm.endpoint_url"
-	KeyLLMModel        = "llm.model"
-	KeyLLMAPIKeySealed = "llm.api_key_sealed"
-	KeyLLMEgressAck    = "llm.egress_ack"
-	KeyLLMDisabled     = "llm.disabled"
-	KeyLLMConfidence   = "llm.confidence_threshold"
-	KeyArchiveEnabled  = "classification.archive_enabled"
-	KeyArchiveAuto     = "classification.archive_auto_threshold"
-	KeyArchiveReview   = "classification.archive_review_threshold"
+	KeyLLMEndpointURL   = "llm.endpoint_url"
+	KeyLLMModel         = "llm.model"
+	KeyLLMAPIKeySealed  = "llm.api_key_sealed"
+	KeyLLMEgressAck     = "llm.egress_ack"
+	KeyLLMDisabled      = "llm.disabled"
+	KeyLLMConfidence    = "llm.confidence_threshold"
+	KeyLLMDateAutoApply = "llm.date_auto_apply"
+	KeyArchiveEnabled   = "classification.archive_enabled"
+	KeyArchiveAuto      = "classification.archive_auto_threshold"
+	KeyArchiveReview    = "classification.archive_review_threshold"
 
 	KeyPreset = "preset"
 
@@ -196,6 +197,7 @@ type LLMConfig struct {
 	APIKey              string
 	EgressAck           bool
 	ConfidenceThreshold float64
+	DateAutoApply       bool
 	// Disabled is persisted separately from EndpointURL so a web-managed
 	// classifier can be turned off without erasing its setup.
 	Disabled bool
@@ -258,11 +260,12 @@ func SetLLMAPIKey(ctx context.Context, database *db.DB, box SecretBox, apiKey st
 // encrypted empty value. Explicit file and environment keys still win.
 func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey *string) error {
 	values := map[string]any{
-		KeyLLMEndpointURL: cfg.EndpointURL,
-		KeyLLMModel:       cfg.Model,
-		KeyLLMEgressAck:   cfg.EgressAck,
-		KeyLLMDisabled:    cfg.Disabled,
-		KeyLLMConfidence:  cfg.ConfidenceThreshold,
+		KeyLLMEndpointURL:   cfg.EndpointURL,
+		KeyLLMModel:         cfg.Model,
+		KeyLLMEgressAck:     cfg.EgressAck,
+		KeyLLMDisabled:      cfg.Disabled,
+		KeyLLMConfidence:    cfg.ConfidenceThreshold,
+		KeyLLMDateAutoApply: cfg.DateAutoApply,
 	}
 	if apiKey != nil {
 		secret, err := sealLLMAPIKey(box, *apiKey)
@@ -294,6 +297,7 @@ func sealLLMAPIKey(box SecretBox, apiKey string) (sealedSecret, error) {
 // remain authoritative.
 func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box SecretBox) (LLMConfig, error) {
 	out := fb
+	out.DateAutoApply = true
 	var s string
 	if !envSet("LLM_ENDPOINT_URL") {
 		if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
@@ -343,6 +347,10 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box Se
 		if err := Get(ctx, database, KeyLLMConfidence, &confidence); err == nil && confidence > 0 {
 			out.ConfidenceThreshold = confidence
 		}
+	}
+	var dateAutoApply bool
+	if err := Get(ctx, database, KeyLLMDateAutoApply, &dateAutoApply); err == nil {
+		out.DateAutoApply = dateAutoApply
 	}
 	if out.ConfidenceThreshold == 0 {
 		out.ConfidenceThreshold = 0.7

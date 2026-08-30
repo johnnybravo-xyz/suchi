@@ -252,6 +252,7 @@ func TestResolveLLMConfig_Precedence(t *testing.T) {
 		APIKey:              "env-key",
 		EgressAck:           false,
 		ConfidenceThreshold: 0.7,
+		DateAutoApply:       true,
 	}
 	// No settings written yet: use the boot fallback.
 	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
@@ -341,6 +342,9 @@ func TestLLMAPIKey_SealedAndResolved(t *testing.T) {
 	}
 	if got.APIKey != "secret-key" {
 		t.Fatalf("APIKey = %q", got.APIKey)
+	}
+	if !got.DateAutoApply {
+		t.Fatal("date auto-apply should default on")
 	}
 }
 

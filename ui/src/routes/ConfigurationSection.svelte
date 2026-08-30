@@ -75,7 +75,7 @@
   let showAllPresets = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
-    egress_ack: false, confidence_threshold: 0.7,
+    egress_ack: false, confidence_threshold: 0.7, date_auto_apply: true,
     archive_enabled: true, archive_auto_threshold: 0.9, archive_review_threshold: 0.5,
   })
   let llmStatus = $state(null)
@@ -148,6 +148,7 @@
     llm.model = st?.model || 'qwen2.5:7b'
     llm.egress_ack = !!st?.egress_ack
     llm.confidence_threshold = st?.confidence_threshold ?? 0.7
+    llm.date_auto_apply = st?.date_auto_apply ?? true
     llm.archive_enabled = st?.archive_enabled ?? true
     llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
     llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
@@ -411,7 +412,7 @@
 
     {:else if section === 'llm'}
       <h3>Classification, research, and extracted facts</h3>
-      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details, extracts dates and other facts for review, and powers <b>Archive research</b> for authorized users.</p>
+      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details, extracts dates for Calendar or review, and powers <b>Archive research</b> for authorized users.</p>
       <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
       {#if llm.archive_enabled}
         <div class="field">
@@ -466,8 +467,11 @@
         <label for="l-confidence">Auto-apply confidence · {Number(llm.confidence_threshold).toFixed(2)}</label>
         <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
                bind:value={llm.confidence_threshold} />
-        <span class="sub" style="font-size:.76rem">Lower applies more model suggestions; higher sends more uncertain documents to review.</span>
+        <span class="sub" style="font-size:.76rem">Model suggestions at or above this score are applied without review.</span>
       </div>
+      <label class="wiz-check"><input type="checkbox" bind:checked={llm.date_auto_apply} />
+        Add dates meeting this score directly to Calendar</label>
+      <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 14px">Turn this off to send newly extracted dates to Approvals. Dates already in Calendar stay there.</p>
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={() => saveAnd(
@@ -491,7 +495,7 @@
           {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
         </div>
       {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, suggests facts for a person to review, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rule above, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>

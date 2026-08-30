@@ -2,6 +2,7 @@ package llmclassifier
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -247,16 +248,16 @@ func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 	}
 }
 
-func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
+func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 	ctx := context.Background()
-	d, docID := openHandlerDocument(t, "Original title", "ambiguous text with renewal date September 1, 2026")
+	d, docID := openHandlerDocument(t, "Original title", "Boarding pass Date 06 Aug 2026; issued August 1, 2026")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2,\"dates\":[{\"role\":\"renewal\",\"value\":\"2026-09-01\",\"precision\":\"day\",\"raw_text\":\"September 1, 2026\",\"evidence\":\"renewal date September 1, 2026\",\"confidence\":0.91}]}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2,\"dates\":[{\"role\":\"service\",\"value\":\"2026-08-06\",\"precision\":\"day\",\"raw_text\":\"06 Aug 2026\",\"evidence\":\"Date 06 Aug 2026\",\"confidence\":0.91},{\"role\":\"issued\",\"value\":\"2026-08-01\",\"precision\":\"day\",\"raw_text\":\"August 1, 2026\",\"evidence\":\"issued August 1, 2026\",\"confidence\":0.69}]}"}}]}`))
 	}))
 	defer srv.Close()
-	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
+	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7, DateAutoApply: true}, silentLog())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,15 +287,45 @@ func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	if reviewTags != 1 {
 		t.Fatalf("needs-review tags = %d, want 1", reviewTags)
 	}
-	var dateStatus, dateValue string
-	if err := d.Read.QueryRowContext(ctx, `
-		SELECT status, sort_value FROM document_intelligence
-		WHERE document_id = ? AND intelligence_type = 'date'
-	`, docID).Scan(&dateStatus, &dateValue); err != nil {
+	for value, wantStatus := range map[string]string{
+		"2026-08-06": "accepted",
+		"2026-08-01": "pending",
+	} {
+		var status string
+		if err := d.Read.QueryRowContext(ctx, `
+			SELECT status FROM document_intelligence
+			WHERE document_id = ? AND intelligence_type = 'date' AND sort_value = ?
+		`, docID, value).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != wantStatus {
+			t.Fatalf("date %s status=%q want=%q", value, status, wantStatus)
+		}
+	}
+}
+
+func TestDateAutoApplyCanBeDisabled(t *testing.T) {
+	ctx := context.Background()
+	d, docID := openHandlerDocument(t, "Boarding pass", "Date 06 Aug 2026")
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Date 06 Aug 2026",
+			[]DateCandidate{{
+				Role: "service", Value: "2026-08-06", Precision: "day",
+				RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 0.95,
+			}}, false, 0.7, time.Now().Unix())
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if dateStatus != "pending" || dateValue != "2026-09-01" {
-		t.Fatalf("date candidate status=%q value=%q", dateStatus, dateValue)
+	var status string
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT status FROM document_intelligence
+		WHERE document_id = ? AND intelligence_type = 'date'
+	`, docID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("date status=%q want=pending", status)
 	}
 }
 

@@ -120,7 +120,7 @@
   .demo-wrap { max-width: 1040px; margin: 0 auto; padding: 18px 12px 48px; }
   .demo-hero { position: relative; overflow: hidden; padding: 28px 30px; border: 1px solid var(--line-strong); border-radius: 16px; background: linear-gradient(135deg, var(--surface), color-mix(in srgb, var(--accent) 8%, var(--surface))); }
   .demo-hero::after { content: ''; position: absolute; right: -65px; top: -95px; width: 250px; height: 250px; border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 50%; box-shadow: 0 0 0 35px color-mix(in srgb, var(--accent) 4%, transparent), 0 0 0 72px color-mix(in srgb, var(--accent) 3%, transparent); pointer-events: none; }
-  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; text-transform: uppercase; }
+  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; }
   .demo-hero h1 { position: relative; z-index: 1; max-width: 700px; margin: 0; font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.08; }
   .lede { position: relative; z-index: 1; max-width: 720px; margin: 11px 0 17px; color: var(--muted); font-size: .9rem; line-height: 1.58; }
   .hero-note { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--muted); font-size: .7rem; }
@@ -136,7 +136,7 @@
   .step-number { position: absolute; top: 14px; right: 15px; color: var(--line-strong); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: 1.55rem; font-weight: 700; }
   .step-icon { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 10px; background: var(--tint); color: var(--accent); }
   .step-copy { position: relative; display: flex; align-items: flex-start; min-width: 0; flex-direction: column; }
-  .step-kicker { margin: 2px 45px 5px 0; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; font-weight: 700; text-transform: uppercase; }
+  .step-kicker { margin: 2px 45px 5px 0; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; font-weight: 700; }
   .step-copy h3 { max-width: 360px; font-size: 1rem; line-height: 1.3; }
   .step-copy p { margin: 8px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
   .step-copy code, .step-copy blockquote { width: 100%; margin: auto 0 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; line-height: 1.45; }

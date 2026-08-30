@@ -35,6 +35,7 @@ type LLMSettingsStatus struct {
 	EgressAck           bool    `json:"egress_ack"`
 	HasAPIKey           bool    `json:"has_api_key"`
 	ConfidenceThreshold float64 `json:"confidence_threshold"`
+	DateAutoApply       bool    `json:"date_auto_apply"`
 	ArchiveEnabled      bool    `json:"archive_enabled"`
 	ArchiveAuto         float64 `json:"archive_auto_threshold"`
 	ArchiveReview       float64 `json:"archive_review_threshold"`

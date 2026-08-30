@@ -355,7 +355,7 @@ archive research, and extracted facts for review; non-local endpoints require
 the egress ack.
 
 Archive research sends only the question, bounded transient history, and
-authorized source title, sensitivity, snippet, plus capability-gated accepted
+authorized source title, sensitivity, snippet, plus capability-gated extracted
 fact value/evidence. It stores no live conversation.
 
 | Env var                             | Purpose                                                                                                                                                 |
@@ -369,8 +369,10 @@ fact value/evidence. It stores no live conversation.
 The setup wizard AEAD-seals API keys before writing them to `settings` and
 never reads plaintext keys back. It exposes masked status, a synthetic
 connection test with validated synthetic fields and latency, a live confidence
-slider, an explicit key-clear action, and a local-only switch. Compose installs
-can reach host Ollama at `http://host.suchi.local:11434/v1`.
+slider, a toggle that either sends qualifying dates directly to Calendar or
+keeps every date in Approvals, an explicit key-clear action, and a local-only
+switch. Compose installs can reach host Ollama at
+`http://host.suchi.local:11434/v1`.
 As described under [Precedence](#precedence), config-file and environment
 values pin their individual classifier fields. Unpinned activation,
 configuration changes, key rotation or clearing, disable, and re-enable apply
@@ -409,7 +411,8 @@ reload after a successful save; pinned fields retain their boot value.
 | `ingest.fs_watch_dir` / `ingest.fs_watch_owner`                                                       | Wizard-written fs-watcher values for fields not pinned at boot.                                              |
 | `preset`                                                                                              | Current filing-tree preset.                                                                                  |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local archive-matching controls.                                                    |
-| `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live LLM classifier config. `_sealed` is AEAD-encrypted with the settings key.                                |
+| `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
+| `llm.date_auto_apply`                                                                                | Add dates meeting the model confidence threshold directly to Calendar; defaults to `true`. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
 | `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
 | `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |

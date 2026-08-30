@@ -105,6 +105,10 @@ type Config struct {
 	// instead of applying the suggested classification. Default 0.7.
 	ConfidenceThreshold float64
 
+	// DateAutoApply sends extracted dates at or above ConfidenceThreshold
+	// directly to Calendar. Otherwise every extracted date waits for review.
+	DateAutoApply bool
+
 	// Timeout bounds one classify request. Default 60s — LLMs can be
 	// slow, especially first-token latency on local models.
 	Timeout time.Duration

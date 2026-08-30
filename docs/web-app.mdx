@@ -160,7 +160,7 @@ they can give a member:
 | Interface label | Stored key |
 | --- | --- |
 | **Ask the archive** | `archive_chat` |
-| **Review extracted facts** | `archive_intelligence` |
+| **Manage document dates** | `archive_intelligence` |
 | **Manage mailboxes** | `mailboxes` |
 | **Create share links** | `share_links` |
 | **Share saved views** | `share_views` |
@@ -184,15 +184,17 @@ clears accumulated history. The application shell is inert while the drawer is
 open.
 
 **Save retrieved documents as a view** opens the View creator with exact
-document IDs, not inferred question words. Pending facts link to Approvals
-before approved dates link to Calendar. Archive Q&A itself is read-only and
-never extracts or saves data.
+document IDs, not inferred question words. Dates waiting for a decision link to
+Approvals; dates already available link to Calendar. Archive Q&A itself is
+read-only and never extracts or saves data.
 
-Members with **Review extracted facts** can also extract dates from a Documents
-selection. Approvals groups candidates by document with candidate, document,
-and visible-result selection. Calendar and rich-query date filters use approved
-facts only. Calendar's **Document view** selector sends the saved
-View ID; the server applies its complete filter and ACLs.
+Members with **Manage document dates** can extract dates from a Documents
+selection. Dates below the configured automatic threshold—or every date when
+automatic Calendar dates are disabled—appear in Approvals. More than two
+document groups use a two-column desktop grid, and the selected-date actions
+stay visible above the list. Calendar and rich-query date filters use dates
+added automatically or approved there. Calendar's **Document view** selector
+sends the saved View ID; the server applies its complete filter and ACLs.
 
 See [Archive research](/archive-chat) for the complete workflow and contracts.
 

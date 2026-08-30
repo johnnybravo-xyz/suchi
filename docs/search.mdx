@@ -135,7 +135,7 @@ recognized query qualifier, the endpoint returns full replacement queries for:
 - correspondents;
 - document types;
 - sensitivity values;
-- approved date roles; and
+- Calendar date roles; and
 - `is:` states.
 
 The browser debounces requests by 160 ms and discards stale responses. Selecting
@@ -228,7 +228,7 @@ bypasses object authorization.
 - SQL fragments are fixed; all user values use bound parameters.
 - Metadata filter names resolve to IDs before execution.
 - Snippets are returned only after visibility predicates match.
-- Archive evidence includes at most three approved facts per source and twelve
+- Archive evidence includes at most three extracted facts per source and twelve
   total, while fact summaries remain complete.
 - Fast route, search, and completion changes discard stale browser responses.
 

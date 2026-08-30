@@ -70,7 +70,7 @@
       if (version !== loadVersion) return
       events = response?.results || []
     } catch (ex) {
-      if (version === loadVersion) error = ex.message || 'Could not load approved dates.'
+      if (version === loadVersion) error = ex.message || 'Could not load dates.'
     } finally {
       if (version === loadVersion) loading = false
     }
@@ -104,7 +104,7 @@
     <div>
       <span class="eyebrow">Dates from your documents</span>
       <h2>Calendar</h2>
-      <p>Only dates reviewed and approved by a person appear here. Each date links to the document it came from.</p>
+      <p>Dates added automatically or approved in Approvals appear here. Each date links to the document it came from.</p>
     </div>
     <div class="calendar-filters">
       <label>
@@ -161,12 +161,12 @@
     <aside class="agenda" aria-labelledby="agenda-title">
       <header>
         <span class="eyebrow">Agenda</span>
-        <h3 id="agenda-title">{events.length} approved date{events.length === 1 ? '' : 's'}</h3>
+        <h3 id="agenda-title">{events.length} date{events.length === 1 ? '' : 's'}</h3>
       </header>
       {#if loading && !events.length}
         {#each Array(4) as _}<div class="agenda-skeleton"><div class="skel"></div><div class="skel"></div></div>{/each}
       {:else if !events.length}
-        <div class="agenda-empty"><Icon name="calendar" size={34} /><b>No approved dates this month</b><span>Review extracted dates in Approvals, or choose another document view.</span></div>
+        <div class="agenda-empty"><Icon name="calendar" size={34} /><b>No dates this month</b><span>Review uncertain dates in Approvals, or choose another document view.</span></div>
       {:else}
         <div class="agenda-list">
           {#each events as event (event.id)}
@@ -191,7 +191,7 @@
   .calendar-page { max-width: 1240px; margin: 0 auto; }
   .calendar-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin: 8px 0 20px; }
   .calendar-intro > div:first-child { max-width: 630px; }
-  .eyebrow { display: block; margin-bottom: 6px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; text-transform: uppercase; }
+  .eyebrow { display: block; margin-bottom: 6px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; }
   .calendar-intro h2 { font-size: 1.62rem; }
   .calendar-intro p { margin: 7px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
   .calendar-filters { display: flex; gap: 9px; }
@@ -204,7 +204,7 @@
   .calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
   .month-grid, .agenda { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; }
   .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--line-strong); background: var(--surface-2); }
-  .weekday-row span { padding: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .61rem; font-weight: 700; text-align: center; text-transform: uppercase; }
+  .weekday-row span { padding: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .61rem; font-weight: 700; text-align: center; }
   .day-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); opacity: 1; transition: opacity .16s ease; }
   .day-grid.loading { opacity: .58; }
   .day { position: relative; min-height: 112px; padding: 8px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
@@ -229,10 +229,10 @@
   .agenda-event:hover { background: var(--tint); }
   .agenda-date { display: flex; align-items: center; flex-direction: column; padding: 5px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
   .agenda-date b { font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .9rem; }
-  .agenda-date small { color: var(--muted); font-size: .55rem; text-transform: uppercase; }
+  .agenda-date small { color: var(--muted); font-size: .55rem; }
   .agenda-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
   .agenda-copy > span:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .agenda-copy > span:first-child strong { color: var(--accent); font-size: .65rem; text-transform: uppercase; }
+  .agenda-copy > span:first-child strong { color: var(--accent); font-size: .65rem; }
   .agenda-copy > span:first-child small, .agenda-copy > small { color: var(--faint); font-size: .59rem; }
   .agenda-copy > b { overflow: hidden; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
   .agenda-copy > span:not(:first-child) { color: var(--muted); font-size: .68rem; line-height: 1.4; }

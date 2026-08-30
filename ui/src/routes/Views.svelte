@@ -314,15 +314,15 @@
             </select>
           </div>
           <div class="field">
-            <label for="view-date-from">Approved date from</label>
+            <label for="view-date-from">Document date from</label>
             <input id="view-date-from" class="input" type="date" bind:value={nv.dateFrom} />
           </div>
           <div class="field">
-            <label for="view-date-to">Approved date to</label>
+            <label for="view-date-to">Document date to</label>
             <input id="view-date-to" class="input" type="date" bind:value={nv.dateTo} />
           </div>
           <div class="field">
-            <label for="view-date-role">Approved date role</label>
+            <label for="view-date-role">Document date role</label>
             <select id="view-date-role" class="input" bind:value={nv.dateRole}>
               <option value="">Every role</option>
               {#each DATE_ROLES as role}
@@ -358,7 +358,7 @@
   .views-page { max-width: 960px; margin: 0 auto; }
   .views-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin: 10px 0 26px; }
   .views-intro > div { max-width: 610px; }
-  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .66rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+  .eyebrow { display: block; margin-bottom: 7px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .66rem; font-weight: 700; letter-spacing: 0; }
   .views-intro h2 { font-size: 1.55rem; line-height: 1.18; }
   .views-intro p { margin: 8px 0 0; color: var(--muted); font-size: .9rem; }
   .new-view { flex: none; padding: 9px 16px; }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
@@ -293,6 +294,7 @@ type llmSettingsInput struct {
 	ClearAPIKey         bool     `json:"clear_api_key"`
 	EgressAck           bool     `json:"egress_ack"`
 	ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
+	DateAutoApply       *bool    `json:"date_auto_apply,omitempty"`
 	ArchiveEnabled      *bool    `json:"archive_enabled,omitempty"`
 	ArchiveAuto         *float64 `json:"archive_auto_threshold,omitempty"`
 	ArchiveReview       *float64 `json:"archive_review_threshold,omitempty"`
@@ -395,6 +397,7 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 		EgressAck:           cfg.EgressAck,
 		HasAPIKey:           cfg.APIKey != "",
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
+		DateAutoApply:       cfg.DateAutoApply,
 		ArchiveEnabled:      archive.Enabled,
 		ArchiveAuto:         archive.AutoThreshold,
 		ArchiveReview:       archive.ReviewThreshold,
@@ -445,11 +448,16 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if body.ConfidenceThreshold != nil {
 		confidence = *body.ConfidenceThreshold
 	}
+	dateAutoApply := current.DateAutoApply
+	if body.DateAutoApply != nil {
+		dateAutoApply = *body.DateAutoApply
+	}
 	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
 		EndpointURL:         body.EndpointURL,
 		Model:               body.Model,
 		EgressAck:           body.EgressAck,
 		ConfidenceThreshold: confidence,
+		DateAutoApply:       dateAutoApply,
 		Disabled:            !enabled,
 	}, s.LLMAEAD, apiKeyUpdate); err != nil {
 		s.serverErr(w, "settings.llm.save", err)
@@ -468,6 +476,17 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, archive); err != nil {
 		s.serverErr(w, "settings.archive_classifier.save", err)
 		return
+	}
+	if dateAutoApply && enabled {
+		applied, err := intelligence.AutoApplyPendingDates(
+			r.Context(), s.DB.Write, confidence, time.Now().Unix())
+		if err != nil {
+			s.serverErr(w, "settings.llm.date_auto_apply", err)
+			return
+		}
+		if applied > 0 {
+			s.Log.Info("settings.llm.date_auto_apply", "date_count", applied, "threshold", confidence)
+		}
 	}
 	if s.LLMReloader != nil {
 		if err := s.LLMReloader(r.Context()); err != nil {

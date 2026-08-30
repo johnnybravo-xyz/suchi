@@ -4,6 +4,8 @@
 package intelligence
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,4 +156,24 @@ func validateDateValue(value DateValue) error {
 
 func cleanText(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+// AutoApplyPendingDates makes existing high-confidence dates available to
+// Calendar when the operator enables automatic date application.
+func AutoApplyPendingDates(ctx context.Context, database *sql.DB, threshold float64, now int64) (int64, error) {
+	if database == nil {
+		return 0, errors.New("date auto-apply database is required")
+	}
+	if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 1 {
+		return 0, errors.New("date auto-apply threshold must be between 0 and 1")
+	}
+	result, err := database.ExecContext(ctx, `
+		UPDATE document_intelligence
+		SET status = 'accepted', updated_at = ?
+		WHERE intelligence_type = ? AND status = 'pending' AND confidence >= ?
+	`, now, TypeDate, threshold)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

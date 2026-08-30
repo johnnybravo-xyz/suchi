@@ -1,6 +1,6 @@
 ---
 title: "Archive research"
-description: "Document questions with citations, exact source views, and human-reviewed extracted facts."
+description: "Document questions with citations, exact source views, and confidence-gated extracted facts."
 ---
 
 Archive research is Suchi's read-only retrieval-augmented generation (RAG)
@@ -58,8 +58,8 @@ from ranked Search are centralized in
 - Provider titles are clamped to 300 Unicode characters and source text to
   1,600. Short documents use their complete extracted text; longer documents
   combine the matched passage with the document end.
-- Approved facts are limited to three per source and twelve total; the response
-  summary still counts every visible approved and pending fact.
+- Extracted facts are limited to three per source and twelve total; the response
+  summary still counts every visible fact by status.
 - Context IDs are loaded directly in requested order without a prior-term test.
 - Model output is capped at 700 tokens and 6,000 answer characters.
 - One provider call per successful turn.
@@ -194,22 +194,28 @@ and version numbers are not treated as date signals. The model still has to
 propose a date, application validation must accept the calendar value, and the
 evidence quote must occur in the document.
 
-All extracted facts remain pending regardless of model confidence. High
-confidence only preselects a candidate in the review UI; it never accepts it.
+When **Add dates meeting this score directly to Calendar** is enabled, a date
+at or above the user-defined model confidence threshold goes straight to
+Calendar. Lower-confidence dates wait in Approvals. Enabling the option or
+lowering the threshold immediately moves matching pending dates into Calendar
+without another model call. Turning the option off sends newly extracted dates
+to Approvals; it does not remove dates already in Calendar. Rescan only when a
+document needs date extraction run again.
 
 ### Review and calendar
 
-The Approvals screen groups extracted facts by source document and supports
-selection at candidate, document, and visible-result levels. Accept or reject
-is one bounded, audited transaction with per-document authorization.
+The Approvals screen groups dates still needing a decision by source document.
+Selection works per date, source document, or visible result set; one bounded,
+audited transaction adds or rejects the selected dates after rechecking
+document authorization.
 
-The Calendar reads only extracted dates a person approved. It supports month
-and agenda views, date-role filtering, and Saved View scope. Pending or rejected
-dates never appear.
+Calendar reads dates that were added automatically or approved in Approvals. It
+supports month and agenda views, date-role filtering, and Saved View scope.
+Pending or rejected dates never appear.
 
-Facts a person approved may be included beside their original source snippet in
-a later archive answer. The original document remains the evidence and is still
-cited.
+Dates available to Calendar may be included beside their original source
+snippet in a later archive answer. The original document remains the evidence
+and is still cited.
 
 ## Authorization
 
@@ -220,14 +226,14 @@ Archive research requires:
 - the `archive_chat` capability, implicit for administrators.
 
 Reviewing extracted facts, running extraction, and using Calendar require
-`archive_intelligence`, also implicit for administrators. Approved dates are
+`archive_intelligence`, also implicit for administrators. Calendar dates are
 readable document metadata, so `documents:read` is sufficient for `date:` and
 `date-role:` predicates. Extraction and review mutations additionally require
 `documents:write` and Change permission on every source document.
 
 Public demo sessions are denied both capabilities.
 
-Retrieval, source snapshots, extracted fact lists, approved facts in chat, and
+Retrieval, source snapshots, extracted fact lists, facts used in chat, and
 calendar queries all apply document ACLs inside SQL. Confidential and
 Restricted snippets are excluded from chat until the user enables the
 per-conversation option. With consent off, only unset, Public, and Internal
@@ -311,8 +317,8 @@ Content-Type: application/json
 
 `context_source_ids` accepts at most three cited IDs. The response includes
 `answer`, `sources`, `citations`, `grounded`, and an
-`intelligence` summary. Approved facts attached to a source appear under that
-source's `intelligence` field.
+`intelligence` summary. Facts available to answers appear under their source's
+`intelligence` field.
 
 ### Extracted facts
 
@@ -369,7 +375,7 @@ Use a real configured model when changing either prompt contract:
 1. Classify a long document with a date near the middle.
 2. Confirm the candidate remains pending and includes matching evidence.
 3. Approve it and confirm it appears on Calendar.
-4. Ask a question whose answer uses the approved date.
+4. Ask a question whose answer uses the Calendar date.
 5. Confirm the response JSON has valid citations and the source opens.
 6. Ask a pronoun-based follow-up and confirm the prior cited source remains in
    the evidence set.

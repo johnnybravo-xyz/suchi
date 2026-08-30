@@ -60,16 +60,17 @@ Administrators have every capability implicitly.
 | `share_links` | Create revocable document share links. |
 | `share_views` | Publish saved views to every user's dashboard. |
 
-The web app labels these capabilities **Ask the archive**, **Review extracted
-facts**, **Manage mailboxes**, **Create share links**, and **Share saved views**.
+The web app labels these capabilities **Ask the archive**, **Manage document
+dates**, **Manage mailboxes**, **Create share links**, and **Share saved views**.
 Removing `archive_chat` removes the Ask action; its conversations are already
 transient browser memory and create no server-side records.
 
 Removing a capability also closes the access it granted:
 - Removing `archive_intelligence` hides extraction, extracted-fact review, and
-  Calendar. Existing pending and approved facts remain stored and auditable.
-  Approved dates remain readable document metadata: callers with
-  `documents:read` may still use `date:` and `date-role:` predicates.
+  Calendar. Existing pending facts and dates already in Calendar remain stored
+  and auditable. Dates already available to Calendar remain readable document
+  metadata: callers with `documents:read` may still use `date:` and
+  `date-role:` predicates.
 - Removing `mailboxes` disables the member's mailbox rows without deleting
   them. Granting it again does not re-enable those rows automatically.
 - Removing `share_links` revokes the member's live share links. Granting it

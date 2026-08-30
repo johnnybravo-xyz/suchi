@@ -162,10 +162,11 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 				EgressAck:           cfg.EgressAck,
 				HasAPIKey:           cfg.APIKey != "",
 				ConfidenceThreshold: cfg.ConfidenceThreshold,
+				DateAutoApply:       cfg.DateAutoApply,
 			}, nil
 		},
 	}
-	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"archive_enabled":false,"archive_auto_threshold":0.85,"archive_review_threshold":0.6}`
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"date_auto_apply":false,"archive_enabled":false,"archive_auto_threshold":0.85,"archive_review_threshold":0.6}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -207,8 +208,9 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if resolved.APIKey != "top-secret" || resolved.Model != "qwen2.5:7b" {
 		t.Fatalf("resolved config = %#v", resolved)
 	}
-	if resolved.ConfidenceThreshold != 0.8 {
-		t.Fatalf("confidence threshold = %v", resolved.ConfidenceThreshold)
+	if resolved.ConfidenceThreshold != 0.8 || resolved.DateAutoApply {
+		t.Fatalf("model controls = threshold:%v date_auto_apply:%t",
+			resolved.ConfidenceThreshold, resolved.DateAutoApply)
 	}
 	archive := settings.ResolveArchiveClassifierConfig(req.Context(), d)
 	if archive.Enabled || archive.AutoThreshold != 0.85 || archive.ReviewThreshold != 0.6 {
@@ -234,7 +236,7 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if !status.HasAPIKey || !status.Enabled || !status.Active {
+	if !status.HasAPIKey || !status.Enabled || !status.Active || status.DateAutoApply {
 		t.Fatalf("unexpected masked status: %#v", status)
 	}
 	if status.ArchiveEnabled || status.ArchiveAuto != 0.85 || status.ArchiveReview != 0.6 {
@@ -265,6 +267,48 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	}
 	if clearedStatus.HasAPIKey {
 		t.Fatal("masked status still reports an API key after explicit clear")
+	}
+}
+
+func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 17, 1, "Boarding pass", "Date 06 Aug 2026", "", false)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO document_intelligence(
+			document_id, intelligence_type, role, value_json, sort_value,
+			raw_text, evidence_text, confidence, status, extractor,
+			source_blob, extraction_version, created_at, updated_at
+		) VALUES
+			(17, 'date', 'service', '{"date":"2026-08-06","precision":"day"}',
+			 '2026-08-06', '06 Aug 2026', 'Date 06 Aug 2026', 0.95, 'pending',
+			 'llm-classifier', 'chat-17', 2, 0, 0),
+			(17, 'date', 'issued', '{"date":"2026-07-01","precision":"day"}',
+			 '2026-07-01', '01 Jul 2026', 'Issued 01 Jul 2026', 0.65, 'pending',
+			 'llm-classifier', 'chat-17', 2, 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(
+		`{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","confidence_threshold":0.7,"date_auto_apply":true}`,
+	)).WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+	rec := httptest.NewRecorder()
+	s.SaveLLMSettings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	for value, want := range map[string]string{"2026-08-06": "accepted", "2026-07-01": "pending"} {
+		var status string
+		if err := s.DB.Read.QueryRowContext(context.Background(), `
+			SELECT status FROM document_intelligence
+			WHERE document_id = 17 AND sort_value = ?
+		`, value).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != want {
+			t.Fatalf("date %s status=%q want=%q", value, status, want)
+		}
 	}
 }
 

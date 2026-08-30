@@ -340,7 +340,7 @@
                   </a>
                 {:else if acceptedDateCount(turn) > 0}
                   <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={closeForNavigation}>
-                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} approved date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar shows reviewed dates only</small></span>
+                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} calendar date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Automatic and reviewed dates</small></span>
                   </a>
                 {/if}
               {/if}
@@ -380,7 +380,7 @@
           <button class="btn primary research-send" disabled={!draft.trim()}><Icon name="ask" size={14} /> Ask</button>
         {/if}
       </form>
-      <small class="research-note">Reviewed facts can support answers; cited documents remain the source.</small>
+      <small class="research-note">Extracted facts can support answers; cited documents remain the source.</small>
     </footer>
   </div>
 {/if}
@@ -404,7 +404,7 @@
   .prompt-list button:hover { border-color: var(--line-strong); color: var(--ink); transform: translateX(2px); }
   .research-turn + .research-turn { margin-top: 30px; padding-top: 27px; border-top: 1px solid var(--line-strong); }
   .turn-question { display: flex; align-items: flex-start; justify-content: flex-end; gap: 9px; }
-  .turn-question > span { margin-top: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .56rem; text-transform: uppercase; }
+  .turn-question > span { margin-top: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .56rem; }
   .turn-question p { width: fit-content; max-width: 86%; margin: 0; padding: 9px 12px; border-radius: 12px 12px 3px 12px; background: var(--tint); color: var(--ink); font-size: .82rem; line-height: 1.45; white-space: pre-wrap; }
   .answer-block { margin-top: 15px; padding-left: 12px; border-left: 2px solid var(--accent); }.answer-block.weak { border-color: var(--faint); }
   .research-answer { margin: 0; color: var(--ink); font-size: .87rem; line-height: 1.68; white-space: pre-wrap; }
@@ -417,7 +417,7 @@
   .research-action:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--tint); }.research-action:disabled { opacity: .55; cursor: default; }
   .research-action > :global(.ico) { flex: none; color: var(--accent); }.research-action span { display: flex; min-width: 0; flex-direction: column; gap: 1px; }.research-action b { font-size: .7rem; }.research-action small { overflow: hidden; color: var(--faint); font-size: .6rem; text-overflow: ellipsis; white-space: nowrap; }
   .evidence-stack { margin-top: 12px; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--surface); }
-  .evidence-stack > header { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); }.evidence-stack > header span { font-size: .63rem; font-weight: 700; text-transform: uppercase; }.evidence-stack > header small { color: var(--faint); font-size: .64rem; }
+  .evidence-stack > header { display: flex; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); }.evidence-stack > header span { font-size: .63rem; font-weight: 700; }.evidence-stack > header small { color: var(--faint); font-size: .64rem; }
   .extra-sources summary { padding: 9px 11px; color: var(--muted); font-size: .67rem; cursor: pointer; }.extra-sources[open] summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .research-compose { padding: 12px 16px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
   .sensitive-toggle { display: flex; align-items: flex-start; gap: 8px; margin: 0 1px 10px; cursor: pointer; }.sensitive-toggle input { margin-top: 2px; }.sensitive-toggle > span { display: flex; flex-direction: column; }.sensitive-toggle b { font-size: .7rem; font-weight: 650; }.sensitive-toggle small { color: var(--faint); font-size: .6rem; line-height: 1.35; }

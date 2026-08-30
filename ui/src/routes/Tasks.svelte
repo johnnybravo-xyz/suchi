@@ -200,7 +200,9 @@
   }
 
   function toggleAllIntelligence(checked) {
-    setCandidateSelection(intelligence.map(candidate => candidate.id), checked)
+    intelligenceSelection = checked
+      ? new Set(intelligence.map(candidate => candidate.id))
+      : new Set()
   }
 
 
@@ -214,9 +216,11 @@
       intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
       intelligenceSelection = new Set([...intelligenceSelection].filter(id => !resolved.has(id)))
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      notify?.(`${decision === 'accepted' ? 'Approved' : 'Rejected'} ${resolved.size} extracted fact${resolved.size === 1 ? '' : 's'}`)
+      notify?.(decision === 'accepted'
+        ? `Added ${resolved.size} date${resolved.size === 1 ? '' : 's'} to Calendar`
+        : `Rejected ${resolved.size} date${resolved.size === 1 ? '' : 's'}`)
     } catch (ex) {
-      notify?.(ex.message || 'Could not update extracted facts')
+      notify?.(ex.message || 'Could not update dates')
     } finally {
       intelligenceBusy = false
     }
@@ -264,22 +268,34 @@
 {:else}
   {#if intelligence.length > 0}
     {@const allIntelligence = selectionState(intelligence)}
+    {@const reviewGroups = intelligenceGroups()}
     <section class="intelligence-review" aria-labelledby="intelligence-review-title">
       <header class="intelligence-head">
         <div>
-          <span class="eyebrow">Facts found in your documents</span>
-          <h2 id="intelligence-review-title">Review extracted facts</h2>
-          <p>{intelligence.length} fact{intelligence.length === 1 ? '' : 's'} to review from {intelligenceGroups().length} document{intelligenceGroups().length === 1 ? '' : 's'}.</p>
+          <span class="eyebrow">Dates needing a quick check</span>
+          <h2 id="intelligence-review-title">Check dates before they reach Calendar</h2>
+          <p>{intelligence.length} date{intelligence.length === 1 ? '' : 's'} from {reviewGroups.length} document{reviewGroups.length === 1 ? '' : 's'} are waiting for your decision.</p>
+          <p class="review-guidance">Uncheck anything incorrect, then add the selected dates to Calendar. Reject removes selected dates from this review.</p>
         </div>
         <label class="select-all">
           <input type="checkbox" checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
                  onchange={(event) => toggleAllIntelligence(event.currentTarget.checked)} />
-          Select all visible
+          Select all dates
         </label>
       </header>
 
-      <div class="intelligence-groups">
-        {#each intelligenceGroups() as group (group.documentID)}
+      <div class="intelligence-actions" role="group" aria-label="Review selected dates">
+        <span><b>{intelligenceSelection.size}</b> of {intelligence.length} date{intelligence.length === 1 ? '' : 's'} selected</span>
+        <button class="btn sm" disabled={!intelligenceSelection.size || intelligenceBusy}
+                onclick={() => resolveSelectedIntelligence('rejected')}>Reject {intelligenceSelection.size}</button>
+        <button class="btn primary sm" disabled={!intelligenceSelection.size || intelligenceBusy}
+                onclick={() => resolveSelectedIntelligence('accepted')}>
+          <Icon name="check" size={13} /> {intelligenceBusy ? 'Saving…' : `Add ${intelligenceSelection.size} to Calendar`}
+        </button>
+      </div>
+
+      <div class="intelligence-groups" class:review-grid={reviewGroups.length > 2}>
+        {#each reviewGroups as group (group.documentID)}
           {@const groupSelection = selectionState(group.candidates)}
           <article class="intelligence-card">
             <header class="intelligence-document">
@@ -296,7 +312,7 @@
               </a>
               <div>
                 <a href={`#/doc/${group.documentID}`}>{group.title || `Document #${group.documentID}`}</a>
-                <small>{group.candidates.length} fact{group.candidates.length === 1 ? '' : 's'} to review</small>
+                <small>{group.candidates.length} date{group.candidates.length === 1 ? '' : 's'} to check</small>
               </div>
             </header>
             <div class="intelligence-candidates">
@@ -307,11 +323,11 @@
                   <span class="intelligence-copy">
                     <span class="intelligence-value">
                       <strong>{formatIntelligenceValue(candidate)}</strong>
-                      <span class="pill">{candidate.type}</span>
-                      <small>{Math.round(Number(candidate.confidence || 0) * 100)}%</small>
+                      <span class="pill">{candidate.type === 'date' ? 'Date' : candidate.type}</span>
+                      <small>{Math.round(Number(candidate.confidence || 0) * 100)}% confidence</small>
                     </span>
-                    <span class="intelligence-evidence">“{candidate.evidence_text}”</span>
-                    <small>Original text: {candidate.raw_text}</small>
+                    <span class="intelligence-evidence">Document text: “{candidate.evidence_text}”</span>
+                    <small>Date text: {candidate.raw_text}</small>
                   </span>
                 </label>
               {/each}
@@ -320,15 +336,6 @@
         {/each}
       </div>
 
-      <footer class="intelligence-actions">
-        <span>{intelligenceSelection.size} selected</span>
-        <button class="btn sm" disabled={!intelligenceSelection.size || intelligenceBusy}
-                onclick={() => resolveSelectedIntelligence('rejected')}>Reject selected</button>
-        <button class="btn primary sm" disabled={!intelligenceSelection.size || intelligenceBusy}
-                onclick={() => resolveSelectedIntelligence('accepted')}>
-          <Icon name="check" size={13} /> {intelligenceBusy ? 'Saving…' : `Approve ${intelligenceSelection.size}`}
-        </button>
-      </footer>
     </section>
   {/if}
   {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
@@ -446,13 +453,15 @@
 {/if}
 
 <style>
-  .intelligence-review { margin: 10px 0 28px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); overflow: hidden; }
-  .intelligence-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, var(--tint), var(--surface)); }
-  .intelligence-head .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; text-transform: uppercase; }
+  .intelligence-review { margin: 10px 0 28px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); }
+  .intelligence-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); border-radius: var(--r) var(--r) 0 0; background: linear-gradient(135deg, var(--tint), var(--surface)); }
+  .intelligence-head .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; }
   .intelligence-head h2 { font-size: 1.22rem; }
-  .intelligence-head p { margin: 5px 0 0; color: var(--muted); font-size: .8rem; }
+  .intelligence-head p { max-width: 780px; margin: 5px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+  .intelligence-head .review-guidance { color: var(--ink); font-size: .76rem; }
   .select-all { display: flex; align-items: center; gap: 7px; flex: none; font-size: .75rem; font-weight: 650; cursor: pointer; }
   .intelligence-groups { display: grid; gap: 12px; padding: 14px; }
+  .intelligence-groups.review-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   .intelligence-card { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
   .intelligence-document { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 11px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .intelligence-document > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
@@ -470,8 +479,9 @@
   .intelligence-value small { color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .64rem; }
   .intelligence-evidence { color: var(--muted); font-size: .78rem; line-height: 1.5; }
   .intelligence-copy > small { color: var(--faint); font-size: .67rem; }
-  .intelligence-actions { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
+  .intelligence-actions { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); background: color-mix(in srgb, var(--surface) 96%, transparent); box-shadow: 0 8px 18px color-mix(in srgb, var(--ink) 7%, transparent); backdrop-filter: blur(8px); }
   .intelligence-actions > span { margin-right: auto; color: var(--muted); font-size: .72rem; }
+  .intelligence-actions > span b { color: var(--ink); }
   .approval-list { display:flex;flex-direction:column;gap:12px;margin-bottom:22px }
   .document-header { display:flex;gap:14px;align-items:center }
   .document-identity { flex:1;min-width:0 }
@@ -500,6 +510,9 @@
   .rescan-targets ul { margin:5px 0 3px;padding-left:18px }
   .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
   .rescan-targets a { color:var(--accent) }
+  @media (max-width: 1050px) {
+    .intelligence-groups.review-grid { grid-template-columns: 1fr; }
+  }
   @media (max-width: 560px) {
     .task-thumb { flex-basis:52px;width:52px }
     .intelligence-head { align-items: flex-start; flex-direction: column; }

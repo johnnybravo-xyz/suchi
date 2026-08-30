@@ -111,14 +111,17 @@ defaults to `0.70`.
 
 At or above the threshold:
 
-- a validated suggested title replaces the current title
-- an unset correspondent can be filled
-- tags are added, never removed
-- the JD category changes only while the document remains in the inbox
+- a validated suggested title replaces the current title;
+- an unset correspondent can be filled;
+- tags are added, never removed;
+- the JD category changes only while the document remains in the inbox; and
+- an extracted date goes directly to Calendar when **Add dates meeting this
+  score directly to Calendar** is enabled.
 
-Below the classifier threshold, source fields stay unchanged, Suchi adds the
+Below the threshold, source fields stay unchanged, Suchi adds the
 `needs-review` tag, and a changed title is offered as an approval assigned to
-the document owner.
+the document owner. Extracted dates wait in Approvals. Turning automatic
+Calendar dates off sends every newly extracted date to Approvals.
 
 ## Test and live reload
 
@@ -127,12 +130,15 @@ the production parser. It returns latency and sanitized synthetic fields only.
 It does not save settings, send archive content, or reveal raw provider output.
 
 Saving local archive settings or the model's enabled state, endpoint, model,
-key, timeout, acknowledgement, or confidence applies immediately. No Suchi
-restart is required.
+key, timeout, acknowledgement, confidence, or automatic Calendar-date option
+applies immediately. No Suchi restart is required. Enabling automatic dates or
+lowering the threshold promotes matching pending dates without another model
+call. Raising the threshold or disabling automatic dates never removes dates
+already in Calendar.
 
-Activation affects new ingests. A settings change never starts an automatic
-archive-wide backfill. Select older documents in **Documents** and use
-**Rescan** when you want the current configuration applied to them.
+Other setting changes affect new ingests and explicit rescans; they never start
+an automatic archive-wide model backfill. Select older documents in
+**Documents** and use **Rescan** when they need processing again.
 
 Config-file and environment values take precedence over stored web settings on
 a field-by-field basis, following the documented [configuration
@@ -186,10 +192,10 @@ privacy, rate-limit, and maintainer contracts.
 ## Current scope
 
 The product provides fixed document classification, transient read-only
-archive research, Views made from retrieved documents, generic human-reviewed
-facts, and approved-date Calendar/query workflows. It does not provide
-arbitrary model tools, custom code in the ingest pipeline, persistent chat,
-timed calendar events, or implicit rule learning from approvals.
+archive research, Views made from retrieved documents, confidence-gated facts
+with optional review, and document-date Calendar/query workflows. It does not
+provide arbitrary model tools, custom code in the ingest pipeline, persistent
+chat, timed calendar events, or implicit rule learning from approvals.
 
 ## Troubleshooting
 

@@ -144,13 +144,13 @@
 <style>
   .archive-settings { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 22px; align-items: start; }
   .archive-rail { position: sticky; top: 0; display: flex; flex-direction: column; padding: 7px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-  .archive-rail > span { margin: 9px 6px 2px; padding: 11px 3px 0; border-top: 1px solid var(--line); color: var(--faint); font-family: ui-monospace, monospace; font-size: .58rem; font-weight: 700; letter-spacing: .07em; line-height: 1.35; text-transform: uppercase; cursor: default; }
+  .archive-rail > span { margin: 9px 6px 2px; padding: 11px 3px 0; border-top: 1px solid var(--line); color: var(--faint); font-family: ui-monospace, monospace; font-size: .58rem; font-weight: 700; letter-spacing: .07em; line-height: 1.35; cursor: default; }
   .archive-rail a { padding: 7px 9px; border-radius: 7px; color: var(--muted); font-size: .78rem; text-decoration: none; }
   .archive-rail a:hover { background: var(--surface-2); color: var(--ink); }
   .archive-rail a.on { background: var(--tint); color: var(--accent); font-weight: 650; }
   .archive-content { min-width: 0; }
   .archive-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
-  .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: ui-monospace, monospace; font-size: .64rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+  .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: ui-monospace, monospace; font-size: .64rem; font-weight: 700; letter-spacing: .07em; }
   .archive-intro h2 { font-size: 1.35rem; line-height: 1.2; }
   .archive-intro p { max-width: 590px; margin: 6px 0 0; color: var(--muted); font-size: .82rem; }
   .admin-pill { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 9px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .68rem; font-weight: 600; }

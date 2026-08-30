@@ -13,9 +13,9 @@ Notable user-visible changes to Suchi are recorded here.
 - A scoped Archive research desk with reauthorized follow-ups, structured
   citation validation, Views made from retrieved documents, bounded model
   traffic, and explicit sensitive-evidence consent.
-- A generic human-reviewed intelligence ledger, with conservative single-call
-  date extraction, bulk approval, accepted-date Calendar, and rich-query date
-  filters.
+- A generic extracted-fact ledger with single-call date extraction,
+  user-controlled confidence-based Calendar entry, optional bulk review, and
+  rich-query date filters.
 - A first-visit public-demo guide for rich queries and the Archive research
   workflow, plus a persistent help launcher. Public model access remains
   denied; the tour uses an anonymized Northstar document cluster.
@@ -30,6 +30,8 @@ Notable user-visible changes to Suchi are recorded here.
   into clickable answer markers, tolerates numeric citation strings, logs safe
   structural rejection reasons, and includes receipt totals in bounded evidence
   passages.
+- Date review uses a responsive document grid, keeps the selected-date actions
+  visible, explains the decision, and renders section labels in sentence case.
 
 ## [0.1.0-beta.1] - 2026-08-29
 
