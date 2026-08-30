@@ -1,8 +1,10 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { search, listLanguages } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
+  import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
 
   let q = $state(route.query.get('q') || '')
   let lang = $state(route.query.get('lang') || '')
@@ -14,6 +16,9 @@
   let searched = $state(false)
   let languages = $state([])
   let runVersion = 0
+  let suggestions = $state([])
+  const queryAssistant = createQueryAssistant((next) => (suggestions = next))
+  onDestroy(queryAssistant.dispose)
 
   // Load the language facet once on mount so the filter chips have
   // observed codes + counts to render.
@@ -40,7 +45,10 @@
       count = res?.count ?? hits.length
     } catch (ex) {
       if (version === runVersion) {
-        err = ex.status === 400 ? 'That query has unbalanced quotes or operators.' : (ex.message || 'Search failed.')
+        err = queryErrorMessage(ex, 'Search failed.')
+        hits = []
+        count = 0
+        searched = false
       }
     } finally {
       if (version === runVersion) loading = false
@@ -86,6 +94,7 @@
       lastURLLang = rl
       q = rq
       lang = rl
+      queryAssistant.clear()
       page = 1
       if (rq) run()
       else {
@@ -100,10 +109,15 @@
 
 <div class="content-narrow">
   <form class="toolbar" onsubmit={submit}>
-    <input class="input" style="flex:1" placeholder="Search document text"
-           bind:value={q} />
+    <input class="input" style="flex:1" placeholder="Search text or use jd:, tag:, from:…"
+           bind:value={q} list="search-query-suggestions" oninput={(event) => queryAssistant.update(event.currentTarget.value)} />
     <button class="btn primary">Search</button>
   </form>
+  <datalist id="search-query-suggestions">
+    {#each suggestions as suggestion (suggestion.query)}
+      <option value={suggestion.query}>{suggestion.value}</option>
+    {/each}
+  </datalist>
 
   {#if languages.length}
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px;align-items:center">

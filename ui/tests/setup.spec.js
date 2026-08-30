@@ -140,9 +140,14 @@ async function mockAPI(page, options = {}) {
       body = { results: response?.results || [] }
     }
     else if (path === '/api/languages/') body = { languages: [] }
-    else if (path === '/api/saved_views/') body = {
-      results: options.savedViews || [],
+    else if (path === '/api/saved_views/' && request.method() === 'POST' && options.savedViewCreateError) {
+      await route.fulfill({
+        status: 400,
+        json: { code: 'invalid_filter', error: options.savedViewCreateError },
+      })
+      return
     }
+    else if (path === '/api/saved_views/') body = { results: options.savedViews || [] }
     else if (path === '/api/email-accounts') body = {
       accounts: [
         {
@@ -663,7 +668,7 @@ test('runs a changed search once and keeps its newest response', async ({ page }
   })
   await page.goto('/#/search?q=paris')
   await firstRequest
-  await page.getByPlaceholder('Search document text').fill('london')
+  await page.getByPlaceholder('Search text or use jd:, tag:, from:…').fill('london')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
 
   await expect(page.getByText('Current London result')).toBeVisible()
@@ -675,8 +680,8 @@ test('runs a changed search once and keeps its newest response', async ({ page }
 test('keeps the newest command-palette suggestions', async ({ page }) => {
   await mockAPI(page, {
     autocompleteByQuery: {
-      old: { delay: 300, results: [{ id: 41, title: 'Old suggestion' }] },
-      new: { results: [{ id: 42, title: 'Current suggestion' }] },
+      'tag:o': { delay: 300, results: [{ value: 'Old suggestion', kind: 'tag', query: 'tag:old' }] },
+      'tag:n': { results: [{ value: 'Current suggestion', kind: 'tag', query: 'tag:new' }] },
     },
   })
   await page.goto('/#/dashboard')
@@ -684,11 +689,11 @@ test('keeps the newest command-palette suggestions', async ({ page }) => {
   const input = page.getByRole('searchbox', { name: 'Search or run a command' })
   const oldRequest = page.waitForRequest(request => {
     const url = new URL(request.url())
-    return url.pathname === '/api/autocomplete/' && url.searchParams.get('q') === 'old'
+    return url.pathname === '/api/autocomplete/' && url.searchParams.get('q') === 'tag:o'
   })
-  await input.fill('old')
+  await input.fill('tag:o')
   await oldRequest
-  await input.fill('new')
+  await input.fill('tag:n')
 
   await expect(page.getByText('Current suggestion')).toBeVisible()
   await page.waitForTimeout(350)
@@ -776,6 +781,44 @@ test('starts view creation from the dashboard action', async ({ page }) => {
   await expect(page).toHaveURL(/#\/views\?new=1$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
   await expect(page.getByLabel('View name')).toBeFocused()
+})
+
+test('stores new saved views as one canonical query', async ({ page }) => {
+  await mockAPI(page, {
+    jdCategories: [{ id: 6, code: 22, name: 'Investments', area_code: 20, area_name: 'Finance', is_area: false }],
+  })
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'New view' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  await dialog.getByLabel('View name').fill('Private investments')
+  await dialog.getByLabel('Query').fill('"distribution advice"')
+  await dialog.getByLabel('Filing category').selectOption('6')
+  await dialog.getByLabel('Sensitivity').selectOption('confidential')
+
+  const saveRequest = page.waitForRequest(request => {
+    return new URL(request.url()).pathname === '/api/saved_views/' && request.method() === 'POST'
+  })
+  await dialog.getByRole('button', { name: 'Save view' }).click()
+  const payload = (await saveRequest).postDataJSON()
+  expect(JSON.parse(payload.filter_json)).toEqual({
+    q: '"distribution advice" jd:22 sensitivity:confidential',
+  })
+})
+
+test('keeps an invalid saved view open with the server error', async ({ page }) => {
+  await mockAPI(page, {
+    savedViewCreateError: 'filter key q: no tag value matches "missing" at byte 0',
+  })
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'New view' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create a view' })
+  await dialog.getByLabel('View name').fill('Missing tag')
+  await dialog.getByLabel('Query').fill('tag:missing')
+  await dialog.getByRole('button', { name: 'Save view' }).click()
+
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('alert')).toHaveText('filter key q: no tag value matches "missing" at byte 0')
+  await expect(dialog.getByRole('button', { name: 'Save view' })).toBeEnabled()
 })
 
 test('limits dashboard count requests and defers empty-view facets', async ({ page }) => {

@@ -46,13 +46,22 @@ that authenticates callers.
 
 ### `search_documents`
 
-Searches title and extracted text through `GET /api/search/`.
+Searches title, extracted text, and filing metadata through `GET /api/search/`.
+The query accepts the same bounded language as the web app, including phrases,
+negation, `jd:`, `tag:`, `from:`, `type:`, `sensitivity:`, `lang:`, `added:`,
+and `is:` filters.
+
+```text
+"distribution advice" jd:22 -tag:archived added:>=2026-01-01
+```
 
 - `query`: required string
 - `page_size`: optional integer, default 10 and maximum 25
 
 Results include document IDs, titles, snippets, ranking, MIME type, and creation
-time, filtered by the token owner's document visibility.
+time, filtered by the token owner's document visibility. The token requires
+`documents:read`; malformed or unresolved queries are returned as API errors
+instead of being interpreted as raw FTS5 syntax.
 
 ### `get_document`
 

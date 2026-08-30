@@ -283,7 +283,8 @@ Paperless saved views migrate into suchi's `saved_views` — with a
 lossy translation from paperless's 50-way `filter_rules.rule_type`
 enum onto suchi's allow-listed `filter_json` keys (`q`, `tags__id__in`,
 `correspondents__id__in`, `document_type__id`, `jd_category_id`,
-`sensitivity`, `ordering`).
+`sensitivity`, `ordering`). Suchi still reads these flat imported filters; the
+importer does not yet rewrite source rules into rich-query equivalents.
 
 A view is `Full` when every rule maps 1:1; `Partial` when at least one
 rule degrades (e.g., storage-path rule → text search); `Failed` when
@@ -301,13 +302,13 @@ zero rules map — the view row is skipped and reported.
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively    |
 | 6 has tag                                                            | `tags__id__in`            | Full                                       |
 | 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                       |
-| 8-16 date filters (created/added/modified before/after)              | —                         | Failed — no date filter yet                |
-| 17 does not have tag                                                 | —                         | Failed — no negation                       |
+| 8-16 date filters (created/added/modified before/after)              | —                         | Failed — importer does not translate date rules; Suchi queries currently support `added:` only |
+| 17 does not have tag                                                 | —                         | Failed — importer does not translate this rule to `-tag:` |
 | 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q`                       | Full                                       |
 | 21 more like this                                                    | —                         | Failed                                     |
 | 25 storage path is / 30 has storage path in                          | `q` text search           | Partial                                    |
 | 26 has correspondent in                                              | `correspondents__id__in`  | Full                                       |
-| 27, 29, 31 negative "in" filters                                     | —                         | Failed                                     |
+| 27, 29, 31 negative "in" filters                                     | —                         | Failed — importer does not translate negative metadata rules |
 | 28 has document type in                                              | `document_type__id` first | Partial                                    |
 | 32-35 owner filters                                                  | —                         | Failed                                     |
 | 36, 38-42 custom-field filters                                       | —                         | Failed                                     |
