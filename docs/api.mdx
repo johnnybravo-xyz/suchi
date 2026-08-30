@@ -1280,6 +1280,64 @@ Admin-only. Body: `{"parent_id": <int-or-null>}`. Rejects
 self-parent (`400 self_parent`) and cycles (`400 cycle`). See
 architecture doc for the "no inheritance in search" call.
 
+## Archive questions
+
+Both endpoints require authentication, `documents:read`, and the
+`archive_chat` capability (implicit for administrators). Public demo sessions
+are explicitly denied.
+
+### `GET /api/chat/status`
+
+Returns live runtime availability without exposing provider configuration:
+
+```json
+{ "enabled": true }
+```
+
+### `POST /api/chat`
+
+Accepts a question, up to four alternating preceding messages (two
+user/assistant turns, 12 KB total), and session consent for sensitive sources:
+
+```json
+{
+  "question": "When does the lease renew?",
+  "history": [
+    { "role": "user", "content": "Which property is this about?" },
+    { "role": "assistant", "content": "The Indiranagar office [1]." }
+  ],
+  "include_sensitive": false
+}
+```
+
+Questions are limited to 2,000 characters. Retrieval normalizes at most twelve
+terms and uses the existing title-weighted SQLite FTS5 index. Trash and
+unauthorized documents are excluded; Confidential and Restricted sources also
+remain excluded unless `include_sensitive` is true. The response contains at
+most six deterministic source records and a query suitable for Views:
+
+```json
+{
+  "answer": "The lease renews on September 1 [1].",
+  "sources": [
+    {
+      "id": 17,
+      "title": "Office lease agreement",
+      "snippet": "The renewal date is September 1 …",
+      "sensitivity": "internal"
+    }
+  ],
+  "view_query": "lease renew"
+}
+```
+
+No matching evidence returns the stable answer **I couldn’t find evidence in
+the documents you can access.** with an empty source array and does not call
+the provider. One model request is allowed for a successful turn and output is
+bounded to about 700 tokens. Questions, answers, and snippets are never logged.
+Provider failures return `502 provider_failure`; a disabled runtime returns
+`503 model_unavailable`.
+
 ## LLM classifier settings
 
 These endpoints are admin-only. The model remains optional; local archive

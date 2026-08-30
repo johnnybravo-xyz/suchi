@@ -410,8 +410,8 @@
       </div>
 
     {:else if section === 'llm'}
-      <h3>Classification</h3>
-      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills details that remain unresolved.</p>
+      <h3>Classification and archive questions</h3>
+      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details and powers <b>Ask the archive</b> for authorized users.</p>
       <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
       {#if llm.archive_enabled}
         <div class="field">
@@ -429,9 +429,9 @@
       <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
-          <span class="pill ok">Classifier active</span>
+          <span class="pill ok">Model active</span>
         {:else if llmStatus?.enabled}
-          <span class="pill warn">Classifier inactive</span>
+          <span class="pill warn">Model inactive</span>
         {:else}
           <span class="pill">No model</span>
         {/if}
@@ -472,12 +472,12 @@
         <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={() => saveAnd(
                   () => saveClassifier(true),
-                  'Classifier configured'
-                )}>Save classifier</button>
+                  'Model configured'
+                )}>Save model</button>
         <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Use local classification only</button>
+                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Disable model</button>
       </div>
       {#if llmTestError}
         <div class="test-result failed">
@@ -491,7 +491,7 @@
           {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
         </div>
       {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The classifier runs automatically on new documents. To classify older documents, select them in <a href="#/documents">Documents</a> and use Rescan.</p>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents automatically and answers authorized archive questions on demand. To classify older documents, select them in <a href="#/documents">Documents</a> and use Rescan.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>

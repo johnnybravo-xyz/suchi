@@ -69,6 +69,11 @@ type FSWatchSettingsStatus struct {
 	OwnerEmail string `json:"fs_watch_owner_email"`
 }
 
+type ChatCompletionMessage struct {
+	Role    string
+	Content string
+}
+
 // Server bundles the state every /api handler needs. Constructed once
 // at boot; safe for concurrent use.
 //
@@ -99,6 +104,10 @@ type Server struct {
 	// against synthetic text and does not persist it.
 	LLMStatusReader func(ctx context.Context) (LLMSettingsStatus, error)
 	LLMTester       func(ctx context.Context, cfg LLMTestConfig) (LLMTestResult, error)
+	// ChatEnabled follows the active runtime model. ChatCompletion is the
+	// narrow plain-text transport seam; core/api never imports the plugin.
+	ChatEnabled    func() bool
+	ChatCompletion func(context.Context, string, []ChatCompletionMessage, int) (string, error)
 	// LLMAEAD seals API keys written by the setup wizard.
 	LLMAEAD *suchicrypto.AEADKey
 	// Setup-owned runtime values use readers for honest revisit forms and
@@ -246,6 +255,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Search + autocomplete over FTS5.
 	mux.HandleFunc("GET /api/search/", s.Search)
 	mux.HandleFunc("GET /api/autocomplete/", s.Autocomplete)
+	mux.HandleFunc("GET /api/chat/status", s.GetChatStatus)
+	mux.HandleFunc("POST /api/chat", s.PostChat)
 
 	// Language facet — distinct languages present in the archive
 	// with per-code doc counts. Powers the search-page facet + doc-

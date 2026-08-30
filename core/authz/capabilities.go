@@ -22,18 +22,20 @@ import (
 type Capability string
 
 const (
-	CapMailboxes  Capability = "mailboxes"
-	CapShareLinks Capability = "share_links"
-	CapShareViews Capability = "share_views"
+	CapArchiveChat Capability = "archive_chat"
+	CapMailboxes   Capability = "mailboxes"
+	CapShareLinks  Capability = "share_links"
+	CapShareViews  Capability = "share_views"
 )
 
 // KnownCapabilities gates what the admin API will accept on the wire.
 // Unknown slugs are rejected loudly so a typo doesn't silently grant
 // nothing.
 var KnownCapabilities = map[Capability]bool{
-	CapMailboxes:  true,
-	CapShareLinks: true,
-	CapShareViews: true,
+	CapArchiveChat: true,
+	CapMailboxes:   true,
+	CapShareLinks:  true,
+	CapShareViews:  true,
 }
 
 // Set is a value-typed capability set. Zero-value is the empty set

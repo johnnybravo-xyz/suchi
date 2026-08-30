@@ -54,12 +54,15 @@ Administrators have every capability implicitly.
 
 | Capability | Allows a member to |
 | --- | --- |
+| `archive_chat` | Ask grounded questions across documents they can read. |
 | `mailboxes` | Connect and manage their own mail intake. |
 | `share_links` | Create revocable document share links. |
 | `share_views` | Publish saved views to every user's dashboard. |
 
-The web app labels these capabilities **Manage mailboxes**, **Create share
-links**, and **Share saved views**.
+The web app labels these capabilities **Ask the archive**, **Manage
+mailboxes**, **Create share links**, and **Share saved views**. Removing
+`archive_chat` immediately removes the Ask action; its conversations are
+already transient browser memory and create no server-side records.
 
 Removing a capability also closes the access it granted:
 

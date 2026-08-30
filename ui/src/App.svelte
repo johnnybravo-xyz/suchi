@@ -1,7 +1,7 @@
 <script>
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, getDemoAnonToken, getToken } from './lib/api.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, getDemoAnonToken, getToken, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
@@ -35,6 +35,12 @@
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   const canShareViews = $derived(hasCapability(session.user, 'share_views'))
+  const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && session.user?.demo !== 'anon' && session.user?.demo !== 'scratch')
+  let chatEnabled = $state(false)
+  let chatOpen = $state(false)
+  let ChatDrawer = $state(null)
+  let chatRequest = $state({ id: 0, question: '' })
+  let chatReturnFocus = $state(null)
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
   let inboxCategory = $state(null)
@@ -158,8 +164,9 @@
           setupEngaged = !setupNeeded
         }).catch(() => {})
       : Promise.resolve()
-    await Promise.all([pollStats(), categories, setup])
-    pollTimer = setInterval(pollStats, 60_000)
+    const chat = pollChatStatus()
+    await Promise.all([pollStats(), categories, setup, chat])
+    pollTimer = setInterval(() => { pollStats(); pollChatStatus() }, 60_000)
   }
 
   async function loadTaxonomy() {
@@ -201,6 +208,12 @@
     } catch (ex) {
       if (!st) statsError = ex.message || 'Could not load archive status.'
     }
+  }
+
+  async function pollChatStatus() {
+    if (!canUseArchiveChat) { chatEnabled = false; return }
+    try { chatEnabled = !!(await chatStatus())?.enabled }
+    catch { chatEnabled = false }
   }
 
   async function loadRecentDocuments({ background = recentDocs !== undefined } = {}) {
@@ -245,6 +258,16 @@
 
   function onKey(e) {
     if (e.key === 'Escape') { mobileNavOpen = false; uploadOpen = false }
+  }
+
+  async function openArchiveChat(question = '', returnFocus = null) {
+    chatOpen = true
+    chatReturnFocus = returnFocus
+    chatRequest = { id: chatRequest.id + 1, question }
+    if (!ChatDrawer) {
+      try { ChatDrawer = (await import('./lib/ArchiveChat.svelte')).default }
+      catch { chatOpen = false; notify('Could not open archive questions') }
+    }
   }
 
   async function handleSignOut() {
@@ -389,7 +412,7 @@
         <h1>{pageTitle}</h1>
         <Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
-          : PAGES} commands={COMMANDS} />
+          : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
@@ -422,7 +445,7 @@
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', jdCategories }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', jdCategories }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
         {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
@@ -443,6 +466,10 @@
         <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories }} />
       </div>
     </div>
+  {/if}
+
+  {#if ChatDrawer}
+    <ChatDrawer open={chatOpen} request={chatRequest} onClose={() => (chatOpen = false)} onReturnFocus={chatReturnFocus} />
   {/if}
 
 {/if}

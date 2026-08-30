@@ -4,7 +4,7 @@
   import { go } from './router.svelte.js'
   import Icon from './Icon.svelte'
 
-  let { pages = [], commands = [] } = $props()
+  let { pages = [], commands = [], canAsk = false, onAsk } = $props()
   let q = $state('')
   let open = $state(false)
   let idx = $state(-1)
@@ -58,6 +58,12 @@
     open = false; idx = -1; q = ''; docs = []; input?.blur()
   }
 
+  function ask() {
+    const question = q.trim()
+    close()
+    onAsk?.(question, () => input?.focus())
+  }
+
   function onKey(e) {
     if (e.key === 'Escape') { close(); return }
     if (!open) return
@@ -83,6 +89,13 @@
          autocomplete="off" spellcheck="false" aria-label="Search or run a command"
          onfocus={() => (open = true)} oninput={(e) => { open = true; idx = -1; search(e.target.value) }}
          onkeydown={onKey} />
+
+  {#if canAsk}
+    <button type="button" class="omni-ask" aria-label="Ask the archive" title="Ask the archive"
+            onmousedown={(e) => e.preventDefault()} onclick={ask}>
+      <Icon name="ask" size={14} /><span>Ask</span>
+    </button>
+  {/if}
 
   {#if open}
     <div class="omni-drop" role="listbox">

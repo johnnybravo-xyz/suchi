@@ -4,7 +4,7 @@ import { USER_CAPABILITIES, hasCapability } from './capabilities.js'
 
 test('keeps the frontend capability catalog unique', () => {
   const keys = USER_CAPABILITIES.map(capability => capability.key)
-  assert.deepEqual(keys, ['mailboxes', 'share_links', 'share_views'])
+  assert.deepEqual(keys, ['archive_chat', 'mailboxes', 'share_links', 'share_views'])
   assert.equal(new Set(keys).size, keys.length)
 })
 

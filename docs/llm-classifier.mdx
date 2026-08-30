@@ -1,11 +1,13 @@
 ---
 title: "LLM classifier"
-description: "Optional local or hosted classification for newly ingested documents."
+description: "Optional local or hosted model assistance for classification and grounded archive questions."
 ---
 
 Suchi ships deterministic automations and local archive matching. The
 optional LLM classifier adds one fixed post-extraction model call for title,
 correspondent, tags, Johnny.Decimal category, confidence, and language.
+The same configured transport also powers read-only, source-grounded archive
+questions for authorized users.
 
 It uses the OpenAI-compatible chat-completions API and supports local servers
 such as Ollama or llama.cpp and compatible hosted providers. The plugin is
@@ -68,11 +70,15 @@ as the model. Set `LLM_API_KEY` or mount a key file through
 
 ## Egress boundary
 
-For a hosted classification, Suchi sends:
+For hosted model assistance, Suchi sends:
 
 - extracted text from the current document
 - bounded filing context and a small set of similar-document titles
 - the requested structured-output instructions
+
+For **Ask the archive**, it instead sends the question, up to four preceding
+user/assistant messages, and at most six short snippets selected from documents
+the caller may read. Sensitive snippets require explicit session consent.
 
 It does not send original PDF or image bytes, unrelated archive content,
 ownership, ACLs, storage paths, or backup information.
@@ -146,11 +152,30 @@ For an operator configuration change, explicitly select the desired documents
 in the UI and rescan them. [Refile](/refile) reruns deterministic filing but
 does not call the LLM.
 
+## Ask the archive
+
+Administrators have the `archive_chat` capability implicitly and may grant it
+to members as **Ask the archive**. Public demo sessions are always denied. A
+caller also needs `documents:read`; every retrieval applies the normal document
+ACL and excludes trash. Confidential and Restricted documents remain excluded
+unless **Include sensitive documents** is enabled for the current conversation.
+
+The Omnibox **Ask** action opens a right-side drawer (full-screen on mobile).
+Enter remains search. Answers render as plain text beside numbered source cards
+that link back to documents. If retrieval finds nothing, Suchi returns a stable
+no-evidence answer without contacting the provider. Provider failures are
+sanitized and do not remove the retrieved source boundary.
+
+Conversation history lives only in browser memory while the application is
+open. Closing preserves it; **Clear** deletes it and resets sensitive-document
+consent. **Save search as view** opens the existing Views creator with the
+retrieval query prefilled.
+
 ## Current scope
 
-v0.1 provides fixed document classification. It does not provide custom prompt
-steps, typed custom-field extractors, arbitrary code in the ingest pipeline,
-or archive question answering.
+v0.1 provides fixed document classification and read-only archive questions.
+It does not provide custom prompt steps, typed custom-field extractors,
+arbitrary code in the ingest pipeline, model tools, or persistent chat.
 
 ## Troubleshooting
 

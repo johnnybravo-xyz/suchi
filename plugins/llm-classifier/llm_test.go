@@ -202,6 +202,40 @@ func TestClassifyHappyPath(t *testing.T) {
 	}
 }
 
+func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
+	var got struct {
+		Model     string              `json:"model"`
+		Messages  []CompletionMessage `json:"messages"`
+		MaxTokens int                 `json:"max_tokens"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("request path/auth = %s / %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Grounded answer [1]."}}]}`))
+	}))
+	defer srv.Close()
+	p, err := New(Config{EndpointURL: srv.URL, Model: "model-x", APIKey: "secret"}, silentLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := p.Complete(context.Background(), "trusted system", []CompletionMessage{
+		{Role: "user", Content: "question"}, {Role: "assistant", Content: "prior answer"},
+	}, 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "Grounded answer [1]." || got.Model != "model-x" || got.MaxTokens != 700 {
+		t.Fatalf("answer=%q model=%q max=%d", answer, got.Model, got.MaxTokens)
+	}
+	if len(got.Messages) != 3 || got.Messages[0].Role != "system" || got.Messages[0].Content != "trusted system" {
+		t.Fatalf("messages=%+v", got.Messages)
+	}
+}
+
 func TestHandlerLowConfidenceStampsPipelineVersion(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Original title", "ambiguous text")

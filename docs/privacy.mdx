@@ -16,7 +16,7 @@ Outbound traffic occurs only when an operator configures or uses an integration:
 | OIDC | Discovery, authorization, and token requests to the configured issuer |
 | IMAP intake | Mailbox credentials or OAuth tokens and mailbox reads |
 | Microsoft mailbox sign-in | Device-code and token requests to Microsoft |
-| Hosted LLM classification | Extracted document text and bounded classification context |
+| Hosted model assistance | Extracted text and bounded classification context; for an authorized archive question, the question, up to four transient history messages, and up to six ACL-filtered snippets |
 | Operator pre-consume script | Whatever the operator's executable chooses to send |
 
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
@@ -72,6 +72,19 @@ returns at most five matching samples to the authorized user. Message bodies
 are not downloaded, persisted, or logged by preview. The LLM connection test returns
 validated synthetic classification fields and latency, never raw model output
 or archive text.
+
+Archive questions are read-only and transient. Suchi stores no conversation
+rows, and the browser retains the transcript only while the application is
+open. The server retrieves only non-trashed documents the caller may view.
+Confidential and Restricted documents are excluded until the user enables
+**Include sensitive documents** for that browser conversation; **Clear**
+resets that consent. The model receives source text as explicitly untrusted
+evidence and is instructed to use no tools or actions and to cite only those
+sources. Previous assistant answers provide continuity, never evidence.
+
+Logs never include questions, answers, or snippets. Chat logs may contain the
+provider host and model, request ID, selected document IDs, counts, duration,
+and sanitized errors.
 
 ## Deletion and retention
 

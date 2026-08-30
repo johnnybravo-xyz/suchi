@@ -492,6 +492,10 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .omni:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .omni input { flex: 1; border: 0; background: none; font: inherit; color: var(--ink); outline: none; min-width: 0; }
 .omni input::-webkit-search-cancel-button { display: none; }
+.omni-ask { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 3px 0 3px 10px;
+  border: 0; border-left: 1px solid var(--line); background: none; color: var(--accent); font: inherit;
+  font-size: .75rem; font-weight: 650; cursor: pointer; }
+.omni-ask:hover { color: var(--ink); }
 .omni-drop { position: absolute; top: calc(100% + 8px); left: 0; right: 0; z-index: 60;
   background: var(--bg); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow);
   padding: 6px; max-height: 60vh; overflow-y: auto; }

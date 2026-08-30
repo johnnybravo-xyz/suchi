@@ -147,11 +147,25 @@ they can give a member:
 
 | Interface label | Stored key |
 | --- | --- |
+| **Ask the archive** | `archive_chat` |
 | **Manage mailboxes** | `mailboxes` |
 | **Create share links** | `share_links` |
 | **Share saved views** | `share_views` |
 
 See [Permissions](/permissions) for revocation effects and object-level access.
+
+When a model is active, **Ask** appears on the right side of the global
+Omnibox for administrators and members with **Ask the archive**. Enter still
+runs ordinary search; selecting **Ask** sends the Omnibox text to a right-side
+drawer (a full-screen sheet on narrow screens). The exact session controls are
+**Include sensitive documents**, **Clear**, **Close archive questions**, and
+**Save search as view**. Closing retains the in-memory conversation. **Clear**
+removes it and turns sensitive-document consent off.
+
+Answers are plain text. Numbered source cards always remain visible when the
+server retrieved evidence and open the source document. **Save search as
+view** opens the existing **Create a view** form with **Contains text**
+prefilled; the user still supplies a name and confirms the save.
 
 Sensitivity choices are **Public**, **Internal**, **Confidential**, and
 **Restricted**; a document without a choice displays **Unset**. Confidential

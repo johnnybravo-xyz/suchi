@@ -40,7 +40,7 @@ archives. The API and storage layout are stabilising but not frozen.
 - Browser uploads, watched folders, IMAP intake, portable import/export, and
   versioned documents.
 - Automations, human approval workflows, selective rescans, and an
-  optional OpenAI-compatible classifier.
+  optional OpenAI-compatible classification and grounded archive questions.
 - Groups, object ACLs, OIDC, share links, audit events, backups, and restore
   tooling.
 - Svelte SPA, a documented scoped HTTP API, and MCP over stdio or HTTP.

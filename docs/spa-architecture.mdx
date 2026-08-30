@@ -55,8 +55,8 @@ The built tree is committed so contributors changing only Go do not need a
 JavaScript toolchain. A UI change is incomplete when `ui/dist` differs from the
 embedded copy.
 
-The beta build intentionally uses three JavaScript chunks: the shell, archive
-workflows, and management workflows. Keep the shell at or below 35 KB gzip and
+The beta build keeps the shell, archive workflows, management workflows, and
+the on-demand archive-question drawer separate. Keep the shell at or below 35 KB gzip and
 remeasure every chunk after UI changes. At v0.1.0-beta.1 the gzip sizes are
 32.31 KB for the shell, 20.77 KB for archive workflows, 40.11 KB for management
 workflows, and 9.86 KB for CSS. This is a transfer-size budget, not a

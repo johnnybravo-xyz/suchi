@@ -530,6 +530,14 @@ func runServe() int {
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.LLMAEAD = decryptKey
+	apiSrv.ChatEnabled = llm.Enabled
+	apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
+		pluginMessages := make([]llmclassifier.CompletionMessage, len(messages))
+		for i, message := range messages {
+			pluginMessages[i] = llmclassifier.CompletionMessage{Role: message.Role, Content: message.Content}
+		}
+		return llm.Complete(rctx, system, pluginMessages, maxTokens)
+	}
 	apiSrv.RuntimePreferencesReader = func(rctx context.Context) (api.RuntimePreferencesStatus, error) {
 		fresh := settings.ResolveRuntimePreferences(rctx, d, settings.RuntimePreferences{
 			BackupInterval: cfg.BackupInterval, OCRLanguages: cfg.OCRLanguages,

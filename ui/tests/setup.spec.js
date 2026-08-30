@@ -139,6 +139,20 @@ async function mockAPI(page, options = {}) {
       if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
       body = { results: response?.results || [] }
     }
+    else if (path === '/api/chat/status') body = { enabled: !!options.chatEnabled }
+    else if (path === '/api/chat' && request.method() === 'POST') {
+      const payload = request.postDataJSON()
+      options.chatRequests?.push(payload)
+      const response = typeof options.chatResponse === 'function'
+        ? options.chatResponse(payload, options.chatRequests?.length || 1)
+        : options.chatResponse
+      if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay))
+      body = response || {
+        answer: 'The archive supports this answer [1].',
+        sources: [{ id: 17, title: 'Archive evidence.pdf', snippet: 'Supporting document text', sensitivity: 'internal' }],
+        view_query: payload.question,
+      }
+    }
     else if (path === '/api/languages/') body = { languages: [] }
     else if (path === '/api/saved_views/') body = {
       results: options.savedViews || [],
@@ -1161,4 +1175,81 @@ test('edits mailbox intake on a narrow screen', async ({ page }) => {
       { selection: 'matching', content: 'email_and_files', subject_terms: 'distribution advice' },
     ],
   })
+})
+
+test('keeps omnibox search separate from lazy archive questions and preserves the session', async ({ page }) => {
+  const chatRequests = []
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests,
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    chatResponse: {
+      answer: 'The lease renews in September [1].',
+      sources: [{ id: 17, title: 'Lease agreement.pdf', snippet: 'The renewal date is September 1.', sensitivity: 'internal' }],
+      view_query: 'lease renewal',
+    },
+  })
+
+  await page.goto('/#/dashboard')
+  const omnibox = page.getByLabel('Search or run a command')
+  await expect(page.getByRole('button', { name: 'Ask the archive' })).toBeVisible()
+  expect(await page.evaluate(() => performance.getEntriesByType('resource').some(entry => entry.name.includes('ArchiveChat')))).toBe(false)
+
+  await omnibox.fill('lease renewal')
+  await omnibox.press('Enter')
+  await expect(page).toHaveURL(/#\/search\?q=lease%20renewal$/)
+  expect(chatRequests).toHaveLength(0)
+
+  await page.goto('/#/dashboard')
+  await omnibox.fill('When does the lease renew?')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await expect(page.getByRole('dialog', { name: 'Ask the archive' })).toBeVisible()
+  await expect(page.getByText('The lease renews in September [1].')).toBeVisible()
+  expect(chatRequests).toHaveLength(1)
+  expect(chatRequests[0]).toMatchObject({ question: 'When does the lease renew?', include_sensitive: false, history: [] })
+  expect(await page.evaluate(() => performance.getEntriesByType('resource').some(entry => entry.name.includes('ArchiveChat')))).toBe(true)
+
+  await page.getByRole('link', { name: 'Save search as view' }).click()
+  await expect(page).toHaveURL(/#\/views\?new=1&q=lease%20renewal$/)
+  await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
+  await expect(page.getByLabel('Contains text')).toHaveValue('lease renewal')
+
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  await expect(page.getByText('The lease renews in September [1].')).toBeVisible()
+  await page.getByRole('button', { name: 'Open source 1: Lease agreement.pdf' }).click()
+  await expect(page).toHaveURL(/#\/doc\/17$/)
+
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const sensitive = page.getByLabel('Include sensitive documents')
+  await sensitive.check()
+  await page.getByRole('button', { name: 'Clear' }).click()
+  await expect(page.getByText('Ask about what you’ve filed')).toBeVisible()
+  await expect(sensitive).not.toBeChecked()
+})
+
+test('supports cancellation, focus return, and the full-screen mobile archive sheet', async ({ page }) => {
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests: [],
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    chatResponse: { delay: 5000, answer: 'Too late', sources: [], view_query: '' },
+  })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/dashboard')
+  const omnibox = page.getByLabel('Search or run a command')
+  await omnibox.fill('slow question')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Ask the archive' })
+  await expect(dialog).toBeVisible()
+  await expect.poll(async () => (await dialog.boundingBox()).x).toBe(0)
+  await expect.poll(async () => Math.round((await dialog.boundingBox()).width)).toBe(390)
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByText('Request canceled.')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Question', exact: true }).press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(omnibox).toBeFocused()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

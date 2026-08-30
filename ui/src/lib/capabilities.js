@@ -1,5 +1,11 @@
 export const USER_CAPABILITIES = Object.freeze([
   Object.freeze({
+    key: 'archive_chat',
+    label: 'Ask the archive',
+    setupLabel: 'Ask the archive',
+    description: 'Ask grounded questions across documents they can read.',
+  }),
+  Object.freeze({
     key: 'mailboxes',
     label: 'Manage mailboxes',
     setupLabel: 'Manage own mailboxes',

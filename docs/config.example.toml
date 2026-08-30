@@ -147,10 +147,10 @@ scan_split_dpi = 150
 # oauth_scopes_microsoft = "https://outlook.office.com/IMAP.AccessAsUser.All"
 
 # --------------------------------------------------------------------
-# LLM classifier (opt-in)
+# Model assistance for classification and archive questions (opt-in)
 # --------------------------------------------------------------------
 #
-# Empty endpoint = classifier disabled. Archive configuration → Classification
+# Empty endpoint = model disabled. Archive configuration → Classification
 # can also write these into database settings.
 
 # [llm]

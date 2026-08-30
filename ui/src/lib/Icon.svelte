@@ -29,6 +29,7 @@
     shield: 'M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z',
     mail: 'M4 6h16v12H4zM4.5 7l7.5 6 7.5-6',
     menu: 'M4 6h16M4 12h16M4 18h16',
+    ask: 'M5 5h14v11H9l-4 4zM9 9h6M9 12.5h4',
   }
 </script>
 

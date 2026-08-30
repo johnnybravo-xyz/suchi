@@ -146,6 +146,15 @@ type Result struct {
 	Language string `json:"language,omitempty"`
 }
 
+// CompletionMessage is one conversational turn for a generic model
+// completion. Callers provide only user and assistant roles; Complete adds the
+// trusted system instruction separately so retrieved document text can never
+// replace it.
+type CompletionMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // Plugin holds an atomic runtime snapshot so live reload from the setup
 // wizard (see SetConfig) never races an in-flight Classify.
 type Plugin struct {
@@ -310,13 +319,62 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		return nil, ErrDisabled
 	}
 	cfg := rt.cfg
-	if !rt.local {
-		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
-	}
 	if utf8.RuneCountInString(content) > cfg.MaxContentChars {
 		content = truncateChars(content, cfg.MaxContentChars) + "\n… [truncated]"
 	}
 	body := buildRequestBody(cfg.Model, title, content, jdCats, siblingTitles)
+	rb, err := p.doCompletion(ctx, rt, body)
+	if err != nil {
+		return nil, err
+	}
+	return parseChatCompletion(rb)
+}
+
+// Complete runs a bounded plain-text completion through the same runtime,
+// authentication, redirect policy, timeout, and sanitized provider errors as
+// classification. It deliberately exposes no tools or provider-specific
+// actions.
+func (p *Plugin) Complete(ctx context.Context, system string, messages []CompletionMessage, maxTokens int) (string, error) {
+	if p == nil {
+		return "", ErrDisabled
+	}
+	rt := p.rt.Load()
+	if rt == nil {
+		return "", ErrDisabled
+	}
+	if maxTokens <= 0 || maxTokens > 700 {
+		maxTokens = 700
+	}
+	wireMessages := make([]CompletionMessage, 0, len(messages)+1)
+	wireMessages = append(wireMessages, CompletionMessage{Role: "system", Content: system})
+	for _, message := range messages {
+		if message.Role != "user" && message.Role != "assistant" {
+			return "", errors.New("llm-classifier: completion role must be user or assistant")
+		}
+		wireMessages = append(wireMessages, message)
+	}
+	payload := map[string]any{
+		"model":       rt.cfg.Model,
+		"messages":    wireMessages,
+		"temperature": 0.1,
+		"max_tokens":  maxTokens,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("llm-classifier: encode completion: %w", err)
+	}
+	rb, err := p.doCompletion(ctx, rt, body)
+	if err != nil {
+		return "", err
+	}
+	return parseCompletionContent(rb)
+}
+
+func (p *Plugin) doCompletion(ctx context.Context, rt *runtime, body []byte) ([]byte, error) {
+	cfg := rt.cfg
+	if !rt.local {
+		p.log.Info("llm-classifier.egress", "host", rt.host, "model", cfg.Model)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(cfg.EndpointURL, "/")+"/chat/completions",
 		bytes.NewReader(body))
@@ -351,7 +409,7 @@ func (p *Plugin) Classify(ctx context.Context, title, content string, jdCats []J
 		return nil, &providerHTTPError{status: resp.StatusCode}
 	}
 
-	return parseChatCompletion(rb)
+	return rb, nil
 }
 
 func truncateChars(s string, max int) string {
@@ -427,20 +485,10 @@ Return ONLY the JSON object; no prose, no markdown.`
 // parseChatCompletion pulls the assistant's content out of the
 // OpenAI-shaped response and JSON-decodes it into a Result.
 func parseChatCompletion(body []byte) (*Result, error) {
-	var envelope struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	raw, err := parseCompletionContent(body)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("decode envelope: %w", err)
-	}
-	if len(envelope.Choices) == 0 {
-		return nil, errors.New("no choices in response")
-	}
-	raw := strings.TrimSpace(envelope.Choices[0].Message.Content)
 	// Strip a ```json fence if the model wrapped it despite our
 	// instructions — extremely common on smaller local models.
 	if strings.HasPrefix(raw, "```") {
@@ -457,6 +505,27 @@ func parseChatCompletion(body []byte) (*Result, error) {
 		return nil, fmt.Errorf("validate result: %w", err)
 	}
 	return &r, nil
+}
+
+func parseCompletionContent(body []byte) (string, error) {
+	var envelope struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", fmt.Errorf("decode envelope: %w", err)
+	}
+	if len(envelope.Choices) == 0 {
+		return "", errors.New("no choices in response")
+	}
+	raw := strings.TrimSpace(envelope.Choices[0].Message.Content)
+	if raw == "" {
+		return "", errors.New("empty completion response")
+	}
+	return raw, nil
 }
 
 func validateResult(r *Result) error {

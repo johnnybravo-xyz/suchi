@@ -5,7 +5,7 @@
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, canShare = false, startCreate = false, jdCategories = [] } = $props()
+  let { notify, canShare = false, startCreate = false, createQuery = '', jdCategories = [] } = $props()
   let views = $state([])
   let loading = $state(true)
   let loadError = $state('')
@@ -133,6 +133,7 @@
       startCreateHandled = false
     } else if (!startCreateHandled) {
       startCreateHandled = true
+      nv.q = createQuery
       openCreate()
     }
   })
