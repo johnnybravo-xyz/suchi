@@ -51,6 +51,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -621,8 +622,12 @@ func parseChatCompletion(body []byte) (*Result, error) {
 		raw = strings.TrimSuffix(raw, "```")
 		raw = strings.TrimSpace(raw)
 	}
+	normalized, err := normalizeClassifierJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode result: %w", err)
+	}
 	var r Result
-	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+	if err := json.Unmarshal(normalized, &r); err != nil {
 		return nil, fmt.Errorf("decode result: %w", err)
 	}
 	if err := validateResult(&r); err != nil {
@@ -631,6 +636,29 @@ func parseChatCompletion(body []byte) (*Result, error) {
 	return &r, nil
 }
 
+// Some OpenAI-compatible models serialize an otherwise valid category code as
+// a JSON string. Normalize that one scalar before strict struct decoding; all
+// range and taxonomy validation still runs below.
+func normalizeClassifierJSON(raw string) ([]byte, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+		return nil, err
+	}
+	value, exists := object["jd_category"]
+	if !exists || len(value) == 0 || value[0] != '"' {
+		return []byte(raw), nil
+	}
+	var encoded string
+	if err := json.Unmarshal(value, &encoded); err != nil {
+		return nil, err
+	}
+	category, err := strconv.Atoi(strings.TrimSpace(encoded))
+	if err != nil {
+		return nil, errors.New("jd_category string must contain an integer")
+	}
+	object["jd_category"] = json.RawMessage(strconv.Itoa(category))
+	return json.Marshal(object)
+}
 func parseCompletionContent(body []byte) (string, error) {
 	var envelope struct {
 		Choices []struct {

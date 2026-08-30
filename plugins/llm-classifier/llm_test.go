@@ -500,6 +500,17 @@ func TestParseChatCompletionValidatesAndNormalizesResult(t *testing.T) {
 	}
 }
 
+func TestParseChatCompletionAcceptsIntegerCategoryStrings(t *testing.T) {
+	envelope := []byte(`{"choices":[{"message":{"content":"{\"jd_category\":\"31\",\"confidence\":0.8}"}}]}`)
+	result, err := parseChatCompletion(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.JDCategory != 31 {
+		t.Fatalf("jd_category=%d, want 31", result.JDCategory)
+	}
+}
+
 func TestSelectClassificationContentKeepsDateWindows(t *testing.T) {
 	content := strings.Repeat("introductory archive text ", 300) +
 		"\nThe policy renewal date is September 14, 2026 and requires action.\n" +
