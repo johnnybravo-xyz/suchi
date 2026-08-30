@@ -41,6 +41,7 @@
   let chatEnabled = $state(false)
   let chatStatusInfo = $state({ enabled: false, provider: '', local: false })
   let chatOpen = $state(false)
+  let chatParked = $state(false)
   let ChatDrawer = $state(null)
   let chatRequest = $state({ id: 0, question: '' })
   let chatReturnFocus = $state(null)
@@ -287,12 +288,28 @@
 
   async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
     chatOpen = true
+    chatParked = false
     chatReturnFocus = returnFocus
     chatRequest = { id: chatRequest.id + 1, question, scope }
     if (!ChatDrawer) {
       try { ChatDrawer = (await import('./lib/ArchiveChat.svelte')).default }
-      catch { chatOpen = false; notify('Could not open archive research') }
+      catch { chatOpen = false; chatParked = false; notify('Could not open archive research') }
     }
+  }
+
+  function closeArchiveChat() {
+    chatOpen = false
+    chatParked = false
+  }
+
+  function parkArchiveChat() {
+    chatOpen = false
+    chatParked = true
+  }
+
+  function resumeArchiveChat() {
+    chatOpen = true
+    chatParked = false
   }
 
   function askSelectedDocuments(ids) {
@@ -449,6 +466,14 @@
         <Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />
+        {#if chatParked && ChatDrawer}
+          <button class="research-ribbon" onclick={resumeArchiveChat}
+                  aria-label="Return to archive research" title="Return to archive research">
+            <span class="research-ribbon-dot"></span>
+            <Icon name="ask" size={14} />
+            <span class="research-ribbon-label">Research active</span>
+          </button>
+        {/if}
         <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
@@ -512,7 +537,9 @@
   {/if}
 
   {#if ChatDrawer}
-    <ChatDrawer open={chatOpen} request={chatRequest} status={chatStatusInfo} canReviewIntelligence={canReviewIntelligence} onClose={() => (chatOpen = false)} onReturnFocus={chatReturnFocus} />
+    <ChatDrawer open={chatOpen} request={chatRequest} status={chatStatusInfo}
+      canReviewIntelligence={canReviewIntelligence} onClose={closeArchiveChat}
+      onPark={parkArchiveChat} onReturnFocus={chatReturnFocus} />
   {/if}
 
 {/if}

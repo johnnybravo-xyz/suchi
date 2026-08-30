@@ -11,8 +11,8 @@ Notable user-visible changes to Suchi are recorded here.
   filing metadata, dates, document state, qualifier suggestions, and
   apply-time validation.
 - A scoped Archive research desk with reauthorized follow-ups, structured
-  citation validation, exact source-set Views, bounded model traffic, and
-  explicit sensitive-evidence consent.
+  citation validation, Views made from retrieved documents, bounded model
+  traffic, and explicit sensitive-evidence consent.
 - A generic human-reviewed intelligence ledger, with conservative single-call
   date extraction, bulk approval, accepted-date Calendar, and rich-query date
   filters.

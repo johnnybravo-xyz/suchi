@@ -52,7 +52,7 @@
     <div class="section-head">
       <div>
         <span class="eyebrow">Two-minute guided tour</span>
-        <h2 id="guided-title">From a precise query to a grounded answer</h2>
+        <h2 id="guided-title">From a precise search to an answer with sources</h2>
       </div>
       <span class="tour-time">2 steps · anonymized data</span>
     </div>
@@ -78,8 +78,8 @@
         <span class="step-icon"><Icon name="ask" size={20} /></span>
         <div class="step-copy">
           <span class="step-kicker">Archive research</span>
-          <h3>Ask across a source set and keep the evidence attached</h3>
-          <p>On a private installation, Suchi retrieves only the scoped Northstar documents, validates every citation, and can save the exact source set as a View.</p>
+          <h3>Ask across related documents and keep the evidence attached</h3>
+          <p>On a private installation, Suchi retrieves only the scoped Northstar documents, validates every citation, and can save the retrieved documents as a View.</p>
           <blockquote>{researchQuestion}</blockquote>
           <a class="btn tour-action" href="https://docs.suchi.page/archive-chat" target="_blank" rel="noopener">
             Read the grounded workflow <Icon name="chev" size={13} />

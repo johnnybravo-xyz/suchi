@@ -10,6 +10,7 @@
     status = { provider: '', local: false },
     canReviewIntelligence = false,
     onClose,
+    onPark,
     onReturnFocus,
   } = $props()
   let turns = $state([])
@@ -164,6 +165,10 @@
     })
   }
 
+  function closeForNavigation() {
+    onPark?.()
+  }
+
   function sourceItems(turn) {
     return turn.sources.map((source, index) => ({ source, number: index + 1 }))
   }
@@ -183,11 +188,6 @@
     })
   }
 
-  function focusCitation(turnID, number) {
-    const source = document.getElementById(`research-source-${turnID}-${number}`)
-    source?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-    source?.focus()
-  }
 
   function providerLabel() {
     if (status?.local) return status.provider ? `Local model · ${status.provider}` : 'Local model'
@@ -273,8 +273,8 @@
   <div class="research-drawer" bind:this={drawer} role="dialog" aria-modal="true" aria-labelledby="research-title" tabindex="-1" onkeydown={onKey}>
     <header class="research-head">
       <div>
-        <span class="research-kicker">Evidence before answers</span>
         <h2 id="research-title">Archive research</h2>
+        <p class="research-intro">Ask questions about your documents.</p>
         <span class="scope-chip"><Icon name="search" size={11} />{request?.scope?.label || 'All archive'}</span>
       </div>
       <div class="research-head-actions">
@@ -308,11 +308,12 @@
 
           {#if turn.answer}
             <div class="answer-block" class:weak={!turn.grounded}>
-              <span class="answer-label">{turn.grounded ? 'Grounded answer' : 'Evidence check'}</span>
               <p class="research-answer">
                 {#each answerParts(turn.answer) as part}
                   {#if part.citation}
-                    <button class="inline-citation" onclick={() => focusCitation(turn.id, part.citation)} aria-label={`Jump to source ${part.citation}`}>{part.text}</button>
+                    {@const citedSource = turn.sources[part.citation - 1]}
+                    <a class="inline-citation" href={`#/doc/${citedSource.id}`} onclick={closeForNavigation}
+                       aria-label={`Open cited document ${part.citation}: ${citedSource.title || `Document #${citedSource.id}`}`}>{part.text}</a>
                   {:else}{part.text}{/if}
                 {/each}
               </p>
@@ -329,16 +330,16 @@
           {#if turn.sources.length}
             {@const groups = sourceGroups(turn)}
             <div class="research-actions" aria-label="Research actions">
-              <a class="research-action" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={close}>
-                <Icon name="eye" size={14} /><span><b>Save source set</b><small>{turn.sources.length} exact documents</small></span>
+              <a class="research-action" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={closeForNavigation}>
+                <Icon name="eye" size={14} /><span><b>Save retrieved documents as a view</b><small>{turn.sources.length} document{turn.sources.length === 1 ? '' : 's'}</small></span>
               </a>
               {#if canReviewIntelligence}
                 {#if pendingDateCount(turn) > 0}
-                  <a class="research-action" href="#/tasks" onclick={close}>
+                  <a class="research-action" href="#/tasks" onclick={closeForNavigation}>
                     <Icon name="tasks" size={14} /><span><b>Review {pendingDateCount(turn)} date{pendingDateCount(turn) === 1 ? '' : 's'}</b><small>Validate candidates in Approvals</small></span>
                   </a>
                 {:else if acceptedDateCount(turn) > 0}
-                  <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={close}>
+                  <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={closeForNavigation}>
                     <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} accepted date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Calendar uses validated facts only</small></span>
                   </a>
                 {/if}
@@ -348,13 +349,13 @@
             <section class="evidence-stack" aria-label="Evidence sources">
               <header><span>Evidence</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
               {#each groups.primary as item (item.source.id)}
-                <ArchiveChatSource {item} turnID={turn.id} cited onOpen={close} />
+                <ArchiveChatSource {item} turnID={turn.id} cited onOpen={closeForNavigation} />
               {/each}
               {#if groups.extra.length}
                 <details class="extra-sources">
                   <summary>{groups.extra.length} additional retrieved source{groups.extra.length === 1 ? '' : 's'}</summary>
                   {#each groups.extra as item (item.source.id)}
-                    <ArchiveChatSource {item} turnID={turn.id} onOpen={close} />
+                    <ArchiveChatSource {item} turnID={turn.id} onOpen={closeForNavigation} />
                   {/each}
                 </details>
               {/if}
@@ -388,7 +389,7 @@
   .research-veil { position: fixed; inset: 0; z-index: 90; border: 0; background: color-mix(in srgb, var(--ink) 28%, transparent); backdrop-filter: blur(1px); }
   .research-drawer { position: fixed; z-index: 91; inset: 0 0 0 auto; width: min(520px, 100vw); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-left: 1px solid var(--line-strong); background: var(--bg); box-shadow: -22px 0 54px color-mix(in srgb, var(--ink) 17%, transparent); animation: research-in .2s ease-out; }
   .research-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 19px 15px; border-bottom: 1px solid var(--line-strong); background: linear-gradient(145deg, var(--surface), var(--bg)); }
-  .research-kicker { display: block; margin-bottom: 3px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; font-weight: 700; text-transform: uppercase; }
+  .research-intro { margin: 3px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.4; }
   .research-head h2 { font-size: 1.13rem; }
   .scope-chip { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .63rem; }
   .research-head-actions { display: flex; gap: 7px; }.icon-only { padding-inline: 9px; }
@@ -406,10 +407,8 @@
   .turn-question > span { margin-top: 8px; color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .56rem; text-transform: uppercase; }
   .turn-question p { width: fit-content; max-width: 86%; margin: 0; padding: 9px 12px; border-radius: 12px 12px 3px 12px; background: var(--tint); color: var(--ink); font-size: .82rem; line-height: 1.45; white-space: pre-wrap; }
   .answer-block { margin-top: 15px; padding-left: 12px; border-left: 2px solid var(--accent); }.answer-block.weak { border-color: var(--faint); }
-  .answer-label { display: block; margin-bottom: 6px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .57rem; font-weight: 700; text-transform: uppercase; }
-  .answer-block.weak .answer-label { color: var(--muted); }
   .research-answer { margin: 0; color: var(--ink); font-size: .87rem; line-height: 1.68; white-space: pre-wrap; }
-  .inline-citation { display: inline; margin: 0 1px; padding: 0 2px; border: 0; border-radius: 3px; background: var(--tint); color: var(--accent); font: inherit; font-size: .76rem; font-weight: 750; cursor: pointer; vertical-align: baseline; }
+  .inline-citation { display: inline; margin: 0 1px; padding: 0 2px; border: 0; border-radius: 3px; background: var(--tint); color: var(--accent); font: inherit; font-size: .76rem; font-weight: 750; text-decoration: none; cursor: pointer; vertical-align: baseline; }
   .inline-citation:hover { text-decoration: underline; }
   .research-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 13px; padding: 10px 12px; border-left: 2px solid var(--danger); background: var(--danger-soft); color: var(--muted); font-size: .78rem; }
   .research-thinking { display: flex; align-items: center; gap: 4px; margin-top: 16px; color: var(--muted); }.research-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; }.research-thinking span:nth-child(2) { animation-delay: .16s; }.research-thinking span:nth-child(3) { animation-delay: .32s; }.research-thinking em { margin-left: 5px; font-size: .73rem; font-style: normal; }

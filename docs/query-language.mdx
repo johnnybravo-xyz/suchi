@@ -254,23 +254,23 @@ filter, and reapplies document ACLs. Clients must not reconstruct partial View
 scopes.
 
 Snapshot Views instead store `document_ids` as an array of 1–100 positive,
-deduplicated IDs. They preserve one exact source set while still reapplying ACLs
-whenever opened or shared.
+deduplicated IDs. They preserve an exact document list while still reapplying
+ACLs whenever opened or shared.
 
-## Archive research and generated Views
+## Archive research Views
 
 Archive research does **not** ask the model to invent a rich query. An earlier
 prototype converted question words into `view_query`, but RAG retrieval used
 prefix-`OR` while saved search text used implicit `AND`; the resulting View
-could differ from the cited sources.
+could differ from the cited documents.
 
-**Save source set** therefore creates an exact snapshot from authorized source
-IDs. A live View that should match future documents is created explicitly with
-this query language.
+**Save retrieved documents as a view** creates an exact snapshot from the
+authorized documents shown under Evidence. A live View that should match future
+documents is created explicitly with this query language.
 
-- RAG retrieval optimizes recall for one answer.
-- Rich queries define stable live filters.
-- Snapshot Views preserve exact cited evidence.
+- RAG retrieval finds evidence for one answer.
+- Rich queries define live filters.
+- Snapshot Views preserve the cited document list.
 
 ## Security
 

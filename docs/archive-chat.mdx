@@ -135,11 +135,11 @@ Conversation state exists only in the mounted browser application.
   answer; an uncited retrieval set is never used as implicit context.
 - The server stores no conversation rows.
 
-## Exact source views
+## Save retrieved documents as a View
 
-**Save source set** creates a snapshot View with `document_ids` rather than
-trying to reconstruct the result from question words. This preserves the exact
-retrieved document set.
+**Save retrieved documents as a view** creates a snapshot with `document_ids`
+rather than trying to reconstruct the result from question words. The View
+contains the documents shown under Evidence.
 
 Opening or sharing the View re-runs document authorization. A shared snapshot
 therefore exposes only the listed documents each viewer can already read.
