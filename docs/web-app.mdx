@@ -23,9 +23,11 @@ It contains only normal filing areas and categories. The protected system
 Inbox is intentionally available through the dedicated **Inbox** item instead
 of being repeated in the Index.
 
-The top bar provides archive search, **Upload**, and the theme control. Search
-suggestions can open a document, filing category, correspondent, tag, document
-type, or page. Selecting **Search everything for** opens **Search results**.
+The top bar provides archive search, **Upload**, and the theme control. Its
+menu combines **Commands**, qualifier-aware **Query suggestions**, and
+**Pages**. A query suggestion completes the active `jd:`, `tag:`, `from:`,
+`type:`, `sensitivity:`, or `is:` token without running the search. Selecting
+**Search everything for** opens **Search results** and validates the full query.
 
 ## Dashboard behavior
 
@@ -61,12 +63,25 @@ Changing a URL filter returns the document list to page one. If two requests
 overlap during fast navigation, only the response for the newest route is
 shown.
 
+Search results and Documents accept the same query language documented in the
+[API reference](/api#query-language). Suggestions appear while typing, but a
+query is validated only when the user selects **Search**, presses Enter in the
+Documents search field, or otherwise applies the route. A rejected query is
+shown below the active search surface without replacing it with an empty result
+state.
+
 ## Saved views
 
-**New view** opens **Create a view**. A view can combine **Contains text** with
-**Filing category**, **Tag**, **Correspondent**, **Document type**, and
-**Sensitivity**. Empty filters mean all values for that field. With no saved
-views, the list says **No saved views yet**.
+**New view** opens **Create a view**. A view can combine the optional **Query**
+field with **Filing category**, **Tag**, **Correspondent**, **Document type**,
+and **Sensitivity**. Empty filters mean all values for that field. With no
+saved views, the list says **No saved views yet**.
+
+**Save view** validates the resulting query and every referenced filing value.
+If validation fails, the server message appears inside **Create a view** and
+the dialog stays open for correction. Newly saved views store one normalized
+query string; existing views that use the older flat filter fields remain
+readable.
 
 Members with **Share saved views**, and all administrators, also see **Share
 this view**. A shared view appears in every user's Views list and dashboard.

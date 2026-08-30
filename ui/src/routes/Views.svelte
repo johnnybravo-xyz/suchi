@@ -1,7 +1,7 @@
 <script>
   import { listSavedViews, createSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
-  import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
+  import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -10,6 +10,7 @@
   let loading = $state(true)
   let loadError = $state('')
   let saving = $state(false)
+  let saveError = $state('')
   let createOpen = $state(false)
   let startCreateHandled = $state(false)
   let nameInput = $state()
@@ -64,6 +65,7 @@
 
   function openCreate() {
     loadFacets()
+    saveError = ''
     createOpen = true
     queueMicrotask(() => nameInput?.focus())
   }
@@ -87,6 +89,7 @@
   function closeCreate() {
     if (saving) return
     createOpen = false
+    saveError = ''
     nv = emptyView()
   }
 
@@ -94,14 +97,15 @@
     e.preventDefault()
     if (!nv.name.trim() || saving) return
 
-    const filters = {}
-    if (nv.q) filters.q = nv.q
-    if (nv.tag) filters.tags__id__in = nv.tag
-    if (nv.corr) filters.correspondents__id__in = nv.corr
-    if (nv.type) filters.document_type__id = nv.type
-    if (nv.jd) filters.jd_category_id = nv.jd
-    if (nv.sens) filters.sensitivity = nv.sens
+    const query = canonicalSavedViewQuery(nv, {
+      tags,
+      correspondents: corrs,
+      types,
+      categories: filingCategories,
+    })
+    const filters = query ? { q: query } : {}
 
+    saveError = ''
     saving = true
     try {
       await createSavedView({
@@ -115,7 +119,7 @@
       createOpen = false
       notify?.('View saved')
       await load()
-    } catch (ex) { notify?.(ex.message || 'Could not save the view') }
+    } catch (ex) { saveError = ex.message || 'Could not save the view.' }
     finally { saving = false }
   }
 
@@ -234,8 +238,8 @@
       </div>
 
       <div class="field search-field">
-        <label for="view-search">Contains text <span>Optional</span></label>
-        <input id="view-search" class="input" placeholder="Words in the title or document" bind:value={nv.q} />
+        <label for="view-search">Query <span>Optional</span></label>
+        <input id="view-search" class="input" placeholder='Text or filters, e.g. tag:tax -is:trash' bind:value={nv.q} />
       </div>
 
       <div class="filter-heading">
@@ -298,6 +302,8 @@
         </label>
       {/if}
 
+      {#if saveError}<div class="err save-error" role="alert">{saveError}</div>{/if}
+
       <div class="form-actions">
         <button type="button" class="btn" onclick={closeCreate} disabled={saving}>Cancel</button>
         <button class="btn primary" disabled={saving || !nv.name.trim()}>{saving ? 'Saving…' : 'Save view'}</button>
@@ -357,6 +363,7 @@
   .field label span { margin-left: 5px; color: var(--faint); font-size: .68rem; font-weight: 500; }
   .name-field .input { font-weight: 600; }
   .search-field { padding-bottom: 3px; }
+  .save-error { margin: 0 0 12px; }
   .filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
   .filter-heading span { font-size: .78rem; font-weight: 700; }
   .filter-heading small { color: var(--muted); font-size: .7rem; }

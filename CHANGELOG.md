@@ -4,6 +4,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- One bounded rich query language across ranked search, Documents, the
+  omnibox, and new saved views, with text prefixes, phrases, negation,
+  filing metadata, dates, document state, qualifier suggestions, and
+  apply-time validation.
+
 ## [0.1.0-beta.1] - 2026-08-29
 
 ### Added

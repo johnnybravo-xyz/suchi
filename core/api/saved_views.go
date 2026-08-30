@@ -12,6 +12,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 )
 
 // SavedViewRow is the JSON projection of one saved_views row.
@@ -152,11 +154,12 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	}
 	filterJSON := "{}"
 	if in.FilterJSON != nil && strings.TrimSpace(*in.FilterJSON) != "" {
-		if err := ValidateSavedViewFilterJSON(*in.FilterJSON); err != nil {
-			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
+		normalized, err := s.normalizeSavedViewFilterJSON(r.Context(), *in.FilterJSON)
+		if err != nil {
+			s.writeSavedViewFilterError(w, "saved_views.create", err)
 			return
 		}
-		filterJSON = *in.FilterJSON
+		filterJSON = normalized
 	}
 
 	// Cap views per user. A saved-views tab that renders 500 entries
@@ -248,12 +251,13 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 		args = append(args, name)
 	}
 	if in.FilterJSON != nil {
-		if err := ValidateSavedViewFilterJSON(*in.FilterJSON); err != nil {
-			s.writeError(w, http.StatusBadRequest, "invalid_filter", err.Error())
+		normalized, err := s.normalizeSavedViewFilterJSON(r.Context(), *in.FilterJSON)
+		if err != nil {
+			s.writeSavedViewFilterError(w, "saved_views.update", err)
 			return
 		}
 		sets = append(sets, "filter_json = ?")
-		args = append(args, *in.FilterJSON)
+		args = append(args, normalized)
 	}
 	if in.Display != nil {
 		display := strings.TrimSpace(*in.Display)
@@ -435,23 +439,24 @@ var savedViewAllowedKeys = map[string]bool{
 	"ordering":               true,
 }
 
-// ValidateSavedViewFilterJSON accepts the flat document-list query shape persisted by clients.
-func ValidateSavedViewFilterJSON(raw string) error {
+// NormalizeSavedViewFilterJSON validates the transitional flat shape and
+// canonicalizes q when present. Existing flat filters remain readable.
+func NormalizeSavedViewFilterJSON(raw string) (string, error) {
 	if len(raw) > savedViewFilterMaxBytes {
-		return &savedViewFilterError{message: "filter_json exceeds 2KB"}
+		return "", &savedViewFilterError{message: "filter_json exceeds 2KB"}
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	var filter map[string]any
 	if err := dec.Decode(&filter); err != nil || filter == nil {
-		return &savedViewFilterError{message: "filter_json must be a JSON object"}
+		return "", &savedViewFilterError{message: "filter_json must be a JSON object"}
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return &savedViewFilterError{message: "filter_json must contain one JSON object"}
+		return "", &savedViewFilterError{message: "filter_json must contain one JSON object"}
 	}
 	for key, value := range filter {
 		if !savedViewAllowedKeys[key] {
-			return &savedViewFilterError{message: "unknown filter key: " + key}
+			return "", &savedViewFilterError{message: "unknown filter key: " + key}
 		}
 		switch typed := value.(type) {
 		case string, json.Number, bool, nil:
@@ -460,14 +465,59 @@ func ValidateSavedViewFilterJSON(raw string) error {
 				switch item.(type) {
 				case string, json.Number, bool, nil:
 				default:
-					return &savedViewFilterError{message: "filter key " + key + " has a non-scalar array element"}
+					return "", &savedViewFilterError{message: "filter key " + key + " has a non-scalar array element"}
 				}
 			}
 		default:
-			return &savedViewFilterError{message: "filter key " + key + " is not a scalar or array of scalars"}
+			return "", &savedViewFilterError{message: "filter key " + key + " is not a scalar or array of scalars"}
 		}
 	}
-	return nil
+	if value, exists := filter["q"]; exists {
+		query, ok := value.(string)
+		if !ok {
+			return "", &savedViewFilterError{message: "filter key q must be a string"}
+		}
+		parsed, err := searchquery.Parse(query)
+		if err != nil {
+			return "", &savedViewFilterError{message: "filter key q: " + err.Error()}
+		}
+		filter["q"] = searchquery.Normalize(parsed)
+	}
+	normalized, err := json.Marshal(filter)
+	if err != nil {
+		return "", &savedViewFilterError{message: "filter_json could not be normalized"}
+	}
+	return string(normalized), nil
+}
+
+func (s *Server) normalizeSavedViewFilterJSON(ctx context.Context, raw string) (string, error) {
+	normalized, err := NormalizeSavedViewFilterJSON(raw)
+	if err != nil {
+		return "", err
+	}
+	var filter struct {
+		Query string `json:"q"`
+	}
+	if err := json.Unmarshal([]byte(normalized), &filter); err != nil {
+		return "", err
+	}
+	if _, err := s.compileQuery(ctx, filter.Query); err != nil {
+		var queryErr *searchquery.Error
+		if errors.As(err, &queryErr) {
+			return "", &savedViewFilterError{message: "filter key q: " + queryErr.Error()}
+		}
+		return "", err
+	}
+	return normalized, nil
+}
+
+func (s *Server) writeSavedViewFilterError(w http.ResponseWriter, operation string, err error) {
+	var filterErr *savedViewFilterError
+	if errors.As(err, &filterErr) {
+		s.writeError(w, http.StatusBadRequest, "invalid_filter", filterErr.Error())
+		return
+	}
+	s.serverErr(w, operation+".validate_filter", err)
 }
 
 type savedViewFilterError struct{ message string }

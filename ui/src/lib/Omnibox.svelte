@@ -1,6 +1,7 @@
 <script>
-  // Combined command palette and document autocomplete.
-  import { autocomplete } from './api.js'
+  // Combined command palette and query entry point.
+  import { onDestroy } from 'svelte'
+  import { createQueryAssistant } from './queryAssist.js'
   import { go } from './router.svelte.js'
   import Icon from './Icon.svelte'
 
@@ -8,9 +9,13 @@
   let q = $state('')
   let open = $state(false)
   let idx = $state(-1)
-  let docs = $state([])
-  let box, input, timer
-  let searchVersion = 0
+  let suggestions = $state([])
+  let box, input
+  const queryAssistant = createQueryAssistant(
+    (next) => (suggestions = next),
+    { delay: 160, limit: 6 },
+  )
+  onDestroy(queryAssistant.dispose)
 
   function matches(label) {
     const s = q.trim().toLowerCase()
@@ -23,28 +28,21 @@
   // Keyboard order must match the rendered groups.
   const items = $derived([
     ...commandHits.map((c, i) => ({ kind: 'cmd', i, run: c.run })),
-    ...docs.map((d) => ({ kind: 'doc', href: `#/doc/${d.id}` })),
+    ...suggestions.map((suggestion) => ({ kind: 'query', query: suggestion.query })),
     ...pageHits.map((p) => ({ kind: 'page', href: p.href })),
   ])
   const total = $derived(items.length)
 
-  function search(v) {
-    const version = ++searchVersion
-    clearTimeout(timer)
-    if (!v.trim()) { docs = []; return }
-    timer = setTimeout(async () => {
-      try {
-        const r = await autocomplete(v.trim(), 6)
-        if (version === searchVersion) docs = (r?.results || r || []).slice(0, 6)
-      } catch {
-        if (version === searchVersion) docs = []
-      }
-    }, 160)
-  }
-
   function activate(i) {
     if (i >= 0 && items[i]) {
       const it = items[i]
+      if (it.kind === 'query') {
+        q = it.query
+        idx = -1
+        queryAssistant.update(q)
+        queueMicrotask(() => input?.focus())
+        return
+      }
       if (it.kind === 'cmd') it.run?.()
       else if (it.href) go(it.href)
     } else if (q.trim()) {
@@ -53,9 +51,8 @@
     close()
   }
   function close() {
-    searchVersion++
-    clearTimeout(timer)
-    open = false; idx = -1; q = ''; docs = []; input?.blur()
+    queryAssistant.clear()
+    open = false; idx = -1; q = ''; input?.blur()
   }
 
   function ask() {
@@ -77,8 +74,8 @@
   }
   function outside(e) { if (box && !box.contains(e.target)) close() }
 
-  const docsBase = $derived(commandHits.length)
-  const pagesBase = $derived(commandHits.length + docs.length)
+  const suggestionsBase = $derived(commandHits.length)
+  const pagesBase = $derived(commandHits.length + suggestions.length)
 </script>
 
 <svelte:window onkeydown={globalKey} onmousedown={outside} />
@@ -87,7 +84,7 @@
   <Icon name="search" size={15} />
   <input bind:this={input} bind:value={q} type="search" placeholder="Search or run a command"
          autocomplete="off" spellcheck="false" aria-label="Search or run a command"
-         onfocus={() => (open = true)} oninput={(e) => { open = true; idx = -1; search(e.target.value) }}
+         onfocus={() => (open = true)} oninput={(e) => { open = true; idx = -1; queryAssistant.update(e.target.value) }}
          onkeydown={onKey} />
 
   {#if canAsk}
@@ -108,14 +105,14 @@
           </button>
         {/each}
       {/if}
-      {#if docs.length}
-        <div class="omni-lbl">Documents</div>
-        {#each docs as d, i (d.id)}
-          <button class="omni-row" class:hot={idx === docsBase + i} role="option" aria-selected={idx === docsBase + i}
-                  onmousedown={(e) => { e.preventDefault(); activate(docsBase + i) }}>
-            <span class="dot"></span>
-            {#if d.jd_category_code}<span class="chip">{d.jd_category_code}</span>{/if}
-            <span class="grow">{d.title || `Document #${d.id}`}</span>
+      {#if suggestions.length}
+        <div class="omni-lbl">Query suggestions</div>
+        {#each suggestions as suggestion, i (suggestion.query)}
+          <button class="omni-row" class:hot={idx === suggestionsBase + i} role="option" aria-selected={idx === suggestionsBase + i}
+                  onmousedown={(e) => { e.preventDefault(); activate(suggestionsBase + i) }}>
+            <Icon name="search" size={13} />
+            <span class="chip">{suggestion.kind}</span>
+            <span class="grow">{suggestion.value}</span>
           </button>
         {/each}
       {/if}

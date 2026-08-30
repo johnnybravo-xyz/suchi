@@ -157,11 +157,13 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		if len(view.FilterJSON) == 0 || strings.TrimSpace(string(view.FilterJSON)) == "null" {
 			view.FilterJSON = json.RawMessage(`{}`)
 		}
-		if err := api.ValidateSavedViewFilterJSON(string(view.FilterJSON)); err != nil {
+		normalizedFilter, err := api.NormalizeSavedViewFilterJSON(string(view.FilterJSON))
+		if err != nil {
 			log.Warn("demo.seed.view.invalid", "name", view.Name, "err", err.Error())
 			s.ViewsFailed++
 			continue
 		}
+		view.FilterJSON = json.RawMessage(normalizedFilter)
 		if opts.SavedViewIngest == nil {
 			s.ViewsWouldSeed++
 			continue

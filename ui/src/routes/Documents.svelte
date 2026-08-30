@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
@@ -7,6 +8,7 @@
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [] } = $props()
 
@@ -37,8 +39,12 @@
   ]))
   let loadedFilterKey = ''
   let loadVersion = 0
+  let suggestions = $state([])
+  const queryAssistant = createQueryAssistant((next) => (suggestions = next))
+  onDestroy(queryAssistant.dispose)
 
   function setRouteFilter(key, value) {
+    queryAssistant.clear()
     const params = new URLSearchParams(route.query)
     const normalized = String(value ?? '').trim()
     if (normalized) params.set(key, normalized)
@@ -84,7 +90,7 @@
       const visibleIDs = new Set(docs.map((document) => document.id))
       sel = new Set([...sel].filter((id) => visibleIDs.has(id)))
     } catch (ex) {
-      if (version === loadVersion) err = ex.message || 'Could not load documents.'
+      if (version === loadVersion) err = queryErrorMessage(ex, 'Could not load documents.')
     } finally {
       if (version === loadVersion) loading = false
     }
@@ -296,10 +302,17 @@
 
 {#if !isInbox}
   <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select, input[type="date"]')) e.target.blur() }}>
-    <input class="input" type="search" value={fQuery} placeholder="Search text"
+    <input class="input" type="search" value={fQuery} placeholder="Search or use jd:, tag:, from:…"
+           list="documents-query-suggestions"
+           oninput={(event) => queryAssistant.update(event.currentTarget.value)}
            onchange={(e) => setRouteFilter('q', e.target.value)}
            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setRouteFilter('q', e.currentTarget.value) } }}
-           style="min-width:150px" />
+           style="min-width:180px" />
+    <datalist id="documents-query-suggestions">
+      {#each suggestions as suggestion (suggestion.query)}
+        <option value={suggestion.query}>{suggestion.value}</option>
+      {/each}
+    </datalist>
     <select class="input" value={fTag} onchange={(e) => setRouteFilter('tags__id__in', e.target.value)}>
       <option value="">All tags</option>
       {#each tags as t}<option value={t.id}>{t.name}</option>{/each}

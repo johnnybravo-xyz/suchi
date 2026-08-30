@@ -207,7 +207,7 @@ Query params (all optional):
 | `document_type__id`                  | Exact document type.                                                                                                        |
 | `tags__id__in`                       | CSV of tag ids; result must carry **every** id (AND).                                                                       |
 | `correspondents__id__in`             | CSV of correspondent ids; result matches **any** (OR).                                                                      |
-| `q`                                  | Full-text search via FTS5 MATCH over title + content.                                                                       |
+| `q`                                  | Rich query string shared with ranked search; plain terms use prefix `AND`.                                                   |
 | `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
 | `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
 
@@ -715,16 +715,16 @@ contract for the SPA and external clients.
 
 ### `GET /api/search/`
 
-Full-text search over `documents_fts` (title + content). Scope:
+Ranked search over document text plus filing metadata. Scope:
 `documents:read`. Non-admin callers are ACL-scoped identically to
-the list surface — the FTS snippet cannot leak content the caller
-can't see.
+the list surface — snippets and metadata filters cannot expose a
+document the caller cannot view.
 
 **Query params**:
 
 | Param                                                | Purpose                                                                                                                          |
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `q`                                                  | The user's raw query string. Empty → empty envelope.                                                                             |
+| `q`                                                  | Rich query string described below. Empty → empty envelope.                                                                    |
 | `page`, `page_size`                                  | Standard pagination (default 25, max 100).                                                                                       |
 | `recency`                                            | `off` disables the recency-decay term in ranking.                                                                                |
 | `tags__id__in`, `correspondents__id__in`             | CSV IDs; doc matches ANY.                                                                                                        |
@@ -756,6 +756,58 @@ bm25(documents_fts, 3.0, 1.0)
 **Response shape** — `{count, next, previous, results}` DRF envelope.
 Each hit carries `{id, title, snippet, rank, created_at, mime_type}`
 where `snippet` wraps the matching span in `<mark>...</mark>`.
+
+#### Query language
+
+`GET /api/search/` and `GET /api/documents/` compile `q` through the
+same parser and return the same matching document set. Plain words are
+Unicode-aware prefix terms joined with implicit `AND`; quoted text is a
+phrase. Prefix a term or filter with `-` to exclude it.
+
+```text
+"distribution advice" jd:22 from:"Bagmane Prime" -tag:archived added:>=2026-01-01
+```
+
+| Token | Effect |
+| --- | --- |
+| `jd:22`, `jd:"22 Investments"` | Filing category by visible code or category name, never row ID. |
+| `tag:tax` | Exact tag name. |
+| `from:"HDFC Bank"` | Primary or linked correspondent. |
+| `type:statement` | Exact document type name. |
+| `sensitivity:confidential` | `public`, `internal`, `confidential`, or `restricted`. |
+| `lang:de` | Assigned or detected 2–3 letter language code. |
+| `title:invoice`, `content:"distribution advice"` | Restrict a text term to one indexed column. |
+| `added:2026-08-25`, `added:>=2026-01-01` | Added date in UTC; `=`, `>`, `>=`, `<`, and `<=` are supported. |
+| `is:inbox`, `is:trash`, `is:encrypted` | Current document state. |
+
+The parser rejects unknown filters, raw FTS5 expressions, Boolean `OR`,
+grouping, proximity operators, malformed comparisons, unterminated quotes,
+and non-whitespace control characters. Queries are limited to 1 KiB, 64
+tokens, and 256 bytes per value. `400 bad_query` responses include `position`,
+optional `filter`, and optional `suggestions` fields. Positions are byte
+offsets in the query exactly as received, including leading whitespace.
+
+`GET /api/autocomplete/?q=...` recognizes an incomplete qualifier at
+the end of `q`. Suggestions for filter names and values carry `query`,
+the full replacement query string. JD suggestions display visible code
+plus name and insert the visible code. Qualifier completion accepts the same
+1 KiB input limit as the parser. The older plain taxonomy-prefix mode remains
+limited to 100 bytes.
+
+### Saved-view query validation
+
+`POST /api/saved_views/` and `PATCH /api/saved_views/{id}` accept
+`filter_json` as a JSON-encoded object string up to 2 KiB. Supported keys are
+`q`,
+`tags__id__in`, `correspondents__id__in`, `document_type__id`,
+`jd_category_id`, `sensitivity`, and `ordering`.
+
+When `q` is present, the server normalizes its spelling and resolves referenced
+categories, tags, correspondents, and document types before writing the row.
+Syntax errors, unknown values, and ambiguous values return `400 invalid_filter`;
+an update that fails validation leaves the stored view unchanged. Existing
+flat filter objects remain readable, while newly created web-app views use `q`
+as their search constraint.
 
 ### `GET /api/documents/{id}/similar`
 

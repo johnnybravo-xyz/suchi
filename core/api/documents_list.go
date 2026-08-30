@@ -14,7 +14,7 @@
 //                               matches ANY (OR semantics — one doc
 //                               with 2 correspondents shouldn't need
 //                               both ids to appear).
-//   q                         — FTS5 MATCH on title + content.
+//   q                         — shared rich text + metadata query.
 //   created_at__gte, __lte    — unix seconds inclusive.
 //   trashed                   — "1" / "true" to show only trashed
 //                               docs; anything else = live only.
@@ -86,12 +86,20 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	where := []string{}
 	args := []any{}
+	queryPlan, err := s.compileQuery(r.Context(), q.Get("q"))
+	if err != nil {
+		if !s.writeQueryError(w, "docs.list", q.Get("q"), err) {
+			s.serverErr(w, "docs.list.compile_query", err)
+		}
+		return
+	}
 
-	// Trashed toggle. Default hides trashed rows.
+	// The route defaults to live documents unless either the legacy
+	// trashed toggle or the shared query language chooses trash state.
 	trashed := q.Get("trashed")
 	if trashed == "1" || trashed == "true" {
 		where = append(where, "d.trashed_at IS NOT NULL")
-	} else {
+	} else if !queryPlan.HasTrashFilter {
 		where = append(where, "d.trashed_at IS NULL")
 	}
 
@@ -196,13 +204,9 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, ts)
 	}
 
-	// Full-text search via the existing FTS5 index. We EXISTS-join
-	// rather than main-join so ORDER/PAGINATE stays on documents.
-	if term := strings.TrimSpace(q.Get("q")); term != "" {
-		where = append(where,
-			`EXISTS (SELECT 1 FROM documents_fts f WHERE f.rowid = d.id AND documents_fts MATCH ?)`)
-		args = append(args, term)
-	}
+	// Rich text and metadata constraints share the same compiled plan as
+	// ranked search. Legacy visual filters above remain additive.
+	where, args = appendQueryPredicates(where, args, queryPlan)
 
 	// Visibility: admins bypass; members get owner/ACL visibility. Public demo
 	// visitors see only the seeded corpus, plus their own scratch uploads.
@@ -230,10 +234,6 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	var total int
 	countSQL := "SELECT COUNT(*) FROM documents d WHERE " + whereSQL
 	if err := s.DB.Read.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
-		if isFTSQueryError(err, q.Get("q")) {
-			s.writeFTSQueryError(w, "docs.list", q.Get("q"), err)
-			return
-		}
 		s.serverErr(w, "docs.list.count", err)
 		return
 	}
@@ -258,10 +258,6 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		 ORDER BY `+orderBy+`
 		 LIMIT ? OFFSET ?`, rowArgs...)
 	if err != nil {
-		if isFTSQueryError(err, q.Get("q")) {
-			s.writeFTSQueryError(w, "docs.list", q.Get("q"), err)
-			return
-		}
 		s.serverErr(w, "docs.list.query", err)
 		return
 	}
