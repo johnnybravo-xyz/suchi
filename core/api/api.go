@@ -105,9 +105,11 @@ type Server struct {
 	LLMStatusReader func(ctx context.Context) (LLMSettingsStatus, error)
 	LLMTester       func(ctx context.Context, cfg LLMTestConfig) (LLMTestResult, error)
 	// ChatEnabled follows the active runtime model. ChatCompletion is the
-	// narrow plain-text transport seam; core/api never imports the plugin.
-	ChatEnabled    func() bool
-	ChatCompletion func(context.Context, string, []ChatCompletionMessage, int) (string, error)
+	// narrow completion seam; core/api never imports the plugin.
+	ChatEnabled     func() bool
+	ChatCompletion  func(context.Context, string, []ChatCompletionMessage, int) (string, error)
+	ChatRuntimeInfo func() (host string, local bool)
+	chatGate        *chatGate
 	// LLMAEAD seals API keys written by the setup wizard.
 	LLMAEAD *suchicrypto.AEADKey
 	// Setup-owned runtime values use readers for honest revisit forms and
@@ -159,10 +161,11 @@ func New(d *db.DB, cas *blob.CAS, log *slog.Logger) (*Server, error) {
 		return nil, errors.New("api.New: DB, CAS, and Log are required")
 	}
 	return &Server{
-		DB:    d,
-		CAS:   cas,
-		Log:   log.With("component", "api"),
-		Authz: authz.ACLAuthorizer{DB: d},
+		DB:       d,
+		CAS:      cas,
+		Log:      log.With("component", "api"),
+		Authz:    authz.ACLAuthorizer{DB: d},
+		chatGate: newChatGate(),
 	}, nil
 }
 

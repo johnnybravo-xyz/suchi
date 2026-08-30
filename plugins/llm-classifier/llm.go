@@ -299,6 +299,19 @@ func (p *Plugin) Config() Config {
 	return rt.cfg
 }
 
+// RuntimeInfo returns the provider host and whether it is local without
+// exposing credentials or the endpoint path.
+func (p *Plugin) RuntimeInfo() (host string, local bool) {
+	if p == nil {
+		return "", false
+	}
+	rt := p.rt.Load()
+	if rt == nil {
+		return "", false
+	}
+	return rt.host, rt.local
+}
+
 // Classify runs the model against title + content, returns the parsed
 // suggestion. jdCats is the installation's user-facing Johnny-Decimal
 // categories; pass nil or an empty slice when unknown (the model will

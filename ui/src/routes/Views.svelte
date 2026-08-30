@@ -5,7 +5,7 @@
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
 
-  let { notify, canShare = false, startCreate = false, createQuery = '', jdCategories = [] } = $props()
+  let { notify, canShare = false, startCreate = false, createQuery = '', createDocumentIDs = '', jdCategories = [] } = $props()
   let views = $state([])
   let loading = $state(true)
   let loadError = $state('')
@@ -22,7 +22,13 @@
   let nv = $state(emptyView())
 
   function emptyView() {
-    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', shared: false }
+    return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', ids: [], shared: false }
+  }
+
+  function parseDocumentIDs(value) {
+    return [...new Set(String(value || '').split(',')
+      .map(id => Number(id.trim()))
+      .filter(id => Number.isInteger(id) && id > 0))].slice(0, 100)
   }
 
   async function load() {
@@ -53,6 +59,9 @@
 
   function filterSummary(filters) {
     const summary = []
+    if (Array.isArray(filters.document_ids) && filters.document_ids.length) {
+      summary.push(`${filters.document_ids.length} saved documents`)
+    }
     if (filters.q) summary.push(`Search: “${filters.q}”`)
     if (filters.jd_category_id) summary.push(nameFor(filingCategories, filters.jd_category_id, 'Category', (c) => `${c.code} ${c.name}`))
     if (filters.tags__id__in) summary.push(`Tag: ${nameFor(tags, filters.tags__id__in, 'Selected tag')}`)
@@ -64,7 +73,7 @@
   }
 
   function openCreate() {
-    loadFacets()
+    if (!nv.ids.length) loadFacets()
     saveError = ''
     createOpen = true
     queueMicrotask(() => nameInput?.focus())
@@ -97,13 +106,13 @@
     e.preventDefault()
     if (!nv.name.trim() || saving) return
 
-    const query = canonicalSavedViewQuery(nv, {
+    const query = nv.ids.length ? '' : canonicalSavedViewQuery(nv, {
       tags,
       correspondents: corrs,
       types,
       categories: filingCategories,
     })
-    const filters = query ? { q: query } : {}
+    const filters = nv.ids.length ? { document_ids: nv.ids } : (query ? { q: query } : {})
 
     saveError = ''
     saving = true
@@ -138,6 +147,7 @@
     } else if (!startCreateHandled) {
       startCreateHandled = true
       nv.q = createQuery
+      nv.ids = parseDocumentIDs(createDocumentIDs)
       openCreate()
     }
   })
@@ -237,60 +247,70 @@
         <input id="view-name" class="input" placeholder="e.g. Tax documents to review" bind:this={nameInput} bind:value={nv.name} required />
       </div>
 
-      <div class="field search-field">
-        <label for="view-search">Query <span>Optional</span></label>
-        <input id="view-search" class="input" placeholder='Text or filters, e.g. tag:tax -is:trash' bind:value={nv.q} />
-      </div>
+      {#if nv.ids.length}
+        <div class="snapshot-note">
+          <span class="snapshot-mark"><Icon name="docs" size={18} /></span>
+          <span>
+            <strong>Exact research snapshot</strong>
+            <small>This view keeps these {nv.ids.length} documents together. Access is checked whenever it opens.</small>
+          </span>
+        </div>
+      {:else}
+        <div class="field search-field">
+          <label for="view-search">Query <span>Optional</span></label>
+          <input id="view-search" class="input" placeholder='Text or filters, e.g. tag:tax -is:trash' bind:value={nv.q} />
+        </div>
 
-      <div class="filter-heading">
-        <span>Filters</span>
-        <small>Leave any field open to include everything</small>
-      </div>
-      {#if facetsError}
-        <div class="err facet-error">
-          <span>{facetsError}</span>
-          <button type="button" class="btn sm" onclick={loadFacets}>Retry</button>
+        <div class="filter-heading">
+          <span>Filters</span>
+          <small>Leave any field open to include everything</small>
+        </div>
+        {#if facetsError}
+          <div class="err facet-error">
+            <span>{facetsError}</span>
+            <button type="button" class="btn sm" onclick={loadFacets}>Retry</button>
+          </div>
+        {/if}
+        <div class="filter-grid">
+          <div class="field">
+            <label for="view-category">Filing category</label>
+            <select id="view-category" class="input" bind:value={nv.jd}>
+              <option value="">Any category</option>
+              {#each filingCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-tag">Tag</label>
+            <select id="view-tag" class="input" bind:value={nv.tag}>
+              <option value="">Any tag</option>
+              {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-correspondent">Correspondent</label>
+            <select id="view-correspondent" class="input" bind:value={nv.corr}>
+              <option value="">Any correspondent</option>
+              {#each corrs as c}<option value={c.id}>{c.name}</option>{/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-type">Document type</label>
+            <select id="view-type" class="input" bind:value={nv.type}>
+              <option value="">Any type</option>
+              {#each types as t}<option value={t.id}>{t.name}</option>{/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="view-sensitivity">Sensitivity</label>
+            <select id="view-sensitivity" class="input" bind:value={nv.sens}>
+              <option value="">Any sensitivity</option>
+              {#each SENSITIVITY_OPTIONS as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </div>
         </div>
       {/if}
-      <div class="filter-grid">
-        <div class="field">
-          <label for="view-category">Filing category</label>
-          <select id="view-category" class="input" bind:value={nv.jd}>
-            <option value="">Any category</option>
-            {#each filingCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
-          </select>
-        </div>
-        <div class="field">
-          <label for="view-tag">Tag</label>
-          <select id="view-tag" class="input" bind:value={nv.tag}>
-            <option value="">Any tag</option>
-            {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
-          </select>
-        </div>
-        <div class="field">
-          <label for="view-correspondent">Correspondent</label>
-          <select id="view-correspondent" class="input" bind:value={nv.corr}>
-            <option value="">Any correspondent</option>
-            {#each corrs as c}<option value={c.id}>{c.name}</option>{/each}
-          </select>
-        </div>
-        <div class="field">
-          <label for="view-type">Document type</label>
-          <select id="view-type" class="input" bind:value={nv.type}>
-            <option value="">Any type</option>
-            {#each types as t}<option value={t.id}>{t.name}</option>{/each}
-          </select>
-        </div>
-        <div class="field">
-          <label for="view-sensitivity">Sensitivity</label>
-          <select id="view-sensitivity" class="input" bind:value={nv.sens}>
-            <option value="">Any sensitivity</option>
-            {#each SENSITIVITY_OPTIONS as option (option.value)}
-              <option value={option.value}>{option.label}</option>
-            {/each}
-          </select>
-        </div>
-      </div>
 
       {#if canShare}
         <label class="share-option">
@@ -363,6 +383,11 @@
   .field label span { margin-left: 5px; color: var(--faint); font-size: .68rem; font-weight: 500; }
   .name-field .input { font-weight: 600; }
   .search-field { padding-bottom: 3px; }
+  .snapshot-note { display: flex; gap: 11px; margin-bottom: 15px; padding: 13px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 10px; background: var(--tint); }
+  .snapshot-mark { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 9px; background: var(--surface); color: var(--accent); }
+  .snapshot-note > span:last-child { display: flex; flex-direction: column; gap: 3px; }
+  .snapshot-note strong { font-size: .82rem; }
+  .snapshot-note small { color: var(--muted); font-size: .72rem; line-height: 1.45; }
   .save-error { margin: 0 0 12px; }
   .filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
   .filter-heading span { font-size: .78rem; font-weight: 700; }

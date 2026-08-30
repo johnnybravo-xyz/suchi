@@ -531,6 +531,7 @@ func runServe() int {
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.LLMAEAD = decryptKey
 	apiSrv.ChatEnabled = llm.Enabled
+	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
 	apiSrv.ChatCompletion = func(rctx context.Context, system string, messages []api.ChatCompletionMessage, maxTokens int) (string, error) {
 		pluginMessages := make([]llmclassifier.CompletionMessage, len(messages))
 		for i, message := range messages {

@@ -445,7 +445,7 @@
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
         {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', jdCategories }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
         {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>

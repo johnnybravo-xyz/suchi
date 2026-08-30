@@ -437,6 +437,7 @@ var savedViewAllowedKeys = map[string]bool{
 	"jd_category_id":         true,
 	"sensitivity":            true,
 	"ordering":               true,
+	"document_ids":           true,
 }
 
 // NormalizeSavedViewFilterJSON validates the transitional flat shape and
@@ -471,6 +472,32 @@ func NormalizeSavedViewFilterJSON(raw string) (string, error) {
 		default:
 			return "", &savedViewFilterError{message: "filter key " + key + " is not a scalar or array of scalars"}
 		}
+	}
+	if value, exists := filter["document_ids"]; exists {
+		items, ok := value.([]any)
+		if !ok {
+			return "", &savedViewFilterError{message: "filter key document_ids must be an array"}
+		}
+		if len(items) == 0 || len(items) > chatMaxScopeDocuments {
+			return "", &savedViewFilterError{message: "filter key document_ids must contain 1 to 100 ids"}
+		}
+		ids := make([]int64, 0, len(items))
+		seen := make(map[int64]bool, len(items))
+		for _, item := range items {
+			number, ok := item.(json.Number)
+			if !ok {
+				return "", &savedViewFilterError{message: "filter key document_ids must contain integers"}
+			}
+			id, err := strconv.ParseInt(number.String(), 10, 64)
+			if err != nil || id <= 0 {
+				return "", &savedViewFilterError{message: "filter key document_ids must contain positive integers"}
+			}
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+		filter["document_ids"] = ids
 	}
 	if value, exists := filter["q"]; exists {
 		query, ok := value.(string)

@@ -24,6 +24,7 @@
   const fCorr = $derived(route.query.get('correspondents__id__in') || '')
   const fType = $derived(route.query.get('document_type__id') || '')
   const fSens = $derived(route.query.get('sensitivity') || '')
+  const fDocumentIDs = $derived(route.query.get('document_ids') || '')
   const ordering = $derived(route.query.get('ordering') || '-created_at')
   let dateFrom = $state('')   // yyyy-mm-dd → created_at__gte (unix)
   let dateTo = $state('')
@@ -34,7 +35,7 @@
   const jdFilter = $derived(route.query.get('jd') || '')
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
   const activeFilterKey = $derived(JSON.stringify([
-    ordering, fQuery, fTag, fCorr, fType, fSens, jdFilter,
+    ordering, fQuery, fTag, fCorr, fType, fSens, fDocumentIDs, jdFilter,
     inbox?.id || '', taxonomyLoaded, dateFrom, dateTo,
   ]))
   let loadedFilterKey = ''
@@ -76,7 +77,7 @@
     try {
       const params = {
         page, page_size: pageSize, ordering,
-        q: fQuery,
+        q: fQuery, document_ids: fDocumentIDs,
         tags__id__in: fTag, correspondents__id__in: fCorr,
         document_type__id: fType, sensitivity: fSens,
         jd_category_id: isInbox ? inbox?.id : jdFilter,

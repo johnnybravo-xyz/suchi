@@ -69,7 +69,9 @@ func doChatRequest(t *testing.T, s *Server, method, path, body string, p *plugin
 
 func TestChatStatusCapabilityAndDemoDenial(t *testing.T) {
 	s := newChatTestServer(t)
-	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) { return "ok", nil }
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Available evidence [1].","citations":[1],"sufficient":true}`, nil
+	}
 
 	if rec := doChatRequest(t, s, http.MethodGet, "/api/chat/status", "", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous status=%d body=%s", rec.Code, rec.Body.String())
@@ -111,7 +113,7 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 			t.Errorf("unsafe system/max contract: %q max=%d", system, maxTokens)
 		}
 		captured = messages
-		return "The renewal is supported [1].", nil
+		return `{"answer":"The renewal is supported [1].","citations":[1],"sufficient":true}`, nil
 	}
 
 	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"lease renewal"}`, adminPrincipal(1))
@@ -184,19 +186,25 @@ func TestChatNoEvidenceBoundsHistoryAndProviderFailure(t *testing.T) {
 	}
 }
 
-func TestNormalizedChatTermsAreBoundedAndDeterministic(t *testing.T) {
-	terms := normalizedChatTerms("One, TWO one три चार five six seven eight nine ten eleven twelve thirteen")
-	if len(terms) != chatMaxTerms || terms[0] != "one" || terms[1] != "two" || terms[2] != "три" || terms[3] != "चार" {
-		t.Fatalf("terms=%v", terms)
+func TestNormalizedChatTermsAreBoundedAndPrioritizeUsefulWords(t *testing.T) {
+	terms := normalizedChatTerms("what can you please tell me about all of the documents that mention lease renewal september 2026")
+	if len(terms) != chatMaxTerms {
+		t.Fatalf("term count=%d terms=%v", len(terms), terms)
+	}
+	joined := " " + strings.Join(terms, " ") + " "
+	for _, useful := range []string{" lease ", " renewal ", " september ", " 2026 "} {
+		if !strings.Contains(joined, useful) {
+			t.Fatalf("useful term %q was dropped: %v", useful, terms)
+		}
 	}
 
 	longUnicode := make([]string, chatMaxTerms)
 	for i := range longUnicode {
 		longUnicode[i] = strings.Repeat("界", chatMaxTermRunes-1) + strconv.Itoa(i)
 	}
-	viewQuery := strings.Join(normalizedChatTerms(strings.Join(longUnicode, " ")), " ")
-	if len(viewQuery) > chatMaxViewQueryBytes || !utf8.ValidString(viewQuery) {
-		t.Fatalf("view query bytes=%d valid=%t", len(viewQuery), utf8.ValidString(viewQuery))
+	normalized := strings.Join(normalizedChatTerms(strings.Join(longUnicode, " ")), " ")
+	if !utf8.ValidString(normalized) {
+		t.Fatalf("normalized terms are not valid UTF-8: %q", normalized)
 	}
 }
 
@@ -212,8 +220,67 @@ func TestValidateChatHistoryBounds(t *testing.T) {
 	if err := validateChatHistory(five); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Fatalf("history count error=%v", err)
 	}
-	overBytes := []ChatHistoryMessage{{Role: "user", Content: strings.Repeat("x", chatMaxHistoryBytes+1)}}
+	overBytes := []ChatHistoryMessage{
+		{Role: "user", Content: strings.Repeat("x", chatMaxHistoryBytes+1)},
+		{Role: "assistant", Content: "answer"},
+	}
 	if err := validateChatHistory(overBytes); err == nil || !strings.Contains(err.Error(), "12 KB") {
 		t.Fatalf("history byte error=%v", err)
+	}
+	if err := validateChatHistory([]ChatHistoryMessage{{Role: "user", Content: "incomplete"}}); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("incomplete history error=%v", err)
+	}
+}
+
+func TestChatCarriesAuthorizedContextSourcesAcrossFollowUps(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 40, 1, "Indiranagar office lease", "The lease renews on September 1.", "public", false)
+
+	var evidence string
+	s.ChatCompletion = func(_ context.Context, _ string, messages []ChatCompletionMessage, _ int) (string, error) {
+		evidence = messages[len(messages)-1].Content
+		return `{"answer":"It renews on September 1 [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{
+		"question":"What about that one?",
+		"history":[
+			{"role":"user","content":"Which Indiranagar lease applies?"},
+			{"role":"assistant","content":"The office lease [1]."}
+		],
+		"context_source_ids":[40]
+	}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(evidence, "Indiranagar office lease") || !strings.Contains(evidence, "September 1") {
+		t.Fatalf("context evidence missing: %s", evidence)
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) == 0 || out.Sources[0].ID != 40 || !out.Grounded {
+		t.Fatalf("response=%+v", out)
+	}
+}
+
+func TestChatRejectsInvalidCitationContracts(t *testing.T) {
+	tests := []string{
+		`{"answer":"Unsupported [2].","citations":[2],"sufficient":true}`,
+		`{"answer":"Mismatch [1].","citations":[],"sufficient":true}`,
+		`{"answer":"Insufficient [1].","citations":[1],"sufficient":false}`,
+	}
+	for _, response := range tests {
+		t.Run(response, func(t *testing.T) {
+			s := newChatTestServer(t)
+			seedChatDoc(t, s, 1, 1, "Lease", "lease evidence", "public", false)
+			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+				return response, nil
+			}
+			rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"lease"}`, adminPrincipal(1))
+			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "invalid_provider_response") {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

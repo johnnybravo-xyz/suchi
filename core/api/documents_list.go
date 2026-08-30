@@ -115,6 +115,21 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 	}
 
+	// Exact document snapshots, used by archive research views. Visibility is
+	// still applied below, so sharing a snapshot never grants document access.
+	documentIDs, err := parseCSVIDs(q.Get("document_ids"))
+	if err != nil || len(documentIDs) > chatMaxScopeDocuments {
+		s.writeError(w, http.StatusBadRequest, "bad_document_ids",
+			fmt.Sprintf("document_ids must contain at most %d positive integers", chatMaxScopeDocuments))
+		return
+	}
+	if len(documentIDs) > 0 {
+		where = append(where, "d.id IN ("+placeholders(len(documentIDs))+")")
+		for _, id := range documentIDs {
+			args = append(args, id)
+		}
+	}
+
 	// Sensitivity — closed vocab; empty means "unset".
 	if v := q.Get("sensitivity"); v != "" {
 		if !SensitivityLevels[v] {

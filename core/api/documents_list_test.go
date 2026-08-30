@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -88,6 +89,19 @@ func TestListDocuments_ReturnsSeeded(t *testing.T) {
 	// Empty slices, not null.
 	if rows[0].Tags == nil {
 		t.Errorf("Tags should be []string{}, got nil")
+	}
+}
+
+func TestListDocuments_ExactDocumentSnapshotStillAppliesACL(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	visible := seedStatsDoc(t, s.DB, 2, "snapshot-visible", "visible", inbox, false, 100)
+	hidden := seedStatsDoc(t, s.DB, 1, "snapshot-hidden", "hidden", inbox, false, 200)
+
+	path := fmt.Sprintf("/api/documents/?document_ids=%d,%d", visible, hidden)
+	code, rows, count := doList(t, s, path, memberPrincipal(2))
+	if code != 200 || count != 1 || len(rows) != 1 || rows[0].ID != visible {
+		t.Fatalf("status=%d count=%d rows=%+v", code, count, rows)
 	}
 }
 

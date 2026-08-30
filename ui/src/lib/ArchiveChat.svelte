@@ -4,7 +4,7 @@
   import { sensitivityLabel, sensDot } from './format.js'
   import Icon from './Icon.svelte'
 
-  let { open = false, request = { id: 0, question: '' }, onClose, onReturnFocus } = $props()
+  let { open = false, request = { id: 0, question: '', scope: {} }, onClose, onReturnFocus } = $props()
   let turns = $state([])
   let draft = $state('')
   let includeSensitive = $state(false)
@@ -15,11 +15,25 @@
   let wasOpen = false
   let handledRequest = 0
 
+  function completedTurns() {
+    return turns.filter(turn => turn.answer && !turn.error)
+  }
+
   function history() {
-    return turns.slice(-2).flatMap(turn => [
+    return completedTurns().slice(-2).flatMap(turn => [
       { role: 'user', content: turn.question },
-      ...(turn.answer ? [{ role: 'assistant', content: turn.answer }] : []),
-    ]).slice(-4)
+      { role: 'assistant', content: turn.answer },
+    ])
+  }
+
+  function contextSourceIDs() {
+    const prior = completedTurns().at(-1)
+    if (!prior) return []
+    const cited = new Set(prior.citations || [])
+    const sources = cited.size
+      ? prior.sources.filter((_, index) => cited.has(index + 1))
+      : prior.sources
+    return sources.slice(0, 3).map(source => source.id)
   }
 
   function updateTurn(id, patch) {
@@ -30,17 +44,24 @@
     question = question.trim()
     if (!question || sending || question.length > 2000) return
     const prior = history()
-    const turn = { id: Date.now(), question, answer: '', sources: [], viewQuery: '', error: '' }
+    const turn = { id: Date.now(), question, answer: '', sources: [], citations: [], grounded: false, error: '' }
     turns = [...turns, turn]
     draft = ''
     sending = true
     controller = new AbortController()
     try {
-      const result = await askArchive({ question, history: prior, include_sensitive: includeSensitive }, controller.signal)
+      const result = await askArchive({
+        question,
+        history: prior,
+        context_source_ids: contextSourceIDs(),
+        scope: request?.scope || {},
+        include_sensitive: includeSensitive,
+      }, controller.signal)
       updateTurn(turn.id, {
         answer: result.answer || '',
         sources: result.sources || [],
-        viewQuery: result.view_query || '',
+        citations: result.citations || [],
+        grounded: !!result.grounded,
       })
     } catch (ex) {
       updateTurn(turn.id, {
@@ -147,11 +168,9 @@
                 </button>
               {/each}
             </div>
-            {#if turn.viewQuery}
-              <a class="save-view" href={`#/views?new=1&q=${encodeURIComponent(turn.viewQuery)}`} onclick={close}>
-                <Icon name="eye" size={14} /> Save search as view
-              </a>
-            {/if}
+            <a class="save-view" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={close}>
+              <Icon name="eye" size={14} /> Save these {turn.sources.length} documents
+            </a>
           {/if}
         </article>
       {/each}
