@@ -194,7 +194,9 @@ For each question Suchi:
 3. Keeps at most 12 useful terms.
 4. Converts them to FTS prefixes and OR-joins them for recall.
 5. Ranks title `3.0`, content `1.0`, without recency.
-6. Returns at most six sources with 300-character titles and 1,600-character snippets.
+6. Returns at most six sources with 300-character titles and 1,600-character
+   passages. A short document is sent whole; a long document combines its
+   matched passage with its ending.
 7. Reloads up to three cited context sources directly in requested order, with
    fresh ACL, trash, sensitivity, and scope checks.
 8. Adds human-accepted intelligence attached to those sources when permitted.

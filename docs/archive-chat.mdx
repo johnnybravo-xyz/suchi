@@ -55,7 +55,9 @@ from ranked Search are centralized in
 
 - At most six documents per answer.
 - At most three reauthorized context documents from the prior turn.
-- Provider titles are clamped to 300 Unicode characters and snippets to 1,600.
+- Provider titles are clamped to 300 Unicode characters and source text to
+  1,600. Short documents use their complete extracted text; longer documents
+  combine the matched passage with the document end.
 - Accepted facts are limited to three per source and twelve total; the response
   summary still counts every visible accepted and pending fact.
 - Context IDs are loaded directly in requested order without a prior-term test.
@@ -82,7 +84,8 @@ caller's document visibility predicate, trash exclusion, and sensitivity rule.
 
 ## Grounding and citation contract
 
-The provider must return one JSON object:
+Suchi requests OpenAI-compatible JSON-object response mode. The provider must
+then return this schema:
 
 ```json
 {
@@ -91,6 +94,9 @@ The provider must return one JSON object:
   "sufficient": true
 }
 ```
+
+Provider requirements are listed under
+[LLM classifier: Hosted providers](/llm-classifier#hosted-providers).
 
 Validation requires:
 

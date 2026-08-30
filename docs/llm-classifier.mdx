@@ -68,6 +68,14 @@ Gemini must use its OpenAI-compatible endpoint. Azure uses the deployment name
 as the model. Set `LLM_API_KEY` or mount a key file through
 `LLM_API_KEY_FILE` for unattended startup.
 
+Classification and Archive research request OpenAI-compatible
+`response_format: {"type":"json_object"}` output before applying their own
+schema validation. A provider or gateway that rejects this field is not
+compatible with the configured model path. Claude requires an
+OpenAI-compatible gateway; Suchi does not call Anthropic's native Messages API.
+Kimi, Qwen, Ollama, and similar providers work when their OpenAI-compatible
+endpoint accepts JSON-object response mode.
+
 ## Egress boundary
 
 For hosted model assistance, Suchi sends:
