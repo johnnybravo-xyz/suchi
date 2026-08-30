@@ -2,6 +2,7 @@
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
+  import { formatIntelligenceValue } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, onCount, canReviewIntelligence = false } = $props()
@@ -202,16 +203,6 @@
     setCandidateSelection(intelligence.map(candidate => candidate.id), checked)
   }
 
-  function intelligenceValue(candidate) {
-    if (candidate.type === 'date') {
-      const date = candidate.value?.date || candidate.sort_value
-      const formatted = date
-        ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-        : 'Unknown date'
-      return `${formatted} · ${candidate.role || 'date'}`
-    }
-    return candidate.raw_text || candidate.sort_value || candidate.type
-  }
 
   async function resolveSelectedIntelligence(decision) {
     const ids = [...intelligenceSelection]
@@ -315,7 +306,7 @@
                          onchange={(event) => setCandidateSelection([candidate.id], event.currentTarget.checked)} />
                   <span class="intelligence-copy">
                     <span class="intelligence-value">
-                      <strong>{intelligenceValue(candidate)}</strong>
+                      <strong>{formatIntelligenceValue(candidate)}</strong>
                       <span class="pill">{candidate.type}</span>
                       <small>{Math.round(Number(candidate.confidence || 0) * 100)}%</small>
                     </span>

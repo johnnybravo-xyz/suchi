@@ -3,6 +3,7 @@
            listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
   import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
+  import { DATE_ROLES, intelligenceRoleLabel } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, canShare = false, startCreate = false, createQuery = '', createDocumentIDs = '', jdCategories = [] } = $props()
@@ -321,8 +322,8 @@
             <label for="view-date-role">Accepted date role</label>
             <select id="view-date-role" class="input" bind:value={nv.dateRole}>
               <option value="">Every role</option>
-              {#each ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other'] as role}
-                <option value={role}>{role.charAt(0).toUpperCase() + role.slice(1)}</option>
+              {#each DATE_ROLES as role}
+                <option value={role}>{intelligenceRoleLabel(role)}</option>
               {/each}
             </select>
           </div>

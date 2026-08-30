@@ -1,6 +1,7 @@
 <script>
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { parseSavedViewFilters } from '../lib/documentFilters.js'
+  import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { initialDocumentIDs = '' } = $props()
@@ -13,7 +14,6 @@
   let error = $state('')
   let loadVersion = 0
 
-  const roles = ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other']
   const monthLabel = $derived(month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))
   const activeView = $derived(views.find(view => String(view.id) === String(selectedViewID)))
   const calendarDays = $derived(buildCalendarDays(month))
@@ -45,23 +45,13 @@
   function groupEvents(items) {
     const grouped = new Map()
     for (const event of items) {
-      const key = event.value?.date || event.sort_value
+      const key = intelligenceDateValue(event)
       if (!grouped.has(key)) grouped.set(key, [])
       grouped.get(key).push(event)
     }
     return grouped
   }
 
-  function roleLabel(value) {
-    return value ? value.charAt(0).toUpperCase() + value.slice(1) : 'Date'
-  }
-
-  function eventDate(event) {
-    const value = event.value?.date || event.sort_value
-    return new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
-      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-    })
-  }
 
   function viewParams() {
     const filters = activeView?.filters || {}
@@ -136,7 +126,7 @@
         <span>Date role</span>
         <select class="input" bind:value={role} onchange={load}>
           <option value="">Every role</option>
-          {#each roles as value}<option value={value}>{roleLabel(value)}</option>{/each}
+          {#each DATE_ROLES as value}<option value={value}>{intelligenceRoleLabel(value)}</option>{/each}
         </select>
       </label>
     </div>
@@ -164,7 +154,7 @@
             <span class="day-number">{day.date.getDate()}</span>
             <div class="day-events">
               {#each dayEvents.slice(0, 3) as event (event.id)}
-                <a href={`#/doc/${event.document_id}`} title={`${roleLabel(event.role)} · ${event.document_title}`}>
+                <a href={`#/doc/${event.document_id}`} title={`${intelligenceRoleLabel(event.role)} · ${event.document_title}`}>
                   <span class={`role-dot role-${event.role}`}></span>
                   <span>{event.document_title || `Document #${event.document_id}`}</span>
                 </a>
@@ -189,12 +179,12 @@
         <div class="agenda-list">
           {#each events as event (event.id)}
             <a class="agenda-event" href={`#/doc/${event.document_id}`}>
-              <span class="agenda-date"><b>{new Date(`${event.value?.date || event.sort_value}T00:00:00`).getDate()}</b><small>{new Date(`${event.value?.date || event.sort_value}T00:00:00`).toLocaleDateString(undefined, { month: 'short' })}</small></span>
+              <span class="agenda-date"><b>{formatArchiveDate(intelligenceDateValue(event), { day: 'numeric' })}</b><small>{formatArchiveDate(intelligenceDateValue(event), { month: 'short' })}</small></span>
               <span class="agenda-copy">
-                <span><strong>{roleLabel(event.role)}</strong><small>{Math.round(Number(event.confidence || 0) * 100)}% · {event.value?.precision || 'day'}</small></span>
+                <span><strong>{intelligenceRoleLabel(event.role)}</strong><small>{Math.round(Number(event.confidence || 0) * 100)}% · {event.value?.precision || 'day'}</small></span>
                 <b>{event.document_title || `Document #${event.document_id}`}</b>
                 <span>“{event.evidence_text}”</span>
-                <small>{eventDate(event)}</small>
+                <small>{formatArchiveDate(intelligenceDateValue(event), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small>
               </span>
               <Icon name="chev" size={13} />
             </a>
