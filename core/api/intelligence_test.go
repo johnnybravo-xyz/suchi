@@ -161,3 +161,59 @@ func TestIntelligenceExtractQueuesAuthorizedDocuments(t *testing.T) {
 		t.Fatalf("authorized jobs=%d", jobs)
 	}
 }
+
+func TestIntelligenceSavedViewAppliesCompleteLegacyScope(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 70, 1, "Confidential quarterly tax invoice", "invoice quarterly tax", "confidential", false)
+	seedChatDoc(t, s, 71, 1, "Public quarterly tax invoice", "invoice quarterly tax", "public", false)
+	seedDateIntelligence(t, s, 70, "accepted", "2026-09-30")
+	seedDateIntelligence(t, s, 71, "accepted", "2026-09-30")
+	result, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+		VALUES (1, 'Quarterly tax review', '{"q":"invoice","sensitivity":"confidential"}', 'list', 0, 0, 0, 0)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewID, _ := result.LastInsertId()
+
+	rec := doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&view_id="+itoa(viewID), "", adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Count   int               `json:"count"`
+		Results []IntelligenceRow `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Count != 1 || len(envelope.Results) != 1 || envelope.Results[0].DocumentID != 70 {
+		t.Fatalf("legacy view scope=%+v", envelope)
+	}
+
+	rec = doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&view_id="+itoa(viewID), "", memberPrincipal(3))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("private view status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		UPDATE saved_views SET shared = 1 WHERE id = ?;
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at)
+		VALUES ('document', 70, 'user', 3, 1, 0)
+	`, viewID); err != nil {
+		t.Fatal(err)
+	}
+	rec = doIntelligenceRequest(t, s, http.MethodGet,
+		"/api/intelligence/?type=date&view_id="+itoa(viewID), "", memberPrincipal(3))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("shared view status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Count != 1 || envelope.Results[0].DocumentID != 70 {
+		t.Fatalf("shared view ACL scope=%+v", envelope)
+	}
+}

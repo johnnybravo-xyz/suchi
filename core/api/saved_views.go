@@ -478,7 +478,7 @@ func NormalizeSavedViewFilterJSON(raw string) (string, error) {
 		if !ok {
 			return "", &savedViewFilterError{message: "filter key document_ids must be an array"}
 		}
-		if len(items) == 0 || len(items) > chatMaxScopeDocuments {
+		if len(items) == 0 || len(items) > maxDocumentScopeIDs {
 			return "", &savedViewFilterError{message: "filter key document_ids must contain 1 to 100 ids"}
 		}
 		ids := make([]int64, 0, len(items))

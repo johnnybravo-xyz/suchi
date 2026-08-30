@@ -86,9 +86,18 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	where := []string{}
 	args := []any{}
-	queryPlan, err := s.compileQuery(r.Context(), q.Get("q"))
+	scope, err := documentScopeFromQuery(q)
 	if err != nil {
-		if !s.writeQueryError(w, "docs.list", q.Get("q"), err) {
+		if scopeErr, ok := err.(*documentScopeError); ok {
+			s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
+			return
+		}
+		s.serverErr(w, "docs.list.parse_scope", err)
+		return
+	}
+	queryPlan, err := s.compileQuery(r.Context(), scope.Query)
+	if err != nil {
+		if !s.writeQueryError(w, "docs.list", scope.Query, err) {
 			s.serverErr(w, "docs.list.compile_query", err)
 		}
 		return
@@ -103,121 +112,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "d.trashed_at IS NULL")
 	}
 
-	// JD category exact match.
-	if v := q.Get("jd_category_id"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			s.writeError(w, http.StatusBadRequest, "bad_jd_category_id",
-				"jd_category_id must be a positive integer")
-			return
-		}
-		where = append(where, "d.jd_category_id = ?")
-		args = append(args, id)
-	}
-
-	// Exact document snapshots, used by archive research views. Visibility is
-	// still applied below, so sharing a snapshot never grants document access.
-	documentIDs, err := parseCSVIDs(q.Get("document_ids"))
-	if err != nil || len(documentIDs) > chatMaxScopeDocuments {
-		s.writeError(w, http.StatusBadRequest, "bad_document_ids",
-			fmt.Sprintf("document_ids must contain at most %d positive integers", chatMaxScopeDocuments))
-		return
-	}
-	if len(documentIDs) > 0 {
-		where = append(where, "d.id IN ("+placeholders(len(documentIDs))+")")
-		for _, id := range documentIDs {
-			args = append(args, id)
-		}
-	}
-
-	// Sensitivity — closed vocab; empty means "unset".
-	if v := q.Get("sensitivity"); v != "" {
-		if !SensitivityLevels[v] {
-			s.writeError(w, http.StatusBadRequest, "bad_sensitivity",
-				"sensitivity must be one of \"\", public, internal, confidential, restricted")
-			return
-		}
-		where = append(where, "d.sensitivity = ?")
-		args = append(args, v)
-	}
-
-	// Document type exact match.
-	if v := q.Get("document_type__id"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			s.writeError(w, http.StatusBadRequest, "bad_document_type_id",
-				"document_type__id must be a positive integer")
-			return
-		}
-		where = append(where, "d.document_type_id = ?")
-		args = append(args, id)
-	}
-
-	// Tag AND-match: doc must carry every listed id. Implemented as
-	// a HAVING count over document_tags — simpler than N joins.
-	tagIDs, err := parseCSVIDs(q.Get("tags__id__in"))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_tags", err.Error())
-		return
-	}
-	if len(tagIDs) > 0 {
-		placeholders := strings.Repeat("?,", len(tagIDs)-1) + "?"
-		where = append(where, `(
-			SELECT COUNT(DISTINCT dt.tag_id)
-			FROM document_tags dt
-			WHERE dt.document_id = d.id AND dt.tag_id IN (`+placeholders+`)
-		) = ?`)
-		for _, id := range tagIDs {
-			args = append(args, id)
-		}
-		args = append(args, len(tagIDs))
-	}
-	// Correspondent OR-match: doc matches if it has any listed id
-	// as either the primary correspondent_id or via
-	// document_correspondents.
-	corrIDs, err := parseCSVIDs(q.Get("correspondents__id__in"))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_correspondents", err.Error())
-		return
-	}
-	if len(corrIDs) > 0 {
-		placeholders := strings.Repeat("?,", len(corrIDs)-1) + "?"
-		where = append(where, `(
-			d.correspondent_id IN (`+placeholders+`)
-			OR EXISTS (
-				SELECT 1 FROM document_correspondents dc
-				WHERE dc.document_id = d.id AND dc.correspondent_id IN (`+placeholders+`)
-			)
-		)`)
-		for _, id := range corrIDs {
-			args = append(args, id)
-		}
-		for _, id := range corrIDs {
-			args = append(args, id)
-		}
-	}
-
-	// Date range on created_at.
-	if v := q.Get("created_at__gte"); v != "" {
-		ts, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || ts < 0 {
-			s.writeError(w, http.StatusBadRequest, "bad_created_at_gte",
-				"created_at__gte must be a non-negative unix seconds integer")
-			return
-		}
-		where = append(where, "d.created_at >= ?")
-		args = append(args, ts)
-	}
-	if v := q.Get("created_at__lte"); v != "" {
-		ts, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || ts < 0 {
-			s.writeError(w, http.StatusBadRequest, "bad_created_at_lte",
-				"created_at__lte must be a non-negative unix seconds integer")
-			return
-		}
-		where = append(where, "d.created_at <= ?")
-		args = append(args, ts)
-	}
+	where, args = appendDocumentScopePredicates(where, args, scope)
 
 	// Rich text and metadata constraints share the same compiled plan as
 	// ranked search. Legacy visual filters above remain additive.

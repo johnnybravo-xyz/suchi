@@ -20,6 +20,13 @@ Notable user-visible changes to Suchi are recorded here.
   workflow, plus a persistent help launcher. Public model access remains
   denied; the tour uses an anonymized Northstar document cluster.
 
+### Fixed
+
+- Dashboard recent documents load once per navigation instead of retriggering
+  from their own response state.
+- Calendar resolves an owned or shared saved View by ID on the server, applies
+  its complete filter, and then reapplies document ACLs.
+
 ## [0.1.0-beta.1] - 2026-08-29
 
 ### Added

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -104,9 +105,36 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	queryPlan, err := s.compileQuery(r.Context(), q.Get("q"))
+	viewID, err := optionalPositiveID(q.Get("view_id"))
 	if err != nil {
-		if !s.writeQueryError(w, "intelligence.list", q.Get("q"), err) {
+		s.writeError(w, http.StatusBadRequest, "bad_view_id", "view_id must be a positive integer")
+		return
+	}
+	scope := documentScope{Query: strings.TrimSpace(q.Get("q"))}
+	if viewID > 0 {
+		if scope.Query != "" || q.Get("document_ids") != "" {
+			s.writeError(w, http.StatusBadRequest, "ambiguous_scope", "view_id cannot be combined with q or document_ids")
+			return
+		}
+		scope, err = s.loadSavedViewScope(r.Context(), p, viewID)
+		if err != nil {
+			if errors.Is(err, errNotFound) {
+				s.writeError(w, http.StatusNotFound, "view_not_found", "saved view not found")
+				return
+			}
+			s.serverErr(w, "intelligence.load_view", err)
+			return
+		}
+	} else {
+		scope.DocumentIDs, err = parseCSVIDs(q.Get("document_ids"))
+		if err != nil || len(scope.DocumentIDs) > bulkEditMaxDocuments {
+			s.writeError(w, http.StatusBadRequest, "bad_document_ids", "document_ids must contain at most 500 positive integers")
+			return
+		}
+	}
+	queryPlan, err := s.compileQuery(r.Context(), scope.Query)
+	if err != nil {
+		if !s.writeQueryError(w, "intelligence.list", scope.Query, err) {
 			s.serverErr(w, "intelligence.compile_query", err)
 		}
 		return
@@ -147,11 +175,6 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_range", "sort_from must not be after sort_to")
 		return
 	}
-	documentIDs, err := parseCSVIDs(q.Get("document_ids"))
-	if err != nil || len(documentIDs) > bulkEditMaxDocuments {
-		s.writeError(w, http.StatusBadRequest, "bad_document_ids", "document_ids must contain at most 500 positive integers")
-		return
-	}
 
 	where := []string{"di.status = ?", "d.trashed_at IS NULL"}
 	args := []any{status}
@@ -171,12 +194,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "di.sort_value <= ?")
 		args = append(args, sortTo)
 	}
-	if len(documentIDs) > 0 {
-		where = append(where, "d.id IN ("+placeholders(len(documentIDs))+")")
-		for _, id := range documentIDs {
-			args = append(args, id)
-		}
-	}
+	where, args = appendDocumentScopePredicates(where, args, scope)
 	if p.Role != "admin" {
 		groups, err := s.principalGroups(r.Context(), p.UserID)
 		if err != nil {

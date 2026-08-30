@@ -1,6 +1,5 @@
 <script>
   import { listIntelligence, listSavedViews } from '../lib/api.js'
-  import { parseSavedViewFilters } from '../lib/documentFilters.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -15,7 +14,6 @@
   let loadVersion = 0
 
   const monthLabel = $derived(month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))
-  const activeView = $derived(views.find(view => String(view.id) === String(selectedViewID)))
   const calendarDays = $derived(buildCalendarDays(month))
   const eventMap = $derived(groupEvents(events))
 
@@ -54,13 +52,8 @@
 
 
   function viewParams() {
-    const filters = activeView?.filters || {}
-    return {
-      q: filters.q || '',
-      document_ids: Array.isArray(filters.document_ids)
-        ? filters.document_ids.join(',')
-        : (activeView ? '' : initialDocumentIDs),
-    }
+    if (selectedViewID) return { view_id: selectedViewID }
+    return { document_ids: initialDocumentIDs }
   }
 
   async function load() {
@@ -86,9 +79,8 @@
   async function loadViews() {
     try {
       const response = await listSavedViews({ include: 'shared' })
-      views = (response?.results || []).map(view => ({
-        ...view, filters: parseSavedViewFilters(view.filter_json),
-      }))
+      views = response?.results || []
+      selectedViewID = ''
     } catch {}
   }
 
@@ -117,7 +109,7 @@
     <div class="calendar-filters">
       <label>
         <span>Document view</span>
-        <select class="input" bind:value={selectedViewID} onchange={load}>
+        <select class="input" bind:value={selectedViewID} onchange={load} autocomplete="off">
           <option value="">All accessible documents</option>
           {#each views as view (view.id)}<option value={view.id}>{view.name}</option>{/each}
         </select>

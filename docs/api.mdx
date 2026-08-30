@@ -1431,8 +1431,13 @@ Returns the standard pagination envelope. Filters:
 | `role` | Type-specific role; requires `type` |
 | `sort_from`, `sort_to` | Type-specific canonical range; dates use `YYYY-MM-DD` |
 | `document_ids` | Up to 500 comma-separated source document IDs |
+| `view_id` | Owned or shared saved View; server applies its complete filter and document ACLs |
 | `q` | Rich document query applied to source documents |
 | `page`, `page_size` | Standard pagination; max 500 |
+
+`view_id` cannot be combined with `q` or `document_ids`. The server resolves
+the View rather than trusting client-reconstructed filters, including legacy
+tag, correspondent, type, category, and sensitivity fields.
 
 Rows contain generic `type`, `role`, `value`, `sort_value`, evidence,
 confidence, review state, extractor/version, and source-document presentation

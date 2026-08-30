@@ -320,8 +320,9 @@ Resolution request:
 ```
 
 List filters include `status`, `type`, `role`, `sort_from`, `sort_to`,
-`document_ids`, `q`, and normal pagination. `q` uses the same rich query
-compiler as Search and Documents.
+`document_ids`, `view_id`, `q`, and normal pagination. `q` uses the same rich
+query compiler as Search and Documents. `view_id` is resolved server-side and
+applies the complete owned/shared View filter plus document ACLs.
 
 ## Maintainer file map
 

@@ -164,6 +164,7 @@ async function mockAPI(page, options = {}) {
       types: [{ type: 'date', label: 'Dates', roles: ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other'] }],
     }
     else if (path === '/api/intelligence/' && request.method() === 'GET') {
+      options.intelligenceQueries?.push(Object.fromEntries(new URL(request.url()).searchParams))
       body = { results: options.intelligence || [], count: options.intelligence?.length || 0 }
     }
     else if (path === '/api/intelligence/extract' && request.method() === 'POST') {
@@ -1428,6 +1429,7 @@ test('bulk-validates generic intelligence candidates by document', async ({ page
 })
 
 test('shows only accepted date intelligence on the calendar', async ({ page }) => {
+  const intelligenceQueries = []
   const now = new Date()
   const year = now.getFullYear()
   const month = String(now.getMonth() + 1).padStart(2, '0')
@@ -1435,6 +1437,7 @@ test('shows only accepted date intelligence on the calendar', async ({ page }) =
   await mockAPI(page, {
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
+    intelligenceQueries,
     intelligence: [{
       id: 81, document_id: 28, document_title: 'Home insurance renewal notice',
       document_has_thumbnail: false, type: 'date', role: 'expiry',
@@ -1443,7 +1446,8 @@ test('shows only accepted date intelligence on the calendar', async ({ page }) =
       confidence: 0.97, status: 'accepted',
     }],
     savedViews: [{
-      id: 4, name: 'Insurance', filter_json: '{"q":"tag:insurance"}',
+      id: 4, name: 'Quarterly tax review',
+      filter_json: '{"q":"invoice","sensitivity":"confidential"}',
       display: 'list', position: 0, created_at: 0, updated_at: 0,
     }],
   })
@@ -1452,5 +1456,18 @@ test('shows only accepted date intelligence on the calendar', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Home insurance renewal notice', exact: true })).toBeVisible()
   await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('Document view')).toContainText('Insurance')
+  const viewSelect = page.getByLabel('Document view')
+  await expect(viewSelect).toContainText('Quarterly tax review')
+  await expect(viewSelect).toHaveValue('')
+  expect(intelligenceQueries.some(query => !('view_id' in query))).toBe(true)
+
+  const scopedRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/intelligence/' && url.searchParams.get('view_id') === '4'
+  })
+  await viewSelect.selectOption('4')
+  await scopedRequest
+  expect(intelligenceQueries.at(-1)).toMatchObject({ view_id: '4', type: 'date', status: 'accepted' })
+  expect(intelligenceQueries.at(-1)).not.toHaveProperty('q')
+  expect(intelligenceQueries.at(-1)).not.toHaveProperty('sensitivity')
 })

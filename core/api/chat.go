@@ -29,7 +29,6 @@ const (
 	chatMaxTermRunes       = 64
 	chatMaxSources         = 6
 	chatMaxContextSources  = 3
-	chatMaxScopeDocuments  = 100
 	chatMaxOutputTokens    = 700
 	chatMaxAnswerRunes     = 6000
 	chatFallbackSnippetLen = 1200
@@ -165,7 +164,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_context", err.Error())
 		return
 	}
-	if in.Scope.DocumentIDs, err = normalizedPositiveIDs(in.Scope.DocumentIDs, chatMaxScopeDocuments); err != nil {
+	if in.Scope.DocumentIDs, err = normalizedPositiveIDs(in.Scope.DocumentIDs, maxDocumentScopeIDs); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_scope", err.Error())
 		return
 	}
