@@ -1,6 +1,6 @@
 ---
 title: "LLM classifier"
-description: "Optional local or hosted model assistance for classification and grounded archive questions."
+description: "Optional local or hosted model assistance for classification, grounded archive research, and reviewed intelligence."
 ---
 
 Suchi ships deterministic automations and local archive matching. The
@@ -76,9 +76,10 @@ For hosted model assistance, Suchi sends:
 - bounded filing context and a small set of similar-document titles
 - the requested structured-output instructions
 
-For **Ask the archive**, it instead sends the question, up to four preceding
-user/assistant messages, and at most six short snippets selected from documents
-the caller may read. Sensitive snippets require explicit session consent.
+For **Archive research**, it instead sends the question, up to four preceding
+messages, and at most six short snippets selected from documents the caller may
+read. Reauthorized context and human-accepted intelligence may accompany those
+same sources. Sensitive snippets require explicit per-conversation consent.
 
 It does not send original PDF or image bytes, unrelated archive content,
 ownership, ACLs, storage paths, or backup information.
@@ -89,10 +90,11 @@ redacted egress inventory and boundary logs.
 
 ## Validation and confidence
 
-Suchi accepts only a validated JSON object. Text lengths, tag count, language
-shape, confidence range, and JD code are bounded before any write. Invalid
-provider output fails the durable job without exposing raw output or document
-text in logs or API errors.
+Suchi accepts only validated JSON contracts. Text lengths, tag count, language
+shape, confidence ranges, JD code, extracted date count and calendar values,
+evidence quotes, and archive-research citations are bounded before persistence
+or rendering. Invalid provider output fails without exposing raw output or
+document text in logs or API errors.
 
 The confidence threshold ranges from `0.50` to `0.95` in `0.05` steps and
 defaults to `0.70`.
@@ -152,30 +154,29 @@ For an operator configuration change, explicitly select the desired documents
 in the UI and rescan them. [Refile](/refile) reruns deterministic filing but
 does not call the LLM.
 
-## Ask the archive
+## Archive research and intelligence
 
-Administrators have the `archive_chat` capability implicitly and may grant it
-to members as **Ask the archive**. Public demo sessions are always denied. A
-caller also needs `documents:read`; every retrieval applies the normal document
-ACL and excludes trash. Confidential and Restricted documents remain excluded
-unless **Include sensitive documents** is enabled for the current conversation.
+Administrators have `archive_chat` and `archive_intelligence` implicitly and
+may grant either capability to members. Archive research performs bounded FTS5
+retrieval, reauthorizes follow-up source IDs, and validates a structured
+answer/citation contract. It has no model tools or write actions.
 
-The Omnibox **Ask** action opens a right-side drawer (full-screen on mobile).
-Enter remains search. Answers render as plain text beside numbered source cards
-that link back to documents. If retrieval finds nothing, Suchi returns a stable
-no-evidence answer without contacting the provider. Provider failures are
-sanitized and do not remove the retrieved source boundary.
+The same classification call may propose reviewable typed intelligence. Dates
+are the first registered type. They are stored in the generic intelligence
+ledger and never reach Calendar, rich-query filters, or later answers until a
+person accepts them.
 
-Conversation history lives only in browser memory while the application is
-open. Closing preserves it; **Clear** deletes it and resets sensitive-document
-consent. **Save search as view** opens the existing Views creator with the
-retrieval query prefilled.
+See [Archive research](/archive-chat) for the complete retrieval, prompt,
+grounding, source-view, intelligence review, date-format, Calendar, API,
+privacy, rate-limit, and maintainer contracts.
 
 ## Current scope
 
-v0.1 provides fixed document classification and read-only archive questions.
-It does not provide custom prompt steps, typed custom-field extractors,
-arbitrary code in the ingest pipeline, model tools, or persistent chat.
+The product provides fixed document classification, transient read-only
+archive research, exact source-set Views, generic human-reviewed intelligence,
+and accepted-date Calendar/query workflows. It does not provide arbitrary
+model tools, custom code in the ingest pipeline, persistent chat, timed calendar
+events, or implicit rule learning from approvals.
 
 ## Troubleshooting
 

@@ -73,18 +73,26 @@ are not downloaded, persisted, or logged by preview. The LLM connection test ret
 validated synthetic classification fields and latency, never raw model output
 or archive text.
 
-Archive questions are read-only and transient. Suchi stores no conversation
+Archive research is read-only and transient. Suchi stores no conversation
 rows, and the browser retains the transcript only while the application is
-open. The server retrieves only non-trashed documents the caller may view.
-Confidential and Restricted documents are excluded until the user enables
-**Include sensitive documents** for that browser conversation; **Clear**
-resets that consent. The model receives source text as explicitly untrusted
-evidence and is instructed to use no tools or actions and to cite only those
-sources. Previous assistant answers provide continuity, never evidence.
+mounted. The server retrieves only non-trashed documents the caller may view.
+Confidential and Restricted documents are excluded until the user enables the
+per-conversation option; **Clear** resets that consent. The drawer identifies
+the local or hosted endpoint receiving evidence.
 
-Logs never include questions, answers, or snippets. Chat logs may contain the
-provider host and model, request ID, selected document IDs, counts, duration,
-and sanitized errors.
+The model receives source text as explicitly untrusted evidence and has no
+tools or actions. Previous assistant answers provide continuity, never evidence.
+Follow-up source IDs are reauthorized. Answer JSON and citation numbers are
+validated before rendering.
+
+Intelligence candidates are persistent archive metadata rather than chat
+history. They retain bounded evidence, extractor version, review state, and
+reviewer for auditability. Only accepted facts feed Calendar, rich queries, or
+later research context.
+
+Logs never include questions, answers, snippets, or intelligence evidence.
+Research logs may contain provider host and model, request ID, selected
+document IDs, fact and citation counts, duration, and sanitized errors.
 
 ## Deletion and retention
 

@@ -1,0 +1,366 @@
+---
+title: "Archive research"
+description: "Grounded document questions, exact source views, and human-validated archive intelligence."
+---
+
+Archive research is Suchi's read-only retrieval-augmented generation (RAG)
+surface. It retrieves evidence from documents the caller may read, sends only
+that bounded evidence to the configured OpenAI-compatible model, validates the
+model's citation contract, and keeps every source attached to the answer.
+
+The same workflow can create an exact saved view from a source set or request
+reviewable document intelligence. Dates are the first intelligence type; the
+storage and approval path are generic so later extractors can add other typed
+facts without another persistence system.
+
+## User workflow
+
+1. Enter a question in the global Omnibox and select **Ask**, or select documents
+   on the Documents screen and choose **Ask selection**.
+2. Suchi opens **Archive research** with the active scope shown in the header.
+3. The server retrieves at most six authorized evidence sources.
+4. The model returns one structured answer with source numbers.
+5. Suchi rejects malformed or out-of-range citations before rendering anything.
+6. The user can open a cited source, save the exact source set as a View, or
+   request date extraction from those documents.
+
+Follow-up questions carry up to three cited source IDs from the preceding
+successful turn. The server reauthorizes and reloads those sources; prior
+assistant text never becomes evidence.
+
+## Retrieval architecture
+
+```mermaid
+flowchart LR
+    Q[Question and scope] --> T[Bounded term selection]
+    T --> F[SQLite FTS5 retrieval]
+    C[Prior cited source IDs] --> A[Reauthorize context]
+    A --> E[Evidence set]
+    F --> E
+    I[Accepted intelligence] --> E
+    E --> M[One model completion]
+    M --> V[Validate JSON and citations]
+    V --> U[Answer, sources, and actions]
+```
+
+### Term selection
+
+Suchi normalizes Unicode letters, marks, digits, and underscores. It considers
+at most 64 unique terms, ranks useful terms ahead of common question words, and
+keeps at most 12. Each selected term becomes a prefix expression and retrieval
+uses `OR` for recall. FTS5 BM25 gives title matches more weight than content
+matches.
+
+This is intentionally a small lexical retrieval layer. It requires no vector
+database, embedding model, background embedding queue, or second provider. A
+future hybrid retriever can replace the candidate step without changing the
+chat, authorization, citation, or intelligence contracts.
+
+### Evidence bounds
+
+- At most six documents per answer.
+- At most three reauthorized context documents from the prior turn.
+- FTS snippets are approximately 80 tokens.
+- A context fallback reads only a bounded leading passage.
+- Model output is capped at 700 tokens and 6,000 answer characters.
+- One provider call per successful turn.
+
+No provider call occurs when retrieval finds no evidence.
+
+## Scope
+
+The research drawer supports these server-enforced scopes:
+
+- all accessible archive documents;
+- the current rich-query result;
+- the current Johnny.Decimal category;
+- the current document; or
+- up to 100 explicitly selected documents.
+
+Scope narrows retrieval. It never grants access. Every query still applies the
+caller's document visibility predicate.
+
+## Grounding and citation contract
+
+The provider must return one JSON object:
+
+```json
+{
+  "answer": "The policy expires on September 14, 2026 [1].",
+  "citations": [1],
+  "sufficient": true
+}
+```
+
+Validation requires:
+
+- a non-empty bounded answer;
+- unique citation numbers;
+- every citation between `1` and the number of supplied sources;
+- every listed citation to appear as an inline `[n]` marker;
+- at least one citation when `sufficient` is true; and
+- no citations when `sufficient` is false.
+
+An invalid response returns `502 invalid_provider_response`. When the model says
+that evidence is insufficient, Suchi returns a stable insufficient-evidence
+answer and retains the retrieved source boundary.
+
+Document text remains untrusted prompt data. The system instruction tells the
+model to ignore role changes and instructions inside evidence. Archive research
+has no tools and no write operations, limiting prompt-injection impact to the
+proposed answer.
+
+## Conversation state
+
+Conversation state exists only in the mounted browser application.
+
+- Closing the drawer preserves it.
+- **Clear** deletes it and resets sensitive-document consent.
+- Only complete successful user/assistant pairs enter history.
+- Failed and canceled turns cannot poison later role alternation.
+- At most two complete prior turns, 12 KB total, are sent.
+- The server stores no conversation rows.
+
+## Exact source views
+
+**Save source set** creates a snapshot View with `document_ids` rather than
+trying to reconstruct the result from question words. This preserves the exact
+retrieved document set.
+
+Opening or sharing the View re-runs document authorization. A shared snapshot
+therefore exposes only the listed documents each viewer can already read.
+Snapshot Views contain at most 100 IDs; archive research currently contributes
+at most six.
+
+Live Views continue to use the rich query language. Date-aware examples:
+
+```text
+date:>=2026-09-01 date:<=2026-09-30
+date-role:renewal is:dated
+tag:insurance date:<=2026-12-31
+```
+
+Only accepted intelligence participates in rich-query date filters.
+
+## Generic archive intelligence
+
+`document_intelligence` is the shared review ledger for extracted facts. Its
+stable columns cover every intelligence type:
+
+- source document;
+- `intelligence_type` and semantic `role`;
+- validated `value_json` plus an indexed `sort_value`;
+- original text, evidence quote, and optional source offset;
+- confidence;
+- `pending`, `accepted`, or `rejected` state;
+- extractor, source blob, and extraction version; and
+- reviewer and review timestamp.
+
+Type-specific validation lives in `core/intelligence`. Adding a type requires a
+small explicit value contract there, an extractor projection, and a UI renderer.
+It does not require a new approval table or state model.
+
+### Date intelligence
+
+Dates are extracted in the existing single classification completion. The model
+may propose up to three important lifecycle or actionable dates with roles:
+
+```text
+issued, due, start, end, expiry, renewal, service, other
+```
+
+Each date includes a normalized `YYYY-MM-DD` value, `day`/`month`/`year`
+precision, the original date phrase, an evidence quote, and independent
+confidence.
+
+Before calling the model, Suchi preserves the beginning and end of long
+documents and adds bounded windows around standard date signals. Supported
+signals include:
+
+- ISO dates and timestamps (`2026-09-14`, `2026-09-14T10:30:00Z`);
+- separated numeric forms (`14/09/2026`, `09/14/26`);
+- named months (`14 September 2026`, `Sept. 14 2026`); and
+- month precision (`2026-09`, `09/2026`).
+
+Bare numbers, compact account-like values such as `20260914`, invoice totals,
+and version numbers are not treated as date signals. The model still has to
+propose a date, application validation must accept the calendar value, and the
+evidence quote must occur in the document.
+
+All extracted facts remain pending regardless of model confidence. High
+confidence only preselects a candidate in the review UI; it never accepts it.
+
+### Review and calendar
+
+The Approvals screen groups intelligence candidates by source document and
+supports selection at candidate, document, and visible-result levels. Accept or
+reject is one bounded, audited transaction with per-document authorization.
+
+The Calendar reads only accepted `date` intelligence. It supports month and
+agenda views, date-role filtering, and Saved View scope. Pending or rejected
+facts never appear.
+
+Accepted intelligence may be included beside its original source snippet in a
+later archive answer. The original document remains the evidence and is still
+cited.
+
+## Authorization
+
+Archive research requires:
+
+- authentication;
+- `documents:read`; and
+- the `archive_chat` capability, implicit for administrators.
+
+Intelligence review, extraction, and Calendar require
+`archive_intelligence`, also implicit for administrators. Mutations additionally
+require `documents:write` and Change permission on every source document.
+
+Public demo sessions are denied both capabilities.
+
+Retrieval, source snapshots, intelligence lists, accepted intelligence in chat,
+and calendar queries all apply document ACLs inside SQL. Confidential and
+Restricted snippets are excluded from chat until the user enables the
+per-conversation option.
+
+## Provider privacy
+
+The model transport is the same one used by classification:
+
+- disabled when no endpoint is configured;
+- non-local endpoints require explicit egress acknowledgement;
+- redirects are refused;
+- API keys never return to the browser;
+- response bodies are bounded; and
+- provider errors are sanitized.
+
+The drawer identifies the local model or hosted endpoint receiving evidence.
+Logs may include source IDs, counts, provider host, model, duration, and
+sanitized failures. They do not include questions, answers, or snippets.
+
+## Abuse controls
+
+Interactive completions have two in-process controls:
+
+- six requests per minute per authenticated user, burst two; and
+- at most two concurrent chat completions per Suchi process.
+
+A refusal returns `429 chat_rate_limited` and `Retry-After`. Reverse proxies may
+apply an additional distributed limit.
+
+## HTTP API
+
+### Status
+
+```http
+GET /api/chat/status
+```
+
+```json
+{
+  "enabled": true,
+  "provider": "localhost",
+  "local": true
+}
+```
+
+### Ask
+
+```http
+POST /api/chat
+Content-Type: application/json
+```
+
+```json
+{
+  "question": "When does it renew?",
+  "history": [
+    { "role": "user", "content": "Which office lease applies?" },
+    { "role": "assistant", "content": "The Indiranagar office lease [1]." }
+  ],
+  "context_source_ids": [17],
+  "scope": {
+    "query": "tag:lease",
+    "document_ids": [],
+    "jd_category_id": 0
+  },
+  "include_sensitive": false
+}
+```
+
+The response includes `answer`, `sources`, `citations`, `grounded`, and an
+`intelligence` summary. Accepted facts attached to a source appear under that
+source's `intelligence` field.
+
+### Intelligence
+
+```http
+GET  /api/intelligence/schema
+GET  /api/intelligence/?status=pending&type=date
+POST /api/intelligence/extract
+POST /api/intelligence/resolve
+```
+
+Extraction request:
+
+```json
+{
+  "document_ids": [17, 28],
+  "types": ["date"]
+}
+```
+
+Resolution request:
+
+```json
+{
+  "candidate_ids": [71, 72],
+  "decision": "accepted"
+}
+```
+
+List filters include `status`, `type`, `role`, `sort_from`, `sort_to`,
+`document_ids`, `q`, and normal pagination. `q` uses the same rich query
+compiler as Search and Documents.
+
+## Maintainer file map
+
+| Concern | Location |
+| --- | --- |
+| Chat request, retrieval, grounding | `core/api/chat.go` |
+| Chat rate and concurrency gate | `core/api/chat_gate.go` |
+| Generic intelligence API | `core/api/intelligence.go` |
+| Intelligence value contracts | `core/intelligence/intelligence.go` |
+| Intelligence schema | `core/db/migrations/0002_document_intelligence.sql` |
+| Single-call model contract | `plugins/llm-classifier/llm.go` |
+| Candidate persistence | `plugins/llm-classifier/handler.go` |
+| Rich query date predicates | `core/searchquery/` |
+| Research drawer | `ui/src/lib/ArchiveChat.svelte` |
+| Review workspace | `ui/src/routes/Tasks.svelte` |
+| Calendar | `ui/src/routes/Calendar.svelte` |
+
+## Operational checks
+
+Use a real configured model when changing either prompt contract:
+
+1. Classify a long document with a date near the middle.
+2. Confirm the candidate remains pending and includes matching evidence.
+3. Accept it and confirm it appears on Calendar.
+4. Ask a question whose answer uses the accepted date.
+5. Confirm the response JSON has valid citations and the source opens.
+6. Ask a pronoun-based follow-up and confirm the prior cited source remains in
+   the evidence set.
+
+Unit tests pin value validation, date-signal conservatism, ACL behavior,
+citation validation, request limits, exact Views, rich-query parity, approval,
+and Calendar rendering.
+
+## Current limits
+
+- Retrieval is lexical FTS5, not semantic embedding search.
+- Chat is intentionally transient and read-only.
+- The classification call proposes at most three dates per document.
+- Relative dates that cannot be normalized from explicit evidence are ignored.
+- Date intelligence represents all-day archival facts; timed events and
+  timezones are outside the current contract.
+- Intelligence rules are never learned implicitly from one approval.

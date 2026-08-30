@@ -20,6 +20,7 @@ ui/src/
   lib/configuration.js        setup and archive-setting labels
   lib/capabilities.js         member capability labels and checks
   lib/documentFilters.js      saved-view to browser-route translation
+  lib/intelligence.js          intelligence type labels and value formatting
   lib/format.js               dates, sizes, and sensitivity vocabulary
   lib/net.js                  local endpoint validation
   lib/router.svelte.js        hash-route state
@@ -106,6 +107,7 @@ Product labels have one source in the frontend:
 | Member capabilities | `lib/capabilities.js` |
 | Sensitivity choices | `lib/format.js` |
 | Document-list browser parameters | `lib/documentFilters.js` |
+| Intelligence roles and values | `lib/intelligence.js` |
 
 Components import these values instead of maintaining local copies. A wording
 or behavior change must update [Web app](/web-app), the focused feature guide,

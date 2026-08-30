@@ -410,8 +410,8 @@
       </div>
 
     {:else if section === 'llm'}
-      <h3>Classification and archive questions</h3>
-      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details and powers <b>Ask the archive</b> for authorized users.</p>
+      <h3>Classification, research, and intelligence</h3>
+      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details, extracts reviewable intelligence, and powers <b>Archive research</b> for authorized users.</p>
       <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
       {#if llm.archive_enabled}
         <div class="field">
@@ -491,7 +491,7 @@
           {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
         </div>
       {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents automatically and answers authorized archive questions on demand. To classify older documents, select them in <a href="#/documents">Documents</a> and use Rescan.</p>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, proposes intelligence for human review, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>

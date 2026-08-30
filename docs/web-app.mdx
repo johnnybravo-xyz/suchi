@@ -163,6 +163,7 @@ they can give a member:
 | Interface label | Stored key |
 | --- | --- |
 | **Ask the archive** | `archive_chat` |
+| **Review archive intelligence** | `archive_intelligence` |
 | **Manage mailboxes** | `mailboxes` |
 | **Create share links** | `share_links` |
 | **Share saved views** | `share_views` |
@@ -170,17 +171,27 @@ they can give a member:
 See [Permissions](/permissions) for revocation effects and object-level access.
 
 When a model is active, **Ask** appears on the right side of the global
-Omnibox for administrators and members with **Ask the archive**. Enter still
-runs ordinary search; selecting **Ask** sends the Omnibox text to a right-side
-drawer (a full-screen sheet on narrow screens). The exact session controls are
-**Include sensitive documents**, **Clear**, **Close archive questions**, and
-**Save search as view**. Closing retains the in-memory conversation. **Clear**
-removes it and turns sensitive-document consent off.
+Omnibox for administrators and members with **Ask the archive**. Enter remains
+ordinary search. **Ask** opens the **Archive research** desk as a right-side
+drawer and a full-screen mobile surface.
 
-Answers are plain text. Numbered source cards always remain visible when the
-server retrieved evidence and open the source document. **Save search as
-view** opens the existing **Create a view** form with **Contains text**
-prefilled; the user still supplies a name and confirms the save.
+The header shows the active scope: all archive documents, the current rich
+query/category, one document, an exact saved snapshot, or a selected document
+set. Answers render with clickable citations, cited sources first, and
+additional retrieved sources collapsed. Closing preserves the in-memory
+conversation; **Clear** removes it and resets sensitive-document consent.
+
+**Save source set** opens the existing View creator with exact document IDs,
+not inferred question words. **Extract dates** queues the same single-call
+classification pipeline for those sources. Pending facts link to the
+Intelligence review workspace; accepted dates link to Calendar.
+
+Members with **Review archive intelligence** can also extract dates from a
+Documents selection. Approvals groups candidates by document with candidate,
+document, and visible-result selection. Calendar and rich-query date filters
+use accepted facts only.
+
+See [Archive research](/archive-chat) for the complete workflow and contracts.
 
 Sensitivity choices are **Public**, **Internal**, **Confidential**, and
 **Restricted**; a document without a choice displays **Unset**. Confidential

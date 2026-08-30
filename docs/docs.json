@@ -37,6 +37,7 @@
               "jd",
               "similar-docs",
               "llm-classifier",
+              "archive-chat",
               "pipeline-versions",
               "privacy",
               "permissions",

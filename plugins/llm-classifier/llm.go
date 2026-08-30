@@ -26,7 +26,13 @@
 //	  "tags":           ["utilities", "electricity"],
 //	  "jd_category":    31,
 //	  "confidence":     0.87,
-//	  "reasoning":      "one sentence explaining low confidence"
+//	  "reasoning":      "",
+//	  "language":       "en",
+//	  "dates": [{
+//	    "role": "due", "value": "2026-03-31", "precision": "day",
+//	    "raw_text": "31 March 2026", "evidence": "Payment is due 31 March 2026.",
+//	    "confidence": 0.94
+//	  }]
 //	}
 //
 // confidence below the threshold (default 0.7) → apply `needs-review`

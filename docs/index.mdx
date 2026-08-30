@@ -37,11 +37,12 @@ API. Its name comes from Sanskrit _suchi_: an index, catalog, or list.
 - **Broad intake.** Uploads, watched folders, IMAP mailboxes, common office and
   image formats, OCR, encrypted PDFs, and portable bundles feed one durable
   pipeline.
-- **Search and workflow.** FTS5 search, saved views, automations, approval
-  reviews, rescans, and rendered filesystem views are built in.
+- **Search and workflow.** Rich FTS5 queries, saved source snapshots,
+  automations, approval reviews, accepted-date Calendar, rescans, and rendered
+  filesystem views are built in.
 - **Optional model assistance.** Local or hosted OpenAI-compatible models can
-  propose metadata after extraction and answer authorized, grounded archive
-  questions. v0.1 does not provide custom extractors.
+  propose metadata and reviewable intelligence after extraction, then answer
+  authorized archive research questions with validated citations.
 - **Controlled sharing and integration.** Users, groups, object ACLs, share
   links, scoped tokens, OIDC, a documented HTTP API, and MCP use the same
   application boundary.
@@ -63,7 +64,10 @@ API. Its name comes from Sanskrit _suchi_: an index, catalog, or list.
     Connect Outlook, Gmail, Fastmail, iCloud, Zoho, or another IMAP server.
   </Card>
   <Card title="Model assistance" icon="wand-magic-sparkles" href="/llm-classifier">
-    Configure classification and read-only archive questions.
+    Configure the shared classification and completion transport.
+  </Card>
+  <Card title="Archive research" icon="magnifying-glass" href="/archive-chat">
+    Ask grounded questions, save source sets, and validate archive intelligence.
   </Card>
   <Card title="Supported formats" icon="file-lines" href="/formats">
     Check extraction behavior and required host tools.

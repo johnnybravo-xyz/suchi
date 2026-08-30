@@ -778,7 +778,9 @@ phrase. Prefix a term or filter with `-` to exclude it.
 | `lang:de` | Assigned or detected 2–3 letter language code. |
 | `title:invoice`, `content:"distribution advice"` | Restrict a text term to one indexed column. |
 | `added:2026-08-25`, `added:>=2026-01-01` | Added date in UTC; `=`, `>`, `>=`, `<`, and `<=` are supported. |
-| `is:inbox`, `is:trash`, `is:encrypted` | Current document state. |
+| `date:2026-09-14`, `date:>=2026-09-01` | Human-accepted date intelligence; the same comparison operators are supported. |
+| `date-role:renewal` | Accepted date intelligence with one semantic role. |
+| `is:inbox`, `is:trash`, `is:encrypted`, `is:dated` | Current document state or accepted-intelligence presence. |
 
 The parser rejects unknown filters, raw FTS5 expressions, Boolean `OR`,
 grouping, proximity operators, malformed comparisons, unterminated quotes,
@@ -1332,63 +1334,129 @@ Admin-only. Body: `{"parent_id": <int-or-null>}`. Rejects
 self-parent (`400 self_parent`) and cycles (`400 cycle`). See
 architecture doc for the "no inheritance in search" call.
 
-## Archive questions
+## Archive research
 
-Both endpoints require authentication, `documents:read`, and the
-`archive_chat` capability (implicit for administrators). Public demo sessions
-are explicitly denied.
+Chat endpoints require authentication, `documents:read`, and `archive_chat`
+(implicit for administrators). Public demo sessions are denied.
 
 ### `GET /api/chat/status`
 
-Returns live runtime availability without exposing provider configuration:
+Returns live runtime availability and a safe provider label:
 
 ```json
-{ "enabled": true }
+{ "enabled": true, "provider": "localhost", "local": true }
 ```
 
 ### `POST /api/chat`
 
-Accepts a question, up to four alternating preceding messages (two
-user/assistant turns, 12 KB total), and session consent for sensitive sources:
-
 ```json
 {
-  "question": "When does the lease renew?",
+  "question": "When does it renew?",
   "history": [
-    { "role": "user", "content": "Which property is this about?" },
-    { "role": "assistant", "content": "The Indiranagar office [1]." }
+    { "role": "user", "content": "Which office lease applies?" },
+    { "role": "assistant", "content": "The Indiranagar office lease [1]." }
   ],
+  "context_source_ids": [17],
+  "scope": {
+    "query": "tag:lease",
+    "document_ids": [],
+    "jd_category_id": 0
+  },
   "include_sensitive": false
 }
 ```
 
-Questions are limited to 2,000 characters. Retrieval normalizes at most twelve
-terms and uses the existing title-weighted SQLite FTS5 index. Trash and
-unauthorized documents are excluded; Confidential and Restricted sources also
-remain excluded unless `include_sensitive` is true. The response contains at
-most six deterministic source records and a query suitable for Views:
+History contains at most two complete user/assistant pairs and 12 KB.
+`context_source_ids` contains at most six positive IDs. Scope accepts a rich
+query, up to 100 exact IDs, and an optional JD category. Every source and
+context ID is reauthorized.
+
+The response contains at most six sources, validated citations, grounding
+state, and intelligence counts:
 
 ```json
 {
-  "answer": "The lease renews on September 1 [1].",
+  "answer": "The lease renews on September 1, 2026 [1].",
+  "citations": [1],
+  "grounded": true,
   "sources": [
     {
       "id": 17,
       "title": "Office lease agreement",
       "snippet": "The renewal date is September 1 …",
-      "sensitivity": "internal"
+      "sensitivity": "internal",
+      "intelligence": [
+        {
+          "type": "date",
+          "role": "renewal",
+          "value": { "date": "2026-09-01", "precision": "day" },
+          "evidence": "The renewal date is September 1, 2026."
+        }
+      ]
     }
   ],
-  "view_query": "lease renew"
+  "intelligence": {
+    "accepted": { "date": 1 },
+    "pending": {}
+  }
 }
 ```
 
-No matching evidence returns the stable answer **I couldn’t find evidence in
-the documents you can access.** with an empty source array and does not call
-the provider. One model request is allowed for a successful turn and output is
-bounded to about 700 tokens. Questions, answers, and snippets are never logged.
-Provider failures return `502 provider_failure`; a disabled runtime returns
-`503 model_unavailable`.
+No evidence returns the stable no-evidence answer without a provider call.
+Insufficient evidence returns a stable insufficient answer. Malformed or
+out-of-range citations return `502 invalid_provider_response`; provider
+failures return `502 provider_failure`; a disabled runtime returns
+`503 model_unavailable`; the per-user/concurrency gate returns
+`429 chat_rate_limited` with `Retry-After`.
+
+## Archive intelligence
+
+These endpoints require `archive_intelligence`, implicit for administrators.
+Reads also require `documents:read`; extraction and resolution require
+`documents:write` plus Change permission on each source document. Public demo
+sessions are denied.
+
+### `GET /api/intelligence/schema`
+
+Returns registered intelligence types and role vocabularies.
+
+### `GET /api/intelligence/`
+
+Returns the standard pagination envelope. Filters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `status` | `pending`, `accepted` (default), or `rejected` |
+| `type` | Registered type, currently `date` |
+| `role` | Type-specific role; requires `type` |
+| `sort_from`, `sort_to` | Type-specific canonical range; dates use `YYYY-MM-DD` |
+| `document_ids` | Up to 500 comma-separated source document IDs |
+| `q` | Rich document query applied to source documents |
+| `page`, `page_size` | Standard pagination; max 500 |
+
+Rows contain generic `type`, `role`, `value`, `sort_value`, evidence,
+confidence, review state, extractor/version, and source-document presentation
+fields.
+
+### `POST /api/intelligence/extract`
+
+```json
+{ "document_ids": [17, 28], "types": ["date"] }
+```
+
+Queues the existing post-ingest pipeline for each authorized document and
+returns `202` with granular per-document results. It does not add another model
+call to the pipeline.
+
+### `POST /api/intelligence/resolve`
+
+```json
+{ "candidate_ids": [71, 72], "decision": "accepted" }
+```
+
+`decision` is `accepted` or `rejected`. Only pending, authorized candidates
+change. The bounded transaction returns granular `not_found`, `forbidden`, and
+`already_resolved` outcomes.
 
 ## LLM classifier settings
 

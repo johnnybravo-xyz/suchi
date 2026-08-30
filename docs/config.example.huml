@@ -64,7 +64,7 @@ scan_split_dpi: 150
 #   oauth_scopes_microsoft: "https://outlook.office.com/IMAP.AccessAsUser.All"
 
 # --------------------------------------------------------------------
-# Model assistance for classification and archive questions
+# Model assistance for classification, archive research, and intelligence
 # --------------------------------------------------------------------
 
 # llm::

@@ -133,10 +133,24 @@ approval sweep closes it as `system:satisfied` and records
 `document.suggestion_satisfied` in the audit log. It does not linger as an
 actionable approval or disappear without history.
 
-This is also the extension pattern for future human-in-the-loop actions: a
-producer starts an approval in its existing transaction, and a typed handler
-performs the approved write. Suchi does not maintain a second proposal table or
-resolution API.
+This remains the extension pattern for future action workflows: a producer
+starts an approval in its existing transaction, and a typed handler performs
+the approved write. Reviewable extracted facts use the deliberately separate
+generic intelligence ledger because they are bulk metadata decisions, not
+state-machine runs.
+
+## Intelligence review
+
+The Approvals screen also hosts pending `document_intelligence` candidates.
+This is one flat review queue shared by registered fact types. Selection works
+per candidate, source document, or visible result set; one bounded API call
+accepts or rejects the selected IDs.
+
+Intelligence review does not create approval definitions, runs, transitions,
+or one task row per fact. The candidate row already carries provenance,
+confidence, source revision, and review state. This keeps a document containing
+many extracted facts cheap to review while preserving an explicit reviewer and
+timestamp. See [Archive research](/archive-chat#generic-archive-intelligence).
 
 ## Rescan proposals
 
