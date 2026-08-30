@@ -1,4 +1,6 @@
-.PHONY: build test vet lint fmt fmt-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
+
+.DEFAULT_GOAL := help
 
 BIN := $(PWD)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures
@@ -6,6 +8,34 @@ STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.817
 
+help:
+	@printf '%s\n' \
+	  'Available targets:' \
+	  '  help            Show this target list.' \
+	  '  build           Build the production suchi binary.' \
+	  '  test            Run tests in every Go module.' \
+	  '  vet             Run go vet in every Go module.' \
+	  '  lint            Run the pinned staticcheck across Go modules.' \
+	  '  fmt             Format every Go source file.' \
+	  '  fmt-check       Fail when a Go source file needs formatting.' \
+	  '  tidy            Run go mod tidy in every Go module.' \
+	  '  check           Run formatting, vet, tests, lint, and UI checks.' \
+	  '  security-check  Run govulncheck and the Bun dependency audit.' \
+	  '  run             Build and run a local server on port 8000.' \
+	  '  clean           Remove the built binary directory.' \
+	  '  smoke           Build and smoke-test server health endpoints.' \
+	  '  smoke-ingest    Exercise the local document ingestion path.' \
+	  '  smoke-mail      Exercise the mbsync mail deployment path.' \
+	  '  ui              Build and copy the committed embedded SPA.' \
+	  '  ui-dev          Run the Vite development server.' \
+	  '  ui-check        Check, test, build, and compare embedded SPA assets.' \
+	  '  ui-e2e          Run the Playwright browser suite.' \
+	  '  ui-clean        Remove UI dependencies and generated assets.' \
+	  '  docs-dev        Run the Mintlify documentation server.' \
+	  '  docs-check      Check documentation for broken links.' \
+	  '  install-hooks   Install the tracked Git hooks.' \
+	  '  bench-check     Run benchmark scenarios against hard limits.' \
+	  '  release         Dispatch the release workflow for VERSION.' 
 
 build:
 	@mkdir -p dist
