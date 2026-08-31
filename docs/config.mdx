@@ -412,7 +412,7 @@ reload after a successful save; pinned fields retain their boot value.
 | `preset`                                                                                              | Current filing-tree preset.                                                                                  |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local archive-matching controls.                                                    |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
-| `llm.date_auto_apply`                                                                                | Add dates meeting the model confidence threshold directly to Calendar; defaults to `true`. |
+| `llm.date_auto_apply`                                                                                | Add high-confidence dates to Calendar automatically; defaults to `true`. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
 | `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
 | `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |

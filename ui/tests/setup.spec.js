@@ -427,7 +427,7 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
 })
 
-test('separates completed archive administration from account settings', async ({ page }) => {
+test('separates completed archive administration from account settings', async ({ page }, testInfo) => {
   const llmSettingsRequests = []
   await mockAPI(page, {
     setupCompletedAt: Math.floor(Date.now() / 1000),
@@ -473,8 +473,10 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=llm$/)
   await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
-  const dateAutoApply = page.getByLabel('Add dates meeting this score directly to Calendar')
+  const dateAutoApply = page.getByLabel('Add high-confidence dates to Calendar automatically')
   await expect(dateAutoApply).toBeChecked()
+  await dateAutoApply.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `/tmp/suchi-date-setting-${testInfo.project.name}.png`, fullPage: true })
   await dateAutoApply.uncheck()
   await page.getByRole('button', { name: 'Save model' }).click()
   await expect.poll(() => llmSettingsRequests.length).toBe(1)

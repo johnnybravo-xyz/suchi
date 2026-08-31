@@ -470,8 +470,8 @@
         <span class="sub" style="font-size:.76rem">Model suggestions at or above this score are applied without review.</span>
       </div>
       <label class="wiz-check"><input type="checkbox" bind:checked={llm.date_auto_apply} />
-        Add dates meeting this score directly to Calendar</label>
-      <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 14px">Turn this off to send newly extracted dates to Approvals. Dates already in Calendar stay there.</p>
+        Add high-confidence dates to Calendar automatically</label>
+      <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 14px">Dates that meet the confidence score above skip review. Turn this off if you want every new date to wait in Approvals. Existing Calendar dates are unchanged.</p>
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={() => saveAnd(
