@@ -119,6 +119,10 @@ async function mockAPI(page, options = {}) {
         archive_review_threshold: 0.5,
       }
     }
+    else if (path === '/api/admin/settings/llm/test') body = {
+      message: 'Classifier connection passed',
+      result: { title: 'Connection test', confidence: 0.91, elapsed_ms: 12, tags: [] },
+    }
     else if (path === '/api/admin/settings/preferences') body = {
       backup_interval_hours: 24,
       ocr_languages: ['eng'],
@@ -473,12 +477,27 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=llm$/)
   await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
+  const testConnection = page.getByRole('button', { name: 'Test connection' })
+  await testConnection.click()
+  await expect(page.getByText('Validated in 12 ms')).toBeVisible()
+  await expect(page.getByText('Works without a model', { exact: true })).toBeVisible()
+  await expect(page.getByText('Uses the configured model', { exact: true })).toBeVisible()
   const dateAutoApply = page.getByLabel('Add high-confidence dates to Calendar automatically')
+  const saveOptions = page.getByRole('button', { name: 'Save model and options' })
   await expect(dateAutoApply).toBeChecked()
+  const controlsAreOrdered = await page.evaluate(() => {
+    const test = [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Test connection')
+    const dates = [...document.querySelectorAll('label')].find(node => node.textContent.includes('Add high-confidence dates'))
+    const save = [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Save model and options')
+    return !!test && !!dates && !!save &&
+      !!(test.compareDocumentPosition(dates) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+      !!(dates.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+  expect(controlsAreOrdered).toBe(true)
   await dateAutoApply.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `/tmp/suchi-date-setting-${testInfo.project.name}.png`, fullPage: true })
   await dateAutoApply.uncheck()
-  await page.getByRole('button', { name: 'Save model' }).click()
+  await saveOptions.click()
   await expect.poll(() => llmSettingsRequests.length).toBe(1)
   expect(llmSettingsRequests[0].date_auto_apply).toBe(false)
   await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0)
@@ -526,7 +545,7 @@ test('keeps failed configuration reads out of editable forms', async ({ page }) 
 
   await expect(page.getByText('classification settings unavailable')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Save classifier' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save model and options' })).toHaveCount(0)
 })
 
 test('distinguishes mailbox and saved-view failures from empty data', async ({ page }) => {

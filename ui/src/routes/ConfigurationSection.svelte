@@ -412,21 +412,9 @@
 
     {:else if section === 'llm'}
       <h3>Classification, research, and extracted facts</h3>
-      <p class="wiz-p">Suchi first learns from similar documents already in your archive, then runs your automations. An optional model fills unresolved details, extracts dates for Calendar or review, and powers <b>Archive research</b> for authorized users.</p>
+      <p class="wiz-p">Suchi can learn from documents already filed in your archive without a model. An optional model fills unresolved details, extracts dates for Calendar or review, and powers <b>Archive research</b> for authorized users.</p>
       <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
-      {#if llm.archive_enabled}
-        <div class="field">
-          <label for="archive-auto">Apply archive matches at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
-          <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
-                 bind:value={llm.archive_auto_threshold}
-                 onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
-        </div>
-        <div class="field">
-          <label for="archive-review">Offer uncertain matches for review at · {Number(llm.archive_review_threshold).toFixed(2)}</label>
-          <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
-                 bind:value={llm.archive_review_threshold} />
-        </div>
-      {/if}
+
       <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
@@ -463,25 +451,12 @@
         <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} />
           This endpoint is not local. I acknowledge document text will leave this machine.</label>
       {/if}
-      <div class="field">
-        <label for="l-confidence">Auto-apply confidence · {Number(llm.confidence_threshold).toFixed(2)}</label>
-        <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
-               bind:value={llm.confidence_threshold} />
-        <span class="sub" style="font-size:.76rem">Model suggestions at or above this score are applied without review.</span>
-      </div>
-      <label class="wiz-check"><input type="checkbox" bind:checked={llm.date_auto_apply} />
-        Add high-confidence dates to Calendar automatically</label>
-      <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 14px">Dates that meet the confidence score above skip review. Turn this off if you want every new date to wait in Approvals. Existing Calendar dates are unchanged.</p>
-      <div class="toolbar">
+
+      <div class="toolbar connection-actions">
         <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
-                onclick={() => saveAnd(
-                  () => saveClassifier(true),
-                  'Model configured'
-                )}>Save model</button>
-        <button class="btn sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local classification remains active')}>Disable model</button>
+                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching remains active')}>Disable model</button>
       </div>
       {#if llmTestError}
         <div class="test-result failed">
@@ -495,7 +470,53 @@
           {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
         </div>
       {/if}
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rule above, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
+
+      <section class="model-options" aria-labelledby="model-options-title">
+        <h4 id="model-options-title">Choose what Suchi can handle automatically</h4>
+        <p class="options-intro">Local matching works without a model. Test the connection before choosing the model-driven options. Save both groups together when you are done.</p>
+
+        {#if llm.archive_enabled}
+          <div class="option-group independent">
+            <span class="option-kind">Works without a model</span>
+            <h5>Similar-document matching</h5>
+            <p>Uses only documents already filed in this archive. No model or external connection is required.</p>
+            <div class="field">
+              <label for="archive-auto">Apply a matching document's filing at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
+              <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
+                     bind:value={llm.archive_auto_threshold}
+                     onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
+            </div>
+            <div class="field">
+              <label for="archive-review">Offer a matching document's filing for review from · {Number(llm.archive_review_threshold).toFixed(2)}</label>
+              <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
+                     bind:value={llm.archive_review_threshold} />
+            </div>
+          </div>
+        {/if}
+
+        <div class="option-group model-driven">
+          <span class="option-kind">Uses the configured model</span>
+          <h5>Model suggestions</h5>
+          <p>After the connection test succeeds, choose when model-proposed filing details and dates can skip review.</p>
+          <div class="field">
+            <label for="l-confidence">Apply model suggestions at · {Number(llm.confidence_threshold).toFixed(2)}</label>
+            <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
+                   bind:value={llm.confidence_threshold} />
+          </div>
+          <label class="wiz-check"><input type="checkbox" bind:checked={llm.date_auto_apply} />
+            Add high-confidence dates to Calendar automatically</label>
+          <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 0">Dates that meet the model score skip review. Turn this off if you want every new date to wait in Approvals. Existing Calendar dates are unchanged.</p>
+        </div>
+
+        <div class="toolbar option-save">
+          <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+                  onclick={() => saveAnd(
+                    () => saveClassifier(true),
+                    'Model and automatic handling saved'
+                  )}>Save model and options</button>
+        </div>
+      </section>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rules above, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>
@@ -550,10 +571,23 @@
     padding: 7px 10px; margin-top: 12px; font-size: .82rem;
   }
   .test-result.failed { border-left-color: var(--danger); }
+  .connection-actions { margin-top: 16px; }
+  .model-options { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
+  .model-options h4 { margin: 0; font-size: 1rem; }
+  .options-intro { max-width: 54em; margin: 6px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+  .option-group { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--r-sm); background: var(--surface); }
+  .option-group.independent { border-left-color: var(--ok); }
+  .option-group.model-driven { border-left-color: var(--accent); }
+  .option-kind { display: inline-flex; margin-bottom: 5px; padding: 3px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: .67rem; font-weight: 650; }
+  .option-group h5 { margin: 0; font-size: .88rem; }
+  .option-group > p { margin: 4px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.45; }
+  .option-group .field:last-child, .option-group .wiz-check:last-child { margin-bottom: 0; }
+  .option-save { margin-top: 14px; }
   .configuration-loading { display:grid;gap:12px;padding:8px 0; }
   .configuration-load-error .toolbar { margin-top:10px; }
   @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .intent-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .model-options { padding: 13px; } }
   .preset {
     display: flex; flex-direction: column; gap: 3px; cursor: pointer;
     border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 12px 14px;
