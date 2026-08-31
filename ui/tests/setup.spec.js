@@ -1568,8 +1568,28 @@ test('supports cancellation, focus return, and the full-screen mobile research d
   await page.getByRole('textbox', { name: 'Question', exact: true }).press('Escape')
   await expect(dialog).toBeHidden()
   await expect(omnibox).toBeFocused()
+  await expect(page.getByRole('listbox')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Return to archive research' })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('closes archive research outside without reopening the Omnibox menu', async ({ page }) => {
+  await mockAPI(page, {
+    chatEnabled: true,
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/#/dashboard')
+  const omnibox = page.getByLabel('Search or run a command')
+  await omnibox.fill('outside close')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Archive research' })
+  await expect(dialog).toBeVisible()
+  await page.locator('.research-veil').click({ position: { x: 200, y: 200 } })
+  await expect(dialog).toBeHidden()
+  await expect(omnibox).toBeFocused()
+  await expect(page.getByRole('listbox')).toHaveCount(0)
 })
 
 test('explains invalid model citations without exposing provider details', async ({ page }) => {

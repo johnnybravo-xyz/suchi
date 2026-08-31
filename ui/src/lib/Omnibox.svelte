@@ -37,11 +37,16 @@
   function close() {
     open = false; idx = -1; q = ''; input?.blur()
   }
+  function restoreFocusWithoutMenu() {
+    input?.focus()
+    open = false
+    idx = -1
+  }
 
   function ask() {
     const question = q.trim()
     close()
-    onAsk?.(question, () => input?.focus())
+    onAsk?.(question, restoreFocusWithoutMenu)
   }
 
   function onKey(e) {
