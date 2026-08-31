@@ -56,13 +56,31 @@ The built tree is committed so contributors changing only Go do not need a
 JavaScript toolchain. A UI change is incomplete when `ui/dist` differs from the
 embedded copy.
 
-The beta build keeps the shell, archive workflows, management workflows, and
-the on-demand archive-question drawer separate. Keep the shell at or below 35
-KB gzip and remeasure every chunk after UI changes. The current production
-chunks, measured with system `gzip`, are 33,958 bytes for the shell, 24,332 for
-archive workflows, 43,170 for management workflows, 5,253 for lazy Archive
-research, 378 for shared intelligence helpers, and 14,207 for CSS. This is a
-transfer-size budget, not a browser-memory or container-size claim.
+The beta build groups lazy routes by the work a person is doing. The small route
+entry files under `ui/src/lib` make those boundaries explicit without custom
+bundler rules. Keep the shell at or below 35 KB gzip and remeasure every chunk
+after UI changes.
+
+Current production sizes, measured with system `gzip`:
+
+| Chunk | Screens or purpose | Gzip bytes |
+| --- | --- | ---: |
+| Shell | Navigation, Dashboard, and login | 34,093 |
+| Document work | Documents, document detail, and Upload | 16,516 |
+| Search | Search | 2,426 |
+| Organize | Views, Calendar, and Trash | 7,590 |
+| Workflow | Approvals and Automations | 11,249 |
+| Configuration | Settings and Setup | 31,432 |
+| Demo | Demo workspace | 2,363 |
+| Archive research | On-demand research drawer | 5,253 |
+| Query helpers | Shared by Documents and Search | 415 |
+| Date helpers | Shared by Calendar and Approvals | 378 |
+| Styles | Shared stylesheet | 14,207 |
+
+A route transfer also includes its small shared helper where listed. These are
+transfer-size measurements, not browser-memory or container-size claims. All
+JavaScript chunks together are 111,715 bytes gzip, but ordinary navigation
+fetches only the shell, the selected route group, and any listed helper.
 
 ## Routing and loading
 
