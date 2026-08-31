@@ -53,3 +53,35 @@ func TestSearchRequiresDocumentsReadScope(t *testing.T) {
 		t.Fatalf("read scope status=%d body=%s", allowed.Code, allowed.Body.String())
 	}
 }
+
+func TestSearchValidatesLanguageFilter(t *testing.T) {
+	s := &Server{
+		DB:  openTestDB(t),
+		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	request := func(rawURL string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, rawURL, nil)
+		req = req.WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+		rec := httptest.NewRecorder()
+		s.Search(rec, req)
+		return rec
+	}
+
+	for _, rawURL := range []string{
+		"/api/search/?q=needle&lang=en-US",
+		"/api/search/?q=needle&lang=%C3%A9%C3%A9",
+		"/api/search/?q=needle&lang=12",
+		"/api/search/?q=needle&lang=abcd",
+		"/api/search/?q=&lang=en-US",
+	} {
+		rec := request(rawURL)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_lang"`) {
+			t.Fatalf("url=%s status=%d body=%s", rawURL, rec.Code, rec.Body.String())
+		}
+	}
+
+	if rec := request("/api/search/?q=&lang=%20DE%20"); rec.Code != http.StatusOK {
+		t.Fatalf("normalized language status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

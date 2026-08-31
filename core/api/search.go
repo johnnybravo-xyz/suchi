@@ -54,6 +54,11 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
+	language, err := normalizedScopeLanguage(r.URL.Query().Get("lang"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_lang", "lang must be a 2 or 3 letter language code")
+		return
+	}
 	raw := r.URL.Query().Get("q")
 	if strings.TrimSpace(raw) == "" {
 		s.writeJSON(w, http.StatusOK,
@@ -85,8 +90,8 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Existing visual-filter query parameters remain additive while clients
-	// transition to canonical query tokens.
-	extra, extraArgs := buildSearchFilters(r)
+	// transition to rich-query filters.
+	extra, extraArgs := buildSearchFilters(r, language)
 	if principal.Role != "admin" {
 		groups, err := s.principalGroups(r.Context(), principal.UserID)
 		if err != nil {
@@ -271,7 +276,7 @@ func (s *Server) autoQueryOne(r *http.Request, table, col, kind, needle string, 
 // Values go through ParseCSVInts (which drops non-int / zero / negative
 // tokens) or strconv.ParseInt with a positive-only guard, so no user
 // input reaches the SQL as a literal.
-func buildSearchFilters(r *http.Request) (string, []any) {
+func buildSearchFilters(r *http.Request, language string) (string, []any) {
 	var (
 		frag strings.Builder
 		args []any
@@ -312,9 +317,9 @@ func buildSearchFilters(r *http.Request) (string, []any) {
 	// Language — `?lang=de` narrows to docs whose detected/user-set
 	// language(s) include the given code. Storage format is
 	// comma-bracketed (,de,en,) so a LIKE with commas both sides
-	// dodges the `de` vs `deu` false-match trap. Silently ignored
-	// when the value isn't a 2-3-letter ISO code.
-	if v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang"))); v != "" && len(v) >= 2 && len(v) <= 3 {
+	// dodges the `de` vs `deu` false-match trap. Search validates and
+	// normalizes this value before constructing any query.
+	if v := language; v != "" {
 		frag.WriteString(" AND d.languages LIKE ?")
 		args = append(args, "%,"+v+",%")
 	}
