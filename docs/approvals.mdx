@@ -143,19 +143,18 @@ state-machine runs.
 
 Start with [Document dates](/document-dates) for the complete user workflow.
 
-The Approvals screen hosts pending `document_intelligence` candidates. Extracted
-dates appear here when they fall below the model confidence threshold or when
-automatic Calendar dates are disabled. Selection works per date, source
-document, or visible result set.
+The Approvals screen hosts pending `document_intelligence` candidates. Selection
+works per date, source document, or visible result set.
 
-More than two source-document groups use a two-column desktop grid and a single
-mobile column. The selected-date action bar stays above the list while
+Dates and workflow approvals share the same card grid. More than two groups use
+two desktop columns and one mobile column; one or two groups stay in a compact
+single column. The selected-date action bar stays above the list while
 scrolling. One bounded API call adds or rejects the selected IDs.
 
 This review does not create approval definitions, runs, transitions, or one
-task row per date. The candidate row already carries provenance, confidence,
-source revision, and review state; a manual decision adds its reviewer and
-timestamp. See [Archive research](/archive-chat#extracted-facts-and-dates).
+task row per date. See [Document dates: Automatic and reviewed
+dates](/document-dates#automatic-and-reviewed-dates) for the threshold, review,
+and rescan rules.
 
 ## Rescan proposals
 

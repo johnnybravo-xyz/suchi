@@ -4,8 +4,8 @@ description: "How Suchi finds dates, decides what reaches Calendar, and asks for
 ---
 
 Suchi can find important dates in document text and place them on Calendar. Each
-Calendar entry keeps its source document and the exact text that produced the
-date, so you can verify it instead of trusting an unexplained event.
+date keeps its source document and the exact text that produced it, so you can
+verify the result instead of trusting an unexplained event.
 
 This workflow is designed to stay out of the way:
 
@@ -46,32 +46,42 @@ Open **Settings → Archive configuration → Classification**.
 Keep **Learn from similar documents in this archive** on if you want local
 archive matching. It does not require a model.
 
-Configure the optional model and choose **Test connection**. After the test
-succeeds, the **Choose what Suchi can handle automatically** section keeps the
-controls in two clearly labeled boxes:
+Configure the optional model and choose **Test connection**. The **Choose what
+Suchi can handle automatically** section keeps the controls in two boxes:
 
-- **Works without a model** contains the two similar-document matching sliders.
+- **Works without a model** contains archive matching and its own save action.
 - **Uses the configured model** contains **Apply model suggestions at** and
   **Add high-confidence dates to Calendar automatically**.
 
-Choose the options, then select **Save model and options**. The model suggestion
-score is the threshold Suchi uses for model-proposed filing details and dates.
+The model suggestion score is the automatic-date threshold. When automatic
+dates are on, dates at or above it go directly to Calendar; everything else
+goes through Approvals. Turn automatic dates off to send every extracted date
+through Approvals.
 
-When automatic Calendar dates are on:
-
-- dates meeting the confidence score go directly to Calendar;
-- lower-confidence dates wait in Approvals; and
-- enabling it or lowering the score also moves matching pending dates to
-  Calendar without another model call.
-
-When it is off, every newly extracted date waits in Approvals. Turning it off or
-raising the score never removes dates already in Calendar.
+Enabling automatic dates or lowering the score also moves matching pending
+dates to Calendar without another model call. Turning it off or raising the
+score never removes dates already in Calendar.
 
 <Info>
   Automatic dates are enabled by default. Confidence reduces review work; it is
   not proof that a date is correct. Every Calendar entry still links to its
   document and supporting text.
 </Info>
+
+## Automatic and reviewed dates
+
+Calendar distinguishes how each date got there:
+
+- An **automatic** date was extracted while automatic dates were enabled and
+  met the configured threshold. It keeps its confidence, extractor, extraction
+  version, source revision, and evidence, but has no reviewer.
+- A **reviewed** date records the person's decision and review time. Rejected
+  dates do not appear on Calendar.
+
+Rescanning refreshes unreviewed machine output from the current document and
+extractor version. It does not overwrite a person's accepted or rejected
+decision. This prevents stale automatic results from accumulating while keeping
+human decisions durable.
 
 ## Review dates in Approvals
 
@@ -118,7 +128,7 @@ Pending and rejected dates never match these filters.
 ## Apply the current settings to older documents
 
 The confidence and automatic-date settings apply to new documents immediately.
-They also affect documents you explicitly rescan.
+They also govern new machine output from documents you explicitly rescan.
 
 To process older documents:
 
@@ -128,7 +138,9 @@ To process older documents:
 
 Enabling automatic dates or lowering the confidence score promotes matching
 pending dates immediately. A rescan is only necessary when the document still
-needs extraction run again.
+needs extraction run again. During that rescan Suchi replaces stale automatic
+and pending output, while preserving dates a person already accepted or
+rejected.
 
 See [Pipeline versions and rescans](/pipeline-versions) for the difference
 between unprocessed, stale, and completed documents.

@@ -371,8 +371,10 @@ never reads plaintext keys back. It exposes masked status, a synthetic
 connection test with validated fields and latency, and an explicit key-clear
 action. Automatic handling appears after the connection controls in two boxes:
 **Works without a model** for local archive matching, and **Uses the configured
-model** for the model confidence slider and automatic Calendar dates. One
-**Save model and options** action persists the connection and both groups.
+model** for the model confidence slider and automatic Calendar dates. **Save
+matching options** preserves the model's current enabled state. After a
+successful connection test, **Save model and options** saves and enables the
+model settings.
 Compose installs can reach host Ollama at
 `http://host.suchi.local:11434/v1`.
 As described under [Precedence](#precedence), config-file and environment

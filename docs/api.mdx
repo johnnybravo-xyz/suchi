@@ -207,9 +207,14 @@ Query params (all optional):
 | `document_type__id`                  | Exact document type.                                                                                                        |
 | `tags__id__in`                       | CSV of tag ids; result must carry **every** id (AND).                                                                       |
 | `correspondents__id__in`             | CSV of correspondent ids; result matches **any** (OR).                                                                      |
+| `document_ids`                       | CSV of at most 100 positive document IDs; useful for exact snapshots. ACLs still apply.                                     |
 | `q`                                  | [Rich query string](/query-language); Search and Documents share its matching plan.                                              |
 | `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
+| `lang`                               | Two- or three-letter language code. Input is trimmed and lowercased; exact stored language membership is required.           |
 | `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
+
+Scope filters are additive. Malformed or oversized `document_ids` returns
+`400 bad_document_ids`; an invalid language token returns `400 bad_lang`.
 
 Non-admin callers get the same ACL fragment the detail + patch
 endpoints use — a member sees only owned docs plus explicit grants
@@ -732,7 +737,7 @@ document the caller cannot view.
 | `recency`                                            | `off` disables the recency-decay term in ranking.                                                                                |
 | `tags__id__in`, `correspondents__id__in`             | CSV IDs; doc matches ANY.                                                                                                        |
 | `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters.                                                                                                            |
-| `lang`                                               | ISO-639-1 code (`de`, `kn`). Narrows to docs whose `languages` includes the code. Silently ignored if not 2–3 lowercase letters. |
+| `lang`                                               | Two- or three-letter language token (`de`, `kn`, `hin`). Narrows to docs whose `languages` includes the token; input is trimmed and lowercased. Invalid values return `400 bad_lang`. |
 
 Ranking uses title-weighted BM25 plus an optional bounded recency term.
 `recency=off` returns raw BM25 ordering. Formula, score direction, weights,
@@ -760,7 +765,14 @@ back to bounded taxonomy-prefix suggestions. See
 `filter_json` as a JSON-encoded object string up to 2 KiB. Supported keys are
 `q`,
 `tags__id__in`, `correspondents__id__in`, `document_type__id`,
-`jd_category_id`, `sensitivity`, and `ordering`.
+`jd_category_id`, `sensitivity`, `ordering`, and `document_ids`.
+
+`document_ids` must be a JSON array containing 1–100 positive integers. The
+server removes duplicates while preserving first occurrence. It is the stable
+contract for an exact snapshot View; opening or sharing the View still reapplies
+document authorization. Other supported filters are additive, so an exact
+snapshot stores `document_ids` alone. The web app does this instead of deriving
+a live `q` from question text.
 
 When `q` is present, the server normalizes its spelling and resolves referenced
 categories, tags, correspondents, and document types before writing the row.
@@ -1390,7 +1402,7 @@ Returns the standard pagination envelope. Filters:
 | `status` | `pending`, `accepted` (default), or `rejected` |
 | `type` | Registered type, currently `date` |
 | `role` | Type-specific role; requires `type` |
-| `sort_from`, `sort_to` | Type-specific canonical range; dates use `YYYY-MM-DD` |
+| `sort_from`, `sort_to` | Type-specific normalized range; dates use `YYYY-MM-DD` |
 | `document_ids` | Up to 500 comma-separated source document IDs |
 | `view_id` | Owned or shared saved View; server applies its complete filter and document ACLs |
 | `q` | Rich document query applied to source documents |

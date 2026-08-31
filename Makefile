@@ -6,6 +6,7 @@ STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.817
 
+
 build:
 	@mkdir -p dist
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN) ./distro/cmd/suchi

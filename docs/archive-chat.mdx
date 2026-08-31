@@ -167,54 +167,12 @@ Type-specific validation lives in `core/intelligence`. Adding a type requires a
 small explicit value contract there, an extractor projection, and a UI renderer.
 It does not require a new approval table or state model.
 
-### Date extraction
+### Date extraction, review, and Calendar
 
-For the end-user workflow, settings, review screen, and troubleshooting, see
+Dates use this ledger without adding a second model completion. For the roles,
+validation rules, confidence threshold, automatic and reviewed dates, rescans,
+Approvals, and Calendar, see
 [Document dates](/document-dates).
-
-Dates are extracted in the existing single classification completion. The model
-may propose up to three important lifecycle or actionable dates with roles:
-
-```text
-issued, due, start, end, expiry, renewal, service, other
-```
-
-Each date includes a normalized `YYYY-MM-DD` value, `day`/`month`/`year`
-precision, the original date phrase, an evidence quote, and independent
-confidence.
-
-Before calling the model, Suchi preserves the beginning and end of long
-documents and adds bounded windows around standard date signals. Supported
-signals include:
-
-- ISO dates and timestamps (`2026-09-14`, `2026-09-14T10:30:00Z`);
-- separated numeric forms (`14/09/2026`, `09/14/26`);
-- named months (`14 September 2026`, `Sept. 14 2026`); and
-- month precision (`2026-09`, `09/2026`).
-
-Bare numbers, compact account-like values such as `20260914`, invoice totals,
-and version numbers are not treated as date signals. The model still has to
-propose a date, application validation must accept the calendar value, and the
-evidence quote must occur in the document.
-
-When **Add high-confidence dates to Calendar automatically** is enabled, a date
-at or above the user-defined model confidence threshold goes straight to
-Calendar. Lower-confidence dates wait in Approvals. Enabling the option or
-lowering the threshold immediately moves matching pending dates into Calendar
-without another model call. Turning the option off sends newly extracted dates
-to Approvals; it does not remove dates already in Calendar. Rescan only when a
-document needs date extraction run again.
-
-### Review and calendar
-
-The Approvals screen groups dates still needing a decision by source document.
-Selection works per date, source document, or visible result set; one bounded,
-audited transaction adds or rejects the selected dates after rechecking
-document authorization.
-
-Calendar reads dates that were added automatically or approved in Approvals. It
-supports month and agenda views, date-role filtering, and Saved View scope.
-Pending or rejected dates never appear.
 
 Dates available to Calendar may be included beside their original source
 snippet in a later archive answer. The original document remains the evidence
@@ -375,7 +333,8 @@ applies the complete owned/shared View filter plus document ACLs.
 
 Use a real configured model when changing either prompt contract:
 
-1. Classify a long document with a date near the middle.
+1. Turn automatic Calendar dates off, then classify a long document with a date
+   near the middle.
 2. Confirm the candidate remains pending and includes matching evidence.
 3. Approve it and confirm it appears on Calendar.
 4. Ask a question whose answer uses the Calendar date.

@@ -114,17 +114,14 @@ At or above the threshold:
 - a validated suggested title replaces the current title;
 - an unset correspondent can be filled;
 - tags are added, never removed;
-- the JD category changes only while the document remains in the inbox; and
-- an extracted date goes directly to Calendar when **Add high-confidence dates
-  to Calendar automatically** is enabled.
+- the JD category changes only while the document remains in the inbox.
 
-See [Document dates](/document-dates) for the automatic-versus-reviewed
-Calendar workflow.
+Date extraction uses the same score but has its own automatic-versus-reviewed
+contract. See [Document dates](/document-dates).
 
 Below the threshold, source fields stay unchanged, Suchi adds the
 `needs-review` tag, and a changed title is offered as an approval assigned to
-the document owner. Extracted dates wait in Approvals. Turning automatic
-Calendar dates off sends every newly extracted date to Approvals.
+the document owner.
 
 ## Test and live reload
 
@@ -134,10 +131,8 @@ It does not save settings, send archive content, or reveal raw provider output.
 
 Saving local archive settings or the model's enabled state, endpoint, model,
 key, timeout, acknowledgement, confidence, or automatic Calendar-date option
-applies immediately. No Suchi restart is required. Enabling automatic dates or
-lowering the threshold promotes matching pending dates without another model
-call. Raising the threshold or disabling automatic dates never removes dates
-already in Calendar.
+applies immediately. No Suchi restart is required. Date-setting effects are
+documented under [Document dates](/document-dates).
 
 Other setting changes affect new ingests and explicit rescans; they never start
 an automatic archive-wide model backfill. Select older documents in
