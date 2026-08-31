@@ -1,5 +1,0 @@
-export { default as Tasks } from '../routes/Tasks.svelte'
-export { default as Automations } from '../routes/Automations.svelte'
-export { default as Settings } from '../routes/Settings.svelte'
-export { default as Setup } from '../routes/Setup.svelte'
-export { default as Demo } from '../routes/Demo.svelte'

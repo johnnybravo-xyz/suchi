@@ -12,23 +12,27 @@
   import BrandMark from './lib/BrandMark.svelte'
   import SetupReminder from './lib/SetupReminder.svelte'
 
-  const archiveBundle = () => import('./lib/archiveBundle.js')
-  const manageBundle = () => import('./lib/manageBundle.js')
+  const documentRoutes = () => import('./lib/documentRoutes.js')
+  const searchRoute = () => import('./lib/searchRoute.js')
+  const organizeRoutes = () => import('./lib/organizeRoutes.js')
+  const workflowRoutes = () => import('./lib/workflowRoutes.js')
+  const configurationRoutes = () => import('./lib/configurationRoutes.js')
+  const demoRoute = () => import('./lib/demoRoute.js')
   const bundled = (load, name) => () => load().then(m => ({ default: m[name] }))
   const lazyRoutes = {
-    documents:   bundled(archiveBundle, 'Documents'),
-    detail:      bundled(archiveBundle, 'DocumentDetail'),
-    search:      bundled(archiveBundle, 'Search'),
-    upload:      bundled(archiveBundle, 'Upload'),
-    uploadBox:   bundled(archiveBundle, 'UploadBox'),
-    trash:       bundled(archiveBundle, 'Trash'),
-    views:       bundled(archiveBundle, 'Views'),
-    calendar:    bundled(archiveBundle, 'Calendar'),
-    tasks:       bundled(manageBundle, 'Tasks'),
-    automations: bundled(manageBundle, 'Automations'),
-    settings:    bundled(manageBundle, 'Settings'),
-    setup:       bundled(manageBundle, 'Setup'),
-    demo:        bundled(manageBundle, 'Demo'),
+    documents:   bundled(documentRoutes, 'Documents'),
+    detail:      bundled(documentRoutes, 'DocumentDetail'),
+    upload:      bundled(documentRoutes, 'Upload'),
+    uploadBox:   bundled(documentRoutes, 'UploadBox'),
+    search:      bundled(searchRoute, 'Search'),
+    trash:       bundled(organizeRoutes, 'Trash'),
+    views:       bundled(organizeRoutes, 'Views'),
+    calendar:    bundled(organizeRoutes, 'Calendar'),
+    tasks:       bundled(workflowRoutes, 'Tasks'),
+    automations: bundled(workflowRoutes, 'Automations'),
+    settings:    bundled(configurationRoutes, 'Settings'),
+    setup:       bundled(configurationRoutes, 'Setup'),
+    demo:        bundled(demoRoute, 'Demo'),
   }
 
   let mobileNavOpen = $state(false)
