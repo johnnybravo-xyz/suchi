@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
@@ -116,14 +117,27 @@ func (citations *chatCitations) UnmarshalJSON(data []byte) error {
 		var citation int
 		if err := json.Unmarshal(value, &citation); err != nil {
 			var text string
-			if stringErr := json.Unmarshal(value, &text); stringErr != nil {
-				return errors.New("citation must be an integer")
+			if stringErr := json.Unmarshal(value, &text); stringErr == nil {
+				parsed, parseErr := strconv.Atoi(strings.TrimSpace(text))
+				if parseErr != nil {
+					return errors.New("citation string must contain an integer")
+				}
+				citation = parsed
+			} else {
+				var number json.Number
+				if numberErr := json.Unmarshal(value, &number); numberErr != nil {
+					return errors.New("citation must be an integer")
+				}
+				rational, ok := new(big.Rat).SetString(number.String())
+				if !ok || !rational.IsInt() || !rational.Num().IsInt64() {
+					return errors.New("citation must be an integer")
+				}
+				parsed := rational.Num().Int64()
+				if strconv.IntSize == 32 && (parsed < -1<<31 || parsed > 1<<31-1) {
+					return errors.New("citation must be an integer")
+				}
+				citation = int(parsed)
 			}
-			parsed, parseErr := strconv.Atoi(strings.TrimSpace(text))
-			if parseErr != nil {
-				return errors.New("citation string must contain an integer")
-			}
-			citation = parsed
 		}
 		out = append(out, citation)
 	}
@@ -438,15 +452,15 @@ func normalizedPositiveIDs(ids []int64, limit int) ([]int64, error) {
 
 func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contextIDs []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
 	combined := make([]ChatSource, 0, chatMaxSources)
-	seen := make(map[int64]bool, chatMaxSources)
+	sourcePosition := make(map[int64]int, chatMaxSources)
 	if len(contextIDs) > 0 {
 		contextSources, err := s.queryChatContextSources(ctx, contextIDs, scope, includeSensitive)
 		if err != nil {
 			return nil, err
 		}
 		for _, source := range contextSources {
-			if !seen[source.ID] {
-				seen[source.ID] = true
+			if _, exists := sourcePosition[source.ID]; !exists {
+				sourcePosition[source.ID] = len(combined)
 				combined = append(combined, source)
 			}
 		}
@@ -457,10 +471,13 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contex
 			return nil, err
 		}
 		for _, source := range currentSources {
-			if seen[source.ID] {
+			if position, exists := sourcePosition[source.ID]; exists {
+				// Direct cited reloads preserve source numbering, while the FTS
+				// result carries the excerpt relevant to the current follow-up.
+				combined[position] = source
 				continue
 			}
-			seen[source.ID] = true
+			sourcePosition[source.ID] = len(combined)
 			combined = append(combined, source)
 			if len(combined) == chatMaxSources {
 				break
@@ -613,7 +630,7 @@ func buildChatEvidencePrompt(question string, sources []ChatSource) string {
 	for i, source := range sources {
 		fmt.Fprintf(&b, "\n[%d] Title: %s\nSensitivity: %s\nContent: %s\n", i+1, source.Title, source.Sensitivity, source.Snippet)
 		if len(source.Intelligence) > 0 {
-			b.WriteString("Human-accepted intelligence:\n")
+			b.WriteString("Accepted extracted facts (automatic or reviewed):\n")
 			for _, fact := range source.Intelligence {
 				fmt.Fprintf(&b, "- type=%s role=%s value=%s evidence=%s\n",
 					fact.Type, fact.Role, fact.Value, fact.Evidence)
@@ -674,23 +691,32 @@ func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principa
 	}
 	countRows.Close()
 
+	orderValues := make([]string, len(sources))
+	factArgs := make([]any, 0, len(sources))
+	for i, source := range sources {
+		orderValues[i] = "(?, " + strconv.Itoa(i) + ")"
+		factArgs = append(factArgs, source.ID)
+	}
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		WITH ranked AS (
-			SELECT document_id, intelligence_type, role, value_json, evidence_text,
+		WITH source_order(document_id, retrieval_rank) AS (
+			VALUES `+strings.Join(orderValues, ",")+`
+		), ranked AS (
+			SELECT di.id, di.document_id, di.intelligence_type, di.role,
+			       di.value_json, di.evidence_text, source_order.retrieval_rank,
 			       ROW_NUMBER() OVER (
-				   PARTITION BY document_id
-				   ORDER BY intelligence_type, role, id
+				   PARTITION BY di.document_id
+				   ORDER BY di.intelligence_type, di.role, di.id
 			       ) AS source_rank
-			FROM document_intelligence
-			WHERE document_id IN (`+placeholders(len(sources))+`)
-			  AND status = 'accepted'
+			FROM document_intelligence di
+			JOIN source_order ON source_order.document_id = di.document_id
+			WHERE di.status = 'accepted'
 		)
 		SELECT document_id, intelligence_type, role, value_json,
 		       substr(evidence_text, 1, `+strconv.Itoa(chatMaxSnippetRunes)+`)
 		FROM ranked
 		WHERE source_rank <= `+strconv.Itoa(chatMaxFactsPerSource)+`
-		ORDER BY document_id, intelligence_type, role
-		LIMIT `+strconv.Itoa(chatMaxFactsTotal), args...)
+		ORDER BY retrieval_rank, intelligence_type, role, id
+		LIMIT `+strconv.Itoa(chatMaxFactsTotal), factArgs...)
 	if err != nil {
 		return summary, err
 	}

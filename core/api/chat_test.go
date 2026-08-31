@@ -199,6 +199,43 @@ func TestChatBoundsProviderEvidenceButKeepsIntelligenceCounts(t *testing.T) {
 	}
 }
 
+func TestChatAcceptedFactCapFollowsSourceRetrievalOrder(t *testing.T) {
+	s := newChatTestServer(t)
+	retrievalOrder := []int64{90, 70, 80, 60, 100}
+	sources := make([]ChatSource, 0, len(retrievalOrder))
+	for _, documentID := range retrievalOrder {
+		seedChatDoc(t, s, documentID, 1, fmt.Sprintf("Source %d", documentID), "evidence", "public", false)
+		sources = append(sources, ChatSource{ID: documentID})
+		for fact := 0; fact < chatMaxFactsPerSource; fact++ {
+			if _, err := s.DB.Write.ExecContext(context.Background(), `
+				INSERT INTO document_intelligence(
+					document_id, intelligence_type, role, value_json, sort_value, raw_text,
+					evidence_text, confidence, status, extractor, extraction_version, created_at, updated_at
+				) VALUES (?, 'date', ?, ?, ?, 'raw', 'evidence', 0.9, 'accepted', 'test', 1, 0, 0)
+			`, documentID, fmt.Sprintf("role-%d", fact), fmt.Sprintf(`{"date":"2026-09-%02d"}`, fact+1),
+				fmt.Sprintf("2026-09-%02d", fact+1)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	summary, err := s.loadChatIntelligence(context.Background(), adminPrincipal(1), sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Accepted["date"] != len(retrievalOrder)*chatMaxFactsPerSource {
+		t.Fatalf("summary=%+v", summary)
+	}
+	for index := range sources {
+		want := chatMaxFactsPerSource
+		if index >= chatMaxFactsTotal/chatMaxFactsPerSource {
+			want = 0
+		}
+		if len(sources[index].Intelligence) != want {
+			t.Fatalf("source order %v index=%d facts=%d want=%d", retrievalOrder, index, len(sources[index].Intelligence), want)
+		}
+	}
+}
+
 func TestChatContextReloadPreservesOrderAndRechecksVisibility(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 41, 1, "First direct context", "context first", "public", false)
@@ -218,6 +255,32 @@ func TestChatContextReloadPreservesOrderAndRechecksVisibility(t *testing.T) {
 	}
 	if len(out.Sources) < 2 || out.Sources[0].ID != 42 || out.Sources[1].ID != 41 {
 		t.Fatalf("ordered sources=%+v", out.Sources)
+	}
+}
+
+func TestChatContextReloadUsesCurrentFTSExcerptWithoutReorderingCitation(t *testing.T) {
+	s := newChatTestServer(t)
+	seedChatDoc(t, s, 60, 1, "First cited source", "first cited context", "public", false)
+	content := strings.Repeat("preface filler ", 180) +
+		"decisive followup evidence is forty two " + strings.Repeat("appendix filler ", 180)
+	seedChatDoc(t, s, 61, 1, "Long cited source", content, "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"The answer is forty two [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"decisive followup","context_source_ids":[61,60]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) < 2 || out.Sources[0].ID != 61 || out.Sources[1].ID != 60 {
+		t.Fatalf("ordered sources=%+v", out.Sources)
+	}
+	if !strings.Contains(out.Sources[0].Snippet, "decisive followup evidence is forty two") {
+		t.Fatalf("current FTS evidence was discarded: %q", out.Sources[0].Snippet)
 	}
 }
 
@@ -412,7 +475,7 @@ func TestChatCarriesAuthorizedContextSourcesAcrossFollowUps(t *testing.T) {
 	}
 	if !strings.Contains(evidence, "Indiranagar office lease") ||
 		!strings.Contains(evidence, "September 1") ||
-		!strings.Contains(evidence, "Human-accepted intelligence") {
+		!strings.Contains(evidence, "Accepted extracted facts (automatic or reviewed)") {
 		t.Fatalf("context evidence missing: %s", evidence)
 	}
 	var out ChatResponse
@@ -517,6 +580,35 @@ func TestParseChatModelAnswerAcceptsNumericStringCitations(t *testing.T) {
 	}
 	if answer != "Supported [1]." || !grounded || len(citations) != 1 || citations[0] != 1 {
 		t.Fatalf("answer=%q citations=%v grounded=%t", answer, citations, grounded)
+	}
+}
+
+func TestParseChatModelAnswerAcceptsMathematicallyIntegralJSONCitations(t *testing.T) {
+	for _, raw := range []string{
+		`{"answer":"Supported.","citations":[1.0],"sufficient":true}`,
+		`{"answer":"Supported.","citations":[1e0],"sufficient":true}`,
+	} {
+		answer, citations, grounded, err := parseChatModelAnswer(raw, 1)
+		if err != nil {
+			t.Fatalf("raw=%s err=%v", raw, err)
+		}
+		if answer != "Supported. [1]" || !grounded || len(citations) != 1 || citations[0] != 1 {
+			t.Fatalf("raw=%s answer=%q citations=%v grounded=%t", raw, answer, citations, grounded)
+		}
+	}
+}
+
+func TestParseChatModelAnswerRejectsInvalidNumericCitations(t *testing.T) {
+	for _, raw := range []string{
+		`{"answer":"Unsupported.","citations":[1.5],"sufficient":true}`,
+		`{"answer":"Unsupported.","citations":[0.0],"sufficient":true}`,
+		`{"answer":"Unsupported.","citations":[2.0],"sufficient":true}`,
+		`{"answer":"Unsupported.","citations":[1e100],"sufficient":true}`,
+		`{"answer":"Unsupported.","citations":[NaN],"sufficient":true}`,
+	} {
+		if _, _, _, err := parseChatModelAnswer(raw, 1); err == nil {
+			t.Fatalf("invalid citation accepted: %s", raw)
+		}
 	}
 }
 

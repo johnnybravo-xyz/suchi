@@ -180,6 +180,14 @@ func SecFetchSite(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// OIDC bearer authentication resolves to an ordinary user principal,
+		// so principal kind alone cannot distinguish it from a cookie session.
+		// Authorization credentials are explicit and cannot be supplied by a
+		// cross-site form; keep both local Token and Bearer calls exempt.
+		if hasTokenAuthorization(r.Header.Get("Authorization")) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		p := auth.FromContext(r.Context())
 		// Only browser sessions rely on ambient cookies. Token, demo-token,
 		// anonymous, and other explicitly authenticated callers are outside the
@@ -199,6 +207,12 @@ func SecFetchSite(next http.Handler) http.Handler {
 		}
 		http.Error(w, "cross-site request refused", http.StatusForbidden)
 	})
+}
+
+func hasTokenAuthorization(header string) bool {
+	parts := strings.Fields(header)
+	return len(parts) == 2 && parts[1] != "" &&
+		(strings.EqualFold(parts[0], "Token") || strings.EqualFold(parts[0], "Bearer"))
 }
 
 // RequireAuth is a route-level guard for handlers that must have a

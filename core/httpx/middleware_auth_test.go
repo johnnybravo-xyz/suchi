@@ -42,20 +42,25 @@ func TestSecFetchSiteRejectsSiblingOriginCookieMutations(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	h := SecFetchSite(next)
 	tests := []struct {
-		name, method, site, kind string
-		want                     int
+		name, method, site, kind, authorization string
+		want                                    int
 	}{
-		{"same origin session", http.MethodPost, "same-origin", "user", http.StatusNoContent},
-		{"headerless session", http.MethodPatch, "", "user", http.StatusNoContent},
-		{"same site session", http.MethodPost, "same-site", "user", http.StatusForbidden},
-		{"cross site session", http.MethodDelete, "cross-site", "user", http.StatusForbidden},
-		{"same site token", http.MethodPut, "same-site", "token", http.StatusNoContent},
-		{"safe session read", http.MethodGet, "cross-site", "user", http.StatusNoContent},
+		{"same origin session", http.MethodPost, "same-origin", "user", "", http.StatusNoContent},
+		{"headerless session", http.MethodPatch, "", "user", "", http.StatusNoContent},
+		{"same site session", http.MethodPost, "same-site", "user", "", http.StatusForbidden},
+		{"cross site session", http.MethodDelete, "cross-site", "user", "", http.StatusForbidden},
+		{"same site token principal", http.MethodPut, "same-site", "token", "Token local", http.StatusNoContent},
+		{"OIDC bearer user principal", http.MethodPost, "cross-site", "user", "Bearer oidc-jwt", http.StatusNoContent},
+		{"local token user principal", http.MethodPatch, "same-site", "user", "Token local-token", http.StatusNoContent},
+		{"unrelated authorization scheme", http.MethodPost, "cross-site", "user", "Basic abc", http.StatusForbidden},
+		{"empty bearer credential", http.MethodPost, "cross-site", "user", "Bearer", http.StatusForbidden},
+		{"safe session read", http.MethodGet, "cross-site", "user", "", http.StatusNoContent},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, "/api/documents/1", nil)
 			req.Header.Set("Sec-Fetch-Site", tc.site)
+			req.Header.Set("Authorization", tc.authorization)
 			req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{Kind: tc.kind, UserID: 1}))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)

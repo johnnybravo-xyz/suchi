@@ -330,7 +330,8 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 	const extractor = "llm-classifier"
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM document_intelligence
-		WHERE document_id = ? AND intelligence_type = ? AND extractor = ? AND status = 'pending'
+		WHERE document_id = ? AND intelligence_type = ? AND extractor = ?
+		  AND (status = 'pending' OR (status = 'accepted' AND reviewed_at IS NULL))
 	`, docID, intelligence.TypeDate, extractor); err != nil {
 		return err
 	}

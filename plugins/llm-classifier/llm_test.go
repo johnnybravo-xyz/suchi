@@ -329,6 +329,120 @@ func TestDateAutoApplyCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestSequentialDateClassificationsReplaceAutomaticFactsAndPreserveReviews(t *testing.T) {
+	ctx := context.Background()
+	d, docID := openHandlerDocument(t, "Schedule", "Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7")
+	classify := func(now int64, dates []DateCandidate) {
+		t.Helper()
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7",
+				dates, true, 0.7, now)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	classify(1, []DateCandidate{
+		{Role: "service", Value: "2026-08-06", Precision: "day", RawText: "Aug 6", Evidence: "Old Aug 6", Confidence: 0.95},
+		{Role: "renewal", Value: "2026-08-08", Precision: "day", RawText: "Aug 8", Evidence: "Reviewed Aug 8", Confidence: 0.5},
+		{Role: "due", Value: "2026-08-09", Precision: "day", RawText: "Aug 9", Evidence: "Rejected Aug 9", Confidence: 0.5},
+	})
+	if _, err := d.Write.ExecContext(ctx, `
+		UPDATE document_intelligence SET status = 'accepted', reviewed_at = 10
+		WHERE document_id = ? AND sort_value = '2026-08-08';
+		UPDATE document_intelligence SET status = 'rejected', reviewed_at = 11
+		WHERE document_id = ? AND sort_value = '2026-08-09'
+	`, docID, docID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next extraction changes the automatic date and repeats both
+	// reviewed facts exactly. Exact-match conflicts must retain the human
+	// decision rather than reviving the model's proposed status.
+	classify(2, []DateCandidate{
+		{Role: "service", Value: "2026-08-07", Precision: "day", RawText: "Aug 7", Evidence: "New Aug 7", Confidence: 0.96},
+		{Role: "renewal", Value: "2026-08-08", Precision: "day", RawText: "Aug 8", Evidence: "Reviewed Aug 8", Confidence: 0.99},
+		{Role: "due", Value: "2026-08-09", Precision: "day", RawText: "Aug 9", Evidence: "Rejected Aug 9", Confidence: 0.99},
+	})
+	rows, err := d.Read.QueryContext(ctx, `
+		SELECT sort_value, status, reviewed_at, confidence
+		FROM document_intelligence WHERE document_id = ? ORDER BY sort_value
+	`, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type factState struct {
+		status     string
+		reviewedAt sql.NullInt64
+		confidence float64
+	}
+	got := map[string]factState{}
+	for rows.Next() {
+		var value string
+		var state factState
+		if err := rows.Scan(&value, &state.status, &state.reviewedAt, &state.confidence); err != nil {
+			t.Fatal(err)
+		}
+		got[value] = state
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := got["2026-08-06"]; exists {
+		t.Fatal("stale automatically accepted date survived changed extraction")
+	}
+	if state := got["2026-08-07"]; state.status != "accepted" || state.reviewedAt.Valid {
+		t.Fatalf("new automatic fact=%+v", state)
+	}
+	if state := got["2026-08-08"]; state.status != "accepted" || !state.reviewedAt.Valid || state.confidence != 0.5 {
+		t.Fatalf("human-accepted fact was overwritten: %+v", state)
+	}
+	if state := got["2026-08-09"]; state.status != "rejected" || !state.reviewedAt.Valid || state.confidence != 0.5 {
+		t.Fatalf("human-rejected fact was overwritten: %+v", state)
+	}
+
+	classify(3, nil)
+	var automatic, reviewed int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FILTER (WHERE reviewed_at IS NULL),
+		       COUNT(*) FILTER (WHERE reviewed_at IS NOT NULL)
+		FROM document_intelligence WHERE document_id = ?
+	`, docID).Scan(&automatic, &reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if automatic != 0 || reviewed != 2 {
+		t.Fatalf("after disappeared extraction automatic=%d reviewed=%d", automatic, reviewed)
+	}
+}
+
+func TestSequentialDateClassificationsRecomputeAutomaticStatusFromSettings(t *testing.T) {
+	ctx := context.Background()
+	d, docID := openHandlerDocument(t, "Schedule", "Date Aug 6")
+	candidate := []DateCandidate{{
+		Role: "service", Value: "2026-08-06", Precision: "day",
+		RawText: "Aug 6", Evidence: "Date Aug 6", Confidence: 0.95,
+	}}
+	classify := func(autoApply bool, threshold float64, want string) {
+		t.Helper()
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Date Aug 6",
+				candidate, autoApply, threshold, time.Now().Unix())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var status string
+		if err := d.Read.QueryRowContext(ctx, `SELECT status FROM document_intelligence WHERE document_id = ?`, docID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != want {
+			t.Fatalf("autoApply=%t threshold=%v status=%q want=%q", autoApply, threshold, status, want)
+		}
+	}
+	classify(true, 0.7, "accepted")
+	classify(false, 0.7, "pending")
+	classify(true, 0.99, "pending")
+	classify(true, 0.9, "accepted")
+}
+
 func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Statement", "credit card statement")
