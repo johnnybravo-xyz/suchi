@@ -108,10 +108,12 @@ async function mockAPI(page, options = {}) {
     else if (path === '/api/admin/settings/llm') {
       if (request.method() === 'POST') options.llmSettingsRequests?.push(request.postDataJSON())
       body = {
-        enabled: false,
-        active: false,
-        endpoint_url: 'http://host.suchi.local:11434/v1',
-        model: 'qwen2.5:7b',
+        enabled: options.llmEnabled ?? false,
+        active: options.llmActive ?? false,
+        endpoint_url: options.llmEndpoint || 'http://host.suchi.local:11434/v1',
+        model: options.llmModel || 'qwen2.5:7b',
+        has_api_key: options.llmHasAPIKey ?? false,
+        egress_ack: options.llmEgressAck ?? false,
         confidence_threshold: 0.7,
         date_auto_apply: options.dateAutoApply ?? true,
         archive_enabled: true,
@@ -478,6 +480,7 @@ test('separates completed archive administration from account settings', async (
   await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
   const testConnection = page.getByRole('button', { name: 'Test connection' })
+  await expect(page.getByRole('button', { name: 'Save model and options' })).toBeDisabled()
   await testConnection.click()
   await expect(page.getByText('Validated in 12 ms')).toBeVisible()
   await expect(page.getByText('Works without a model', { exact: true })).toBeVisible()
@@ -508,6 +511,86 @@ test('separates completed archive administration from account settings', async (
   await configuration.getByRole('link', { name: 'Archive overview' }).click()
   await overviewReload
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
+})
+
+test('separates model-free matching saves from validated model settings', async ({ page }) => {
+  const llmSettingsRequests = []
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    llmSettingsRequests,
+    llmHasAPIKey: true,
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  const saveMatching = page.getByRole('button', { name: 'Save matching options' })
+  await saveMatching.click()
+  await expect.poll(() => llmSettingsRequests.length).toBe(1)
+  expect(llmSettingsRequests[0]).toMatchObject({
+    enabled: false,
+    archive_enabled: true,
+    endpoint_url: 'http://host.suchi.local:11434/v1',
+    model: 'qwen2.5:7b',
+  })
+
+  const saveModel = page.getByRole('button', { name: 'Save model and options' })
+  const testConnection = page.getByRole('button', { name: 'Test connection' })
+  await expect(saveModel).toBeDisabled()
+  await testConnection.click()
+  await expect(page.getByText('Validated in 12 ms')).toBeVisible()
+  await expect(saveModel).toBeEnabled()
+
+  await page.getByLabel('Endpoint URL').fill('http://localhost:11435/v1')
+  await expect(page.getByText('Validated in 12 ms')).toHaveCount(0)
+  await expect(saveModel).toBeDisabled()
+  await testConnection.click()
+  await expect(saveModel).toBeEnabled()
+  await page.getByLabel('Model', { exact: true }).fill('qwen2.5:14b')
+  await expect(page.getByText('Validated in 12 ms')).toHaveCount(0)
+  await expect(saveModel).toBeDisabled()
+  await testConnection.click()
+  await expect(saveModel).toBeEnabled()
+  await page.getByLabel('API key (blank for local)').fill('replacement-key')
+  await expect(saveModel).toBeDisabled()
+  await testConnection.click()
+  await expect(saveModel).toBeEnabled()
+  await page.getByLabel('Clear the saved API key when saving. Config-file and environment keys are unchanged.').check()
+  await expect(saveModel).toBeDisabled()
+  await page.getByRole('button', { name: 'Hosted endpoint' }).click()
+  await page.getByLabel('Endpoint URL').fill('https://models.example.test/v1')
+  const egress = page.getByLabel('This endpoint is not local. I acknowledge document text will leave this machine.')
+  await egress.check()
+  await testConnection.click()
+  await expect(saveModel).toBeEnabled()
+  await egress.uncheck()
+  await expect(page.getByText('Validated in 12 ms')).toHaveCount(0)
+  await expect(saveModel).toBeDisabled()
+})
+
+test('preserves an enabled model when saving archive matching', async ({ page }) => {
+  const llmSettingsRequests = []
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    llmSettingsRequests,
+    llmEnabled: true,
+    llmActive: true,
+    llmEndpoint: 'https://models.example.test/v1',
+    llmModel: 'archive-model',
+    llmEgressAck: true,
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  await page.getByLabel(/Apply a matching document's filing at/).fill('0.85')
+  await page.getByRole('button', { name: 'Save matching options' }).click()
+  await expect.poll(() => llmSettingsRequests.length).toBe(1)
+  expect(llmSettingsRequests[0]).toMatchObject({
+    enabled: true,
+    endpoint_url: 'https://models.example.test/v1',
+    model: 'archive-model',
+    egress_ack: true,
+    archive_auto_threshold: 0.85,
+  })
 })
 
 test('mounts only the selected settings surface', async ({ page }) => {
@@ -1215,6 +1298,37 @@ test('groups metadata reviews by document', async ({ page }) => {
   await expect(page.getByText('Add “banking” tag?')).toBeVisible()
   await expect(page.getByText('Set correspondent to “HDFC Bank”?')).toBeVisible()
   await expect(page.getByText('document-change', { exact: true }).first()).toBeHidden()
+  if ((page.viewportSize()?.width || 0) > 1050) {
+    expect(Math.round((await page.locator('.approval-grid[data-approval-kind="workflow"]').boundingBox()).width)).toBeLessThanOrEqual(820)
+  }
+})
+
+test('lays out more than two workflow approvals in the shared responsive grid', async ({ page }, testInfo) => {
+  const approvalTasks = [17, 18, 19].map((docID, index) => ({
+    id: 90 + index, run_id: 30 + index, approval_id: 8, approval_name: 'document-change',
+    doc_id: docID, doc_title: `Review document ${index + 1}.pdf`, doc_has_thumbnail: false,
+    state_key: 'review', assignee: 'user:1', prompt: 'Review suggested document metadata',
+    choices: ['apply', 'reject'], status: 'open', created_at: 1780100000,
+    vars: { field: 'tag', value_id: 40 + index, label: `review-${index + 1}`, confidence: 0.74, source: 'archive', based_on: [2] },
+  }))
+  await mockAPI(page, { approvalTasks })
+  await page.goto('/#/tasks')
+
+  const grid = page.locator('.approval-grid[data-approval-kind="workflow"]')
+  await expect(grid).toHaveClass(/approval-grid-many/)
+  await expect(grid.locator('.approval-card')).toHaveCount(3)
+  const boxes = await grid.locator('.approval-card').evaluateAll(cards => cards.map(card => {
+    const box = card.getBoundingClientRect()
+    return { x: Math.round(box.x), width: Math.round(box.width) }
+  }))
+  if ((page.viewportSize()?.width || 0) > 1050) {
+    expect(boxes[0].x).not.toBe(boxes[1].x)
+    expect(Math.abs(boxes[0].width - boxes[1].width)).toBeLessThanOrEqual(1)
+  } else {
+    expect(new Set(boxes.map(box => box.x)).size).toBe(1)
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: `/tmp/suchi-workflow-approvals-${testInfo.project.name}.png`, fullPage: true })
 })
 
 test('shows affected document titles in rescan details', async ({ page }) => {
@@ -1391,6 +1505,11 @@ test('keeps search separate from scoped archive research and saves exact sources
   await page.getByRole('button', { name: 'Return to archive research' }).click()
   await expect(page.getByRole('dialog', { name: 'Archive research' })).toBeVisible()
   await expect(page.getByText('The lease renews in September')).toBeVisible()
+  await page.getByTitle('Close', { exact: true }).click()
+  const resumedRibbon = page.getByRole('button', { name: 'Return to archive research' })
+  await expect(resumedRibbon).toBeVisible()
+  await expect(resumedRibbon).toBeFocused()
+  await resumedRibbon.click()
   await page.getByRole('link', { name: /Save retrieved documents as a view/ }).click()
   await expect(page).toHaveURL(/#\/views\?new=1&ids=17$/)
   await expect(page.getByRole('dialog', { name: 'Create a view' })).toBeVisible()
@@ -1512,6 +1631,47 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   await expect(page.getByText('Nothing matched.')).toBeVisible()
   await ask('search scope')
   expect(chatRequests.at(-1).scope).toMatchObject({ query: 'lease', language: 'de' })
+
+  await page.getByLabel('Search or run a command').press('Escape')
+  await page.getByPlaceholder('Search text or use jd:, tag:, from:…').fill('')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page).toHaveURL(/#\/search\?lang=de$/)
+  await ask('cleared search scope')
+  expect(chatRequests.at(-1).scope).toEqual({
+    query: '', document_ids: [], jd_category_id: 0, sensitivity: '',
+    document_type_id: 0, tag_ids: [], correspondent_ids: [],
+    created_at_gte: null, created_at_lte: null, language: 'de',
+  })
+})
+
+test('keeps modified research anchors in the current drawer session', async ({ page }) => {
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests: [],
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const composer = page.getByRole('textbox', { name: 'Question', exact: true })
+  await composer.fill('show the evidence')
+  await composer.press('Enter')
+  const dialog = page.getByRole('dialog', { name: 'Archive research' })
+  await expect(page.getByRole('link', { name: 'Open cited document 1: Archive evidence.pdf' })).toBeVisible()
+
+  async function modifiedClick(locator, init) {
+    await locator.evaluate((element, eventInit) => {
+      element.addEventListener('click', event => event.preventDefault(), { once: true })
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...eventInit }))
+    }, init)
+    await expect(dialog).toBeVisible()
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    await expect(page.getByRole('button', { name: 'Return to archive research' })).toHaveCount(0)
+  }
+
+  await modifiedClick(page.getByRole('link', { name: 'Open cited document 1: Archive evidence.pdf' }), { button: 0, ctrlKey: true })
+  await modifiedClick(page.getByRole('link', { name: 'Open source 1: Archive evidence.pdf' }), { button: 1 })
+  await modifiedClick(page.getByRole('link', { name: /Save retrieved documents as a view/ }), { button: 0, shiftKey: true })
 })
 
 test('resets research boundaries and carries only bounded cited follow-up context', async ({ page }) => {
@@ -1584,13 +1744,30 @@ test('clearing an active research request invalidates it without restoring text'
   await expect(page.getByText('Request canceled.')).toHaveCount(0)
 })
 
-test('suppresses the global Omnibox shortcut behind modal dialogs', async ({ page }) => {
+test('makes the upload modal inert, focused, trapped, and dismissible', async ({ page }) => {
   await mockAPI(page, { setupCompletedAt: Math.floor(Date.now() / 1000), filingTreeChosen: true })
   await page.goto('/#/dashboard')
-  await page.getByRole('button', { name: 'Upload documents' }).click()
-  await expect(page.getByRole('dialog', { name: 'Upload documents' })).toBeVisible()
+  const opener = page.getByRole('button', { name: 'Upload documents' })
+  await opener.focus()
+  await opener.click()
+  const dialog = page.getByRole('dialog', { name: 'Upload documents' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toBeFocused()
+  await expect(page.locator('.shell')).toHaveAttribute('inert', '')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
   await expect(page.getByLabel('Search or run a command')).not.toBeFocused()
+  const close = page.getByRole('button', { name: 'Close upload' })
+  const drop = dialog.getByRole('button', { name: 'Upload documents' })
+  await expect(drop).toBeVisible()
+  await close.focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(drop).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(close).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(opener).toBeFocused()
+  await expect(page.locator('.shell')).not.toHaveAttribute('inert', '')
 })
 
 test('reviews dates in a responsive grid with visible actions', async ({ page }, testInfo) => {
@@ -1637,8 +1814,8 @@ test('reviews dates in a responsive grid with visible actions', async ({ page },
   await expect(page.getByText('Dates needing a quick check', { exact: true })).toBeVisible()
   expect(await page.getByText('Dates needing a quick check', { exact: true }).evaluate(element => getComputedStyle(element).textTransform)).toBe('none')
   await expect(page.getByText('3 of 4 dates selected')).toBeVisible()
-  const reviewGrid = page.locator('.intelligence-groups')
-  await expect(reviewGrid).toHaveClass(/review-grid/)
+  const reviewGrid = page.locator('.approval-grid[data-approval-kind="date"]')
+  await expect(reviewGrid).toHaveClass(/approval-grid-many/)
   const columnCount = await reviewGrid.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length)
   expect(columnCount).toBe((page.viewportSize()?.width || 0) > 1050 ? 2 : 1)
   const actions = page.getByRole('group', { name: 'Review selected dates' })
@@ -1672,7 +1849,13 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
       document_has_thumbnail: false, type: 'date', role: 'expiry',
       value: { date, precision: 'day' }, sort_value: date,
       raw_text: date, evidence_text: `Cover expires on ${date}.`,
-      confidence: 0.97, status: 'accepted',
+      confidence: 0.97, status: 'accepted', reviewed_at: 1780200000,
+    }, {
+      id: 82, document_id: 29, document_title: 'Automatic policy reminder',
+      document_has_thumbnail: false, type: 'date', role: 'renewal',
+      value: { date, precision: 'day' }, sort_value: date,
+      raw_text: date, evidence_text: `Renewal starts on ${date}.`,
+      confidence: 0.99, status: 'accepted', reviewed_at: null,
     }],
     savedViews: [{
       id: 4, name: 'Quarterly tax review',
@@ -1685,8 +1868,10 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Calendar' })).toBeVisible()
   await expect(page.getByText('Dates from your documents', { exact: true })).toBeVisible()
   await expect(page.getByText('Dates added automatically or approved in Approvals appear here. Each date links to the document it came from.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Home insurance renewal notice', exact: true })).toBeVisible()
+  await expect(page.getByText('Home insurance renewal notice', { exact: true }).first()).toBeVisible()
   await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
+  await expect(page.locator('.agenda-event').filter({ hasText: 'Home insurance renewal notice' }).getByText('Reviewed', { exact: true })).toBeVisible()
+  await expect(page.locator('.agenda-event').filter({ hasText: 'Automatic policy reminder' }).getByText('Automatic', { exact: true })).toBeVisible()
   const viewSelect = page.getByLabel('Document view')
   await expect(viewSelect).toContainText('Quarterly tax review')
   await expect(viewSelect).toHaveValue('')
@@ -1701,4 +1886,13 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   expect(intelligenceQueries.at(-1)).toMatchObject({ view_id: '4', type: 'date', status: 'accepted' })
   expect(intelligenceQueries.at(-1)).not.toHaveProperty('q')
   expect(intelligenceQueries.at(-1)).not.toHaveProperty('sensitivity')
+
+  await page.evaluate(() => { location.hash = '#/calendar?document_ids=29,30' })
+  await expect.poll(() => intelligenceQueries.filter(query => query.document_ids === '29,30').length).toBe(0)
+  expect(intelligenceQueries.at(-1)).toMatchObject({ view_id: '4' })
+
+  await viewSelect.selectOption('')
+  await expect.poll(() => intelligenceQueries.filter(query => query.document_ids === '29,30').length).toBe(1)
+  await page.evaluate(() => { location.hash = '#/calendar?document_ids=31' })
+  await expect.poll(() => intelligenceQueries.filter(query => query.document_ids === '31').length).toBe(1)
 })

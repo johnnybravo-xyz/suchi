@@ -165,7 +165,10 @@
     })
   }
 
-  function closeForNavigation() {
+  function closeForNavigation(event) {
+    // Real anchors keep their native new-tab behavior. Only a plain primary
+    // activation navigates this tab and therefore needs to park the drawer.
+    if (event?.defaultPrevented || event?.button !== 0 || event?.metaKey || event?.ctrlKey || event?.shiftKey || event?.altKey) return
     onPark?.()
   }
 

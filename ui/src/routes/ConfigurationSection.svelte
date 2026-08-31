@@ -225,10 +225,30 @@
     return { ...llm, enabled, api_key: llm.api_key || '' }
   }
 
-  function setLLMMode(mode) {
-    llmMode = mode
+  function matchingPayload() {
+    return {
+      enabled: !!llmStatus?.enabled,
+      endpoint_url: llmStatus?.endpoint_url || '',
+      model: llmStatus?.model || '',
+      api_key: '',
+      clear_api_key: false,
+      egress_ack: !!llmStatus?.egress_ack,
+      confidence_threshold: llmStatus?.confidence_threshold ?? 0.7,
+      date_auto_apply: llmStatus?.date_auto_apply ?? true,
+      archive_enabled: llm.archive_enabled,
+      archive_auto_threshold: Number(llm.archive_auto_threshold),
+      archive_review_threshold: Number(llm.archive_review_threshold),
+    }
+  }
+
+  function invalidateLLMTest() {
     llmTestResult = null
     llmTestError = ''
+  }
+
+  function setLLMMode(mode) {
+    llmMode = mode
+    invalidateLLMTest()
     if (mode === 'local' && (!llm.endpoint_url || !isLocalEndpoint(llm.endpoint_url))) {
       llm.endpoint_url = 'http://host.suchi.local:11434/v1'
       if (!llm.model) llm.model = 'qwen2.5:7b'
@@ -242,11 +262,24 @@
   function setClearAPIKey(event) {
     llm.clear_api_key = event.currentTarget.checked
     if (llm.clear_api_key) llm.api_key = ''
+    invalidateLLMTest()
   }
 
   async function saveClassifier(enabled) {
     const result = await saveLLMSettings(llmPayload(enabled))
     await loadLLM()
+    invalidateLLMTest()
+    return result
+  }
+
+  async function saveMatching() {
+    const result = await saveLLMSettings(matchingPayload())
+    llmStatus = {
+      ...llmStatus,
+      archive_enabled: llm.archive_enabled,
+      archive_auto_threshold: Number(llm.archive_auto_threshold),
+      archive_review_threshold: Number(llm.archive_review_threshold),
+    }
     return result
   }
 
@@ -413,8 +446,6 @@
     {:else if section === 'llm'}
       <h3>Classification, research, and extracted facts</h3>
       <p class="wiz-p">Suchi can learn from documents already filed in your archive without a model. An optional model fills unresolved details, extracts dates for Calendar or review, and powers <b>Archive research</b> for authorized users.</p>
-      <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
-
       <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
@@ -436,11 +467,12 @@
         <p class="wiz-p sub" style="font-size:.8rem">Use the OpenAI-compatible base URL from your provider. Suchi sends extracted text, never the original file.</p>
       {/if}
       <div class="field"><label for="l-url">Endpoint URL</label>
-        <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} /></div>
+        <input id="l-url" class="input mono" placeholder="http://host.suchi.local:11434/v1" bind:value={llm.endpoint_url} oninput={invalidateLLMTest} /></div>
       <div class="field"><label for="l-model">Model</label>
-        <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} /></div>
+        <input id="l-model" class="input mono" placeholder="qwen2.5:7b" bind:value={llm.model} oninput={invalidateLLMTest} /></div>
       <div class="field"><label for="l-key">API key (blank for local)</label>
         <input id="l-key" class="input mono" type="password" bind:value={llm.api_key} autocomplete="off"
+               oninput={invalidateLLMTest}
                disabled={llm.clear_api_key}
                placeholder={llmStatus?.has_api_key ? 'stored key — leave blank to keep' : ''} /></div>
       {#if llmStatus?.has_api_key}
@@ -448,7 +480,7 @@
           Clear the saved API key when saving. Config-file and environment keys are unchanged.</label>
       {/if}
       {#if llmIsRemote}
-        <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} />
+        <label class="wiz-check attn"><input type="checkbox" bind:checked={llm.egress_ack} onchange={invalidateLLMTest} />
           This endpoint is not local. I acknowledge document text will leave this machine.</label>
       {/if}
 
@@ -473,13 +505,14 @@
 
       <section class="model-options" aria-labelledby="model-options-title">
         <h4 id="model-options-title">Choose what Suchi can handle automatically</h4>
-        <p class="options-intro">Local matching works without a model. Test the connection before choosing the model-driven options. Save both groups together when you are done.</p>
+        <p class="options-intro">Local matching and model-driven handling are saved separately, so changing archive matching never turns on a model.</p>
 
-        {#if llm.archive_enabled}
-          <div class="option-group independent">
-            <span class="option-kind">Works without a model</span>
-            <h5>Similar-document matching</h5>
-            <p>Uses only documents already filed in this archive. No model or external connection is required.</p>
+        <div class="option-group independent">
+          <span class="option-kind">Works without a model</span>
+          <h5>Similar-document matching</h5>
+          <p>Uses only documents already filed in this archive. Saving these options keeps the model {llmStatus?.enabled ? 'enabled' : 'disabled'}.</p>
+          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
+          {#if llm.archive_enabled}
             <div class="field">
               <label for="archive-auto">Apply a matching document's filing at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
               <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
@@ -491,13 +524,17 @@
               <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
                      bind:value={llm.archive_review_threshold} />
             </div>
+          {/if}
+          <div class="toolbar option-save">
+            <button class="btn primary sm" disabled={busy || llmTesting}
+                    onclick={() => saveAnd(saveMatching, 'Similar-document matching saved')}>Save matching options</button>
           </div>
-        {/if}
+        </div>
 
         <div class="option-group model-driven">
           <span class="option-kind">Uses the configured model</span>
           <h5>Model suggestions</h5>
-          <p>After the connection test succeeds, choose when model-proposed filing details and dates can skip review.</p>
+          <p>Test the current endpoint, model, and key before saving when model-proposed filing details and dates can skip review.</p>
           <div class="field">
             <label for="l-confidence">Apply model suggestions at · {Number(llm.confidence_threshold).toFixed(2)}</label>
             <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
@@ -509,7 +546,7 @@
         </div>
 
         <div class="toolbar option-save">
-          <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
+          <button class="btn primary sm" disabled={busy || llmTesting || !llmTestResult || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                   onclick={() => saveAnd(
                     () => saveClassifier(true),
                     'Model and automatic handling saved'

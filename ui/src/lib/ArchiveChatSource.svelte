@@ -6,7 +6,7 @@
 </script>
 
 <a id={`research-source-${turnID}-${item.number}`} class="source-card" class:cited
-   href={`#/doc/${item.source.id}`} onclick={() => onOpen?.()}
+   href={`#/doc/${item.source.id}`} onclick={(event) => onOpen?.(event)}
    aria-label={`Open source ${item.number}: ${item.source.title || `Document #${item.source.id}`}`}>
   <span class="source-number">[{item.number}]</span>
   <span class="source-copy">

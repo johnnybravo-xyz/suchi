@@ -294,11 +294,11 @@
         </button>
       </div>
 
-      <div class="intelligence-groups" class:review-grid={reviewGroups.length > 2}>
+      <div class="approval-grid" class:approval-grid-many={reviewGroups.length > 2} data-approval-kind="date">
         {#each reviewGroups as group (group.documentID)}
           {@const groupSelection = selectionState(group.candidates)}
-          <article class="intelligence-card">
-            <header class="intelligence-document">
+          <article class="approval-card intelligence-card">
+            <header class="approval-card-header intelligence-document">
               <input type="checkbox" aria-label={`Select every candidate from ${group.title || `document ${group.documentID}`}`}
                      checked={groupSelection.all} use:indeterminate={groupSelection.some}
                      onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
@@ -315,7 +315,7 @@
                 <small>{group.candidates.length} date{group.candidates.length === 1 ? '' : 's'} to check</small>
               </div>
             </header>
-            <div class="intelligence-candidates">
+            <div class="approval-card-body intelligence-candidates">
               {#each group.candidates as candidate (candidate.id)}
                 <label class="intelligence-candidate">
                   <input type="checkbox" checked={intelligenceSelection.has(candidate.id)}
@@ -341,12 +341,13 @@
   {#if tasks.length === 0 && jobs.length === 0 && intelligence.length === 0}
     <div class="empty"><Icon name="tasks" size={56} /><b>Nothing needs you.</b><span>The archive is running itself.</span></div>
   {:else if tasks.length > 0}
+    {@const workflowGroups = approvalGroups(tasks)}
     <h3 style="font-size:.9rem;color:var(--muted);margin:14px 0 8px">Approvals</h3>
-    <div class="approval-list">
-      {#each approvalGroups(tasks) as group (group.key)}
-        <div class="card task-card">
+    <div class="approval-grid workflow-approval-grid" class:approval-grid-many={workflowGroups.length > 2} data-approval-kind="workflow">
+      {#each workflowGroups as group (group.key)}
+        <article class="approval-card workflow-approval-card">
           {#if group.document}
-            <div class="document-header">
+            <header class="approval-card-header document-header">
               <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail}
                  href={`#/doc/${group.document.doc_id}`}
                  aria-label={`Open ${group.document.doc_title || `document ${group.document.doc_id}`}`}>
@@ -366,10 +367,15 @@
                   {#if group.tasks.length > 1}<span>{group.tasks.length} suggestions</span>{/if}
                 </div>
               </div>
-            </div>
+            </header>
             {#if groupContext(group)}<div class="group-context">{groupContext(group)}</div>{/if}
+          {:else}
+            <header class="approval-card-header operation-header">
+              <span class="operation-mark"><Icon name="refresh" size={17} /></span>
+              <span><small>Archive operation</small><b>{group.tasks[0]?.approval_name === 'rescan-proposal' ? 'Processing update' : 'Approval request'}</b></span>
+            </header>
           {/if}
-          <div class="decision-list">
+          <div class="approval-card-body decision-list">
             {#each group.tasks as t (t.id)}
               {@const dl = deadline(t)}
               {@const targets = rescanTargets(t)}
@@ -422,7 +428,7 @@
               </section>
             {/each}
           </div>
-        </div>
+        </article>
       {/each}
     </div>
   {/if}
@@ -460,9 +466,12 @@
   .intelligence-head p { max-width: 780px; margin: 5px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
   .intelligence-head .review-guidance { color: var(--ink); font-size: .76rem; }
   .select-all { display: flex; align-items: center; gap: 7px; flex: none; font-size: .75rem; font-weight: 650; cursor: pointer; }
-  .intelligence-groups { display: grid; gap: 12px; padding: 14px; }
-  .intelligence-groups.review-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-  .intelligence-card { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
+  .approval-grid { display: grid; max-width: 820px; gap: 12px; align-items: start; }
+  .intelligence-review .approval-grid { padding: 14px; }
+  .approval-grid.approval-grid-many { max-width: none; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .approval-card { min-width: 0; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--bg); }
+  .approval-card-header { border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .approval-card-body { background: var(--bg); }
   .intelligence-document { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 11px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .intelligence-document > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
   .intelligence-document a { overflow: hidden; color: var(--ink); font-size: .84rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -482,23 +491,27 @@
   .intelligence-actions { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); background: color-mix(in srgb, var(--surface) 96%, transparent); box-shadow: 0 8px 18px color-mix(in srgb, var(--ink) 7%, transparent); backdrop-filter: blur(8px); }
   .intelligence-actions > span { margin-right: auto; color: var(--muted); font-size: .72rem; }
   .intelligence-actions > span b { color: var(--ink); }
-  .approval-list { display:flex;flex-direction:column;gap:12px;margin-bottom:22px }
-  .document-header { display:flex;gap:14px;align-items:center }
+  .workflow-approval-grid { margin-bottom:22px }
+  .document-header { display:flex;gap:11px;align-items:center;padding:11px 13px }
   .document-identity { flex:1;min-width:0 }
   .document-identity > a { color:var(--ink);font-weight:650;overflow-wrap:anywhere }
   .document-meta { display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:var(--muted);font-size:.76rem;margin-top:6px }
   .decision { font-size:1rem;line-height:1.35;overflow-wrap:anywhere }
   .task-thumb {
-    display:flex;align-items:center;justify-content:center;flex:0 0 64px;width:64px;aspect-ratio:3 / 4;
+    display:flex;align-items:center;justify-content:center;flex:0 0 46px;width:46px;aspect-ratio:3 / 4;
     border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface-2)
   }
   .task-thumb img { width:100%;height:100%;object-fit:cover;display:block }
   .task-thumb.placeholder { color:var(--faint) }
-  .group-context { color:var(--muted);font-size:.82rem;line-height:1.45;margin-top:10px }
-  .decision-list { margin-top:14px;border-top:1px solid var(--line) }
+  .group-context { padding:9px 13px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.78rem;line-height:1.45;background:var(--surface) }
+  .decision-list { padding:0 13px }
   .decision-row { padding:15px 0;border-bottom:1px solid var(--line) }
-  .decision-row:last-child { padding-bottom:0;border-bottom:0 }
-  .task-card > .decision-list:first-child { margin-top:0;border-top:0 }
+  .decision-row:last-child { border-bottom:0 }
+  .operation-header { display:flex;align-items:center;gap:10px;padding:11px 13px }
+  .operation-header > span:last-child { display:flex;flex-direction:column;gap:2px }
+  .operation-header small { color:var(--faint);font-size:.61rem }
+  .operation-header b { font-size:.82rem }
+  .operation-mark { display:grid;place-items:center;width:35px;height:35px;border:1px solid var(--line);border-radius:8px;color:var(--accent);background:var(--bg) }
   .review-context, .rescan-context { color:var(--muted);font-size:.84rem;line-height:1.45;margin-top:10px }
   .evidence { display:flex;gap:6px 14px;flex-wrap:wrap;color:var(--muted);font-size:.78rem;margin-top:5px }
   .choices { margin-top:14px }
@@ -511,10 +524,10 @@
   .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
   .rescan-targets a { color:var(--accent) }
   @media (max-width: 1050px) {
-    .intelligence-groups.review-grid { grid-template-columns: 1fr; }
+    .approval-grid.approval-grid-many { grid-template-columns: 1fr; }
   }
   @media (max-width: 560px) {
-    .task-thumb { flex-basis:52px;width:52px }
+    .task-thumb { flex-basis:42px;width:42px }
     .intelligence-head { align-items: flex-start; flex-direction: column; }
     .intelligence-actions { flex-wrap: wrap; }
     .intelligence-actions > span { width: 100%; }

@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, getDemoAnonToken, getToken, chatStatus } from './lib/api.js'
@@ -32,6 +33,8 @@
 
   let mobileNavOpen = $state(false)
   let uploadOpen = $state(false)
+  let uploadDialog = $state(null)
+  let uploadReturnFocus = null
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
@@ -45,6 +48,8 @@
   let ChatDrawer = $state(null)
   let chatRequest = $state({ id: 0, question: '' })
   let chatReturnFocus = $state(null)
+  let chatRibbon = $state(null)
+  let chatOpenedFromRibbon = $state(false)
   let visibleChatScope = $state(null)
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
   let openAreas = $state(loadOpenAreas())
@@ -270,8 +275,46 @@
     refreshVisibleData()
   }
 
+  function openUpload() {
+    uploadReturnFocus = document.activeElement
+    uploadOpen = true
+    queueMicrotask(() => uploadDialog?.focus())
+  }
+
+  function closeUpload({ refresh = false } = {}) {
+    if (!uploadOpen) return
+    uploadOpen = false
+    if (refresh) refreshVisibleData()
+    queueMicrotask(() => uploadReturnFocus?.focus?.())
+  }
+
+  function onUploadKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeUpload({ refresh: true })
+      return
+    }
+    if (e.key !== 'Tab' || !uploadDialog) return
+    const focusable = [...uploadDialog.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]):not([hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    if (!focusable.length) {
+      e.preventDefault()
+      uploadDialog.focus()
+      return
+    }
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === uploadDialog)) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
   function onKey(e) {
-    if (e.key === 'Escape') { mobileNavOpen = false; uploadOpen = false }
+    if (e.key === 'Escape') mobileNavOpen = false
   }
 
   function currentChatScope() {
@@ -289,6 +332,7 @@
   async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
     chatOpen = true
     chatParked = false
+    chatOpenedFromRibbon = false
     chatReturnFocus = returnFocus
     chatRequest = { id: chatRequest.id + 1, question, scope }
     if (!ChatDrawer) {
@@ -299,17 +343,21 @@
 
   function closeArchiveChat() {
     chatOpen = false
-    chatParked = false
+    chatParked = chatOpenedFromRibbon
+    chatOpenedFromRibbon = false
   }
 
   function parkArchiveChat() {
     chatOpen = false
     chatParked = true
+    chatOpenedFromRibbon = false
   }
 
   function resumeArchiveChat() {
     chatOpen = true
     chatParked = false
+    chatOpenedFromRibbon = true
+    chatReturnFocus = () => chatRibbon?.focus()
   }
 
   function askSelectedDocuments(ids) {
@@ -324,7 +372,10 @@
     await signOut()
   }
 
-  $effect(() => { route.path; mobileNavOpen = false; uploadOpen = false; visibleChatScope = null })
+  $effect(() => {
+    route.path
+    untrack(() => { mobileNavOpen = false; closeUpload(); visibleChatScope = null })
+  })
   const page = $derived(route.parts[0] || 'dashboard')
   const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
   const jdCategories = $derived(jdTree.flatMap((area) => area.categories))
@@ -367,7 +418,7 @@
     if (page === 'calendar' && !canReviewIntelligence) go('#/dashboard')
   })
   const COMMANDS = $derived([
-    { label: 'Upload documents',       ico: 'upload', run: () => (uploadOpen = true) },
+    { label: 'Upload documents',       ico: 'upload', run: openUpload },
     { label: session.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
       ico: session.theme === 'dark' ? 'sun' : 'moon',
       run: () => setTheme(session.theme === 'dark' ? 'light' : 'dark') },
@@ -392,7 +443,7 @@
 {:else if !session.user}
   <Login onSignedIn={() => { boot(); go('#/dashboard') }} />
 {:else}
-  <div class="shell" inert={chatOpen}>
+  <div class="shell" inert={chatOpen || uploadOpen}>
     {#if mobileNavOpen}
       <button class="mobile-nav-veil" aria-label="Close navigation" onclick={() => (mobileNavOpen = false)}></button>
     {/if}
@@ -467,14 +518,14 @@
           ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
           : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />
         {#if chatParked && ChatDrawer}
-          <button class="research-ribbon" onclick={resumeArchiveChat}
+          <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}
                   aria-label="Return to archive research" title="Return to archive research">
             <span class="research-ribbon-dot"></span>
             <Icon name="ask" size={14} />
             <span class="research-ribbon-label">Research active</span>
           </button>
         {/if}
-        <button class="btn primary topbar-upload" onclick={() => (uploadOpen = true)} aria-label="Upload documents">
+        <button class="btn primary topbar-upload" onclick={openUpload} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
         {#if demoMode}
@@ -523,12 +574,13 @@
   </div>
 
   {#if uploadOpen}
-    <div class="modal-veil" onclick={() => (uploadOpen = false)} role="presentation">
+    <div class="modal-veil" onclick={() => closeUpload({ refresh: true })} role="presentation">
       <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Upload documents" tabindex="-1">
+      <div class="modal" bind:this={uploadDialog} onclick={(e) => e.stopPropagation()} onkeydown={onUploadKey}
+           role="dialog" aria-modal="true" aria-label="Upload documents" tabindex="-1">
         <div class="modal-head">
           <h3>Upload</h3>
-          <button class="btn sm" onclick={() => { uploadOpen = false; refreshVisibleData() }}
+          <button class="btn sm" onclick={() => closeUpload({ refresh: true })}
                   title="Close upload" aria-label="Close upload"><Icon name="x" size={13} /></button>
         </div>
         <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories }} />

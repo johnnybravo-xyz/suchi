@@ -22,6 +22,14 @@
   const queryAssistant = createQueryAssistant((next) => (suggestions = next))
   onDestroy(queryAssistant.dispose)
 
+  function publishEmptyScope() {
+    onScopeChange?.({
+      label: lang ? 'Current search filters' : 'All archive', query: '', document_ids: [], jd_category_id: 0,
+      sensitivity: '', document_type_id: 0, tag_ids: [], correspondent_ids: [],
+      created_at_gte: null, created_at_lte: null, language: lang,
+    })
+  }
+
   // Load the language facet once on mount so the filter chips have
   // observed codes + counts to render.
   ;(async () => {
@@ -34,7 +42,11 @@
   async function run() {
     const version = ++runVersion
     const query = q.trim()
-    if (!query) { hits = []; count = 0; searched = false; return }
+    if (!query) {
+      hits = []; count = 0; searched = false
+      publishEmptyScope()
+      return
+    }
     const requestPage = page
     const requestLang = lang
     loading = true; err = ''; searched = true
@@ -109,10 +121,11 @@
       else {
         runVersion++
         hits = []; count = 0; searched = false; loading = false; err = ''
+        publishEmptyScope()
       }
     }
   })
-  queueMicrotask(() => { if (q) run() })  // initial query from the URL
+  queueMicrotask(() => { if (q) run(); else publishEmptyScope() })  // initial query from the URL
   const pages = $derived(Math.max(1, Math.ceil(count / 25)))
 </script>
 

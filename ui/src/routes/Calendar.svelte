@@ -56,6 +56,10 @@
     return { document_ids: initialDocumentIDs }
   }
 
+  function dateOriginLabel(event) {
+    return event.reviewed_at ? 'Reviewed' : 'Automatic'
+  }
+
   async function load() {
     const version = ++loadVersion
     loading = true
@@ -86,17 +90,20 @@
 
   function moveMonth(offset) {
     month = new Date(month.getFullYear(), month.getMonth() + offset, 1)
-    load()
   }
 
   function useCurrentMonth() {
     const now = new Date()
     month = new Date(now.getFullYear(), now.getMonth(), 1)
-    load()
   }
 
   loadViews()
-  load()
+  $effect(() => {
+    // Reload when the visible Calendar filters change. A saved view takes
+    // precedence over direct document IDs.
+    `${month.getTime()}:${role}:${selectedViewID || `documents:${initialDocumentIDs}`}`
+    load()
+  })
 </script>
 
 <div class="calendar-page">
@@ -109,14 +116,14 @@
     <div class="calendar-filters">
       <label>
         <span>Document view</span>
-        <select class="input" bind:value={selectedViewID} onchange={load} autocomplete="off">
+        <select class="input" bind:value={selectedViewID} autocomplete="off">
           <option value="">All accessible documents</option>
           {#each views as view (view.id)}<option value={view.id}>{view.name}</option>{/each}
         </select>
       </label>
       <label>
         <span>Date role</span>
-        <select class="input" bind:value={role} onchange={load}>
+        <select class="input" bind:value={role}>
           <option value="">Every role</option>
           {#each DATE_ROLES as value}<option value={value}>{intelligenceRoleLabel(value)}</option>{/each}
         </select>
@@ -149,6 +156,7 @@
                 <a href={`#/doc/${event.document_id}`} title={`${intelligenceRoleLabel(event.role)} · ${event.document_title}`}>
                   <span class={`role-dot role-${event.role}`}></span>
                   <span>{event.document_title || `Document #${event.document_id}`}</span>
+                  <small class="date-origin">{dateOriginLabel(event)}</small>
                 </a>
               {/each}
               {#if dayEvents.length > 3}<small>+{dayEvents.length - 3} more</small>{/if}
@@ -173,7 +181,7 @@
             <a class="agenda-event" href={`#/doc/${event.document_id}`}>
               <span class="agenda-date"><b>{formatArchiveDate(intelligenceDateValue(event), { day: 'numeric' })}</b><small>{formatArchiveDate(intelligenceDateValue(event), { month: 'short' })}</small></span>
               <span class="agenda-copy">
-                <span><strong>{intelligenceRoleLabel(event.role)}</strong><small>{Math.round(Number(event.confidence || 0) * 100)}% · {event.value?.precision || 'day'}</small></span>
+                <span><strong>{intelligenceRoleLabel(event.role)}</strong><small>{Math.round(Number(event.confidence || 0) * 100)}% · {event.value?.precision || 'day'}</small><em class="date-origin">{dateOriginLabel(event)}</em></span>
                 <b>{event.document_title || `Document #${event.document_id}`}</b>
                 <span>“{event.evidence_text}”</span>
                 <small>{formatArchiveDate(intelligenceDateValue(event), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small>
@@ -216,7 +224,9 @@
   .day-events { display: grid; gap: 4px; margin-top: 4px; }
   .day-events a { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 3px 5px; border-radius: 5px; background: var(--tint); color: var(--ink); font-size: .63rem; text-decoration: none; }
   .day-events a span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .day-events a .date-origin { margin-left: auto; }
   .day-events small { color: var(--faint); font-size: .59rem; }
+  .date-origin { flex: none; padding: 1px 4px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .55rem; font-style: normal; font-weight: 650; line-height: 1.4; }
   .role-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--accent); }
   .role-expiry, .role-due { background: var(--danger); }
   .role-issued, .role-start { background: var(--success); }
