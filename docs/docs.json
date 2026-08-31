@@ -24,7 +24,7 @@
           },
           {
             "group": "Getting started",
-            "pages": ["getting-started", "web-app"]
+            "pages": ["getting-started", "web-app", "document-dates"]
           },
           {
             "group": "Reference",
