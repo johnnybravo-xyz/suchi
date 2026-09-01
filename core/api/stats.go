@@ -45,10 +45,16 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	// pending queue.
 	isAdmin := p.Role == "admin"
 
-	groups, err := s.principalGroups(ctx, p.UserID)
-	if err != nil {
-		s.serverErr(w, "stats.load_groups", err)
-		return
+	var (
+		groups []int64
+		err    error
+	)
+	if !isAdmin {
+		groups, err = s.principalGroups(ctx, p.UserID)
+		if err != nil {
+			s.serverErr(w, "stats.load_groups", err)
+			return
+		}
 	}
 
 	var out StatsResponse
@@ -131,7 +137,7 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		canReviewIntelligence = capabilities.Has(authz.CapArchiveIntelligence)
 	}
 	if canReviewIntelligence {
-		out.PendingIntelligence, err = intelligenceCountForPrincipal(ctx, s, p, "pending")
+		out.PendingIntelligence, err = intelligenceCountForPrincipal(ctx, s, p, groups, "pending")
 		if err != nil {
 			s.serverErr(w, "stats.intelligence", err)
 			return

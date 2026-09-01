@@ -102,11 +102,16 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	if body.Method == "trash" || body.Method == "delete" {
 		requiredPerm = authz.PermDelete
 	}
+	decisions, err := s.documentPermissionDecisions(r.Context(), p, body.Documents, requiredPerm)
+	if err != nil {
+		s.serverErr(w, "bulk_edit.authorize", err)
+		return
+	}
 	results := make([]BulkEditItemResult, len(body.Documents))
 	authorized := make([]int64, 0, len(body.Documents))
 	for i, id := range body.Documents {
 		results[i].ID = id
-		if !s.canBulkEditDoc(r, id, requiredPerm) {
+		if !decisions[id] {
 			results[i].Code = "forbidden"
 			continue
 		}
@@ -117,7 +122,7 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	// Mark each id ok=true after the tx commits — a per-id error
 	// inside the tx aborts the whole batch by design; partial writes
 	// would leave the archive in an unrecoverable half-state.
-	err := s.applyBulkEdit(r, body.Method, body.Parameters, authorized)
+	err = s.applyBulkEdit(r, body.Method, body.Parameters, authorized)
 	if err != nil {
 		if errors.Is(err, errBadMethod) {
 			s.writeError(w, http.StatusBadRequest, "bad_method",
@@ -157,26 +162,6 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 		Applied: applied, Results: results,
 	})
 }
-
-// canBulkEditDoc keeps the ACL rule in authorize while allowing each bulk
-// method to select the same permission as its single-document counterpart.
-func (s *Server) canBulkEditDoc(r *http.Request, id int64, perm authz.Perm) bool {
-	return s.authorize(&discardResponseWriter{}, r,
-		auth.FromContext(r.Context()), authz.KindDocument, id, perm)
-}
-
-// discardResponseWriter absorbs writes so authorize()'s deny-branch
-// (which formats a 403 JSON) doesn't leak onto the real writer.
-type discardResponseWriter struct{ hdr http.Header }
-
-func (d *discardResponseWriter) Header() http.Header {
-	if d.hdr == nil {
-		d.hdr = http.Header{}
-	}
-	return d.hdr
-}
-func (d *discardResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (d *discardResponseWriter) WriteHeader(int)             {}
 
 var (
 	errBadMethod = errors.New("bulk_edit: unknown method")

@@ -3,6 +3,7 @@ package httpx
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,17 +66,20 @@ func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.Registry, promhttp.HandlerOpts{Registry: m.Registry})
 }
 
-// HTTPInstrument records per-request counters. Route label is a route
-// TEMPLATE ("/api/documents/{id}") to avoid cardinality blow-up; the
-// caller supplies it by wrapping per-registered pattern.
-func (m *Metrics) HTTPInstrument(route string) Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, status: 200}
-			next.ServeHTTP(sw, r)
-			m.HTTPRequests.WithLabelValues(r.Method, route, strconv.Itoa(sw.status)).Inc()
-			m.HTTPDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
-		})
-	}
+// HTTPInstrument records bounded ServeMux route patterns.
+func (m *Metrics) HTTPInstrument(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(sw, r)
+		route := r.Pattern
+		if _, path, ok := strings.Cut(route, " "); ok {
+			route = path
+		}
+		if route == "" {
+			route = "unmatched"
+		}
+		m.HTTPRequests.WithLabelValues(r.Method, route, strconv.Itoa(sw.status)).Inc()
+		m.HTTPDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+	})
 }

@@ -681,7 +681,7 @@ func runServe() int {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           buildHTTPHandler(mux, cfg, authChain, demoRL, log),
+		Handler:           buildHTTPHandler(mux, cfg, authChain, demoRL, m, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

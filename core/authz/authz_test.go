@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -178,6 +179,153 @@ func TestACLAuthorizerOverlappingGroupGrantsUseBitwiseUnion(t *testing.T) {
 	}
 	if err := authorizer.Can(ctx, principal, authz.KindDocument, docID, authz.PermChange); err == nil {
 		t.Fatal("two view grants must not add up to change permission")
+	}
+}
+
+func TestACLAuthorizerCanDocumentsMatchesIndividualDecisions(t *testing.T) {
+	ctx := context.Background()
+	d := setup(t, ctx)
+	alice := seedUser(t, ctx, d, "alice-batch@x", "member")
+	bob := seedUser(t, ctx, d, "bob-batch@x", "member")
+	bobDoc := seedDoc(t, ctx, d, bob, "bob owned")
+	directDoc := seedDoc(t, ctx, d, alice, "direct grant")
+	unionDoc := seedDoc(t, ctx, d, alice, "union grant")
+	deniedDoc := seedDoc(t, ctx, d, alice, "denied")
+
+	store := authz.NewStore(d)
+	group, err := store.CreateGroup(ctx, "batch-reviewers", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddMember(ctx, group.ID, bob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Grant(ctx, alice, authz.Grant{
+		ObjectKind: string(authz.KindDocument), ObjectID: directDoc,
+		PrincipalKind: "user", PrincipalID: bob,
+		PermBits: int(authz.PermView | authz.PermChange),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Raw legacy rows can split a requested mask across principals.
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id,
+		                        perm_bits, created_at, created_by)
+		VALUES ('document', ?, 'user', ?, ?, 0, ?),
+		       ('document', ?, 'group', ?, ?, 0, ?)
+	`, unionDoc, bob, int(authz.PermView), alice,
+		unionDoc, group.ID, int(authz.PermChange), alice); err != nil {
+		t.Fatal(err)
+	}
+
+	authorizer := authz.ACLAuthorizer{DB: d}
+	principal := authz.Principal{
+		UserID: bob, Role: "member", Groups: []int64{group.ID},
+	}
+	missingID := deniedDoc + 10_000
+	ids := []int64{bobDoc, directDoc, unionDoc, deniedDoc, missingID, directDoc}
+	for _, want := range []authz.Perm{authz.PermChange, authz.PermView | authz.PermChange} {
+		decisions, err := authorizer.CanDocuments(ctx, principal, ids, want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			err := authorizer.Can(ctx, principal, authz.KindDocument, id, want)
+			allowed := err == nil
+			var denied *authz.ErrDenied
+			if err != nil && !errors.As(err, &denied) {
+				t.Fatalf("individual decision for %d failed: %v", id, err)
+			}
+			if decisions[id] != allowed {
+				t.Errorf("want=%d document %d batch=%t individual=%t", want, id, decisions[id], allowed)
+			}
+		}
+	}
+
+	adminDecisions, err := authorizer.CanDocuments(ctx,
+		authz.Principal{UserID: alice, Role: "admin"}, []int64{bobDoc, missingID}, authz.PermChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adminDecisions[bobDoc] || !adminDecisions[missingID] {
+		t.Fatalf("admin decisions=%v", adminDecisions)
+	}
+
+	corpusOwner := seedUser(t, ctx, d, authz.DemoCorpusOwnerEmail, "admin")
+	corpusDoc := seedDoc(t, ctx, d, corpusOwner, "batch corpus")
+	demoDecisions, err := authorizer.CanDocuments(ctx,
+		authz.Principal{UserID: bob, Role: "member", Kind: authz.KindDemoScratch},
+		[]int64{bobDoc, corpusDoc, deniedDoc}, authz.PermView)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !demoDecisions[bobDoc] || !demoDecisions[corpusDoc] || demoDecisions[deniedDoc] {
+		t.Fatalf("demo decisions=%v", demoDecisions)
+	}
+}
+
+func TestACLAuthorizerCanDocumentsHandlesFiveHundredIDs(t *testing.T) {
+	ctx := context.Background()
+	d := setup(t, ctx)
+	alice := seedUser(t, ctx, d, "alice-large-batch@x", "member")
+	bob := seedUser(t, ctx, d, "bob-large-batch@x", "member")
+	inbox, err := jd.InboxCategoryID(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]int64, 0, 500)
+	expectedAllowed := 0
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		for i := range 500 {
+			owner := alice
+			if i%3 == 0 {
+				owner = bob
+			}
+			res, err := tx.ExecContext(ctx, `
+				INSERT INTO documents(owner_id, original_blob, original_size, title,
+				                      jd_category_id, added_at, created_at, updated_at)
+				VALUES (?, ?, 0, ?, ?, 0, 0, 0)
+			`, owner, fmt.Sprintf("batch-sha-%d", i), fmt.Sprintf("batch %d", i), inbox)
+			if err != nil {
+				return err
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+			if i%3 != 2 {
+				expectedAllowed++
+			}
+			if i%3 == 1 {
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO object_acls(object_kind, object_id, principal_kind,
+					                        principal_id, perm_bits, created_at, created_by)
+					VALUES ('document', ?, 'user', ?, ?, 0, ?)
+				`, id, bob, int(authz.PermView|authz.PermChange), alice); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	decisions, err := (authz.ACLAuthorizer{DB: d}).CanDocuments(ctx,
+		authz.Principal{UserID: bob, Role: "member"}, ids, authz.PermChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := 0
+	for _, id := range ids {
+		if decisions[id] {
+			allowed++
+		}
+	}
+	if len(decisions) != len(ids) || allowed != expectedAllowed {
+		t.Fatalf("decisions=%d allowed=%d, want %d/%d", len(decisions), allowed, expectedAllowed, len(ids))
 	}
 }
 

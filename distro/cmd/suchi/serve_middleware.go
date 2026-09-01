@@ -9,12 +9,14 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 )
 
-func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Chain, demoLimiter *httpx.RateLimit, log *slog.Logger) http.Handler {
+func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Chain,
+	demoLimiter *httpx.RateLimit, metrics *httpx.Metrics, log *slog.Logger) http.Handler {
 	router := httpx.NormalizeAPITrailingSlash(mux)
 	middleware := []httpx.Middleware{
 		httpx.RequestID,
 		httpx.SecurityHeaders,
 		httpx.AccessLog(log),
+		metrics.HTTPInstrument,
 		httpx.BodyLimit(cfg.BodyLimit),
 		httpx.Authenticate(authChain, log),
 		httpx.SecFetchSite,

@@ -138,6 +138,46 @@ func TestIntelligenceResolveIsPerDocumentAuthorized(t *testing.T) {
 	}
 }
 
+type authorizerFunc func(context.Context, authz.Principal, authz.Kind, int64, authz.Perm) error
+
+func (fn authorizerFunc) Can(ctx context.Context, principal authz.Principal,
+	kind authz.Kind, id int64, want authz.Perm) error {
+	return fn(ctx, principal, kind, id, want)
+}
+
+func TestIntelligenceResolveReportsOnlyItsOwnTransition(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 52, 1, "Concurrent policy", "Renews 2026-11-01", "internal", false)
+	candidateID := seedDateIntelligence(t, s, 52, "pending", "2026-11-01")
+
+	// Simulate another reviewer committing after the handler's pre-read.
+	s.Authz = authorizerFunc(func(ctx context.Context, _ authz.Principal, _ authz.Kind, _ int64, _ authz.Perm) error {
+		_, err := s.DB.ExecWrite(ctx, `
+			UPDATE document_intelligence SET status = 'accepted' WHERE id = ?`, candidateID)
+		return err
+	})
+	body := `{"candidate_ids":[` + itoa(candidateID) + `],"decision":"rejected"}`
+	rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve", body, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response intelligenceMutationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Applied != 0 || len(response.Results) != 1 ||
+		response.Results[0].OK || response.Results[0].Code != "already_resolved" {
+		t.Fatalf("response=%+v", response)
+	}
+	var status string
+	if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id = ?`, candidateID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" {
+		t.Fatalf("status=%q, want first reviewer's accepted decision", status)
+	}
+}
+
 func TestIntelligenceExtractQueuesAuthorizedDocuments(t *testing.T) {
 	s := newIntelligenceTestServer(t)
 	seedChatDoc(t, s, 60, 2, "Editable policy", "Renews 2026-09-01", "internal", false)

@@ -13,7 +13,9 @@ package authz
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
@@ -135,6 +137,98 @@ func (a ACLAuthorizer) Can(ctx context.Context, p Principal, kind Kind, id int64
 		return nil
 	}
 	return &ErrDenied{Kind: kind, ID: id, Want: want, Have: Perm(have)}
+}
+
+// CanDocuments resolves built-in owner and ACL decisions in one read.
+func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int64, want Perm) (map[int64]bool, error) {
+	decisions := make(map[int64]bool, len(ids))
+	unique := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, exists := decisions[id]; exists {
+			continue
+		}
+		decisions[id] = false
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return decisions, nil
+	}
+	// Special principals and compound masks keep the full Can semantics.
+	batchableWant := want == PermView || want == PermChange || want == PermDelete
+	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch || !batchableWant {
+		for _, id := range unique {
+			err := a.Can(ctx, p, KindDocument, id, want)
+			if err == nil {
+				decisions[id] = true
+				continue
+			}
+			var denied *ErrDenied
+			if !errors.As(err, &denied) {
+				return nil, err
+			}
+		}
+		return decisions, nil
+	}
+	if p.UserID == 0 {
+		return decisions, nil
+	}
+	if p.Role == "admin" {
+		for _, id := range unique {
+			decisions[id] = true
+		}
+		return decisions, nil
+	}
+
+	values := strings.TrimSuffix(strings.Repeat("(?),", len(unique)), ",")
+	args := make([]any, 0, len(unique)+len(p.Groups)+1)
+	for _, id := range unique {
+		args = append(args, id)
+	}
+	principalWhere := "(acl.principal_kind = 'user' AND acl.principal_id = ?)"
+	args = append(args, p.UserID)
+	if len(p.Groups) > 0 {
+		principalWhere += " OR (acl.principal_kind = 'group' AND acl.principal_id IN (" + placeholders(len(p.Groups)) + "))"
+		for _, groupID := range p.Groups {
+			args = append(args, groupID)
+		}
+	}
+	rows, err := a.DB.Read.QueryContext(ctx, `
+		WITH requested(id) AS (VALUES `+values+`)
+		SELECT requested.id, d.owner_id, COALESCE(acl.perm_bits, 0)
+		FROM requested
+		LEFT JOIN documents d ON d.id = requested.id
+		LEFT JOIN object_acls acl
+		  ON acl.object_kind = 'document' AND acl.object_id = requested.id
+		 AND (`+principalWhere+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	have := make(map[int64]Perm, len(unique))
+	for rows.Next() {
+		var (
+			id    int64
+			owner sql.NullInt64
+			bits  int
+		)
+		if err := rows.Scan(&id, &owner, &bits); err != nil {
+			return nil, err
+		}
+		if owner.Valid && owner.Int64 == p.UserID {
+			decisions[id] = true
+		}
+		have[id] |= Perm(bits)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range unique {
+		if !decisions[id] && have[id]&want == want {
+			decisions[id] = true
+		}
+	}
+	return decisions, nil
 }
 
 // demoObjectVisible admits global taxonomy rows, the designated seeded corpus,

@@ -13,7 +13,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -132,6 +134,27 @@ func TestBulkEdit_TrashRequiresDeletePermission(t *testing.T) {
 		}, memberPrincipal(2))
 	if code != 200 || body.Applied != 1 {
 		t.Fatalf("metadata edit status=%d body=%+v", code, body)
+	}
+}
+
+func TestBulkEdit_AuthorizerErrorFailsRequest(t *testing.T) {
+	s := newBulkServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	docID := seedStatsDoc(t, s.DB, 1, "auth-error-sha", "auth error", inbox, false, 0)
+	s.Authz = &recordingAuthorizer{errors: map[int64]error{
+		docID: errors.New("authorizer unavailable"),
+	}}
+
+	code, _ := doBulkEdit(t, s,
+		map[string]any{
+			"documents": []int64{docID},
+			"method":    "set_sensitivity",
+			"parameters": map[string]any{
+				"sensitivity": "internal",
+			},
+		}, adminPrincipal(1))
+	if code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500", code)
 	}
 }
 

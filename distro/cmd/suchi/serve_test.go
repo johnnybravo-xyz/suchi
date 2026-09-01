@@ -24,7 +24,7 @@ func TestBuildHTTPHandlerPreservesRoutingAndLimiterBoundaries(t *testing.T) {
 	mux.HandleFunc("GET /api/items/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, testLogger())
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)
@@ -60,7 +60,7 @@ func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	handler := buildHTTPHandler(mux, &config.Config{
 		BodyLimit:         1024,
 		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
-	}, &auth.Chain{}, nil, testLogger())
+	}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)

@@ -254,6 +254,7 @@ func NormalizeAPITrailingSlash(mux *http.ServeMux) http.Handler {
 			if _, pat2 := mux.Handler(r2); pat2 != pat &&
 				!isCatchAll(pat2) && !isSubtreeFallback(pat2, r2.URL.Path) {
 				mux.ServeHTTP(w, r2)
+				r.Pattern = r2.Pattern
 				return
 			}
 		} else if strings.HasSuffix(muxPatternPath(pat), "/") &&
@@ -262,6 +263,7 @@ func NormalizeAPITrailingSlash(mux *http.ServeMux) http.Handler {
 			r2.URL.Path = p + "/"
 			r2.URL.RawPath = ""
 			mux.ServeHTTP(w, r2)
+			r.Pattern = r2.Pattern
 			return
 		}
 		if isCatchAll(pat) || isSubtreeFallback(pat, p) {

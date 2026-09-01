@@ -126,8 +126,8 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		scope.DocumentIDs, err = parseCSVIDs(q.Get("document_ids"))
-		if err != nil || len(scope.DocumentIDs) > bulkEditMaxDocuments {
+		scope.DocumentIDs, err = parseBoundedCSVIDs(q.Get("document_ids"), bulkEditMaxDocuments)
+		if err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_document_ids", "document_ids must contain at most 500 positive integers")
 			return
 		}
@@ -205,13 +205,14 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		where = append(where, visibility)
 		args = append(args, visibilityArgs...)
 	}
-	where, args = appendQueryPredicates(where, args, queryPlan)
+	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)
 	whereSQL := strings.Join(where, " AND ")
+	fromSQL := `document_intelligence di
+		JOIN documents d ON d.id = di.document_id` + queryDocumentFTSJoin(queryPlan)
 	pp := ParsePageParams(r, 100, 500)
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT COUNT(*) FROM document_intelligence di
-		JOIN documents d ON d.id = di.document_id
+		SELECT COUNT(*) FROM `+fromSQL+`
 		WHERE `+whereSQL, args...).Scan(&total); err != nil {
 		s.serverErr(w, "intelligence.count", err)
 		return
@@ -224,8 +225,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		       di.raw_text, di.evidence_text, di.evidence_start, di.confidence,
 		       di.status, di.extractor, di.extraction_version, di.reviewed_by,
 		       di.reviewed_at, di.created_at, di.updated_at
-		FROM document_intelligence di
-		JOIN documents d ON d.id = di.document_id
+		FROM `+fromSQL+`
 		WHERE `+whereSQL+`
 		ORDER BY di.sort_value, d.title, di.id
 		LIMIT ? OFFSET ?`, queryArgs...)
@@ -300,10 +300,15 @@ func (s *Server) ExtractIntelligence(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	results := make([]intelligenceMutationResult, len(ids))
+	decisions, err := s.documentPermissionDecisions(r.Context(), p, ids, authz.PermChange)
+	if err != nil {
+		s.serverErr(w, "intelligence.extract.authorize", err)
+		return
+	}
 	authorized := make([]int64, 0, len(ids))
 	for i, id := range ids {
 		results[i].ID = id
-		if !s.canBulkEditDoc(r, id, authz.PermChange) {
+		if !decisions[id] {
 			results[i].Code = "forbidden"
 			continue
 		}
@@ -354,6 +359,17 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "intelligence.resolve.load", err)
 		return
 	}
+	pendingDocuments := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if state, exists := states[id]; exists && state.status == "pending" {
+			pendingDocuments = append(pendingDocuments, state.documentID)
+		}
+	}
+	decisions, err := s.documentPermissionDecisions(r.Context(), p, pendingDocuments, authz.PermChange)
+	if err != nil {
+		s.serverErr(w, "intelligence.resolve.authorize", err)
+		return
+	}
 	results := make([]intelligenceMutationResult, len(ids))
 	authorized := make([]int64, 0, len(ids))
 	for i, id := range ids {
@@ -367,12 +383,13 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 			results[i].Code = "already_resolved"
 			continue
 		}
-		if !s.canBulkEditDoc(r, state.documentID, authz.PermChange) {
+		if !decisions[state.documentID] {
 			results[i].Code = "forbidden"
 			continue
 		}
 		authorized = append(authorized, id)
 	}
+	transitioned := make([]int64, 0, len(authorized))
 	if len(authorized) > 0 {
 		now := time.Now().Unix()
 		args := []any{body.Decision, p.UserID, now, now}
@@ -380,23 +397,41 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 			args = append(args, id)
 		}
 		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(), `
+			// RETURNING makes the response reflect which reviewer won the race.
+			rows, err := tx.QueryContext(r.Context(), `
 				UPDATE document_intelligence
 				SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
-				WHERE status = 'pending' AND id IN (`+placeholders(len(authorized))+`)`, args...)
-			return err
+				WHERE status = 'pending' AND id IN (`+placeholders(len(authorized))+`)
+				RETURNING id`, args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				transitioned = append(transitioned, id)
+			}
+			return rows.Err()
 		}); err != nil {
 			s.serverErr(w, "intelligence.resolve.update", err)
 			return
 		}
 	}
-	markMutationResults(results, authorized)
+	markMutationResults(results, transitioned)
+	for i := range results {
+		if !results[i].OK && results[i].Code == "" {
+			results[i].Code = "already_resolved"
+		}
+	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 		Actor: p, Action: "document_intelligence.resolve", ObjectKind: "document_intelligence",
-		After: map[string]any{"decision": body.Decision, "requested": len(ids), "applied": len(authorized)},
+		After: map[string]any{"decision": body.Decision, "requested": len(ids), "applied": len(transitioned)},
 	})
 	s.writeJSON(w, http.StatusOK, intelligenceMutationResponse{
-		Total: len(ids), Applied: len(authorized), Results: results,
+		Total: len(ids), Applied: len(transitioned), Results: results,
 	})
 }
 
@@ -441,14 +476,11 @@ func markMutationResults(results []intelligenceMutationResult, authorized []int6
 	}
 }
 
-func intelligenceCountForPrincipal(ctx context.Context, s *Server, p *pluginapi.Principal, status string) (int64, error) {
+func intelligenceCountForPrincipal(ctx context.Context, s *Server, p *pluginapi.Principal,
+	groups []int64, status string) (int64, error) {
 	where := []string{"di.status = ?", "d.trashed_at IS NULL"}
 	args := []any{status}
 	if p.Role != "admin" {
-		groups, err := s.principalGroups(ctx, p.UserID)
-		if err != nil {
-			return 0, err
-		}
 		visibility, visibilityArgs := documentVisibilityWhere(p, groups)
 		where = append(where, visibility)
 		args = append(args, visibilityArgs...)
