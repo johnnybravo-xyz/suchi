@@ -194,12 +194,45 @@ For each question Suchi:
 3. Keeps at most 12 useful terms.
 4. Converts them to FTS prefixes and OR-joins them for recall.
 5. Ranks title `3.0`, content `1.0`, without recency.
-6. Returns at most six sources with 300-character titles and 1,600-character
-   passages. A short document is sent whole; a long document combines its
-   matched passage with its ending.
+6. Selects at most six document IDs, keeping cited follow-up sources first and
+   current BM25 results after them.
 7. Reloads up to three cited context sources directly in requested order, with
-   fresh ACL, trash, sensitivity, and scope checks.
-8. Adds approved extracted facts attached to those sources when permitted.
+   fresh ACL, trash, sensitivity, and scope checks, then checks those authorized
+   IDs for a current full-question match in one restricted FTS query. That match
+   cannot be displaced by globally higher-ranked documents and applies in
+   Focused mode too.
+8. Keeps the first full-question FTS passage for each matching document. For
+   Balanced and Detailed, it runs each normalized term across all selected long
+   document IDs in one batch and adds at most one passage per term.
+9. Removes whitespace-normalized duplicate or contained passages without
+   changing primary-passage or source order, then appends a distinct document
+   ending when the source-text ceiling has room.
+10. Adds approved extracted facts attached to those sources when permitted.
+
+This is a two-stage document/passages flow: document authorization and ranking
+decide the stable citation numbers first; passage expansion operates only on
+those already-authorized IDs. All authorization, scope, document, FTS, and
+fallback reads share one read-only SQLite WAL snapshot, so a concurrent ACL,
+sensitivity, trash, or content change cannot mix old authorization with newer
+text. With at most 12 normalized terms, term expansion performs at most 12
+bounded SQLite reads, each batching the term across the selected sources. It
+never issues one query per document.
+
+SQLite FTS5's `snippet()` function returns at most 64 tokens. Suchi also caps
+each returned passage at 1,200 Unicode characters before assembly. Temporary
+markers locate the first match so the character cap is applied around it, then
+all markers are removed before the passage reaches the browser, logs, or model.
+Merely increasing one contiguous snippet would still inspect only the
+neighborhood chosen for that single FTS window, so it would not reliably recover
+far-apart clauses or repeated totals in a long document. Term-specific windows
+improve that coverage while the Focused, Balanced, and Detailed source ceilings
+remain hard bounds. See [SQLite FTS5 snippets](https://www.sqlite.org/fts5.html#the_snippet_function)
+and [Archive research: Research context presets](/archive-chat#research-context-presets).
+
+Short documents that fit the active ceiling are sent whole. A cited long
+document with no current-term match uses a bounded beginning-and-ending
+fallback. Source numbering remains stable, and the assembled source text
+returned by the API is exactly what the provider receives.
 
 Prefix-OR raises recall for the small evidence set. The model and citation
 validator then decide whether that evidence is sufficient. A research scope
@@ -225,6 +258,9 @@ bypasses object authorization.
 - FTS content stays in SQLite; no network search service is required.
 - Queries are limited to 1 KiB, 64 tokens, and 256 bytes per value.
 - Search pages cap at 100; similar results at 50; Archive research sources at 6.
+- Archive research term-expansion reads cap at 12, passage windows at 64 FTS5
+  tokens and 1,200 Unicode characters, and per-source text at 1,600–4,800
+  characters.
 - SQL fragments are fixed; all user values use bound parameters.
 - Metadata filter names resolve to IDs before execution.
 - Snippets are returned only after visibility predicates match.

@@ -33,10 +33,11 @@ assistant text never becomes evidence.
 ```mermaid
 flowchart LR
     Q[Question and scope] --> T[Bounded term selection]
-    T --> F[SQLite FTS5 retrieval]
+    T --> R[Rank authorized documents]
     C[Prior cited source IDs] --> A[Reauthorize context]
-    A --> E[Evidence set]
-    F --> E
+    R --> P[Assemble bounded passages]
+    A --> P
+    P --> E[Document-numbered evidence set]
     I[Approved extracted facts] --> E
     E --> M[One model completion]
     M --> V[Validate JSON and citations]
@@ -55,16 +56,72 @@ from ranked Search are centralized in
 
 - At most six documents per answer.
 - At most three reauthorized context documents from the prior turn.
-- Provider titles are clamped to 300 Unicode characters and source text to
-  1,600. Short documents use their complete extracted text; longer documents
-  combine the matched passage with the document end.
+- Provider titles are clamped to 300 Unicode characters. Source text follows
+  the administrator's **Research context** preset described below.
 - Extracted facts are limited to three per source and twelve total; the response
-  summary still counts every visible fact by status.
+  summary still counts every visible fact by status. Their existing 1,600
+  Unicode-character value and evidence bounds do not grow with Research context.
 - Context IDs are loaded directly in requested order without a prior-term test.
 - Model output is capped at 700 tokens and 6,000 answer characters.
 - One provider call per successful turn.
 
 No provider call occurs when retrieval finds no evidence.
+
+### Research context presets
+
+An administrator chooses one global preset under **Settings → Archive
+configuration → Classification**. A missing or invalid stored value resolves to
+**Balanced**. Saving the preset affects the next question immediately; it does
+not reload or enable the model, change credentials, apply dates, clear an open
+research drawer, or require a server restart.
+
+| Preset | Matching passages per document | Source-text limit per document | Maximum across six sources |
+| --- | ---: | ---: | ---: |
+| Focused | 1 | 1,600 Unicode characters | 9,600 characters |
+| Balanced (default) | 2 | 3,200 Unicode characters | 19,200 characters |
+| Detailed | 3 | 4,800 Unicode characters | 28,800 characters |
+
+The passage column counts matching FTS windows, not the optional distinct
+document ending. That ending and Suchi's passage separators still count toward
+the source-text ceiling. Titles, the question, bounded history, and
+capability-gated accepted facts are separate parts of the provider request. The
+six-source maximum does not change.
+
+For a long matching document, Suchi keeps the first passage from the complete
+normalized question. Balanced and Detailed can add distinct term-specific
+passages in question-term order. Each FTS5 passage uses SQLite's maximum
+64-token snippet window. Suchi temporarily marks the first match, clips around
+it, removes every marker, and retains at most 1,200 Unicode characters. This
+keeps the match even when unusually long tokens push it beyond the first 1,200
+characters of SQLite's snippet. Whitespace-equivalent, duplicate, and contained
+passages are removed. When space remains, a distinct document ending is
+appended so receipt totals, signatures, and closing clauses are less likely to
+disappear.
+
+A document whose complete extracted text fits the selected per-document limit
+is sent whole. One restricted FTS query checks every cited follow-up source for
+the complete current question, so a matching passage cannot be displaced by
+six better-ranked documents and Focused mode still receives it. A long cited
+source with no current match uses a bounded beginning-and-ending fallback. The
+stitched `snippet` returned to the browser is byte-for-byte the source text
+supplied to the model, so the reader and provider see the same evidence under
+each source number.
+
+Authorization, scope resolution, document content, FTS passages, and fallbacks
+are read through one read-only SQLite WAL snapshot per question. A concurrent
+ACL, sensitivity, trash, or content change therefore appears either before
+that retrieval or on the next one, never halfway through one evidence set.
+
+Focused is the safest starting point for small local models or tight context
+windows. Balanced is recommended for most local and hosted models. Detailed is
+best reserved for models with enough context capacity when important evidence
+is likely to be repeated or far apart in long documents. It can increase
+latency, hosted token cost, and the amount of authorized document text sent to
+the configured provider.
+
+Detailed improves coverage; it is not exhaustive analysis of every repeated
+occurrence in a very large document. Check totals and other high-consequence
+claims against the cited sources.
 
 ## Scope
 
@@ -216,18 +273,27 @@ For each turn the provider receives the question, the allowed complete history
 pairs, and each selected source's title, sensitivity, snippet, and—when the user
 has `archive_intelligence`—accepted fact value and evidence. It receives no ACL
 rows or unrelated document metadata.
-Logs may include source IDs, counts, provider host, model, duration, and
-sanitized failures. They do not include questions, answers, or snippets.
+The archive-evidence assembly event records only the chosen context mode,
+passage count, source count, and bounded evidence size. Separate operational
+events still record the normal HTTP method, path, status, byte count, duration,
+and request ID; calls to a hosted model also record its host and model name.
+Sanitized failures may be logged. None of these events includes questions,
+answers, titles, snippets, or extracted evidence.
 
 ## Abuse controls
 
-Interactive completions have two in-process controls:
+Interactive research has three in-process controls:
 
-- six requests per minute per authenticated user, burst two; and
+- six evidence-bearing requests per minute per authenticated user, burst two;
+- at most two concurrent multi-pass evidence retrievals per Suchi process; and
 - at most two concurrent chat completions per Suchi process.
 
-A refusal returns `429 chat_rate_limited` and `Retry-After`. Reverse proxies may
-apply an additional distributed limit.
+A rate token is reserved before retrieval, preventing rate-limited requests
+from running the passage queries, and is returned when retrieval cannot start,
+errors, or finds no provider-eligible evidence. Retrieval owns one reader
+connection and does not occupy a provider-call slot. A refusal returns
+`429 chat_rate_limited` and `Retry-After`. Reverse proxies may apply an
+additional distributed limit.
 
 ## HTTP API
 

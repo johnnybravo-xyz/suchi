@@ -1340,8 +1340,9 @@ fresh ACL, trash, sensitivity, and scope checks.
 The response contains at most six sources, structurally validated citations,
 grounding state, and complete extracted-fact counts. Suchi adds missing inline
 markers from the provider's structured citation list. Provider evidence is
-bounded to 300 Unicode characters per title, 1,600 per snippet, three approved
-facts per source, and twelve facts total:
+bounded to 300 Unicode characters per title and the active 1,600–4,800
+Unicode-character [Research context preset](/archive-chat#research-context-presets)
+per snippet, plus three approved facts per source and twelve facts total:
 
 ```json
 {
@@ -1376,7 +1377,8 @@ Insufficient evidence, including an answer with no source numbers, returns the
 stable insufficient answer. Malformed or out-of-range citations return
 `502 invalid_provider_response`; provider failures return
 `502 provider_failure`; a disabled runtime returns
-`503 model_unavailable`; the per-user/concurrency gate returns
+`503 model_unavailable`; the per-user rate or retrieval/provider concurrency
+gates return
 `429 chat_rate_limited` with `Retry-After`.
 
 Q&A is read-only. Saving the retrieved documents as a View or opening
@@ -1468,9 +1470,13 @@ signal; plaintext key material is never returned.
   "date_auto_apply": true,
   "archive_enabled": true,
   "archive_auto_threshold": 0.9,
-  "archive_review_threshold": 0.5
+  "archive_review_threshold": 0.5,
+  "research_context_mode": "balanced"
 }
 ```
+
+`research_context_mode` is `focused`, `balanced`, or `detailed`. Missing or
+invalid stored values read back as `balanced`.
 
 ### `POST /api/admin/settings/llm`
 
@@ -1495,6 +1501,27 @@ when that endpoint is not pinned by the config file or environment.
 The response reports whether the saved configuration is `active`. The durable
 subscriber is present from boot, so first activation, configuration changes,
 key rotation, disable, and re-enable all apply immediately.
+
+### `PATCH /api/admin/settings/llm`
+
+Updates only the global Archive research source-text preset:
+
+```json
+{ "research_context_mode": "detailed" }
+```
+
+The body must contain exactly `research_context_mode`, with a value of
+`focused`, `balanced`, or `detailed`. The response returns the saved value:
+
+```json
+{ "research_context_mode": "detailed" }
+```
+
+This standalone save applies to the next question. It does not rewrite the
+endpoint, model, API key, egress acknowledgement, confidence thresholds, or
+date settings; enable a model; auto-apply pending dates; or reload the provider.
+See [Archive research: Research context presets](/archive-chat#research-context-presets)
+for passage assembly and exact payload bounds.
 
 ### `POST /api/admin/settings/llm/test`
 

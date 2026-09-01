@@ -81,6 +81,10 @@ eligible; unknown sensitivity values fail closed. Confidential and Restricted
 documents require the per-conversation option. **Clear**, scope or provider
 changes, and turning that option off clear the relevant in-memory history. The
 drawer identifies the local or hosted endpoint receiving evidence.
+The administrator-owned Research context preset changes the maximum authorized
+source text sent per question, which can affect provider cost, latency, and
+privacy exposure. See [Archive research: Research context presets](/archive-chat#research-context-presets)
+for the exact bounds and fallbacks.
 
 The model receives source text as explicitly untrusted evidence and has no
 tools or actions. Previous assistant answers provide continuity, never evidence.
@@ -94,9 +98,12 @@ history. They retain bounded evidence, extractor version, review state, and a
 reviewer when a person made the decision. Only dates added automatically or
 approved in Approvals feed Calendar, rich queries, or later research context.
 
-Logs never include questions, answers, snippets, or extracted evidence.
-Research logs may contain provider host and model, request ID, selected
-document IDs, fact and citation counts, duration, and sanitized errors.
+Logs never include questions, answers, snippets, or extracted evidence. The
+archive-evidence assembly event contains only the selected context mode,
+passage count, source count, and bounded evidence size. Separate access logs
+contain the HTTP method, path, status, byte count, duration, and request ID;
+hosted-model egress events contain the provider host and model name. Sanitized
+failures may also be recorded.
 
 ## Deletion and retention
 
