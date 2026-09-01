@@ -50,8 +50,6 @@ func (s Set) Has(c Capability) bool { _, ok := s[c]; return ok }
 
 func (s Set) Add(c Capability) { s[c] = struct{}{} }
 
-func (s Set) Remove(c Capability) { delete(s, c) }
-
 // Slice returns the caps as a stable, alpha-sorted []Capability so
 // the wire projection is deterministic (helpful for tests + audit
 // diffs).

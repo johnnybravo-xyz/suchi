@@ -105,12 +105,3 @@ func (g *chatGate) acquireProvider() (release func(), retryAfter time.Duration, 
 		return nil, time.Second, false
 	}
 }
-
-// enter combines both admissions when no retrieval falls between them.
-func (g *chatGate) enter(userID int64) (release func(), retryAfter time.Duration, ok bool) {
-	_, retryAfter, ok = g.admit(userID)
-	if !ok {
-		return nil, retryAfter, false
-	}
-	return g.acquireProvider()
-}

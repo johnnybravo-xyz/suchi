@@ -5,41 +5,39 @@ import (
 	"time"
 )
 
-func TestChatGateBoundsRateAndConcurrency(t *testing.T) {
+func TestChatGateBoundsRateAndProviderConcurrency(t *testing.T) {
 	now := time.Unix(100, 0)
 	gate := newChatGate()
 	gate.now = func() time.Time { return now }
 
-	releaseOne, _, ok := gate.enter(1)
+	releaseOne, _, ok := gate.acquireProvider()
 	if !ok {
-		t.Fatal("first request was refused")
+		t.Fatal("first provider call was refused")
 	}
-	releaseTwo, _, ok := gate.enter(2)
+	releaseTwo, _, ok := gate.acquireProvider()
 	if !ok {
-		t.Fatal("second concurrent request was refused")
+		t.Fatal("second provider call was refused")
 	}
-	if _, retry, ok := gate.enter(3); ok || retry <= 0 {
-		t.Fatalf("third concurrent request ok=%t retry=%s", ok, retry)
+	if _, retry, ok := gate.acquireProvider(); ok || retry <= 0 {
+		t.Fatalf("third provider call ok=%t retry=%s", ok, retry)
 	}
 	releaseOne()
 	releaseTwo()
 
 	for i := range chatRequestBurst {
-		release, _, ok := gate.enter(9)
+		_, _, ok := gate.admit(9)
 		if !ok {
 			t.Fatalf("burst request %d was refused", i)
 		}
-		release()
 	}
-	if _, retry, ok := gate.enter(9); ok || retry <= 0 {
+	if _, retry, ok := gate.admit(9); ok || retry <= 0 {
 		t.Fatalf("request beyond burst ok=%t retry=%s", ok, retry)
 	}
 	now = now.Add(10 * time.Second)
-	release, _, ok := gate.enter(9)
+	_, _, ok = gate.admit(9)
 	if !ok {
 		t.Fatal("refill did not admit a request")
 	}
-	release()
 }
 
 func TestChatGateBoundsRetrievalsAndRefundsReservation(t *testing.T) {

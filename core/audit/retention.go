@@ -1,6 +1,6 @@
 // audit_events retention — a sliding-window prune so the notifications
 // feed doesn't turn the audit log into an unbounded storage growth
-// path. Runs from backup.Loop's ticker (same interval, same single-
+// path. Runs from the backup scheduler's ticker (same interval, same single-
 // writer conn), not its own goroutine — one less thing to reason
 // about at boot.
 //

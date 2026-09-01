@@ -107,13 +107,6 @@ func Recognized(mime string) bool {
 	return supportedMIMEs[mime]
 }
 
-// Available reports whether anydoc is on PATH. Postingest checks this
-// to log a specific route.no_binary hint instead of a generic skip.
-func Available() bool {
-	_, err := exec.LookPath(DefaultBinary)
-	return err == nil
-}
-
 // Extract streams src to a tempfile and runs anydoc against it.
 // Skipped=true when the binary is missing — safe caller behavior is
 // "leave content empty; install anydoc + re-ingest later".

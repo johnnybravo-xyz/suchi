@@ -30,7 +30,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -390,24 +389,6 @@ func safeExistingBundleFile(root, path string) (string, error) {
 		return "", fmt.Errorf("bundle path is not a regular file: %s", path)
 	}
 	return path, nil
-}
-
-// FirstExisting is a small helper for "here or there" file lookups; some
-// operators pass in a root that already has originals/ inline, others
-// have originals nested one deeper.
-func FirstExisting(candidates ...string) (string, error) {
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		} else if !isNotExist(err) {
-			return "", err
-		}
-	}
-	return "", fs.ErrNotExist
-}
-
-func isNotExist(err error) bool {
-	return err != nil && os.IsNotExist(err)
 }
 
 // ParseTime accepts the source's ISO8601 variants and returns a Unix

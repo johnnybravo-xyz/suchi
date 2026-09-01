@@ -59,10 +59,6 @@ func AttachmentNames(raw []byte) []string {
 	}
 }
 
-func HasAttachment(raw []byte) bool {
-	return len(AttachmentNames(raw)) > 0
-}
-
 // attachmentFilename mirrors the EML fanout: only named, non-inline parts become
 // child documents. This keeps the intake gate from accepting a message whose
 // apparent attachment would later be discarded as inline content.

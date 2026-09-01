@@ -20,6 +20,17 @@ Notable user-visible changes to Suchi are recorded here.
   workflow, plus a persistent help launcher. Public model access remains
   denied; the tour uses an anonymized Northstar document cluster.
 
+### Changed
+
+- Rich-query lists now start from matching FTS rows, ranked Search bounds
+  recency snippet work to its result page, and newest document pages use a
+  stable partial index.
+- Bulk document authorization is batched, and concurrent date reviewers now
+  report and audit only the decision that actually changed each candidate.
+- The web app cancels superseded list, search, Calendar, and completion reads;
+  caches Calendar date formatters; loads route CSS lazily; and retains at most
+  20 Archive research turns.
+
 ### Fixed
 
 - Dashboard recent documents load once per navigation instead of retriggering
@@ -27,11 +38,21 @@ Notable user-visible changes to Suchi are recorded here.
 - Calendar resolves an owned or shared saved View by ID on the server, applies
   its complete filter, and then reapplies document ACLs.
 - Archive research requests provider JSON mode, normalizes structured citations
-  into clickable answer markers, tolerates numeric citation strings, logs safe
-  structural rejection reasons, and includes receipt totals in bounded evidence
-  passages.
+  into clickable answer markers, tolerates numeric citation strings, includes
+  receipt totals in bounded evidence passages, and logs only the mode, passage
+  and source counts, and bounded evidence size—never question or document text.
 - Date review uses a responsive document grid, keeps the selected-date actions
   visible, explains the decision, and renders section labels in sentence case.
+- Title-only ranked matches return an empty body snippet instead of failing,
+  Calendar identifies months that exceed its 500-row display limit, and
+  oversized facet lists fail before reaching SQLite.
+- HTTP request metrics now record the matched route pattern, including
+  normalized API paths, without using document IDs as labels.
+
+### Security
+
+- Model-provider logs retain only the endpoint host, never URL paths or query
+  strings that may contain tenant or credential material.
 
 ## [0.1.0-beta.1] - 2026-08-29
 

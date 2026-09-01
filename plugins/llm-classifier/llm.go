@@ -218,9 +218,11 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	}
 	rt, err := runtimeFromConfig(cfg)
 	if errors.Is(err, errEgressAckRequired) {
+		// This error is reached only after endpoint validation succeeds.
+		endpoint, _ := parseEndpointURL(strings.TrimSpace(cfg.EndpointURL))
 		log.Warn("llm-classifier.disabled",
 			"reason", "non-local endpoint requires LLM_EGRESS_ACK=true",
-			"endpoint", strings.TrimSpace(cfg.EndpointURL))
+			"host", endpoint.Hostname())
 		return nil, nil
 	}
 	if err != nil {
@@ -228,8 +230,8 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	}
 	if !rt.local {
 		log.Warn("llm-classifier.egress",
-			"endpoint", rt.cfg.EndpointURL,
 			"host", rt.host,
+			"model", rt.cfg.Model,
 			"msg", "OCR text of every classified document leaves the box")
 	}
 	p := &Plugin{log: log}
@@ -250,9 +252,10 @@ func (p *Plugin) SetConfig(cfg Config) error {
 	p.rt.Store(rt)
 	if !rt.local {
 		p.log.Warn("llm-classifier.reload.egress",
-			"endpoint", rt.cfg.EndpointURL, "host", rt.host)
+			"host", rt.host, "model", rt.cfg.Model)
 	} else {
-		p.log.Info("llm-classifier.reload", "endpoint", rt.cfg.EndpointURL, "model", rt.cfg.Model)
+		p.log.Info("llm-classifier.reload",
+			"host", rt.host, "model", rt.cfg.Model, "local", true)
 	}
 	return nil
 }

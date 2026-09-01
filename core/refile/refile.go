@@ -29,7 +29,6 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
@@ -123,17 +122,6 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 		"automations_applied", s.AutomationsApplied, "render_enqueued", s.RenderEnqueued,
 		"errors", s.Errors, "elapsed", s.Elapsed)
 	return s, nil
-}
-
-// EnqueueRenderOnly is the smallest possible action — just push a
-// render/move job for every live doc. Useful when only the
-// storage-path template changed and no metadata is affected.
-func EnqueueRenderOnly(ctx context.Context, d *db.DB, log *slog.Logger, disp *jobs.Dispatcher) (Stats, error) {
-	s, err := All(ctx, d, log, Options{SkipAutomations: true})
-	if err == nil && disp != nil {
-		disp.Nudge()
-	}
-	return s, err
 }
 
 func loadDocIDs(ctx context.Context, d *db.DB, ownerID int64) ([]int64, error) {

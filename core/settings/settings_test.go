@@ -229,17 +229,18 @@ func TestSetupState_ImportedTaxonomyCountsAsChoice(t *testing.T) {
 	}
 }
 
-func TestMarkComplete_UpdatesNeeded(t *testing.T) {
+func TestMarkCompleteUpdatesSetupState(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
-	if need, _ := settings.SetupNeeded(ctx, d); !need {
-		t.Error("SetupNeeded should be true before MarkSetupComplete")
-	}
 	if err := settings.MarkSetupComplete(ctx, d); err != nil {
 		t.Fatal(err)
 	}
-	if need, _ := settings.SetupNeeded(ctx, d); need {
-		t.Error("SetupNeeded should be false after MarkSetupComplete")
+	state, err := settings.LoadSetupState(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompletedAt == nil || *state.CompletedAt == 0 {
+		t.Error("MarkSetupComplete did not stamp the setup state")
 	}
 }
 
@@ -324,7 +325,8 @@ func TestLLMAPIKey_SealedAndResolved(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
 	box := testSecretBox{}
-	if err := settings.SetLLMAPIKey(ctx, d, box, "secret-key"); err != nil {
+	apiKey := "secret-key"
+	if err := settings.SaveLLMConfig(ctx, d, settings.LLMConfig{DateAutoApply: true}, box, &apiKey); err != nil {
 		t.Fatal(err)
 	}
 

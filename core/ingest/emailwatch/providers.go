@@ -1,7 +1,5 @@
 package emailwatch
 
-import "sort"
-
 // Provider presets exist so the UI can drop users into a working
 // IMAP config with one click for the ~six mail hosts that cover most
 // of the install base. Each entry captures the host/port/TLS choice
@@ -50,24 +48,4 @@ var Presets = map[string]Preset{
 		AuthMethod: "password",
 		HelpText:   "Configure host/port/TLS by hand.",
 	},
-}
-
-// PresetByName returns the named preset + ok. Callers pass ok=false
-// through to the UI as "unknown provider" rather than falling back
-// silently. (Named PresetByName rather than Preset because the type
-// already owns that identifier in this package.)
-func PresetByName(name string) (Preset, bool) {
-	p, ok := Presets[name]
-	return p, ok
-}
-
-// PresetNames returns the preset keys in stable (alphabetical) order
-// so dropdown rendering is deterministic across page loads.
-func PresetNames() []string {
-	names := make([]string, 0, len(Presets))
-	for k := range Presets {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	return names
 }

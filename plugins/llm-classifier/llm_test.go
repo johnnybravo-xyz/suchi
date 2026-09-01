@@ -1,6 +1,7 @@
 package llmclassifier
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -113,6 +114,82 @@ func TestNewAcceptsNonLocalWithAck(t *testing.T) {
 	if p.rt.Load().local {
 		t.Error("api.openai.com should not be local")
 	}
+}
+
+func TestProviderLogsOmitEndpointPathsAndQueries(t *testing.T) {
+	const (
+		host        = "models.example.test"
+		pathSecret  = "tenant-path-secret"
+		querySecret = "query-api-secret"
+	)
+	newLogger := func(output *bytes.Buffer) *slog.Logger {
+		return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+	assertRedacted := func(t *testing.T, output string) {
+		t.Helper()
+		if !strings.Contains(output, "host="+host) {
+			t.Fatalf("log omitted parsed host: %s", output)
+		}
+		if strings.Contains(output, pathSecret) || strings.Contains(output, querySecret) {
+			t.Fatalf("log exposed endpoint path or query: %s", output)
+		}
+	}
+
+	t.Run("startup", func(t *testing.T) {
+		var output bytes.Buffer
+		_, err := New(Config{
+			EndpointURL: "https://" + host + "/v1/" + pathSecret,
+			Model:       "test-model",
+			EgressAck:   true,
+		}, newLogger(&output))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertRedacted(t, output.String())
+	})
+
+	t.Run("reload", func(t *testing.T) {
+		var output bytes.Buffer
+		plugin := NewDisabled(newLogger(&output))
+		if err := plugin.SetConfig(Config{
+			EndpointURL: "https://" + host + "/v1/" + pathSecret,
+			Model:       "test-model",
+			EgressAck:   true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertRedacted(t, output.String())
+	})
+
+	t.Run("egress acknowledgement", func(t *testing.T) {
+		var output bytes.Buffer
+		plugin, err := New(Config{
+			EndpointURL: "https://" + host + "/v1/" + pathSecret,
+			Model:       "test-model",
+		}, newLogger(&output))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plugin != nil {
+			t.Fatal("unacknowledged hosted endpoint enabled the plugin")
+		}
+		assertRedacted(t, output.String())
+	})
+
+	t.Run("invalid query", func(t *testing.T) {
+		var output bytes.Buffer
+		_, err := New(Config{
+			EndpointURL: "https://" + host + "/v1?api-key=" + querySecret,
+			Model:       "test-model",
+			EgressAck:   true,
+		}, newLogger(&output))
+		if err == nil {
+			t.Fatal("endpoint query was accepted")
+		}
+		if strings.Contains(output.String(), querySecret) {
+			t.Fatalf("log exposed rejected endpoint query: %s", output.String())
+		}
+	})
 }
 
 func TestNewDisabledOnEmptyURL(t *testing.T) {

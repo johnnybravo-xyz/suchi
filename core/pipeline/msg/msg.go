@@ -47,12 +47,6 @@ func Recognized(mime string) bool {
 		m == "application/ms-outlook"
 }
 
-// Available reports whether msgconvert is on PATH.
-func Available() bool {
-	_, err := exec.LookPath(DefaultBinary)
-	return err == nil
-}
-
 // Convert streams src through msgconvert. A missing binary or invalid input is
 // a soft skip so the original remains available for later reprocessing.
 func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*Result, error) {

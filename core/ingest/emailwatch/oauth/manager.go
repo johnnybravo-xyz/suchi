@@ -51,11 +51,6 @@ func (m *Manager) Active() (*Client, string, bool) {
 	return m.active, m.activeID, true
 }
 
-func (m *Manager) ActiveID() string {
-	_, id, _ := m.Active()
-	return id
-}
-
 func (m *Manager) Ready() bool {
 	return m != nil && m.active != nil
 }

@@ -209,20 +209,6 @@ func MarkSetupComplete(ctx context.Context, database *db.DB) error {
 	return Set(ctx, database, KeySetupCompletedAt, time.Now().Unix())
 }
 
-// SetupNeeded reports whether an admin landing on / should be redirected
-// to /admin/setup. True when no completion timestamp exists yet.
-func SetupNeeded(ctx context.Context, database *db.DB) (bool, error) {
-	var completedAt int64
-	err := Get(ctx, database, KeySetupCompletedAt, &completedAt)
-	if errors.Is(err, ErrNotFound) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return completedAt == 0, nil
-}
-
 // ---------- resolvers — database defaults, explicit boot config wins ----------
 
 // LLMConfig is the shape callers merge into their plugin config. Uses
@@ -281,14 +267,6 @@ type SecretBox interface {
 type sealedSecret struct {
 	Version    int    `json:"version"`
 	Ciphertext []byte `json:"ciphertext"`
-}
-
-func SetLLMAPIKey(ctx context.Context, database *db.DB, box SecretBox, apiKey string) error {
-	secret, err := sealLLMAPIKey(box, apiKey)
-	if err != nil {
-		return err
-	}
-	return Set(ctx, database, KeyLLMAPIKeySealed, secret)
 }
 
 // SaveLLMConfig persists public fields and optionally replaces the API key.

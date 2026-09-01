@@ -78,21 +78,6 @@ func (s *Scheduler) config() (Config, uint64) {
 	return s.cfg, s.version
 }
 
-// Loop runs snapshots until ctx is cancelled. Intended to be spawned
-// once at boot:
-//
-//	go backup.Loop(ctx, backup.Config{...}, database, log)
-//
-// The loop takes one snapshot per Interval tick. First snapshot fires
-// one Interval after start so a boot storm doesn't slam the disk.
-func Loop(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger) {
-	if cfg.Interval <= 0 {
-		log.Info("backup.disabled", "reason", "backup interval <= 0")
-		return
-	}
-	NewScheduler(cfg).Run(ctx, database, log)
-}
-
 // Run blocks until ctx is cancelled and applies Update calls without a process
 // restart. The first snapshot under each configuration still occurs one full
 // interval after activation.

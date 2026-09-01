@@ -5,6 +5,7 @@ package authz
 // the admin API can't accidentally silently drop a typo grant.
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -78,5 +79,18 @@ func TestCapabilities_diff(t *testing.T) {
 	if !added.Has(CapShareLinks) || len(removed) != 0 {
 		t.Errorf("empty prior: added=%v removed=%v",
 			added.SliceStrings(), removed.SliceStrings())
+	}
+}
+
+func TestCapabilitiesMarshalAsSortedArray(t *testing.T) {
+	set := NewSet()
+	set.Add(CapShareLinks)
+	set.Add(CapArchiveChat)
+	got, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `["archive_chat","share_links"]` {
+		t.Fatalf("JSON = %s", got)
 	}
 }

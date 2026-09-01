@@ -211,9 +211,8 @@ type row struct {
 	Attempts int
 }
 
-// claim atomically flips a batch of pending jobs to running and returns
-// them. Batch size is small on purpose — a slow handler must not stall
-// the rest of the queue for a full batch length.
+// claim atomically flips a batch of pending jobs to running and returns them.
+// The small batch bounds how many rows can wait behind the serial dispatcher.
 func (d *Dispatcher) claim(ctx context.Context) ([]row, error) {
 	const batch = 8
 	var out []row

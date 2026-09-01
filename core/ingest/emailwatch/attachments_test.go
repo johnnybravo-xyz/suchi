@@ -106,7 +106,7 @@ const emlMultipartNoAttachments = "From: a@example.com\r\n" +
 
 const emlMalformed = "this is not a mail message\r\nno headers, no nothing\r\n"
 
-func TestHasAttachment(t *testing.T) {
+func TestAttachmentNamesDetectAttachments(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
@@ -124,7 +124,7 @@ func TestHasAttachment(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := emailwatch.HasAttachment([]byte(c.raw))
+			got := len(emailwatch.AttachmentNames([]byte(c.raw))) > 0
 			if got != c.want {
 				t.Errorf("want %v, got %v", c.want, got)
 			}
