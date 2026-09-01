@@ -87,6 +87,110 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 }
 
+func TestBeta1UpgradeToBeta2(t *testing.T) {
+	ctx := context.Background()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Beta.2 has one schema step after the published beta.1 baseline.
+	if len(migs) != 2 || migs[0].Version != 1 || migs[1].Version != 2 {
+		t.Fatalf("migration versions = %v, want [1 2]", migrationVersions(migs))
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	t.Run("upgrade", func(t *testing.T) {
+		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "upgrade.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		if err := db.Migrate(ctx, d, migs[:1], log); err != nil {
+			t.Fatal(err)
+		}
+		assertSchemaVersion(t, d, 1)
+		if _, err := d.ExecWrite(ctx, `
+			INSERT INTO settings(key, value_json, updated_at)
+			VALUES ('beta1-probe', '"preserved"', 1)`); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := db.Migrate(ctx, d, migs, log); err != nil {
+			t.Fatal(err)
+		}
+		assertSchemaVersion(t, d, 2)
+		assertBeta2Schema(t, d)
+		var value string
+		if err := d.Read.QueryRowContext(ctx,
+			"SELECT value_json FROM settings WHERE key = 'beta1-probe'",
+		).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		if value != `"preserved"` {
+			t.Fatalf("preserved setting = %q", value)
+		}
+	})
+
+	t.Run("fresh install", func(t *testing.T) {
+		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "fresh.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		if err := db.Migrate(ctx, d, migs, log); err != nil {
+			t.Fatal(err)
+		}
+		assertSchemaVersion(t, d, 2)
+		assertBeta2Schema(t, d)
+	})
+}
+
+func migrationVersions(migs []db.Migration) []int {
+	versions := make([]int, len(migs))
+	for i, migration := range migs {
+		versions[i] = migration.Version
+	}
+	return versions
+}
+
+func assertSchemaVersion(t *testing.T, d *db.DB, want int) {
+	t.Helper()
+	var got int
+	if err := d.Read.QueryRow("PRAGMA user_version").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("user_version = %d, want %d", got, want)
+	}
+}
+
+func assertBeta2Schema(t *testing.T, d *db.DB) {
+	t.Helper()
+	objects := []struct {
+		typ  string
+		name string
+	}{
+		{typ: "table", name: "document_intelligence"},
+		{typ: "index", name: "idx_document_intelligence_review"},
+		{typ: "index", name: "idx_document_intelligence_document"},
+		{typ: "index", name: "documents_live_created"},
+	}
+	for _, object := range objects {
+		var found int
+		if err := d.Read.QueryRow(
+			"SELECT count(*) FROM sqlite_schema WHERE type = ? AND name = ?",
+			object.typ, object.name,
+		).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		if found != 1 {
+			t.Errorf("%s %q count = %d, want 1", object.typ, object.name, found)
+		}
+	}
+}
+
 func TestLiveDocumentListUsesCreatedIndex(t *testing.T) {
 	ctx := context.Background()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "index.db"))

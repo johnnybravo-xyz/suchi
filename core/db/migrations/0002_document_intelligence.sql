@@ -1,3 +1,4 @@
+-- v0.1.0-beta.2 schema changes. Immutable after publication.
 CREATE TABLE document_intelligence (
     id                 INTEGER PRIMARY KEY,
     document_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -24,3 +25,8 @@ CREATE INDEX idx_document_intelligence_review
     ON document_intelligence(status, intelligence_type, sort_value, document_id);
 CREATE INDEX idx_document_intelligence_document
     ON document_intelligence(document_id, status, intelligence_type);
+
+-- Stream the default live-document page without a temporary sort.
+CREATE INDEX documents_live_created
+    ON documents(created_at DESC, id DESC)
+    WHERE trashed_at IS NULL;

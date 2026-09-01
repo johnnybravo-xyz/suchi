@@ -22,6 +22,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Beta.2 schema changes now ship as one migration, so beta.1 archives advance
+  in a single transactional step.
 - Rich-query lists now start from matching FTS rows, ranked Search bounds
   recency snippet work to its result page, and newest document pages use a
   stable partial index.

@@ -31,6 +31,10 @@ User-visible changes update the `[Unreleased]` section of
 in the same pull request. Write for operators and call out required migration
 steps directly.
 
+A release may add at most one numbered database migration. Fold all schema
+changes for an unreleased version into that migration; never rewrite it after
+the release is published.
+
 Suchi follows SemVer:
 
 - `MAJOR`: incompatible stable-interface changes after 1.0

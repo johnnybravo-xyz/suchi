@@ -71,8 +71,9 @@ document links.
 
 SQLite pragmas are applied by the DSN and include WAL, foreign keys, a busy
 timeout, and bounded memory mapping. Migrations under `core/db/migrations/` are
-embedded, numbered, and applied at boot. Applied migrations are immutable;
-schema corrections use a new migration.
+embedded, numbered, and applied at boot. Each release adds at most one migration:
+fold unreleased schema changes into that file, then keep it immutable after
+publication. Later schema corrections use a new migration.
 
 Original and derived bytes are immutable CAS objects addressed by SHA-256:
 
