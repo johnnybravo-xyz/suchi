@@ -432,11 +432,6 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 /* ---------- upload page ---------- */
 .upload-wrap { max-width: 620px; margin: 0 auto; }
 
-/* ---------- approvals ---------- */
-.task-card { display: flex; flex-direction: column; gap: 10px; }
-.task-card .prompt { font-weight: 600; font-size: .98rem; }
-.task-card .meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; color: var(--muted); font-size: .78rem; }
-.task-card .choices { display: flex; gap: 8px; flex-wrap: wrap; }
 .deadline-soon { color: var(--warn); font-weight: 600; }
 
 /* ---------- automations builder ---------- */

@@ -18,9 +18,14 @@
   let searched = $state(false)
   let languages = $state([])
   let runVersion = 0
+  let activeController // cancel superseded searches, not only their UI updates
   let suggestions = $state([])
   const queryAssistant = createQueryAssistant((next) => (suggestions = next))
-  onDestroy(queryAssistant.dispose)
+  onDestroy(() => {
+    runVersion++
+    queryAssistant.dispose()
+    activeController?.abort()
+  })
 
   function publishEmptyScope() {
     onScopeChange?.({
@@ -41,6 +46,8 @@
 
   async function run() {
     const version = ++runVersion
+    activeController?.abort()
+    activeController = undefined
     const query = q.trim()
     if (!query) {
       hits = []; count = 0; searched = false
@@ -49,6 +56,8 @@
     }
     const requestPage = page
     const requestLang = lang
+    const controller = new AbortController()
+    activeController = controller
     loading = true; err = ''; searched = true
     try {
       const params = { page: requestPage, page_size: 25 }
@@ -60,7 +69,7 @@
         tag_ids: [], correspondent_ids: [], created_at_gte: null, created_at_lte: null,
         language: requestLang,
       })
-      const res = await search(query, params)
+      const res = await search(query, params, controller.signal)
       if (version !== runVersion) return
       hits = res?.results || []
       count = res?.count ?? hits.length
@@ -72,6 +81,7 @@
         searched = false
       }
     } finally {
+      if (activeController === controller) activeController = undefined
       if (version === runVersion) loading = false
     }
   }

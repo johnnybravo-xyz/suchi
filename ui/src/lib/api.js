@@ -75,7 +75,7 @@ async function upgradeDemoSession() {
 }
 
 const api = {
-  get: (p) => req('GET', p),
+  get: (p, opts) => req('GET', p, undefined, opts),
   post: (p, b) => req('POST', p, b),
   patch: (p, b) => req('PATCH', p, b),
   put: (p, b) => req('PUT', p, b),
@@ -107,20 +107,19 @@ function qs(params) {
 export const whoami = () => api.get('/api/whoami')
 export const login = (email, password) => api.post('/api/login', { email, password })
 
-export const listDocuments = (params) => api.get(`/api/documents/${qs(params)}`)
+export const listDocuments = (params, signal) => api.get(`/api/documents/${qs(params)}`, { signal })
 export const getDocument = (id) => api.get(`/api/documents/${id}`)
 export const patchDocument = (id, body) => api.patch(`/api/documents/${id}`, body)
 export const deleteDocument = (id) => api.del(`/api/documents/${id}`)
 export const restoreDocument = (id) => api.post(`/api/documents/${id}/restore`)
 export const documentVersions = (id) => api.get(`/api/documents/${id}/versions/`)
 
-export const search = (q, params) => api.get(`/api/search/${qs({ q, ...params })}`)
-export const autocomplete = (q, limit = 8) => api.get(`/api/autocomplete/${qs({ q, limit })}`)
+export const search = (q, params, signal) => api.get(`/api/search/${qs({ q, ...params })}`, { signal })
+export const autocomplete = (q, limit = 8, signal) => api.get(`/api/autocomplete/${qs({ q, limit })}`, { signal })
 export const listLanguages = () => api.get('/api/languages/')
 export const chatStatus = () => api.get('/api/chat/status')
 export const askArchive = (body, signal) => req('POST', '/api/chat', body, { signal })
-export const intelligenceSchema = () => api.get('/api/intelligence/schema')
-export const listIntelligence = (params) => api.get(`/api/intelligence/${qs(params)}`)
+export const listIntelligence = (params, signal) => api.get(`/api/intelligence/${qs(params)}`, { signal })
 export const extractIntelligence = (body) => api.post('/api/intelligence/extract', body)
 export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve', body)
 
@@ -214,7 +213,7 @@ export const thumbPath = (id, reveal) => `/api/documents/${id}/thumb${reveal ? '
 export const automationsSchema = () => api.get('/api/automations/schema')
 export const listPresets = () => api.get('/api/presets/')
 
-export const listSavedViews = (params) => api.get(`/api/saved_views/${qs(params)}`)
+export const listSavedViews = (params, signal) => api.get(`/api/saved_views/${qs(params)}`, { signal })
 export const createSavedView = (b) => api.post('/api/saved_views/', b)
 export const deleteSavedView = (id) => api.del(`/api/saved_views/${id}`)
 

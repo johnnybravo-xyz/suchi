@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { listDocuments, listSavedViews } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { fmtDate, sensDot } from '../lib/format.js'
@@ -19,13 +20,17 @@
   let viewsError = $state('')
   let viewTotal = $state(0)
   let loadVersion = 0
+  let activeController
 
   async function load() {
     const version = ++loadVersion
+    activeController?.abort()
+    const controller = new AbortController()
+    activeController = controller
     viewsLoading = true
     viewsError = ''
     try {
-      const res = await listSavedViews({ include: 'shared' })
+      const res = await listSavedViews({ include: 'shared' }, controller.signal)
       if (version !== loadVersion) return
       const raw = res?.results || res || []
       viewTotal = res?.count ?? raw.length
@@ -44,7 +49,7 @@
 
       const loadedViews = await Promise.all(selected.map(async (view) => {
         try {
-          const result = await listDocuments({ ...view.filters, page_size: 1 })
+          const result = await listDocuments({ ...view.filters, page_size: 1 }, controller.signal)
           return { ...view, count: result?.count ?? 0 }
         } catch { return view }
       }))
@@ -54,6 +59,7 @@
       views = []
       viewsError = ex.message || 'Could not load views.'
     } finally {
+      if (activeController === controller) activeController = undefined
       if (version === loadVersion) viewsLoading = false
     }
   }
@@ -70,6 +76,10 @@
   }
 
   load()
+  onDestroy(() => {
+    loadVersion++
+    activeController?.abort()
+  })
 </script>
 
 <div class="metrics">

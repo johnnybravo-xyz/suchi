@@ -15,9 +15,7 @@ export default defineConfig({
   build: {
     target: 'baseline-widely-available',
     assetsInlineLimit: 8192,        // favicon + icons inline into the bundle
-    cssCodeSplit: false,            // one CSS file; dist/ is committed,
-                                     // per-chunk CSS would just be more
-                                     // hashed files to churn in git
+    cssCodeSplit: true,             // load route styles with lazy route chunks
     rollupOptions: {
       output: {
         // Content hashes prevent an upgraded binary from pairing with a

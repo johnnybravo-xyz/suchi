@@ -74,8 +74,8 @@ validated synthetic classification fields and latency, never raw model output
 or archive text.
 
 Archive research is read-only and transient. Suchi stores no conversation
-rows, and the browser retains the transcript only while the application is
-mounted. The server retrieves only non-trashed documents the caller may view.
+rows, and the browser retains at most the 20 newest transcript turns while the
+application is mounted. The server retrieves only non-trashed documents the caller may view.
 When sensitive consent is off, only unset, Public, and Internal documents are
 eligible; unknown sensitivity values fail closed. Confidential and Restricted
 documents require the per-conversation option. **Clear**, scope or provider

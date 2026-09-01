@@ -23,6 +23,9 @@
   let wasOpen = false
   let handledRequest = 0
   let sessionKey = ''
+  let nextTurnID = 0
+
+  const maxTranscriptTurns = 20
 
   const prompts = [
     'Find the next renewal dates',
@@ -91,13 +94,14 @@
     const prior = history()
     const contextIDs = contextSourceIDs()
     const turn = {
-      id: Date.now(), question, answer: '', sources: [], citations: [], grounded: false,
+      id: ++nextTurnID, question, answer: '', sources: [], citations: [], grounded: false,
       error: '',
     }
-    turns = [...turns, turn]
+    // Bound the DOM and retained evidence during long drawer sessions.
+    turns = [...turns, turn].slice(-maxTranscriptTurns)
     draft = ''
     sending = true
-    const requestState = { controller: new AbortController(), turnID: turn.id, restoreDraft: false, invalidated: false }
+    const requestState = { controller: new AbortController(), restoreDraft: false, invalidated: false }
     activeRequest = requestState
     revealTurn(turn.id)
     try {
@@ -172,13 +176,9 @@
     onPark?.()
   }
 
-  function sourceItems(turn) {
-    return turn.sources.map((source, index) => ({ source, number: index + 1 }))
-  }
-
   function sourceGroups(turn) {
     const cited = new Set(turn.citations || [])
-    const items = sourceItems(turn)
+    const items = turn.sources.map((source, index) => ({ source, number: index + 1 }))
     const primary = cited.size ? items.filter(item => cited.has(item.number)) : items
     const primaryNumbers = new Set(primary.map(item => item.number))
     return { primary, extra: items.filter(item => !primaryNumbers.has(item.number)) }
@@ -352,13 +352,13 @@
             <section class="evidence-stack" aria-label="Evidence sources">
               <header><span>Evidence</span><small>{turn.citations.length || 0} cited / {turn.sources.length} retrieved</small></header>
               {#each groups.primary as item (item.source.id)}
-                <ArchiveChatSource {item} turnID={turn.id} cited onOpen={closeForNavigation} />
+                <ArchiveChatSource {item} cited onOpen={closeForNavigation} />
               {/each}
               {#if groups.extra.length}
                 <details class="extra-sources">
                   <summary>{groups.extra.length} additional retrieved source{groups.extra.length === 1 ? '' : 's'}</summary>
                   {#each groups.extra as item (item.source.id)}
-                    <ArchiveChatSource {item} turnID={turn.id} onOpen={closeForNavigation} />
+                    <ArchiveChatSource {item} onOpen={closeForNavigation} />
                   {/each}
                 </details>
               {/if}

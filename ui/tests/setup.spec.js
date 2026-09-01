@@ -241,7 +241,7 @@ async function mockAPI(page, options = {}) {
     }
     else if (path === '/api/intelligence/' && request.method() === 'GET') {
       options.intelligenceQueries?.push(Object.fromEntries(new URL(request.url()).searchParams))
-      body = { results: options.intelligence || [], count: options.intelligence?.length || 0 }
+      body = { results: options.intelligence || [], count: options.intelligenceCount ?? options.intelligence?.length ?? 0 }
     }
     else if (path === '/api/intelligence/extract' && request.method() === 'POST') {
       const payload = request.postDataJSON()
@@ -1844,6 +1844,28 @@ test('keeps modified research anchors in the current drawer session', async ({ p
   await modifiedClick(page.getByRole('link', { name: /Save retrieved documents as a view/ }), { button: 0, shiftKey: true })
 })
 
+test('bounds long archive research transcripts', async ({ page }) => {
+  const chatRequests = []
+  await mockAPI(page, {
+    chatEnabled: true,
+    chatRequests,
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+  await page.getByRole('button', { name: 'Ask the archive' }).click()
+  const composer = page.getByRole('textbox', { name: 'Question', exact: true })
+  for (let turn = 1; turn <= 21; turn++) {
+    await composer.fill(`bounded question ${turn}`)
+    await composer.press('Enter')
+    await expect.poll(() => chatRequests.length).toBe(turn)
+    await expect(composer).toBeEnabled()
+  }
+  await expect(page.locator('.research-turn')).toHaveCount(20)
+  await expect(page.getByText('bounded question 1', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('bounded question 21', { exact: true })).toBeVisible()
+})
+
 test('resets research boundaries and carries only bounded cited follow-up context', async ({ page }) => {
   const chatRequests = []
   await mockAPI(page, {
@@ -2014,6 +2036,7 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
     intelligenceQueries,
+    intelligenceCount: 650,
     intelligence: [{
       id: 81, document_id: 28, document_title: 'Home insurance renewal notice',
       document_has_thumbnail: false, type: 'date', role: 'expiry',
@@ -2042,6 +2065,8 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   await expect(page.locator('.agenda-event').getByText('Expiry', { exact: true })).toBeVisible()
   await expect(page.locator('.agenda-event').filter({ hasText: 'Home insurance renewal notice' }).getByText('Reviewed', { exact: true })).toBeVisible()
   await expect(page.locator('.agenda-event').filter({ hasText: 'Automatic policy reminder' }).getByText('Automatic', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '2 of 650 dates' })).toBeVisible()
+  await expect(page.getByText('Showing the first 500. Narrow the view or date role to see the rest.')).toBeVisible()
   const viewSelect = page.getByLabel('Document view')
   await expect(viewSelect).toContainText('Quarterly tax review')
   await expect(viewSelect).toHaveValue('')

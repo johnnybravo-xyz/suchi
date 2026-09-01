@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
@@ -11,7 +12,11 @@
   let role = $state('')
   let loading = $state(true)
   let error = $state('')
+  let eventTotal = $state(0)
   let loadVersion = 0
+  let activeController // rapid month changes should release the older read
+
+  const calendarPageSize = 500
 
   const monthLabel = $derived(month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))
   const calendarDays = $derived(buildCalendarDays(month))
@@ -62,6 +67,9 @@
 
   async function load() {
     const version = ++loadVersion
+    activeController?.abort()
+    const controller = new AbortController()
+    activeController = controller
     loading = true
     error = ''
     try {
@@ -69,13 +77,15 @@
       const response = await listIntelligence({
         status: 'accepted', type: 'date', role,
         sort_from: bounds.from, sort_to: bounds.to,
-        page_size: 500, ...viewParams(),
-      })
+        page_size: calendarPageSize, ...viewParams(),
+      }, controller.signal)
       if (version !== loadVersion) return
       events = response?.results || []
+      eventTotal = response?.count ?? events.length
     } catch (ex) {
       if (version === loadVersion) error = ex.message || 'Could not load dates.'
     } finally {
+      if (activeController === controller) activeController = undefined
       if (version === loadVersion) loading = false
     }
   }
@@ -98,6 +108,10 @@
   }
 
   loadViews()
+  onDestroy(() => {
+    loadVersion++
+    activeController?.abort()
+  })
   $effect(() => {
     // Reload when the visible Calendar filters change. A saved view takes
     // precedence over direct document IDs.
@@ -169,7 +183,8 @@
     <aside class="agenda" aria-labelledby="agenda-title">
       <header>
         <span class="eyebrow">Agenda</span>
-        <h3 id="agenda-title">{events.length} date{events.length === 1 ? '' : 's'}</h3>
+        <h3 id="agenda-title">{events.length}{eventTotal > events.length ? ` of ${eventTotal}` : ''} date{eventTotal === 1 ? '' : 's'}</h3>
+        {#if eventTotal > events.length}<small class="agenda-limit">Showing the first {calendarPageSize}. Narrow the view or date role to see the rest.</small>{/if}
       </header>
       {#if loading && !events.length}
         {#each Array(4) as _}<div class="agenda-skeleton"><div class="skel"></div><div class="skel"></div></div>{/each}
@@ -233,6 +248,7 @@
   .agenda { max-height: 690px; }
   .agenda > header { padding: 14px 15px 11px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .agenda h3 { font-size: .87rem; }
+  .agenda-limit { display: block; margin-top: 4px; color: var(--muted); font-size: .62rem; line-height: 1.35; }
   .agenda-list { max-height: 620px; overflow-y: auto; }
   .agenda-event { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 13px; border-bottom: 1px solid var(--line); color: inherit; text-decoration: none; }
   .agenda-event:last-child { border-bottom: 0; }

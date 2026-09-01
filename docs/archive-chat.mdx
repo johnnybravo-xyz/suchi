@@ -186,6 +186,8 @@ Conversation state exists only in the mounted browser application.
   sensitive consent. Disabling sensitive consent clears accumulated history.
 - Only complete successful user/assistant pairs enter history.
 - Failed and canceled turns cannot poison later role alternation.
+- The drawer retains the newest 20 turns, bounding long-session DOM and evidence
+  memory without changing the smaller provider-history limit.
 - Only the newest complete pairs fitting four messages and 12 KB are sent.
 - Follow-ups carry only sources actually cited by the preceding successful
   answer; an uncited retrieval set is never used as implicit context.

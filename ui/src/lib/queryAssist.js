@@ -1,20 +1,23 @@
 import { autocomplete } from './api.js'
 
-export async function querySuggestions(query, limit = 8) {
+async function querySuggestions(query, limit = 8, signal) {
   const value = String(query || '')
   if (!value.trim()) return []
-  const response = await autocomplete(value, limit)
+  const response = await autocomplete(value, limit, signal)
   return (response?.results || response || []).filter((suggestion) => suggestion.query)
 }
 
 export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } = {}) {
   let timer
   let version = 0
+  let activeController // stop stale suggestions at the server too
 
   function cancel() {
     version++
     clearTimeout(timer)
     timer = undefined
+    activeController?.abort()
+    activeController = undefined
   }
 
   function clear() {
@@ -25,6 +28,8 @@ export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } =
   function update(query) {
     const current = ++version
     clearTimeout(timer)
+    activeController?.abort()
+    activeController = undefined
     const value = String(query || '')
     if (!value.trim()) {
       onSuggestions([])
@@ -32,11 +37,15 @@ export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } =
     }
     timer = setTimeout(async () => {
       timer = undefined
+      const controller = new AbortController()
+      activeController = controller
       try {
-        const next = await querySuggestions(value, limit)
+        const next = await querySuggestions(value, limit, controller.signal)
         if (current === version) onSuggestions(next)
       } catch {
         if (current === version) onSuggestions([])
+      } finally {
+        if (activeController === controller) activeController = undefined
       }
     }, delay)
   }

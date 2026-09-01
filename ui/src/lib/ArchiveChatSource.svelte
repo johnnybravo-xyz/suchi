@@ -2,16 +2,22 @@
   import { sensitivityLabel, sensDot } from './format.js'
   import Icon from './Icon.svelte'
 
-  let { item, turnID, cited = false, onOpen } = $props()
+  let { item, cited = false, onOpen } = $props()
+  const snippetPreview = $derived.by(() => {
+    // The response retains exact evidence; cards only need the two visible lines.
+    const characters = [...String(item.source.snippet || '')]
+    if (characters.length <= 420) return characters.join('')
+    return `${characters.slice(0, 420).join('').trimEnd()}…`
+  })
 </script>
 
-<a id={`research-source-${turnID}-${item.number}`} class="source-card" class:cited
+<a class="source-card" class:cited
    href={`#/doc/${item.source.id}`} onclick={(event) => onOpen?.(event)}
    aria-label={`Open source ${item.number}: ${item.source.title || `Document #${item.source.id}`}`}>
   <span class="source-number">[{item.number}]</span>
   <span class="source-copy">
     <strong>{item.source.title || `Document #${item.source.id}`}</strong>
-    <span>{item.source.snippet}</span>
+    <span>{snippetPreview}</span>
     <small><i class:danger={sensDot(item.source.sensitivity) === 'danger'}></i>{sensitivityLabel(item.source.sensitivity)}</small>
   </span>
   <Icon name="chev" size={13} />

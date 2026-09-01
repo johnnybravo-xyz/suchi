@@ -41,9 +41,14 @@
   ]))
   let loadedFilterKey = ''
   let loadVersion = 0
+  let activeController // cancel superseded filters, not only their UI updates
   let suggestions = $state([])
   const queryAssistant = createQueryAssistant((next) => (suggestions = next))
-  onDestroy(queryAssistant.dispose)
+  onDestroy(() => {
+    loadVersion++
+    queryAssistant.dispose()
+    activeController?.abort()
+  })
 
   function setRouteFilter(key, value) {
     queryAssistant.clear()
@@ -66,6 +71,8 @@
 
   async function load({ background = false } = {}) {
     const version = ++loadVersion
+    activeController?.abort()
+    activeController = undefined
     if (!background) loading = true
     err = ''
     if (isInbox && !inbox?.id) {
@@ -75,6 +82,8 @@
       if (taxonomyLoaded) err = 'The inbox is unavailable.'
       return
     }
+    const controller = new AbortController()
+    activeController = controller
     try {
       const params = {
         page, page_size: pageSize, ordering,
@@ -100,7 +109,7 @@
         created_at_lte: params.created_at__lte === '' ? null : params.created_at__lte,
         language: '',
       })
-      const res = await listDocuments(params)
+      const res = await listDocuments(params, controller.signal)
       if (version !== loadVersion) return
       docs = res?.results || []
       count = res?.count ?? docs.length
@@ -109,6 +118,7 @@
     } catch (ex) {
       if (version === loadVersion) err = queryErrorMessage(ex, 'Could not load documents.')
     } finally {
+      if (activeController === controller) activeController = undefined
       if (version === loadVersion) loading = false
     }
   }
