@@ -2,6 +2,7 @@
   import { untrack } from 'svelte'
   import { setupState, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
+           saveResearchContextMode,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
            listPresets } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
@@ -28,6 +29,11 @@
     { id: 'freelance', name: 'Freelance', description: 'Clients, invoicing, taxes, contracts.', areas: [] },
     { id: 'smb_billing', name: 'Small business', description: 'AP/AR heavy: vendors, invoices, compliance.', areas: [] },
     { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
+  ]
+  const RESEARCH_CONTEXT_MODES = [
+    { id: 'focused', label: 'Focused', bound: '1 matching passage · up to 1,600 characters', description: 'Less text for smaller local models and faster answers.' },
+    { id: 'balanced', label: 'Balanced', bound: '2 matching passages · up to 3,200 characters', description: 'Recommended for most archives and models.' },
+    { id: 'detailed', label: 'Detailed', bound: '3 matching passages · up to 4,800 characters', description: 'Checks more places in long documents; may be slower and send more text.' },
   ]
   let presets = $state(FALLBACK_PRESETS)
   let loaded = $state(new Set())
@@ -78,6 +84,7 @@
     egress_ack: false, confidence_threshold: 0.7, date_auto_apply: true,
     archive_enabled: true, archive_auto_threshold: 0.9, archive_review_threshold: 0.5,
   })
+  let researchContextMode = $state('balanced')
   let llmStatus = $state(null)
   let llmTesting = $state(false)
   let llmMode = $state('local')
@@ -152,6 +159,8 @@
     llm.archive_enabled = st?.archive_enabled ?? true
     llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
     llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
+    researchContextMode = RESEARCH_CONTEXT_MODES.some(mode => mode.id === st?.research_context_mode)
+      ? st.research_context_mode : 'balanced'
     llm.api_key = ''
     llm.clear_api_key = false
     llmMode = st?.endpoint_url && !isLocalEndpoint(st.endpoint_url) ? 'hosted' : 'local'
@@ -221,8 +230,21 @@
   }
 
 
+  // POST and test reject unknown fields; keep PATCH-only settings out here.
   function llmPayload(enabled) {
-    return { ...llm, enabled, api_key: llm.api_key || '' }
+    return {
+      enabled,
+      endpoint_url: llm.endpoint_url,
+      model: llm.model,
+      api_key: llm.api_key || '',
+      clear_api_key: !!llm.clear_api_key,
+      egress_ack: !!llm.egress_ack,
+      confidence_threshold: Number(llm.confidence_threshold),
+      date_auto_apply: !!llm.date_auto_apply,
+      archive_enabled: !!llm.archive_enabled,
+      archive_auto_threshold: Number(llm.archive_auto_threshold),
+      archive_review_threshold: Number(llm.archive_review_threshold),
+    }
   }
 
   function matchingPayload() {
@@ -280,6 +302,12 @@
       archive_auto_threshold: Number(llm.archive_auto_threshold),
       archive_review_threshold: Number(llm.archive_review_threshold),
     }
+    return result
+  }
+
+  async function saveResearchContext() {
+    const result = await saveResearchContextMode(researchContextMode)
+    llmStatus = { ...llmStatus, research_context_mode: result.research_context_mode }
     return result
   }
 
@@ -503,6 +531,39 @@
         </div>
       {/if}
 
+      <section class="research-context" aria-labelledby="research-context-title">
+        <div class="research-context-heading">
+          <div>
+            <span class="option-kind">Archive answer evidence</span>
+            <h4 id="research-context-title">Archive research configuration</h4>
+          </div>
+          <span class="context-live">Applies to the next question</span>
+        </div>
+        <p>Choose how many relevant sections Archive research can include from each document. When room remains, Suchi may also include a separate document ending. More text can improve answers from long documents, but may take longer and send more to your model. It still considers only documents the person asking can access, with at most six documents per answer.</p>
+        <div class="context-presets" role="radiogroup" aria-label="Research context">
+          {#each RESEARCH_CONTEXT_MODES as mode, index (mode.id)}
+            <label class="context-preset" class:on={researchContextMode === mode.id}>
+              <input type="radio" name="research-context-mode" bind:group={researchContextMode} value={mode.id} />
+              <span class="context-copy">
+                <span class="context-label">
+                  <b>{mode.label}</b>
+                  {#if mode.id === 'balanced'}<span class="recommended">Recommended</span>{/if}
+                </span>
+                <span>{mode.description}</span>
+                <small>{mode.bound}</small>
+              </span>
+              <span class="context-depth" aria-hidden="true">
+                {#each Array(index + 1) as _}<i></i>{/each}
+              </span>
+            </label>
+          {/each}
+        </div>
+        <div class="toolbar option-save">
+          <button class="btn primary sm" disabled={busy || llmTesting}
+                  onclick={() => saveAnd(saveResearchContext, 'Research context saved')}>Save research context</button>
+        </div>
+      </section>
+
       <section class="model-options" aria-labelledby="model-options-title">
         <h4 id="model-options-title">Choose what Suchi can handle automatically</h4>
         <p class="options-intro">Local matching and model-driven handling are saved separately, so changing archive matching never turns on a model.</p>
@@ -609,6 +670,27 @@
   }
   .test-result.failed { border-left-color: var(--danger); }
   .connection-actions { margin-top: 16px; }
+  .research-context { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
+  .research-context-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+  .research-context h4 { margin: 0; font-size: 1rem; }
+  .research-context > p { max-width: 56em; margin: 7px 0 14px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+  .context-live { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+  .context-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .context-preset {
+    position: relative; display: grid; grid-template-columns: auto 1fr; gap: 8px; min-width: 0;
+    padding: 11px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); cursor: pointer;
+  }
+  .context-preset:hover { border-color: var(--line-strong); }
+  .context-preset.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .context-preset input { margin: 3px 0 0; accent-color: var(--accent); }
+  .context-copy { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
+  .context-label { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--ink); font-size: .82rem; }
+  .context-copy small { margin-top: 3px; color: var(--muted); font-size: .75rem; }
+  .recommended { padding: 2px 5px; border-radius: 999px; background: var(--tint); color: var(--accent); font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .context-depth { position: absolute; right: 9px; top: 10px; display: flex; align-items: end; gap: 2px; height: 12px; opacity: .38; }
+  .context-depth i { display: block; width: 3px; height: 5px; border-radius: 2px; background: var(--accent); }
+  .context-depth i:nth-child(2) { height: 8px; }
+  .context-depth i:nth-child(3) { height: 11px; }
   .model-options { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
   .model-options h4 { margin: 0; font-size: 1rem; }
   .options-intro { max-width: 54em; margin: 6px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
@@ -625,6 +707,11 @@
   @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .intent-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .model-options { padding: 13px; } }
+  @media (max-width: 760px) {
+    .research-context { padding: 13px; }
+    .research-context-heading { align-items: start; flex-direction: column; gap: 4px; }
+    .context-presets { grid-template-columns: 1fr; }
+  }
   .preset {
     display: flex; flex-direction: column; gap: 3px; cursor: pointer;
     border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 12px 14px;

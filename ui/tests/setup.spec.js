@@ -8,8 +8,20 @@ const presets = [
   { id: 'blank', name: 'Blank', description: 'Build your own', blank: true, areas: [] },
 ]
 
+// Mirror the server's strict decoder so payload drift fails in the browser suite.
+const llmInputFields = [
+  'enabled', 'endpoint_url', 'model', 'api_key', 'clear_api_key', 'egress_ack',
+  'confidence_threshold', 'date_auto_apply', 'archive_enabled',
+  'archive_auto_threshold', 'archive_review_threshold',
+]
+
+function unexpectedFields(payload, allowed) {
+  return Object.keys(payload).filter(key => !allowed.includes(key))
+}
+
 async function mockAPI(page, options = {}) {
   let taxonomyApplied = false
+  let researchContextMode = options.researchContextMode || 'balanced'
   await page.route('**/preview/**', async route => {
     await route.fulfill({
       contentType: 'text/html',
@@ -40,6 +52,13 @@ async function mockAPI(page, options = {}) {
     }
     if (path === '/api/jd/categories/' && options.taxonomyFailure) {
       await route.fulfill({ status: 500, json: { error: 'taxonomy unavailable' } })
+      return
+    }
+    if (path === '/api/admin/settings/llm' && request.method() === 'PATCH' && options.researchContextSaveFailure) {
+      await route.fulfill({
+        status: 500,
+        json: { code: 'save_failed', error: options.failureMessage || 'research context unavailable' },
+      })
       return
     }
     if (options.failPaths?.includes(path)) {
@@ -106,24 +125,64 @@ async function mockAPI(page, options = {}) {
       actions: [{ kind: 'assign_tags', name: 'Add tags', params: [{ name: 'tag_ids' }] }],
     }
     else if (path === '/api/admin/settings/llm') {
-      if (request.method() === 'POST') options.llmSettingsRequests?.push(request.postDataJSON())
-      body = {
-        enabled: options.llmEnabled ?? false,
-        active: options.llmActive ?? false,
-        endpoint_url: options.llmEndpoint || 'http://host.suchi.local:11434/v1',
-        model: options.llmModel || 'qwen2.5:7b',
-        has_api_key: options.llmHasAPIKey ?? false,
-        egress_ack: options.llmEgressAck ?? false,
-        confidence_threshold: 0.7,
-        date_auto_apply: options.dateAutoApply ?? true,
-        archive_enabled: true,
-        archive_auto_threshold: 0.9,
-        archive_review_threshold: 0.5,
+      if (request.method() === 'PATCH') {
+        const payload = request.postDataJSON()
+        const unexpected = unexpectedFields(payload, ['research_context_mode'])
+        if (unexpected.length || Object.keys(payload).length !== 1 ||
+            !['focused', 'balanced', 'detailed'].includes(payload.research_context_mode)) {
+          await route.fulfill({
+            status: 400,
+            json: { code: 'bad_json', error: unexpected.length ? `unknown field ${unexpected[0]}` : 'invalid research context mode' },
+          })
+          return
+        }
+        options.researchContextRequests?.push(payload)
+        researchContextMode = payload.research_context_mode
+        body = { research_context_mode: researchContextMode }
+      } else if (request.method() === 'POST') {
+        const payload = request.postDataJSON()
+        const unexpected = unexpectedFields(payload, llmInputFields)
+        if (unexpected.length) {
+          await route.fulfill({
+            status: 400,
+            json: { code: 'bad_json', error: `unknown field ${unexpected[0]}` },
+          })
+          return
+        }
+        options.llmSettingsRequests?.push(payload)
+        body = { saved: true, active: payload.enabled }
+      } else {
+        body = {
+          enabled: options.llmEnabled ?? false,
+          active: options.llmActive ?? false,
+          endpoint_url: options.llmEndpoint || 'http://host.suchi.local:11434/v1',
+          model: options.llmModel || 'qwen2.5:7b',
+          has_api_key: options.llmHasAPIKey ?? false,
+          egress_ack: options.llmEgressAck ?? false,
+          confidence_threshold: 0.7,
+          date_auto_apply: options.dateAutoApply ?? true,
+          archive_enabled: true,
+          archive_auto_threshold: 0.9,
+          archive_review_threshold: 0.5,
+          research_context_mode: researchContextMode,
+        }
       }
     }
-    else if (path === '/api/admin/settings/llm/test') body = {
-      message: 'Classifier connection passed',
-      result: { title: 'Connection test', confidence: 0.91, elapsed_ms: 12, tags: [] },
+    else if (path === '/api/admin/settings/llm/test') {
+      const payload = request.postDataJSON()
+      const unexpected = unexpectedFields(payload, llmInputFields)
+      if (unexpected.length) {
+        await route.fulfill({
+          status: 400,
+          json: { code: 'bad_json', error: `unknown field ${unexpected[0]}` },
+        })
+        return
+      }
+      options.llmTestRequests?.push(payload)
+      body = {
+        message: 'Classifier connection passed',
+        result: { title: 'Connection test', confidence: 0.91, elapsed_ms: 12, tags: [] },
+      }
     }
     else if (path === '/api/admin/settings/preferences') body = {
       backup_interval_hours: 24,
@@ -591,6 +650,97 @@ test('preserves an enabled model when saving archive matching', async ({ page })
     egress_ack: true,
     archive_auto_threshold: 0.85,
   })
+})
+
+test('loads Balanced research context and saves each bounded preset independently', async ({ page }) => {
+  const researchContextRequests = []
+  const llmSettingsRequests = []
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    researchContextRequests,
+    llmSettingsRequests,
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  const research = page.getByRole('region', { name: 'Archive research configuration' })
+  await expect(research.getByRole('radio', { name: /Balanced/ })).toBeChecked()
+  await expect(research.locator('input[type="number"]')).toHaveCount(0)
+  await expect(research.getByText('1 matching passage · up to 1,600 characters')).toBeVisible()
+  await expect(research.getByText('3 matching passages · up to 4,800 characters')).toBeVisible()
+  await expect(research.getByText(/may also include a separate document ending/)).toBeVisible()
+
+  for (const mode of ['Focused', 'Balanced', 'Detailed']) {
+    await research.getByRole('radio', { name: new RegExp(mode) }).check()
+    await research.getByRole('button', { name: 'Save research context' }).click()
+    await expect.poll(() => researchContextRequests.length).toBe(
+      ['Focused', 'Balanced', 'Detailed'].indexOf(mode) + 1
+    )
+  }
+  expect(researchContextRequests).toEqual([
+    { research_context_mode: 'focused' },
+    { research_context_mode: 'balanced' },
+    { research_context_mode: 'detailed' },
+  ])
+  expect(llmSettingsRequests).toEqual([])
+})
+
+test('keeps research context out of model test, save, and disable payloads', async ({ page }) => {
+  const llmSettingsRequests = []
+  const llmTestRequests = []
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    llmSettingsRequests,
+    llmTestRequests,
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  await page.getByRole('radio', { name: /Detailed/ }).check()
+  await page.getByRole('button', { name: 'Test connection' }).click()
+  await expect(page.getByText('Validated in 12 ms')).toBeVisible()
+  await expect.poll(() => llmTestRequests.length).toBe(1)
+
+  const enabledPayload = {
+    enabled: true,
+    endpoint_url: 'http://host.suchi.local:11434/v1',
+    model: 'qwen2.5:7b',
+    api_key: '',
+    clear_api_key: false,
+    egress_ack: false,
+    confidence_threshold: 0.7,
+    date_auto_apply: true,
+    archive_enabled: true,
+    archive_auto_threshold: 0.9,
+    archive_review_threshold: 0.5,
+  }
+  expect(llmTestRequests[0]).toEqual(enabledPayload)
+
+  await page.getByRole('button', { name: 'Save model and options' }).click()
+  await expect.poll(() => llmSettingsRequests.length).toBe(1)
+  expect(llmSettingsRequests[0]).toEqual(enabledPayload)
+
+  await page.getByRole('button', { name: 'Disable model' }).click()
+  await expect.poll(() => llmSettingsRequests.length).toBe(2)
+  expect(llmSettingsRequests[1]).toEqual({ ...enabledPayload, enabled: false })
+})
+
+test('keeps research context editable when its standalone save fails', async ({ page }) => {
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    researchContextMode: 'unexpected',
+    researchContextSaveFailure: true,
+    failureMessage: 'research context unavailable',
+  })
+  await page.goto('/#/settings?tab=archive&section=llm')
+
+  const research = page.getByRole('region', { name: 'Archive research configuration' })
+  await expect(research.getByRole('radio', { name: /Balanced/ })).toBeChecked()
+  await research.getByRole('radio', { name: /Detailed/ }).check()
+  await research.getByRole('button', { name: 'Save research context' }).click()
+  await expect(page.getByText('research context unavailable')).toBeVisible()
+  await expect(research.getByRole('radio', { name: /Detailed/ })).toBeChecked()
 })
 
 test('mounts only the selected settings surface', async ({ page }) => {
