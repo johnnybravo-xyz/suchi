@@ -180,3 +180,38 @@ func TestStats_DeadJobsAdminOnly(t *testing.T) {
 		t.Errorf("member dead_jobs = %d, want 0 (admin-only)", member.DeadJobs)
 	}
 }
+
+func TestStats_PendingApprovalsMatchesActionableInbox(t *testing.T) {
+	s := newStatsServer(t)
+	liveDoc := seedApprovalDocument(t, s.DB, "stats-live", 2, false)
+	trashedDoc := seedApprovalDocument(t, s.DB, "stats-trashed", 2, true)
+	seedApprovalDocument(t, s.DB, "stats-stale", 0, false)
+	seedUser(t, s.DB, 5)
+
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &liveDoc, Assignee: "user:5"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &trashedDoc, Assignee: "user:5"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{Assignee: "user:5", Status: "claimed"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{
+		Slug:     "rescan-proposal",
+		Vars:     map[string]any{"kind": "ocr", "current_version": 2},
+		Assignee: "user:5",
+	})
+
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &liveDoc, Assignee: "role:admin"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &trashedDoc, Assignee: "role:admin"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{Assignee: "role:admin", Status: "claimed"})
+	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{
+		Slug:     "rescan-proposal",
+		Vars:     map[string]any{"kind": "ocr", "current_version": 2},
+		Assignee: "role:admin",
+	})
+
+	code, member := doStats(t, s, memberPrincipal(5))
+	if code != 200 || member.PendingApprovals != 3 {
+		t.Fatalf("member stats: status=%d pending=%d, want 200/3", code, member.PendingApprovals)
+	}
+	code, admin := doStats(t, s, adminPrincipal(1))
+	if code != 200 || admin.PendingApprovals != 3 {
+		t.Fatalf("admin stats: status=%d pending=%d, want 200/3", code, admin.PendingApprovals)
+	}
+}

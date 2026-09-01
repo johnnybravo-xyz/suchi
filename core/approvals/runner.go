@@ -338,6 +338,9 @@ func (e *Engine) Resolve(ctx context.Context, taskID int64, choice string, actor
 	}
 	actorTag := principalTag(actor)
 	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := ensureTaskRunActionable(ctx, tx, taskID); err != nil {
+			return err
+		}
 		if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package rescan_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -196,5 +197,74 @@ func TestDetect_DoesNotProposeEncryptedDocuments(t *testing.T) {
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
 		t.Fatalf("encrypted document opened %d proposal runs, want 0", got)
+	}
+}
+
+func TestProposalStillNeededTracksEligibleDocuments(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	vars := map[string]any{
+		"kind":             "ocr",
+		"current_version":  float64(2),
+		"target_documents": []any{},
+	}
+
+	first := seedDoc(t, ctx, d, owner, "sha-first", 0)
+	needed, err := rescan.ProposalStillNeeded(ctx, d, vars)
+	if err != nil || !needed {
+		t.Fatalf("live stale document: needed=%v err=%v", needed, err)
+	}
+	for _, version := range []any{2, int64(2)} {
+		vars["current_version"] = version
+		needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+		if err != nil || !needed {
+			t.Fatalf("current_version=%T: needed=%v err=%v", version, needed, err)
+		}
+	}
+	if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET trashed_at = 1 WHERE id = ?`, first); err != nil {
+		t.Fatal(err)
+	}
+	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	if err != nil || needed {
+		t.Fatalf("only stale document trashed: needed=%v err=%v", needed, err)
+	}
+
+	ids := make([]int64, 11)
+	for i := range ids {
+		ids[i] = seedDoc(t, ctx, d, owner, fmt.Sprintf("sha-preview-%d", i), 0)
+	}
+	vars["target_documents"] = ids[:10]
+	for _, id := range ids[:10] {
+		if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET trashed_at = 1 WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	if err != nil || !needed {
+		t.Fatalf("eligible document beyond preview: needed=%v err=%v", needed, err)
+	}
+	if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET trashed_at = 1 WHERE id = ?`, ids[10]); err != nil {
+		t.Fatal(err)
+	}
+	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	if err != nil || needed {
+		t.Fatalf("all stale documents trashed: needed=%v err=%v", needed, err)
+	}
+}
+
+func TestProposalStillNeededRejectsMalformedVars(t *testing.T) {
+	ctx := context.Background()
+	d, _ := setupDB(t)
+	for _, vars := range []map[string]any{
+		{},
+		{"kind": "ocr"},
+		{"kind": "ocr", "current_version": 0},
+		{"kind": "ocr", "current_version": -1},
+		{"kind": "ocr", "current_version": 1.5},
+		{"kind": "ocr", "current_version": "2"},
+	} {
+		if _, err := rescan.ProposalStillNeeded(ctx, d, vars); err == nil || err.Error() != "rescan: malformed proposal vars" {
+			t.Fatalf("vars=%v: got error %v", vars, err)
+		}
 	}
 }

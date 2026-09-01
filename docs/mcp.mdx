@@ -65,8 +65,10 @@ tool only to clients allowed to read archive text.
 
 ### `list_inbox`
 
-Returns up to 50 durable jobs and approval tasks visible to the caller through
-`GET /api/tasks/?limit=50`. Requires `documents:read` for API-token callers.
+Returns up to 50 durable jobs and actionable approval tasks visible to the
+caller through `GET /api/tasks/?limit=50`. Approvals bound to trashed documents
+disappear; they can reappear after restoration only while the task and its run
+remain active. Requires `documents:read` for API-token callers.
 
 ### `resolve_approval_task`
 
@@ -75,7 +77,6 @@ Requires `documents:write` for API-token callers.
 
 - `task_id`: required task ID
 - `choice`: required declared choice
-- `note`: optional operator note
 
 ### `create_share_link`
 

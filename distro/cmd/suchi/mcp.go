@@ -263,7 +263,6 @@ func registerListInbox(server *mcp.Server, client *suchiClient) {
 type resolveTaskArgs struct {
 	TaskID int64  `json:"task_id" jsonschema:"the approval task id to resolve"`
 	Choice string `json:"choice"  jsonschema:"one of the choices the task declared"`
-	Note   string `json:"note,omitempty" jsonschema:"optional operator note attached to the resolution"`
 }
 
 func registerResolveApprovalTask(server *mcp.Server, client *suchiClient) {
@@ -274,10 +273,7 @@ func registerResolveApprovalTask(server *mcp.Server, client *suchiClient) {
 		if args.TaskID <= 0 || args.Choice == "" {
 			return nil, nil, errors.New("task_id must be > 0 and choice non-empty")
 		}
-		body, _ := json.Marshal(map[string]any{
-			"choice": args.Choice,
-			"note":   args.Note,
-		})
+		body, _ := json.Marshal(map[string]any{"choice": args.Choice})
 		b, err := client.do(ctx, "POST",
 			"/api/approvals/tasks/"+strconv.FormatInt(args.TaskID, 10)+"/resolve",
 			strings.NewReader(string(body)))

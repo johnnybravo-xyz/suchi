@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Approvals bound to trashed documents now disappear from REST and MCP inboxes;
+  restoring the document makes them available again only if the task and its
+  run are still active.
+
 ## [0.1.0-beta.1] - 2026-08-29
 
 ### Added

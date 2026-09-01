@@ -11,7 +11,6 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
-	"strconv"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
@@ -101,23 +100,12 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Approvals — the count MUST match what the Tasks page shows for
-	// this caller. Same WHERE clause as approvalTasksForUser in
-	// tasks.go: `user:<me>` always, plus `role:admin` when the caller
-	// is admin. Otherwise a task assigned to another role/user bumps
-	// the dashboard counter but never surfaces on the page the counter
-	// links to — a classic "number won't stop nagging me" bug.
-	me := "user:" + strconv.FormatInt(p.UserID, 10)
-	if isAdmin {
-		_ = s.DB.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM approval_tasks
-			 WHERE assignee IN (?, 'role:admin') AND status IN ('open','claimed')`,
-			me).Scan(&out.PendingApprovals)
-	} else {
-		_ = s.DB.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM approval_tasks WHERE assignee = ? AND status IN ('open','claimed')`,
-			me).Scan(&out.PendingApprovals)
+	pendingApprovals, err := s.countVisibleApprovalTasks(ctx, p.UserID, p.Role, "open", "claimed")
+	if err != nil {
+		s.serverErr(w, "stats.approvals", err)
+		return
 	}
+	out.PendingApprovals = int64(pendingApprovals)
 
 	// Dead jobs — admin only. Members see 0 so the dashboard doesn't
 	// leak "the archive is broken" to non-admins.

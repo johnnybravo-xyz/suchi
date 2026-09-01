@@ -3,6 +3,7 @@ package approvals_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
@@ -77,6 +78,88 @@ func TestDocumentChangeUsesApprovalLifecycle(t *testing.T) {
 	}
 	if title != "Electricity bill, March 2026" || state != "done" || transitionActor != "user:1" || auditKind != "user" {
 		t.Fatalf("title=%q state=%q transition_actor=%q audit_actor=%q", title, state, transitionActor, auditKind)
+	}
+}
+
+func TestDocumentChangeCannotResolveWhileDocumentIsTrashed(t *testing.T) {
+	e := newEngine(t)
+	ctx := context.Background()
+	seedDocumentForChange(t, e.DB())
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+			Field: "title", Value: "Electricity bill, March 2026",
+			Label: "Electricity bill, March 2026", Confidence: 0.65, Source: "llm",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT r.id FROM approval_runs r
+		JOIN approval_defs d ON d.id = r.def_id
+		WHERE d.slug = ? AND r.doc_id = 10
+	`, approvals.DocumentChangeSlug).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	taskID := tasks[0].ID
+	if _, err := e.DB().Write.ExecContext(ctx,
+		`UPDATE documents SET trashed_at = 1 WHERE id = 10`); err != nil {
+		t.Fatal(err)
+	}
+
+	actor := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	if err := e.Resolve(ctx, taskID, "apply", actor); !errors.Is(err, approvals.ErrTaskUnavailable) {
+		t.Fatalf("resolve trashed document: got %v, want ErrTaskUnavailable", err)
+	}
+	var status, title string
+	if err := e.DB().Read.QueryRowContext(ctx,
+		`SELECT status FROM approval_tasks WHERE id = ?`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRowContext(ctx,
+		`SELECT title FROM documents WHERE id = 10`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	var advanceJobs int
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM jobs
+		WHERE kind = 'approval:advance'
+		  AND json_extract(payload, '$.run_id') = ?
+		  AND json_extract(payload, '$.trigger') = 'apply'
+	`, runID).Scan(&advanceJobs); err != nil {
+		t.Fatal(err)
+	}
+	if status != "open" || title != "scan.pdf" || advanceJobs != 0 {
+		t.Fatalf("status=%q title=%q apply_jobs=%d", status, title, advanceJobs)
+	}
+
+	if _, err := e.DB().Write.ExecContext(ctx,
+		`UPDATE documents SET trashed_at = NULL WHERE id = 10`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Resolve(ctx, taskID, "apply", actor); err != nil {
+		t.Fatalf("resolve restored document: %v", err)
+	}
+	if err := e.Advance(ctx, runID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRowContext(ctx,
+		`SELECT title FROM documents WHERE id = 10`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Electricity bill, March 2026" {
+		t.Fatalf("restored approval did not apply: title=%q", title)
 	}
 }
 
