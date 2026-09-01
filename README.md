@@ -24,6 +24,10 @@ telemetry service.
 Status: **v0.1 beta candidate**, suitable for evaluation but not yet critical
 archives. The API and storage layout are stabilising but not frozen.
 
+[Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·
+[Releases](https://github.com/johnnybravo-xyz/suchi/releases) ·
+[Actions](https://github.com/johnnybravo-xyz/suchi/actions)
+
 - Reproducible size and startup measurements live under
   [`hack/bench/latest-published/`](hack/bench/latest-published/).
 - No built-in outbound connection is made until an operator enables or uses an

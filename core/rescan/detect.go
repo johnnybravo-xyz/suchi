@@ -23,6 +23,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -34,6 +35,47 @@ import (
 var kindsToCheck = []string{"ocr", "llm", "content"}
 
 const proposalTargetPreview = 10
+
+var errMalformedProposalVars = fmt.Errorf("rescan: malformed proposal vars")
+
+// ProposalStillNeeded reports whether a rescan proposal still has eligible
+// work. target_documents is a bounded preview and is deliberately ignored.
+func ProposalStillNeeded(ctx context.Context, d *db.DB, vars map[string]any) (bool, error) {
+	kind, ok := vars["kind"].(string)
+	if !ok || kind == "" {
+		return false, errMalformedProposalVars
+	}
+
+	var currentVersion int
+	switch value := vars["current_version"].(type) {
+	case float64:
+		if value <= 0 || math.Trunc(value) != value {
+			return false, errMalformedProposalVars
+		}
+		currentVersion = int(value)
+		if currentVersion <= 0 || float64(currentVersion) != value {
+			return false, errMalformedProposalVars
+		}
+	case int:
+		currentVersion = value
+	case int64:
+		currentVersion = int(value)
+		if int64(currentVersion) != value {
+			return false, errMalformedProposalVars
+		}
+	default:
+		return false, errMalformedProposalVars
+	}
+	if currentVersion <= 0 {
+		return false, errMalformedProposalVars
+	}
+
+	count, err := CountProposalStale(ctx, d, kind, currentVersion)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
 
 // EnsureProposals is the boot-time entrypoint. Idempotent.
 //

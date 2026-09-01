@@ -13,11 +13,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 )
 
 func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
@@ -199,45 +204,100 @@ func itoa(n int64) string {
 	return string(b[i:])
 }
 
-// seedApprovalTask inserts a def+run+task triple. Returns the def id
-// and the task id so tests can assert on both.
-func seedApprovalTask(t *testing.T, d *db.DB, assignee, status string) (defID, runID, taskID int64) {
+type approvalTaskSeed struct {
+	Slug     string
+	RunState string
+	DocID    *int64
+	Vars     map[string]any
+	Assignee string
+	Status   string
+}
+
+func seedApprovalTaskFixture(t *testing.T, d *db.DB, seed approvalTaskSeed) (defID, runID, taskID int64) {
 	t.Helper()
 	ctx := context.Background()
-
 	seedUser(t, d, 1)
-
-	// A single shared def per DB — tests care about tasks, not defs. Upsert-on-slug.
+	if seed.Slug == "" {
+		seed.Slug = "t"
+	}
+	if seed.RunState == "" {
+		seed.RunState = "running"
+	}
+	if seed.Assignee == "" {
+		seed.Assignee = "user:5"
+	}
+	if seed.Status == "" {
+		seed.Status = "open"
+	}
+	varsJSON, err := json.Marshal(seed.Vars)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT OR IGNORE INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
-		VALUES ('t', 1, '{}', 1, 0, 1)
-	`); err != nil {
+		VALUES (?, 1, '{}', 1, 0, 1)
+	`, seed.Slug); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Read.QueryRowContext(ctx,
-		`SELECT id FROM approval_defs WHERE slug='t' AND version=1`).Scan(&defID); err != nil {
+		`SELECT id FROM approval_defs WHERE slug = ? AND version = 1`, seed.Slug).Scan(&defID); err != nil {
 		t.Fatal(err)
 	}
-
+	var docID any
+	if seed.DocID != nil {
+		docID = *seed.DocID
+	}
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO approval_runs(def_id, state, current_state, vars_json, state_entered_at, started_at)
-		VALUES (?, 'running', 'wait', '{}', 0, 0)
-	`, defID)
+		INSERT INTO approval_runs(def_id, doc_id, state, current_state, vars_json, state_entered_at, started_at)
+		VALUES (?, ?, ?, 'wait', ?, 0, 0)
+	`, defID, docID, seed.RunState, string(varsJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
 	runID, _ = res.LastInsertId()
-
 	res, err = d.Write.ExecContext(ctx, `
-		INSERT INTO approval_tasks(run_id, state_key, assignee, prompt,
-		                            choices_json, status, created_at)
+		INSERT INTO approval_tasks(run_id, state_key, assignee, prompt, choices_json, status, created_at)
 		VALUES (?, 'wait', ?, 'approve?', '["approve","reject"]', ?, 100)
-	`, runID, assignee, status)
+	`, runID, seed.Assignee, seed.Status)
 	if err != nil {
 		t.Fatal(err)
 	}
 	taskID, _ = res.LastInsertId()
 	return
+}
+
+func seedApprovalTask(t *testing.T, d *db.DB, assignee, status string) (defID, runID, taskID int64) {
+	return seedApprovalTaskFixture(t, d, approvalTaskSeed{Assignee: assignee, Status: status})
+}
+
+func seedApprovalDocument(t *testing.T, d *db.DB, sha string, ocrVersion int, trashed bool) int64 {
+	t.Helper()
+	seedUser(t, d, 1)
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
+		VALUES (0, 9, 'Test', 0);
+		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
+		VALUES (1, 0, 1, 'Inbox', 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	var trashedAt any
+	if trashed {
+		trashedAt = int64(1)
+	}
+	res, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO documents(owner_id, original_blob, original_size, title, jd_category_id, trashed_at,
+		                      created_at, updated_at, pipeline_version_ocr)
+		VALUES (1, ?, 0, ?, 1, ?, 0, 0, ?)
+	`, sha, sha, trashedAt, ocrVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
@@ -332,5 +392,179 @@ func TestApprovalTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
 	// it in Counts.
 	if open != 5 {
 		t.Errorf("open count truncated by limit: want 5, got %d", open)
+	}
+}
+
+func TestApprovalTasksForUser_OnlyReturnsActionableTasks(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+
+	liveDoc := seedApprovalDocument(t, d, "sha-live", 2, false)
+	trashedDoc := seedApprovalDocument(t, d, "sha-trashed", 2, true)
+	staleDoc := seedApprovalDocument(t, d, "sha-stale", 0, true)
+	seedApprovalTaskFixture(t, d, approvalTaskSeed{DocID: &liveDoc})
+	seedApprovalTaskFixture(t, d, approvalTaskSeed{DocID: &trashedDoc})
+	seedApprovalTaskFixture(t, d, approvalTaskSeed{})
+	seedApprovalTaskFixture(t, d, approvalTaskSeed{RunState: "done"})
+	seedApprovalTaskFixture(t, d, approvalTaskSeed{
+		Slug: rescan.ProposalSlug,
+		Vars: map[string]any{"kind": "ocr", "current_version": 2},
+	})
+
+	r := httptest.NewRequest("GET", "/api/tasks/", nil)
+	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 || open != 2 {
+		t.Fatalf("initial actionable tasks: len=%d open=%d, want 2/2", len(tasks), open)
+	}
+
+	secondStaleDoc := seedApprovalDocument(t, d, "sha-stale-second", 0, false)
+	tasks, open, err = s.approvalTasksForUser(r, 5, "member", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 3 || open != 3 {
+		t.Fatalf("rescan with another live target: len=%d open=%d, want 3/3", len(tasks), open)
+	}
+
+	if _, err := d.Write.ExecContext(ctx, `
+		UPDATE documents SET trashed_at = 1 WHERE id = ?;
+		UPDATE documents SET trashed_at = NULL WHERE id IN (?, ?)
+	`, secondStaleDoc, trashedDoc, staleDoc); err != nil {
+		t.Fatal(err)
+	}
+	tasks, open, err = s.approvalTasksForUser(r, 5, "member", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 4 || open != 4 {
+		t.Fatalf("restored approvals: len=%d open=%d, want 4/4", len(tasks), open)
+	}
+}
+
+func TestApprovalTasksForUser_RescanPaginationWithSingleReadConnection(t *testing.T) {
+	d := openTestDB(t)
+	// One reader makes an outer-Rows/nested-read deadlock deterministic.
+	d.Read.SetMaxOpenConns(1)
+	d.Read.SetMaxIdleConns(1)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+
+	// Force pagination past one complete batch of ineligible proposals.
+	_, _, ordinaryTaskID := seedApprovalTask(t, d, "user:5", "open")
+	for range approvalTaskBatchSize {
+		seedApprovalTaskFixture(t, d, approvalTaskSeed{
+			Slug: rescan.ProposalSlug,
+			Vars: map[string]any{"kind": "ocr", "current_version": 2},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, "/api/tasks/", nil).WithContext(ctx)
+	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != ordinaryTaskID {
+		t.Fatalf("tasks = %+v, want only ordinary task %d", tasks, ordinaryTaskID)
+	}
+	if open != 1 {
+		t.Fatalf("open count = %d, want 1", open)
+	}
+}
+
+func TestCountVisibleApprovalTasks_RescanWithSingleReadConnection(t *testing.T) {
+	d := openTestDB(t)
+	d.Read.SetMaxOpenConns(1)
+	d.Read.SetMaxIdleConns(1)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+
+	seedApprovalDocument(t, d, "sha-single-reader-stale", 0, false)
+	seedApprovalTask(t, d, "user:5", "open")
+	// Distinct previews share one eligibility result but count as two tasks.
+	for i := range 2 {
+		seedApprovalTaskFixture(t, d, approvalTaskSeed{
+			Slug: rescan.ProposalSlug,
+			Vars: map[string]any{
+				"kind": "ocr", "current_version": 2,
+				"target_documents": []any{i},
+			},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	count, err := s.countVisibleApprovalTasks(ctx, 5, "member", "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("open count = %d, want 3", count)
+	}
+}
+
+func TestApprovalResolveTask_TerminalConflictAndUnavailableNotFound(t *testing.T) {
+	d := openTestDB(t)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	s := &Server{DB: d, Log: logger}
+	previousEngine := approvals.Default()
+	approvals.SetDefault(approvals.New(d, logger))
+	t.Cleanup(func() { approvals.SetDefault(previousEngine) })
+
+	trashedDoc := seedApprovalDocument(t, d, "sha-resolve-trashed", 2, true)
+	_, _, resolvedID := seedApprovalTask(t, d, "user:5", "resolved")
+	_, _, expiredID := seedApprovalTask(t, d, "user:5", "expired")
+	_, _, openTrashedID := seedApprovalTaskFixture(t, d, approvalTaskSeed{
+		DocID: &trashedDoc,
+	})
+	_, _, claimedTrashedID := seedApprovalTaskFixture(t, d, approvalTaskSeed{
+		DocID:  &trashedDoc,
+		Status: "claimed",
+	})
+	_, _, stoppedRunID := seedApprovalTaskFixture(t, d, approvalTaskSeed{
+		RunState: "done",
+	})
+	_, _, staleProposalID := seedApprovalTaskFixture(t, d, approvalTaskSeed{
+		Slug: rescan.ProposalSlug,
+		Vars: map[string]any{"kind": "content", "current_version": 2},
+	})
+
+	for _, tc := range []struct {
+		name     string
+		taskID   int64
+		wantHTTP int
+		wantCode string
+	}{
+		{"resolved retry", resolvedID, http.StatusConflict, "already_resolved"},
+		{"expired retry", expiredID, http.StatusConflict, "already_resolved"},
+		{"open trashed document", openTrashedID, http.StatusNotFound, "no_task"},
+		{"claimed trashed document", claimedTrashedID, http.StatusNotFound, "no_task"},
+		{"open stopped run", stoppedRunID, http.StatusNotFound, "no_task"},
+		{"stale rescan proposal", staleProposalID, http.StatusNotFound, "no_task"},
+		{"missing task", 999999, http.StatusNotFound, "no_task"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/approvals/tasks/resolve",
+				strings.NewReader(`{"choice":"approve"}`))
+			req.SetPathValue("task_id", strconv.FormatInt(tc.taskID, 10))
+			req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+			rec := httptest.NewRecorder()
+			s.ApprovalResolveTask(rec, req)
+			if rec.Code != tc.wantHTTP {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tc.wantHTTP)
+			}
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Code != tc.wantCode {
+				t.Fatalf("code=%q body=%s, want %q", body.Code, rec.Body.String(), tc.wantCode)
+			}
+		})
 	}
 }

@@ -414,6 +414,25 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 	return out, rows.Err()
 }
 
+// Recheck inside the resolving write transaction so document trash or run
+// termination cannot race with enqueuing the task's advance.
+func ensureTaskRunActionable(ctx context.Context, tx *sql.Tx, taskID int64) error {
+	var actionable int
+	err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		LEFT JOIN documents d ON d.id = r.doc_id
+		WHERE t.id = ?
+		  AND r.state = 'running'
+		  AND (r.doc_id IS NULL OR (d.id IS NOT NULL AND d.trashed_at IS NULL))
+	`, taskID).Scan(&actionable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskUnavailable
+	}
+	return err
+}
+
 // markTaskResolved sets status='resolved' + the resolution fields.
 // Guarded on prior status='open' so a double-resolve is a no-op we can
 // detect (RowsAffected == 0 → ErrTaskResolved).

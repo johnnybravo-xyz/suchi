@@ -13,6 +13,10 @@ var (
 	// ErrNoTask means the task id is unknown.
 	ErrNoTask = errors.New("approvals: task not found")
 
+	// ErrTaskUnavailable means the task's run or bound document is not
+	// currently actionable.
+	ErrTaskUnavailable = errors.New("approvals: task is not actionable")
+
 	// ErrBadTransition means the current state has no mapping for the
 	// trigger, or the handler returned an event not in State.On.
 	ErrBadTransition = errors.New("approvals: bad transition")

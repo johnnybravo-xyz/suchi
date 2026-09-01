@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 )
 
 // Task is one job-row projection for the /api/tasks/ surface.
@@ -144,12 +146,11 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	if include != "jobs" && principal.UserID > 0 {
 		atasks, open, err := s.approvalTasksForUser(r, principal.UserID, principal.Role, limit)
 		if err != nil {
-			s.Log.Error("api.tasks.approvals_query", "err", err.Error())
-			// Non-fatal: jobs already loaded, degrade to jobs-only.
-		} else {
-			resp.ApprovalTasks = atasks
-			resp.Counts["approvals_open"] = open
+			s.serverErr(w, "tasks.approvals_query", err)
+			return
 		}
+		resp.ApprovalTasks = atasks
+		resp.Counts["approvals_open"] = open
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
@@ -351,29 +352,103 @@ func escapeLike(s string) string {
 	return r.Replace(s)
 }
 
-// approvalTasksForUser returns open+claimed approval_tasks whose
-// assignee is the current user, plus the total open count for
-// "approvals_open" in Counts. The joined approval_defs id is exposed as
-// ApprovalID so a client can render "Invoice approval" without a second
-// round-trip to /api/approvals/definitions/{slug}.
-//
-// Assignee filter is exact: "user:<id>". Role-based assignees are
-// resolved to user rows at approvals.advance time (see
-// core/approvals.AssigneeResolver), so a role-scoped downstream build
-// still surfaces the right rows here.
-func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string, limit int) ([]ApprovalTask, int, error) {
-	me := fmt.Sprintf("user:%d", userID)
+const approvalTaskBatchSize = 64
 
-	// Role-scoped tasks (e.g. `assignee = "role:admin"`) show up
-	// to every user whose role matches. Non-role assignees still
-	// filter by user:N exact match. The OR fragment is empty for
-	// non-privileged users, keeping their inbox to their own tasks.
-	roleClause := ""
+const approvalTaskVisibilitySQL = `
+	r.state = 'running'
+	AND (r.doc_id IS NULL OR (doc.id IS NOT NULL AND doc.trashed_at IS NULL))`
+
+func approvalAssigneeSQL(userID int64, role string) (string, []any) {
+	clause := "t.assignee = ?"
 	if role == "admin" {
-		roleClause = " OR t.assignee = 'role:admin'"
+		clause = "(t.assignee = ? OR t.assignee = 'role:admin')"
 	}
+	return clause, []any{fmt.Sprintf("user:%d", userID)}
+}
 
-	q := `
+// proposalEligibilityCache keys only the fields that determine eligibility, so
+// equivalent proposals share one archive-wide stale-document count per request.
+type proposalEligibilityCache map[string]bool
+
+func proposalEligibilityKey(vars map[string]any) (string, error) {
+	raw, err := json.Marshal([]any{vars["kind"], vars["current_version"]})
+	if err != nil {
+		return "", fmt.Errorf("encode rescan proposal eligibility key: %w", err)
+	}
+	return string(raw), nil
+}
+
+func (s *Server) proposalStillNeeded(ctx context.Context, vars map[string]any, cache proposalEligibilityCache) (bool, error) {
+	key, err := proposalEligibilityKey(vars)
+	if err != nil {
+		return false, err
+	}
+	if cache != nil {
+		if needed, ok := cache[key]; ok {
+			return needed, nil
+		}
+	}
+	needed, err := rescan.ProposalStillNeeded(ctx, s.DB, vars)
+	if err != nil {
+		return false, err
+	}
+	if cache != nil {
+		cache[key] = needed
+	}
+	return needed, nil
+}
+
+// materializeApprovalTasks closes the outer Rows before eligibility checks
+// acquire another reader; holding both can deadlock the bounded read pool.
+func materializeApprovalTasks(rows *sql.Rows) ([]ApprovalTask, error) {
+	defer rows.Close()
+	tasks := []ApprovalTask{}
+	for rows.Next() {
+		var (
+			task       ApprovalTask
+			choicesRaw string
+			varsRaw    string
+			deadline   int64
+			docID      int64
+			hasThumb   int
+		)
+		if err := rows.Scan(&task.ID, &task.RunID, &task.ApprovalID, &docID, &task.ApprovalName,
+			&task.StateKey, &task.Assignee, &task.Prompt, &choicesRaw, &task.Status, &deadline,
+			&task.CreatedAt, &varsRaw, &task.DocTitle, &task.DocJDCategoryID, &task.DocJDCategoryCode,
+			&task.DocJDCategoryName, &hasThumb); err != nil {
+			return nil, fmt.Errorf("scan approval_tasks row: %w", err)
+		}
+		if docID > 0 {
+			task.DocID = docID
+		}
+		task.DocHasThumbnail = hasThumb != 0
+		if deadline > 0 {
+			task.DeadlineAt = deadline
+		}
+		if choicesRaw != "" {
+			if err := json.Unmarshal([]byte(choicesRaw), &task.Choices); err != nil {
+				return nil, fmt.Errorf("decode approval task %d choices: %w", task.ID, err)
+			}
+		}
+		if varsRaw != "" && varsRaw != "{}" {
+			if err := json.Unmarshal([]byte(varsRaw), &task.Vars); err != nil {
+				return nil, fmt.Errorf("decode approval task %d vars: %w", task.ID, err)
+			}
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate approval_tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+// approvalTasksForUser returns the caller's actionable approval tasks and the
+// exact untruncated count of open tasks.
+func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string, limit int) ([]ApprovalTask, int, error) {
+	ctx := r.Context()
+	assigneeSQL, assigneeArgs := approvalAssigneeSQL(userID, role)
+	query := `
 		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0), def.slug,
 		       t.state_key, t.assignee, t.prompt,
 		       t.choices_json, t.status, COALESCE(t.deadline_at, 0), t.created_at,
@@ -386,66 +461,184 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string
 		JOIN approval_defs def ON def.id = r.def_id
 		LEFT JOIN documents doc ON doc.id = r.doc_id
 		LEFT JOIN jd_categories jc ON jc.id = doc.jd_category_id
-		WHERE (t.assignee = ?` + roleClause + `) AND t.status IN ('open','claimed')
+		WHERE (` + assigneeSQL + `)
+		  AND t.status IN ('open','claimed')
+		  AND ` + approvalTaskVisibilitySQL + `
 		ORDER BY t.created_at DESC, t.id DESC
-		LIMIT ?
-	`
-	rows, err := s.DB.Read.QueryContext(r.Context(), q, me, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("select approval_tasks: %w", err)
-	}
-	defer rows.Close()
+		LIMIT ? OFFSET ?`
 
-	var out []ApprovalTask
-	for rows.Next() {
-		var (
-			t          ApprovalTask
-			choicesRaw string
-			varsRaw    string
-			deadline   int64
-			docID      int64
-			hasThumb   int
-		)
-		if err := rows.Scan(&t.ID, &t.RunID, &t.ApprovalID, &docID, &t.ApprovalName,
-			&t.StateKey, &t.Assignee, &t.Prompt, &choicesRaw, &t.Status, &deadline,
-			&t.CreatedAt, &varsRaw, &t.DocTitle, &t.DocJDCategoryID, &t.DocJDCategoryCode,
-			&t.DocJDCategoryName, &hasThumb); err != nil {
-			return nil, 0, fmt.Errorf("scan approval_tasks row: %w", err)
+	out := []ApprovalTask{}
+	eligibility := proposalEligibilityCache{}
+	offset := 0
+	for len(out) < limit {
+		args := append([]any{}, assigneeArgs...)
+		args = append(args, approvalTaskBatchSize, offset)
+		rows, err := s.DB.Read.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, 0, fmt.Errorf("select approval_tasks: %w", err)
 		}
-		if docID > 0 {
-			t.DocID = docID
+		batch, err := materializeApprovalTasks(rows)
+		if err != nil {
+			return nil, 0, err
 		}
-		t.DocHasThumbnail = hasThumb != 0
-		if deadline > 0 {
-			t.DeadlineAt = deadline
-		}
-		if choicesRaw != "" {
-			if err := json.Unmarshal([]byte(choicesRaw), &t.Choices); err != nil {
-				return nil, 0, fmt.Errorf("decode approval task %d choices: %w", t.ID, err)
+
+		for _, task := range batch {
+			if task.ApprovalName == rescan.ProposalSlug {
+				needed, err := s.proposalStillNeeded(ctx, task.Vars, eligibility)
+				if err != nil {
+					return nil, 0, fmt.Errorf("check approval task %d: %w", task.ID, err)
+				}
+				if !needed {
+					continue
+				}
+			}
+			if len(out) < limit {
+				out = append(out, task)
 			}
 		}
-		if varsRaw != "" && varsRaw != "{}" {
-			if err := json.Unmarshal([]byte(varsRaw), &t.Vars); err != nil {
-				return nil, 0, fmt.Errorf("decode approval task %d vars: %w", t.ID, err)
-			}
+		scanned := len(batch)
+		offset += scanned
+		if scanned < approvalTaskBatchSize {
+			break
 		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate approval_tasks: %w", err)
 	}
 
-	// Separate count query so the "open inbox" number is honest even
-	// when limit truncates the list. Widened with the same role clause
-	// as the SELECT so the sidebar badge matches what the list shows.
-	// The table is aliased as `t` on purpose — roleClause is built
-	// against `t.assignee`, so both queries share the same fragment
-	// verbatim.
-	var open int
-	countQ := `SELECT COUNT(*) FROM approval_tasks t WHERE (t.assignee = ?` + roleClause + `) AND t.status = 'open'`
-	err = s.DB.Read.QueryRowContext(r.Context(), countQ, me).Scan(&open)
+	open, err := s.countVisibleApprovalTasksCached(ctx, userID, role, eligibility, "open")
 	if err != nil {
-		return nil, 0, fmt.Errorf("count approval_tasks: %w", err)
+		return nil, 0, err
 	}
 	return out, open, nil
+}
+
+func (s *Server) countVisibleApprovalTasks(ctx context.Context, userID int64, role string, statuses ...string) (int, error) {
+	return s.countVisibleApprovalTasksCached(ctx, userID, role, proposalEligibilityCache{}, statuses...)
+}
+
+type rescanApprovalTaskCount struct {
+	vars  map[string]any
+	count int
+}
+
+// materializeRescanApprovalTaskCounts closes grouped rows before eligibility
+// checks acquire another reader.
+func materializeRescanApprovalTaskCounts(rows *sql.Rows) ([]rescanApprovalTaskCount, error) {
+	defer rows.Close()
+	counts := []rescanApprovalTaskCount{}
+	for rows.Next() {
+		var varsRaw string
+		var n int
+		if err := rows.Scan(&varsRaw, &n); err != nil {
+			return nil, fmt.Errorf("scan rescan approval_task: %w", err)
+		}
+		var vars map[string]any
+		if err := json.Unmarshal([]byte(varsRaw), &vars); err != nil {
+			return nil, fmt.Errorf("decode rescan approval_task vars: %w", err)
+		}
+		counts = append(counts, rescanApprovalTaskCount{vars: vars, count: n})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rescan approval_tasks: %w", err)
+	}
+	return counts, nil
+}
+
+func (s *Server) countVisibleApprovalTasksCached(ctx context.Context, userID int64, role string, eligibility proposalEligibilityCache, statuses ...string) (int, error) {
+	if len(statuses) == 0 {
+		return 0, nil
+	}
+	assigneeSQL, assigneeArgs := approvalAssigneeSQL(userID, role)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",")
+	args := append([]any{}, assigneeArgs...)
+	for _, status := range statuses {
+		args = append(args, status)
+	}
+
+	var count int
+	ordinaryArgs := append(append([]any{}, args...), rescan.ProposalSlug)
+	err := s.DB.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs def ON def.id = r.def_id
+		LEFT JOIN documents doc ON doc.id = r.doc_id
+		WHERE (`+assigneeSQL+`)
+		  AND t.status IN (`+placeholders+`)
+		  AND `+approvalTaskVisibilitySQL+`
+		  AND def.slug != ?`, ordinaryArgs...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count approval_tasks: %w", err)
+	}
+
+	rescanArgs := append(append([]any{}, args...), rescan.ProposalSlug)
+	// Preserve exact task multiplicity while the semantic cache coalesces
+	// payloads that differ only in irrelevant preview fields.
+	rows, err := s.DB.Read.QueryContext(ctx, `
+		SELECT COALESCE(r.vars_json, '{}'), COUNT(*)
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs def ON def.id = r.def_id
+		LEFT JOIN documents doc ON doc.id = r.doc_id
+		WHERE (`+assigneeSQL+`)
+		  AND t.status IN (`+placeholders+`)
+		  AND `+approvalTaskVisibilitySQL+`
+		  AND def.slug = ?
+		GROUP BY COALESCE(r.vars_json, '{}')`, rescanArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("select rescan approval_tasks: %w", err)
+	}
+	rescanCounts, err := materializeRescanApprovalTaskCounts(rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, candidate := range rescanCounts {
+		needed, err := s.proposalStillNeeded(ctx, candidate.vars, eligibility)
+		if err != nil {
+			return 0, fmt.Errorf("check rescan approval_task: %w", err)
+		}
+		if needed {
+			count += candidate.count
+		}
+	}
+	return count, nil
+}
+
+// approvalTaskVisibilityByID keeps terminal tasks distinct so resolve retries
+// retain 409; active but unavailable tasks remain hidden behind 404.
+func (s *Server) approvalTaskVisibilityByID(ctx context.Context, taskID int64) (visible, terminal bool, err error) {
+	var status, slug, varsRaw string
+	var structurallyActionable int
+	err = s.DB.Read.QueryRowContext(ctx, `
+		SELECT t.status, def.slug, COALESCE(r.vars_json, '{}'),
+		       CASE WHEN r.state = 'running'
+		                  AND (r.doc_id IS NULL OR (doc.id IS NOT NULL AND doc.trashed_at IS NULL))
+		            THEN 1 ELSE 0 END
+		FROM approval_tasks t
+		JOIN approval_runs r ON r.id = t.run_id
+		JOIN approval_defs def ON def.id = r.def_id
+		LEFT JOIN documents doc ON doc.id = r.doc_id
+		WHERE t.id = ?`, taskID).Scan(&status, &slug, &varsRaw, &structurallyActionable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("load approval task visibility: %w", err)
+	}
+	if status != "open" && status != "claimed" {
+		return false, true, nil
+	}
+	if structurallyActionable == 0 {
+		return false, false, nil
+	}
+	if slug != rescan.ProposalSlug {
+		return true, false, nil
+	}
+	var vars map[string]any
+	if err := json.Unmarshal([]byte(varsRaw), &vars); err != nil {
+		return false, false, fmt.Errorf("decode rescan approval task vars: %w", err)
+	}
+	needed, err := s.proposalStillNeeded(ctx, vars, proposalEligibilityCache{})
+	if err != nil {
+		return false, false, fmt.Errorf("check rescan approval task: %w", err)
+	}
+	return needed, false, nil
 }

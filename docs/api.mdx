@@ -928,7 +928,12 @@ Timestamps are Unix seconds.
 
 `approval_tasks` are scoped to the caller: an entry appears only if the
 task's `assignee` resolves to the current user. Terminal statuses
-(`resolved`, `expired`) are omitted. Resolve one via
+(`resolved`, `expired`) are omitted.
+Document-bound tasks are also omitted while their document is trashed and
+can reappear if it is restored while the task is still open or claimed and its
+run is still active. A task that expires or whose run advances while the
+document is trashed does not reappear. Documentless tasks remain visible while
+their run still has actionable work. Resolve one via
 `POST /api/approvals/tasks/{task_id}/resolve`. `approvals_open` in
 `counts` is the true open-inbox size, unaffected by `limit`. Document-bound
 tasks include the current title and filing category plus a thumbnail-presence

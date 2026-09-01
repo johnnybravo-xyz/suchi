@@ -221,6 +221,18 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	} else if !s.authorize(w, r, actor, authz.KindDocument, *run.DocID, authz.PermView) {
 		return
 	}
+	visibleTasks := tasks[:0]
+	for _, task := range tasks {
+		visible, _, err := s.approvalTaskVisibilityByID(r.Context(), task.ID)
+		if err != nil {
+			s.serverErr(w, "approval.getrun.tasks", err)
+			return
+		}
+		if visible {
+			visibleTasks = append(visibleTasks, task)
+		}
+	}
+	tasks = visibleTasks
 	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
 	if err != nil {
 		s.serverErr(w, "approval.getrun.transitions", err)
@@ -262,9 +274,18 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_choice", "choice is required")
 		return
 	}
+	visible, terminal, err := s.approvalTaskVisibilityByID(r.Context(), taskID)
+	if err != nil {
+		s.serverErr(w, "approval.resolve.visibility", err)
+		return
+	}
+	if !visible && !terminal {
+		s.writeError(w, http.StatusNotFound, "no_task", "task not found")
+		return
+	}
 	if err := approvals.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {
 		switch {
-		case errors.Is(err, approvals.ErrNoTask):
+		case errors.Is(err, approvals.ErrNoTask) || errors.Is(err, approvals.ErrTaskUnavailable):
 			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
 		case errors.Is(err, approvals.ErrTaskResolved):
 			s.writeError(w, http.StatusConflict, "already_resolved", "task already resolved")
