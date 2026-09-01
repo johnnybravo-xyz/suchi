@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 )
 
 type apiQueryResolver struct {
-	server *Server
+	queryer chatQueryer
 }
 
 func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]searchquery.Candidate, error) {
@@ -42,7 +43,7 @@ func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]
 		return nil, fmt.Errorf("resolve unsupported search filter %q", filter)
 	}
 
-	rows, err := r.server.DB.Read.QueryContext(ctx, query, args...)
+	rows, err := r.queryer.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s value: %w", filter, err)
 	}
@@ -66,19 +67,29 @@ func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]
 }
 
 func (r apiQueryResolver) InboxCategoryID(ctx context.Context) (int64, error) {
-	id, err := jd.InboxCategoryID(ctx, r.server.DB)
-	if err != nil {
+	var raw string
+	if err := r.queryer.QueryRowContext(ctx,
+		`SELECT value_json FROM settings WHERE key = ?`, jd.SettingInboxCategoryID).Scan(&raw); err != nil {
+		return 0, fmt.Errorf("resolve inbox query: %w", err)
+	}
+	var id int64
+	if err := json.Unmarshal([]byte(raw), &id); err != nil {
 		return 0, fmt.Errorf("resolve inbox query: %w", err)
 	}
 	return id, nil
 }
 
 func (s *Server) compileQuery(ctx context.Context, raw string) (searchquery.Plan, error) {
+	return s.compileQueryWith(ctx, s.DB.Read, raw)
+}
+
+// Resolve named scope filters inside the retrieval's pinned transaction.
+func (s *Server) compileQueryWith(ctx context.Context, q chatQueryer, raw string) (searchquery.Plan, error) {
 	parsed, err := searchquery.Parse(raw)
 	if err != nil {
 		return searchquery.Plan{}, err
 	}
-	resolved, err := searchquery.Resolve(ctx, parsed, apiQueryResolver{server: s})
+	resolved, err := searchquery.Resolve(ctx, parsed, apiQueryResolver{queryer: q})
 	if err != nil {
 		return searchquery.Plan{}, err
 	}

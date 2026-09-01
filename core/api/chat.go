@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,27 +20,82 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/searchquery"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 const (
-	chatMaxQuestionRunes    = 2000
-	chatMaxHistory          = 4
-	chatMaxHistoryBytes     = 12 << 10
-	chatMaxTerms            = 12
-	chatMaxCandidateTerms   = 64
-	chatMaxTermRunes        = 64
-	chatMaxSources          = 6
-	chatMaxContextSources   = 3
-	chatMaxTitleRunes       = 300
-	chatMaxSnippetRunes     = 1600
-	chatFTSSnippetTokens    = 64
-	chatSnippetSegmentRunes = (chatMaxSnippetRunes - 80) / 2
-	chatMaxFactsPerSource   = 3
-	chatMaxFactsTotal       = 12
-	chatMaxOutputTokens     = 700
-	chatMaxAnswerRunes      = 6000
+	chatMaxQuestionRunes  = 2000
+	chatMaxHistory        = 4
+	chatMaxHistoryBytes   = 12 << 10
+	chatMaxTerms          = 12
+	chatMaxCandidateTerms = 64
+	chatMaxTermRunes      = 64
+	chatMaxSources        = 6
+	chatMaxContextSources = 3
+	chatMaxTitleRunes     = 300
+	chatFTSSnippetTokens  = 64
+	chatMaxPassageRunes   = 1200
+	chatMaxFactRunes      = 1600
+	chatMaxSourceFocused  = 1600
+	chatMaxSourceBalanced = 3200
+	chatMaxSourceDetailed = 4800
+	chatMaxFactsPerSource = 3
+	chatMaxFactsTotal     = 12
+	chatMaxOutputTokens   = 700
+	chatMaxAnswerRunes    = 6000
+	// FDD0-FDEF supplies 32 noncharacters; 16 runes give each marker 80 bits.
+	chatFTSMarkerRunes   = 16
+	chatFTSMarkerBase    = rune(0xfdd0)
+	chatFTSMarkerChoices = 32
 )
+
+type chatFTSMarkers struct {
+	start string
+	end   string
+}
+
+// Use unpredictable markers so untrusted text cannot spoof the clipping anchor.
+func newChatFTSMarkers() (chatFTSMarkers, error) {
+	var entropy [chatFTSMarkerRunes * 2]byte
+	if _, err := cryptorand.Read(entropy[:]); err != nil {
+		return chatFTSMarkers{}, err
+	}
+	encode := func(values []byte) string {
+		runes := make([]rune, len(values))
+		for i, value := range values {
+			runes[i] = chatFTSMarkerBase + rune(value%chatFTSMarkerChoices)
+		}
+		return string(runes)
+	}
+	markers := chatFTSMarkers{
+		start: encode(entropy[:chatFTSMarkerRunes]),
+		end:   encode(entropy[chatFTSMarkerRunes:]),
+	}
+	if markers.start == markers.end {
+		end := []rune(markers.end)
+		end[len(end)-1] = chatFTSMarkerBase + (end[len(end)-1]-chatFTSMarkerBase+1)%chatFTSMarkerChoices
+		markers.end = string(end)
+	}
+	return markers, nil
+}
+
+type chatResearchContext struct {
+	mode           settings.ResearchContextMode
+	maxPassages    int
+	maxSourceRunes int
+}
+
+func chatResearchContextForMode(mode settings.ResearchContextMode) chatResearchContext {
+	switch mode {
+	case settings.ResearchContextFocused:
+		return chatResearchContext{mode: mode, maxPassages: 1, maxSourceRunes: chatMaxSourceFocused}
+	case settings.ResearchContextDetailed:
+		return chatResearchContext{mode: mode, maxPassages: 3, maxSourceRunes: chatMaxSourceDetailed}
+	default:
+		return chatResearchContext{mode: settings.ResearchContextBalanced, maxPassages: 2, maxSourceRunes: chatMaxSourceBalanced}
+	}
+}
 
 const (
 	chatNoEvidenceAnswer   = "I couldn’t find evidence in the documents you can access."
@@ -181,7 +238,6 @@ func (s *Server) GetChatStatus(w http.ResponseWriter, r *http.Request) {
 
 // PostChat retrieves visible evidence and performs at most one model request.
 func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
-	started := time.Now()
 	p := s.chatPrincipal(w, r)
 	if p == nil {
 		return
@@ -244,12 +300,41 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 
 	terms := normalizedChatTerms(in.Question)
 	if len(terms) == 0 && len(in.ContextSourceIDs) == 0 {
+		researchContext := chatResearchContextForMode(settings.ResolveResearchContextMode(r.Context(), s.DB))
+		s.logChatEvidence("api.chat.no_evidence", researchContext, 0, nil)
 		s.writeJSON(w, http.StatusOK, ChatResponse{
 			Answer: chatNoEvidenceAnswer, Sources: []ChatSource{}, Citations: []int{},
 		})
 		return
 	}
-	sources, err := s.retrieveChatSources(r.Context(), terms, in.ContextSourceIDs, in.Scope, in.IncludeSensitive)
+
+	refundRate, retryAfter, ok := s.chatGate.admit(p.UserID)
+	if !ok {
+		seconds := max(1, int(retryAfter.Round(time.Second)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.writeError(w, http.StatusTooManyRequests, "chat_rate_limited", "archive research is busy; try again shortly")
+		return
+	}
+	rateReserved := true
+	defer func() {
+		if rateReserved {
+			refundRate()
+		}
+	}()
+
+	researchContext := chatResearchContextForMode(settings.ResolveResearchContextMode(r.Context(), s.DB))
+	releaseRetrieval, retryAfter, ok := s.chatGate.acquireRetrieval()
+	if !ok {
+		seconds := max(1, int(retryAfter.Round(time.Second)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.writeError(w, http.StatusTooManyRequests, "chat_rate_limited", "archive research is busy; try again shortly")
+		return
+	}
+	sources, passageCount, err := func() ([]ChatSource, int, error) {
+		defer releaseRetrieval()
+		return s.retrieveChatSources(
+			r.Context(), terms, in.ContextSourceIDs, in.Scope, in.IncludeSensitive, researchContext)
+	}()
 	if err != nil {
 		if in.Scope.Query != "" && s.writeQueryError(w, "chat.scope", in.Scope.Query, err) {
 			return
@@ -258,7 +343,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(sources) == 0 {
-		s.Log.Info("api.chat.no_evidence", "source_count", 0, "duration_ms", time.Since(started).Milliseconds())
+		s.logChatEvidence("api.chat.no_evidence", researchContext, passageCount, sources)
 		s.writeJSON(w, http.StatusOK, ChatResponse{
 			Answer: chatNoEvidenceAnswer, Sources: []ChatSource{}, Citations: []int{},
 		})
@@ -270,7 +355,10 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, retryAfter, ok := s.chatGate.enter(p.UserID)
+	// From here on the request has actionable evidence, so it consumes the
+	// reserved rate token even if both provider slots are already occupied.
+	rateReserved = false
+	release, retryAfter, ok := s.chatGate.acquireProvider()
 	if !ok {
 		seconds := max(1, int(retryAfter.Round(time.Second)/time.Second))
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
@@ -286,15 +374,13 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	messages = append(messages, ChatCompletionMessage{Role: "user", Content: buildChatEvidencePrompt(in.Question, sources)})
 	rawAnswer, err := s.ChatCompletion(r.Context(), chatSystemPrompt, messages, chatMaxOutputTokens)
 	if err != nil {
-		s.Log.Warn("api.chat.provider_error", "source_ids", chatSourceIDs(sources), "source_count", len(sources),
-			"duration_ms", time.Since(started).Milliseconds(), "err", sanitizedChatError(err))
+		s.logChatEvidence("api.chat.provider_error", researchContext, passageCount, sources)
 		s.writeError(w, http.StatusBadGateway, "provider_failure", "archive research provider unavailable")
 		return
 	}
 	answer, citations, grounded, err := parseChatModelAnswer(rawAnswer, len(sources))
 	if err != nil {
-		s.Log.Warn("api.chat.invalid_response", "source_ids", chatSourceIDs(sources), "source_count", len(sources),
-			"duration_ms", time.Since(started).Milliseconds(), "reason", chatResponseErrorReason(err))
+		s.logChatEvidence("api.chat.invalid_response", researchContext, passageCount, sources)
 		s.writeError(w, http.StatusBadGateway, "invalid_provider_response", "archive research provider returned an invalid grounded answer")
 		return
 	}
@@ -302,8 +388,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		answer = chatInsufficientAnswer
 		citations = []int{}
 	}
-	s.Log.Info("api.chat.completed", "source_ids", chatSourceIDs(sources), "source_count", len(sources),
-		"citation_count", len(citations), "grounded", grounded, "duration_ms", time.Since(started).Milliseconds())
+	s.logChatEvidence("api.chat.completed", researchContext, passageCount, sources)
 	s.writeJSON(w, http.StatusOK, ChatResponse{
 		Answer: answer, Sources: sources, Citations: citations, Grounded: grounded,
 		Intelligence: intelligenceSummary,
@@ -450,44 +535,140 @@ func normalizedPositiveIDs(ids []int64, limit int) ([]int64, error) {
 	return out, nil
 }
 
-func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contextIDs []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
-	combined := make([]ChatSource, 0, chatMaxSources)
+type chatSourceMaterial struct {
+	source    ChatSource
+	whole     string
+	beginning string
+	ending    string
+	passages  []string
+}
+
+// chatQueryer keeps scope resolution and passage reads on one snapshot.
+type chatQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contextIDs []int64,
+	scope ChatScope, includeSensitive bool, researchContext chatResearchContext) ([]ChatSource, int, error) {
+	markers, err := newChatFTSMarkers()
+	if err != nil {
+		return nil, 0, err
+	}
+	tx, err := s.DB.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// One read transaction prevents authorization and content snapshots mixing.
+	where, args, err := s.chatSourceWhere(ctx, tx, scope, includeSensitive)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	combined := make([]chatSourceMaterial, 0, chatMaxSources)
 	sourcePosition := make(map[int64]int, chatMaxSources)
 	if len(contextIDs) > 0 {
-		contextSources, err := s.queryChatContextSources(ctx, contextIDs, scope, includeSensitive)
+		contextSources, err := s.queryChatContextSources(
+			ctx, tx, contextIDs, where, args, researchContext.maxSourceRunes)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, source := range contextSources {
-			if _, exists := sourcePosition[source.ID]; !exists {
-				sourcePosition[source.ID] = len(combined)
+			if _, exists := sourcePosition[source.source.ID]; !exists {
+				sourcePosition[source.source.ID] = len(combined)
 				combined = append(combined, source)
+			}
+		}
+
+		// Cited matches must not be displaced by the global six-result ranking.
+		authorizedIDs := make([]int64, 0, len(contextSources))
+		for _, source := range contextSources {
+			authorizedIDs = append(authorizedIDs, source.source.ID)
+		}
+		if len(terms) > 0 && len(authorizedIDs) > 0 {
+			contextMatches, err := s.queryChatFTSSources(
+				ctx, tx, terms, authorizedIDs, where, args, markers,
+				len(authorizedIDs), researchContext.maxSourceRunes)
+			if err != nil {
+				return nil, 0, err
+			}
+			for _, source := range contextMatches {
+				if position, exists := sourcePosition[source.source.ID]; exists {
+					combined[position] = source
+				}
 			}
 		}
 	}
 	if len(terms) > 0 && len(combined) < chatMaxSources {
-		currentSources, err := s.queryChatFTSSources(ctx, terms, scope, includeSensitive, chatMaxSources)
+		currentSources, err := s.queryChatFTSSources(
+			ctx, tx, terms, nil, where, args, markers, chatMaxSources, researchContext.maxSourceRunes)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, source := range currentSources {
-			if position, exists := sourcePosition[source.ID]; exists {
+			if position, exists := sourcePosition[source.source.ID]; exists {
 				// Direct cited reloads preserve source numbering, while the FTS
 				// result carries the excerpt relevant to the current follow-up.
 				combined[position] = source
 				continue
 			}
-			sourcePosition[source.ID] = len(combined)
+			sourcePosition[source.source.ID] = len(combined)
 			combined = append(combined, source)
 			if len(combined) == chatMaxSources {
 				break
 			}
 		}
 	}
-	return combined, nil
+
+	if researchContext.maxPassages > 1 && len(terms) > 0 {
+		ids := make([]int64, 0, len(combined))
+		for _, material := range combined {
+			if material.whole == "" && len(material.passages) < researchContext.maxPassages {
+				ids = append(ids, material.source.ID)
+			}
+		}
+		for _, term := range terms {
+			if len(ids) == 0 {
+				break
+			}
+			passages, err := s.queryChatAdditionalPassages(ctx, tx, term, ids, markers)
+			if err != nil {
+				return nil, 0, err
+			}
+			remaining := ids[:0]
+			for i := range combined {
+				material := &combined[i]
+				if material.whole != "" || len(material.passages) >= researchContext.maxPassages {
+					continue
+				}
+				if passage := passages[material.source.ID]; passage != "" {
+					appendDistinctChatPassage(&material.passages, passage)
+				}
+				if len(material.passages) < researchContext.maxPassages {
+					remaining = append(remaining, material.source.ID)
+				}
+			}
+			ids = remaining
+		}
+	}
+
+	sources := make([]ChatSource, 0, len(combined))
+	passageCount := 0
+	for _, material := range combined {
+		snippet, count := assembleChatSourceSnippet(material, researchContext.maxSourceRunes)
+		material.source.Snippet = snippet
+		sources = append(sources, material.source)
+		passageCount += count
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return sources, passageCount, nil
 }
 
-func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSensitive bool) ([]string, []any, error) {
+func (s *Server) chatSourceWhere(ctx context.Context, q chatQueryer, scope ChatScope, includeSensitive bool) ([]string, []any, error) {
 	p := auth.FromContext(ctx)
 	where := []string{"d.trashed_at IS NULL"}
 	args := []any{}
@@ -495,7 +676,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 		where = append(where, "COALESCE(d.sensitivity, '') IN ('', 'public', 'internal')")
 	}
 	if p.Role != "admin" {
-		groups, err := s.principalGroups(ctx, p.UserID)
+		groups, err := chatPrincipalGroups(ctx, q, p.UserID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -505,7 +686,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 	}
 	where, args = appendDocumentScopePredicates(where, args, scope.documentScope())
 	if scope.Query != "" {
-		plan, err := s.compileQuery(ctx, scope.Query)
+		plan, err := s.compileQueryWith(ctx, q, scope.Query)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -514,59 +695,108 @@ func (s *Server) chatSourceWhere(ctx context.Context, scope ChatScope, includeSe
 	return where, args, nil
 }
 
-func (scope ChatScope) documentScope() documentScope {
-	return documentScope(scope)
-}
-
-func (s *Server) queryChatFTSSources(ctx context.Context, terms []string, scope ChatScope, includeSensitive bool, limit int) ([]ChatSource, error) {
-	if len(terms) == 0 || limit <= 0 {
-		return []ChatSource{}, nil
+func chatPrincipalGroups(ctx context.Context, q chatQueryer, userID int64) ([]int64, error) {
+	if userID == 0 {
+		return nil, nil
 	}
-	where, args, err := s.chatSourceWhere(ctx, scope, includeSensitive)
-	if err != nil {
-		return nil, err
-	}
-	queryParts := make([]string, len(terms))
-	for i, term := range terms {
-		queryParts[i] = term + "*"
-	}
-	where = append([]string{"documents_fts MATCH ?"}, where...)
-	args = append([]any{strings.Join(queryParts, " OR ")}, args...)
-	args = append(args, limit)
-	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT d.id, substr(COALESCE(d.title, ''), 1, `+strconv.Itoa(chatMaxTitleRunes)+`),
-		       CASE
-		           WHEN length(COALESCE(d.content, '')) <= `+strconv.Itoa(chatMaxSnippetRunes)+`
-		           THEN COALESCE(d.content, '')
-		           ELSE substr(snippet(documents_fts, 1, '', '', ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`), 1, `+strconv.Itoa(chatSnippetSegmentRunes)+`)
-		                || ' … [document end] … '
-		                || substr(COALESCE(d.content, ''), -`+strconv.Itoa(chatSnippetSegmentRunes)+`)
-		       END,
-		       COALESCE(d.sensitivity, '')
-		FROM documents_fts
-		JOIN documents d ON d.id = documents_fts.rowid
-		WHERE `+strings.Join(where, " AND ")+`
-		ORDER BY bm25(documents_fts, 3.0, 1.0), d.id
-		LIMIT ?`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT group_id FROM group_members WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanChatSources(rows, limit)
+	var groups []int64
+	for rows.Next() {
+		var groupID int64
+		if err := rows.Scan(&groupID); err != nil {
+			return nil, err
+		}
+		groups = append(groups, groupID)
+	}
+	return groups, rows.Err()
 }
 
-func (s *Server) queryChatContextSources(ctx context.Context, ids []int64, scope ChatScope, includeSensitive bool) ([]ChatSource, error) {
-	where, args, err := s.chatSourceWhere(ctx, scope, includeSensitive)
+func (scope ChatScope) documentScope() documentScope {
+	return documentScope(scope)
+}
+
+func (s *Server) queryChatFTSSources(ctx context.Context, q chatQueryer, terms []string, ids []int64,
+	baseWhere []string, baseArgs []any, markers chatFTSMarkers, limit, maxSourceRunes int) ([]chatSourceMaterial, error) {
+	if len(terms) == 0 || limit <= 0 {
+		return []chatSourceMaterial{}, nil
+	}
+	where := append([]string(nil), baseWhere...)
+	args := append([]any(nil), baseArgs...)
+	queryParts := make([]string, len(terms))
+	for i, term := range terms {
+		queryParts[i] = term + "*"
+	}
+	matchQuery := strings.Join(queryParts, " OR ")
+	if len(ids) > 0 {
+		where = append(where, "d.id IN ("+placeholders(len(ids))+")")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	where = append([]string{"documents_fts MATCH ?"}, where...)
+	args = append([]any{matchQuery}, args...)
+	args = append(args, limit,
+		maxSourceRunes,
+		markers.start, markers.end,
+		markers.start, markers.end, markers.start,
+		matchQuery)
+	rows, err := q.QueryContext(ctx, chatFTSSourceSQL(where), args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+	return scanChatSourceMaterials(rows, limit, markers)
+}
+
+func chatFTSSourceSQL(where []string) string {
+	// Ranking first prevents snippet() from running for every corpus match.
+	// The rowid-restricted MATCH keeps FTS5 auxiliary functions valid.
+	// SQL allows only the final cap plus markers that Go removes.
+	return `
+		WITH ranked AS MATERIALIZED (
+			SELECT d.id, bm25(documents_fts, 3.0, 1.0) AS match_rank
+			FROM documents_fts
+			JOIN documents d ON d.id = documents_fts.rowid
+			WHERE ` + strings.Join(where, " AND ") + `
+			ORDER BY match_rank, d.id
+			LIMIT ?
+		)
+		SELECT d.id, substr(COALESCE(d.title, ''), 1, ` + strconv.Itoa(chatMaxTitleRunes) + `),
+		       CASE WHEN length(COALESCE(d.content, '')) <= ? THEN COALESCE(d.content, '') ELSE '' END,
+		       substr(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `),
+		              max(1, instr(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `), ?)
+		                     - ` + strconv.Itoa(chatMaxPassageRunes/2) + `),
+			              ` + strconv.Itoa(chatMaxPassageRunes+chatFTSMarkerRunes*2) + `),
+		       substr(COALESCE(d.content, ''), 1, ` + strconv.Itoa(chatMaxPassageRunes) + `),
+		       substr(COALESCE(d.content, ''), -` + strconv.Itoa(chatMaxPassageRunes) + `),
+		       COALESCE(d.sensitivity, '')
+		FROM ranked
+		JOIN documents d ON d.id = ranked.id
+		CROSS JOIN documents_fts
+		WHERE documents_fts.rowid = ranked.id
+		  AND documents_fts MATCH ?
+		ORDER BY ranked.match_rank, ranked.id`
+}
+
+func (s *Server) queryChatContextSources(ctx context.Context, q chatQueryer, ids []int64,
+	baseWhere []string, baseArgs []any, maxSourceRunes int) ([]chatSourceMaterial, error) {
+	where := append([]string(nil), baseWhere...)
+	args := append([]any(nil), baseArgs...)
 	where = append(where, "d.id IN ("+placeholders(len(ids))+")")
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	rows, err := s.DB.Read.QueryContext(ctx, `
+	args = append([]any{maxSourceRunes}, args...)
+	rows, err := q.QueryContext(ctx, `
 		SELECT d.id, substr(COALESCE(d.title, ''), 1, `+strconv.Itoa(chatMaxTitleRunes)+`),
-		       substr(COALESCE(d.content, ''), 1, `+strconv.Itoa(chatMaxSnippetRunes)+`),
+		       CASE WHEN length(COALESCE(d.content, '')) <= ? THEN COALESCE(d.content, '') ELSE '' END,
+		       '',
+		       substr(COALESCE(d.content, ''), 1, `+strconv.Itoa(chatMaxPassageRunes)+`),
+		       substr(COALESCE(d.content, ''), -`+strconv.Itoa(chatMaxPassageRunes)+`),
 		       COALESCE(d.sensitivity, '')
 		FROM documents d
 		WHERE `+strings.Join(where, " AND "), args...)
@@ -574,15 +804,15 @@ func (s *Server) queryChatContextSources(ctx context.Context, ids []int64, scope
 		return nil, err
 	}
 	defer rows.Close()
-	sources, err := scanChatSources(rows, len(ids))
+	sources, err := scanChatSourceMaterials(rows, len(ids), chatFTSMarkers{})
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[int64]ChatSource, len(sources))
+	byID := make(map[int64]chatSourceMaterial, len(sources))
 	for _, source := range sources {
-		byID[source.ID] = source
+		byID[source.source.ID] = source
 	}
-	ordered := make([]ChatSource, 0, len(sources))
+	ordered := make([]chatSourceMaterial, 0, len(sources))
 	for _, id := range ids {
 		if source, ok := byID[id]; ok {
 			ordered = append(ordered, source)
@@ -591,24 +821,242 @@ func (s *Server) queryChatContextSources(ctx context.Context, ids []int64, scope
 	return ordered, nil
 }
 
+// queryChatAdditionalPassages runs one content-only FTS read for a term across
+// every already-authorized long source. Callers process at most chatMaxTerms,
+// keeping the second stage bounded to twelve SQLite reads per question.
+func (s *Server) queryChatAdditionalPassages(ctx context.Context, q chatQueryer, term string, ids []int64,
+	markers chatFTSMarkers) (map[int64]string, error) {
+	if term == "" || len(ids) == 0 {
+		return map[int64]string{}, nil
+	}
+	args := make([]any, 0, len(ids)+6)
+	args = append(args,
+		markers.start, markers.end,
+		markers.start, markers.end, markers.start,
+		"content : "+term+"*")
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT rowid,
+		       substr(snippet(documents_fts, 1, ?, ?, ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`),
+		              max(1, instr(snippet(documents_fts, 1, ?, ?, ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`), ?)
+		                     - `+strconv.Itoa(chatMaxPassageRunes/2)+`),
+			              `+strconv.Itoa(chatMaxPassageRunes+chatFTSMarkerRunes*2)+`)
+		FROM documents_fts
+		WHERE documents_fts MATCH ?
+		  AND rowid IN (`+placeholders(len(ids))+`)
+		ORDER BY rowid`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	passages := make(map[int64]string, len(ids))
+	for rows.Next() {
+		var id int64
+		var passage string
+		if err := rows.Scan(&id, &passage); err != nil {
+			return nil, err
+		}
+		passages[id] = boundedChatFTSPassage(passage, chatMaxPassageRunes, markers)
+	}
+	return passages, rows.Err()
+}
+
 type chatRows interface {
 	Next() bool
 	Scan(...any) error
 	Err() error
 }
 
-func scanChatSources(rows chatRows, limit int) ([]ChatSource, error) {
-	sources := make([]ChatSource, 0, limit)
+func scanChatSourceMaterials(rows chatRows, limit int, markers chatFTSMarkers) ([]chatSourceMaterial, error) {
+	sources := make([]chatSourceMaterial, 0, limit)
 	for rows.Next() {
-		var source ChatSource
-		if err := rows.Scan(&source.ID, &source.Title, &source.Snippet, &source.Sensitivity); err != nil {
+		var material chatSourceMaterial
+		var primary string
+		if err := rows.Scan(&material.source.ID, &material.source.Title, &material.whole,
+			&primary, &material.beginning, &material.ending, &material.source.Sensitivity); err != nil {
 			return nil, err
 		}
-		source.Title = truncateRunes(source.Title, chatMaxTitleRunes)
-		source.Snippet = truncateRunes(source.Snippet, chatMaxSnippetRunes)
-		sources = append(sources, source)
+		material.source.Title = truncateRunes(material.source.Title, chatMaxTitleRunes)
+		material.whole = truncateRunes(material.whole, chatMaxSourceDetailed)
+		material.beginning = truncateRunes(material.beginning, chatMaxPassageRunes)
+		material.ending = truncateRunes(material.ending, chatMaxPassageRunes)
+		appendDistinctChatPassage(&material.passages, boundedChatFTSPassage(primary, chatMaxPassageRunes, markers))
+		sources = append(sources, material)
 	}
 	return sources, rows.Err()
+}
+
+// Center the rune cap on the match; FTS5's token cap alone cannot do that.
+func boundedChatFTSPassage(marked string, limit int, markers chatFTSMarkers) string {
+	clean, matchStart, matchEnd, matched := stripChatFTSMarkers(marked, markers)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(clean)
+	if len(runes) <= limit {
+		return clean
+	}
+	if !matched {
+		return string(runes[:limit])
+	}
+	matchStart = max(0, min(matchStart, len(runes)))
+	matchEnd = max(matchStart, min(matchEnd, len(runes)))
+	matchRunes := matchEnd - matchStart
+	start := matchStart
+	if matchRunes < limit {
+		start -= (limit - matchRunes) / 2
+	}
+	start = max(0, min(start, len(runes)-limit))
+	return string(runes[start : start+limit])
+}
+
+// Strip markers while retaining the first match bounds in cleaned runes.
+func stripChatFTSMarkers(marked string, markers chatFTSMarkers) (clean string, matchStart, matchEnd int, matched bool) {
+	var out strings.Builder
+	matchStart = -1
+	matchEnd = -1
+	position := 0
+	if markers.start == "" || markers.end == "" {
+		writeChatFTSText(&out, marked)
+		return out.String(), matchStart, matchEnd, false
+	}
+	for len(marked) > 0 {
+		startAt := strings.Index(marked, markers.start)
+		endAt := strings.Index(marked, markers.end)
+		markerAt := -1
+		marker := ""
+		switch {
+		case startAt >= 0 && (endAt < 0 || startAt <= endAt):
+			markerAt, marker = startAt, markers.start
+		case endAt >= 0:
+			markerAt, marker = endAt, markers.end
+		}
+		if markerAt < 0 {
+			position += writeChatFTSText(&out, marked)
+			break
+		}
+		position += writeChatFTSText(&out, marked[:markerAt])
+		if marker == markers.start && matchStart < 0 {
+			matchStart = position
+		}
+		if marker == markers.end && matchStart >= 0 && matchEnd < 0 {
+			matchEnd = position
+		}
+		marked = marked[markerAt+len(marker):]
+	}
+	clean = out.String()
+	if matchStart >= 0 {
+		if matchEnd < matchStart {
+			matchEnd = position
+		}
+		matched = true
+	}
+	return clean, matchStart, matchEnd, matched
+}
+
+func writeChatFTSText(out *strings.Builder, value string) int {
+	// Also removes partial markers cut at SQLite's bounded result edge.
+	written := 0
+	for _, current := range value {
+		if current >= chatFTSMarkerBase && current < chatFTSMarkerBase+chatFTSMarkerChoices {
+			continue
+		}
+		out.WriteRune(current)
+		written++
+	}
+	return written
+}
+
+func containsChatFTSMarker(value string) bool {
+	return strings.IndexFunc(value, func(current rune) bool {
+		return current >= chatFTSMarkerBase && current < chatFTSMarkerBase+chatFTSMarkerChoices
+	}) >= 0
+}
+
+const (
+	chatMatchSeparator       = " … [another match] … "
+	chatDocumentEndSeparator = " … [document end] … "
+)
+
+func appendDistinctChatPassage(passages *[]string, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	candidateKey := strings.Join(strings.Fields(candidate), " ")
+	if candidateKey == "" {
+		return false
+	}
+	for _, passage := range *passages {
+		key := strings.Join(strings.Fields(passage), " ")
+		if strings.Contains(key, candidateKey) || strings.Contains(candidateKey, key) {
+			return false
+		}
+	}
+	*passages = append(*passages, candidate)
+	return true
+}
+
+func assembleChatSourceSnippet(material chatSourceMaterial, limit int) (string, int) {
+	if material.whole != "" {
+		return truncateRunes(material.whole, limit), 1
+	}
+	pieces := make([]string, 0, len(material.passages)+2)
+	separators := make([]string, 0, len(material.passages)+2)
+	takeTail := make([]bool, 0, len(material.passages)+2)
+	for _, passage := range material.passages {
+		before := len(pieces)
+		appendDistinctChatPassage(&pieces, passage)
+		if len(pieces) > before {
+			separator := ""
+			if before > 0 {
+				separator = chatMatchSeparator
+			}
+			separators = append(separators, separator)
+			takeTail = append(takeTail, false)
+		}
+	}
+	if len(pieces) == 0 {
+		if appendDistinctChatPassage(&pieces, material.beginning) {
+			separators = append(separators, "")
+			takeTail = append(takeTail, false)
+		}
+	}
+	before := len(pieces)
+	if appendDistinctChatPassage(&pieces, material.ending) {
+		separator := ""
+		if before > 0 {
+			separator = chatDocumentEndSeparator
+		}
+		separators = append(separators, separator)
+		takeTail = append(takeTail, true)
+	}
+
+	var out strings.Builder
+	count := 0
+	for i, piece := range pieces {
+		remaining := limit - utf8.RuneCountInString(out.String())
+		separatorRunes := utf8.RuneCountInString(separators[i])
+		if remaining <= separatorRunes {
+			break
+		}
+		out.WriteString(separators[i])
+		pieceLimit := remaining - separatorRunes
+		if takeTail[i] {
+			out.WriteString(lastRunes(piece, pieceLimit))
+		} else {
+			out.WriteString(truncateRunes(piece, pieceLimit))
+		}
+		count++
+	}
+	return out.String(), count
+}
+
+func lastRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[len(runes)-limit:])
 }
 
 const chatSystemPrompt = `Answer the archive question using only the supplied evidence sources.
@@ -712,7 +1160,7 @@ func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principa
 			WHERE di.status = 'accepted'
 		)
 		SELECT document_id, intelligence_type, role, value_json,
-		       substr(evidence_text, 1, `+strconv.Itoa(chatMaxSnippetRunes)+`)
+		       substr(evidence_text, 1, `+strconv.Itoa(chatMaxFactRunes)+`)
 		FROM ranked
 		WHERE source_rank <= `+strconv.Itoa(chatMaxFactsPerSource)+`
 		ORDER BY retrieval_rank, intelligence_type, role, id
@@ -741,7 +1189,7 @@ func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principa
 			fact.Value = boundedChatFactValue(valueJSON)
 			fact.Type = truncateRunes(fact.Type, chatMaxTermRunes)
 			fact.Role = truncateRunes(fact.Role, chatMaxTermRunes)
-			fact.Evidence = truncateRunes(fact.Evidence, chatMaxSnippetRunes)
+			fact.Evidence = truncateRunes(fact.Evidence, chatMaxFactRunes)
 			sourcePosition = int64(sourceIndex[documentID])
 			sources[sourcePosition].Intelligence = append(sources[sourcePosition].Intelligence, fact)
 			factsPerSource[documentID]++
@@ -752,12 +1200,12 @@ func (s *Server) loadChatIntelligence(ctx context.Context, p *pluginapi.Principa
 }
 
 func boundedChatFactValue(valueJSON string) json.RawMessage {
-	if utf8.RuneCountInString(valueJSON) <= chatMaxSnippetRunes {
+	if utf8.RuneCountInString(valueJSON) <= chatMaxFactRunes {
 		return json.RawMessage(valueJSON)
 	}
 	// Truncating arbitrary JSON would make it invalid. Preserve a bounded,
 	// valid representation that makes the truncation explicit to the model.
-	bounded, _ := json.Marshal(truncateRunes(valueJSON, chatMaxSnippetRunes))
+	bounded, _ := json.Marshal(truncateRunes(valueJSON, chatMaxFactRunes))
 	return json.RawMessage(bounded)
 }
 
@@ -864,25 +1312,15 @@ func chatResponseErrorReason(err error) string {
 	return err.Error()
 }
 
-func chatSourceIDs(sources []ChatSource) []int64 {
-	ids := make([]int64, len(sources))
-	for i, source := range sources {
-		ids[i] = source.ID
+func (s *Server) logChatEvidence(event string, researchContext chatResearchContext,
+	passageCount int, sources []ChatSource) {
+	evidenceRunes := 0
+	for _, source := range sources {
+		evidenceRunes += utf8.RuneCountInString(source.Snippet)
 	}
-	return ids
-}
-
-func sanitizedChatError(err error) string {
-	if errors.Is(err, context.Canceled) {
-		return "request canceled"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "provider timeout"
-	}
-	type upstreamStatus interface{ UpstreamStatusCode() int }
-	var status upstreamStatus
-	if errors.As(err, &status) {
-		return fmt.Sprintf("provider HTTP %d", status.UpstreamStatusCode())
-	}
-	return "provider request failed"
+	s.Log.Info(event,
+		"research_context_mode", researchContext.mode,
+		"passage_count", passageCount,
+		"source_count", len(sources),
+		"evidence_runes", evidenceRunes)
 }

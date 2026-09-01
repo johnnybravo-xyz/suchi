@@ -39,6 +39,7 @@ type LLMSettingsStatus struct {
 	ArchiveEnabled      bool    `json:"archive_enabled"`
 	ArchiveAuto         float64 `json:"archive_auto_threshold"`
 	ArchiveReview       float64 `json:"archive_review_threshold"`
+	ResearchContextMode string  `json:"research_context_mode"`
 }
 
 type LLMTestConfig struct {

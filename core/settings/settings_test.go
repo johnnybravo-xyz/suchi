@@ -391,6 +391,29 @@ func TestArchiveClassifierConfigDefaultsAndPersists(t *testing.T) {
 	}
 }
 
+func TestResearchContextModeDefaultsValidatesAndPersists(t *testing.T) {
+	d := setupDB(t)
+	ctx := context.Background()
+	if got := settings.ResolveResearchContextMode(ctx, d); got != settings.ResearchContextBalanced {
+		t.Fatalf("missing mode = %q, want balanced", got)
+	}
+	if err := settings.Set(ctx, d, settings.KeyResearchContext, "future-mode"); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.ResolveResearchContextMode(ctx, d); got != settings.ResearchContextBalanced {
+		t.Fatalf("invalid stored mode = %q, want balanced", got)
+	}
+	if err := settings.SaveResearchContextMode(ctx, d, settings.ResearchContextDetailed); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.ResolveResearchContextMode(ctx, d); got != settings.ResearchContextDetailed {
+		t.Fatalf("stored mode = %q, want detailed", got)
+	}
+	if err := settings.SaveResearchContextMode(ctx, d, "unbounded"); err == nil {
+		t.Fatal("invalid mode was saved")
+	}
+}
+
 func TestSaveLLMConfig_ExplicitEmptyKeyOverridesUnpinnedFallback(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()

@@ -31,6 +31,7 @@ const (
 	KeyLLMDisabled      = "llm.disabled"
 	KeyLLMConfidence    = "llm.confidence_threshold"
 	KeyLLMDateAutoApply = "llm.date_auto_apply"
+	KeyResearchContext  = "llm.research_context_mode"
 	KeyArchiveEnabled   = "classification.archive_enabled"
 	KeyArchiveAuto      = "classification.archive_auto_threshold"
 	KeyArchiveReview    = "classification.archive_review_threshold"
@@ -43,6 +44,41 @@ const (
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
 )
+
+type ResearchContextMode string
+
+const (
+	ResearchContextFocused  ResearchContextMode = "focused"
+	ResearchContextBalanced ResearchContextMode = "balanced"
+	ResearchContextDetailed ResearchContextMode = "detailed"
+)
+
+func (mode ResearchContextMode) Valid() bool {
+	switch mode {
+	case ResearchContextFocused, ResearchContextBalanced, ResearchContextDetailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ResolveResearchContextMode reads the operator-owned retrieval preset. A
+// missing, malformed, or obsolete value falls back to Balanced so a bad row
+// can never enlarge or disable the evidence boundary.
+func ResolveResearchContextMode(ctx context.Context, database *db.DB) ResearchContextMode {
+	var mode ResearchContextMode
+	if err := Get(ctx, database, KeyResearchContext, &mode); err != nil || !mode.Valid() {
+		return ResearchContextBalanced
+	}
+	return mode
+}
+
+func SaveResearchContextMode(ctx context.Context, database *db.DB, mode ResearchContextMode) error {
+	if !mode.Valid() {
+		return fmt.Errorf("settings: invalid research context mode %q", mode)
+	}
+	return Set(ctx, database, KeyResearchContext, mode)
+}
 
 // ErrNotFound signals the key isn't present (distinct from a scan
 // error). Callers can use errors.Is.

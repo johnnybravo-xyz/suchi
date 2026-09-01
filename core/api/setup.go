@@ -40,6 +40,7 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
 	mux.HandleFunc("POST /api/admin/setup/preset", s.ApplyPreset)
 	mux.HandleFunc("GET /api/admin/settings/llm", s.GetLLMSettings)
+	mux.HandleFunc("PATCH /api/admin/settings/llm", s.PatchLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm/test", s.TestLLMSettings)
 	mux.HandleFunc("GET /api/admin/settings/preferences", s.GetPreferences)
@@ -377,11 +378,13 @@ func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter,
 
 func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
 	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
+	researchContextMode := settings.ResolveResearchContextMode(ctx, s.DB)
 	if s.LLMStatusReader != nil {
 		status, err := s.LLMStatusReader(ctx)
 		status.ArchiveEnabled = archive.Enabled
 		status.ArchiveAuto = archive.AutoThreshold
 		status.ArchiveReview = archive.ReviewThreshold
+		status.ResearchContextMode = string(researchContextMode)
 		return status, err
 	}
 	cfg, err := settings.ResolveLLMConfig(ctx, s.DB, settings.LLMConfig{}, s.LLMAEAD)
@@ -401,6 +404,7 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 		ArchiveEnabled:      archive.Enabled,
 		ArchiveAuto:         archive.AutoThreshold,
 		ArchiveReview:       archive.ReviewThreshold,
+		ResearchContextMode: string(researchContextMode),
 	}, nil
 }
 
@@ -414,6 +418,35 @@ func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, status)
+}
+
+// PatchLLMSettings updates only the independently applied Archive research
+// context preset. It deliberately does not pass through the model save path:
+// changing retrieval depth must not touch credentials, enable a provider,
+// auto-apply dates, or invoke the provider reloader.
+func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	var body struct {
+		ResearchContextMode settings.ResearchContextMode `json:"research_context_mode"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if !body.ResearchContextMode.Valid() {
+		s.writeError(w, http.StatusBadRequest, "bad_research_context_mode",
+			"research_context_mode must be one of: focused, balanced, detailed")
+		return
+	}
+	if err := settings.SaveResearchContextMode(r.Context(), s.DB, body.ResearchContextMode); err != nil {
+		s.serverErr(w, "settings.llm.research_context", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{
+		"research_context_mode": string(body.ResearchContextMode),
+	})
 }
 
 func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {

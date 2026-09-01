@@ -270,6 +270,79 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	}
 }
 
+func TestResearchContextSettingsAreAdminOwnedAndIndependent(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := settings.SetMany(ctx, d, map[string]any{
+		settings.KeyLLMEndpointURL:   "https://models.example.test/v1",
+		settings.KeyLLMModel:         "archive-model",
+		settings.KeyLLMEgressAck:     true,
+		settings.KeyLLMDateAutoApply: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloads := 0
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLMReloader: func(context.Context) error { reloads++; return nil },
+	}
+	request := func(method, body string, principal *pluginapi.Principal) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/admin/settings/llm", strings.NewReader(body))
+		if principal != nil {
+			req = req.WithContext(auth.WithPrincipal(req.Context(), principal))
+		}
+		rec := httptest.NewRecorder()
+		if method == http.MethodGet {
+			s.GetLLMSettings(rec, req)
+		} else {
+			s.PatchLLMSettings(rec, req)
+		}
+		return rec
+	}
+	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	member := &pluginapi.Principal{Kind: "user", UserID: 2, Role: "member"}
+
+	if rec := request(http.MethodGet, "", admin); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"research_context_mode":"balanced"`) {
+		t.Fatalf("default GET status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPatch, `{"research_context_mode":"detailed"}`, member); rec.Code != http.StatusForbidden {
+		t.Fatalf("member PATCH status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPatch, `{"research_context_mode":"unbounded"}`, admin); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "bad_research_context_mode") {
+		t.Fatalf("invalid PATCH status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPatch, `{"research_context_mode":"focused","enabled":true}`, admin); rec.Code != http.StatusBadRequest {
+		t.Fatalf("extra field PATCH status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPatch, `{"research_context_mode":"detailed"}`, admin); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"research_context_mode":"detailed"`) {
+		t.Fatalf("valid PATCH status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if reloads != 0 {
+		t.Fatalf("standalone context save reloaded provider %d times", reloads)
+	}
+	var endpoint, model string
+	var egress, dateAutoApply bool
+	if err := settings.Get(ctx, d, settings.KeyLLMEndpointURL, &endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyLLMModel, &model); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyLLMEgressAck, &egress); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyLLMDateAutoApply, &dateAutoApply); err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://models.example.test/v1" || model != "archive-model" || !egress || dateAutoApply {
+		t.Fatalf("unrelated LLM settings changed: endpoint=%q model=%q egress=%t dates=%t",
+			endpoint, model, egress, dateAutoApply)
+	}
+}
+
 func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 17, 1, "Boarding pass", "Date 06 Aug 2026", "", false)

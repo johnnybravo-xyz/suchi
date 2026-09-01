@@ -18,6 +18,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/searchquery"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
 func newChatTestServer(t *testing.T) *Server {
@@ -162,15 +163,15 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 func TestChatBoundsProviderEvidenceButKeepsIntelligenceCounts(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 1, 1, strings.Repeat("界", chatMaxTitleRunes+20),
-		"needle "+strings.Repeat("界", chatMaxSnippetRunes+200), "public", false)
+		"needle "+strings.Repeat("界", chatMaxSourceBalanced+200), "public", false)
 	for i := 0; i < chatMaxFactsPerSource+4; i++ {
 		if _, err := s.DB.Write.ExecContext(context.Background(), `
 			INSERT INTO document_intelligence(
 				document_id, intelligence_type, role, value_json, sort_value, raw_text,
 				evidence_text, confidence, status, extractor, extraction_version, created_at, updated_at
 			) VALUES (1, 'date', 'renewal', ?, ?, 'raw', ?, 0.9, 'accepted', 'test', 1, 0, 0)
-		`, `{"date":"2026-09-01","note":"`+strings.Repeat("x", chatMaxSnippetRunes+50)+`"}`,
-			fmt.Sprintf("2026-09-%02d", i+1), strings.Repeat("e", chatMaxSnippetRunes+50)+strconv.Itoa(i)); err != nil {
+		`, `{"date":"2026-09-01","note":"`+strings.Repeat("x", chatMaxFactRunes+50)+`"}`,
+			fmt.Sprintf("2026-09-%02d", i+1), strings.Repeat("e", chatMaxFactRunes+50)+strconv.Itoa(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -188,13 +189,13 @@ func TestChatBoundsProviderEvidenceButKeepsIntelligenceCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out.Sources) != 1 || utf8.RuneCountInString(out.Sources[0].Title) != chatMaxTitleRunes ||
-		utf8.RuneCountInString(out.Sources[0].Snippet) > chatMaxSnippetRunes {
+		utf8.RuneCountInString(out.Sources[0].Snippet) > chatMaxSourceBalanced {
 		t.Fatalf("unbounded source=%+v", out.Sources)
 	}
 	if len(out.Sources[0].Intelligence) != chatMaxFactsPerSource || out.Intelligence.Accepted["date"] != chatMaxFactsPerSource+4 {
 		t.Fatalf("facts=%d summary=%v", len(out.Sources[0].Intelligence), out.Intelligence)
 	}
-	if utf8.RuneCountInString(prompt) > 12000 {
+	if utf8.RuneCountInString(prompt) > 15000 {
 		t.Fatalf("provider prompt unexpectedly large: %d runes", utf8.RuneCountInString(prompt))
 	}
 }
@@ -281,6 +282,36 @@ func TestChatContextReloadUsesCurrentFTSExcerptWithoutReorderingCitation(t *test
 	}
 	if !strings.Contains(out.Sources[0].Snippet, "decisive followup evidence is forty two") {
 		t.Fatalf("current FTS evidence was discarded: %q", out.Sources[0].Snippet)
+	}
+}
+
+func TestChatFocusedReloadsCitedMatchOutsideGlobalTopSix(t *testing.T) {
+	s := newChatTestServer(t)
+	setChatResearchMode(t, s, settings.ResearchContextFocused)
+	content := strings.Repeat("cited preface filler ", 220) +
+		"decisive followup evidence from the cited source " + strings.Repeat("cited appendix filler ", 220)
+	seedChatDoc(t, s, 99, 1, "Previously cited record", content, "public", false)
+	for id := int64(1); id <= 8; id++ {
+		seedChatDoc(t, s, id, 1, "Decisive followup ranked result",
+			strings.Repeat("decisive followup ", 12)+"other evidence", "public", false)
+	}
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Cited evidence [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"decisive followup","context_source_ids":[99]}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) != chatMaxSources || out.Sources[0].ID != 99 {
+		t.Fatalf("sources=%+v", out.Sources)
+	}
+	if !strings.Contains(out.Sources[0].Snippet, "decisive followup evidence from the cited source") {
+		t.Fatalf("cited match was displaced by global ranking: %q", out.Sources[0].Snippet)
 	}
 }
 
@@ -415,6 +446,412 @@ func TestChatReceiptEvidenceIncludesTrailingTotal(t *testing.T) {
 	}
 	if len(response.Sources) != 1 || !strings.Contains(response.Sources[0].Snippet, "Total $75.74") {
 		t.Fatalf("receipt evidence=%+v", response.Sources)
+	}
+}
+
+func setChatResearchMode(t *testing.T, s *Server, mode settings.ResearchContextMode) {
+	t.Helper()
+	if err := settings.SaveResearchContextMode(context.Background(), s.DB, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChatResearchContextModesBoundFarApartPassages(t *testing.T) {
+	tests := []struct {
+		mode        settings.ResearchContextMode
+		wantRunes   int
+		wantMatches int
+	}{
+		{settings.ResearchContextFocused, chatMaxSourceFocused, 1},
+		{settings.ResearchContextBalanced, chatMaxSourceBalanced, 2},
+		{settings.ResearchContextDetailed, chatMaxSourceDetailed, 3},
+	}
+	for _, test := range tests {
+		t.Run(string(test.mode), func(t *testing.T) {
+			s := newChatTestServer(t)
+			setChatResearchMode(t, s, test.mode)
+			filler := strings.Repeat(" ordinary", 400)
+			content := "alpha marker" + filler + " beta marker" + filler +
+				" gamma marker" + filler + " Final ledger total 98765"
+			seedChatDoc(t, s, 1, 1, "Distributed evidence", content, "public", false)
+			calls := 0
+			var prompt string
+			s.ChatCompletion = func(_ context.Context, _ string, messages []ChatCompletionMessage, _ int) (string, error) {
+				calls++
+				prompt = messages[len(messages)-1].Content
+				return `{"answer":"Bounded evidence.","citations":[1],"sufficient":true}`, nil
+			}
+			rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+				`{"question":"alpha beta gamma"}`, adminPrincipal(1))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var out ChatResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || len(out.Sources) != 1 {
+				t.Fatalf("calls=%d sources=%+v", calls, out.Sources)
+			}
+			snippet := out.Sources[0].Snippet
+			if got := utf8.RuneCountInString(snippet); got > test.wantRunes {
+				t.Fatalf("snippet runes=%d want <=%d", got, test.wantRunes)
+			}
+			matches := 0
+			for _, marker := range []string{"alpha marker", "beta marker", "gamma marker"} {
+				if strings.Contains(snippet, marker) {
+					matches++
+				}
+			}
+			if matches != test.wantMatches {
+				t.Fatalf("matched regions=%d want=%d snippet=%q", matches, test.wantMatches, snippet)
+			}
+			if !strings.Contains(snippet, "Final ledger total 98765") {
+				t.Fatalf("document ending missing: %q", snippet)
+			}
+			if !strings.Contains(prompt, "Content: "+snippet+"\n") {
+				t.Fatal("browser source snippet differs from provider evidence")
+			}
+		})
+	}
+}
+
+func TestChatResearchContextShortTitleAndFollowUpFallbacks(t *testing.T) {
+	s := newChatTestServer(t)
+	setChatResearchMode(t, s, settings.ResearchContextBalanced)
+	short := "A short complete document with the exact needle and closing total 42."
+	seedChatDoc(t, s, 1, 1, "Short record", short, "public", false)
+	longTitleOnly := "Opening fallback text " + strings.Repeat("neutral filler ", 300) + "Closing fallback total 77"
+	seedChatDoc(t, s, 2, 1, "Needle appears only in this title", longTitleOnly, "public", false)
+	longCited := "Cited beginning " + strings.Repeat("unrelated archive text ", 300) + "Cited ending 99"
+	seedChatDoc(t, s, 3, 1, "Prior source", longCited, "public", false)
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"Evidence.","citations":[1],"sufficient":true}`, nil
+	}
+
+	shortRec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"exact needle"}`, adminPrincipal(1))
+	var shortOut ChatResponse
+	if err := json.Unmarshal(shortRec.Body.Bytes(), &shortOut); err != nil {
+		t.Fatal(err)
+	}
+	if len(shortOut.Sources) != 2 || shortOut.Sources[0].Snippet != short {
+		t.Fatalf("short-document retrieval=%+v", shortOut.Sources)
+	}
+
+	titleRec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"needle appears"}`, adminPrincipal(1))
+	var titleOut ChatResponse
+	if err := json.Unmarshal(titleRec.Body.Bytes(), &titleOut); err != nil {
+		t.Fatal(err)
+	}
+	var titleSnippet string
+	for _, source := range titleOut.Sources {
+		if source.ID == 2 {
+			titleSnippet = source.Snippet
+		}
+	}
+	if !strings.Contains(titleSnippet, "Opening fallback text") || !strings.Contains(titleSnippet, "Closing fallback total 77") {
+		t.Fatalf("title-only fallback=%q", titleSnippet)
+	}
+
+	citedRec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+		`{"question":"words absent everywhere","context_source_ids":[3]}`, adminPrincipal(1))
+	var citedOut ChatResponse
+	if err := json.Unmarshal(citedRec.Body.Bytes(), &citedOut); err != nil {
+		t.Fatal(err)
+	}
+	if len(citedOut.Sources) != 1 || citedOut.Sources[0].ID != 3 ||
+		!strings.Contains(citedOut.Sources[0].Snippet, "Cited beginning") ||
+		!strings.Contains(citedOut.Sources[0].Snippet, "Cited ending 99") {
+		t.Fatalf("cited fallback=%+v", citedOut.Sources)
+	}
+}
+
+func TestChatPassageDeduplicationAndUnicodeBounds(t *testing.T) {
+	passages := []string{"Primary   passage with totals"}
+	if appendDistinctChatPassage(&passages, "Primary passage with totals") {
+		t.Fatal("whitespace-equivalent passage was retained")
+	}
+	if appendDistinctChatPassage(&passages, "passage with totals") {
+		t.Fatal("contained passage was retained")
+	}
+	if !appendDistinctChatPassage(&passages, "A distant second passage") {
+		t.Fatal("distinct passage was dropped")
+	}
+	material := chatSourceMaterial{
+		passages: passages,
+		ending:   strings.Repeat("界", chatMaxPassageRunes),
+	}
+	snippet, count := assembleChatSourceSnippet(material, chatMaxSourceFocused)
+	if !utf8.ValidString(snippet) || utf8.RuneCountInString(snippet) > chatMaxSourceFocused || count != 3 {
+		t.Fatalf("unicode snippet runes=%d count=%d valid=%t", utf8.RuneCountInString(snippet), count, utf8.ValidString(snippet))
+	}
+}
+
+func TestChatFTSPassageCapKeepsMatchAfterLongTokensAndStripsMarkers(t *testing.T) {
+	s := newChatTestServer(t)
+	setChatResearchMode(t, s, settings.ResearchContextFocused)
+	longToken := strings.Repeat("x", 40)
+	content := strings.Repeat(longToken+" ", chatFTSSnippetTokens-1) +
+		"needleproof " + strings.Repeat("trailing context ", 100)
+	seedChatDoc(t, s, 1, 1, "Long-token record", content, "public", false)
+	var prompt string
+	s.ChatCompletion = func(_ context.Context, _ string, messages []ChatCompletionMessage, _ int) (string, error) {
+		prompt = messages[len(messages)-1].Content
+		return `{"answer":"Found [1].","citations":[1],"sufficient":true}`, nil
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"needleproof"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sources) != 1 || !strings.Contains(out.Sources[0].Snippet, "needleproof") {
+		t.Fatalf("match was clipped out: %+v", out.Sources)
+	}
+	if containsChatFTSMarker(out.Sources[0].Snippet) || containsChatFTSMarker(prompt) {
+		t.Fatal("temporary FTS marker reached browser or provider evidence")
+	}
+
+	markers := chatFTSMarkers{
+		start: strings.Repeat(string(chatFTSMarkerBase), chatFTSMarkerRunes),
+		end:   strings.Repeat(string(chatFTSMarkerBase+1), chatFTSMarkerRunes),
+	}
+	marked := strings.Repeat("界", 1900) + markers.start + "needle" + markers.end +
+		strings.Repeat("界", 1900)
+	bounded := boundedChatFTSPassage(marked, chatMaxPassageRunes, markers)
+	if !utf8.ValidString(bounded) || utf8.RuneCountInString(bounded) > chatMaxPassageRunes ||
+		!strings.Contains(bounded, "needle") || containsChatFTSMarker(bounded) {
+		t.Fatalf("bounded marked passage is unsafe: runes=%d passage=%q",
+			utf8.RuneCountInString(bounded), bounded)
+	}
+}
+
+func TestChatFTSPlanRanksBeforeBuildingSnippets(t *testing.T) {
+	s := newChatTestServer(t)
+	markers, err := newChatFTSMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "EXPLAIN " + chatFTSSourceSQL([]string{"d.trashed_at IS NULL"})
+	match := "needle*"
+	args := []any{
+		match, chatMaxSources, chatMaxSourceBalanced,
+		markers.start, markers.end,
+		markers.start, markers.end, markers.start,
+		match,
+	}
+	rows, err := s.DB.Read.QueryContext(context.Background(), query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seenReturn := false
+	seenRankedRewind := false
+	snippets := 0
+	for rows.Next() {
+		var addr, p1, p2, p3, p5 int
+		var opcode string
+		var p4, comment any
+		if err := rows.Scan(&addr, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
+			t.Fatal(err)
+		}
+		if opcode == "Return" {
+			seenReturn = true
+		}
+		if seenReturn && opcode == "Rewind" {
+			seenRankedRewind = true
+		}
+		if opcode == "Function" && strings.Contains(fmt.Sprint(p4), "snippet(") {
+			snippets++
+			if !seenRankedRewind {
+				t.Fatalf("snippet opcode %d precedes the bounded ranked-row loop", addr)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if snippets == 0 || !seenRankedRewind {
+		t.Fatalf("unexpected query bytecode: snippets=%d ranked_rewind=%t", snippets, seenRankedRewind)
+	}
+}
+
+func TestChatRetrievalUsesOneSQLiteSnapshot(t *testing.T) {
+	s := newChatTestServer(t)
+	oldContent := "oldanchor retained evidence " + strings.Repeat("snapshot filler ", 260)
+	seedChatDoc(t, s, 1, 1, "Snapshot record", oldContent, "public", false)
+	ctx := auth.WithPrincipal(context.Background(), adminPrincipal(1))
+	tx, err := s.DB.Read.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	where, args, err := s.chatSourceWhere(ctx, tx, ChatScope{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := s.queryChatContextSources(ctx, tx, []int64{1}, where, args, chatMaxSourceBalanced)
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial snapshot sources=%+v err=%v", initial, err)
+	}
+	if _, err := s.DB.Write.ExecContext(ctx, `UPDATE documents SET content = ? WHERE id = 1`,
+		"newsecret replacement evidence "+strings.Repeat("new filler ", 300)); err != nil {
+		t.Fatal(err)
+	}
+	markers, err := newChatFTSMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldMatches, err := s.queryChatFTSSources(ctx, tx, []string{"oldanchor"}, []int64{1},
+		where, args, markers, 1, chatMaxSourceBalanced)
+	if err != nil || len(oldMatches) != 1 || !strings.Contains(oldMatches[0].passages[0], "oldanchor") {
+		t.Fatalf("old snapshot match=%+v err=%v", oldMatches, err)
+	}
+	newMatches, err := s.queryChatAdditionalPassages(ctx, tx, "newsecret", []int64{1}, markers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newMatches[1] != "" {
+		t.Fatalf("newer content mixed into pinned snapshot: %q", newMatches[1])
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, _, err := s.retrieveChatSources(ctx, []string{"newsecret"}, nil, ChatScope{}, false,
+		chatResearchContextForMode(settings.ResearchContextBalanced))
+	if err != nil || len(fresh) != 1 || !strings.Contains(fresh[0].Snippet, "newsecret") {
+		t.Fatalf("next snapshot did not see committed update: sources=%+v err=%v", fresh, err)
+	}
+}
+
+func TestChatRateRejectionPrecedesAllRetrievalReads(t *testing.T) {
+	s := newChatTestServer(t)
+	s.chatGate = newChatGate()
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		return `{"answer":"unused","citations":[],"sufficient":false}`, nil
+	}
+	for i := 0; i < chatRequestBurst; i++ {
+		if _, _, ok := s.chatGate.admit(1); !ok {
+			t.Fatalf("failed to reserve burst token %d", i)
+		}
+	}
+	// A closed read pool makes any settings, scope, ranking, or passage query
+	// fail. A 429 therefore proves admission rejected the call before retrieval.
+	if err := s.DB.Read.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"needle"}`, adminPrincipal(1))
+	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "chat_rate_limited") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChatNoEvidenceRefundsEarlyRateReservation(t *testing.T) {
+	s := newChatTestServer(t)
+	s.chatGate = newChatGate()
+	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+		t.Fatal("provider called without evidence")
+		return "", nil
+	}
+	for i := 0; i < chatRequestBurst+2; i++ {
+		rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+			`{"question":"zzyzx unobtainium"}`, adminPrincipal(1))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), chatNoEvidenceAnswer) {
+			t.Fatalf("request %d status=%d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestChatModeRegressionBoundaries(t *testing.T) {
+	for _, mode := range []settings.ResearchContextMode{
+		settings.ResearchContextFocused, settings.ResearchContextBalanced, settings.ResearchContextDetailed,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			s := newChatTestServer(t)
+			setChatResearchMode(t, s, mode)
+			if _, err := s.DB.Write.ExecContext(context.Background(),
+				`UPDATE users SET capabilities = '["archive_chat","archive_intelligence"]' WHERE id = 3`); err != nil {
+				t.Fatal(err)
+			}
+			seedChatDoc(t, s, 1, 2, "Allowed scoped lease", "lease renewal scoped evidence", "internal", false)
+			seedChatDoc(t, s, 2, 2, "Trashed scoped lease", "lease renewal scoped evidence", "public", true)
+			seedChatDoc(t, s, 3, 2, "Sensitive scoped lease", "lease renewal scoped evidence", "confidential", false)
+			seedChatDoc(t, s, 4, 2, "Hidden scoped lease", "lease renewal scoped evidence", "public", false)
+			if _, err := s.DB.Write.ExecContext(context.Background(), `
+				INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at)
+				VALUES ('document', 1, 'user', 3, 1, 0), ('document', 3, 'user', 3, 1, 0)
+			`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Write.ExecContext(context.Background(), `
+				INSERT INTO document_intelligence(
+					document_id, intelligence_type, role, value_json, sort_value, raw_text,
+					evidence_text, confidence, status, extractor, extraction_version, created_at, updated_at
+				) VALUES (1, 'date', 'renewal', '{"date":"2026-09-01"}', '2026-09-01',
+					'September 1', 'Renews September 1', 0.9, 'accepted', 'test', 1, 0, 0)
+				`); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+				calls++
+				return `{"answer":"Scoped.","citations":[1],"sufficient":true}`, nil
+			}
+			rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+				`{"question":"lease renewal","scope":{"document_ids":[1,2,3,4]}}`, memberPrincipal(3))
+			var out ChatResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK || calls != 1 || len(out.Sources) != 1 || out.Sources[0].ID != 1 ||
+				len(out.Sources[0].Intelligence) != 1 {
+				t.Fatalf("status=%d calls=%d sources=%+v", rec.Code, calls, out.Sources)
+			}
+			noEvidence := doChatRequest(t, s, http.MethodPost, "/api/chat",
+				`{"question":"zzyzx unobtainium"}`, memberPrincipal(3))
+			if noEvidence.Code != http.StatusOK || calls != 1 || !strings.Contains(noEvidence.Body.String(), chatNoEvidenceAnswer) {
+				t.Fatalf("no-evidence status=%d calls=%d body=%s", noEvidence.Code, calls, noEvidence.Body.String())
+			}
+			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+				calls++
+				return "", errors.New("private provider failure")
+			}
+			failed := doChatRequest(t, s, http.MethodPost, "/api/chat",
+				`{"question":"lease renewal","scope":{"document_ids":[1]}}`, memberPrincipal(3))
+			if failed.Code != http.StatusBadGateway || calls != 2 ||
+				strings.Contains(failed.Body.String(), "private provider failure") {
+				t.Fatalf("provider-failure status=%d calls=%d body=%s", failed.Code, calls, failed.Body.String())
+			}
+		})
+	}
+}
+
+func TestChatSixSourceLimitAcrossResearchModes(t *testing.T) {
+	for _, mode := range []settings.ResearchContextMode{
+		settings.ResearchContextFocused, settings.ResearchContextBalanced, settings.ResearchContextDetailed,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			s := newChatTestServer(t)
+			setChatResearchMode(t, s, mode)
+			for id := int64(1); id <= chatMaxSources+1; id++ {
+				seedChatDoc(t, s, id, 1, fmt.Sprintf("Ranked source %d", id), "bounded source evidence", "public", false)
+			}
+			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+				return `{"answer":"Bounded.","citations":[1],"sufficient":true}`, nil
+			}
+			rec := doChatRequest(t, s, http.MethodPost, "/api/chat",
+				`{"question":"bounded source evidence"}`, adminPrincipal(1))
+			var out ChatResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK || len(out.Sources) != chatMaxSources {
+				t.Fatalf("status=%d sources=%+v", rec.Code, out.Sources)
+			}
+		})
 	}
 }
 

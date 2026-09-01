@@ -41,3 +41,32 @@ func TestChatGateBoundsRateAndConcurrency(t *testing.T) {
 	}
 	release()
 }
+
+func TestChatGateBoundsRetrievalsAndRefundsReservation(t *testing.T) {
+	now := time.Unix(200, 0)
+	gate := newChatGate()
+	gate.now = func() time.Time { return now }
+
+	releaseOne, _, ok := gate.acquireRetrieval()
+	if !ok {
+		t.Fatal("first retrieval was refused")
+	}
+	releaseTwo, _, ok := gate.acquireRetrieval()
+	if !ok {
+		t.Fatal("second retrieval was refused")
+	}
+	if _, retry, ok := gate.acquireRetrieval(); ok || retry <= 0 {
+		t.Fatalf("third retrieval ok=%t retry=%s", ok, retry)
+	}
+	releaseOne()
+	releaseTwo()
+
+	for i := 0; i < chatRequestBurst+2; i++ {
+		refund, _, ok := gate.admit(11)
+		if !ok {
+			t.Fatalf("refunded reservation %d was refused", i)
+		}
+		refund()
+		refund() // refunds are idempotent
+	}
+}

@@ -8,6 +8,7 @@ import (
 const (
 	chatRequestsPerMinute = 6
 	chatRequestBurst      = 2
+	chatConcurrentReads   = 2
 	chatConcurrentCalls   = 2
 )
 
@@ -16,12 +17,13 @@ type chatRateBucket struct {
 	last   time.Time
 }
 
-// chatGate protects both hosted-model spend and small local model runtimes.
+// chatGate bounds retrieval load, hosted spend, and small local runtimes.
 // It is process-local by design; deployments that need a distributed quota
 // can still place one at the reverse proxy.
 type chatGate struct {
 	mu      sync.Mutex
 	buckets map[int64]chatRateBucket
+	reads   chan struct{}
 	slots   chan struct{}
 	now     func() time.Time
 }
@@ -29,12 +31,27 @@ type chatGate struct {
 func newChatGate() *chatGate {
 	return &chatGate{
 		buckets: make(map[int64]chatRateBucket),
+		reads:   make(chan struct{}, chatConcurrentReads),
 		slots:   make(chan struct{}, chatConcurrentCalls),
 		now:     time.Now,
 	}
 }
 
-func (g *chatGate) enter(userID int64) (release func(), retryAfter time.Duration, ok bool) {
+// Bound multi-pass FTS globally and leave half the read pool for other APIs.
+func (g *chatGate) acquireRetrieval() (release func(), retryAfter time.Duration, ok bool) {
+	if g == nil {
+		return func() {}, 0, true
+	}
+	select {
+	case g.reads <- struct{}{}:
+		return func() { <-g.reads }, 0, true
+	default:
+		return nil, time.Second, false
+	}
+}
+
+// Reserve before retrieval; refund requests that never reach a provider.
+func (g *chatGate) admit(userID int64) (refund func(), retryAfter time.Duration, ok bool) {
 	if g == nil {
 		return func() {}, 0, true
 	}
@@ -59,10 +76,41 @@ func (g *chatGate) enter(userID int64) (release func(), retryAfter time.Duration
 	g.buckets[userID] = bucket
 	g.mu.Unlock()
 
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			now := g.now()
+			g.mu.Lock()
+			bucket := g.buckets[userID]
+			elapsed := now.Sub(bucket.last).Minutes()
+			bucket.tokens = min(float64(chatRequestBurst),
+				bucket.tokens+elapsed*chatRequestsPerMinute+1)
+			bucket.last = now
+			g.buckets[userID] = bucket
+			g.mu.Unlock()
+		})
+	}, 0, true
+}
+
+// Keep slow archive reads from occupying live-provider slots.
+func (g *chatGate) acquireProvider() (release func(), retryAfter time.Duration, ok bool) {
+	if g == nil {
+		return func() {}, 0, true
+	}
+
 	select {
 	case g.slots <- struct{}{}:
 		return func() { <-g.slots }, 0, true
 	default:
 		return nil, time.Second, false
 	}
+}
+
+// enter combines both admissions when no retrieval falls between them.
+func (g *chatGate) enter(userID int64) (release func(), retryAfter time.Duration, ok bool) {
+	_, retryAfter, ok = g.admit(userID)
+	if !ok {
+		return nil, retryAfter, false
+	}
+	return g.acquireProvider()
 }
