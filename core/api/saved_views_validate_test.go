@@ -4,6 +4,8 @@ package api
 // shape so a new key needs a deliberate code change.
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -56,5 +58,45 @@ func TestNormalizeSavedViewQuery(t *testing.T) {
 	}
 	if _, err := NormalizeSavedViewFilterJSON(`{"q":"unknown:value"}`); err == nil {
 		t.Fatal("malformed saved query was accepted")
+	}
+}
+
+func TestSavedViewFacetIDsAreBoundedAndDeduplicated(t *testing.T) {
+	encode := func(key string, ids []int64) string {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{key: ids})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	for _, key := range []string{"tags__id__in", "correspondents__id__in"} {
+		if _, err := NormalizeSavedViewFilterJSON(encode(key, testPositiveIDs(100))); err != nil {
+			t.Fatalf("%s rejected 100 unique ids: %v", key, err)
+		}
+		if _, err := NormalizeSavedViewFilterJSON(encode(key, testPositiveIDs(101))); err == nil {
+			t.Fatalf("%s accepted 101 unique ids", key)
+		}
+
+		raw := encode(key, []int64{3, 1, 3, 2})
+		scope, err := documentScopeFromSavedViewJSON(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := scope.TagIDs
+		if key == "correspondents__id__in" {
+			got = scope.CorrespondentIDs
+		}
+		if want := []int64{3, 1, 2}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s ids=%v, want %v", key, got, want)
+		}
+
+		duplicates := make([]int64, 101)
+		for i := range duplicates {
+			duplicates[i] = 7
+		}
+		if _, err := NormalizeSavedViewFilterJSON(encode(key, duplicates)); err != nil {
+			t.Fatalf("%s rejected bounded unique duplicate list: %v", key, err)
+		}
 	}
 }

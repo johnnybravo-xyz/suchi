@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -89,6 +90,47 @@ func TestListDocuments_ReturnsSeeded(t *testing.T) {
 	// Empty slices, not null.
 	if rows[0].Tags == nil {
 		t.Errorf("Tags should be []string{}, got nil")
+	}
+}
+
+func TestListDocuments_OrderingHasStableIDTieBreak(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	first := seedStatsDoc(t, s.DB, 1, "same-time-a", "first", inbox, false, 100)
+	second := seedStatsDoc(t, s.DB, 1, "same-time-b", "second", inbox, false, 100)
+
+	_, rows, _ := doList(t, s, "/api/documents/", adminPrincipal(1))
+	if len(rows) != 2 {
+		t.Fatalf("descending rows=%+v", rows)
+	}
+	if rows[0].ID != second || rows[1].ID != first {
+		t.Fatalf("descending ids=%v,%v, want %d,%d", rows[0].ID, rows[1].ID, second, first)
+	}
+	_, rows, _ = doList(t, s, "/api/documents/?ordering=created_at", adminPrincipal(1))
+	if len(rows) != 2 {
+		t.Fatalf("ascending rows=%+v", rows)
+	}
+	if rows[0].ID != first || rows[1].ID != second {
+		t.Fatalf("ascending ids=%v,%v, want %d,%d", rows[0].ID, rows[1].ID, first, second)
+	}
+
+	if _, err := s.DB.Write.ExecContext(context.Background(),
+		`UPDATE documents SET title = 'same title' WHERE id IN (?, ?)`, first, second); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		ordering string
+		want     []int64
+	}{
+		{"updated_at", []int64{first, second}},
+		{"-updated_at", []int64{second, first}},
+		{"title", []int64{first, second}},
+		{"-title", []int64{second, first}},
+	} {
+		_, rows, _ = doList(t, s, "/api/documents/?ordering="+test.ordering, adminPrincipal(1))
+		if len(rows) != 2 || rows[0].ID != test.want[0] || rows[1].ID != test.want[1] {
+			t.Fatalf("ordering %q rows=%+v, want ids=%v", test.ordering, rows, test.want)
+		}
 	}
 }
 
@@ -178,14 +220,46 @@ func TestListDocuments_AllTagsFilterPrecedesPagination(t *testing.T) {
 	}
 
 	_, rows, count := doList(t, s,
-		"/api/documents/?tags__id__in=1,2&page_size=1", adminPrincipal(1))
+		"/api/documents/?tags__id__in=1,2,1&page_size=1", adminPrincipal(1))
 	if count != 2 || len(rows) != 1 || rows[0].ID != second {
 		t.Fatalf("page 1 count=%d rows=%+v", count, rows)
 	}
 	_, rows, count = doList(t, s,
-		"/api/documents/?tags__id__in=1,2&page_size=1&page=2", adminPrincipal(1))
+		"/api/documents/?tags__id__in=1,2,1&page_size=1&page=2", adminPrincipal(1))
 	if count != 2 || len(rows) != 1 || rows[0].ID != first {
 		t.Fatalf("page 2 count=%d rows=%+v", count, rows)
+	}
+}
+
+func TestListDocuments_FacetIDLimits(t *testing.T) {
+	s := newListServer(t)
+	request := func(field, raw string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/api/documents/?"+field+"="+raw, nil)
+		req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+		s.ListDocuments(rec, req)
+		return rec
+	}
+
+	for _, test := range []struct {
+		field string
+		code  string
+	}{
+		{"tags__id__in", "bad_tags"},
+		{"correspondents__id__in", "bad_correspondents"},
+	} {
+		for _, raw := range []string{testCSVRange(100), testRepeatedCSV(1, 100)} {
+			if rec := request(test.field, raw); rec.Code != 200 {
+				t.Fatalf("%s accepted boundary status=%d body=%s", test.field, rec.Code, rec.Body.String())
+			}
+		}
+		for _, raw := range []string{testCSVRange(101), testRepeatedCSV(1, 101)} {
+			rec := request(test.field, raw)
+			if rec.Code != 400 || !strings.Contains(rec.Body.String(), `"code":"`+test.code+`"`) {
+				t.Fatalf("%s oversized status=%d body=%s", test.field, rec.Code, rec.Body.String())
+			}
+		}
 	}
 }
 

@@ -499,6 +499,20 @@ func NormalizeSavedViewFilterJSON(raw string) (string, error) {
 		}
 		filter["document_ids"] = ids
 	}
+	for _, key := range []string{"tags__id__in", "correspondents__id__in"} {
+		value, exists := filter[key]
+		if !exists {
+			continue
+		}
+		ids, err := scopeIDs(value)
+		if err != nil {
+			return "", &savedViewFilterError{message: "filter key " + key + " must contain positive integers"}
+		}
+		if len(ids) > maxDocumentScopeIDs {
+			return "", &savedViewFilterError{message: "filter key " + key + " must contain at most 100 unique positive integers"}
+		}
+		filter[key] = ids
+	}
 	if value, exists := filter["q"]; exists {
 		query, ok := value.(string)
 		if !ok {

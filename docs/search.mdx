@@ -68,6 +68,13 @@ Text results include a content snippet with `<mark>` around the matching span.
 The snippet window is 20 FTS tokens. Filter-only queries do not join FTS; they
 return an empty snippet and use newest-first ordering.
 
+Default recency-ranked searches first materialize only the requested page of
+document IDs and scores. A row-ID-restricted FTS pass then builds one snippet
+for each page result, so broad matches do not build display text for the whole
+candidate set. Raw `recency=off` searches stay in one FTS scan because a second
+bounded MATCH costs more than it saves for plain BM25. Both paths use score and
+document ID as a stable order. See [SQLite WITH-clause materialization](https://www.sqlite.org/lang_with.html#materialization_hints).
+
 ### BM25 weighting
 
 When text clauses exist, ranking begins with SQLite FTS5 BM25:
@@ -123,6 +130,15 @@ Documents does not apply BM25 or recency ordering. It supports list orders such
 as newest, oldest, updated, and title because the screen is also a bulk-action
 workspace. Legacy URL filters remain additive while older links and imported
 Views migrate to normalized queries.
+
+When a rich query contains positive text, Documents starts with the FTS match
+and joins the resulting row IDs to document metadata. Calendar's source-document
+filter uses the same shape. This avoids scanning every document and running a
+correlated FTS probe for each row. Filter-only document lists stay on ordinary
+tables; the default live newest-first page uses a partial
+`(created_at DESC, id DESC)` index. Every supported list order includes ID as a
+deterministic tie-breaker, so equal timestamps or titles cannot move between
+pages.
 
 ## Query completion and autocomplete
 
@@ -222,6 +238,8 @@ SQLite FTS5's `snippet()` function returns at most 64 tokens. Suchi also caps
 each returned passage at 1,200 Unicode characters before assembly. Temporary
 markers locate the first match so the character cap is applied around it, then
 all markers are removed before the passage reaches the browser, logs, or model.
+Each already-ranked or row-ID-restricted result materializes its marked passage
+once before clipping, avoiding duplicate `snippet()` evaluation.
 Merely increasing one contiguous snippet would still inspect only the
 neighborhood chosen for that single FTS window, so it would not reliably recover
 far-apart clauses or repeated totals in a long document. Term-specific windows

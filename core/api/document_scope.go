@@ -37,7 +37,7 @@ func (e *documentScopeError) Error() string { return e.Message }
 func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	scope := documentScope{Query: strings.TrimSpace(values.Get("q"))}
 	var err error
-	if scope.DocumentIDs, err = parseCSVIDs(values.Get("document_ids")); err != nil || len(scope.DocumentIDs) > maxDocumentScopeIDs {
+	if scope.DocumentIDs, err = parseBoundedCSVIDs(values.Get("document_ids"), maxDocumentScopeIDs); err != nil {
 		return documentScope{}, &documentScopeError{
 			Code: "bad_document_ids", Message: fmt.Sprintf("document_ids must contain at most %d positive integers", maxDocumentScopeIDs),
 		}
@@ -52,11 +52,11 @@ func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	if scope.DocumentTypeID, err = optionalPositiveID(values.Get("document_type__id")); err != nil {
 		return documentScope{}, &documentScopeError{Code: "bad_document_type_id", Message: "document_type__id must be a positive integer"}
 	}
-	if scope.TagIDs, err = parseCSVIDs(values.Get("tags__id__in")); err != nil {
-		return documentScope{}, &documentScopeError{Code: "bad_tags", Message: err.Error()}
+	if scope.TagIDs, err = parseBoundedCSVIDs(values.Get("tags__id__in"), maxDocumentScopeIDs); err != nil {
+		return documentScope{}, &documentScopeError{Code: "bad_tags", Message: "tags__id__in " + err.Error()}
 	}
-	if scope.CorrespondentIDs, err = parseCSVIDs(values.Get("correspondents__id__in")); err != nil {
-		return documentScope{}, &documentScopeError{Code: "bad_correspondents", Message: err.Error()}
+	if scope.CorrespondentIDs, err = parseBoundedCSVIDs(values.Get("correspondents__id__in"), maxDocumentScopeIDs); err != nil {
+		return documentScope{}, &documentScopeError{Code: "bad_correspondents", Message: "correspondents__id__in " + err.Error()}
 	}
 	if scope.CreatedAtGTE, err = optionalNonNegativeInt(values.Get("created_at__gte")); err != nil {
 		return documentScope{}, &documentScopeError{Code: "bad_created_at_gte", Message: "created_at__gte must be a non-negative unix seconds integer"}
@@ -100,11 +100,11 @@ func documentScopeFromSavedViewJSON(raw string) (documentScope, error) {
 	if scope.DocumentTypeID, err = scopeID(values["document_type__id"]); err != nil {
 		return documentScope{}, &savedViewFilterError{message: "filter key document_type__id must be a positive integer"}
 	}
-	if scope.TagIDs, err = scopeIDs(values["tags__id__in"]); err != nil {
-		return documentScope{}, &savedViewFilterError{message: "filter key tags__id__in must contain positive integers"}
+	if scope.TagIDs, err = scopeIDs(values["tags__id__in"]); err != nil || len(scope.TagIDs) > maxDocumentScopeIDs {
+		return documentScope{}, &savedViewFilterError{message: "filter key tags__id__in must contain at most 100 unique positive integers"}
 	}
-	if scope.CorrespondentIDs, err = scopeIDs(values["correspondents__id__in"]); err != nil {
-		return documentScope{}, &savedViewFilterError{message: "filter key correspondents__id__in must contain positive integers"}
+	if scope.CorrespondentIDs, err = scopeIDs(values["correspondents__id__in"]); err != nil || len(scope.CorrespondentIDs) > maxDocumentScopeIDs {
+		return documentScope{}, &savedViewFilterError{message: "filter key correspondents__id__in must contain at most 100 unique positive integers"}
 	}
 	return scope, nil
 }

@@ -13,7 +13,7 @@ import (
 )
 
 type apiQueryResolver struct {
-	queryer chatQueryer
+	queryer sqlQueryer
 }
 
 func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]searchquery.Candidate, error) {
@@ -84,7 +84,7 @@ func (s *Server) compileQuery(ctx context.Context, raw string) (searchquery.Plan
 }
 
 // Resolve named scope filters inside the retrieval's pinned transaction.
-func (s *Server) compileQueryWith(ctx context.Context, q chatQueryer, raw string) (searchquery.Plan, error) {
+func (s *Server) compileQueryWith(ctx context.Context, q sqlQueryer, raw string) (searchquery.Plan, error) {
 	parsed, err := searchquery.Parse(raw)
 	if err != nil {
 		return searchquery.Plan{}, err
@@ -97,9 +97,18 @@ func (s *Server) compileQueryWith(ctx context.Context, q chatQueryer, raw string
 }
 
 func appendQueryPredicates(where []string, args []any, plan searchquery.Plan) ([]string, []any) {
+	return appendQueryPredicatesWithMatch(where, args, plan,
+		`EXISTS (SELECT 1 FROM documents_fts WHERE documents_fts.rowid = d.id AND documents_fts MATCH ?)`)
+}
+
+// List queries must let MATCH drive the scan instead of probing FTS per document.
+func appendFTSDrivenQueryPredicates(where []string, args []any, plan searchquery.Plan) ([]string, []any) {
+	return appendQueryPredicatesWithMatch(where, args, plan, `documents_fts MATCH ?`)
+}
+
+func appendQueryPredicatesWithMatch(where []string, args []any, plan searchquery.Plan, matchSQL string) ([]string, []any) {
 	if plan.Match != "" {
-		where = append(where,
-			`EXISTS (SELECT 1 FROM documents_fts WHERE documents_fts.rowid = d.id AND documents_fts MATCH ?)`)
+		where = append(where, matchSQL)
 		args = append(args, plan.Match)
 	}
 	for _, predicate := range plan.Predicates {
@@ -107,6 +116,13 @@ func appendQueryPredicates(where []string, args []any, plan searchquery.Plan) ([
 		args = append(args, predicate.Args...)
 	}
 	return where, args
+}
+
+func queryDocumentFTSJoin(plan searchquery.Plan) string {
+	if plan.Match == "" {
+		return ""
+	}
+	return " JOIN documents_fts ON documents_fts.rowid = d.id"
 }
 
 func (s *Server) writeQueryError(w http.ResponseWriter, operation, _ string, err error) bool {

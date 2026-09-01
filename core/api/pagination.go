@@ -107,29 +107,25 @@ func pageURL(r *http.Request, page int) string {
 	return r.URL.Path + "?" + q.Encode()
 }
 
-// ParseCSVInts reads a comma-separated list of integers from ?key=.
-// Empty or missing → nil. Non-integer tokens are silently dropped
-// (mobile clients occasionally send stale ids after a delete; a
-// filter that just skips them is friendlier than a 400).
-//
-// Used by DRF-style filters like `?tags__id__in=1,2,3`.
-func ParseCSVInts(r *http.Request, key string) []int64 {
-	raw := strings.TrimSpace(r.URL.Query().Get(key))
-	if raw == "" {
-		return nil
+// Malformed values are dropped for compatibility with legacy mobile filters.
+func parseBoundedCSVInts(r *http.Request, key string, limit int) ([]int64, error) {
+	parts, err := boundedCSVParts(r.URL.Query().Get(key), limit)
+	if err != nil || len(parts) == 0 {
+		return nil, err
 	}
-	parts := strings.Split(raw, ",")
 	out := make([]int64, 0, len(parts))
+	seen := make(map[int64]bool, len(parts))
 	for _, p := range parts {
 		v, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
-		if err == nil && v > 0 {
+		if err == nil && v > 0 && !seen[v] {
+			seen[v] = true
 			out = append(out, v)
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 // OrderingToSQL translates ?ordering=field or ?ordering=-field into a

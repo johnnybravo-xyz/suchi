@@ -91,7 +91,15 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 
 	// Existing visual-filter query parameters remain additive while clients
 	// transition to rich-query filters.
-	extra, extraArgs := buildSearchFilters(r, language)
+	extra, extraArgs, err := buildSearchFilters(r, language)
+	if err != nil {
+		if scopeErr, ok := err.(*documentScopeError); ok {
+			s.writeError(w, http.StatusBadRequest, scopeErr.Code, scopeErr.Message)
+			return
+		}
+		s.serverErr(w, "search.parse_filters", err)
+		return
+	}
 	if principal.Role != "admin" {
 		groups, err := s.principalGroups(r.Context(), principal.UserID)
 		if err != nil {
@@ -103,7 +111,8 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		extraArgs = append(extraArgs, visibilityArgs...)
 	}
 	whereSQL := " WHERE " + strings.Join(where, " AND ") + extra
-	countArgs := append(append([]any{}, args...), extraArgs...)
+	countArgs := append([]any{}, args...)
+	countArgs = append(countArgs, extraArgs...)
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
 		"SELECT COUNT(*)"+fromSQL+whereSQL, countArgs...).Scan(&total); err != nil {
@@ -112,37 +121,35 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := ParsePageParams(r, 25, 100)
-	snippetExpr := "''"
-	rankExpr := "0.0"
-	orderBy := "d.created_at DESC"
-	rankArgs := []any{}
-	if queryPlan.Match != "" {
-		snippetExpr = "snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20)"
-		rankExpr = "bm25(documents_fts, ?, ?)"
-		rankArgs = []any{bm25TitleWeight, bm25ContentWeight}
-		if r.URL.Query().Get("recency") != "off" {
-			rankExpr = "bm25(documents_fts, ?, ?) - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?))"
-			rankArgs = []any{bm25TitleWeight, bm25ContentWeight, recencyBoost, float64(recencyHalfLifeS)}
+	var pageSQL string
+	var queryArgs []any
+	if queryPlan.Match == "" {
+		pageSQL = `
+			SELECT d.id, d.title, '', 0.0, d.created_at,
+			       COALESCE(d.mime_type, '')` +
+			fromSQL + whereSQL + `
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, args...)
+		queryArgs = append(queryArgs, extraArgs...)
+		queryArgs = append(queryArgs, p.PageSize, p.Offset())
+	} else {
+		if r.URL.Query().Get("recency") == "off" {
+			pageSQL = searchFTSRawPageSQL(whereSQL)
+			queryArgs = append(queryArgs, bm25TitleWeight, bm25ContentWeight)
+			queryArgs = append(queryArgs, args...)
+			queryArgs = append(queryArgs, extraArgs...)
+			queryArgs = append(queryArgs, p.PageSize, p.Offset())
+		} else {
+			rankExpr := "bm25(documents_fts, ?, ?) - ? / (1.0 + (CAST(unixepoch() - d.created_at AS REAL) / ?))"
+			pageSQL = searchFTSPageSQL(whereSQL, rankExpr)
+			queryArgs = append(queryArgs, bm25TitleWeight, bm25ContentWeight, recencyBoost, float64(recencyHalfLifeS))
+			queryArgs = append(queryArgs, args...)
+			queryArgs = append(queryArgs, extraArgs...)
+			queryArgs = append(queryArgs, p.PageSize, p.Offset(), queryPlan.Match)
 		}
-		orderBy = rankExpr
 	}
-
-	queryArgs := append([]any{}, rankArgs...)
-	queryArgs = append(queryArgs, args...)
-	queryArgs = append(queryArgs, extraArgs...)
-	if queryPlan.Match != "" {
-		queryArgs = append(queryArgs, rankArgs...)
-	}
-	queryArgs = append(queryArgs, p.PageSize, p.Offset())
-	rows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT d.id, d.title,
-		       `+snippetExpr+`,
-		       `+rankExpr+`,
-		       d.created_at,
-		       COALESCE(d.mime_type, '')`+
-		fromSQL+whereSQL+`
-		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`, queryArgs...)
+	rows, err := s.DB.Read.QueryContext(r.Context(), pageSQL, queryArgs...)
 	if err != nil {
 		s.serverErr(w, "search.query", err)
 		return
@@ -164,6 +171,41 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, p, out))
+}
+
+func searchFTSPageSQL(whereSQL, rankExpr string) string {
+	// Bound the second MATCH and snippet pass to the recency-ranked page.
+	return `
+		WITH ranked AS MATERIALIZED (
+			SELECT d.id, ` + rankExpr + ` AS match_rank
+			FROM documents_fts
+			JOIN documents d ON d.id = documents_fts.rowid` + whereSQL + `
+			ORDER BY match_rank, d.id
+			LIMIT ? OFFSET ?
+		)
+		SELECT d.id, d.title,
+		       COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), ''),
+		       ranked.match_rank, d.created_at,
+		       COALESCE(d.mime_type, '')
+		FROM ranked
+		JOIN documents d ON d.id = ranked.id
+		CROSS JOIN documents_fts
+		WHERE documents_fts.rowid = ranked.id
+		  AND documents_fts MATCH ?
+		ORDER BY ranked.match_rank, ranked.id`
+}
+
+func searchFTSRawPageSQL(whereSQL string) string {
+	// Plain BM25 is faster in one FTS scan than through a second bounded MATCH.
+	return `
+		SELECT d.id, d.title,
+		       COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), ''),
+		       bm25(documents_fts, ?, ?) AS match_rank, d.created_at,
+		       COALESCE(d.mime_type, '')
+		FROM documents_fts
+		JOIN documents d ON d.id = documents_fts.rowid` + whereSQL + `
+		ORDER BY match_rank, d.id
+		LIMIT ? OFFSET ?`
 }
 
 // AutocompleteSuggestion is one entry in the autocomplete response.
@@ -269,31 +311,38 @@ func (s *Server) autoQueryOne(r *http.Request, table, col, kind, needle string, 
 	return out
 }
 
-// buildSearchFilters converts DRF-style query params into an extra
-// SQL fragment (`AND ...`) plus its bind args. Every filter is
-// optional; the fragment is empty when no filter params are set.
+// buildSearchFilters converts DRF-style query params into an extra SQL
+// fragment (`AND ...`) plus its bind args. Every filter is optional.
 //
-// Values go through ParseCSVInts (which drops non-int / zero / negative
+// Facet values use the bounded CSV parser (which drops non-int / zero / negative
 // tokens) or strconv.ParseInt with a positive-only guard, so no user
 // input reaches the SQL as a literal.
-func buildSearchFilters(r *http.Request, language string) (string, []any) {
+func buildSearchFilters(r *http.Request, language string) (string, []any, error) {
 	var (
 		frag strings.Builder
 		args []any
 	)
-	if ids := ParseCSVInts(r, "tags__id__in"); len(ids) > 0 {
+	tagIDs, err := parseBoundedCSVInts(r, "tags__id__in", maxDocumentScopeIDs)
+	if err != nil {
+		return "", nil, &documentScopeError{Code: "bad_tags", Message: "tags__id__in " + err.Error()}
+	}
+	if len(tagIDs) > 0 {
 		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id = d.id AND dt.tag_id IN (")
-		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString(placeholders(len(tagIDs)))
 		frag.WriteString("))")
-		for _, id := range ids {
+		for _, id := range tagIDs {
 			args = append(args, id)
 		}
 	}
-	if ids := ParseCSVInts(r, "correspondents__id__in"); len(ids) > 0 {
+	correspondentIDs, err := parseBoundedCSVInts(r, "correspondents__id__in", maxDocumentScopeIDs)
+	if err != nil {
+		return "", nil, &documentScopeError{Code: "bad_correspondents", Message: "correspondents__id__in " + err.Error()}
+	}
+	if len(correspondentIDs) > 0 {
 		frag.WriteString(" AND EXISTS (SELECT 1 FROM document_correspondents dc WHERE dc.document_id = d.id AND dc.correspondent_id IN (")
-		frag.WriteString(placeholders(len(ids)))
+		frag.WriteString(placeholders(len(correspondentIDs)))
 		frag.WriteString("))")
-		for _, id := range ids {
+		for _, id := range correspondentIDs {
 			args = append(args, id)
 		}
 	}
@@ -323,7 +372,7 @@ func buildSearchFilters(r *http.Request, language string) (string, []any) {
 		frag.WriteString(" AND d.languages LIKE ?")
 		args = append(args, "%,"+v+",%")
 	}
-	return frag.String(), args
+	return frag.String(), args, nil
 }
 
 // placeholders returns "?, ?, ?" for n args.

@@ -205,16 +205,16 @@ Query params (all optional):
 | `jd_category_id`                     | Exact filing-chip match.                                                                                                    |
 | `sensitivity`                        | One of `public`, `internal`, `confidential`, `restricted`.                                                                  |
 | `document_type__id`                  | Exact document type.                                                                                                        |
-| `tags__id__in`                       | CSV of tag ids; result must carry **every** id (AND).                                                                       |
-| `correspondents__id__in`             | CSV of correspondent ids; result matches **any** (OR).                                                                      |
+| `tags__id__in`                       | Up to 100 positive tag-ID tokens; duplicates are removed in first-seen order. Result must carry **every** unique ID (AND).   |
+| `correspondents__id__in`             | Up to 100 positive correspondent-ID tokens; duplicates are removed in first-seen order. Result matches **any** (OR).         |
 | `document_ids`                       | CSV of at most 100 positive document IDs; useful for exact snapshots. ACLs still apply.                                     |
 | `q`                                  | [Rich query string](/query-language); Search and Documents share its matching plan.                                              |
 | `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
 | `lang`                               | Two- or three-letter language code. Input is trimmed and lowercased; exact stored language membership is required.           |
 | `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
 
-Scope filters are additive. Malformed or oversized `document_ids` returns
-`400 bad_document_ids`; an invalid language token returns `400 bad_lang`.
+Scope filters are additive. Malformed or oversized ID lists return a field-specific
+`400`; an invalid language token returns `400 bad_lang`.
 
 Non-admin callers get the same ACL fragment the detail + patch
 endpoints use — a member sees only owned docs plus explicit grants
@@ -735,7 +735,7 @@ document the caller cannot view.
 | `q`                                                  | Rich query string described below. Empty → empty envelope.                                                                    |
 | `page`, `page_size`                                  | Standard pagination (default 25, max 100).                                                                                       |
 | `recency`                                            | `off` disables the recency-decay term in ranking.                                                                                |
-| `tags__id__in`, `correspondents__id__in`             | CSV IDs; doc matches ANY.                                                                                                        |
+| `tags__id__in`, `correspondents__id__in`             | Up to 100 positive ID tokens per field, deduplicated in first-seen order; doc matches ANY.                                         |
 | `document_type__id`, `jd_category_id`, `sensitivity` | Single-value filters.                                                                                                            |
 | `lang`                                               | Two- or three-letter language token (`de`, `kn`, `hin`). Narrows to docs whose `languages` includes the token; input is trimmed and lowercased. Invalid values return `400 bad_lang`. |
 
@@ -773,6 +773,9 @@ contract for an exact snapshot View; opening or sharing the View still reapplies
 document authorization. Other supported filters are additive, so an exact
 snapshot stores `document_ids` alone. The web app does this instead of deriving
 a live `q` from question text.
+
+Saved-view tag and correspondent lists accept at most 100 unique positive IDs.
+The server removes duplicates in first-seen order during normalization.
 
 When `q` is present, the server normalizes its spelling and resolves referenced
 categories, tags, correspondents, and document types before writing the row.

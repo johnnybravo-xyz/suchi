@@ -27,9 +27,7 @@ package api
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
@@ -68,12 +66,12 @@ type DocumentListRow struct {
 // by. Anything outside this map falls back to the default. Keeps
 // user input out of the SQL string concatenation.
 var listOrderingAllow = map[string]string{
-	"created_at":  "d.created_at",
-	"-created_at": "d.created_at DESC",
-	"updated_at":  "d.updated_at",
-	"-updated_at": "d.updated_at DESC",
-	"title":       "d.title",
-	"-title":      "d.title DESC",
+	"created_at":  "d.created_at, d.id",
+	"-created_at": "d.created_at DESC, d.id DESC",
+	"updated_at":  "d.updated_at, d.id",
+	"-updated_at": "d.updated_at DESC, d.id DESC",
+	"title":       "d.title, d.id",
+	"-title":      "d.title DESC, d.id DESC",
 }
 
 // ListDocuments serves GET /api/documents/. Wired in api.go.
@@ -114,9 +112,8 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	where, args = appendDocumentScopePredicates(where, args, scope)
 
-	// Rich text and metadata constraints share the same compiled plan as
-	// ranked search. Legacy visual filters above remain additive.
-	where, args = appendQueryPredicates(where, args, queryPlan)
+	// Positive text starts from FTS; metadata filters remain additive.
+	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)
 
 	// Visibility: admins bypass; members get owner/ACL visibility. Public demo
 	// visitors see only the seeded corpus, plus their own scratch uploads.
@@ -142,7 +139,8 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	// COUNT — envelope carries the total pre-limit.
 	var total int
-	countSQL := "SELECT COUNT(*) FROM documents d WHERE " + whereSQL
+	fromSQL := "documents d" + queryDocumentFTSJoin(queryPlan)
+	countSQL := "SELECT COUNT(*) FROM " + fromSQL + " WHERE " + whereSQL
 	if err := s.DB.Read.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		s.serverErr(w, "docs.list.count", err)
 		return
@@ -161,7 +159,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(d.thumb_sha, ''),
 		       COALESCE(d.encryption_state, ''),
 		       d.created_at, d.updated_at, d.trashed_at
-		  FROM documents d
+		  FROM `+fromSQL+`
 		  LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		  LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
 		 WHERE `+whereSQL+`
@@ -213,29 +211,6 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
-}
-
-// parseCSVIDs turns "1,2,3" into []int64{1,2,3}. Empty string returns
-// nil. Invalid entries return an error naming the offending token.
-func parseCSVIDs(s string) ([]int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]int64, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		v, err := strconv.ParseInt(p, 10, 64)
-		if err != nil || v <= 0 {
-			return nil, fmt.Errorf("id must be a positive integer, got %q", p)
-		}
-		out = append(out, v)
-	}
-	return out, nil
 }
 
 // hydrateTagsForList populates the Tags slice on every list row via

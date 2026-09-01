@@ -587,6 +587,12 @@ func TestChatPassageDeduplicationAndUnicodeBounds(t *testing.T) {
 	}
 }
 
+func containsChatFTSMarker(value string) bool {
+	return strings.IndexFunc(value, func(current rune) bool {
+		return current >= chatFTSMarkerBase && current < chatFTSMarkerBase+chatFTSMarkerChoices
+	}) >= 0
+}
+
 func TestChatFTSPassageCapKeepsMatchAfterLongTokensAndStripsMarkers(t *testing.T) {
 	s := newChatTestServer(t)
 	setChatResearchMode(t, s, settings.ResearchContextFocused)
@@ -637,10 +643,9 @@ func TestChatFTSPlanRanksBeforeBuildingSnippets(t *testing.T) {
 	query := "EXPLAIN " + chatFTSSourceSQL([]string{"d.trashed_at IS NULL"})
 	match := "needle*"
 	args := []any{
-		match, chatMaxSources, chatMaxSourceBalanced,
-		markers.start, markers.end,
-		markers.start, markers.end, markers.start,
-		match,
+		match, chatMaxSources,
+		markers.start, markers.end, match,
+		chatMaxSourceBalanced, markers.start,
 	}
 	rows, err := s.DB.Read.QueryContext(context.Background(), query, args...)
 	if err != nil {
@@ -673,8 +678,41 @@ func TestChatFTSPlanRanksBeforeBuildingSnippets(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if snippets == 0 || !seenRankedRewind {
+	if snippets != 1 || !seenRankedRewind {
 		t.Fatalf("unexpected query bytecode: snippets=%d ranked_rewind=%t", snippets, seenRankedRewind)
+	}
+}
+
+func TestChatAdditionalPassagePlanBuildsOneSnippet(t *testing.T) {
+	s := newChatTestServer(t)
+	markers, err := newChatFTSMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.DB.Read.QueryContext(context.Background(),
+		"EXPLAIN "+chatAdditionalPassagesSQL(1),
+		markers.start, markers.end, "content : needle*", 1, markers.start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	snippets := 0
+	for rows.Next() {
+		var addr, p1, p2, p3, p5 int
+		var opcode string
+		var p4, comment any
+		if err := rows.Scan(&addr, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
+			t.Fatal(err)
+		}
+		if opcode == "Function" && strings.Contains(fmt.Sprint(p4), "snippet(") {
+			snippets++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if snippets != 1 {
+		t.Fatalf("additional-passage bytecode has %d snippet opcodes, want 1", snippets)
 	}
 }
 
@@ -1046,15 +1084,5 @@ func TestParseChatModelAnswerRejectsInvalidNumericCitations(t *testing.T) {
 		if _, _, _, err := parseChatModelAnswer(raw, 1); err == nil {
 			t.Fatalf("invalid citation accepted: %s", raw)
 		}
-	}
-}
-
-func TestChatResponseErrorReasonDoesNotEchoMalformedOutput(t *testing.T) {
-	_, _, _, err := parseChatModelAnswer(`{"answer":"private text"`, 1)
-	if err == nil {
-		t.Fatal("malformed response was accepted")
-	}
-	if reason := chatResponseErrorReason(err); reason != "malformed JSON" {
-		t.Fatalf("reason=%q", reason)
 	}
 }

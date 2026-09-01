@@ -166,6 +166,43 @@ func TestRichQueryPlainTextUsesPrefixAND(t *testing.T) {
 	}
 }
 
+func TestListStyleRichTextQueryIsFTSDriven(t *testing.T) {
+	s := newListServer(t)
+	plan, err := s.compileQuery(context.Background(), "rareterm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, args := appendFTSDrivenQueryPredicates(
+		[]string{"d.trashed_at IS NULL"}, nil, plan)
+	rows, err := s.DB.Read.QueryContext(context.Background(), `
+		EXPLAIN QUERY PLAN
+		SELECT d.id
+		FROM documents d`+queryDocumentFTSJoin(plan)+`
+		WHERE `+strings.Join(where, " AND "), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var details strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details.WriteString(detail)
+		details.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	queryPlan := details.String()
+	if !strings.Contains(queryPlan, "SCAN documents_fts VIRTUAL TABLE INDEX") ||
+		strings.Contains(queryPlan, "CORRELATED") {
+		t.Fatalf("rich text query is not FTS-driven:\n%s", queryPlan)
+	}
+}
+
 func TestRichQueryJDUsesVisibleCodeNotRowID(t *testing.T) {
 	s := newListServer(t)
 	matchingID, _ := seedRichQueryData(t, s)

@@ -517,36 +517,12 @@ func truncateRunes(value string, limit int) string {
 	return value
 }
 
-func normalizedPositiveIDs(ids []int64, limit int) ([]int64, error) {
-	if len(ids) > limit {
-		return nil, fmt.Errorf("at most %d document ids are allowed", limit)
-	}
-	seen := make(map[int64]bool, len(ids))
-	out := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if id <= 0 {
-			return nil, errors.New("document ids must be positive")
-		}
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out, nil
-}
-
 type chatSourceMaterial struct {
 	source    ChatSource
 	whole     string
 	beginning string
 	ending    string
 	passages  []string
-}
-
-// chatQueryer keeps scope resolution and passage reads on one snapshot.
-type chatQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contextIDs []int64,
@@ -668,7 +644,7 @@ func (s *Server) retrieveChatSources(ctx context.Context, terms []string, contex
 	return sources, passageCount, nil
 }
 
-func (s *Server) chatSourceWhere(ctx context.Context, q chatQueryer, scope ChatScope, includeSensitive bool) ([]string, []any, error) {
+func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatScope, includeSensitive bool) ([]string, []any, error) {
 	p := auth.FromContext(ctx)
 	where := []string{"d.trashed_at IS NULL"}
 	args := []any{}
@@ -695,7 +671,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, q chatQueryer, scope ChatS
 	return where, args, nil
 }
 
-func chatPrincipalGroups(ctx context.Context, q chatQueryer, userID int64) ([]int64, error) {
+func chatPrincipalGroups(ctx context.Context, q sqlQueryer, userID int64) ([]int64, error) {
 	if userID == 0 {
 		return nil, nil
 	}
@@ -719,7 +695,7 @@ func (scope ChatScope) documentScope() documentScope {
 	return documentScope(scope)
 }
 
-func (s *Server) queryChatFTSSources(ctx context.Context, q chatQueryer, terms []string, ids []int64,
+func (s *Server) queryChatFTSSources(ctx context.Context, q sqlQueryer, terms []string, ids []int64,
 	baseWhere []string, baseArgs []any, markers chatFTSMarkers, limit, maxSourceRunes int) ([]chatSourceMaterial, error) {
 	if len(terms) == 0 || limit <= 0 {
 		return []chatSourceMaterial{}, nil
@@ -740,10 +716,8 @@ func (s *Server) queryChatFTSSources(ctx context.Context, q chatQueryer, terms [
 	where = append([]string{"documents_fts MATCH ?"}, where...)
 	args = append([]any{matchQuery}, args...)
 	args = append(args, limit,
-		maxSourceRunes,
-		markers.start, markers.end,
-		markers.start, markers.end, markers.start,
-		matchQuery)
+		markers.start, markers.end, matchQuery,
+		maxSourceRunes, markers.start)
 	rows, err := q.QueryContext(ctx, chatFTSSourceSQL(where), args...)
 	if err != nil {
 		return nil, err
@@ -753,9 +727,8 @@ func (s *Server) queryChatFTSSources(ctx context.Context, q chatQueryer, terms [
 }
 
 func chatFTSSourceSQL(where []string) string {
-	// Ranking first prevents snippet() from running for every corpus match.
+	// Rank first, then materialize one marked snippet per bounded result row.
 	// The rowid-restricted MATCH keeps FTS5 auxiliary functions valid.
-	// SQL allows only the final cap plus markers that Go removes.
 	return `
 		WITH ranked AS MATERIALIZED (
 			SELECT d.id, bm25(documents_fts, 3.0, 1.0) AS match_rank
@@ -764,25 +737,29 @@ func chatFTSSourceSQL(where []string) string {
 			WHERE ` + strings.Join(where, " AND ") + `
 			ORDER BY match_rank, d.id
 			LIMIT ?
+		), marked AS MATERIALIZED (
+			SELECT ranked.id, ranked.match_rank,
+			       COALESCE(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `), '') AS marked_passage
+			FROM ranked
+			CROSS JOIN documents_fts
+			WHERE documents_fts.rowid = ranked.id
+			  AND documents_fts MATCH ?
 		)
 		SELECT d.id, substr(COALESCE(d.title, ''), 1, ` + strconv.Itoa(chatMaxTitleRunes) + `),
 		       CASE WHEN length(COALESCE(d.content, '')) <= ? THEN COALESCE(d.content, '') ELSE '' END,
-		       substr(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `),
-		              max(1, instr(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `), ?)
+		       substr(marked.marked_passage,
+		              max(1, instr(marked.marked_passage, ?)
 		                     - ` + strconv.Itoa(chatMaxPassageRunes/2) + `),
 			              ` + strconv.Itoa(chatMaxPassageRunes+chatFTSMarkerRunes*2) + `),
 		       substr(COALESCE(d.content, ''), 1, ` + strconv.Itoa(chatMaxPassageRunes) + `),
 		       substr(COALESCE(d.content, ''), -` + strconv.Itoa(chatMaxPassageRunes) + `),
 		       COALESCE(d.sensitivity, '')
-		FROM ranked
-		JOIN documents d ON d.id = ranked.id
-		CROSS JOIN documents_fts
-		WHERE documents_fts.rowid = ranked.id
-		  AND documents_fts MATCH ?
-		ORDER BY ranked.match_rank, ranked.id`
+		FROM marked
+		JOIN documents d ON d.id = marked.id
+		ORDER BY marked.match_rank, marked.id`
 }
 
-func (s *Server) queryChatContextSources(ctx context.Context, q chatQueryer, ids []int64,
+func (s *Server) queryChatContextSources(ctx context.Context, q sqlQueryer, ids []int64,
 	baseWhere []string, baseArgs []any, maxSourceRunes int) ([]chatSourceMaterial, error) {
 	where := append([]string(nil), baseWhere...)
 	args := append([]any(nil), baseArgs...)
@@ -824,29 +801,20 @@ func (s *Server) queryChatContextSources(ctx context.Context, q chatQueryer, ids
 // queryChatAdditionalPassages runs one content-only FTS read for a term across
 // every already-authorized long source. Callers process at most chatMaxTerms,
 // keeping the second stage bounded to twelve SQLite reads per question.
-func (s *Server) queryChatAdditionalPassages(ctx context.Context, q chatQueryer, term string, ids []int64,
+func (s *Server) queryChatAdditionalPassages(ctx context.Context, q sqlQueryer, term string, ids []int64,
 	markers chatFTSMarkers) (map[int64]string, error) {
 	if term == "" || len(ids) == 0 {
 		return map[int64]string{}, nil
 	}
-	args := make([]any, 0, len(ids)+6)
+	args := make([]any, 0, len(ids)+4)
 	args = append(args,
 		markers.start, markers.end,
-		markers.start, markers.end, markers.start,
 		"content : "+term+"*")
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	rows, err := q.QueryContext(ctx, `
-		SELECT rowid,
-		       substr(snippet(documents_fts, 1, ?, ?, ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`),
-		              max(1, instr(snippet(documents_fts, 1, ?, ?, ' … ', `+strconv.Itoa(chatFTSSnippetTokens)+`), ?)
-		                     - `+strconv.Itoa(chatMaxPassageRunes/2)+`),
-			              `+strconv.Itoa(chatMaxPassageRunes+chatFTSMarkerRunes*2)+`)
-		FROM documents_fts
-		WHERE documents_fts MATCH ?
-		  AND rowid IN (`+placeholders(len(ids))+`)
-		ORDER BY rowid`, args...)
+	args = append(args, markers.start)
+	rows, err := q.QueryContext(ctx, chatAdditionalPassagesSQL(len(ids)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -861,6 +829,23 @@ func (s *Server) queryChatAdditionalPassages(ctx context.Context, q chatQueryer,
 		passages[id] = boundedChatFTSPassage(passage, chatMaxPassageRunes, markers)
 	}
 	return passages, rows.Err()
+}
+
+func chatAdditionalPassagesSQL(idCount int) string {
+	return `
+		WITH marked AS MATERIALIZED (
+			SELECT rowid,
+			       COALESCE(snippet(documents_fts, 1, ?, ?, ' … ', ` + strconv.Itoa(chatFTSSnippetTokens) + `), '') AS marked_passage
+			FROM documents_fts
+			WHERE documents_fts MATCH ?
+			  AND rowid IN (` + placeholders(idCount) + `)
+		)
+		SELECT rowid,
+		       substr(marked_passage,
+		              max(1, instr(marked_passage, ?) - ` + strconv.Itoa(chatMaxPassageRunes/2) + `),
+			              ` + strconv.Itoa(chatMaxPassageRunes+chatFTSMarkerRunes*2) + `)
+		FROM marked
+		ORDER BY rowid`
 }
 
 type chatRows interface {
@@ -967,12 +952,6 @@ func writeChatFTSText(out *strings.Builder, value string) int {
 		written++
 	}
 	return written
-}
-
-func containsChatFTSMarker(value string) bool {
-	return strings.IndexFunc(value, func(current rune) bool {
-		return current >= chatFTSMarkerBase && current < chatFTSMarkerBase+chatFTSMarkerChoices
-	}) >= 0
 }
 
 const (
@@ -1295,21 +1274,6 @@ func chatCitationMarkers(answer string) map[int]bool {
 		offset = close + 1
 	}
 	return markers
-}
-
-func chatResponseErrorReason(err error) string {
-	var syntaxErr *json.SyntaxError
-	if errors.As(err, &syntaxErr) {
-		return "malformed JSON"
-	}
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
-		if typeErr.Field != "" {
-			return "invalid type for " + typeErr.Field
-		}
-		return "invalid JSON field type"
-	}
-	return err.Error()
 }
 
 func (s *Server) logChatEvidence(event string, researchContext chatResearchContext,

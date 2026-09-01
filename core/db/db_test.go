@@ -86,3 +86,49 @@ func TestOpenAndMigrate(t *testing.T) {
 		t.Fatalf("newer database must be rejected, got %v", err)
 	}
 }
+
+func TestLiveDocumentListUsesCreatedIndex(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := d.Read.QueryContext(ctx, `
+		EXPLAIN QUERY PLAN
+		SELECT d.id FROM documents d
+		WHERE d.trashed_at IS NULL
+		ORDER BY d.created_at DESC, d.id DESC
+		LIMIT 50`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var details strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details.WriteString(detail)
+		details.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	plan := details.String()
+	if !strings.Contains(plan, "USING INDEX documents_live_created") ||
+		strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("default document page still sorts:\n%s", plan)
+	}
+}

@@ -121,7 +121,7 @@ func TestBuildEnvelope_Empty(t *testing.T) {
 	}
 }
 
-func TestParseCSVInts(t *testing.T) {
+func TestParseBoundedCSVIntsDropsMalformedValues(t *testing.T) {
 	cases := []struct {
 		q    string
 		want []int64
@@ -130,6 +130,7 @@ func TestParseCSVInts(t *testing.T) {
 		{"tags__id__in=", nil},
 		{"tags__id__in=1", []int64{1}},
 		{"tags__id__in=1,2,3", []int64{1, 2, 3}},
+		{"tags__id__in=3,1,3,2", []int64{3, 1, 2}},
 		{"tags__id__in=+1+,+2+,+3+", []int64{1, 2, 3}}, // + decodes to space
 		{"tags__id__in=1,invalid,3", []int64{1, 3}},
 		{"tags__id__in=0,-1", nil}, // 0 and negative dropped
@@ -141,7 +142,10 @@ func TestParseCSVInts(t *testing.T) {
 				url += "?" + tc.q
 			}
 			r := httptest.NewRequest("GET", url, nil)
-			got := ParseCSVInts(r, "tags__id__in")
+			got, err := parseBoundedCSVInts(r, "tags__id__in", maxDocumentScopeIDs)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(got) != len(tc.want) {
 				t.Errorf("got %v, want %v", got, tc.want)
 				return
@@ -152,6 +156,21 @@ func TestParseCSVInts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseBoundedCSVInts(t *testing.T) {
+	request := func(raw string) *http.Request {
+		return httptest.NewRequest("GET", "/api/things/?tags__id__in="+raw, nil)
+	}
+	ids, err := parseBoundedCSVInts(request(testCSVRange(100)), "tags__id__in", 100)
+	if err != nil || len(ids) != 100 {
+		t.Fatalf("100 ids: ids=%d err=%v", len(ids), err)
+	}
+	for _, raw := range []string{testCSVRange(101), testRepeatedCSV(1, 101)} {
+		if _, err := parseBoundedCSVInts(request(raw), "tags__id__in", 100); err == nil {
+			t.Fatal("101 raw tokens were accepted")
+		}
 	}
 }
 
