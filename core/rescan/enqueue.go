@@ -123,6 +123,7 @@ func Select(ctx context.Context, d *db.DB, opts Options) ([]Row, error) {
 	defer rows.Close()
 
 	var out []Row
+	var matched int64
 	for rows.Next() {
 		var r Row
 		var hasContent int
@@ -130,19 +131,29 @@ func Select(ctx context.Context, d *db.DB, opts Options) ([]Row, error) {
 			return nil, err
 		}
 		r.HasContent = hasContent == 1
-		out = append(out, r)
+		if opts.SampleSize <= 0 {
+			out = append(out, r)
+			continue
+		}
+
+		matched++
+		if len(out) < opts.SampleSize {
+			out = append(out, r)
+			continue
+		}
+
+		// Algorithm R gives every matching row an equal chance using O(sample) memory.
+		if pick := rand.Int63n(matched); pick < int64(opts.SampleSize) {
+			out[int(pick)] = r
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// SampleSize applied post-filter — the CLI's `--sample 20` and
-	// the approvals-handler's "approve_sample" branch both take this
-	// path. Fisher–Yates over math/rand's default source; the
-	// randomness is preview convenience, not cryptography.
-	if opts.SampleSize > 0 && len(out) > opts.SampleSize {
+	// Randomize the bounded sample's presentation order, as before.
+	if opts.SampleSize > 0 && matched > int64(opts.SampleSize) {
 		rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
-		out = out[:opts.SampleSize]
 	}
 	return out, nil
 }

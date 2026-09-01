@@ -30,6 +30,9 @@ Notable user-visible changes to Suchi are recorded here.
 - The web app cancels superseded list, search, Calendar, and completion reads;
   caches Calendar date formatters; loads route CSS lazily; and retains at most
   20 Archive research turns.
+- Sampled rescans keep memory proportional to the requested sample, idle
+  research rate entries expire, and date extraction holds SQLite's writer for
+  less time.
 
 ### Fixed
 

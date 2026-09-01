@@ -384,25 +384,65 @@ func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 func TestDateAutoApplyCanBeDisabled(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Boarding pass", "Date 06 Aug 2026")
-	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Date 06 Aug 2026",
-			[]DateCandidate{{
-				Role: "service", Value: "2026-08-06", Precision: "day",
-				RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 0.95,
-			}}, false, 0.7, time.Now().Unix())
+	dates, err := prepareDateCandidates("Date 06 Aug 2026", []DateCandidate{{
+		Role: "service", Value: "2026-08-06", Precision: "day",
+		RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 0.95,
+	}}, false, 0.7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", dates, time.Now().Unix())
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var status string
+	var evidenceStart sql.NullInt64
 	if err := d.Read.QueryRowContext(ctx, `
-		SELECT status FROM document_intelligence
+		SELECT status, evidence_start FROM document_intelligence
 		WHERE document_id = ? AND intelligence_type = 'date'
-	`, docID).Scan(&status); err != nil {
+	`, docID).Scan(&status, &evidenceStart); err != nil {
 		t.Fatal(err)
 	}
 	if status != "pending" {
 		t.Fatalf("date status=%q want=pending", status)
+	}
+	if !evidenceStart.Valid || evidenceStart.Int64 != 5 {
+		t.Fatalf("evidence_start=%v want=5", evidenceStart)
+	}
+}
+
+func TestPrepareDateCandidatesNormalizesAndComputesOffsets(t *testing.T) {
+	dates, err := prepareDateCandidates("Préface — DATE 06 AUG 2026 total", []DateCandidate{{
+		Role: " Service ", Value: " 2026-08-06 ", Precision: " DAY ",
+		RawText: " 06   Aug 2026 ", Evidence: " DATE\n06 AUG 2026 ", Confidence: 0.9,
+	}}, true, 0.8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dates) != 1 {
+		t.Fatalf("prepared dates=%d want=1", len(dates))
+	}
+	got := dates[0]
+	if got.Role != "service" || got.SortValue != "2026-08-06" || got.RawText != "06 Aug 2026" || got.EvidenceText != "DATE 06 AUG 2026" {
+		t.Fatalf("prepared date=%+v", got)
+	}
+	if got.ValueJSON != `{"date":"2026-08-06","precision":"day"}` {
+		t.Fatalf("value_json=%q", got.ValueJSON)
+	}
+	if got.status != "accepted" || !got.evidenceStart.Valid || got.evidenceStart.Int64 != 18 {
+		t.Fatalf("status=%q evidence_start=%v", got.status, got.evidenceStart)
+	}
+}
+
+func TestPrepareDateCandidatesValidatesBeforePersistence(t *testing.T) {
+	_, err := prepareDateCandidates("Due February 30", []DateCandidate{{
+		Role: "due", Value: "2026-02-30", Precision: "day",
+		RawText: "February 30", Evidence: "Due February 30", Confidence: 0.9,
+	}}, true, 0.8)
+	if err == nil {
+		t.Fatal("invalid date was prepared")
 	}
 }
 
@@ -411,9 +451,12 @@ func TestSequentialDateClassificationsReplaceAutomaticFactsAndPreserveReviews(t 
 	d, docID := openHandlerDocument(t, "Schedule", "Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7")
 	classify := func(now int64, dates []DateCandidate) {
 		t.Helper()
+		prepared, err := prepareDateCandidates("Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7", dates, true, 0.7)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7",
-				dates, true, 0.7, now)
+			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", prepared, now)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -500,9 +543,12 @@ func TestSequentialDateClassificationsRecomputeAutomaticStatusFromSettings(t *te
 	}}
 	classify := func(autoApply bool, threshold float64, want string) {
 		t.Helper()
+		prepared, err := prepareDateCandidates("Date Aug 6", candidate, autoApply, threshold)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", "Date Aug 6",
-				candidate, autoApply, threshold, time.Now().Unix())
+			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", prepared, time.Now().Unix())
 		}); err != nil {
 			t.Fatal(err)
 		}

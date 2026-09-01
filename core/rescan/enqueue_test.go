@@ -3,6 +3,7 @@ package rescan_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 // user + the JD tree seeded so `documents.jd_category_id` FK
 // insertions pass. Local to the rescan test package — small enough
 // to duplicate rather than reach across a shared helper.
-func setupDB(t *testing.T) (*db.DB, int64) {
+func setupDB(t testing.TB) (*db.DB, int64) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "test.db")
@@ -57,7 +58,7 @@ func setupDB(t *testing.T) (*db.DB, int64) {
 	return d, ownerID
 }
 
-func seedDoc(t *testing.T, ctx context.Context, d *db.DB, ownerID int64, sha string, ocrVer int) int64 {
+func seedDoc(t testing.TB, ctx context.Context, d *db.DB, ownerID int64, sha string, ocrVer int) int64 {
 	t.Helper()
 	inbox, _ := jd.InboxCategoryID(ctx, d)
 	var id int64
@@ -78,6 +79,40 @@ func seedDoc(t *testing.T, ctx context.Context, d *db.DB, ownerID int64, sha str
 		t.Fatal(err)
 	}
 	return id
+}
+
+func seedDocs(t testing.TB, ctx context.Context, d *db.DB, ownerID int64, prefix string, count int) []int64 {
+	t.Helper()
+	inbox, _ := jd.InboxCategoryID(ctx, d)
+	ids := make([]int64, 0, count)
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO documents(owner_id, original_blob, original_size, title,
+			                      jd_category_id, added_at, created_at, updated_at,
+			                      pipeline_version_ocr, pipeline_version_llm, pipeline_version_content)
+			VALUES (?, ?, 0, ?, ?, 0, 0, 0, 0, 0, 0)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for i := range count {
+			sha := fmt.Sprintf("%s-%05d", prefix, i)
+			result, err := stmt.ExecContext(ctx, ownerID, sha, sha, inbox)
+			if err != nil {
+				return err
+			}
+			id, err := result.LastInsertId()
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func TestOptions_Validate(t *testing.T) {
@@ -252,6 +287,108 @@ func TestEnqueue_SampleCap(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("SampleSize=3 with 10 stale docs: got %d, want 3", n)
+	}
+}
+
+func TestSelect_SampleUsesBoundedReservoir(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	const corpusSize = 5000
+	ids := seedDocs(t, ctx, d, owner, "large", corpusSize)
+
+	// Leave a large eligible set after applying both stale and live-document filters.
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET pipeline_version_ocr = 1 WHERE id % 4 = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET trashed_at = 1 WHERE id % 7 = 0`); err != nil {
+		t.Fatal(err)
+	}
+
+	const sampleSize = 37
+	got, err := rescan.Select(ctx, d, rescan.Options{
+		Stale: "ocr", OCRVersion: 1, SampleSize: sampleSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != sampleSize {
+		t.Fatalf("sample length = %d, want %d", len(got), sampleSize)
+	}
+	// The old materialize-then-truncate path retained capacity for the corpus.
+	if cap(got) >= corpusSize/10 {
+		t.Fatalf("sample capacity = %d, want memory proportional to sample size", cap(got))
+	}
+
+	seen := make(map[int64]struct{}, sampleSize)
+	sorted := true
+	for i, row := range got {
+		if row.ID%4 == 0 || row.ID%7 == 0 {
+			t.Fatalf("sampled ineligible document %d", row.ID)
+		}
+		if _, exists := seen[row.ID]; exists {
+			t.Fatalf("sampled document %d twice", row.ID)
+		}
+		seen[row.ID] = struct{}{}
+		if i > 0 && got[i-1].ID > row.ID {
+			sorted = false
+		}
+	}
+	if sorted {
+		t.Fatal("sample remained in query order")
+	}
+	if got[0].ID < ids[0] || got[0].ID > ids[len(ids)-1] {
+		t.Fatalf("sampled document %d outside corpus", got[0].ID)
+	}
+}
+
+func TestSelect_SampleAtOrAboveMatchesReturnsAll(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	ids := seedDocs(t, ctx, d, owner, "small", 3)
+
+	for _, sampleSize := range []int{3, 1_000_000} {
+		got, err := rescan.Select(ctx, d, rescan.Options{SampleSize: sampleSize})
+		if err != nil {
+			t.Fatalf("sample %d: %v", sampleSize, err)
+		}
+		if len(got) != len(ids) {
+			t.Fatalf("sample %d returned %d rows, want %d", sampleSize, len(got), len(ids))
+		}
+		for i := range ids {
+			if got[i].ID != ids[i] {
+				t.Fatalf("sample %d row %d = %d, want %d", sampleSize, i, got[i].ID, ids[i])
+			}
+		}
+	}
+}
+
+func BenchmarkSelect_SampleLargeCorpus(b *testing.B) {
+	ctx := context.Background()
+	d, owner := setupDB(b)
+	seedDocs(b, ctx, d, owner, "benchmark", 10_000)
+
+	for _, tc := range []struct {
+		name       string
+		sampleSize int
+		want       int
+	}{
+		{name: "all", want: 10_000},
+		{name: "sample-37", sampleSize: 37, want: 37},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				got, err := rescan.Select(ctx, d, rescan.Options{SampleSize: tc.sampleSize})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(got) != tc.want {
+					b.Fatalf("got %d rows, want %d", len(got), tc.want)
+				}
+			}
+		})
 	}
 }
 

@@ -145,10 +145,15 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	if lowConfidence {
 		log.Info("llm-classifier.low_confidence", "threshold", threshold)
 	}
+	// Prepare date evidence before taking SQLite's writer.
+	preparedDates, err := prepareDateCandidates(content, res.Dates, startRuntime.cfg.DateAutoApply, threshold)
+	if err != nil {
+		return fmt.Errorf("prepare date candidates: %w", err)
+	}
 
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		if err := replaceDateCandidatesInTx(ctx, tx, e.DocID, sourceBlob, content, res.Dates, startRuntime.cfg.DateAutoApply, threshold, now); err != nil {
+		if err := replaceDateCandidatesInTx(ctx, tx, e.DocID, sourceBlob, preparedDates, now); err != nil {
 			return err
 		}
 
@@ -326,7 +331,42 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 	return out, rows.Err()
 }
 
-func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sourceBlob, content string, dates []DateCandidate, autoApply bool, autoApplyThreshold float64, now int64) error {
+type preparedDateCandidate struct {
+	intelligence.Candidate
+	evidenceStart sql.NullInt64
+	status        string
+}
+
+func prepareDateCandidates(content string, dates []DateCandidate, autoApply bool, autoApplyThreshold float64) ([]preparedDateCandidate, error) {
+	if len(dates) == 0 {
+		return nil, nil
+	}
+	lowerContent := strings.ToLower(content)
+	prepared := make([]preparedDateCandidate, 0, len(dates))
+	for _, date := range dates {
+		candidate, err := intelligence.NewDateCandidate(
+			date.Role, date.Value, date.Precision,
+			date.RawText, date.Evidence, date.Confidence,
+		)
+		if err != nil {
+			return nil, err
+		}
+		status := "pending"
+		if autoApply && candidate.Confidence >= autoApplyThreshold {
+			status = "accepted"
+		}
+		var evidenceStart sql.NullInt64
+		if index := strings.Index(lowerContent, strings.ToLower(candidate.RawText)); index >= 0 {
+			evidenceStart = sql.NullInt64{Int64: int64(index), Valid: true}
+		}
+		prepared = append(prepared, preparedDateCandidate{
+			Candidate: candidate, evidenceStart: evidenceStart, status: status,
+		})
+	}
+	return prepared, nil
+}
+
+func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sourceBlob string, dates []preparedDateCandidate, now int64) error {
 	const extractor = "llm-classifier"
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM document_intelligence
@@ -335,23 +375,7 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 	`, docID, intelligence.TypeDate, extractor); err != nil {
 		return err
 	}
-	lowerContent := strings.ToLower(content)
 	for _, date := range dates {
-		candidate, err := intelligence.NewDateCandidate(
-			date.Role, date.Value, date.Precision,
-			date.RawText, date.Evidence, date.Confidence,
-		)
-		if err != nil {
-			return err
-		}
-		status := "pending"
-		if autoApply && candidate.Confidence >= autoApplyThreshold {
-			status = "accepted"
-		}
-		var evidenceStart any
-		if index := strings.Index(lowerContent, strings.ToLower(candidate.RawText)); index >= 0 {
-			evidenceStart = index
-		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO document_intelligence(
 				document_id, intelligence_type, role, value_json, sort_value,
@@ -360,8 +384,8 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(document_id, intelligence_type, role, value_json, evidence_text, extractor)
 			DO NOTHING
-		`, docID, candidate.Type, candidate.Role, candidate.ValueJSON, candidate.SortValue,
-			candidate.RawText, candidate.EvidenceText, evidenceStart, candidate.Confidence, status,
+		`, docID, date.Type, date.Role, date.ValueJSON, date.SortValue,
+			date.RawText, date.EvidenceText, date.evidenceStart, date.Confidence, date.status,
 			extractor, sourceBlob, PipelineVersionLLM, now, now); err != nil {
 			return err
 		}

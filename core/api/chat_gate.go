@@ -10,6 +10,8 @@ const (
 	chatRequestBurst      = 2
 	chatConcurrentReads   = 2
 	chatConcurrentCalls   = 2
+	chatBucketIdleAfter   = time.Duration(chatRequestBurst) * time.Minute / chatRequestsPerMinute
+	chatBucketPruneEvery  = time.Minute
 )
 
 type chatRateBucket struct {
@@ -21,11 +23,12 @@ type chatRateBucket struct {
 // It is process-local by design; deployments that need a distributed quota
 // can still place one at the reverse proxy.
 type chatGate struct {
-	mu      sync.Mutex
-	buckets map[int64]chatRateBucket
-	reads   chan struct{}
-	slots   chan struct{}
-	now     func() time.Time
+	mu        sync.Mutex
+	buckets   map[int64]chatRateBucket
+	reads     chan struct{}
+	slots     chan struct{}
+	now       func() time.Time
+	nextPrune time.Time
 }
 
 func newChatGate() *chatGate {
@@ -58,6 +61,7 @@ func (g *chatGate) admit(userID int64) (refund func(), retryAfter time.Duration,
 
 	now := g.now()
 	g.mu.Lock()
+	g.pruneIdleBuckets(now)
 	bucket, exists := g.buckets[userID]
 	if !exists {
 		bucket = chatRateBucket{tokens: chatRequestBurst, last: now}
@@ -90,6 +94,19 @@ func (g *chatGate) admit(userID int64) (refund func(), retryAfter time.Duration,
 			g.mu.Unlock()
 		})
 	}, 0, true
+}
+
+// Idle buckets are equivalent to a new, fully refilled bucket.
+func (g *chatGate) pruneIdleBuckets(now time.Time) {
+	if !g.nextPrune.IsZero() && now.Before(g.nextPrune) {
+		return
+	}
+	g.nextPrune = now.Add(chatBucketPruneEvery)
+	for userID, bucket := range g.buckets {
+		if now.Sub(bucket.last) >= chatBucketIdleAfter {
+			delete(g.buckets, userID)
+		}
+	}
 }
 
 // Keep slow archive reads from occupying live-provider slots.
