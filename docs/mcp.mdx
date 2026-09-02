@@ -30,6 +30,11 @@ administrator token.
 
 `--url` and `--token` override `SUCHI_URL` and `SUCHI_TOKEN`.
 
+The adapter never follows HTTP redirects, so it cannot forward its token to a
+redirect target. API responses must be bounded, valid `application/json`;
+redirects, unexpected content types, and malformed or oversized bodies fail
+closed.
+
 ## Transports
 
 | Invocation | Transport | Typical use |

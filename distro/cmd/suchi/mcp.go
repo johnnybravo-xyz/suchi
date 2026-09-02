@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,7 +85,7 @@ func runMCP(args []string) int {
 	}
 	base = strings.TrimRight(base, "/")
 
-	client := &suchiClient{base: base, token: tok, http: &http.Client{Timeout: 30 * time.Second}}
+	client := newSuchiClient(base, tok)
 
 	// Sanity — /api/whoami confirms the token works before we advertise
 	// tools to an agent. Better UX than a first-tool-call failure.
@@ -138,10 +139,24 @@ type suchiClient struct {
 	http  *http.Client
 }
 
-// do issues a request against the suchi API with Token auth. Returns
-// the response body on 2xx; anything else is unwrapped into a Go error
-// carrying the response code + body — the tool layer surfaces this to
-// the agent as the ToolResult error.
+const maxMCPResponseBytes = 8 << 20
+
+func newSuchiClient(base, token string) *suchiClient {
+	return &suchiClient{
+		base:  base,
+		token: token,
+		http: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
+}
+
+// do issues a request against the Suchi API with Token auth. It accepts only
+// bounded, valid JSON on 2xx and reports failures without response text or
+// query values that may contain document data.
 func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
@@ -157,16 +172,23 @@ func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reade
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Cap body at 8 MiB — the largest thing an MCP tool returns from
-	// suchi today is a search page; anything above that is a
-	// misconfiguration.
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// Keep responses bounded even when a configured origin is not Suchi.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPResponseBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 400 {
-		return b, fmt.Errorf("suchi %s %s: %d — %s",
-			method, path, resp.StatusCode, snippet(b))
+	if len(b) > maxMCPResponseBytes {
+		return nil, errors.New("suchi response exceeds 8 MiB")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, safeAPIResponseError(method, path, resp.StatusCode, b)
+	}
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return nil, errors.New("suchi returned a non-JSON response")
+	}
+	if !json.Valid(b) {
+		return nil, errors.New("suchi returned malformed JSON")
 	}
 	return b, nil
 }
@@ -176,14 +198,32 @@ func (c *suchiClient) ping(ctx context.Context) error {
 	return err
 }
 
-// snippet returns the first 200 chars of a body for error messages —
-// enough to see a {"error":"..."} shape without dumping a full page.
-func snippet(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) > 200 {
-		s = s[:200] + "..."
+func safeAPIResponseError(method, requestPath string, status int, body []byte) error {
+	pathOnly := requestPath
+	if parsed, err := url.Parse(requestPath); err == nil {
+		pathOnly = parsed.EscapedPath()
+	} else if before, _, ok := strings.Cut(requestPath, "?"); ok {
+		pathOnly = before
 	}
-	return s
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && safeErrorCode(envelope.Code) {
+		return fmt.Errorf("suchi %s %s: %d (%s)", method, pathOnly, status, envelope.Code)
+	}
+	return fmt.Errorf("suchi %s %s: %d", method, pathOnly, status)
+}
+
+func safeErrorCode(code string) bool {
+	if code == "" || len(code) > 64 {
+		return false
+	}
+	for _, char := range code {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------- tool registration ----------
