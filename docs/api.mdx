@@ -170,13 +170,19 @@ read-only fields are not user profile settings.
   "build_revision": "1234567890ab",
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
-  "avatar_url": "/api/users/1/avatar"
+  "avatar_url": "/api/users/1/avatar",
+  "capabilities": ["mailboxes"],
+  "scopes": ["documents:read", "documents:write"]
 }
 ```
 
 `display_name` + `avatar_url` are omitted when unset. `instance_host` comes
 from the configured `PUBLIC_URL` and lets the SPA preview the identity shown on
 public share pages. **401** if anonymous.
+`scopes` copies the authenticated API token's granted scopes. Cookie/OIDC
+sessions return `[]`; clients must not infer token grants from user role or
+capabilities.
+
 
 ### `POST /api/logout`
 
