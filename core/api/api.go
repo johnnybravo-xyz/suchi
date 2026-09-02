@@ -194,6 +194,9 @@ func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 // serveBlob (sensitivity gate, ETag, sandbox CSP). A grep for those
 // routes finds them there, not in this file.
 func (s *Server) Register(mux *http.ServeMux) {
+	// Public compatibility probe. Clients call this before sending credentials.
+	mux.HandleFunc("GET /api/handshake", s.GetHandshake)
+
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
 	// Paginated list — every SPA list view + third-party client

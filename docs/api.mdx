@@ -17,6 +17,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Group                   | Routes                                                                                                                                                                                |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Health / metrics        | `/healthz`, `/readyz`, `/metrics`                                                                                                                                                     |
+| Client compatibility     | `GET /api/handshake` (public; no credentials)                                                                                                                                         |
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `/oidc/login` and `/oidc/callback`                                                                                                               |
 | Auth (JSON)             | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`                                                                          |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
@@ -88,6 +89,17 @@ load-balancer readiness gating.
 
 **200** `{"status":"ok","user_version":<int>}`
 **503** `{"status":"db_unreachable"|"schema_stale", ...}`
+
+### `GET /api/handshake`
+
+Public compatibility probe for first-party clients. Call it before sending
+credentials. The response contains no deployment or user state:
+
+**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0"}`
+
+Clients must require `product` to equal `suchi`, require an API version they
+support, and compare `min_app_version` as numeric semantic-version components.
+Redirects are not compatibility responses and must not receive credentials.
 
 ### `GET /metrics`
 
