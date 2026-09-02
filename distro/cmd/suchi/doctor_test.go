@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,5 +93,48 @@ func TestResolveDoctorLLMEndpointRetainsEnvironmentFallbackForEmptySetting(t *te
 	cfg := &config.Config{LLMEndpointURL: "http://127.0.0.1:11434/v1"}
 	if got := resolveDoctorLLMEndpoint(ctx, d, cfg); got != cfg.LLMEndpointURL {
 		t.Fatalf("endpoint = %q, want environment fallback %q", got, cfg.LLMEndpointURL)
+	}
+}
+
+func TestResolveDoctorDataDirFallsBackForUnavailableDefault(t *testing.T) {
+	primaryParent := t.TempDir()
+	primary := filepath.Join(primaryParent, "not-a-directory", "suchi")
+	if err := os.WriteFile(filepath.Dir(primary), []byte("block mkdir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallbackBase := t.TempDir()
+
+	got, usedFallback, err := resolveDoctorDataDir(primary, true, func() (string, error) {
+		return fallbackBase, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(fallbackBase, "suchi")
+	if got != want || !usedFallback {
+		t.Fatalf("resolveDoctorDataDir() = (%q, %t), want (%q, true)", got, usedFallback, want)
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("fallback directory was not created: info=%v err=%v", info, err)
+	}
+}
+
+func TestResolveDoctorDataDirDoesNotReplaceExplicitPath(t *testing.T) {
+	primaryParent := t.TempDir()
+	primary := filepath.Join(primaryParent, "not-a-directory", "suchi")
+	if err := os.WriteFile(filepath.Dir(primary), []byte("block mkdir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+
+	got, usedFallback, err := resolveDoctorDataDir(primary, false, func() (string, error) {
+		called = true
+		return "", errors.New("must not be called")
+	})
+	if err == nil {
+		t.Fatal("resolveDoctorDataDir() succeeded for an unavailable explicit path")
+	}
+	if got != "" || usedFallback || called {
+		t.Fatalf("resolveDoctorDataDir() = (%q, %t, %v), fallback called=%t", got, usedFallback, err, called)
 	}
 }

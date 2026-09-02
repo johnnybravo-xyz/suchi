@@ -67,14 +67,21 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
 	}
-	bi, _ := debug.ReadBuildInfo()
-	fmt.Printf("suchi doctor — %s\n", buildVersion(bi))
-	fmt.Println()
-	ctx := context.Background()
-	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
+	configuredDataDir := cfg.DataDir
+	_, dataDirExplicit := os.LookupEnv("DATA_DIR")
+	resolvedDataDir, usedFallback, err := resolveDoctorDataDir(cfg.DataDir, !dataDirExplicit, os.UserConfigDir)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "  ✗ mkdir %s: %v\n", cfg.DataDir, err)
 		return 1
 	}
+	cfg.DataDir = resolvedDataDir
+	bi, _ := debug.ReadBuildInfo()
+	fmt.Printf("suchi doctor — %s\n", buildVersion(bi))
+	if usedFallback {
+		fmt.Printf("  ! DATA_DIR %s unavailable; using %s\n", configuredDataDir, cfg.DataDir)
+	}
+	fmt.Println()
+	ctx := context.Background()
 	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  ✗ open DB: %v\n", err)
@@ -465,4 +472,30 @@ func checkWritable(dir string) error {
 	name := tmp.Name()
 	_ = tmp.Close()
 	return os.Remove(name)
+}
+
+// resolveDoctorDataDir preserves an explicitly configured DATA_DIR. When the
+// built-in /data default is unavailable (common for direct, unprivileged
+// installs), it falls back to a per-user directory selected by the OS.
+func resolveDoctorDataDir(dataDir string, allowFallback bool, userConfigDir func() (string, error)) (string, bool, error) {
+	primaryErr := os.MkdirAll(dataDir, 0o750)
+	if primaryErr == nil {
+		return dataDir, false, nil
+	}
+	if !allowFallback {
+		return "", false, primaryErr
+	}
+
+	base, err := userConfigDir()
+	if err != nil {
+		return "", false, fmt.Errorf("%w; locate user fallback: %v", primaryErr, err)
+	}
+	fallback := filepath.Join(base, "suchi")
+	if fallback == dataDir {
+		return "", false, primaryErr
+	}
+	if err := os.MkdirAll(fallback, 0o750); err != nil {
+		return "", false, fmt.Errorf("%w; create fallback %s: %v", primaryErr, fallback, err)
+	}
+	return fallback, true, nil
 }

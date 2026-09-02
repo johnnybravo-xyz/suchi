@@ -185,6 +185,11 @@ don't fail — the ingest pipeline degrades gracefully. An explicit CAS
 scrub also exits non-zero on missing or corrupt content. Useful for air-gap
 verification and support tickets.
 
+When `DATA_DIR` is unset and the `/data` default cannot be created, the
+doctor falls back to the current user's OS config directory (for example,
+`~/Library/Application Support/suchi` on macOS). An explicitly configured
+`DATA_DIR` is never replaced by the fallback.
+
 ```sh
 suchi doctor            # human-readable
 suchi doctor --scrub-cas
