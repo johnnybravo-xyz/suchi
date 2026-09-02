@@ -74,6 +74,11 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	metadata, metadataErr := parseUploadMetadata(r)
+	if metadataErr != nil {
+		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
+		return
+	}
 	sourceKind := ingest.SourceUpload
 	sourceLabel := principal.Display
 	if sourceLabel == "" {
@@ -103,6 +108,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		sniffed = "application/octet-stream"
 	}
 	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
+	if metadataErr := rejectDeviceContentForMIME(metadata, sniffed); metadataErr != nil {
+		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
+		return
+	}
 
 	title := deriveTitle(header.Filename)
 
@@ -170,23 +179,18 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 
 		// Fresh insert.
 		now := time.Now().Unix()
-		// source_mtime carries the source file's filesystem mtime when
-		// the SPA sends it as a form field (browser upload path). It's
-		// the closest thing to a real creation date; NULL when the
-		// caller (e.g. an API script) omits it.
-		var srcMTime sql.NullInt64
-		if raw := r.FormValue("source_mtime"); raw != "" {
-			if ts, perr := strconv.ParseInt(raw, 10, 64); perr == nil && ts > 0 {
-				srcMTime.Int64 = ts
-				srcMTime.Valid = true
-			}
-		}
+		dbValues := metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, added_at, created_at, updated_at, source_mtime
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, principal.UserID, ref.SHA256, ref.Size, title, sniffed, inbox, now, now, now, srcMTime)
+				jd_category_id, added_at, created_at, updated_at, source_mtime,
+				content, content_source, device_content_confidence,
+				device_ocr_language, device_content_received_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, principal.UserID, ref.SHA256, ref.Size, title, sniffed, inbox,
+			now, now, now, dbValues.SourceMTime, dbValues.Content,
+			dbValues.ContentSource, dbValues.DeviceConfidence,
+			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
 		if err != nil {
 			return err
 		}

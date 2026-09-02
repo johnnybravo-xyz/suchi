@@ -89,6 +89,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	metadata, metadataErr := parseUploadMetadata(r)
+	if metadataErr != nil {
+		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
+		return
+	}
 	sourceKind := ingest.SourceUpload
 	sourceLabel := p.Display
 	if sourceLabel == "" {
@@ -112,6 +117,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		sniffed = "application/octet-stream"
 	}
 	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
+	if metadataErr := rejectDeviceContentForMIME(metadata, sniffed); metadataErr != nil {
+		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
+		return
+	}
 	title := deriveTitle(header.Filename)
 	if title == "Untitled" && prevTitle != "" {
 		// Carry the predecessor title forward when the uploader didn't
@@ -126,14 +135,19 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	var newID int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		now := time.Now().Unix()
+		dbValues := metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
-				previous_version_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				previous_version_id, source_mtime, content, content_source,
+				device_content_confidence, device_ocr_language,
+				device_content_received_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, prevOwner, ref.SHA256, ref.Size, title, sniffed, catID,
-			now, now, now, prevID)
+			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
+			dbValues.ContentSource, dbValues.DeviceConfidence,
+			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
 		if err != nil {
 			return err
 		}
