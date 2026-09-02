@@ -562,6 +562,7 @@ func runServe() int {
 	apiSrv.PublicURL = cfg.PublicURL
 	buildInfo, _ := debug.ReadBuildInfo()
 	apiSrv.BuildVersion, apiSrv.BuildRevision = buildIdentity(buildInfo)
+	apiSrv.WithDeviceOCRMinConfidence(cfg.DeviceOCRMinConfidence)
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.LLMAEAD = decryptKey

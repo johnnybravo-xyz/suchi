@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"net/url"
 	"os"
@@ -41,6 +42,9 @@ type Config struct {
 	// TODO(ocr-languages): discover installed language data, validate selections,
 	// and test mixed-script OCR. See docs/formats.mdx.
 	OCRLanguages []string
+	// DeviceOCRMinConfidence controls when accepted mobile OCR becomes
+	// provisional searchable text. Provenance is retained below the threshold.
+	DeviceOCRMinConfidence float64
 
 	// DevMode gates a small pile of DX conveniences intended for local
 	// iteration only: admin auto-provisioning, setup-token skip, and a
@@ -226,6 +230,15 @@ func Load() (*Config, error) {
 	if c.DjvuMaxContentBytes, err = parseBytes(env("DJVU_MAX_CONTENT_BYTES", "32M")); err != nil {
 		return nil, fmt.Errorf("DJVU_MAX_CONTENT_BYTES: %w", err)
 	}
+	c.DeviceOCRMinConfidence = 0.65
+	if s := env("DEVICE_OCR_MIN_CONFIDENCE", ""); s != "" {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 1 {
+			return nil, fmt.Errorf("DEVICE_OCR_MIN_CONFIDENCE: want finite float in [0,1], got %q", s)
+		}
+		c.DeviceOCRMinConfidence = f
+	}
+
 	c.OCREngine = strings.ToLower(env("OCR_ENGINE", "auto"))
 	switch c.OCREngine {
 	case "auto", "tesseract", "ocrmypdf":

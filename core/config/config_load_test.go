@@ -149,6 +149,37 @@ func TestLLMConfidenceThreshold(t *testing.T) {
 	}
 }
 
+func TestDeviceOCRMinConfidence(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceOCRMinConfidence != 0.65 {
+		t.Fatalf("default DeviceOCRMinConfidence = %v, want 0.65", cfg.DeviceOCRMinConfidence)
+	}
+
+	t.Setenv("DEVICE_OCR_MIN_CONFIDENCE", "0.8")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceOCRMinConfidence != 0.8 {
+		t.Fatalf("configured DeviceOCRMinConfidence = %v, want 0.8", cfg.DeviceOCRMinConfidence)
+	}
+
+	for _, invalid := range []string{"-0.1", "1.1", "NaN", "+Inf", "-Inf", "not-a-number"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("DEVICE_OCR_MIN_CONFIDENCE", invalid)
+			if _, err := Load(); err == nil {
+				t.Fatalf("DEVICE_OCR_MIN_CONFIDENCE=%q was accepted", invalid)
+			}
+		})
+	}
+}
+
 func TestInvalidRuntimeSettings(t *testing.T) {
 	for key, value := range map[string]string{
 		"BODY_LIMIT":            "-1",
