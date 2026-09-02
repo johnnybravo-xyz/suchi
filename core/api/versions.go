@@ -32,6 +32,22 @@ type VersionView struct {
 	IsHead            bool   `json:"is_head"`
 }
 
+type uploadVersionResponse struct {
+	ID                int64  `json:"id"`
+	PreviousVersionID int64  `json:"previous_version_id"`
+	SHA256            string `json:"sha256"`
+	Size              int64  `json:"size"`
+	MIME              string `json:"mime_type"`
+	Title             string `json:"title"`
+	IdempotentReplay  bool   `json:"idempotent_replay,omitempty"`
+}
+
+type duplicateVersionBlobResponse struct {
+	Error      string `json:"error"`
+	Code       string `json:"code"`
+	ExistingID int64  `json:"existing_id"`
+}
+
 // UploadNewVersion — POST /api/documents/{id}/versions/. Multipart
 // upload same as UploadDocument, except the resulting row's
 // previous_version_id is set to {id}.
@@ -81,6 +97,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
 	}
+	idempotencyKey, requestErr := parseIdempotencyKey(r)
+	if requestErr != nil {
+		s.writeError(w, http.StatusBadRequest, requestErr.code, requestErr.message)
+		return
+	}
 
 	file, header, err := r.FormFile("document")
 	if err != nil {
@@ -109,7 +130,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	ref, err := s.CAS.Put(file)
 	if err != nil {
 		s.Log.Error("api.version.cas_put", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "cas_put_failed", err.Error())
+		s.writeError(w, http.StatusInternalServerError, "cas_put_failed", "failed to store blob")
 		return
 	}
 	sniffed, err := s.sniffMIME(ref.SHA256)
@@ -125,15 +146,50 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if title == "Untitled" && prevTitle != "" {
 		// Carry the predecessor title forward when the uploader didn't
 		// provide a distinguishing filename — often the case for
-		// "resubmitted contract" uploads via mobile clients.
+		// resubmitted uploads via mobile clients.
 		title = prevTitle
 	}
-	// Category: default to the predecessor's category, not inbox — a
-	// version of a filed doc stays in the same category.
 	catID := prevJDCatID
+	idempotency := uploadIdempotencyRequest{
+		Key: idempotencyKey, Operation: uploadOperationVersion, Predecessor: prevID,
+	}
+	if idempotency.Key != "" {
+		idempotency.Fingerprint = buildUploadFingerprint(
+			idempotency.Operation, prevID, ref.SHA256, header.Filename, metadata,
+		)
+	}
 
-	var newID int64
+	var (
+		newID           int64
+		duplicateLiveID int64
+		response        uploadVersionResponse
+		replay          *storedUploadResponse
+	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		stored, found, err := loadStoredUploadResponse(
+			r.Context(), tx, p.UserID, idempotency,
+		)
+		if err != nil {
+			return err
+		}
+		if found {
+			replay = &stored
+			newID = stored.DocumentID
+			return nil
+		}
+
+		err = tx.QueryRowContext(r.Context(), `
+			SELECT id FROM documents
+			WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
+			ORDER BY id LIMIT 1
+		`, prevOwner, ref.SHA256).Scan(&duplicateLiveID)
+		if err == nil {
+			return errDuplicateVersionBlob
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
 		now := time.Now().Unix()
 		dbValues := metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
@@ -177,16 +233,53 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"sha256":    ref.SHA256,
 			"size":      ref.Size,
 			"mime_type": sniffed,
 		})
-		return jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payload))
+		if err != nil {
+			return err
+		}
+		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payload)); err != nil {
+			return err
+		}
+		response = uploadVersionResponse{
+			ID: newID, PreviousVersionID: prevID, SHA256: ref.SHA256,
+			Size: ref.Size, MIME: sniffed, Title: title,
+		}
+		return storeUploadResponse(
+			r.Context(), tx, p.UserID, idempotency,
+			ref.SHA256, newID, http.StatusCreated, response,
+		)
 	})
+	if errors.Is(err, errIdempotencyConflict) {
+		s.writeError(w, http.StatusConflict, "idempotency_conflict",
+			"Idempotency-Key was already used for a different upload")
+		return
+	}
+	if errors.Is(err, errDuplicateVersionBlob) {
+		s.writeJSON(w, http.StatusConflict, duplicateVersionBlobResponse{
+			Error:      "uploaded bytes already belong to a live document",
+			Code:       "duplicate_version_blob",
+			ExistingID: duplicateLiveID,
+		})
+		return
+	}
 	if err != nil {
 		s.Log.Error("api.version.db", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to write document version")
+		return
+	}
+	if replay != nil {
+		if err := json.Unmarshal([]byte(replay.JSON), &response); err != nil {
+			s.Log.Error("api.version.idempotency_decode", "err", err.Error(), "id", replay.DocumentID)
+			s.writeError(w, http.StatusInternalServerError, "idempotency_read", "failed to read stored upload response")
+			return
+		}
+		response.IdempotentReplay = true
+		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", replay.DocumentID))
+		s.writeJSON(w, replay.Status, response)
 		return
 	}
 
@@ -205,14 +298,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", newID))
-	s.writeJSON(w, http.StatusCreated, map[string]any{
-		"id":                  newID,
-		"previous_version_id": prevID,
-		"sha256":              ref.SHA256,
-		"size":                ref.Size,
-		"mime_type":           sniffed,
-		"title":               title,
-	})
+	s.writeJSON(w, http.StatusCreated, response)
 }
 
 // ListVersions — GET /api/documents/{id}/versions/. Returns every row

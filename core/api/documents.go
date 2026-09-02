@@ -28,13 +28,14 @@ import (
 
 // UploadResponse is what POST /api/documents/ returns on success.
 type UploadResponse struct {
-	ID           int64  `json:"id"`
-	SHA256       string `json:"sha256"`
-	Size         int64  `json:"size"`
-	MIME         string `json:"mime_type"`
-	Title        string `json:"title"`
-	Restored     bool   `json:"restored,omitempty"`     // true when this was an undelete
-	Deduplicated bool   `json:"deduplicated,omitempty"` // existing live document reused
+	ID               int64  `json:"id"`
+	SHA256           string `json:"sha256"`
+	Size             int64  `json:"size"`
+	MIME             string `json:"mime_type"`
+	Title            string `json:"title"`
+	Restored         bool   `json:"restored,omitempty"`     // true when this was an undelete
+	Deduplicated     bool   `json:"deduplicated,omitempty"` // existing live document reused
+	IdempotentReplay bool   `json:"idempotent_replay,omitempty"`
 }
 
 // UploadDocument accepts a multipart upload, streams it into the CAS,
@@ -57,6 +58,11 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
+	idempotencyKey, requestErr := parseIdempotencyKey(r)
+	if requestErr != nil {
+		s.writeError(w, http.StatusBadRequest, requestErr.code, requestErr.message)
+		return
+	}
 
 	file, header, err := r.FormFile("document")
 	if err != nil {
@@ -114,6 +120,14 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := deriveTitle(header.Filename)
+	idempotency := uploadIdempotencyRequest{
+		Key: idempotencyKey, Operation: uploadOperationDocument,
+	}
+	if idempotency.Key != "" {
+		idempotency.Fingerprint = buildUploadFingerprint(
+			idempotency.Operation, 0, ref.SHA256, header.Filename, metadata,
+		)
+	}
 
 	// New documents land in inbox; classifiers may reassign them later.
 	inbox, err := jd.InboxCategoryID(r.Context(), s.DB)
@@ -123,16 +137,29 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert-or-resurrect in one transaction. Dedup queries and the
-	// insert share the same tx so a concurrent uploader can't race us
-	// into a duplicate row — the single-writer SQLite discipline
-	// serializes them anyway, but this keeps the invariant explicit.
+	// Insert-or-resurrect in one transaction. Idempotency lookup, dedupe,
+	// source recording, outbox work, and response persistence commit together.
 	var (
 		outID        int64
 		restored     bool
 		deduplicated bool
+		status       int
+		response     UploadResponse
+		replay       *storedUploadResponse
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		stored, found, err := loadStoredUploadResponse(
+			r.Context(), tx, principal.UserID, idempotency,
+		)
+		if err != nil {
+			return err
+		}
+		if found {
+			replay = &stored
+			outID = stored.DocumentID
+			return nil
+		}
+
 		// A live match reuses the document and records this acquisition.
 		// Scope per owner so household members may independently own the
 		// same bytes.
@@ -145,8 +172,24 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		if errAlive == nil {
 			outID = aliveID
 			deduplicated = true
-			return ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, time.Now().Unix())
+			if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
+				sourceLabel, header.Filename, time.Now().Unix()); err != nil {
+				return err
+			}
+			existingTitle := title
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT title FROM documents WHERE id = ?`, outID).Scan(&existingTitle); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: ref.SHA256, Size: ref.Size,
+				MIME: sniffed, Title: existingTitle, Deduplicated: true,
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, idempotency,
+				ref.SHA256, outID, status, response,
+			)
 		}
 		if !errors.Is(errAlive, sql.ErrNoRows) {
 			return errAlive
@@ -162,16 +205,28 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			principal.UserID, ref.SHA256, time.Now().Add(-trash.Retention).Unix(),
 		).Scan(&trashedID)
 		if errTrashed == nil {
+			now := time.Now().Unix()
 			if _, err := tx.ExecContext(r.Context(),
 				`UPDATE documents SET trashed_at = NULL, updated_at = ? WHERE id = ?`,
-				time.Now().Unix(), trashedID,
+				now, trashedID,
 			); err != nil {
 				return err
 			}
 			outID = trashedID
 			restored = true
-			return ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, time.Now().Unix())
+			if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
+				sourceLabel, header.Filename, now); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: ref.SHA256, Size: ref.Size,
+				MIME: sniffed, Title: title, Restored: true,
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, idempotency,
+				ref.SHA256, outID, status, response,
+			)
 		}
 		if !errors.Is(errTrashed, sql.ErrNoRows) {
 			return errTrashed
@@ -213,15 +268,42 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			MIME:     sniffed,
 			Filename: header.Filename, // consumption trigger filter
 		}
-		payloadJSON, mErr := json.Marshal(payload)
-		if mErr != nil {
-			return mErr
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return err
 		}
-		return jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON))
+		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON)); err != nil {
+			return err
+		}
+		status = http.StatusCreated
+		response = UploadResponse{
+			ID: outID, SHA256: ref.SHA256, Size: ref.Size,
+			MIME: sniffed, Title: title,
+		}
+		return storeUploadResponse(
+			r.Context(), tx, principal.UserID, idempotency,
+			ref.SHA256, outID, status, response,
+		)
 	})
+	if errors.Is(err, errIdempotencyConflict) {
+		s.writeError(w, http.StatusConflict, "idempotency_conflict",
+			"Idempotency-Key was already used for a different upload")
+		return
+	}
 	if err != nil {
 		s.Log.Error("api.upload.db", "err", err.Error(), "sha", ref.SHA256)
 		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to write document row")
+		return
+	}
+	if replay != nil {
+		if err := json.Unmarshal([]byte(replay.JSON), &response); err != nil {
+			s.Log.Error("api.upload.idempotency_decode", "err", err.Error(), "id", replay.DocumentID)
+			s.writeError(w, http.StatusInternalServerError, "idempotency_read", "failed to read stored upload response")
+			return
+		}
+		response.IdempotentReplay = true
+		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", replay.DocumentID))
+		s.writeJSON(w, replay.Status, response)
 		return
 	}
 
@@ -241,42 +323,20 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			After:     map[string]any{"sha256": ref.SHA256},
 			RequestID: logx.RequestID(ctx),
 		})
-		existingTitle := title
-		if err := s.DB.Read.QueryRowContext(r.Context(),
-			`SELECT title FROM documents WHERE id = ?`, outID).Scan(&existingTitle); err != nil {
-			s.Log.Warn("api.upload.title_lookup", "err", err.Error(), "id", outID)
-		}
-		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", outID))
-		s.writeJSON(w, http.StatusOK, UploadResponse{
-			ID: outID, SHA256: ref.SHA256, Size: ref.Size,
-			MIME: sniffed, Title: existingTitle, Deduplicated: true,
+	} else {
+		audit.Log(ctx, s.DB, s.Log, audit.Event{
+			Actor:      principal,
+			Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
+			ObjectKind: "document", ObjectID: outID,
+			After: map[string]any{
+				"sha256": ref.SHA256, "size": ref.Size, "title": title, "mime": sniffed,
+			},
+			RequestID: logx.RequestID(ctx),
 		})
-		return
 	}
 
-	audit.Log(ctx, s.DB, s.Log, audit.Event{
-		Actor:      principal,
-		Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
-		ObjectKind: "document", ObjectID: outID,
-		After: map[string]any{
-			"sha256": ref.SHA256, "size": ref.Size, "title": title, "mime": sniffed,
-		},
-		RequestID: logx.RequestID(ctx),
-	})
-
-	status := http.StatusCreated
-	if restored {
-		status = http.StatusOK
-	}
 	w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", outID))
-	s.writeJSON(w, status, UploadResponse{
-		ID:       outID,
-		SHA256:   ref.SHA256,
-		Size:     ref.Size,
-		MIME:     sniffed,
-		Title:    title,
-		Restored: restored,
-	})
+	s.writeJSON(w, status, response)
 }
 
 // SoftDeleteDocument starts the fixed 30-day recovery window. Automatic
