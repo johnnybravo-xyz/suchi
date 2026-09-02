@@ -542,16 +542,21 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
-	ID           int64  `json:"id"`
-	OwnerID      int64  `json:"owner_id"`
-	Title        string `json:"title"`
-	Content      string `json:"content"`
-	OriginalBlob string `json:"original_blob"`
-	OriginalSize int64  `json:"original_size"`
-	ArchiveBlob  string `json:"archive_blob,omitempty"`
-	ArchiveSize  int64  `json:"archive_size,omitempty"`
-	MIME         string `json:"mime_type"`
-	JDCategoryID int64  `json:"jd_category_id"`
+	ID            int64  `json:"id"`
+	OwnerID       int64  `json:"owner_id"`
+	Title         string `json:"title"`
+	Content       string `json:"content"`
+	ContentSource string `json:"content_source"`
+	// Device OCR provenance remains visible after server text supersedes it.
+	DeviceContentConfidence *float64 `json:"device_content_confidence,omitempty"`
+	DeviceOCRLanguage       string   `json:"device_ocr_language,omitempty"`
+	DeviceContentReceivedAt *int64   `json:"device_content_received_at,omitempty"`
+	OriginalBlob            string   `json:"original_blob"`
+	OriginalSize            int64    `json:"original_size"`
+	ArchiveBlob             string   `json:"archive_blob,omitempty"`
+	ArchiveSize             int64    `json:"archive_size,omitempty"`
+	MIME                    string   `json:"mime_type"`
+	JDCategoryID            int64    `json:"jd_category_id"`
 	// Denormalized JD fields — saves every JSON consumer a round-
 	// trip to render a filing chip. The UI already does this join
 	// inline; the JSON surface catches up here. jd_area_code is
@@ -687,9 +692,11 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		jdAreaName  sql.NullString
 	)
 	var (
-		languagesStored string
-		languagesLocked int
-		sourceMTime     sql.NullInt64
+		languagesStored         string
+		languagesLocked         int
+		sourceMTime             sql.NullInt64
+		deviceContentConfidence sql.NullFloat64
+		deviceContentReceivedAt sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT d.id, d.owner_id, d.title, COALESCE(d.content, ''),
@@ -699,7 +706,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       d.created_at, COALESCE(d.added_at, d.created_at), d.updated_at, d.trashed_at,
 		       jc.code, jc.name, ja.name,
 		       d.languages, d.languages_locked,
-		       d.source_mtime
+		       d.source_mtime, d.content_source, d.device_content_confidence,
+		       d.device_ocr_language, d.device_content_received_at
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
@@ -708,7 +716,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
-		&sourceMTime)
+		&sourceMTime, &d.ContentSource, &deviceContentConfidence,
+		&d.DeviceOCRLanguage, &deviceContentReceivedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -750,6 +759,14 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if sourceMTime.Valid {
 		v := sourceMTime.Int64
 		d.SourceMTime = &v
+	}
+	if deviceContentConfidence.Valid {
+		v := deviceContentConfidence.Float64
+		d.DeviceContentConfidence = &v
+	}
+	if deviceContentReceivedAt.Valid {
+		v := deviceContentReceivedAt.Int64
+		d.DeviceContentReceivedAt = &v
 	}
 	d.Languages = strings.Join(lang.Parse(languagesStored), ",")
 	d.LanguagesLocked = languagesLocked != 0

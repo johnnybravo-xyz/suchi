@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -158,6 +159,45 @@ func TestUploadNewVersionPersistsDeviceOCRProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertStoredUploadMetadata(t, d, newID, true, 0.8, "de_DE")
+}
+
+func TestDocumentDetailExposesDeviceOCRProvenance(t *testing.T) {
+	s, d, principal := newUploadMetadataServer(t)
+	rec := httptest.NewRecorder()
+	s.UploadDocument(rec, multipartUploadRequest(t, "/api/documents/", "scan.pdf", testPDFBytes(), map[string][]string{
+		"content":            {"private recognized text"},
+		"content_source":     {"device_ocr"},
+		"content_confidence": {"0.8"},
+		"ocr_language":       {"en-US"},
+	}, principal))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := d.ExecWrite(context.Background(), `
+		UPDATE documents
+		SET content = 'server text', content_source = 'server'
+		WHERE id = 1
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/documents/1", nil)
+	req.SetPathValue("id", "1")
+	req = req.WithContext(auth.WithPrincipal(req.Context(), principal))
+	detailRec := httptest.NewRecorder()
+	s.GetDocument(detailRec, req)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail DocumentDetail
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.ContentSource != "server" ||
+		detail.DeviceContentConfidence == nil || *detail.DeviceContentConfidence != 0.8 ||
+		detail.DeviceOCRLanguage != "en_US" || detail.DeviceContentReceivedAt == nil {
+		t.Fatalf("detail provenance = %+v", detail)
+	}
 }
 
 func TestUploadMetadataRejectsInvalidRequests(t *testing.T) {

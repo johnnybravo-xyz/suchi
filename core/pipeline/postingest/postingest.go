@@ -302,14 +302,15 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return fmt.Errorf("consumption automations: %w", err)
 	}
 
-	origBlob, mime, ownerEmail, err := h.loadDoc(ctx, e.DocID)
+	input, err := h.loadDoc(ctx, e.DocID)
 	if err != nil {
 		return fmt.Errorf("load doc: %w", err)
 	}
+	mime := input.MIME
 
-	origBytes, err := h.readBlob(origBlob)
+	origBytes, err := h.readBlob(input.OriginalBlob)
 	if err != nil {
-		return fmt.Errorf("cas get %s: %w", origBlob, err)
+		return fmt.Errorf("cas get %s: %w", input.OriginalBlob, err)
 	}
 
 	// Mail headers can label a real PDF as "bin" or octet-stream. Resniff
@@ -318,7 +319,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		result, err := h.db.ExecWrite(ctx, `
 			UPDATE documents SET mime_type = ?, updated_at = ?
 			WHERE id = ? AND original_blob = ? AND trashed_at IS NULL
-		`, refined, time.Now().Unix(), e.DocID, origBlob)
+		`, refined, time.Now().Unix(), e.DocID, input.OriginalBlob)
 		if err != nil {
 			return fmt.Errorf("refine source MIME: %w", err)
 		}
@@ -338,7 +339,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			ID:         e.DocID,
 			MIME:       mime,
 			Filename:   consCtx.Filename,
-			OwnerEmail: ownerEmail,
+			OwnerEmail: input.OwnerEmail,
 		}, log,
 			preconsume.Options{Script: h.preConsume})
 		if err != nil {
@@ -618,17 +619,24 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	}
 
 	var (
-		content     string
-		archiveBlob string
-		archiveSize int64
+		content       string
+		contentSource = "server"
+		archiveBlob   string
+		archiveSize   int64
 	)
 
 	if ins.HasText {
-		// Text-native shortcut — no OCR needed.
+		// Text-native extraction is authoritative over provisional device OCR.
 		content = ins.Text
 		log.Info("post-ingest.route.text_native", "chars", ins.NonBlank)
+	} else if input.ContentSource == "device_ocr" && strings.TrimSpace(input.Content) != "" {
+		// The API already applied the configured confidence threshold. Avoid
+		// repeating OCR for image-only PDFs when accepted device text exists.
+		content = input.Content
+		contentSource = "device_ocr"
+		log.Info("post-ingest.route.device_ocr", "chars", len([]rune(content)))
 	} else {
-		// 3b. OCR path — engine dispatch.
+		// No accepted text exists; run the configured server OCR path.
 		c, ab, as, err := h.runOCR(ctx, log, pdfBytes, false)
 		if err != nil {
 			return err
@@ -636,7 +644,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		content, archiveBlob, archiveSize = c, ab, as
 	}
 
-	if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
+	if err := h.updateDocWithSource(ctx, e.DocID, content, contentSource, archiveBlob, archiveSize); err != nil {
 		return err
 	}
 
@@ -729,9 +737,11 @@ func (h *Handler) splitChildExists(ctx context.Context, parentID int64, index in
 	var exists bool
 	err := h.db.Read.QueryRowContext(ctx, `
 		SELECT EXISTS(
-			SELECT 1 FROM documents WHERE split_parent_id = ? AND split_index = ?
+			SELECT 1 FROM documents
+			WHERE split_index = ?
+			  AND (split_origin_id = ? OR (split_origin_id = 0 AND split_parent_id = ?))
 		)
-	`, parentID, index).Scan(&exists)
+	`, index, parentID, parentID).Scan(&exists)
 	return exists, err
 }
 
@@ -791,11 +801,11 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
-				split_parent_id, split_index
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				split_parent_id, split_origin_id, split_index
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
 			parent.JDCategoryID, now, now, now,
-			parentID, index)
+			parentID, parentID, index)
 		if err != nil {
 			return err
 		}
@@ -1669,25 +1679,39 @@ func consumptionContextFromPayload(p map[string]any) automations.Context {
 	return c
 }
 
+// documentInput is the immutable row state needed to route one ingest job.
+// Content and ContentSource carry only API-accepted provisional device OCR.
+type documentInput struct {
+	OriginalBlob  string
+	MIME          string
+	OwnerEmail    string
+	Content       string
+	ContentSource string
+}
+
 // loadDoc reads the fields needed to start processing. The trashed_at guard means
 // a race between soft-delete and post-ingest gets us "not found" and
 // the retry loop eventually parks the job dead — better than doing OCR
 // on a document the user already trashed.
-func (h *Handler) loadDoc(ctx context.Context, id int64) (origBlob, mime, ownerEmail string, err error) {
-	var mimeNull sql.NullString
-	err = h.db.Read.QueryRowContext(ctx, `
-		SELECT d.original_blob, COALESCE(d.mime_type, ''), u.email
+func (h *Handler) loadDoc(ctx context.Context, id int64) (documentInput, error) {
+	var input documentInput
+	err := h.db.Read.QueryRowContext(ctx, `
+		SELECT d.original_blob, COALESCE(d.mime_type, ''), u.email,
+		       COALESCE(d.content, ''), d.content_source
 		FROM documents d
 		JOIN users u ON u.id = d.owner_id
 		WHERE d.id = ? AND d.trashed_at IS NULL
-	`, id).Scan(&origBlob, &mimeNull, &ownerEmail)
+	`, id).Scan(
+		&input.OriginalBlob, &input.MIME, &input.OwnerEmail,
+		&input.Content, &input.ContentSource,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", "", fmt.Errorf("doc %d not found or trashed", id)
+		return documentInput{}, fmt.Errorf("doc %d not found or trashed", id)
 	}
-	if mimeNull.Valid {
-		mime = mimeNull.String
+	if err != nil {
+		return documentInput{}, err
 	}
-	return
+	return input, nil
 }
 
 // readBlob loads one pipeline input into memory.
@@ -1700,11 +1724,26 @@ func (h *Handler) readBlob(sha string) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-// updateDoc writes the pipeline output back. Empty content is a valid
-// state — happens when both extraction and OCR are skipped (neither
-// tool installed). The FTS5 trigger picks up the content column
-// change automatically.
+// updateDoc writes server-authoritative output. Empty or skipped server output
+// must not erase accepted provisional device text.
 func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob string, archSize int64) error {
+	return h.updateDocWithSource(ctx, id, content, "server", archBlob, archSize)
+}
+
+func (h *Handler) updateDocWithSource(
+	ctx context.Context,
+	id int64,
+	content string,
+	contentSource string,
+	archBlob string,
+	archSize int64,
+) error {
+	if strings.TrimSpace(content) == "" {
+		contentSource = ""
+	}
+	if contentSource != "" && contentSource != "device_ocr" && contentSource != "server" {
+		return fmt.Errorf("post-ingest: invalid content source %q", contentSource)
+	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var archBlobArg any
 		var archSizeArg any
@@ -1712,14 +1751,23 @@ func (h *Handler) updateDoc(ctx context.Context, id int64, content, archBlob str
 			archBlobArg = archBlob
 			archSizeArg = archSize
 		}
+		emptyOutput := strings.TrimSpace(content) == ""
 		_, err := tx.ExecContext(ctx, `
 			UPDATE documents
-			SET content = ?, archive_blob = ?, archive_size = ?,
+			SET content = CASE
+			        WHEN ? AND content_source = 'device_ocr' THEN content
+			        ELSE ?
+			    END,
+			    content_source = CASE
+			        WHEN ? AND content_source = 'device_ocr' THEN content_source
+			        ELSE ?
+			    END,
+			    archive_blob = ?, archive_size = ?,
 			    pipeline_version_content = ?, pipeline_version_ocr = ?,
 			    updated_at = ?
 			WHERE id = ?
-		`, content, archBlobArg, archSizeArg,
-			PipelineVersionContent, PipelineVersionOCR,
+		`, emptyOutput, content, emptyOutput, contentSource,
+			archBlobArg, archSizeArg, PipelineVersionContent, PipelineVersionOCR,
 			time.Now().Unix(), id)
 		return err
 	})
