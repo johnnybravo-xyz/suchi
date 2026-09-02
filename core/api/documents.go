@@ -657,11 +657,10 @@ func IsHighSensitivity(s string) bool {
 // visible (with trashed_at set) so mobile clients can render the
 // undelete flow.
 func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid id")

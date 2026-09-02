@@ -209,11 +209,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 // The doc id doesn't have to be the head or the root; any node in
 // the chain returns the full chain.
 func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
