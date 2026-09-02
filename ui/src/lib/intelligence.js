@@ -11,6 +11,22 @@ export function intelligenceDateValue(candidate) {
   return candidate?.value?.date || candidate?.sort_value || ''
 }
 
+// The compact month grid shows documents, not every semantic role attached to
+// the same date. Keep the first API-ordered event for each document and day.
+export function groupCalendarEvents(items) {
+  const grouped = new Map()
+  const seen = new Set()
+  for (const event of items) {
+    const date = intelligenceDateValue(event)
+    const identity = `${date}:${event.document_id ?? `event-${event.id}`}`
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    if (!grouped.has(date)) grouped.set(date, [])
+    grouped.get(date).push(event)
+  }
+  return grouped
+}
+
 const dateFormatters = new Map()
 
 export function formatArchiveDate(value, options = { year: 'numeric', month: 'short', day: 'numeric' }) {

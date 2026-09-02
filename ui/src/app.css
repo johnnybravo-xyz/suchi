@@ -179,6 +179,7 @@ input, select, textarea { font: inherit; color: inherit; }
   .topbar-upload span { display: none; }
   .research-ribbon { padding: 8px; }
   .content { padding: 16px 14px 32px; }
+  .irow.hoverable > .pill { display: none; }
 }
 .content-narrow { max-width: 980px; margin: 0 auto; }
 

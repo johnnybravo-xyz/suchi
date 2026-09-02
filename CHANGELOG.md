@@ -41,6 +41,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Approvals bound to trashed documents now disappear from REST and MCP inboxes;
   restoring the document makes them available again only if the task and its
   run are still active.
+- Calendar collapses same-document same-day roles into one month-grid card,
+  keeps origin badges inside compact cards, and mobile document rows prioritize
+  titles over tags.
 - Dashboard recent documents load once per navigation instead of retriggering
   from their own response state.
 - Calendar resolves an owned or shared saved View by ID on the server, applies

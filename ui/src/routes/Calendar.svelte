@@ -1,7 +1,7 @@
 <script>
   import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
-  import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate } from '../lib/intelligence.js'
+  import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate, groupCalendarEvents } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { initialDocumentIDs = '' } = $props()
@@ -20,7 +20,7 @@
 
   const monthLabel = $derived(month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))
   const calendarDays = $derived(buildCalendarDays(month))
-  const eventMap = $derived(groupEvents(events))
+  const eventMap = $derived(groupCalendarEvents(events))
 
   function isoDate(date) {
     const year = date.getFullYear()
@@ -45,15 +45,6 @@
     })
   }
 
-  function groupEvents(items) {
-    const grouped = new Map()
-    for (const event of items) {
-      const key = intelligenceDateValue(event)
-      if (!grouped.has(key)) grouped.set(key, [])
-      grouped.get(key).push(event)
-    }
-    return grouped
-  }
 
 
   function viewParams() {
@@ -169,7 +160,7 @@
               {#each dayEvents.slice(0, 3) as event (event.id)}
                 <a href={`#/doc/${event.document_id}`} title={`${intelligenceRoleLabel(event.role)} · ${event.document_title}`}>
                   <span class={`role-dot role-${event.role}`}></span>
-                  <span>{event.document_title || `Document #${event.document_id}`}</span>
+                  <span class="day-event-title">{event.document_title || `Document #${event.document_id}`}</span>
                   <small class="date-origin">{dateOriginLabel(event)}</small>
                 </a>
               {/each}
@@ -237,9 +228,10 @@
   .day.has-events { background: color-mix(in srgb, var(--accent) 3%, var(--surface)); }
   .day-number { display: grid; place-items: center; width: 24px; height: 24px; margin-left: auto; border-radius: 50%; font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; }
   .day-events { display: grid; gap: 4px; margin-top: 4px; }
-  .day-events a { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 3px 5px; border-radius: 5px; background: var(--tint); color: var(--ink); font-size: .63rem; text-decoration: none; }
-  .day-events a span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .day-events a .date-origin { margin-left: auto; }
+  .day-events a { display: grid; grid-template-columns: 5px minmax(0, 1fr); align-items: center; gap: 2px 5px; min-width: 0; padding: 4px 5px; border-radius: 5px; background: var(--tint); color: var(--ink); font-size: .63rem; text-decoration: none; }
+  .day-event-title { grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .day-events a .role-dot { grid-row: 1 / span 2; }
+  .day-events a .date-origin { grid-column: 2; justify-self: start; margin-left: 0; }
   .day-events small { color: var(--faint); font-size: .59rem; }
   .date-origin { flex: none; padding: 1px 4px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .55rem; font-style: normal; font-weight: 650; line-height: 1.4; }
   .role-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--accent); }
