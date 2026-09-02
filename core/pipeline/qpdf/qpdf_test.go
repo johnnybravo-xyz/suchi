@@ -51,7 +51,7 @@ func TestFakeBinaryHappyPath(t *testing.T) {
 	// Write a mock qpdf that ignores its args and prints a known marker.
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "qpdf")
-	must(t, os.WriteFile(fake, []byte("#!/bin/sh\necho -n NORMALIZED\n"), 0o755))
+	must(t, os.WriteFile(fake, []byte("#!/bin/sh\nprintf %s NORMALIZED\n"), 0o755))
 
 	res, err := qpdf.Normalize(ctx, bytes.NewReader([]byte("original bytes")), silentLog(), qpdf.Options{
 		Binary: fake,
