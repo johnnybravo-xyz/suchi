@@ -1,0 +1,12 @@
+{
+  "kind": "token",
+  "user_id": 7,
+  "email": "reader@example.com",
+  "display_name": "Reader",
+  "instance_host": "suchi.example.com",
+  "role": "member",
+  "authn_by": "local-auth",
+  "avatar_url": "/api/users/7/avatar",
+  "capabilities": [],
+  "scopes": ["documents:read", "documents:write"]
+}

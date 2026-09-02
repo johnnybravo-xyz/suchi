@@ -1,0 +1,34 @@
+{
+  "id": 91,
+  "title": "March electricity bill",
+  "content": "",
+  "content_source": "server",
+  "original_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "original_size": 16841,
+  "archive_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "archive_size": 62114,
+  "mime_type": "application/pdf",
+  "jd_category_id": 31,
+  "jd_category_code": 31,
+  "jd_category_name": "Utilities",
+  "jd_area_name": "Home",
+  "sensitivity": "",
+  "created_at": 1793491200,
+  "added_at": 1793494800,
+  "updated_at": 1793491200,
+  "source_mtime": 1793494700,
+  "sources": [
+    {
+      "kind": "mailbox",
+      "label": "Personal Outlook",
+      "detail": "reader@example.com / INBOX",
+      "observed_at": 1793494800
+    }
+  ],
+  "tags": ["utilities", "electricity"],
+  "correspondents": [
+    {"id": 3, "name": "BESCOM", "role": "sender"}
+  ],
+  "languages": "de,en",
+  "languages_locked": false
+}

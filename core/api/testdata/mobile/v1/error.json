@@ -1,0 +1,4 @@
+{
+  "code": "idempotency_conflict",
+  "message": "idempotency key was already used for different input"
+}

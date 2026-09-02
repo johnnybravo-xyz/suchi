@@ -1,0 +1,22 @@
+{
+  "counts": {
+    "pending": 0,
+    "running": 1,
+    "done": 12,
+    "dead": 0,
+    "approvals_open": 0
+  },
+  "results": [
+    {
+      "id": 42,
+      "kind": "post-ingest",
+      "state": "running",
+      "attempts": 1,
+      "doc_id": 93,
+      "created_at": 1785779486,
+      "updated_at": 1785779523,
+      "next_run_at": 1785779486
+    }
+  ],
+  "approval_tasks": []
+}
