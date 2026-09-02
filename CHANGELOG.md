@@ -4,6 +4,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- First-party mobile clients can negotiate API compatibility, inspect token
+  scopes, submit timestamped PDF OCR with explicit provenance, retry document
+  and version uploads idempotently, resolve QR-split children, request bounded
+  thumbnails, and fetch metadata without transferring extracted text.
+
 ## [0.1.0-beta.2] - 2026-09-05
 
 ### Added

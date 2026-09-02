@@ -48,6 +48,10 @@ endpoint's scope and the principal must be allowed to access the object.
 Mobile Reader calls require `documents:read` on document lists, search,
 document detail, version lists, thumbnails, and task reads. The scope check
 runs before object ACL and sensitivity checks; it never broadens row visibility.
+Mobile pairing should require both `documents:read` and `documents:write`.
+Upload idempotency keys are scoped to the authenticated user, but they never
+bypass authorization: token scope is checked on every document replay, and a
+version replay also rechecks change permission on its predecessor.
 
 ## Capabilities
 

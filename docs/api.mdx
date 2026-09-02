@@ -248,6 +248,7 @@ Query params (all optional):
 | `ordering`                           | `-created_at` (default), `created_at`, `-updated_at`, `updated_at`, `-title`, `title`. Unknown values fall back to default. |
 | `jd_category_id`                     | Exact filing-chip match.                                                                                                    |
 | `sensitivity`                        | One of `public`, `internal`, `confidential`, `restricted`.                                                                  |
+| `split_origin_id`                    | Positive upload document id; returns its live QR-split children after ACL filtering.                                              |
 | `document_type__id`                  | Exact document type.                                                                                                        |
 | `tags__id__in`                       | Up to 100 positive tag-ID tokens; duplicates are removed in first-seen order. Result must carry **every** unique ID (AND).   |
 | `correspondents__id__in`             | Up to 100 positive correspondent-ID tokens; duplicates are removed in first-seen order. Result matches **any** (OR).         |
@@ -284,6 +285,8 @@ detail for that):
       "jd_area_name": "Home",
       "sensitivity": "",
       "thumb_sha": "ab12...",
+      "split_origin_id": 84,
+      "split_index": 1,
       "created_at": 1746662400,
       "updated_at": 1746662400,
       "tags": ["utilities", "bescom"],
@@ -296,6 +299,14 @@ detail for that):
 `thumb_sha` non-empty means the row has a thumbnail at
 `/api/documents/{id}/thumb` (client can render immediately without
 a HEAD probe).
+`split_origin_id` is the immutable id of the upload that produced a QR-split
+child; `split_index` is its one-based part number. Unlike `split_parent_id`,
+the origin survives later hard deletion of the retired parent. Poll the accepted
+upload until its active job is gone, then request
+`?split_origin_id=<accepted-id>`. A trashed accepted row normally denotes a
+split parent; a 404 means it was later hard-deleted. Report a multi-document
+success only after every returned live child has completed post-ingest.
+
 
 ### `POST /api/documents/`
 
@@ -303,6 +314,38 @@ Multipart upload. Streams the file into the CAS by SHA-256, then commits the
 document row and first durable job together. An unreferenced CAS object left by
 a failed database commit is harmless and is reclaimed by `suchi gc`. MIME is
 sniffed server-side; the multipart Content-Type header is a hint only.
+
+Multipart fields:
+
+| Field | Contract |
+| --- | --- |
+| `document` | Required file part. MIME is determined from stored bytes, not the multipart header. |
+| `source_mtime` | Optional, single positive base-10 Unix-second integer. Duplicate, empty, zero, negative, signed, fractional, or malformed values return `400 bad_source_mtime`; omission stores `NULL`. |
+| `content`, `content_source`, `content_confidence` | Optional device OCR group. All three must occur exactly once together; `content_source` must literally be `device_ocr`, content must be valid UTF-8 at most 1 MiB, and confidence must be finite in `[0,1]`. Invalid or partial groups return `400 bad_device_content`. |
+| `ocr_language` | Optional only with the complete device OCR group. Accepts the existing `ll_RR` form or canonical BCP-47 `ll-RR`, stored as `ll_RR`; invalid values return `400 bad_device_content`. |
+
+Device OCR is accepted only when the sniffed upload is a PDF. Fresh rows always
+record submitted confidence, language, and receipt time. At or above
+`DEVICE_OCR_MIN_CONFIDENCE`, text is provisionally indexed with
+`content_source=device_ocr`; below it, submitted text is discarded while its
+non-content provenance remains. Native PDF text is authoritative and changes
+the active source to `server`. For image-only PDFs with accepted nonblank device
+text, post-ingest skips duplicate server OCR. Empty or skipped server output
+never erases accepted device text. Dedupe and restore only record the ordinary
+acquisition source and do not attach newly submitted OCR provenance to the
+existing row.
+
+An optional `Idempotency-Key` must be one canonical lowercase UUID v4. Invalid
+keys return `400 bad_idempotency_key`. Keys are scoped to the authenticated user
+and shared across document and version uploads. Suchi fingerprints the
+operation, predecessor, uploaded SHA-256, sanitized filename basename,
+`source_mtime` presence/value, device source, a SHA-256 of device text,
+canonical numeric confidence, and canonical OCR language using length-prefixed
+fields. Matching retries replay the original `200` or `201`, preserve the
+canonical `Location`, and add `"idempotent_replay":true` without adding a source
+or job. Reusing a key with different normalized input returns
+`409 idempotency_conflict`. Scope and object authorization run on every request,
+including a replay.
 
 **201 Created** `{ "id": ..., "sha256": "...", "size": ..., "mime_type": ..., "title": "..." }`
 
@@ -332,6 +375,9 @@ Dedup state machine:
   match is not restored; the upload creates a fresh row while retention cleanup
   removes the expired one.
 
+All successful response shapes may include `"idempotent_replay": true` on a
+matching keyed retry.
+
 ### `GET /api/documents/{id}`
 
 Full projection of one document: title, extracted content (post-OCR),
@@ -354,6 +400,10 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
   "owner_id": 1,
   "title": "Electricity bill March 2026",
   "content": "Electricity bill for March 2026...",
+  "content_source": "server",
+  "device_content_confidence": 0.86,
+  "device_ocr_language": "en_US",
+  "device_content_received_at": 1793494800,
   "original_blob": "sha256hex...",
   "original_size": 16841,
   "archive_blob": "sha256hex...",
@@ -366,6 +416,7 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
   "created_at": 1793491200,
   "added_at": 1793494800,
   "updated_at": 1793491200,
+  "source_mtime": 1793494700,
   "sources": [
     {
       "kind": "mailbox",
@@ -389,6 +440,12 @@ mailbox's current display name. Suchi retains the name captured at ingest and
 uses it if that mailbox is later deleted; `detail` remains the observed address
 and folder. `added_at` is when Suchi ingested the document;
 `created_at` and optional `source_mtime` carry upstream dates.
+
+`content_source` is `device_ocr`, `server`, or empty and names the authority for
+the active `content`. Device provenance remains available after authoritative
+server text replaces it. Pass `include_content=0` for metadata-only reads; the
+response keeps the stable `content` key with an empty string and does not carry
+OCR text over the wire. This is the required mobile metadata/detail request.
 
 `jd_category_code` / `jd_category_name` / `jd_area_name` are denormalized
 from the JD tree so API clients can render a filing chip
@@ -798,8 +855,13 @@ snippet behavior, and filter-only ordering are documented in
 [Search architecture: Ranked Search](/search#ranked-search).
 
 **Response shape** — `{count, next, previous, results}` DRF envelope.
-Each hit carries `{id, title, snippet, rank, created_at, mime_type}`
-where `snippet` wraps the matching span in `<mark>...</mark>`.
+Each hit carries `{id, title, snippet, rank, created_at, mime_type,
+sensitivity}`. `snippet` wraps a matching span in `<mark>...</mark>` for
+non-sensitive documents. Confidential and Restricted hits still participate in
+ranking but return an empty snippet; clients must render a sensitivity
+placeholder rather than hidden OCR text. Malformed queries return
+`400 bad_query`; logs contain only a SHA-256 correlation value, never the raw
+query.
 
 #### Query language
 
@@ -877,11 +939,13 @@ the source had no extracted body text. `method` is currently `fts`.
 ### `GET /api/documents/{id}/thumb`
 
 Page-1 thumbnail rendered at ingest time from the archive PDF via
-`pdftoppm -f 1 -l 1 -r 40 -png`. PNG bytes; immutable ETag equal to
-`documents.thumb_sha`. Serve with
-`Cache-Control: private, max-age=31536000, immutable` so the SPA's
-list view can request one URL per doc and every subsequent scroll is
-a 304.
+`pdftoppm -f 1 -l 1 -r 40 -png`. Omit `width` to preserve the stored PNG
+bytes and immutable ETag `"documents.thumb_sha"`. Optional integer
+`width=64..512` downscales with Catmull-Rom while preserving aspect ratio and
+never upscales. Its ETag is `"<thumb_sha>-w<actual-width>"`, where actual width
+may be smaller than requested. Invalid, duplicate, or out-of-range width values
+return `400 bad_width`. Both forms use
+`Cache-Control: private, max-age=31536000, immutable`.
 
 Scope: `documents:read`. ACL rule matches `GET /api/documents/{id}`.
 
@@ -899,10 +963,12 @@ title-initials placeholder — no error state on the row.
 **Sensitivity gate.** Mirrors `/preview/{id}`. When the doc is
 `confidential` or `restricted`, the endpoint returns **202** with a
 small JSON body (`{"sensitivity":"…","gated":true,"reveal_url":"?reveal=1"}`)
-and `Cache-Control: no-store` unless the caller passes `?reveal=1`.
-The SPA passes `reveal=1` on the list view (the caller is already
-authorized to view the doc) and blurs the returned bytes client-side;
-a direct URL scan without `reveal=1` cannot pull the raw first page.
+and `Cache-Control: no-store` unless the caller passes `?reveal=1`. A validated
+width is preserved in the gated URL, for example
+`?reveal=1&width=160`. The SPA passes `reveal=1` on the list view (the caller is
+already authorized to view the doc) and blurs the returned bytes client-side;
+a direct URL scan without `reveal=1` cannot pull the raw first page. Mobile rows
+request `width=160`.
 
 ### `DELETE /api/documents/{id}`
 
@@ -1319,6 +1385,14 @@ Upload a new version of {id}. Multipart, same shape as
 `POST /api/documents/`. Result row's `previous_version_id` = {id}.
 Default carry-forward: title (if uploader gave a bland filename)
 and JD category (a filed doc's version stays filed).
+
+The device OCR, `source_mtime`, and `Idempotency-Key` rules are identical to a
+fresh document upload. A matching keyed response-loss retry replays before live
+blob detection. Without a replay, bytes already owned by any live document for
+the predecessor's owner return
+`409 {"code":"duplicate_version_blob","existing_id":<id>,...}` instead of a
+database error. The existing row may be the predecessor, another version in
+the chain, or an unrelated document. Trashed rows do not block a new version.
 
 ### `GET /api/tags/`
 
