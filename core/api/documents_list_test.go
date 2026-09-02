@@ -210,6 +210,48 @@ func TestListDocuments_JDCategoryFilter(t *testing.T) {
 	}
 }
 
+func TestListDocuments_SplitOriginFilterIsACLScoped(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	first := seedStatsDoc(t, s.DB, 1, "split_one", "part one", inbox, false, 100)
+	second := seedStatsDoc(t, s.DB, 2, "split_two", "part two", inbox, false, 200)
+	other := seedStatsDoc(t, s.DB, 1, "split_other", "other origin", inbox, false, 300)
+	for _, item := range []struct {
+		id     int64
+		origin int64
+		index  int
+	}{
+		{id: first, origin: 50, index: 1},
+		{id: second, origin: 50, index: 2},
+		{id: other, origin: 60, index: 1},
+	} {
+		if _, err := s.DB.ExecWrite(context.Background(), `
+			UPDATE documents SET split_origin_id = ?, split_index = ? WHERE id = ?
+		`, item.origin, item.index, item.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, rows, count := doList(t, s, "/api/documents/?split_origin_id=50", memberPrincipal(1))
+	if code != 200 || count != 1 || len(rows) != 1 {
+		t.Fatalf("status=%d count=%d rows=%+v", code, count, rows)
+	}
+	if rows[0].ID != first || rows[0].SplitOriginID != 50 ||
+		rows[0].SplitIndex == nil || *rows[0].SplitIndex != 1 {
+		t.Fatalf("split row=%+v", rows[0])
+	}
+}
+
+func TestListDocuments_RejectsInvalidSplitOrigin(t *testing.T) {
+	s := newListServer(t)
+	for _, value := range []string{"0", "-1", "not-an-id"} {
+		code, _, _ := doList(t, s, "/api/documents/?split_origin_id="+value, adminPrincipal(1))
+		if code != 400 {
+			t.Fatalf("split_origin_id=%q status=%d, want 400", value, code)
+		}
+	}
+}
+
 func TestListDocuments_TrashedToggle(t *testing.T) {
 	s := newListServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

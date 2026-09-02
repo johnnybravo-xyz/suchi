@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,14 +127,16 @@ func queryDocumentFTSJoin(plan searchquery.Plan) string {
 	return " JOIN documents_fts ON documents_fts.rowid = d.id"
 }
 
-func (s *Server) writeQueryError(w http.ResponseWriter, operation, _ string, err error) bool {
+func (s *Server) writeQueryError(w http.ResponseWriter, operation, raw string, err error) bool {
 	var queryErr *searchquery.Error
 	if !errors.As(err, &queryErr) {
 		return false
 	}
 	if s.Log != nil {
+		sum := sha256.Sum256([]byte(raw))
 		s.Log.Info("api."+operation+".query_error",
-			"position", queryErr.Position, "filter", queryErr.Filter)
+			"position", queryErr.Position, "filter", queryErr.Filter,
+			"query_sha256", hex.EncodeToString(sum[:]))
 	}
 	s.writeJSON(w, http.StatusBadRequest, queryErrorBody{
 		Code:        "bad_query",

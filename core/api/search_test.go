@@ -1,13 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -116,17 +117,90 @@ func TestSearchRecencyPaginationAppliesFiltersAndACLBeforeLimit(t *testing.T) {
 }
 
 func TestSearchMalformedQueryReturnsBadRequest(t *testing.T) {
+	var logs bytes.Buffer
 	s := &Server{
 		DB:  openTestDB(t),
-		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/search/?q=%22", nil)
+	secrets := []string{
+		"privateocrphrase", "secretfilenamepdf",
+		"bearertokenvalue", "documentcontentvalue",
+	}
+	raw := strings.Join(secrets, " ") + ` "`
+	req := httptest.NewRequest(http.MethodGet, "/api/search/?q="+url.QueryEscape(raw), nil)
 	req = req.WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
 	rec := httptest.NewRecorder()
 
 	s.Search(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_query"`) {
+		t.Fatalf("status=%d body=%s logs=%s", rec.Code, rec.Body.String(), logs.String())
+	}
+	for _, secret := range secrets {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("query log leaked %q: %s", secret, logs.String())
+		}
+	}
+	if !strings.Contains(logs.String(), "query_sha256=") {
+		t.Fatalf("query log omitted one-way correlation hash: %s", logs.String())
+	}
+}
+
+func TestSearchSuppressesSensitiveSnippets(t *testing.T) {
+	d := openTestDB(t)
+	inbox := seedStatsJDInbox(t, d)
+	publicID := seedStatsDoc(t, d, 1, "public-sha", "Public", inbox, false, 100)
+	confidentialID := seedStatsDoc(t, d, 1, "confidential-sha", "Confidential", inbox, false, 200)
+	restrictedID := seedStatsDoc(t, d, 1, "restricted-sha", "Restricted", inbox, false, 300)
+	for _, item := range []struct {
+		id          int64
+		content     string
+		sensitivity string
+	}{
+		{id: publicID, content: "archiveword public excerpt", sensitivity: "public"},
+		{id: confidentialID, content: "archiveword confidential excerpt", sensitivity: "confidential"},
+		{id: restrictedID, content: "archiveword restricted excerpt", sensitivity: "restricted"},
+	} {
+		if _, err := d.ExecWrite(context.Background(), `
+			UPDATE documents SET content = ?, sensitivity = ? WHERE id = ?
+		`, item.content, item.sensitivity, item.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	req := httptest.NewRequest(http.MethodGet, "/api/search/?q=archiveword&recency=off", nil)
+	req = req.WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+	rec := httptest.NewRecorder()
+	s.Search(rec, req)
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Results []SearchHit `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Results) != 3 {
+		t.Fatalf("results=%+v", envelope.Results)
+	}
+	for _, hit := range envelope.Results {
+		switch hit.ID {
+		case publicID:
+			if hit.Sensitivity != "public" || hit.Snippet == "" ||
+				!strings.Contains(hit.Snippet, "archiveword") {
+				t.Fatalf("public hit=%+v", hit)
+			}
+		case confidentialID:
+			if hit.Sensitivity != "confidential" || hit.Snippet != "" {
+				t.Fatalf("confidential hit=%+v", hit)
+			}
+		case restrictedID:
+			if hit.Sensitivity != "restricted" || hit.Snippet != "" {
+				t.Fatalf("restricted hit=%+v", hit)
+			}
+		default:
+			t.Fatalf("unexpected hit=%+v", hit)
+		}
 	}
 }
 

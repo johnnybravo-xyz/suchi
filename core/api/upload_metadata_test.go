@@ -193,10 +193,30 @@ func TestDocumentDetailExposesDeviceOCRProvenance(t *testing.T) {
 	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.ContentSource != "server" ||
+	if detail.Content != "server text" || detail.ContentSource != "server" ||
 		detail.DeviceContentConfidence == nil || *detail.DeviceContentConfidence != 0.8 ||
 		detail.DeviceOCRLanguage != "en_US" || detail.DeviceContentReceivedAt == nil {
 		t.Fatalf("detail provenance = %+v", detail)
+	}
+
+	metadataReq := httptest.NewRequest(http.MethodGet, "/api/documents/1?include_content=0", nil)
+	metadataReq.SetPathValue("id", "1")
+	metadataReq = metadataReq.WithContext(auth.WithPrincipal(metadataReq.Context(), principal))
+	metadataRec := httptest.NewRecorder()
+	s.GetDocument(metadataRec, metadataReq)
+	if metadataRec.Code != http.StatusOK {
+		t.Fatalf("metadata detail status=%d body=%s", metadataRec.Code, metadataRec.Body.String())
+	}
+	if strings.Contains(metadataRec.Body.String(), "server text") {
+		t.Fatalf("suppressed detail leaked content: %s", metadataRec.Body.String())
+	}
+	var metadataDetail DocumentDetail
+	if err := json.Unmarshal(metadataRec.Body.Bytes(), &metadataDetail); err != nil {
+		t.Fatal(err)
+	}
+	if metadataDetail.Content != "" || metadataDetail.ContentSource != "server" ||
+		metadataDetail.DeviceContentConfidence == nil {
+		t.Fatalf("suppressed detail = %+v", metadataDetail)
 	}
 }
 

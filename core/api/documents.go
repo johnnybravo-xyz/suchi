@@ -738,6 +738,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
 		return
 	}
+	includeContent := r.URL.Query().Get("include_content") != "0"
 
 	var (
 		d           DocumentDetail
@@ -759,7 +760,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		deviceContentReceivedAt sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT d.id, d.owner_id, d.title, COALESCE(d.content, ''),
+		SELECT d.id, d.owner_id, d.title,
+		       CASE WHEN ? THEN COALESCE(d.content, '') ELSE '' END,
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
 		       d.jd_category_id, d.sensitivity,
@@ -772,7 +774,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
 		WHERE d.id = ?
-	`, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,

@@ -18,14 +18,19 @@
 package api
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	xdraw "golang.org/x/image/draw"
 )
 
 // GetDocumentThumb serves the doc's page-1 thumbnail.
@@ -37,6 +42,11 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	requestedWidth, resize, err := parseThumbnailWidth(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_width", "width must be one integer from 64 through 512")
 		return
 	}
 	if !s.authorize(w, r, p, authz.KindDocument, id, authz.PermView) {
@@ -59,6 +69,10 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 	}
 	if sens.Valid && IsHighSensitivity(sens.String) &&
 		r.URL.Query().Get("reveal") != "1" {
+		revealURL := "?reveal=1"
+		if resize {
+			revealURL += "&width=" + strconv.Itoa(requestedWidth)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Sensitivity", sens.String)
 		// Never cache the gate response so a later reclassification
@@ -67,24 +81,40 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(
 			`{"sensitivity":"` + sens.String + `",` +
-				`"gated":true,"reveal_url":"?reveal=1"}`))
+				`"gated":true,"reveal_url":"` + revealURL + `"}`))
 		return
 	}
 	if !sha.Valid || sha.String == "" {
 		s.writeError(w, http.StatusNotFound, "no_thumb", "no thumbnail for this document")
 		return
 	}
-	etag := `"` + sha.String + `"`
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
-		w.WriteHeader(http.StatusNotModified)
+	if !resize {
+		etag := `"` + sha.String + `"`
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		rc, err := s.CAS.Get(sha.String)
+		if errors.Is(err, blob.ErrNotFound) {
+			s.writeError(w, http.StatusNotFound, "no_thumb", "thumbnail blob missing")
+			return
+		}
+		if err != nil {
+			s.serverErr(w, "thumb.get", err)
+			return
+		}
+		defer rc.Close()
+		w.Header().Set("Content-Type", "image/png")
+		if _, err := io.Copy(w, rc); err != nil {
+			s.Log.Warn("thumb.copy", "err", err.Error())
+		}
 		return
 	}
+
 	rc, err := s.CAS.Get(sha.String)
 	if errors.Is(err, blob.ErrNotFound) {
-		// thumb_sha set but blob missing — treat as no thumb so a
-		// half-corrupted CAS doesn't 500 the list.
 		s.writeError(w, http.StatusNotFound, "no_thumb", "thumbnail blob missing")
 		return
 	}
@@ -92,9 +122,63 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "thumb.get", err)
 		return
 	}
-	defer rc.Close()
+	sourceBytes, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		s.serverErr(w, "thumb.read", err)
+		return
+	}
+	source, err := png.Decode(bytes.NewReader(sourceBytes))
+	if err != nil {
+		s.serverErr(w, "thumb.decode", err)
+		return
+	}
+	sourceBounds := source.Bounds()
+	sourceWidth := sourceBounds.Dx()
+	sourceHeight := sourceBounds.Dy()
+	if sourceWidth <= 0 || sourceHeight <= 0 {
+		s.writeError(w, http.StatusInternalServerError, "thumb_decode", "stored thumbnail has invalid dimensions")
+		return
+	}
+	actualWidth := min(requestedWidth, sourceWidth)
+	etag := `"` + sha.String + `-w` + strconv.Itoa(actualWidth) + `"`
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	output := sourceBytes
+	if actualWidth < sourceWidth {
+		targetHeight := max(1, (sourceHeight*actualWidth+sourceWidth/2)/sourceWidth)
+		target := image.NewRGBA(image.Rect(0, 0, actualWidth, targetHeight))
+		xdraw.CatmullRom.Scale(target, target.Bounds(), source, sourceBounds, xdraw.Over, nil)
+		var encoded bytes.Buffer
+		if err := png.Encode(&encoded, target); err != nil {
+			s.serverErr(w, "thumb.encode", err)
+			return
+		}
+		output = encoded.Bytes()
+	}
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "image/png")
-	if _, err := io.Copy(w, rc); err != nil {
+	if _, err := w.Write(output); err != nil {
 		s.Log.Warn("thumb.copy", "err", err.Error())
 	}
+}
+
+func parseThumbnailWidth(r *http.Request) (width int, present bool, err error) {
+	values, present := r.URL.Query()["width"]
+	if !present {
+		return 0, false, nil
+	}
+	if len(values) != 1 {
+		return 0, true, errors.New("duplicate width")
+	}
+	width, err = strconv.Atoi(values[0])
+	if err != nil || width < 64 || width > 512 {
+		return 0, true, errors.New("invalid width")
+	}
+	return width, true, nil
 }
