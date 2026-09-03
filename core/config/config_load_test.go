@@ -180,6 +180,29 @@ func TestDeviceOCRMinConfidence(t *testing.T) {
 	}
 }
 
+func TestDevAllowLANRequiresExplicitOne(t *testing.T) {
+	isolateConfigEnv(t)
+	t.Setenv("PUBLIC_URL", "http://localhost")
+	for _, value := range []string{"", "0", "true"} {
+		t.Setenv("SUCHI_DEV_ALLOW_LAN", value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.DevAllowLAN {
+			t.Fatalf("SUCHI_DEV_ALLOW_LAN=%q enabled LAN access", value)
+		}
+	}
+	t.Setenv("SUCHI_DEV_ALLOW_LAN", "1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.DevAllowLAN {
+		t.Fatal("SUCHI_DEV_ALLOW_LAN=1 did not enable LAN access")
+	}
+}
+
 func TestInvalidRuntimeSettings(t *testing.T) {
 	for key, value := range map[string]string{
 		"BODY_LIMIT":            "-1",

@@ -113,7 +113,7 @@ environment overrides a file-side secret-file path.
 | Env var                           | Default                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATA_DIR`                        | `/data`                  | Root of `blobs/`, `suchi.db` + WAL, `backups/`, `config.toml`, `staging/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `LISTEN_ADDR`                     | `:8000`                  | HTTP listener.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `LISTEN_ADDR`                     | `:8000`                  | HTTP listener. In `SUCHI_DEV=1`, the wildcard default is narrowed to `127.0.0.1:8000`; public/wildcard listeners are refused. Physical-device LAN testing must name one private IP and set `SUCHI_DEV_ALLOW_LAN=1`.                                                                                                                                                                                                                                                                                                                   |
 | `LOG_LEVEL`                       | `info`                   | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `SUCHI_PPROF`                     | (unset)                  | Set to `1` to expose admin-authenticated `/debug/pprof/*` endpoints. Disable after profiling.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `TRUSTED_PROXY_CIDRS`             | (unset)                  | Comma-separated proxy networks allowed to supply `X-Forwarded-For` identities for login, share-link, and demo rate limits. The direct TCP peer must match; suchi then walks the header right-to-left and selects the first untrusted address. Leave unset when connecting directly. Configure the proxy to append or replace this header. |
@@ -216,7 +216,8 @@ production uses — no dev-only mint helper, nothing new to learn.
 
 | Env var     | Default | Purpose                                                                                                                                |
 | ----------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `SUCHI_DEV` | (unset) | Set to `1` to enable dev-mode. Auto-provisions the fixed `dev@suchi.local` admin at boot; refuses to arm outside the guardrails below. |
+| `SUCHI_DEV`           | (unset) | Set to `1` to enable dev-mode. Auto-provisions the fixed `dev@suchi.local` admin at boot; refuses to arm outside the guardrails below. |
+| `SUCHI_DEV_ALLOW_LAN` | (unset) | Set to `1` only for physical-device testing, together with a `LISTEN_ADDR` naming the same private IP literal as `PUBLIC_URL`.          |
 
 The auto-provisioned admin is fixed: **email `dev@suchi.local`,
 password `devdevdev`**. That's not a placeholder — the plan is that
@@ -236,6 +237,13 @@ level=WARN msg=main.dev.ready
 
 Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
 
+- **Narrows the wildcard listener to loopback** — the normal `:8000` default
+  becomes `127.0.0.1:8000` in dev mode. Explicit wildcard, public-IP, and
+  hostname listeners are refused.
+- **Requires a deliberate LAN opt-in** — physical-device testing uses, for
+  example, `PUBLIC_URL=http://192.168.1.50:8000`,
+  `LISTEN_ADDR=192.168.1.50:8000`, and `SUCHI_DEV_ALLOW_LAN=1`. The two IP
+  literals must match; the server never binds every interface in dev mode.
 - **Refuses non-local `PUBLIC_URL`** — allows `localhost`,
   `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
   `::1`, bare hostnames without dots, and any `*.local` name.

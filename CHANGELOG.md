@@ -204,6 +204,14 @@ Notable user-visible changes to Suchi are recorded here.
 - Model-provider logs retain only the endpoint host, never URL paths or query
   strings that may contain tenant or credential material.
 
+### Security
+
+- API tokens now fail closed outside explicitly scoped client routes; raw
+  downloads and account, credential, administration, and operational surfaces
+  require a browser/OIDC session.
+- Developer mode binds loopback by default and requires an explicit matching
+  private interface opt-in for physical-device LAN testing.
+
 ## [0.1.0-beta.1] - 2026-08-29
 
 ### Added

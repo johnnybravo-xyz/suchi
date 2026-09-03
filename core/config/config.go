@@ -50,7 +50,8 @@ type Config struct {
 	// iteration only: admin auto-provisioning, setup-token skip, and a
 	// login helper printed on boot. Never intended for production —
 	// gated by an explicit env var so it cannot be flipped by accident.
-	DevMode bool
+	DevMode     bool
+	DevAllowLAN bool
 
 	// OIDC requires signed ID-token email + email_verified=true claims.
 	// All-or-nothing group; empty issuer disables OIDC entirely.
@@ -188,6 +189,7 @@ func Load() (*Config, error) {
 		IngestIMAPOAuthClientIDMicrosoft: env("INGEST_IMAP_OAUTH_CLIENT_ID_MICROSOFT", ""),
 		IngestIMAPOAuthScopesMicrosoft:   env("INGEST_IMAP_OAUTH_SCOPES_MICROSOFT", ""),
 		DevMode:                          env("SUCHI_DEV", "") == "1",
+		DevAllowLAN:                      env("SUCHI_DEV_ALLOW_LAN", "") == "1",
 		IngestFSDir:                      env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
 		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),

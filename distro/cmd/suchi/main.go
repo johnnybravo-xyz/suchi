@@ -267,6 +267,18 @@ func runServe() int {
 				"remediation", "point PUBLIC_URL at localhost / 127.0.0.1 / 10.0.0.0/8 / 172.16.0.0/12 / 192.168.0.0/16 / *.local")
 			return 1
 		}
+		listenAddr, err := secureDevListenAddr(cfg.ListenAddr, cfg.PublicURL, cfg.DevAllowLAN)
+		if err != nil {
+			log.Error("main.dev.refused",
+				"reason", err.Error(),
+				"listen_addr", cfg.ListenAddr,
+				"remediation", "use loopback, or set LISTEN_ADDR to one private IP plus SUCHI_DEV_ALLOW_LAN=1 for physical-device testing")
+			return 1
+		}
+		if listenAddr != cfg.ListenAddr {
+			log.Warn("main.dev.listener_narrowed", "configured", cfg.ListenAddr, "effective", listenAddr)
+			cfg.ListenAddr = listenAddr
+		}
 		if err := la.EnsureDevAdmin(ctx, localauth.DevAdminEmail, localauth.DevAdminPassword); err != nil {
 			log.Error("main.dev.ensure_admin", "err", err.Error())
 			return 1
