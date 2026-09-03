@@ -523,6 +523,19 @@ func TestFanOutSegmentsRetriesBeforeRetiringParent(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
 	parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source pdf"))
+	if _, err := d.ExecWrite(ctx, `
+		UPDATE documents
+		SET source_mtime = 1700000000,
+		    sensitivity = 'restricted',
+		    content = 'combined device text',
+		    content_source = 'device_ocr',
+		    device_content_confidence = 0.9,
+		    device_ocr_language = 'en_US',
+		    device_content_received_at = 1699999999
+		WHERE id = ?
+	`, parentID); err != nil {
+		t.Fatal(err)
+	}
 
 	binDir := t.TempDir()
 	failMarker := filepath.Join(binDir, "failed-once")
@@ -551,7 +564,9 @@ printf 'segment-%%s' "$4"
 	assertSplitState(t, d, parentID, true, 2)
 
 	rows, err := d.Read.QueryContext(ctx, `
-		SELECT title, split_origin_id
+		SELECT title, split_origin_id, source_mtime, sensitivity,
+		       COALESCE(content, ''), content_source, device_content_confidence,
+		       device_ocr_language, device_content_received_at
 		FROM documents WHERE split_parent_id = ? ORDER BY split_index
 	`, parentID)
 	if err != nil {
@@ -560,15 +575,30 @@ printf 'segment-%%s' "$4"
 	wantTitles := []string{"opaque.bin (part 1/2)", "opaque.bin (part 2/2)"}
 	for i := 0; rows.Next(); i++ {
 		var (
-			title  string
-			origin int64
+			title         string
+			origin        int64
+			sourceMTime   sql.NullInt64
+			sensitivity   string
+			content       string
+			contentSource string
+			confidence    sql.NullFloat64
+			language      string
+			receivedAt    sql.NullInt64
 		)
-		if err := rows.Scan(&title, &origin); err != nil {
+		if err := rows.Scan(&title, &origin, &sourceMTime, &sensitivity,
+			&content, &contentSource, &confidence, &language, &receivedAt); err != nil {
 			t.Fatal(err)
 		}
 		if i >= len(wantTitles) || title != wantTitles[i] || origin != parentID {
 			t.Fatalf("child %d title/origin = %q/%d, want %q/%d",
 				i+1, title, origin, wantTitles[i], parentID)
+		}
+		if !sourceMTime.Valid || sourceMTime.Int64 != 1700000000 || sensitivity != "restricted" {
+			t.Fatalf("child %d inherited mtime/sensitivity = %v/%q", i+1, sourceMTime, sensitivity)
+		}
+		if content != "" || contentSource != "" || confidence.Valid || language != "" || receivedAt.Valid {
+			t.Fatalf("child %d copied bundle OCR: content=%q source=%q confidence=%v language=%q received=%v",
+				i+1, content, contentSource, confidence, language, receivedAt)
 		}
 	}
 	if err := rows.Close(); err != nil {

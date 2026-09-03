@@ -702,11 +702,18 @@ func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID
 }
 
 func (h *Handler) fanOutSegments(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte, segments []docsplit.Segment) (bool, error) {
-	// Load enough of the parent's row to seed the children — owner,
-	// title, mime, jd_category all copy through.
+	// Load the parent's durable acquisition and classification metadata before
+	// creating children. In particular, sensitivity must be present from the
+	// first child read; adding it later would briefly expose a restricted scan.
 	parent, err := h.loadParentForSplit(ctx, parentID)
 	if err != nil {
 		return false, fmt.Errorf("load parent for split: %w", err)
+	}
+	if parent.HasDeviceOCR {
+		// Device OCR describes the combined feeder scan, so there is no safe way
+		// to assign its text or confidence to individual segments. Each child
+		// starts without device text and runs the normal server extraction path.
+		log.Info("post-ingest.scan_split.device_ocr_discarded", "parent_id", parentID)
 	}
 
 	for i, seg := range segments {
@@ -752,21 +759,30 @@ type splitParent struct {
 	Title        string
 	MIME         string
 	JDCategoryID int64
+	SourceMTime  sql.NullInt64
+	Sensitivity  string
+	HasDeviceOCR bool
 }
 
 func (h *Handler) loadParentForSplit(ctx context.Context, docID int64) (*splitParent, error) {
 	p := &splitParent{}
-	var mimeNull sql.NullString
+	var (
+		mimeNull      sql.NullString
+		contentSource string
+	)
 	err := h.db.Read.QueryRowContext(ctx, `
-		SELECT owner_id, title, COALESCE(mime_type, ''), jd_category_id
+		SELECT owner_id, title, COALESCE(mime_type, ''), jd_category_id,
+		       source_mtime, COALESCE(sensitivity, ''), content_source
 		FROM documents WHERE id = ?
-	`, docID).Scan(&p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID)
+	`, docID).Scan(&p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID,
+		&p.SourceMTime, &p.Sensitivity, &contentSource)
 	if err != nil {
 		return nil, err
 	}
 	if mimeNull.Valid {
 		p.MIME = mimeNull.String
 	}
+	p.HasDeviceOCR = contentSource == "device_ocr"
 	return p, nil
 }
 
@@ -801,11 +817,12 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
-				split_parent_id, split_origin_id, split_index
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				split_parent_id, split_origin_id, split_index,
+				source_mtime, sensitivity
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
 			parent.JDCategoryID, now, now, now,
-			parentID, parentID, index)
+			parentID, parentID, index, parent.SourceMTime, parent.Sensitivity)
 		if err != nil {
 			return err
 		}

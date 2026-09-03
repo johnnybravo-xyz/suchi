@@ -243,6 +243,9 @@ a specific payload — and fan out one document per segment.
 - Separator pages are dropped; the ranges between them become segments.
 - Each segment becomes a fresh document (with its own `original_blob`
   and `post-ingest` job), linked via `split_parent_id`.
+- Children inherit the original capture time, filing category, and sensitivity
+  immediately. Device OCR belongs to the combined feeder scan and is not copied
+  to a segment; each child runs server extraction independently.
 - The parent doc is soft-deleted so the workspace only shows the
   children. Undelete brings the parent (original combined scan) back
   if the split was wrong.
