@@ -18,6 +18,11 @@ import (
 const (
 	uploadOperationDocument = "document"
 	uploadOperationVersion  = "version"
+
+	// Mobile retries are normally resolved within hours, but devices can stay
+	// offline for weeks. Keep full wire responses long enough for that case
+	// without allowing this auxiliary table to grow for the archive's lifetime.
+	uploadIdempotencyRetention = 30 * 24 * time.Hour
 )
 
 var (
@@ -114,6 +119,11 @@ func loadStoredUploadResponse(
 ) (storedUploadResponse, bool, error) {
 	if request.Key == "" {
 		return storedUploadResponse{}, false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM upload_idempotency WHERE created_at < ?",
+		time.Now().Add(-uploadIdempotencyRetention).Unix()); err != nil {
+		return storedUploadResponse{}, false, err
 	}
 	var stored storedUploadResponse
 	err := tx.QueryRowContext(ctx, `

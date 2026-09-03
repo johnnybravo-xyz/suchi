@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -19,6 +20,7 @@ import (
 )
 
 const testIdempotencyKey = "123e4567-e89b-42d3-a456-426614174000"
+const secondIdempotencyKey = "123e4567-e89b-42d3-a456-426614174001"
 
 func TestParseIdempotencyKey(t *testing.T) {
 	valid := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -257,6 +259,62 @@ func TestUploadNewVersionIdempotentReplay(t *testing.T) {
 		t.Fatalf("first=%+v replay=%+v", firstResponse, replayResponse)
 	}
 	assertUploadSideEffectCounts(t, d, 2, 1, 1, 1)
+}
+
+func TestUploadNewVersionRecoversReplayAfterResponseExpires(t *testing.T) {
+	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	if _, err := d.ExecWrite(context.Background(), `
+		UPDATE upload_idempotency SET created_at = ?
+	`, time.Now().Add(-uploadIdempotencyRetention-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
+	if replay.Code != http.StatusCreated {
+		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	var firstResponse, replayResponse uploadVersionResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResponse); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayResponse); err != nil {
+		t.Fatal(err)
+	}
+	if replayResponse.ID != firstResponse.ID || !replayResponse.IdempotentReplay {
+		t.Fatalf("first=%+v replay=%+v", firstResponse, replayResponse)
+	}
+	assertUploadSideEffectCounts(t, d, 2, 1, 1, 1)
+}
+
+func TestUploadIdempotencyRetentionPrunesExpiredResponses(t *testing.T) {
+	s, d, principal := newUploadMetadataServer(t)
+	first := uploadDocumentWithKey(t, s, principal, testIdempotencyKey, "first.pdf", testPDFBytes(), nil)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	if _, err := d.ExecWrite(context.Background(), `
+		UPDATE upload_idempotency SET created_at = ?
+	`, time.Now().Add(-uploadIdempotencyRetention-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	secondBytes := append(append([]byte{}, testPDFBytes()...), '2')
+	second := uploadDocumentWithKey(t, s, principal, secondIdempotencyKey, "second.pdf", secondBytes, nil)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	assertUploadSideEffectCounts(t, d, 2, 2, 2, 1)
+	var survivingKey string
+	if err := d.Read.QueryRow(`SELECT idempotency_key FROM upload_idempotency`).Scan(&survivingKey); err != nil {
+		t.Fatal(err)
+	}
+	if survivingKey != secondIdempotencyKey {
+		t.Fatalf("surviving key=%q, want current key", survivingKey)
+	}
 }
 
 func TestUploadNewVersionReplayRechecksACL(t *testing.T) {

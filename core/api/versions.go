@@ -114,6 +114,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		duplicateLiveID int64
 		response        uploadVersionResponse
 		replay          *storedUploadResponse
+		recoveredReplay bool
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		stored, found, err := loadStoredUploadResponse(
@@ -126,6 +127,36 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			replay = &stored
 			newID = stored.DocumentID
 			return nil
+		}
+
+		// The full response cache is intentionally time-bounded. A much later
+		// keyed retry can still be recognized by its immutable predecessor and
+		// content hash, preventing a lost response from becoming either a
+		// duplicate version or a permanent client-side conflict.
+		if upload.Idempotency.Key != "" {
+			err = tx.QueryRowContext(r.Context(), `
+				SELECT id, original_size, COALESCE(mime_type, ''), title
+				FROM documents
+				WHERE owner_id = ? AND previous_version_id = ?
+				  AND original_blob = ? AND trashed_at IS NULL
+				ORDER BY id LIMIT 1
+			`, prevOwner, prevID, upload.SHA256).Scan(
+				&newID, &response.Size, &response.MIME, &response.Title,
+			)
+			if err == nil {
+				response.ID = newID
+				response.PreviousVersionID = prevID
+				response.SHA256 = upload.SHA256
+				response.IdempotentReplay = true
+				recoveredReplay = true
+				return storeUploadResponse(
+					r.Context(), tx, p.UserID, upload.Idempotency,
+					upload.SHA256, newID, http.StatusCreated, response,
+				)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 		}
 
 		err = tx.QueryRowContext(r.Context(), `
@@ -229,6 +260,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		response.IdempotentReplay = true
 		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", replay.DocumentID))
 		s.writeJSON(w, replay.Status, response)
+		return
+	}
+	if recoveredReplay {
+		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", newID))
+		s.writeJSON(w, http.StatusCreated, response)
 		return
 	}
 

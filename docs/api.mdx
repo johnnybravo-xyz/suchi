@@ -342,7 +342,10 @@ fields. Matching retries replay the original `200` or `201`, preserve the
 canonical `Location`, and add `"idempotent_replay":true` without adding a source
 or job. Reusing a key with different normalized input returns
 `409 idempotency_conflict`. Scope and object authorization run on every request,
-including a replay.
+including a replay. Full response records are retained for 30 days and pruned
+by later keyed uploads. After that window, ordinary content deduplication still
+prevents a document duplicate; a version retry with the same predecessor and
+bytes is recovered as a successful replay.
 
 **201 Created** `{ "id": ..., "sha256": "...", "size": ..., "mime_type": ..., "title": "..." }`
 
@@ -1385,8 +1388,10 @@ and JD category (a filed doc's version stays filed).
 
 The device OCR, `source_mtime`, and `Idempotency-Key` rules are identical to a
 fresh document upload. A matching keyed response-loss retry replays before live
-blob detection. Without a replay, bytes already owned by any live document for
-the predecessor's owner return
+blob detection. Once the 30-day response cache expires, a keyed retry of the
+same bytes against the same predecessor is still recovered from the resulting
+version row. Without a replay, bytes already owned by any live document for the
+predecessor's owner return
 `409 {"code":"duplicate_version_blob","existing_id":<id>,...}` instead of a
 database error. The existing row may be the predecessor, another version in
 the chain, or an unrelated document. Trashed rows do not block a new version.
