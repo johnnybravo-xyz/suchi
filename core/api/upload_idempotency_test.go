@@ -211,6 +211,10 @@ func TestUploadDocumentIdempotentDedupeAndRestore(t *testing.T) {
 			if !tc.flag(firstResponse) || !tc.flag(replayResponse) || !replayResponse.IdempotentReplay {
 				t.Fatalf("first=%+v replay=%+v", firstResponse, replayResponse)
 			}
+			if firstResponse.Title != "initial" || replayResponse.Title != "initial" {
+				t.Fatalf("existing title changed in response: first=%q replay=%q",
+					firstResponse.Title, replayResponse.Title)
+			}
 			assertUploadSideEffectCounts(t, d, 1, 2, 1, 1)
 		})
 	}

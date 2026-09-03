@@ -78,6 +78,7 @@ func buildUploadFingerprint(
 		contentDigest = deviceContentDigest(metadata)
 		value := metadata.Device.Confidence
 		if value == 0 {
+			// Normalize IEEE-754 negative zero so equivalent metadata has one key.
 			value = 0
 		}
 		confidence = strconv.FormatFloat(value, 'g', -1, 64)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -21,7 +20,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
-	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
@@ -58,75 +56,9 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
-	idempotencyKey, requestErr := parseIdempotencyKey(r)
-	if requestErr != nil {
-		s.writeError(w, http.StatusBadRequest, requestErr.code, requestErr.message)
+	upload := s.prepareUpload(w, r, uploadOperationDocument, 0)
+	if upload == nil {
 		return
-	}
-
-	file, header, err := r.FormFile("document")
-	if err != nil {
-		// http.MaxBytesReader (wired at boot via BodyLimit) trips
-		// here with a *http.MaxBytesError. Distinguish so the caller
-		// gets the right shape.
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
-				fmt.Sprintf("upload exceeded the %d-byte cap (see BODY_LIMIT)", mbe.Limit))
-			return
-		}
-		s.writeError(w, http.StatusBadRequest, "missing_file",
-			`multipart part "document" is required`)
-		return
-	}
-	defer file.Close()
-	metadata, metadataErr := parseUploadMetadata(r)
-	if metadataErr != nil {
-		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
-		return
-	}
-	sourceKind := ingest.SourceUpload
-	sourceLabel := principal.Display
-	if sourceLabel == "" {
-		sourceLabel = principal.Email
-	}
-	if principal.Kind == "token" {
-		sourceKind = ingest.SourceAPI
-		if sourceLabel == "" {
-			sourceLabel = "API token"
-		}
-	}
-
-	// Stream to CAS. Put() returns the SHA-256 and streamed size.
-	ref, err := s.CAS.Put(file)
-	if err != nil {
-		s.Log.Error("api.upload.cas_put", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "cas_put_failed",
-			"failed to store blob")
-		return
-	}
-
-	// MIME sniff. Reopen the file we just stored — net/http.DetectContentType
-	// reads at most 512 bytes and mime.Type() from filename is unreliable.
-	sniffed, err := s.sniffMIME(ref.SHA256)
-	if err != nil {
-		s.Log.Warn("api.upload.mime_sniff", "err", err.Error(), "sha", ref.SHA256)
-		sniffed = "application/octet-stream"
-	}
-	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
-	if metadataErr := rejectDeviceContentForMIME(metadata, sniffed); metadataErr != nil {
-		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
-		return
-	}
-
-	title := deriveTitle(header.Filename)
-	idempotency := uploadIdempotencyRequest{
-		Key: idempotencyKey, Operation: uploadOperationDocument,
-	}
-	if idempotency.Key != "" {
-		idempotency.Fingerprint = buildUploadFingerprint(
-			idempotency.Operation, 0, ref.SHA256, header.Filename, metadata,
-		)
 	}
 
 	// New documents land in inbox; classifiers may reassign them later.
@@ -149,7 +81,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		stored, found, err := loadStoredUploadResponse(
-			r.Context(), tx, principal.UserID, idempotency,
+			r.Context(), tx, principal.UserID, upload.Idempotency,
 		)
 		if err != nil {
 			return err
@@ -167,28 +99,28 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		errAlive := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM documents
 			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
-			principal.UserID, ref.SHA256,
+			principal.UserID, upload.SHA256,
 		).Scan(&aliveID)
 		if errAlive == nil {
 			outID = aliveID
 			deduplicated = true
-			if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, time.Now().Unix()); err != nil {
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
 				return err
 			}
-			existingTitle := title
+			existingTitle := upload.Title
 			if err := tx.QueryRowContext(r.Context(),
 				`SELECT title FROM documents WHERE id = ?`, outID).Scan(&existingTitle); err != nil {
 				return err
 			}
 			status = http.StatusOK
 			response = UploadResponse{
-				ID: outID, SHA256: ref.SHA256, Size: ref.Size,
-				MIME: sniffed, Title: existingTitle, Deduplicated: true,
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: existingTitle, Deduplicated: true,
 			}
 			return storeUploadResponse(
-				r.Context(), tx, principal.UserID, idempotency,
-				ref.SHA256, outID, status, response,
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
 			)
 		}
 		if !errors.Is(errAlive, sql.ErrNoRows) {
@@ -202,7 +134,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			 WHERE owner_id = ? AND original_blob = ?
 			   AND trashed_at IS NOT NULL AND trashed_at > ?
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			principal.UserID, ref.SHA256, time.Now().Add(-trash.Retention).Unix(),
+			principal.UserID, upload.SHA256, time.Now().Add(-trash.Retention).Unix(),
 		).Scan(&trashedID)
 		if errTrashed == nil {
 			now := time.Now().Unix()
@@ -214,18 +146,23 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			}
 			outID = trashedID
 			restored = true
-			if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, now); err != nil {
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, now); err != nil {
+				return err
+			}
+			var restoredTitle string
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT title FROM documents WHERE id = ?`, outID).Scan(&restoredTitle); err != nil {
 				return err
 			}
 			status = http.StatusOK
 			response = UploadResponse{
-				ID: outID, SHA256: ref.SHA256, Size: ref.Size,
-				MIME: sniffed, Title: title, Restored: true,
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: restoredTitle, Restored: true,
 			}
 			return storeUploadResponse(
-				r.Context(), tx, principal.UserID, idempotency,
-				ref.SHA256, outID, status, response,
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
 			)
 		}
 		if !errors.Is(errTrashed, sql.ErrNoRows) {
@@ -234,7 +171,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 
 		// Fresh insert.
 		now := time.Now().Unix()
-		dbValues := metadata.databaseValues(s.deviceOCRMinConfidence, now)
+		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
@@ -242,7 +179,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 				content, content_source, device_content_confidence,
 				device_ocr_language, device_content_received_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, principal.UserID, ref.SHA256, ref.Size, title, sniffed, inbox,
+		`, principal.UserID, upload.SHA256, upload.Size, upload.Title, upload.MIME, inbox,
 			now, now, now, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -254,8 +191,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		outID = id
-		if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-			sourceLabel, header.Filename, now); err != nil {
+		if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+			upload.SourceLabel, upload.Filename, now); err != nil {
 			return err
 		}
 
@@ -263,10 +200,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		// the doc row. There is no window where a doc exists but its
 		// work is lost — the whole point of the outbox pattern.
 		payload := postIngestPayload{
-			SHA256:   ref.SHA256,
-			Size:     ref.Size,
-			MIME:     sniffed,
-			Filename: header.Filename, // consumption trigger filter
+			SHA256:   upload.SHA256,
+			Size:     upload.Size,
+			MIME:     upload.MIME,
+			Filename: upload.Filename, // consumption trigger filter
 		}
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
@@ -277,12 +214,12 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		}
 		status = http.StatusCreated
 		response = UploadResponse{
-			ID: outID, SHA256: ref.SHA256, Size: ref.Size,
-			MIME: sniffed, Title: title,
+			ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+			MIME: upload.MIME, Title: upload.Title,
 		}
 		return storeUploadResponse(
-			r.Context(), tx, principal.UserID, idempotency,
-			ref.SHA256, outID, status, response,
+			r.Context(), tx, principal.UserID, upload.Idempotency,
+			upload.SHA256, outID, status, response,
 		)
 	})
 	if errors.Is(err, errIdempotencyConflict) {
@@ -291,7 +228,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.Log.Error("api.upload.db", "err", err.Error(), "sha", ref.SHA256)
+		s.Log.Error("api.upload.db", "err", err.Error(), "sha", upload.SHA256)
 		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to write document row")
 		return
 	}
@@ -320,7 +257,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		audit.Log(ctx, s.DB, s.Log, audit.Event{
 			Actor: principal, Action: "document.ingest.deduplicated",
 			ObjectKind: "document", ObjectID: outID,
-			After:     map[string]any{"sha256": ref.SHA256},
+			After:     map[string]any{"sha256": upload.SHA256},
 			RequestID: logx.RequestID(ctx),
 		})
 	} else {
@@ -329,7 +266,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
 			ObjectKind: "document", ObjectID: outID,
 			After: map[string]any{
-				"sha256": ref.SHA256, "size": ref.Size, "title": title, "mime": sniffed,
+				"sha256": upload.SHA256, "size": upload.Size, "title": response.Title, "mime": upload.MIME,
 			},
 			RequestID: logx.RequestID(ctx),
 		})
@@ -951,56 +888,4 @@ func deriveTitle(filename string) string {
 		return "Untitled"
 	}
 	return base
-}
-
-// sniffMIME reads the first 512 bytes from CAS(sha) and runs
-// net/http.DetectContentType on them. Returns "application/octet-stream"
-// on any error — the caller decides whether that's a soft-fail or a
-// harder one.
-//
-// Refinement step: if the stdlib sniffer returns "application/zip",
-// peek inside the archive to distinguish office documents (docx/xlsx/
-// pptx/odt/ods/odp), EPUB, and other zip-based formats. Without this
-// refinement, docx uploads land as application/zip and skip the
-// anydoc extractor.
-func (s *Server) sniffMIME(sha string) (string, error) {
-	rc, err := s.CAS.Get(sha)
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-	var head [512]byte
-	n, err := io.ReadFull(rc, head[:])
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return "", err
-	}
-	mime := http.DetectContentType(head[:n])
-	if mime != "application/zip" {
-		return mime, nil
-	}
-	// Zip refine: re-open, size the blob, hand to refineZipMIME. Any
-	// failure (unreadable zip, format not one we recognize) falls back
-	// to application/zip — safe non-regression.
-	stat, err := s.CAS.Stat(sha)
-	if err != nil {
-		return mime, nil
-	}
-	rc2, err := s.CAS.Get(sha)
-	if err != nil {
-		return mime, nil
-	}
-	defer rc2.Close()
-	// Today's filesystem CAS returns *os.File which is an io.ReaderAt;
-	// future backends (S3, blob-crypt) might not. Fall through if the
-	// assertion fails — no zip refine possible without random access,
-	// keeps application/zip.
-	ra, ok := rc2.(io.ReaderAt)
-	if !ok {
-		return mime, nil
-	}
-	refined, err := refineZipMIME(ra, stat.Size)
-	if err != nil || refined == "" {
-		return mime, nil
-	}
-	return refined, nil
 }

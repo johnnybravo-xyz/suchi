@@ -3,8 +3,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -223,7 +225,8 @@ func TestDocumentDetailExposesDeviceOCRProvenance(t *testing.T) {
 func TestUploadMetadataRejectsInvalidRequests(t *testing.T) {
 	t.Run("device text on non-PDF", func(t *testing.T) {
 		s, d, principal := newUploadMetadataServer(t)
-		req := multipartUploadRequest(t, "/api/documents/", "note.txt", []byte("plain text"), map[string][]string{
+		content := []byte("plain text")
+		req := multipartUploadRequest(t, "/api/documents/", "note.txt", content, map[string][]string{
 			"content":            {"private recognized text"},
 			"content_source":     {"device_ocr"},
 			"content_confidence": {"0.8"},
@@ -232,6 +235,9 @@ func TestUploadMetadataRejectsInvalidRequests(t *testing.T) {
 		s.UploadDocument(rec, req)
 		assertUploadError(t, rec, "bad_device_content")
 		assertDocumentCount(t, d, 0)
+		if _, err := s.CAS.Stat(fmt.Sprintf("%x", sha256.Sum256(content))); err == nil {
+			t.Fatal("rejected metadata left an unreferenced blob in CAS")
+		}
 	})
 
 	t.Run("duplicate source mtime", func(t *testing.T) {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -65,5 +66,31 @@ func TestUploadNewVersionCopiesDocumentACLs(t *testing.T) {
 	}
 	if bits != int(authz.PermView|authz.PermChange) {
 		t.Fatalf("copied permission bits=%d", bits)
+	}
+}
+
+func TestUploadNewVersionCarriesFilenameIntoPostIngest(t *testing.T) {
+	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	req := multipartUploadRequest(t,
+		"/api/documents/1/versions/", "statement.pdf", testPDFBytes(), nil, principal)
+	req.SetPathValue("id", strconv.FormatInt(previousID, 10))
+	rec := httptest.NewRecorder()
+
+	s.UploadNewVersion(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var raw string
+	if err := d.Read.QueryRow(`
+		SELECT payload FROM jobs WHERE kind = 'post-ingest' ORDER BY id DESC LIMIT 1
+	`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var payload postIngestPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Filename != "statement.pdf" {
+		t.Fatalf("post-ingest filename=%q, want statement.pdf", payload.Filename)
 	}
 }

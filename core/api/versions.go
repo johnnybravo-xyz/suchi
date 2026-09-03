@@ -14,7 +14,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
-	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 )
 
@@ -97,52 +96,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
 	}
-	idempotencyKey, requestErr := parseIdempotencyKey(r)
-	if requestErr != nil {
-		s.writeError(w, http.StatusBadRequest, requestErr.code, requestErr.message)
+	upload := s.prepareUpload(w, r, uploadOperationVersion, prevID)
+	if upload == nil {
 		return
 	}
-
-	file, header, err := r.FormFile("document")
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "missing_file",
-			`multipart part "document" is required`)
-		return
-	}
-	defer file.Close()
-	metadata, metadataErr := parseUploadMetadata(r)
-	if metadataErr != nil {
-		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
-		return
-	}
-	sourceKind := ingest.SourceUpload
-	sourceLabel := p.Display
-	if sourceLabel == "" {
-		sourceLabel = p.Email
-	}
-	if p.Kind == "token" {
-		sourceKind = ingest.SourceAPI
-		if sourceLabel == "" {
-			sourceLabel = "API token"
-		}
-	}
-
-	ref, err := s.CAS.Put(file)
-	if err != nil {
-		s.Log.Error("api.version.cas_put", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "cas_put_failed", "failed to store blob")
-		return
-	}
-	sniffed, err := s.sniffMIME(ref.SHA256)
-	if err != nil || sniffed == "" {
-		sniffed = "application/octet-stream"
-	}
-	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
-	if metadataErr := rejectDeviceContentForMIME(metadata, sniffed); metadataErr != nil {
-		s.writeError(w, http.StatusBadRequest, metadataErr.code, metadataErr.message)
-		return
-	}
-	title := deriveTitle(header.Filename)
+	title := upload.Title
 	if title == "Untitled" && prevTitle != "" {
 		// Carry the predecessor title forward when the uploader didn't
 		// provide a distinguishing filename — often the case for
@@ -150,14 +108,6 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		title = prevTitle
 	}
 	catID := prevJDCatID
-	idempotency := uploadIdempotencyRequest{
-		Key: idempotencyKey, Operation: uploadOperationVersion, Predecessor: prevID,
-	}
-	if idempotency.Key != "" {
-		idempotency.Fingerprint = buildUploadFingerprint(
-			idempotency.Operation, prevID, ref.SHA256, header.Filename, metadata,
-		)
-	}
 
 	var (
 		newID           int64
@@ -167,7 +117,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		stored, found, err := loadStoredUploadResponse(
-			r.Context(), tx, p.UserID, idempotency,
+			r.Context(), tx, p.UserID, upload.Idempotency,
 		)
 		if err != nil {
 			return err
@@ -182,7 +132,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			SELECT id FROM documents
 			WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
 			ORDER BY id LIMIT 1
-		`, prevOwner, ref.SHA256).Scan(&duplicateLiveID)
+		`, prevOwner, upload.SHA256).Scan(&duplicateLiveID)
 		if err == nil {
 			return errDuplicateVersionBlob
 		}
@@ -191,7 +141,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		}
 
 		now := time.Now().Unix()
-		dbValues := metadata.databaseValues(s.deviceOCRMinConfidence, now)
+		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
@@ -200,7 +150,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 				device_content_confidence, device_ocr_language,
 				device_content_received_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, prevOwner, ref.SHA256, ref.Size, title, sniffed, catID,
+		`, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, catID,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -212,8 +162,8 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		newID = id
-		if err := ingest.RecordSource(r.Context(), tx, newID, sourceKind,
-			sourceLabel, header.Filename, now); err != nil {
+		if err := ingest.RecordSource(r.Context(), tx, newID, upload.SourceKind,
+			upload.SourceLabel, upload.Filename, now); err != nil {
 			return err
 		}
 
@@ -233,10 +183,9 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		payload, err := json.Marshal(map[string]any{
-			"sha256":    ref.SHA256,
-			"size":      ref.Size,
-			"mime_type": sniffed,
+		payload, err := json.Marshal(postIngestPayload{
+			SHA256: upload.SHA256, Size: upload.Size, MIME: upload.MIME,
+			Filename: upload.Filename,
 		})
 		if err != nil {
 			return err
@@ -245,12 +194,12 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		response = uploadVersionResponse{
-			ID: newID, PreviousVersionID: prevID, SHA256: ref.SHA256,
-			Size: ref.Size, MIME: sniffed, Title: title,
+			ID: newID, PreviousVersionID: prevID, SHA256: upload.SHA256,
+			Size: upload.Size, MIME: upload.MIME, Title: title,
 		}
 		return storeUploadResponse(
-			r.Context(), tx, p.UserID, idempotency,
-			ref.SHA256, newID, http.StatusCreated, response,
+			r.Context(), tx, p.UserID, upload.Idempotency,
+			upload.SHA256, newID, http.StatusCreated, response,
 		)
 	})
 	if errors.Is(err, errIdempotencyConflict) {
@@ -292,7 +241,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		ObjectKind: "document", ObjectID: newID,
 		After: map[string]any{
 			"previous_version_id": prevID,
-			"sha256":              ref.SHA256, "size": ref.Size, "title": title,
+			"sha256":              upload.SHA256, "size": upload.Size, "title": title,
 		},
 		RequestID: logx.RequestID(ctx),
 	})
