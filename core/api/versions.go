@@ -44,8 +44,14 @@ type uploadVersionResponse struct {
 type duplicateVersionBlobResponse struct {
 	Error      string `json:"error"`
 	Code       string `json:"code"`
-	ExistingID int64  `json:"existing_id"`
+	ExistingID int64  `json:"existing_id,omitempty"`
 }
+
+var (
+	errVersionPermissionChanged  = errors.New("version permission changed")
+	errVersionPredecessorChanged = errors.New("version predecessor changed")
+	errVersionTargetUnavailable  = errors.New("version replay target unavailable")
+)
 
 // UploadNewVersion — POST /api/documents/{id}/versions/. Multipart
 // upload same as UploadDocument, except the resulting row's
@@ -61,7 +67,7 @@ type duplicateVersionBlobResponse struct {
 //	                            (extends the chain from row 6)
 //
 // The write is one tx: CAS put + dedup + doc row + post-ingest job.
-// Auth: only the owner of {id} (or admin) can add a version.
+// Auth: callers with change permission on {id} can add a version.
 func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -77,17 +83,13 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, p, authz.KindDocument, prevID, authz.PermChange) {
 		return
 	}
-	// Load the predecessor's carry-forward metadata (title inherits;
-	// jd_category_id inherits; owner stays the predecessor's).
-	var (
-		prevOwner   int64
-		prevTitle   string
-		prevJDCatID int64
-	)
+	// Reject an already-trashed predecessor before consuming the upload body.
+	// Its metadata is deliberately loaded again under the write lock below.
+	var predecessorExists int
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT owner_id, title, jd_category_id
+		SELECT 1
 		FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, prevID).Scan(&prevOwner, &prevTitle, &prevJDCatID)
+	`, prevID).Scan(&predecessorExists)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "predecessor document not found")
 		return
@@ -100,23 +102,69 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if upload == nil {
 		return
 	}
-	title := upload.Title
-	if title == "Untitled" && prevTitle != "" {
-		// Carry the predecessor title forward when the uploader didn't
-		// provide a distinguishing filename — often the case for
-		// resubmitted uploads via mobile clients.
-		title = prevTitle
-	}
-	catID := prevJDCatID
-
 	var (
 		newID           int64
 		duplicateLiveID int64
+		prevOwner       int64
+		prevTitle       string
+		prevJDCatID     int64
+		title           string
 		response        uploadVersionResponse
 		replay          *storedUploadResponse
 		recoveredReplay bool
 	)
+	authorizeReplayTarget := func(tx *sql.Tx, id int64) error {
+		var one int
+		err := tx.QueryRowContext(r.Context(), `
+			SELECT 1 FROM documents WHERE id = ? AND trashed_at IS NULL
+		`, id).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errVersionTargetUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		allowed, err := s.authorized(
+			r.Context(), p, authz.KindDocument, id, authz.PermView,
+		)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errVersionPermissionChanged
+		}
+		return nil
+	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		// The body and CAS copy may take time. Re-read both lifecycle state and
+		// authorization after acquiring the write lock so ACL revocation or
+		// trashing cannot race the version insert.
+		err := tx.QueryRowContext(r.Context(), `
+			SELECT owner_id, title, jd_category_id
+			FROM documents WHERE id = ? AND trashed_at IS NULL
+		`, prevID).Scan(&prevOwner, &prevTitle, &prevJDCatID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errVersionPredecessorChanged
+		}
+		if err != nil {
+			return err
+		}
+		allowed, err := s.authorized(
+			r.Context(), p, authz.KindDocument, prevID, authz.PermChange,
+		)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errVersionPermissionChanged
+		}
+		title = upload.Title
+		if title == "Untitled" && prevTitle != "" {
+			// Carry the predecessor title forward when the uploader didn't
+			// provide a distinguishing filename.
+			title = prevTitle
+		}
+
 		stored, found, err := loadStoredUploadResponse(
 			r.Context(), tx, p.UserID, upload.Idempotency,
 		)
@@ -124,6 +172,9 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if found {
+			if err := authorizeReplayTarget(tx, stored.DocumentID); err != nil {
+				return err
+			}
 			replay = &stored
 			newID = stored.DocumentID
 			return nil
@@ -138,12 +189,15 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 				SELECT id, original_size, COALESCE(mime_type, ''), title
 				FROM documents
 				WHERE owner_id = ? AND previous_version_id = ?
-				  AND original_blob = ? AND trashed_at IS NULL
-				ORDER BY id LIMIT 1
+				  AND original_blob = ?
+				ORDER BY (trashed_at IS NULL) DESC, id LIMIT 1
 			`, prevOwner, prevID, upload.SHA256).Scan(
 				&newID, &response.Size, &response.MIME, &response.Title,
 			)
 			if err == nil {
+				if err := authorizeReplayTarget(tx, newID); err != nil {
+					return err
+				}
 				response.ID = newID
 				response.PreviousVersionID = prevID
 				response.SHA256 = upload.SHA256
@@ -165,6 +219,15 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			ORDER BY id LIMIT 1
 		`, prevOwner, upload.SHA256).Scan(&duplicateLiveID)
 		if err == nil {
+			visible, authErr := s.authorized(
+				r.Context(), p, authz.KindDocument, duplicateLiveID, authz.PermView,
+			)
+			if authErr != nil {
+				return authErr
+			}
+			if !visible {
+				duplicateLiveID = 0
+			}
 			return errDuplicateVersionBlob
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -181,7 +244,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 				device_content_confidence, device_ocr_language,
 				device_content_received_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, catID,
+		`, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -233,6 +296,20 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			upload.SHA256, newID, http.StatusCreated, response,
 		)
 	})
+	if errors.Is(err, errVersionPermissionChanged) {
+		s.writeError(w, http.StatusForbidden, "forbidden", "permission denied")
+		return
+	}
+	if errors.Is(err, errVersionPredecessorChanged) {
+		s.writeError(w, http.StatusConflict, "version_predecessor_changed",
+			"predecessor is no longer available for versioning")
+		return
+	}
+	if errors.Is(err, errVersionTargetUnavailable) {
+		s.writeError(w, http.StatusConflict, "version_target_unavailable",
+			"the prior version upload result is no longer available")
+		return
+	}
 	if errors.Is(err, errIdempotencyConflict) {
 		s.writeError(w, http.StatusConflict, "idempotency_conflict",
 			"Idempotency-Key was already used for a different upload")

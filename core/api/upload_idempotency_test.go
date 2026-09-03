@@ -318,36 +318,110 @@ func TestUploadIdempotencyRetentionPrunesExpiredResponses(t *testing.T) {
 }
 
 func TestUploadNewVersionReplayRechecksACL(t *testing.T) {
-	s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
-	seedUser(t, d, 2)
-	if _, err := d.ExecWrite(context.Background(), `
-		INSERT INTO object_acls(
-			object_kind, object_id, principal_kind, principal_id,
-			perm_bits, created_at, created_by
-		) VALUES ('document', ?, 'user', 2, ?, 1, 1)
-	`, previousID, int(authz.PermView|authz.PermChange)); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name         string
+		revokeTarget bool
+		recover      bool
+	}{
+		{name: "predecessor revoked"},
+		{name: "stored target revoked", revokeTarget: true},
+		{name: "recovered target revoked", revokeTarget: true, recover: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
+			principal := grantVersionEditor(t, d, previousID)
+			first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
+			if first.Code != http.StatusCreated {
+				t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+			}
+			var created uploadVersionResponse
+			if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			if tc.recover {
+				if _, err := d.ExecWrite(context.Background(), `
+					UPDATE upload_idempotency SET created_at = ?
+				`, time.Now().Add(-uploadIdempotencyRetention-time.Second).Unix()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			revokedID := previousID
+			if tc.revokeTarget {
+				revokedID = created.ID
+			}
+			if _, err := d.ExecWrite(context.Background(), `
+				DELETE FROM object_acls
+				WHERE object_kind = 'document' AND object_id = ?
+				  AND principal_kind = 'user' AND principal_id = 2
+			`, revokedID); err != nil {
+				t.Fatal(err)
+			}
+			replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
+			if replay.Code != http.StatusForbidden ||
+				!strings.Contains(replay.Body.String(), `"code":"forbidden"`) {
+				t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(replay.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body) != 2 || replay.Header().Get("Location") != "" {
+				t.Fatalf("inaccessible target metadata leaked: headers=%v body=%v", replay.Header(), body)
+			}
+			assertUploadSideEffectCounts(t, d, 2, 1, 1, 1)
+		})
 	}
-	principal := &pluginapi.Principal{
-		Kind: "user", UserID: 2, Email: "editor@example.test", Role: "member",
-		Scopes: []string{"documents:write"},
+}
+
+func TestUploadNewVersionRechecksPredecessorInsideWriteTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mutation   string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "ACL revoked while reading body",
+			mutation:   `DELETE FROM object_acls WHERE object_kind = 'document' AND object_id = ? AND principal_kind = 'user' AND principal_id = 2`,
+			wantStatus: http.StatusForbidden,
+			wantCode:   "forbidden",
+		},
+		{
+			name:       "predecessor trashed while reading body",
+			mutation:   `UPDATE documents SET trashed_at = 10 WHERE id = ?`,
+			wantStatus: http.StatusConflict,
+			wantCode:   "version_predecessor_changed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
+			principal := grantVersionEditor(t, d, previousID)
+			req := versionUploadRequest(
+				t, principal, previousID, testIdempotencyKey,
+				"revision.pdf", testPDFBytes(), nil,
+			)
+			var mutationErr error
+			body := &mutateOnFirstRead{
+				ReadCloser: req.Body,
+				mutate: func() {
+					_, mutationErr = d.ExecWrite(context.Background(), tc.mutation, previousID)
+				},
+			}
+			req.Body = body
+			rec := httptest.NewRecorder()
+
+			s.UploadNewVersion(rec, req)
+
+			if mutationErr != nil {
+				t.Fatal(mutationErr)
+			}
+			if !body.mutated || rec.Code != tc.wantStatus ||
+				!strings.Contains(rec.Body.String(), `"code":"`+tc.wantCode+`"`) {
+				t.Fatalf("mutated=%v status=%d body=%s", body.mutated, rec.Code, rec.Body.String())
+			}
+			assertUploadSideEffectCounts(t, d, 1, 0, 0, 0)
+		})
 	}
-	first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
-	if first.Code != http.StatusCreated {
-		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
-	}
-	if _, err := d.ExecWrite(context.Background(), `
-		DELETE FROM object_acls
-		WHERE object_kind = 'document' AND object_id = ?
-		  AND principal_kind = 'user' AND principal_id = 2
-	`, previousID); err != nil {
-		t.Fatal(err)
-	}
-	replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
-	if replay.Code != http.StatusForbidden {
-		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
-	}
-	assertUploadSideEffectCounts(t, d, 2, 1, 1, 1)
 }
 
 func TestIdempotencyKeyConflictsAcrossUploadOperations(t *testing.T) {
@@ -368,11 +442,13 @@ func TestUploadNewVersionRejectsLiveDuplicateBlob(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		existingKind string
+		delegated    bool
 		wantCreated  bool
 	}{
 		{name: "predecessor", existingKind: "predecessor"},
 		{name: "same chain", existingKind: "child"},
 		{name: "unrelated document", existingKind: "unrelated"},
+		{name: "hidden unrelated document", existingKind: "unrelated", delegated: true},
 		{name: "trashed document", existingKind: "trashed", wantCreated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -409,6 +485,9 @@ func TestUploadNewVersionRejectsLiveDuplicateBlob(t *testing.T) {
 				Kind: "user", UserID: 1, Email: "owner@example.test", Role: "member",
 				Scopes: []string{"documents:write"},
 			}
+			if tc.delegated {
+				principal = grantVersionEditor(t, d, previousID)
+			}
 			rec := uploadVersionWithKey(t, s, principal, previousID, "", "revision.pdf", testPDFBytes(), nil)
 			if tc.wantCreated {
 				if rec.Code != http.StatusCreated {
@@ -423,7 +502,13 @@ func TestUploadNewVersionRejectsLiveDuplicateBlob(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if response.Code != "duplicate_version_blob" || response.ExistingID != existingID {
+			if response.Code != "duplicate_version_blob" {
+				t.Fatalf("response=%+v", response)
+			}
+			if tc.delegated && (response.ExistingID != 0 || strings.Contains(rec.Body.String(), `"existing_id"`)) {
+				t.Fatalf("inaccessible duplicate leaked: %s", rec.Body.String())
+			}
+			if !tc.delegated && response.ExistingID != existingID {
 				t.Fatalf("response=%+v, want existing id %d", response, existingID)
 			}
 		})
@@ -460,6 +545,22 @@ func uploadVersionWithKey(
 	fields map[string][]string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	req := versionUploadRequest(t, principal, previousID, key, filename, content, fields)
+	rec := httptest.NewRecorder()
+	s.UploadNewVersion(rec, req)
+	return rec
+}
+
+func versionUploadRequest(
+	t *testing.T,
+	principal *pluginapi.Principal,
+	previousID int64,
+	key string,
+	filename string,
+	content []byte,
+	fields map[string][]string,
+) *http.Request {
+	t.Helper()
 	previous := strconv.FormatInt(previousID, 10)
 	target := "/api/documents/" + previous + "/versions/"
 	req := multipartUploadRequest(t, target, filename, content, fields, principal)
@@ -467,9 +568,38 @@ func uploadVersionWithKey(
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
-	rec := httptest.NewRecorder()
-	s.UploadNewVersion(rec, req)
-	return rec
+	return req
+}
+
+type mutateOnFirstRead struct {
+	io.ReadCloser
+	mutate  func()
+	mutated bool
+}
+
+func (r *mutateOnFirstRead) Read(p []byte) (int, error) {
+	if !r.mutated {
+		r.mutated = true
+		r.mutate()
+	}
+	return r.ReadCloser.Read(p)
+}
+
+func grantVersionEditor(t *testing.T, d *db.DB, documentID int64) *pluginapi.Principal {
+	t.Helper()
+	seedUser(t, d, 2)
+	if _, err := d.ExecWrite(context.Background(), `
+		INSERT INTO object_acls(
+			object_kind, object_id, principal_kind, principal_id,
+			perm_bits, created_at, created_by
+		) VALUES ('document', ?, 'user', 2, ?, 1, 1)
+	`, documentID, int(authz.PermView|authz.PermChange)); err != nil {
+		t.Fatal(err)
+	}
+	return &pluginapi.Principal{
+		Kind: "user", UserID: 2, Email: "editor@example.test", Role: "member",
+		Scopes: []string{"documents:write"},
+	}
 }
 
 func newVersionUploadServer(t *testing.T, previousSHA string) (*Server, *db.DB, *blob.CAS, *pluginapi.Principal, int64) {

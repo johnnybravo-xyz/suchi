@@ -40,31 +40,48 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request,
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return false
 	}
+	ok, err := s.authorized(r.Context(), principal, kind, id, want)
+	if err != nil {
+		s.serverErr(w, "authz.can", err)
+		return false
+	}
+	if !ok {
+		s.writeError(w, http.StatusForbidden, "forbidden", "permission denied")
+	}
+	return ok
+}
+
+// authorized is the response-free form of authorize. Mutation handlers use it
+// after opening their write transaction so the permission decision and write
+// observe one stable database state.
+func (s *Server) authorized(ctx context.Context, principal *pluginapi.Principal,
+	kind authz.Kind, id int64, want authz.Perm) (bool, error) {
+
+	if principal == nil {
+		return false, nil
+	}
 	var groups []int64
 	if principal.Role != "admin" {
 		var err error
-		groups, err = s.principalGroups(r.Context(), principal.UserID)
+		groups, err = s.principalGroups(ctx, principal.UserID)
 		if err != nil {
-			s.serverErr(w, "authz.load_groups", err)
-			return false
+			return false, err
 		}
 	}
-	err := s.Authz.Can(r.Context(), authz.Principal{
+	err := s.Authz.Can(ctx, authz.Principal{
 		UserID: principal.UserID,
 		Role:   principal.Role,
 		Kind:   principal.Kind,
 		Groups: groups,
 	}, kind, id, want)
 	if err == nil {
-		return true
+		return true, nil
 	}
 	var denied *authz.ErrDenied
 	if errors.As(err, &denied) {
-		s.writeError(w, http.StatusForbidden, "forbidden", "permission denied")
-		return false
+		return false, nil
 	}
-	s.serverErr(w, "authz.can", err)
-	return false
+	return false, err
 }
 
 func (s *Server) principalGroups(ctx context.Context, userID int64) ([]int64, error) {
