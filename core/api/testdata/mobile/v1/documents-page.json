@@ -1,7 +1,5 @@
 {
   "count": 2,
-  "next": null,
-  "previous": null,
   "results": [
     {
       "id": 91,
@@ -12,7 +10,6 @@
       "jd_category_code": 31,
       "jd_category_name": "Utilities",
       "jd_area_name": "Home",
-      "sensitivity": "",
       "thumb_sha": "ab12",
       "created_at": 1746662400,
       "updated_at": 1746662400,
@@ -27,8 +24,7 @@
       "sensitivity": "restricted",
       "created_at": 1746576000,
       "updated_at": 1746662500,
-      "tags": [],
-      "correspondents": []
+      "tags": []
     }
   ]
 }

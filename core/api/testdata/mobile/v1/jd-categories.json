@@ -1,7 +1,5 @@
 {
   "count": 2,
-  "next": null,
-  "previous": null,
   "results": [
     {
       "id": 31,
@@ -9,8 +7,7 @@
       "name": "Utilities",
       "description": "Recurring household services",
       "area_code": 30,
-      "area_name": "Home",
-      "system": false
+      "area_name": "Home"
     },
     {
       "id": 49,
