@@ -273,12 +273,13 @@ Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
 
 Multi-account testing: dev-mode only touches the `dev@suchi.local` row.
 Every other users-table row (`alice@ex.com`, `bob@ex.com`) survives
-restarts untouched. Create additional users via
-`POST /api/admin/users/` with the dev admin's token; they persist
-across dev-mode restarts as normal. Second _admin_ rows will block the
-next `SUCHI_DEV=1` boot — the right behaviour; drop the extra admin before
-restarting dev mode. A normal boot also refuses this data directory until the
-public `dev@suchi.local` account is disabled.
+restarts untouched. Create additional users in Settings, or call
+`POST /api/admin/users/` with the dev admin's authenticated session cookie;
+admin routes do not accept API tokens. These users persist across dev-mode
+restarts as normal. Second _admin_ rows will block the next `SUCHI_DEV=1` boot
+— the right behaviour; drop the extra admin before restarting dev mode. A
+normal boot also refuses this data directory until the public
+`dev@suchi.local` account is disabled.
 
 <Warning>
   Dev-mode is a DX shortcut, not a production feature. The refusals above are

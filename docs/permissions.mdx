@@ -117,11 +117,12 @@ PUT    /api/acls/{kind}/{id}
 DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
 ```
 
-Administrators can grant user 5 view and change access to document 17 with:
+ACL routes require an authenticated browser or OIDC session. An administrator
+can grant user 5 view and change access to document 17 with:
 
 ```sh
 curl -X PUT http://localhost:8000/api/acls/document/17 \
-  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Cookie: suchi_session=$SUCHI_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"principal_kind":"user","principal_id":5,"perm_bits":3}'
 ```

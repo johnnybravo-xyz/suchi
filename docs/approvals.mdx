@@ -76,11 +76,12 @@ human-approved write retry-safe when the durable job is redelivered.
 | `POST` | `/api/approvals/tasks/{id}/resolve` | Submit a declared choice |
 | `POST` | `/api/approvals/runs/{id}/cancel` | Cancel a running run |
 
-Register the example under `invoice-approval`:
+Register the example under `invoice-approval` from an administrator's browser
+or OIDC session:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/api/approvals/definitions \
-  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Cookie: suchi_session=$SUCHI_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"slug":"invoice-approval","spec":<definition-json>}'
 ```
@@ -94,6 +95,8 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"doc_id":17}'
 ```
+
+`$TOKEN` needs `documents:write` and change access to document 17.
 
 The assignee resolves the resulting task from the Approvals screen or API. A
 resolution enqueues the next advancement; the HTTP request does not run the
