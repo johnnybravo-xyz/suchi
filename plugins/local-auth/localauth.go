@@ -211,6 +211,26 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	return nil
 }
 
+// RefuseEnabledDevAdmin prevents a data directory armed with the public
+// development credential from being reused by a normal server. Operators can
+// deliberately quarantine the account by disabling it before a non-dev boot;
+// disabled users also cannot authenticate with their previously issued tokens.
+func (p *Plugin) RefuseEnabledDevAdmin(ctx context.Context) error {
+	var disabled bool
+	err := p.db.Read.QueryRowContext(ctx,
+		`SELECT disabled FROM users WHERE email = ?`, DevAdminEmail).Scan(&disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("localauth: inspect development admin: %w", err)
+	}
+	if !disabled {
+		return fmt.Errorf("localauth: enabled public development admin %q remains in this data directory", DevAdminEmail)
+	}
+	return nil
+}
+
 // Name implements pluginapi.Authenticator.
 func (p *Plugin) Name() string { return Name }
 

@@ -299,6 +299,11 @@ func runServe() int {
 				"source": "SUCHI_DEV",
 			},
 		})
+	} else if err := la.RefuseEnabledDevAdmin(ctx); err != nil {
+		log.Error("main.dev_admin.refused",
+			"reason", err.Error(),
+			"remediation", "disable dev@suchi.local or use a different DATA_DIR before starting without SUCHI_DEV=1")
+		return 1
 	}
 
 	// OIDC must inspect bearer tokens before local cookie/token auth.

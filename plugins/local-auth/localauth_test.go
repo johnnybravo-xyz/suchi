@@ -266,6 +266,25 @@ func TestEnsureDevAdmin_IdempotentPasswordReset(t *testing.T) {
 	}
 }
 
+func TestRefuseEnabledDevAdminAfterDevDataReuse(t *testing.T) {
+	ctx := context.Background()
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(ctx, DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.RefuseEnabledDevAdmin(ctx); err == nil || !strings.Contains(err.Error(), "enabled public development admin") {
+		t.Fatalf("normal boot guard error = %v, want enabled development admin refusal", err)
+	}
+	if _, err := p.db.ExecWrite(ctx,
+		`UPDATE users SET disabled = 1 WHERE email = ?`, DevAdminEmail); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RefuseEnabledDevAdmin(ctx); err != nil {
+		t.Fatalf("disabled development admin blocked normal boot: %v", err)
+	}
+}
+
 func TestTokenHandlerIssuesGranularTokenWithoutSession(t *testing.T) {
 	p := openTestPlugin(t)
 	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
