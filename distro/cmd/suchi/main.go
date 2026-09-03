@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
@@ -331,6 +332,11 @@ func runServe() int {
 	if err := renderer.Reconcile(ctx); err != nil {
 		log.Warn("main.view.reconcile", "err", err.Error())
 	}
+	trashService, err := trash.New(d, cas, cfg.DataDir+"/rendered", log)
+	if err != nil {
+		log.Error("main.trash.new", "err", err.Error())
+		return 1
+	}
 
 	// Losing this key makes stored document and mailbox passwords unusable.
 	decryptKey, err := suchicrypto.LoadOrCreateKey(cfg.DecryptKeyPath)
@@ -469,6 +475,7 @@ func runServe() int {
 	}
 	go disp.Run(ctx)
 	defer disp.Stop()
+	go trashService.Run(ctx)
 
 	backupScheduler := backup.NewScheduler(backup.Config{
 		DataDir:            cfg.DataDir,
@@ -535,7 +542,7 @@ func runServe() int {
 		return 1
 	}
 
-	apiSrv, err := api.New(d, cas, log)
+	apiSrv, err := api.New(d, cas, trashService, log)
 	if err != nil {
 		log.Error("main.api.new", "err", err.Error())
 		return 1

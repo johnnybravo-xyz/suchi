@@ -1,7 +1,7 @@
 <script>
   import Icon from './Icon.svelte'
 
-  let { title, message, confirmLabel = 'Confirm', busy = false, onConfirm, onCancel } = $props()
+  let { title, message, confirmLabel = 'Confirm', busyLabel = 'Moving…', busy = false, onConfirm, onCancel } = $props()
   let cancelButton
 
   function cancel() {
@@ -29,7 +29,7 @@
     <p class="sub" style="margin:0;color:var(--muted)">{message}</p>
     <div class="toolbar" style="margin:16px 0 0">
       <button class="btn sm danger" disabled={busy} onclick={() => onConfirm?.()}>
-        {busy ? 'Moving…' : confirmLabel}
+        {busy ? busyLabel : confirmLabel}
       </button>
       <button class="btn sm" disabled={busy} onclick={cancel} bind:this={cancelButton}>Cancel</button>
     </div>

@@ -1,13 +1,7 @@
-// Saved views + trash listing.
-//
 // Saved views: named query + display config. Each user owns their own set and
-// may expose individual views to other users. Client hits POST /api/saved_views/ with
-// {name, filter_json, display, position} and later reads them via
+// may expose individual views to other users. Client hits POST /api/saved_views/
+// with {name, filter_json, display, position} and later reads them via
 // GET /api/saved_views/. UNIQUE(owner_id, name) prevents duplicates.
-//
-// Trash listing: GET /api/trash/ returns the soft-deleted docs the
-// caller owns (or all of them for admin). Existing POST /api/documents/
-// {id}/restore already handles un-trashing.
 
 package api
 
@@ -356,75 +350,6 @@ func (s *Server) DeleteSavedView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---------- Trash listing ----------
-
-// TrashRow is a compact projection of a soft-deleted document — just
-// the bits a "trash" UI needs to render a list + let the user restore
-// or hard-delete individual rows.
-type TrashRow struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	MIME      string `json:"mime_type,omitempty"`
-	Size      int64  `json:"original_size"`
-	CreatedAt int64  `json:"created_at"`
-	TrashedAt int64  `json:"trashed_at"`
-}
-
-// ListTrash — GET /api/trash/. Owner-scoped for members; admins see
-// everyone's trashed docs.
-func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if p == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
-		return
-	}
-	where := "trashed_at IS NOT NULL"
-	args := []any{}
-	if p.Role != "admin" {
-		where += " AND owner_id = ?"
-		args = append(args, p.UserID)
-	}
-
-	var total int
-	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM documents WHERE "+where, args...).Scan(&total); err != nil {
-		s.serverErr(w, "trash.count", err)
-		return
-	}
-	pp := ParsePageParams(r, 50, 200)
-	q := `SELECT id, title, COALESCE(mime_type, ''), original_size,
-	              created_at, COALESCE(trashed_at, 0)
-	      FROM documents
-	      WHERE ` + where + `
-	      ORDER BY trashed_at DESC, id DESC
-	      LIMIT ? OFFSET ?`
-	args = append(args, pp.PageSize, pp.Offset())
-	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
-	if err != nil {
-		s.serverErr(w, "trash.list", err)
-		return
-	}
-	defer rows.Close()
-	var out []TrashRow
-	for rows.Next() {
-		var v TrashRow
-		if err := rows.Scan(&v.ID, &v.Title, &v.MIME, &v.Size,
-			&v.CreatedAt, &v.TrashedAt); err != nil {
-			s.serverErr(w, "trash.scan", err)
-			return
-		}
-		out = append(out, v)
-	}
-	if err := rows.Err(); err != nil {
-		s.serverErr(w, "trash.iterate", err)
-		return
-	}
-	if out == nil {
-		out = []TrashRow{}
-	}
-	s.writeJSON(w, http.StatusOK, BuildEnvelope(r, total, pp, out))
 }
 
 const savedViewFilterMaxBytes = 2048

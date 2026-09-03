@@ -1,37 +1,84 @@
 <script>
-  import { listTrash, restoreDocument } from '../lib/api.js'
+  import { emptyTrash, listTrash, permanentlyDeleteDocument, restoreDocument } from '../lib/api.js'
   import { fmtDate, fmtBytes } from '../lib/format.js'
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import Icon from '../lib/Icon.svelte'
 
   let { notify } = $props()
   let rows = $state([])
+  let total = $state(0)
   let loading = $state(true)
   let err = $state('')
+  let deleteRequest = $state(null)
+  let deleteBusy = $state(false)
 
   async function load() {
-    loading = true; err = ''
+    loading = true
+    err = ''
     try {
-      const r = await listTrash()
-      rows = r?.results || r || []
-    } catch (ex) { err = ex.message || 'Could not load the trash.' }
-    finally { loading = false }
+      const response = await listTrash()
+      rows = response?.results || response || []
+      total = response?.count ?? rows.length
+    } catch (ex) {
+      err = ex.message || 'Could not load the trash.'
+    } finally {
+      loading = false
+    }
   }
 
   async function restore(d) {
     try {
       await restoreDocument(d.id)
       rows = rows.filter(x => x.id !== d.id)
+      total = Math.max(0, total - 1)
       notify?.('Restored')
-    } catch (ex) { notify?.(ex.message || 'Could not restore') }
+    } catch (ex) {
+      notify?.(ex.message || 'Could not restore')
+    }
+  }
+
+  async function confirmDelete() {
+    const request = deleteRequest
+    if (!request) return
+    deleteBusy = true
+    try {
+      if (request.kind === 'document') {
+        await permanentlyDeleteDocument(request.document.id)
+        rows = rows.filter(x => x.id !== request.document.id)
+        total = Math.max(0, total - 1)
+        notify?.('Permanently deleted')
+      } else {
+        const response = await emptyTrash()
+        const purged = response?.purged ?? total
+        rows = []
+        total = Math.max(0, total - purged)
+        if (total > 0) await load()
+        notify?.(`Permanently deleted ${purged} document${purged === 1 ? '' : 's'}`)
+      }
+      deleteRequest = null
+    } catch (ex) {
+      notify?.(ex.message || 'Could not permanently delete')
+    } finally {
+      deleteBusy = false
+    }
   }
 
   load()
 </script>
 
 <div class="content-narrow">
-  <p class="sub" style="color:var(--muted);margin:0 0 12px;font-size:.86rem">
-    Trashed documents wait here until the retention window purges them. Restore puts one back exactly where it was filed.
-  </p>
+  <div class="toolbar" style="align-items:flex-start;margin:0 0 12px">
+    <p class="sub grow" style="color:var(--muted);margin:0;font-size:.86rem">
+      Documents are permanently deleted 30 days after being moved to Trash. Restore puts one back where it was filed.
+    </p>
+    <button class="btn sm danger"
+            disabled={loading || total === 0}
+            title={total === 0 ? 'Trash is empty' : `Permanently delete all ${total} documents in Trash`}
+            onclick={() => (deleteRequest = { kind: 'all' })}>
+      <Icon name="trash" size={13} /> Empty trash
+      {#if total > 0}<span class="pill">{total}</span>{/if}
+    </button>
+  </div>
   {#if err}<div class="err">{err}</div>{/if}
   {#if loading}
     <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
@@ -44,11 +91,34 @@
           <span class="dot"></span>
           <span class="grow">
             <span class="title" style="display:block">{d.title || `Document #${d.id}`}</span>
-            <span class="sub">{d.mime_type || ''} {d.original_size ? '· ' + fmtBytes(d.original_size) : ''} · trashed {fmtDate(d.trashed_at)}</span>
+            <span class="sub">
+              {d.mime_type || ''} {d.original_size ? '· ' + fmtBytes(d.original_size) : ''}
+              · trashed {fmtDate(d.trashed_at)} · Deletes permanently {fmtDate(d.deletes_at)}
+            </span>
           </span>
-          <button class="btn sm" onclick={() => restore(d)}><Icon name="left" size={13} /> Restore</button>
+          <span class="toolbar" style="margin:0">
+            {#if d.deletes_at > Math.floor(Date.now() / 1000)}
+              <button class="btn sm" onclick={() => restore(d)}><Icon name="left" size={13} /> Restore</button>
+            {/if}
+            <button class="btn sm danger" onclick={() => (deleteRequest = { kind: 'document', document: d })}>
+              <Icon name="trash" size={13} /> Delete permanently
+            </button>
+          </span>
         </div>
       {/each}
     </div>
   {/if}
 </div>
+
+{#if deleteRequest}
+  <ConfirmDialog
+    title={deleteRequest.kind === 'document' ? 'Delete permanently?' : 'Empty Trash?'}
+    message={deleteRequest.kind === 'document'
+      ? `“${deleteRequest.document.title || `Document #${deleteRequest.document.id}`}” will be permanently deleted, and any share link containing it will be revoked. This cannot be undone.`
+      : `All ${total} document${total === 1 ? '' : 's'} you can see in Trash will be permanently deleted. This cannot be undone.`}
+    confirmLabel={deleteRequest.kind === 'document' ? 'Delete permanently' : 'Empty trash'}
+    busyLabel="Deleting…"
+    busy={deleteBusy}
+    onConfirm={confirmDelete}
+    onCancel={() => (deleteRequest = null)} />
+{/if}

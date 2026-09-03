@@ -23,6 +23,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 // UploadResponse is what POST /api/documents/ returns on success.
@@ -146,9 +147,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		var trashedID int64
 		errTrashed := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM documents
-			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NOT NULL
+			 WHERE owner_id = ? AND original_blob = ?
+			   AND trashed_at IS NOT NULL AND trashed_at > ?
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			principal.UserID, ref.SHA256,
+			principal.UserID, ref.SHA256, time.Now().Add(-trash.Retention).Unix(),
 		).Scan(&trashedID)
 		if errTrashed == nil {
 			if _, err := tx.ExecContext(r.Context(),
@@ -273,10 +275,9 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SoftDeleteDocument sets trashed_at on the given document. The blob
-// stays in the CAS — `suchi gc` reclaims it later. Undelete happens
-// either on hash-collision re-upload (UploadDocument) or via the
-// Restore endpoint.
+// SoftDeleteDocument starts the fixed 30-day recovery window. Automatic
+// retention cleanup or an explicit Trash action permanently deletes the row
+// and reclaims blobs that no other database row references.
 func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -320,8 +321,8 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RestoreDocument clears trashed_at. Idempotent — restoring an
-// already-live doc returns 200 with a no-op.
+// RestoreDocument clears trashed_at during the 30-day recovery window.
+// Restoring an already-live document remains an idempotent no-op.
 func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -335,12 +336,14 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermChange) {
 		return
 	}
+	now := time.Now()
+	cutoff := now.Add(-trash.Retention).Unix()
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(),
 			`UPDATE documents SET trashed_at = NULL, updated_at = ?
-			 WHERE id = ? AND trashed_at IS NOT NULL`,
-			time.Now().Unix(), id)
+			 WHERE id = ? AND trashed_at IS NOT NULL AND trashed_at > ?`,
+			now.Unix(), id, cutoff)
 		if err != nil {
 			return err
 		}
@@ -351,6 +354,19 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 		s.Log.Error("api.restore.db", "err", err.Error(), "doc_id", id)
 		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to restore")
 		return
+	}
+	if affected == 0 {
+		var trashedAt sql.NullInt64
+		err := s.DB.Read.QueryRowContext(r.Context(),
+			`SELECT trashed_at FROM documents WHERE id = ?`, id).Scan(&trashedAt)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && trashedAt.Valid && trashedAt.Int64 <= cutoff) {
+			s.writeError(w, http.StatusNotFound, "not_found", "no such recoverable document")
+			return
+		}
+		if err != nil {
+			s.serverErr(w, "restore.state", err)
+			return
+		}
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 		Actor: principal, Action: "document.restore",

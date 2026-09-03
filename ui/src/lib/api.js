@@ -159,6 +159,8 @@ export const deleteShareLink = (id) => api.del(`/api/share_links/${id}`)
 export const stats = () => api.get('/api/stats/')
 
 export const listTrash = () => api.get('/api/trash/')
+export const permanentlyDeleteDocument = (id) => api.del(`/api/trash/${id}`)
+export const emptyTrash = () => api.del('/api/trash/')
 
 export const bulkEdit = (documents, method, parameters) =>
   api.post('/api/documents/bulk_edit', { documents, method, parameters })

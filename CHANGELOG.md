@@ -19,6 +19,9 @@ Notable user-visible changes to Suchi are recorded here.
 - A first-visit public-demo guide for rich queries and the Archive research
   workflow, plus a persistent help launcher. Public model access remains
   denied; the tour uses an anonymized Northstar document cluster.
+- A fixed 30-day Trash recovery window with automatic expiry, confirmed
+  permanent deletion and Empty Trash actions, share-link revocation, minimal
+  purge auditing, and reference-safe blob cleanup.
 
 ### Changed
 

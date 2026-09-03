@@ -22,6 +22,7 @@ function unexpectedFields(payload, allowed) {
 async function mockAPI(page, options = {}) {
   let taxonomyApplied = false
   let researchContextMode = options.researchContextMode || 'balanced'
+  let trashDocuments = [...(options.trashDocuments || [])]
   await page.route('**/preview/**', async route => {
     await route.fulfill({
       contentType: 'text/html',
@@ -36,6 +37,7 @@ async function mockAPI(page, options = {}) {
     const documentVersions = path.match(/^\/api\/documents\/(\d+)\/versions\/$/)
     const similarDocuments = path.match(/^\/api\/documents\/(\d+)\/similar$/)
     const documentAccess = path.match(/^\/api\/acls\/document\/(\d+)$/)
+    const trashDocument = path.match(/^\/api\/trash\/(\d+)$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -270,6 +272,21 @@ async function mockAPI(page, options = {}) {
       return
     }
     else if (path === '/api/saved_views/') body = { results: options.savedViews || [] }
+    else if (path === '/api/trash/' && request.method() === 'DELETE') {
+      options.emptyTrashRequests?.push({ count: trashDocuments.length })
+      body = { purged: trashDocuments.length }
+      trashDocuments = []
+    }
+    else if (path === '/api/trash/') {
+      body = { count: trashDocuments.length, results: trashDocuments }
+    }
+    else if (trashDocument && request.method() === 'DELETE') {
+      const documentID = Number(trashDocument[1])
+      options.permanentDeleteRequests?.push(documentID)
+      trashDocuments = trashDocuments.filter(document => document.id !== documentID)
+      await route.fulfill({ status: 204 })
+      return
+    }
     else if (path === '/api/email-accounts') body = {
       accounts: [
         {
@@ -2090,4 +2107,69 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   await expect.poll(() => intelligenceQueries.filter(query => query.document_ids === '29,30').length).toBe(1)
   await page.evaluate(() => { location.hash = '#/calendar?document_ids=31' })
   await expect.poll(() => intelligenceQueries.filter(query => query.document_ids === '31').length).toBe(1)
+})
+
+test('confirms permanent Trash deletion before removing rows', async ({ page }) => {
+  const permanentDeleteRequests = []
+  const emptyTrashRequests = []
+  const trashedAt = Math.floor(Date.now() / 1000) - (2 * 24 * 60 * 60)
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    permanentDeleteRequests,
+    emptyTrashRequests,
+    trashDocuments: [{
+      id: 31,
+      title: 'Old electricity bill',
+      mime_type: 'application/pdf',
+      original_size: 2048,
+      created_at: trashedAt - 100,
+      trashed_at: trashedAt,
+      deletes_at: trashedAt + (30 * 24 * 60 * 60),
+    }, {
+      id: 32,
+      title: 'Old insurance notice',
+      mime_type: 'application/pdf',
+      original_size: 4096,
+      created_at: trashedAt - 200,
+      trashed_at: trashedAt,
+      deletes_at: trashedAt + (30 * 24 * 60 * 60),
+    }, {
+      id: 33,
+      title: 'Expired tax notice',
+      mime_type: 'application/pdf',
+      original_size: 1024,
+      created_at: trashedAt - (31 * 24 * 60 * 60),
+      trashed_at: trashedAt - (31 * 24 * 60 * 60),
+      deletes_at: trashedAt - (24 * 60 * 60),
+    }],
+  })
+  await page.goto('/#/trash')
+
+  await expect(page.getByText('Documents are permanently deleted 30 days after being moved to Trash. Restore puts one back where it was filed.')).toBeVisible()
+  await expect(page.getByText(/Deletes permanently/).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /Empty trash/ })).toBeEnabled()
+  const expiredRow = page.locator('.irow').filter({ hasText: 'Expired tax notice' })
+  await expect(expiredRow.getByRole('button', { name: 'Restore' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Delete permanently' }).first().click()
+  let dialog = page.getByRole('alertdialog', { name: 'Delete permanently?' })
+  await expect(dialog).toContainText('any share link containing it will be revoked')
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByText('Old electricity bill', { exact: true })).toBeVisible()
+  expect(permanentDeleteRequests).toEqual([])
+
+  await page.getByRole('button', { name: 'Delete permanently' }).first().click()
+  dialog = page.getByRole('alertdialog', { name: 'Delete permanently?' })
+  await dialog.getByRole('button', { name: 'Delete permanently' }).click()
+  await expect(page.getByText('Old electricity bill', { exact: true })).toHaveCount(0)
+  expect(permanentDeleteRequests).toEqual([31])
+
+  await page.getByRole('button', { name: 'Empty trash' }).click()
+  dialog = page.getByRole('alertdialog', { name: 'Empty Trash?' })
+  await expect(dialog).toContainText('All 2 documents you can see in Trash')
+  await dialog.getByRole('button', { name: 'Empty trash' }).click()
+  await expect(page.getByText('Trash is empty.')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Empty trash/ })).toBeDisabled()
+  expect(emptyTrashRequests).toEqual([{ count: 2 }])
 })

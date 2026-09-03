@@ -19,7 +19,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | Health / metrics        | `/healthz`, `/readyz`, `/metrics`                                                                                                                                                     |
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `/oidc/login` and `/oidc/callback`                                                                                                               |
 | Auth (JSON)             | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`                                                                          |
-| Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET /api/trash/`                                                                 |
+| Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
 | Doc extras              | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                                                       |
 | Taxonomy                | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                            |
 | Search + autocomplete   | `/api/search/`, `/api/autocomplete/`, `/api/languages/`                                                                                                                               |
@@ -283,9 +283,10 @@ Dedup state machine:
   A different uploader, filename, mailbox, watched path, or import source does.
   Dedup remains owner-scoped.
 
-- Hash matches only a **trashed** doc → clears `trashed_at`, returns
-  `200 OK` with `"restored": true`.
-- Fresh hash → new row, `201 Created`.
+- Hash matches a **trashed** document still inside its 30-day recovery window
+  → clears `trashed_at`, returns `200 OK` with `"restored": true`. An expired
+  match is not restored; the upload creates a fresh row while retention cleanup
+  removes the expired one.
 
 ### `GET /api/documents/{id}`
 
@@ -853,13 +854,39 @@ a direct URL scan without `reveal=1` cannot pull the raw first page.
 
 ### `DELETE /api/documents/{id}`
 
-Sets `trashed_at`. The blob stays in the CAS — `suchi gc` reclaims it
-later. `204 No Content` on success, `404` if the doc isn't live.
+Moves a live document to Trash by setting `trashed_at`. The document remains
+recoverable for 30 days. `204 No Content` on success, `404` if the document is
+not live. Restoring and trashing it again starts a new 30-day window.
 
 ### `POST /api/documents/{id}/restore`
 
-Clears `trashed_at`. Idempotent — restoring a live doc returns
-`200 OK` with `{"affected": 0}`.
+Clears `trashed_at` during the 30-day recovery window. Restoring a live
+document is idempotent and returns `200 OK` with `{"affected": 0}`. An expired
+trashed document returns `404` and remains eligible for automatic purge.
+
+### `GET /api/trash/`
+
+Returns a paginated envelope of trashed documents. Members see their own
+documents; administrators see all trashed documents. Each row includes
+`trashed_at` and `deletes_at`, the Unix timestamp exactly 30 days later.
+
+### `DELETE /api/trash/{id}`
+
+Permanently deletes one already-trashed document. Requires `documents:write`
+and delete permission for that document. Returns `204 No Content`; live,
+restored, and missing documents cannot be hard-deleted through this route.
+
+### `DELETE /api/trash/`
+
+Permanently deletes every document in the caller's Trash scope for which the
+caller has delete permission. Members are owner-scoped; administrators are
+archive-wide. Returns `200 OK` with `{"purged": N}`.
+
+Permanent deletion removes document-owned metadata and workflow state, revokes
+every share link containing the document, clears non-foreign-key references,
+and replaces prior document audit history with a minimal `document.purge`
+record. Rendered files are removed safely. CAS blobs are deleted only after a
+post-commit reference check confirms no document or avatar still uses them.
 
 ### `GET /api/tasks/`
 

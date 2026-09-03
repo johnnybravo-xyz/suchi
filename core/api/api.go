@@ -23,6 +23,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 // LLMSettingsStatus is the masked admin-facing classifier state. API keys are
@@ -86,6 +87,7 @@ type Server struct {
 	CAS       *blob.CAS
 	Log       *slog.Logger
 	Jobs      *jobs.Dispatcher
+	trash     *trash.Service
 	PublicURL string // validated external origin, wired from config at boot
 	decrypt   DecryptDeps
 	// PasswordHasher is set at boot by main.go from the local-auth
@@ -153,20 +155,21 @@ type Server struct {
 	oauthFlows     oauthFlowStore
 }
 
-// New returns a Server. The zero value isn't runnable — DB, CAS, Log
-// are required. Jobs stays nil until wired via WithJobs.
+// New returns a Server. The zero value isn't runnable — DB, CAS, trash, and
+// Log are required. Jobs stays nil until wired via WithJobs.
 //
 // Authz defaults to ACLAuthorizer: owners and admins retain full access, while
 // explicit user or group grants can add narrower permissions.
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger) (*Server, error) {
-	if d == nil || cas == nil || log == nil {
-		return nil, errors.New("api.New: DB, CAS, and Log are required")
+func New(d *db.DB, cas *blob.CAS, retention *trash.Service, log *slog.Logger) (*Server, error) {
+	if d == nil || cas == nil || retention == nil || log == nil {
+		return nil, errors.New("api.New: DB, CAS, trash, and Log are required")
 	}
 	return &Server{
 		DB:       d,
 		CAS:      cas,
 		Log:      log.With("component", "api"),
 		Authz:    authz.ACLAuthorizer{DB: d},
+		trash:    retention,
 		chatGate: newChatGate(),
 	}, nil
 }
@@ -280,6 +283,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Trash listing (soft-deleted docs — owner-scoped for members).
 	mux.HandleFunc("GET /api/trash/", s.ListTrash)
+	mux.HandleFunc("DELETE /api/trash/{id}", s.PurgeTrashDocument)
+	mux.HandleFunc("DELETE /api/trash/", s.EmptyTrash)
 
 	// Share links (creator-facing CRUD).
 	mux.HandleFunc("GET /api/share_links/", s.ListShareLinks)
