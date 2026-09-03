@@ -183,51 +183,12 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// LoginHandler validates credentials and returns either a fresh session
-// cookie (browser) or a fresh API token (JSON body). Branches on Accept.
+// LoginHandler validates credentials and creates a browser session. API
+// clients use TokenHandler instead; keeping the two credential exchanges
+// separate prevents headless clients from accumulating unused session rows.
 func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	var req LoginRequest
-	if err := decodeJSONRequest(w, r, &req); err != nil {
-		http.Error(w, "bad body", http.StatusBadRequest)
-		return
-	}
-	if req.Email == "" || req.Password == "" {
-		http.Error(w, "email and password required", http.StatusBadRequest)
-		return
-	}
-
-	userID, err := p.verifyCredentials(r.Context(), req.Email, req.Password)
-	if errors.Is(err, errInvalidCredentials) {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Explicit JSON clients receive a token and a session cookie. The cookie
-	// keeps browser-capable clients able to follow direct preview/download URLs;
-	// the SPA omits this Accept header and uses only the session.
-	if wantsJSON(r) {
-		token, err := p.issueAPIToken(r.Context(), userID, "login",
-			auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
-		if err != nil {
-			http.Error(w, "token failed", http.StatusInternalServerError)
-			return
-		}
-		sid, err := p.IssueSession(r.Context(), userID, r)
-		if err != nil {
-			// Token was minted but session failed — best-effort
-			// return the token so the caller isn't left with
-			// nothing. Log-worthy but not fatal.
-			p.log.Warn("localauth.json_login.session_failed",
-				"user_id", userID, "err", err.Error())
-		} else {
-			http.SetCookie(w, p.sessionCookie(sid))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+	userID, ok := p.authenticateCredentials(w, r)
+	if !ok {
 		return
 	}
 
@@ -240,8 +201,44 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func wantsJSON(r *http.Request) bool {
-	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json")
+// TokenHandler validates credentials and returns a scoped API token. It never
+// creates a browser session or sets a cookie.
+func (p *Plugin) TokenHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := p.authenticateCredentials(w, r)
+	if !ok {
+		return
+	}
+	token, err := p.issueAPIToken(r.Context(), userID, "login",
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
+	if err != nil {
+		http.Error(w, "token failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+}
+
+func (p *Plugin) authenticateCredentials(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	var req LoginRequest
+	if err := decodeJSONRequest(w, r, &req); err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return 0, false
+	}
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "email and password required", http.StatusBadRequest)
+		return 0, false
+	}
+
+	userID, err := p.verifyCredentials(r.Context(), req.Email, req.Password)
+	if errors.Is(err, errInvalidCredentials) {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return 0, false
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return 0, false
+	}
+	return userID, true
 }
 
 // LoginFormHandler is the sibling of LoginHandler for browser HTML
@@ -369,6 +366,10 @@ func (p *Plugin) issueSession(ctx context.Context, userID int64, r *http.Request
 	sid := hex.EncodeToString(raw[:])
 	now := time.Now()
 	err := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM sessions WHERE expires_at <= ?", now.Unix()); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
 			VALUES (?, ?, ?, ?, ?, ?, ?)

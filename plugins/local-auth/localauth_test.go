@@ -266,7 +266,7 @@ func TestEnsureDevAdmin_IdempotentPasswordReset(t *testing.T) {
 	}
 }
 
-func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
+func TestTokenHandlerIssuesGranularTokenWithoutSession(t *testing.T) {
 	p := openTestPlugin(t)
 	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
 		t.Fatal(err)
@@ -275,10 +275,9 @@ func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Accept", "application/json")
+	req := httptest.NewRequest(http.MethodPost, "/api/token/", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
-	p.LoginHandler(rec, req)
+	p.TokenHandler(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -295,26 +294,15 @@ func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("cookies: got %d, want 1", len(cookies))
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("token exchange set %d cookies, want none", len(cookies))
 	}
-	var rawCount, digestCount int
-	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, cookies[0].Value).Scan(&rawCount); err != nil {
+	var sessionCount int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessionCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, digest(cookies[0].Value)).Scan(&digestCount); err != nil {
-		t.Fatal(err)
-	}
-	if rawCount != 0 || digestCount != 1 {
-		t.Fatalf("session storage: raw=%d digest=%d, want raw=0 digest=1", rawCount, digestCount)
-	}
-
-	cookieReq := httptest.NewRequest(http.MethodGet, "/", nil)
-	cookieReq.AddCookie(cookies[0])
-	cookiePrincipal, err := p.Authenticate(cookieReq)
-	if err != nil || cookiePrincipal == nil {
-		t.Fatalf("cookie authentication failed: principal=%v err=%v", cookiePrincipal, err)
+	if sessionCount != 0 {
+		t.Fatalf("token exchange created %d session rows, want none", sessionCount)
 	}
 	tokenReq := httptest.NewRequest(http.MethodGet, "/api/documents/", nil)
 	tokenReq.Header.Set("Authorization", "Token "+response.Token)
@@ -323,36 +311,108 @@ func TestLoginHandler_AcceptsEmailAndIssuesGranularScopes(t *testing.T) {
 		t.Fatalf("token authentication failed: principal=%v err=%v", tokenPrincipal, err)
 	}
 
-	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 1 WHERE id = ?`, cookiePrincipal.UserID); err != nil {
+	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 1 WHERE id = ?`, tokenPrincipal.UserID); err != nil {
 		t.Fatal(err)
-	}
-	if principal, err := p.Authenticate(cookieReq); err != nil || principal != nil {
-		t.Fatalf("disabled user's cookie accepted: principal=%v err=%v", principal, err)
 	}
 	if principal, err := p.Authenticate(tokenReq); err == nil || principal != nil {
 		t.Fatalf("disabled user's token accepted: principal=%v err=%v", principal, err)
 	}
-	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 0 WHERE id = ?`, cookiePrincipal.UserID); err != nil {
+	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 0 WHERE id = ?`, tokenPrincipal.UserID); err != nil {
 		t.Fatal(err)
 	}
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
-	logoutReq.AddCookie(cookies[0])
 	logoutReq = logoutReq.WithContext(auth.WithPrincipal(logoutReq.Context(), tokenPrincipal))
 	logoutRec := httptest.NewRecorder()
 	p.LogoutHandler(logoutRec, logoutReq)
 	if logoutRec.Code != http.StatusNoContent {
 		t.Fatalf("logout status: got %d, want 204", logoutRec.Code)
 	}
-	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, digest(cookies[0].Value)).Scan(&digestCount); err != nil {
-		t.Fatal(err)
-	}
 	var revokedCount int
 	if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens WHERE id = ? AND revoked_at IS NOT NULL`, tokenPrincipal.TokenID).Scan(&revokedCount); err != nil {
 		t.Fatal(err)
 	}
-	if digestCount != 0 || revokedCount != 1 {
-		t.Fatalf("logout cleanup: sessions=%d revoked_tokens=%d", digestCount, revokedCount)
+	if revokedCount != 1 {
+		t.Fatalf("logout revoked_tokens=%d, want 1", revokedCount)
+	}
+}
+
+func TestLoginHandlerCreatesOnlyBrowserSession(t *testing.T) {
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(LoginRequest{Email: DevAdminEmail, Password: DevAdminPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Accept", "application/json") // response no longer branches on Accept
+	rec := httptest.NewRecorder()
+	p.LoginHandler(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies: got %d, want 1", len(cookies))
+	}
+	var rawCount, digestCount, tokenCount int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, cookies[0].Value).Scan(&rawCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id = ?`, digest(cookies[0].Value)).Scan(&digestCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens`).Scan(&tokenCount); err != nil {
+		t.Fatal(err)
+	}
+	if rawCount != 0 || digestCount != 1 || tokenCount != 0 {
+		t.Fatalf("login storage: raw_sessions=%d digested_sessions=%d tokens=%d", rawCount, digestCount, tokenCount)
+	}
+
+	cookieReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	cookieReq.AddCookie(cookies[0])
+	cookiePrincipal, err := p.Authenticate(cookieReq)
+	if err != nil || cookiePrincipal == nil {
+		t.Fatalf("cookie authentication failed: principal=%v err=%v", cookiePrincipal, err)
+	}
+	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 1 WHERE id = ?`, cookiePrincipal.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := p.Authenticate(cookieReq); err != nil || principal != nil {
+		t.Fatalf("disabled user's cookie accepted: principal=%v err=%v", principal, err)
+	}
+}
+
+func TestIssueSessionPrunesExpiredRows(t *testing.T) {
+	p := openTestPlugin(t)
+	if err := p.EnsureDevAdmin(context.Background(), DevAdminEmail, DevAdminPassword); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if _, err := p.db.ExecWrite(context.Background(), `
+		INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at)
+		VALUES ('expired', 1, 1, ?, 1), ('live', 1, 1, ?, 1)
+	`, now-1, now+60); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.IssueSession(context.Background(), 1,
+		httptest.NewRequest(http.MethodPost, "/api/login", nil)); err != nil {
+		t.Fatal(err)
+	}
+	var expired, live, total int
+	if err := p.db.Read.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id = 'expired'`).Scan(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id = 'live'`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 || live != 1 || total != 2 {
+		t.Fatalf("session cleanup: expired=%d live=%d total=%d, want 0/1/2", expired, live, total)
 	}
 }
 

@@ -137,13 +137,10 @@ Request:
 
 ### `POST /api/login`
 
-Local-password login. Send a JSON body in both cases; the `Accept` header decides
-the response shape:
-
-- `Accept: application/json` plants a session cookie and returns
-  `{"token": "<hex>"}` for an API client.
-- Without that header, the endpoint plants a session cookie and returns 204;
-  this is the SPA path.
+Local-password browser login. Send a JSON body; success plants a session cookie
+and returns 204. API clients should exchange the same credentials at
+`POST /api/token/`, which returns `{"token":"<hex>"}` without creating a
+browser session or setting a cookie.
 
 The separate `POST /login` browser form accepts URL-encoded fields and redirects
 after setting the same kind of session cookie.
