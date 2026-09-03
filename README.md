@@ -56,12 +56,12 @@ tradeoffs.
 
 ## Quick Start
 
-The unsuffixed image is the recommended standard build:
+The moving `beta` image is a convenient standard build for local evaluation:
 
 ```sh
 docker volume create suchi-data
 docker run -d --name suchi --restart unless-stopped \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -e PUBLIC_URL=http://127.0.0.1:8000 \
   -v suchi-data:/data \
   ghcr.io/johnnybravo-xyz/suchi:beta
@@ -76,13 +76,18 @@ for operators who want editable mounts, networks, and image pins. See [Getting
 started](docs/getting-started.mdx) for direct binary, reverse-proxy, NAS, and
 production deployment paths.
 
+This quick start is bound to loopback and the moving `beta` tag is for
+evaluation only. A production server, including one reached by the mobile app,
+must use HTTPS and pin the selected release by its published image digest.
+
 ## Images
 
 - `standard` / `beta` / `beta-standard`: Alpine. Supports all listed formats
-  and indexes scanned PDFs with Tesseract. The two beta tags resolve to the
-  same image.
+  and indexes scanned PDFs with Tesseract. The beta tags are moving evaluation
+  channels and resolve to the same image.
 - `full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned PDFs can
-  retain a searchable text layer.
+  retain a searchable text layer; `beta-full` is also a moving evaluation
+  channel.
 
 Both images include anydoc, DjVu, HEIC/HEIF, and Outlook MSG support. The full
 image changes only the scanned-PDF archive behavior. See [Supported file

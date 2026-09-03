@@ -11,6 +11,9 @@
 # breaks SQLite WAL).
 #
 # Replace the PUBLIC_URL hostname with the TLS URL exposed by your Ingress.
+# The beta image below keeps this template runnable for evaluation only.
+# Before production, replace it with the selected release's published
+# ghcr.io/johnnybravo-xyz/suchi@sha256 digest. Do not deploy a moving tag.
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -45,7 +48,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: suchi
-          image: ghcr.io/johnnybravo-xyz/suchi:beta
+          image: ghcr.io/johnnybravo-xyz/suchi:beta # evaluation only; pin a digest for production
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
