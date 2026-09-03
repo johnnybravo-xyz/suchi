@@ -42,6 +42,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/zugferd"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -1128,16 +1129,8 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO correspondents(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, name, slug.Make(name), now, now); err != nil {
-			return err
-		}
-		var corID int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM correspondents WHERE name = ?`, name).Scan(&corID); err != nil {
+		corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, now)
+		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -1146,7 +1139,7 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 		`, docID, corID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE documents SET correspondent_id = COALESCE(correspondent_id, ?) WHERE id = ?
 		`, corID, docID)
 		return err
@@ -1228,6 +1221,19 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 			FROM document_correspondents WHERE document_id = ?
 		`, childID, parentID); err != nil {
 			return fmt.Errorf("inherit correspondents: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE documents
+			SET correspondent_id = (
+				SELECT correspondent_id
+				FROM document_correspondents
+				WHERE document_id = ? AND role = 'sender'
+				ORDER BY position, correspondent_id
+				LIMIT 1
+			)
+			WHERE id = ? AND correspondent_id IS NULL
+		`, childID, childID); err != nil {
+			return fmt.Errorf("inherit primary correspondent: %w", err)
 		}
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,

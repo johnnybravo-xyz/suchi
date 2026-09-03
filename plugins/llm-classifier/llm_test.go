@@ -616,6 +616,60 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	}
 }
 
+func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
+	ctx := context.Background()
+	d, docID := openHandlerDocument(t, "Invoice", "Example supplies invoice")
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO correspondents(id, name, slug, created_at, updated_at)
+		VALUES (1, 'EXAMPLE SUPPLIES PRIVATE LIMITED',
+		        'example-supplies-private-limited', 0, 0);
+		INSERT INTO document_correspondents(document_id, correspondent_id, role)
+		VALUES (?, 1, 'sender');
+	`, docID); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"correspondent\":\"Example Supplies Private Limited\",\"confidence\":0.9}"}}]}`))
+	}))
+	defer srv.Close()
+	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewHandler(p, Adapt(d), silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+		t.Fatal(err)
+	}
+
+	var primaryID, attached, correspondents int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT correspondent_id FROM documents WHERE id = ?`, docID,
+	).Scan(&primaryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM document_correspondents
+		WHERE document_id = ? AND correspondent_id = 1 AND role = 'sender'
+	`, docID).Scan(&attached); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM correspondents`).Scan(&correspondents); err != nil {
+		t.Fatal(err)
+	}
+	var canonicalUpdated int64
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT updated_at FROM correspondents WHERE id = 1`,
+	).Scan(&canonicalUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if primaryID != 1 || attached != 1 || correspondents != 1 || canonicalUpdated != 0 {
+		t.Fatalf("primary=%d attached=%d correspondents=%d canonical updated_at=%d",
+			primaryID, attached, correspondents, canonicalUpdated)
+	}
+}
+
 // TestClassifyInjectsJDCatsIntoUserMessage: the per-installation
 // Johnny-Decimal categories must land in the user message so the
 // model has real codes to pick from — a bare "10-99" hint produces

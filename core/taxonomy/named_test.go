@@ -46,3 +46,41 @@ func TestUpsertByNameUsesAllowListedTable(t *testing.T) {
 		t.Fatalf("invalid table error = %v", err)
 	}
 }
+
+func TestUpsertByNameReusesCanonicalSlug(t *testing.T) {
+	ctx := context.Background()
+	d := setup(t, ctx)
+	var canonicalID, variantID int64
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		canonicalID, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+			"EXAMPLE SUPPLIES PRIVATE LIMITED", 10)
+		if err != nil {
+			return err
+		}
+		variantID, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+			"Example Supplies Private Limited", 20)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalID != variantID {
+		t.Fatalf("ids = %d and %d, want the same canonical row", canonicalID, variantID)
+	}
+	var name, gotSlug string
+	var created, updated, count int64
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT name, slug, created_at, updated_at
+		FROM correspondents WHERE id = ?
+	`, canonicalID).Scan(&name, &gotSlug, &created, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM correspondents`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if name != "EXAMPLE SUPPLIES PRIVATE LIMITED" ||
+		gotSlug != "example-supplies-private-limited" || created != 10 || updated != 20 || count != 1 {
+		t.Fatalf("canonical row = (%q, %q, created=%d, updated=%d, count=%d)",
+			name, gotSlug, created, updated, count)
+	}
+}

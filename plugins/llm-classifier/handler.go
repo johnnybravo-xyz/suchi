@@ -13,7 +13,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
-	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -192,14 +192,36 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 		if res.Correspondent != "" {
 			var currentCorrespondent sql.NullInt64
-			if err := tx.QueryRowContext(ctx,
-				`SELECT correspondent_id FROM documents WHERE id = ?`, e.DocID,
-			).Scan(&currentCorrespondent); err != nil {
+			if err := tx.QueryRowContext(ctx, `
+				SELECT COALESCE(
+					d.correspondent_id,
+					(
+						SELECT dc.correspondent_id
+						FROM document_correspondents dc
+						WHERE dc.document_id = d.id AND dc.role = 'sender'
+						ORDER BY dc.position, dc.correspondent_id
+						LIMIT 1
+					)
+				)
+				FROM documents d
+				WHERE d.id = ?
+			`, e.DocID).Scan(&currentCorrespondent); err != nil {
 				return err
 			}
 			// Parsed email headers and explicit metadata outrank a model guess.
-			if !currentCorrespondent.Valid {
-				corID, err := upsertByName(ctx, tx, "correspondents", res.Correspondent, now)
+			if currentCorrespondent.Valid {
+				// Heal attachment rows created before sender inheritance also
+				// populated the legacy primary FK.
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE documents
+					SET correspondent_id = ?
+					WHERE id = ? AND correspondent_id IS NULL
+				`, currentCorrespondent.Int64, e.DocID); err != nil {
+					return err
+				}
+			} else {
+				corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+					res.Correspondent, now)
 				if err != nil {
 					return err
 				}
@@ -393,28 +415,8 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 	return nil
 }
 
-func upsertByName(ctx context.Context, tx *sql.Tx, table, name string, now int64) (int64, error) {
-	if name == "" {
-		return 0, errors.New("empty name")
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-	`, table), name, slug.Make(name), now, now); err != nil {
-		return 0, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, table),
-		name).Scan(&id); err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
 func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int64, now int64) error {
-	tagID, err := upsertByName(ctx, tx, "tags", name, now)
+	tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
 	if err != nil {
 		return err
 	}

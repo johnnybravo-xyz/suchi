@@ -189,16 +189,30 @@ func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 		t.Fatalf("parent/trash rows = %d/%d, want 0/0", parentCount, trashCount)
 	}
 
+	var childID int64
 	var title, mime string
-	var parentRef sql.NullInt64
+	var parentRef, primaryCorrespondent sql.NullInt64
 	if err := d.Read.QueryRowContext(ctx, `
-		SELECT title, mime_type, email_parent_id
+		SELECT id, title, mime_type, email_parent_id, correspondent_id
 		FROM documents
-	`).Scan(&title, &mime, &parentRef); err != nil {
+	`).Scan(&childID, &title, &mime, &parentRef, &primaryCorrespondent); err != nil {
 		t.Fatal(err)
 	}
-	if title != "[Invoice attached] invoice.pdf" || mime != "application/pdf" || parentRef.Valid {
-		t.Fatalf("attachment = (%q, %q, parent=%v), want inherited title/PDF/no parent", title, mime, parentRef)
+	if title != "[Invoice attached] invoice.pdf" || mime != "application/pdf" ||
+		parentRef.Valid || !primaryCorrespondent.Valid {
+		t.Fatalf("attachment = (%q, %q, parent=%v, correspondent=%v), want inherited title/PDF/no parent/sender",
+			title, mime, parentRef, primaryCorrespondent)
+	}
+	var inheritedSender int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM document_correspondents
+		WHERE document_id = ? AND correspondent_id = ? AND role = 'sender'
+	`, childID, primaryCorrespondent.Int64).Scan(&inheritedSender); err != nil {
+		t.Fatal(err)
+	}
+	if inheritedSender != 1 {
+		t.Fatalf("inherited sender rows = %d, want 1", inheritedSender)
 	}
 }
 
