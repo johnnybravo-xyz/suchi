@@ -36,6 +36,7 @@
   }
 
   let mobileNavOpen = $state(false)
+  let sidebarCollapsed = $state(false)
   let uploadOpen = $state(false)
   let uploadDialog = $state(null)
   let uploadReturnFocus = null
@@ -447,11 +448,11 @@
 {:else if !session.user}
   <Login onSignedIn={() => { boot(); go('#/dashboard') }} />
 {:else}
-  <div class="shell" inert={chatOpen || uploadOpen}>
+  <div class="shell" class:sidebar-collapsed={sidebarCollapsed} inert={chatOpen || uploadOpen}>
     {#if mobileNavOpen}
       <button class="mobile-nav-veil" aria-label="Close navigation" onclick={() => (mobileNavOpen = false)}></button>
     {/if}
-    <aside class="sidebar" class:mobile-open={mobileNavOpen}>
+    <aside id="primary-navigation" class="sidebar" class:mobile-open={mobileNavOpen}>
       <a class="brand" href="#/dashboard" aria-label="suchi home">
         <BrandMark />
         <b>suchi</b>
@@ -513,8 +514,15 @@
 
     <div class="main">
       <div class="topbar">
+        <button class="btn desktop-menu" onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+                aria-label={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                title={sidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                aria-controls="primary-navigation" aria-expanded={!sidebarCollapsed}>
+          <Icon name="menu" size={17} />
+        </button>
         <button class="btn mobile-menu" onclick={() => (mobileNavOpen = !mobileNavOpen)}
-                aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'} title="Navigation">
+                aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'} title="Navigation"
+                aria-controls="primary-navigation" aria-expanded={mobileNavOpen}>
           <Icon name={mobileNavOpen ? 'x' : 'menu'} size={17} />
         </button>
         <h1>{pageTitle}</h1>

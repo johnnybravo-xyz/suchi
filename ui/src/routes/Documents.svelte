@@ -385,8 +385,16 @@
         <option value={option.value}>{option.label}</option>
       {/each}
     </select>
-    <input class="input" type="date" bind:value={dateFrom} title="Added on or after" style="max-width:150px" />
-    <input class="input" type="date" bind:value={dateTo} title="Added on or before" style="max-width:150px" />
+    <span class="document-date-filter">
+      <input class="input" type="date" bind:value={dateFrom} title="Added on or after"
+             aria-label="Added on or after" placeholder="dd/mm/yyyy" />
+      {#if !dateFrom}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
+    </span>
+    <span class="document-date-filter">
+      <input class="input" type="date" bind:value={dateTo} title="Added on or before"
+             aria-label="Added on or before" placeholder="dd/mm/yyyy" />
+      {#if !dateTo}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
+    </span>
     <span class="spacer"></span>
     <span class="seg">
       <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>

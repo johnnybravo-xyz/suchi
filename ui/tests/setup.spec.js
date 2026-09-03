@@ -1187,6 +1187,31 @@ test('loads recent dashboard documents once per navigation', async ({ page }) =>
   expect(recentRequests).toBe(2)
 })
 
+test('keeps recent dashboard documents inside the mobile content column', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile', 'mobile layout regression')
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+    documents: [{
+      id: 42,
+      title: 'A deliberately long example document title that must shrink inside the recent list',
+      jd_category_code: 22,
+      jd_category_name: 'Example category',
+      sensitivity: 'internal',
+      created_at: 1780000000,
+      tags: [],
+    }],
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.locator('.dash-grid a.irow').filter({ hasText: 'A deliberately long example' })).toBeVisible()
+
+  const widths = await page.locator('.content').evaluate((content) => ({
+    client: content.clientWidth,
+    scroll: content.scrollWidth,
+  }))
+  expect(widths.scroll).toBeLessThanOrEqual(widths.client)
+})
+
 test('limits dashboard count requests and defers empty-view facets', async ({ page }) => {
   const countRequests = []
   const facetRequests = []
@@ -2172,4 +2197,34 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
   await expect(page.getByText('Trash is empty.')).toBeVisible()
   await expect(page.getByRole('button', { name: /Empty trash/ })).toBeDisabled()
   expect(emptyTrashRequests).toEqual([{ count: 2 }])
+})
+
+test('navigation button toggles the sidebar at each breakpoint', async ({ page }) => {
+  await mockAPI(page, {
+    setupCompletedAt: Math.floor(Date.now() / 1000),
+    filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+
+  const sidebar = page.locator('#primary-navigation')
+  if ((page.viewportSize()?.width || 0) <= 860) {
+    await expect(sidebar).toBeHidden()
+    const open = page.getByRole('button', { name: 'Open navigation' })
+    await expect(open).toHaveAttribute('aria-expanded', 'false')
+    await open.click()
+    await expect(sidebar).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Close navigation' }).last()).toHaveAttribute('aria-expanded', 'true')
+    await page.locator('.mobile-nav-veil').click({ position: { x: 350, y: 100 } })
+    await expect(sidebar).toBeHidden()
+  } else {
+    await expect(sidebar).toBeVisible()
+    const collapse = page.getByRole('button', { name: 'Collapse navigation' })
+    await expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    await collapse.click()
+    await expect(sidebar).toBeHidden()
+    const expand = page.getByRole('button', { name: 'Expand navigation' })
+    await expect(expand).toHaveAttribute('aria-expanded', 'false')
+    await expand.click()
+    await expect(sidebar).toBeVisible()
+  }
 })

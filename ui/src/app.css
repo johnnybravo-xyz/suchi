@@ -77,6 +77,10 @@ input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- app shell ---------- */
 .shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
+@media (min-width: 861px) {
+  .shell.sidebar-collapsed { grid-template-columns: 1fr; }
+  .shell.sidebar-collapsed > .sidebar { display: none; }
+}
 
 .sidebar {
   border-right: 1px solid var(--line);
@@ -85,7 +89,8 @@ input, select, textarea { font: inherit; color: inherit; }
   padding: 14px 10px;
   overflow-y: auto;
 }
-.mobile-menu, .mobile-nav-veil { display: none; }
+.btn.mobile-menu, .mobile-nav-veil { display: none; }
+.btn.desktop-menu, .btn.mobile-menu { flex: none; padding: 8px 11px; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 14px; }
 .brand svg { width: 24px; height: 24px; }
 .brand b { font-weight: 700; font-size: 1.02rem; letter-spacing: 0; }
@@ -159,7 +164,8 @@ input, select, textarea { font: inherit; color: inherit; }
     box-shadow: var(--shadow);
   }
   .sidebar.mobile-open { display: flex; }
-  .mobile-menu { display: inline-flex; padding: 8px 11px; }
+  .btn.desktop-menu { display: none; }
+  .btn.mobile-menu { display: inline-flex; }
   .mobile-nav-veil {
     display: block;
     position: fixed;
@@ -258,6 +264,18 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .toolbar select { max-width: 190px; }
 .spacer { flex: 1; }
+.document-date-filter { position: relative; display: inline-flex; flex: 0 1 150px; width: 150px; max-width: 100%; }
+.document-date-filter > .input { max-width: none; }
+.date-format-hint { display: none; }
+
+@media (max-width: 700px) {
+  .date-format-hint {
+    position: absolute; inset: 1px 34px 1px 1px;
+    display: flex; align-items: center; padding-left: 11px;
+    border-radius: 8px 0 0 8px; background: var(--surface);
+    color: var(--faint); font-size: .9rem; pointer-events: none;
+  }
+}
 
 /* ---------- cards / detail ---------- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
@@ -330,6 +348,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .m-value { font-size: 2rem; font-weight: 700; letter-spacing: 0; line-height: 1.1; }
 .m-sub { font-size: .74rem; color: var(--faint); }
 .dash-grid { display: grid; grid-template-columns: 7fr 5fr; gap: 22px; align-items: start; }
+.dash-grid > div { min-width: 0; }
 @media (max-width: 1000px) { .dash-grid { grid-template-columns: 1fr; } }
 .dash-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .dash-head h3 { font-size: .95rem; }
