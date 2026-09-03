@@ -62,8 +62,10 @@ func (s *Server) prepareUpload(
 
 	sniffed, err := sniffMultipartMIME(file, header.Size)
 	if err != nil {
-		s.Log.Warn("api.upload.mime_sniff", "err", err.Error(), "filename", header.Filename)
-		sniffed = "application/octet-stream"
+		s.Log.Error("api.upload.mime_sniff", "err", err.Error(), "filename", header.Filename)
+		s.writeError(w, http.StatusInternalServerError, "upload_read_failed",
+			"failed to inspect uploaded file")
+		return nil
 	}
 	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
 	if metadataErr := rejectDeviceContentForMIME(metadata, sniffed); metadataErr != nil {

@@ -311,6 +311,8 @@ Multipart upload. Streams the file into the CAS by SHA-256, then commits the
 document row and first durable job together. An unreferenced CAS object left by
 a failed database commit is harmless and is reclaimed by `suchi gc`. MIME is
 sniffed server-side; the multipart Content-Type header is a hint only.
+An unreadable or non-rewindable upload is rejected with
+`500 upload_read_failed` before any CAS write.
 
 Multipart fields:
 
