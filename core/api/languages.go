@@ -36,13 +36,24 @@ type LanguagesResponse struct {
 // hoop-jumping for a small aggregation. At the archive sizes
 // suchi targets (< 1M docs), this is fine.
 func (s *Server) ListLanguages(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
 		return
 	}
-	rows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT languages FROM documents
-		WHERE trashed_at IS NULL AND languages != ''
-	`)
+	where := "d.trashed_at IS NULL AND d.languages != ''"
+	var args []any
+	if principal.Role != "admin" {
+		groups, err := s.principalGroups(r.Context(), principal.UserID)
+		if err != nil {
+			s.serverErr(w, "api.languages.load_groups", err)
+			return
+		}
+		visibility, visibilityArgs := documentVisibilityWhere(principal, groups)
+		where += " AND " + visibility
+		args = append(args, visibilityArgs...)
+	}
+	rows, err := s.DB.Read.QueryContext(r.Context(),
+		"SELECT d.languages FROM documents d WHERE "+where, args...)
 	if err != nil {
 		s.serverErr(w, "api.languages.query", err)
 		return
