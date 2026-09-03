@@ -13,6 +13,7 @@ import (
 // binary assembly boundary prevents a newly registered handler from silently
 // inheriting an admin user's authority through a narrowly scoped token.
 var tokenRouteScopes = map[string]string{
+	"GET /api/handshake": "",
 	// Compatibility, credential exchange, identity inspection, and current
 	// credential logout are deliberately available without a content scope.
 	"POST /api/login":                "",

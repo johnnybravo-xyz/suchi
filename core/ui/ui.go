@@ -240,6 +240,9 @@ func (s *Server) usesExternalLogin() bool {
 // can render a "click to reveal" placeholder without a network
 // round-trip to figure out what to do.
 func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
+		return
+	}
 	id, ok := s.authorizeBlob(w, r)
 	if !ok {
 		return
@@ -417,6 +420,9 @@ func isHighSensitivity(s string) bool {
 // post-processed — and is admin-scoped because that's the only
 // caller with a legitimate reason to see the raw archive object.
 func (s *Server) Download(w http.ResponseWriter, r *http.Request) {
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
+		return
+	}
 	if _, ok := s.authorizeBlob(w, r); !ok {
 		return
 	}

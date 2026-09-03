@@ -14,6 +14,7 @@ package ui
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -68,5 +69,36 @@ func TestPreviewCSP_SandboxHeaderSet(t *testing.T) {
 	// X-Frame-Options is the belt-and-braces backup for older browsers.
 	if got := rec.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
 		t.Errorf("X-Frame-Options = %q, want SAMEORIGIN", got)
+	}
+}
+
+func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
+	s := newUISrv(t)
+	for _, path := range []string{"/preview/1", "/download/1"} {
+		t.Run(path, func(t *testing.T) {
+			request := func(scopes []string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.SetPathValue("id", "1")
+				req = req.WithContext(auth.WithPrincipal(context.Background(), &pluginapi.Principal{
+					Kind: "token", UserID: 1, Role: "admin", Scopes: scopes,
+				}))
+				if strings.HasPrefix(path, "/preview/") {
+					s.Preview(rec, req)
+				} else {
+					s.Download(rec, req)
+				}
+				return rec
+			}
+
+			denied := request(nil)
+			if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), `"code":"insufficient_scope"`) {
+				t.Fatalf("missing-scope response = %d %q", denied.Code, denied.Body.String())
+			}
+			allowed := request([]string{auth.ScopeDocumentsRead})
+			if allowed.Code == http.StatusForbidden && strings.Contains(allowed.Body.String(), "insufficient_scope") {
+				t.Fatalf("read-scoped token was rejected: %d %q", allowed.Code, allowed.Body.String())
+			}
+		})
 	}
 }
