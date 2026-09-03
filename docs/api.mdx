@@ -1384,6 +1384,11 @@ latest non-trashed version.
 }
 ```
 
+Each version node is checked against its current document ACL. A caller must be
+able to view the requested node, and the response omits any other chain node it
+cannot view. Relationship ids and head state are computed only from the visible
+subset, so a later ACL change cannot leak hidden version metadata.
+
 ### `POST /api/documents/{id}/versions/`
 
 Upload a new version of {id}. Multipart, same shape as

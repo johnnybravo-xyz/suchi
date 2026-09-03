@@ -291,8 +291,8 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 // to the root, then walks forward through direct children to the
 // head. Result is ordered oldest → newest.
 //
-// The doc id doesn't have to be the head or the root; any node in
-// the chain returns the full chain.
+// The doc id doesn't have to be the head or the root. Every returned node is
+// authorized independently because ACLs can change after a version is made.
 func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
@@ -303,10 +303,21 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
-	// Anyone who can view any node in the chain can see the whole
-	// chain (versions are metadata about the same logical doc).
+	// The requested node is the authorization anchor. This keeps an arbitrary
+	// chain id from becoming a metadata oracle even if another node is shared.
 	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
 		return
+	}
+	groups, err := s.principalGroups(r.Context(), principal.UserID)
+	if err != nil {
+		s.serverErr(w, "versions.load_groups", err)
+		return
+	}
+	authzPrincipal := authz.Principal{
+		UserID: principal.UserID,
+		Role:   principal.Role,
+		Kind:   principal.Kind,
+		Groups: groups,
 	}
 	// Walk back to the root: while previous_version_id is not null,
 	// jump. Cap the loop to avoid pathological cycles that shouldn't
@@ -338,11 +349,7 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		)
 		SELECT d.id, d.title, d.original_blob, d.original_size,
 		       COALESCE(d.mime_type, ''), d.created_at,
-		       d.previous_version_id,
-		       CASE WHEN EXISTS (
-		         SELECT 1 FROM documents c
-		         WHERE c.previous_version_id = d.id AND c.trashed_at IS NULL
-		       ) THEN 0 ELSE 1 END AS is_head
+		       d.previous_version_id, d.trashed_at
 		FROM documents d
 		JOIN chain USING (id)
 		ORDER BY d.created_at ASC, d.id ASC
@@ -353,16 +360,20 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var out []VersionView
+	type candidate struct {
+		view VersionView
+		live bool
+	}
+	var chain []candidate
 	for rows.Next() {
 		var (
-			v      VersionView
-			mime   string
-			prev   sql.NullInt64
-			isHead int
+			v       VersionView
+			mime    string
+			prev    sql.NullInt64
+			trashed sql.NullInt64
 		)
 		if err := rows.Scan(&v.ID, &v.Title, &v.SHA256, &v.Size, &mime,
-			&v.CreatedAt, &prev, &isHead); err != nil {
+			&v.CreatedAt, &prev, &trashed); err != nil {
 			s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 			return
 		}
@@ -371,15 +382,56 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 			pid := prev.Int64
 			v.PreviousVersionID = &pid
 		}
-		v.IsHead = isHead == 1
-		out = append(out, v)
+		chain = append(chain, candidate{view: v, live: !trashed.Valid})
 	}
 	if err := rows.Err(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
 	}
-	if out == nil {
-		out = []VersionView{}
+	if err := rows.Close(); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
+		return
+	}
+
+	// Close the chain cursor before ACL checks: ACLAuthorizer performs its own
+	// reads, and holding one connection per request while acquiring another can
+	// exhaust the bounded read pool under concurrency.
+	candidates := make([]candidate, 0, len(chain))
+	for _, item := range chain {
+		if item.view.ID != id {
+			err := s.Authz.Can(r.Context(), authzPrincipal,
+				authz.KindDocument, item.view.ID, authz.PermView)
+			if err != nil {
+				var denied *authz.ErrDenied
+				if errors.As(err, &denied) {
+					continue
+				}
+				s.serverErr(w, "versions.authorize_node", err)
+				return
+			}
+		}
+		candidates = append(candidates, item)
+	}
+	visible := make(map[int64]bool, len(candidates))
+	for _, item := range candidates {
+		visible[item.view.ID] = true
+	}
+	liveChildren := make(map[int64]bool, len(candidates))
+	for _, item := range candidates {
+		if item.live && item.view.PreviousVersionID != nil && visible[*item.view.PreviousVersionID] {
+			liveChildren[*item.view.PreviousVersionID] = true
+		}
+	}
+	out := make([]VersionView, 0, len(candidates))
+	for _, item := range candidates {
+		v := item.view
+		if v.PreviousVersionID != nil && !visible[*v.PreviousVersionID] {
+			// Do not leak the id of an omitted predecessor through the remaining
+			// node's relationship field.
+			v.PreviousVersionID = nil
+		}
+		v.IsHead = !liveChildren[v.ID]
+		out = append(out, v)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"results": out})
 }
