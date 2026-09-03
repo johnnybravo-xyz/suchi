@@ -1022,6 +1022,11 @@ Query parameters:
 | `kind`    | (unset) | Literal prefix filter on the internal job kind.                                                                                                                  |
 | `include` | (both)  | `jobs` returns only the durable outbox; `approvals` returns only human approvals. Default returns both. |
 
+Malformed, non-positive, duplicated, or unsupported filter values return
+`400 bad_task_filter`; they never silently broaden the result. Job counts use
+the same `state`, `doc_id`, and `kind` filters as `results`. With
+`include=approvals`, job counts are zero and only `approvals_open` is populated.
+
 Response shape:
 
 ```json

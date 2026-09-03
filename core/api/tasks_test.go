@@ -76,6 +76,89 @@ func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
 	}
 }
 
+func TestListTasksRejectsAmbiguousOrMalformedFilters(t *testing.T) {
+	s := &Server{Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	for _, target := range []string{
+		"/api/tasks/?state=waiting",
+		"/api/tasks/?limit=none",
+		"/api/tasks/?limit=0",
+		"/api/tasks/?doc_id=none",
+		"/api/tasks/?doc_id=-1",
+		"/api/tasks/?include=both",
+		"/api/tasks/?state=dead&state=pending",
+	} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req = req.WithContext(auth.WithPrincipal(req.Context(), adminPrincipal(1)))
+			rec := httptest.NewRecorder()
+			s.ListTasks(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_task_filter"`) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestListTasksCountsUseTheRequestedJobFilters(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 5)
+	if _, err := d.Write.ExecContext(context.Background(), `
+		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (40, 49, 'System', 0);
+		INSERT INTO jd_categories(id, area_start, code, name, system) VALUES (49, 40, 49, 'Inbox', 1);
+		INSERT INTO documents(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (101, 5, 'sha-101', 1, 'Mine', 49, 0, 0);
+		INSERT INTO jobs(id, kind, doc_id, state, next_run_at, created_at, updated_at)
+		VALUES (201, 'post-ingest', 101, 'pending', 0, 1, 1),
+		       (202, 'post-classify', 101, 'dead', 0, 2, 2),
+		       (203, 'post-ingest', 101, 'done', 0, 3, 3);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/tasks/?doc_id=101&kind=post-ingest&include=jobs", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+	rec := httptest.NewRecorder()
+	s.ListTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response TasksResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || response.Results[0].ID != 201 {
+		t.Fatalf("results=%+v, want only pending post-ingest", response.Results)
+	}
+	if response.Counts["pending"] != 1 || response.Counts["done"] != 1 || response.Counts["dead"] != 0 {
+		t.Fatalf("filtered counts=%+v", response.Counts)
+	}
+
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/tasks/?state=pending&doc_id=101&kind=post-ingest&include=jobs", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+	rec = httptest.NewRecorder()
+	s.ListTasks(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Counts["pending"] != 1 || response.Counts["done"] != 0 {
+		t.Fatalf("state-filtered counts=%+v", response.Counts)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/?include=approvals", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+	rec = httptest.NewRecorder()
+	s.ListTasks(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Counts["pending"] != 0 || response.Counts["done"] != 0 || len(response.Results) != 0 {
+		t.Fatalf("approval-only job data: results=%+v counts=%+v", response.Results, response.Counts)
+	}
+}
+
 func TestRetryDeadJob(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
