@@ -57,7 +57,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
-	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 var ErrOwnerNotFound = errors.New("fswatch: owner not found")
@@ -480,24 +480,18 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 	}
 	seenSender := false
 	for i, c := range corrs {
-		if c.Name == "" {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
 			continue
 		}
 		role := c.Role
 		if role == "" {
 			role = "sender"
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO correspondents(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, c.Name, slug.Make(c.Name), now, now); err != nil {
+		corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+			name, now)
+		if err != nil {
 			return fmt.Errorf("upsert correspondent: %w", err)
-		}
-		var corID int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM correspondents WHERE name = ?`, c.Name).Scan(&corID); err != nil {
-			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role, position)
@@ -518,20 +512,13 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 	}
 
 	for _, name := range s.Tags {
+		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tags(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, name, slug.Make(name), now, now); err != nil {
+		tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+		if err != nil {
 			return fmt.Errorf("upsert tag %q: %w", name, err)
-		}
-		var tagID int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM tags WHERE name = ?`, name).Scan(&tagID); err != nil {
-			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,

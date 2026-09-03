@@ -41,7 +41,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/thumb"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/zugferd"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
-	"github.com/johnnybravo-xyz/suchi/core/slug"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -888,19 +887,8 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 			if name == "" {
 				continue
 			}
-			// Upsert the tag by slugified name (matches automation
-			// convention). Then attach.
-			sl := slug.Make(name)
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO tags(name, slug, created_at, updated_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-			`, name, sl, now, now); err != nil {
-				return err
-			}
-			var tagID int64
-			if err := tx.QueryRowContext(ctx,
-				`SELECT id FROM tags WHERE name = ?`, name).Scan(&tagID); err != nil {
+			tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+			if err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx,

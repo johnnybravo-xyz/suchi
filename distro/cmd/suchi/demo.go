@@ -28,7 +28,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
-	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
@@ -309,60 +309,35 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 }
 
 func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return sql.NullInt64{}, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO correspondents(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO NOTHING
-	`, name, slug.Make(name), now, now); err != nil {
-		return sql.NullInt64{}, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM correspondents WHERE name = ?`, name).Scan(&id); err != nil {
+	id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, now)
+	if err != nil {
 		return sql.NullInt64{}, err
 	}
 	return sql.NullInt64{Int64: id, Valid: true}, nil
 }
 
 func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64) (sql.NullInt64, error) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return sql.NullInt64{}, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO document_types(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO NOTHING
-	`, name, slug.Make(name), now, now); err != nil {
-		return sql.NullInt64{}, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM document_types WHERE name = ?`, name).Scan(&id); err != nil {
+	id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableDocumentTypes, name, now)
+	if err != nil {
 		return sql.NullInt64{}, err
 	}
 	return sql.NullInt64{Int64: id, Valid: true}, nil
 }
 
 func upsertTag(ctx context.Context, tx *sql.Tx, name string, now int64) (int64, error) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tags(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(name) DO NOTHING
-	`, name, slug.Make(name), now, now); err != nil {
-		return 0, err
-	}
-	var id int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM tags WHERE name = ?`, name).Scan(&id); err != nil {
-		return 0, err
-	}
-	return id, nil
+	return taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
 }
 
 // titleFromFilename turns "bescom_january.pdf" → "Bescom January". Not

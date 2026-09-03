@@ -5,13 +5,14 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
-	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // Roles for document_correspondents. Kept as constants + a small
@@ -57,6 +58,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_name", "name is required")
 		return
@@ -68,6 +70,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var corID int64
+	var canonicalName string
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		// Confirm doc still exists (authorize passed already but we
 		// need to fail cleanly if a race trashed the doc between then
@@ -84,16 +87,13 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		now := time.Now().Unix()
-		// Upsert correspondent by name.
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT INTO correspondents(name, slug, created_at, updated_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET updated_at = excluded.updated_at
-		`, req.Name, slug.Make(req.Name), now, now); err != nil {
+		corID, err = taxonomy.UpsertByName(r.Context(), tx, taxonomy.TableCorrespondents,
+			req.Name, now)
+		if err != nil {
 			return err
 		}
 		if err := tx.QueryRowContext(r.Context(),
-			`SELECT id FROM correspondents WHERE name = ?`, req.Name).Scan(&corID); err != nil {
+			`SELECT name FROM correspondents WHERE id = ?`, corID).Scan(&canonicalName); err != nil {
 			return err
 		}
 		// Junction row — no-op on duplicate role.
@@ -137,7 +137,7 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 		After: map[string]any{"correspondent_id": corID, "role": req.Role},
 	})
 	s.writeJSON(w, http.StatusCreated,
-		DocCorrespondent{ID: corID, Name: req.Name, Role: req.Role})
+		DocCorrespondent{ID: corID, Name: canonicalName, Role: req.Role})
 }
 
 // ListDocCorrespondents — GET /api/documents/{id}/correspondents/.
