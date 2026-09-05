@@ -1,194 +1,254 @@
 ---
-title: "Architecture"
-description: "System boundaries, data flow, storage, jobs, security, and extension points."
+title: "Backend architecture"
+description: "Follow a document through the Go runtime, find the owning code, and verify changes without breaking storage or security boundaries."
 ---
 
-Suchi is one statically linked Go binary with an embedded Svelte application.
-SQLite, content-addressed blobs, and generated filesystem views live under one
-`DATA_DIR`. The core runtime needs no database server, cache, or message broker.
-Optional document tools and configured network integrations sit outside that
-core.
+Suchi turns incoming files into a local archive: capture, extract, file,
+retrieve, and review. Each step must remain useful without an LLM or an external
+service. The production distribution is one statically linked Go binary with
+an embedded Svelte application, SQLite, immutable blobs, and rebuildable filing
+views under `DATA_DIR`. It needs no database server, cache, or message broker.
 
-## Repository boundaries
+This guide describes the implementation in this checkout. Product proposals in
+`../specs/` can include future work or contracts implemented on other branches;
+check the source and contract tests before carrying them into a change. For
+browser composition and bundle ownership, see [Frontend architecture](/spa-architecture).
 
-| Path | Responsibility |
+## Where to start a change
+
+These are ownership boundaries, not interchangeable layers or a directory inventory.
+
+| Concern | Entry point and owner |
 | --- | --- |
-| `core/` | Application services, storage, pipeline, API, and server-rendered entry pages |
-| `plugin-api/` | Small shared interfaces and value types |
-| `plugins/` | Compile-linked authentication, subscriber, and audit implementations |
-| `distro/cmd/suchi/` | CLI and dependency wiring |
-| `ui/` | Svelte source embedded into the binary |
-| `hack/` | Development, fixture, and benchmark tooling |
+| Process lifecycle and dependency wiring | `distro/cmd/suchi/main.go: runServe`; `serve_*.go` assembles runtime services and HTTP policy |
+| JSON requests and wire contracts | `core/api/api.go: Server.Register`; feature handlers stay together in `core/api/` |
+| Browser entry pages and blob delivery | `core/ui/ui.go` and `core/ui/spa.go`; API preview/download mirrors are wired in the CLI |
+| Identity and access decisions | `core/auth/`, `core/authz/`, `core/httpx/`; credential implementations in `plugins/local-auth/` and `plugins/oidc/` |
+| Durable state and work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
+| Capture and processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
+| Filing, review, and retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; their HTTP projections live in `core/api/` |
 
-Keep domain behavior in an existing `core` package when it shares that
-package's ownership. Add a package only for a distinct responsibility. A
-feature is a plugin when operators may replace or omit the implementation, not
-simply because it is optional.
+Keep behavior in its existing domain owner. `plugin-api/` is the small shared
+vocabulary for authenticators, job subscribers, and audit sinks, not a service
+framework. Plugins are compile-linked; there is no runtime Go plugin loader.
+The API receives explicit callbacks from the CLI when it needs an integration
+without importing `plugins/*`.
 
-## Data flow
+## Boot and shutdown
+
+Follow `runServe` when a service works in a unit test but is absent at runtime:
+
+1. Load and validate configuration, create `DATA_DIR`, open SQLite, apply
+   embedded migrations, and establish the Johnny.Decimal Inbox invariants.
+2. Construct authentication, CAS, rendering, retention, encryption keys, and
+   configured integrations. Optional parser availability is reported without
+   making a missing tool a startup failure.
+3. Register all durable subscribers before reclaiming interrupted jobs and
+   starting the dispatcher. Start the configured intake supervisors, backup,
+   and retention loops.
+4. Construct the API and browser handlers, inject runtime dependencies, register
+   routes, then wrap the assembled mux in the HTTP middleware.
+5. On termination, cancel the shared context and shut down HTTP with a bounded
+   grace period. Subscribers and subprocesses must honor cancellation.
+
+This is a single-server-process design. The single writer and startup job
+reclamation are not coordination for multiple servers sharing one database.
+
+## From upload to usable document
 
 ```mermaid
 flowchart LR
-  U[Upload API] --> D[(SQLite)]
-  F[Watched folder] --> D
-  M[IMAP watcher] --> D
-  D --> J[Durable jobs]
-  J --> P[Post-ingest pipeline]
-  P --> B[Content-addressed blobs]
-  P --> D
-  P --> R[Rendered filing view]
-  D --> A[JSON API]
-  B --> A
-  A --> S[Embedded SPA]
-  A --> C[Other clients]
+  I[Upload or intake] --> B[Original bytes in CAS]
+  B --> T[Commit document, source, and first job]
+  T --> J[Durable dispatcher]
+  J --> P[Extract and normalize]
+  P --> F[File and review]
+  P --> S[(SQLite text and metadata)]
+  P --> D[Derived CAS objects]
+  F --> S
+  S --> A[ACL-filtered retrieval]
+  D --> A
+  A --> C[Web app and API clients]
 ```
 
-All ingest producers create the document and its first job together. The
-pipeline identifies the format, normalizes or extracts content when tooling is
-available, writes derived blobs and metadata, then schedules classification,
-automation, rendering, or approval work. Missing optional tools degrade the
-result; they do not discard the original upload.
+For a new upload, `UploadDocument` follows this sequence:
 
-Acquisition provenance is stored separately from document identity. The same
-owner and content hash resolve to one document and one CAS blob, while distinct
-uploads, mailbox folders, watched paths, and imports become `document_sources`
-rows. Mailbox rows keep the name, address, and folder observed at ingest plus a
-nullable reference to the configured mailbox. The detail API uses the current
-mailbox name while that account exists and falls back to the recorded name
-after deletion. Exact repeats from the same mailbox and folder are ignored.
-Split pages and email attachments inherit their parent's sources; versions
-record their own upload source. Sources never stand in for version chains or
-document links.
+1. Require write scope and enforce the HTTP body limit. Sniff the content;
+   the supplied MIME type is not authoritative.
+2. Stream the original into CAS before opening the database write transaction.
+3. In one transaction, resolve owner/hash deduplication or insert the document,
+   record acquisition provenance, and enqueue `post-ingest` for a new document.
+4. After commit, nudge the dispatcher and emit the audit event. A lost nudge
+   cannot lose the persisted job. Re-uploading an existing live document records
+   its source without adding another extraction job.
+5. The post-ingest subscriber selects the format path, extracts content, and
+   writes derived bytes and metadata. Its common post-content path performs
+   local archive matching, automations, filing-view and thumbnail refresh, and
+   the optional `post-classify` handoff.
 
-## Storage and concurrency
+Filesystem and IMAP intake have their own producer code and use the same
+transactional document/job pattern. Import is deliberately different:
+`core/importer/bundle/` can restore supplied content, archive bytes, and
+metadata without automatically scheduling fresh extraction. Do not assume
+every document row means a new processing job.
 
-`core/db` opens separate pools against one SQLite file:
+`document_sources` describes acquisition, not document identity. The same owner
+and original hash can have several sources; one CAS object can be referenced by
+different documents. Mailbox history retains its observed name/folder even if
+the configured account is deleted. Split children and email attachments inherit
+sources; a version records its own upload. Sources, version chains, and document
+relationships are not substitutes for one another.
 
-- `DB.Write` has one connection. Mutations use `WriteTx`, which serializes
-  writers inside the process.
-- `DB.Read` serves concurrent reads while WAL mode allows the writer to
-  continue.
+## Storage and transaction invariants
 
-SQLite pragmas are applied by the DSN and include WAL, foreign keys, a busy
-timeout, and bounded memory mapping. Migrations under `core/db/migrations/` are
-embedded, numbered, and applied at boot. Each release adds at most one migration:
-fold unreleased schema changes into that file, then keep it immutable after
-publication. Later schema corrections use a new migration.
+`DB.Write` has one connection; `DB.Read` has a small concurrent pool. Both open
+the same SQLite file with WAL, foreign keys, a busy timeout, and bounded memory
+mapping. Use `WriteTx` for mutations and pass its `*sql.Tx` into helpers that
+participate in that transaction. Re-entering the write pool from inside a
+transaction waits on the connection already held by the caller.
 
-Original and derived bytes are immutable CAS objects addressed by SHA-256:
+Keep network calls, subprocesses, and long file processing outside write
+transactions. Enqueue required asynchronous work with the state change that
+requires it, not in a separate best-effort write afterward. Audit logging is
+generally post-commit and must not be mistaken for a transactional job outbox.
+
+Original and derived bytes are addressed by SHA-256:
 
 ```text
 $DATA_DIR/blobs/sha256/ab/cd/ef/<full-hash>
 ```
 
-Writes stream through a same-directory temporary file and finish with an
-atomic rename. Database rows reference the blobs. The rendered Johnny.Decimal
-tree is a rebuildable projection, not another source of truth.
+`CAS.Put` hashes a stream into a temporary file at the CAS root, then renames it
+into its shard on the same filesystem. SQLite and the filesystem are not one
+transaction: a later database failure can leave an unreferenced blob, which
+the GC path can reclaim. Do not delete by hash on a request failure; another
+document may reference it.
 
-## Durable work
+Preserve `original_blob` and the original MIME type. Decryption, normalization,
+and OCR create derived objects rather than overwriting the upload. The rendered
+Johnny.Decimal tree is a rebuildable projection. Trash, retention, and
+`core/gc/` own deletion and reference-aware reclamation. Back up the complete
+data directory, including the keys that decrypt sealed credentials.
 
-The `jobs` table is Suchi's queue. Producers enqueue in the same transaction as
-the state change that requires work. The dispatcher claims ready rows, invokes
-registered subscribers, retries failures with backoff, and parks exhausted
-jobs as `dead`. Running internal jobs are reclaimed after an interrupted
-process.
+Migrations are embedded and ordered. Fold unreleased schema changes into the
+current release migration; never rewrite a migration already published in a
+release. See [Release process](/release-process).
 
-Subscribers must be idempotent and respect context cancellation. Network calls
-and subprocess work happen after the producer transaction commits.
-Ready jobs drain in serial batches; the polling interval is an idle fallback,
-so a backlog or follow-up stage does not wait between batches.
+## HTTP and security boundaries
 
-Common job families include:
+`distro/cmd/suchi/serve_middleware.go: buildHTTPHandler` composes request IDs,
+security headers, access logging, metrics, body limits, authentication, token
+policy, and Fetch Metadata checks around the normalized API mux.
 
-| Family | Owner |
+These gates answer different questions:
+
+- **Authentication:** `core/auth` establishes a principal. OIDC is checked
+  before local authentication; anonymous demo authentication is last.
+- **Token authority:** `serve_token_policy.go` explicitly lists routes available
+  to local API tokens and demo scratch tokens. Unlisted routes are session-only;
+  an admin role does not bypass this boundary. Add a route's scope deliberately
+  and test the assembled handler, not only the bare API method.
+- **Roles and capabilities:** handlers enforce administration or feature grants,
+  including archive chat and intelligence. Scopes do not imply those grants.
+- **Object authorization:** `core/authz` combines ownership, administrator
+  access, direct grants, and group grants. Lists, counts, search, and similarity
+  constrain visibility in SQL before pagination, not by filtering returned rows.
+- **Browser origin:** cookie-session mutations reject sibling-origin
+  `same-site` and `cross-site` Fetch Metadata requests. Same-origin and
+  headerless compatibility requests remain supported; explicit token/bearer
+  integrations are exempt. Do not replace this with a CORS-only check.
+
+The public token scopes are `documents:read`, `documents:write`, and
+`events:read`; they are distinct grants, not a hierarchy. A feed-only token
+cannot read document content. Document-read access still needs a document ACL.
+The policy preserves deliberate exceptions such as admin-token metrics and
+scope-subset token creation; read [HTTP API](/api) before changing compatibility.
+
+Preview/download aliases share `core/ui`'s blob-serving behavior, including
+object checks, reveal gates, ETags, and preview CSP. Thumbnails have their own
+handler in `core/api/documents_thumb.go`. High sensitivity is a reveal posture,
+not an additional tenant boundary. Normal API document reads can return content
+to an authorized reader; untouched `raw=1` downloads are an administrator
+session-only surface.
+
+Mailbox secrets, OAuth caches, PDF passwords, and model keys are sealed.
+Browser session identifiers and API tokens are stored as digests. Audit events
+must exclude document bodies and credentials. See [Permissions](/permissions)
+and [Privacy](/privacy) for the user-facing contract.
+
+## Retrieval, filing, and human review
+
+`core/searchquery` parses a bounded flat clause list, resolves symbolic names
+at the API boundary, and compiles parameterized SQL and FTS constraints.
+`core/api/search_query.go` connects that plan to both ranked Search and sortable
+Documents. Keep the document set consistent while retaining each endpoint's
+different response shape. Saved views use the same query contract.
+
+Local archive matching fills unresolved metadata before user automations.
+Automations are the deterministic trigger/condition/action engine; approvals
+are the state-machine engine for human decisions. Do not introduce a second
+workflow engine for a new intake source or integration.
+
+`core/intelligence` validates reviewable extracted facts; its API applies
+source-document visibility. Archive chat is bounded, on-demand retrieval in
+`core/api/chat.go`, not a background job or a general agent runtime. It uses
+the same configured model integration through explicit callbacks. Preserve
+evidence limits, review decisions, and human-edited metadata when changing
+extraction or classification.
+
+## Durable work and optional integrations
+
+`core/jobs/jobs.go` owns claims, retries, and dead letters. Current job kinds
+are `post-ingest`, `post-classify`, `render`, `approval:advance`, and
+`approval:timeout-sweep`. The dispatcher drains ready work in serial batches;
+polling is only the idle fallback. A job can run again after failure or a
+crash, including when its side effect succeeded but completion was not recorded.
+
+Subscribers must be idempotent, honor cancellation, and keep payload contracts
+beside their owner. Register before `Run`; the registry is not dynamically
+synchronized. Unknown kinds and terminal errors become `dead`; other failures
+retry with bounded attempts/backoff. Pipeline versions in the processing
+owners let rescan target stale results.
+
+Local parsing remains useful without the optional classifier. Remote model
+endpoints require explicit egress acknowledgement, and redirects are rejected.
+Intake and identity integrations have their own configured destinations; do not
+make useful local operation depend on a Suchi-operated service.
+
+External parsers run through `core/sandbox` with timeouts, bounded captured
+stdout/stderr, explicit environment, and temporary working directories.
+Unix cancellation kills the process group. This is a subprocess resource
+wrapper, **not OS-level isolation**: it does not deny filesystem/network access
+or impose process memory limits. Keep format-specific input/output limits and
+deployment isolation explicit; a unit test with a stub executable does not
+establish the safety or availability of the real parser.
+
+## Change and verification map
+
+Start with the affected boundary, then run the aggregate loop.
+
+| Change | Focused verification |
 | --- | --- |
-| `postingest:*` | Document normalization and extraction |
-| `classify:*` | Optional LLM classification |
-| `render:*` | Filesystem-view updates |
-| `approval:*` | Approval advancement and timeout sweeps |
+| Routes, scopes, credentials, or ACLs | `go test ./core/auth/... ./core/authz/... ./core/httpx/... ./core/api/... ./core/ui/... ./distro/cmd/suchi/...`; cover denied principals, aliases, counts, and direct blob routes |
+| Query/filter semantics | `go test ./core/searchquery/... ./core/api/...`; preserve Search/Documents parity and hidden-document exclusion |
+| Ingest or a format tool | `go test ./core/ingest/... ./core/pipeline/... ./core/sandbox/...`; verify original preservation, retries, and the affected real-tool smoke test |
+| Queue or concurrent runtime state | `go test -race ./core/jobs/... ./distro/cmd/suchi/...`; exercise backlog draining, cancellation, and restart recovery |
+| Schema, blobs, or deletion | `go test ./core/db/... ./core/blob/... ./core/trash/... ./core/gc/... ./core/importer/bundle/...`; cover migration and shared-blob references |
+| Filing, model suggestions, or review | `go test ./core/automations/... ./core/approvals/... ./core/intelligence/... ./plugins/llm-classifier/...`; preserve human decisions and no-model behavior |
 
-## HTTP, authentication, and authorization
+```sh
+make check        # format, vet, tests, staticcheck across Go modules; UI and embedded parity
+make smoke        # build; health/readiness against a disposable loopback server
+make docs-check   # documentation links
+```
 
-The standard JSON surface is `/api/*`; the embedded application consumes the
-same endpoints as external clients. List responses use the documented JSON
-envelopes in [HTTP API](/api).
+Use a writable `GOCACHE` in a restricted environment. To force re-execution, use
+`make test TEST_FLAGS='-count=1 -timeout 60s'`. The race detector needs a working
+CGO toolchain. UI changes additionally require `make ui` and
+the relevant browser regressions. Use focused benchmarks for a claimed local
+performance win and `make bench-check` for startup/memory/binary guardrails.
 
-Requests pass through request-ID, logging, authentication, scope, and
-authorization layers; the Go HTTP server contains handler panics. Authentication establishes a principal through local
-sessions or tokens and optional OIDC. Authorization then applies roles, groups,
-object ACLs, ownership, and sensitivity rules.
-
-List and search handlers put visibility constraints inside SQL. Post-filtering
-would leak counts or break pagination. Mutations emit audit events after their
-state change succeeds; audit JSON never includes document content or secrets.
-
-Secrets such as mailbox credentials and OAuth caches, PDF passwords, and LLM API
-keys are sealed with the generated key under `DATA_DIR`. API tokens
-and browser session identifiers are stored as digests. The operator must back
-up the whole data directory, not only the database.
-
-## Processing boundaries
-
-External parsers run through `core/sandbox` with a controlled environment,
-timeouts, output limits, temporary working directories, and process-group
-cleanup. Upload limits are enforced before work is scheduled.
-
-Preview and download routes enforce document view permission before reading a
-blob. High-sensitivity previews additionally require an explicit reveal.
-Cookie-session mutations accept same-origin and headerless compatibility
-requests but reject both sibling-origin `same-site` and `cross-site` browser
-requests through Fetch Metadata checks. Token-authenticated integrations are
-exempt. UI responses set CSP, frame, and content-type protections.
-
-## Classification and workflows
-
-- **Archive matching** learns unresolved filing metadata from visible similar documents.
-- **Automations** provide deterministic classification through typed triggers and ordered actions.
-- **Approvals** model human decisions that directly control a system action,
-  including low-confidence metadata suggestions.
-- **LLM classification** is an optional fixed post-extraction subscriber with
-  explicit egress acknowledgement.
-
-These mechanisms share the durable job and audit infrastructure while keeping
-network calls outside automation transactions and human decisions explicit.
-
-## Extension points
-
-`plugin-api` defines the stable shared vocabulary:
-
-- `Authenticator` adds an authentication source.
-- `Subscriber` consumes durable jobs.
-- `AuditSink` receives audit events for external export.
-
-Plugins are compiled into a distribution; Suchi does not load arbitrary Go
-shared objects at runtime. Format extractors and core workflow actions remain
-ordinary `core` packages when they are part of the shipped product.
-
-## Invariants
-
-Changes should preserve these properties:
-
-- one in-process SQLite writer and no writes through the read pool
-- bound SQL values and allow-listed dynamic identifiers
-- immutable CAS writes with same-filesystem atomic replacement
-- document visibility applied inside list, search, and similar-document queries
-- durable work enqueued with the mutation that requires it
-- retry-aware subscribers with explicit deduplication where side effects need
-  it, plus bounded subprocess execution
-- sealed credentials and content-free audit records
-- generated views treated as rebuildable projections
-
-## Adding a feature
-
-1. Place behavior in the package that owns the domain; introduce a new package
-   only when ownership is distinct.
-2. Add a migration for schema changes and enqueue follow-up work transactionally.
-3. Apply scopes and object authorization at the handler boundary.
-4. Add focused unit or HTTP integration coverage with a temporary database.
-5. Update the API guide, user documentation, and changelog in the same change.
-6. Run `make check`; add `make smoke` or `make bench-check` when the affected
-   surface warrants it.
-
-Related references: [configuration](/config), [formats](/formats),
-[permissions](/permissions), [automations](/automations),
-[approvals](/approvals), and [plugins](/plugins).
+When a change moves ownership, entry points, state flow, or an invariant, update
+this guide in the same change. Update the relevant public API/feature guide and
+changelog for observable changes. Report missing real-tool or runtime checks
+explicitly; passing mocks does not establish end-to-end compatibility.

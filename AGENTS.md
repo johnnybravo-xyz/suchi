@@ -8,6 +8,8 @@ Optional integrations must preserve useful local operation.
 - Read `README.md` and the relevant `docs/` guide. Code, contract tests, and
   `CHANGELOG.md` describe the shipped implementation; `../specs/` also contains
   future proposals and records for other branches.
+- Read `docs/architecture.mdx` for the product/backend map and
+  `docs/spa-architecture.mdx` for browser ownership before changing a boundary.
 - `core/` owns application behavior; `plugins/` contains compiled integrations;
   `plugin-api/` is the extension vocabulary; `distro/cmd/suchi/` wires it.
 - `ui/src/` owns the web app. Commit its generated `core/ui/spa/dist/` bundle
@@ -47,3 +49,10 @@ Optional integrations must preserve useful local operation.
 - Delete unused code before adding abstractions. Keep ACL, recovery, retry,
   and wire-contract tests; prefer observable assertions over source-text checks.
 - Update the relevant public guide and changelog for user-visible changes.
+- For architecture changes, update the affected architecture guides in the
+  same commit: responsibilities, entry points, data/request/job flow, storage,
+  trust/egress boundaries, extension contracts, and verification commands.
+  Follow their links to the affected pipeline/plugin/workflow guides rather
+  than duplicating those designs. Before handoff, compare docs to the actual
+  diff; if architecture is unchanged, say so in the commit or PR. The hook is
+  only a reminder, not semantic validation.

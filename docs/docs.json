@@ -33,7 +33,6 @@
           {
             "group": "Concepts",
             "pages": [
-              "architecture",
               "jd",
               "search",
               "query-language",
@@ -67,6 +66,7 @@
           {
             "group": "Development",
             "pages": [
+              "architecture",
               "spa-architecture",
               "release-process"
             ]

@@ -4,14 +4,11 @@
 //
 //	$DATA_DIR/blobs/sha256/ab/cd/ef/abcdef...ff
 //
-// Three levels caps any single directory at ~4k entries even with
-// millions of blobs — matters on ext4/xfs where a single directory
-// with hundreds of thousands of entries turns O(1) opens into O(N)
-// disk seeks, and matters for backup tooling (rsync, restic) that
-// walks the tree.
+// Hash-prefix sharding avoids collecting every blob in one directory.
+// It distributes entries without imposing a fixed per-directory limit.
 //
 // Writes stream through sha256 and land via atomic rename from a
-// per-put temp file in the same sharded directory (so the rename is
+// per-put temp file at the CAS root (so the rename is
 // same-device). Duplicate puts are cheap: same hash → same path → we
 // keep the existing file and return the ref.
 package blob
@@ -31,7 +28,7 @@ import (
 
 // CAS is the filesystem content-addressed store.
 type CAS struct {
-	root string // absolute; contains a "sha256" subdir
+	root string // absolute path to blobs/sha256
 }
 
 // ErrNotFound is returned by Get/Stat when the requested hash is absent.
@@ -56,7 +53,7 @@ func New(dir string) (*CAS, error) {
 // already exists at its computed hash, Put is a no-op that still returns
 // the ref — dedup is a property of the CAS, not the caller.
 //
-// The temp file is created inside the destination shard directory so the
+// The temp file is created at the CAS root so the
 // final rename is always same-device (POSIX atomic).
 func (c *CAS) Put(r io.Reader) (pluginapi.BlobRef, error) {
 	// Bootstrap: we don't know the hash yet, so we can't pick the final
