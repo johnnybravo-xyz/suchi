@@ -2,7 +2,7 @@
 #
 # hack/smoke-anydoc-docx.sh — end-to-end verify that a docx ingest hits
 # anydoc and lands non-empty content. Builds the standard image, boots a
-# throwaway container against /tmp/suchi-smoke-anydoc, bootstraps the
+# throwaway container against a unique temporary directory, bootstraps the
 # admin, uploads a hand-crafted minimal docx, waits for post-ingest,
 # and asserts documents.content is non-empty and contains the marker
 # string.
@@ -14,44 +14,57 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${IMAGE:-suchi:standard}"
-DATA_DIR="${DATA_DIR:-/tmp/suchi-smoke-anydoc}"
 PORT="${PORT:-8765}"
 BASE="http://127.0.0.1:$PORT"
 EMAIL="you@example.com"
 PASSWORD="local-smoke-passwd"
 MARKER="RUSTIC_FLAMINGO_QUANTUM_TROMBONE"  # unlikely-to-hit-elsewhere marker
 
-trap 'docker rm -f suchi-smoke-anydoc >/dev/null 2>&1 || true' EXIT
+SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/suchi-smoke-anydoc.XXXXXX")"
+DATA_DIR="$SMOKE_DIR/data"
+STAGE="$SMOKE_DIR/docx"
+CONTAINER_NAME="suchi-smoke-anydoc-${SMOKE_DIR##*.}"
+CONTAINER_ID=""
+
+cleanup() {
+  if [ -n "$CONTAINER_ID" ] && ! docker rm -f "$CONTAINER_ID" >/dev/null 2>&1; then
+    echo "teardown failed for $CONTAINER_ID; temporary state retained at $SMOKE_DIR" >&2
+    exit 1
+  fi
+  rm -rf -- "$SMOKE_DIR"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "== build =="
 docker build --target standard -t "$IMAGE" "$ROOT"
 
 echo
-echo "== fresh DATA_DIR =="
-rm -rf "$DATA_DIR"
+echo "== temporary DATA_DIR: $DATA_DIR =="
 mkdir -p "$DATA_DIR"
 
 echo
 echo "== boot standard =="
-docker rm -f suchi-smoke-anydoc >/dev/null 2>&1 || true
 # Run as the host UID so writes to the bind-mounted DATA_DIR succeed.
 # The image bakes UID 65532 for named volumes; host bind-mounts don't
 # inherit that ownership, so a --user override is the friction-free
 # path (the Go binary is CGO_ENABLED=0 and doesn't care about UIDs).
-docker run -d --name suchi-smoke-anydoc \
+CONTAINER_ID=$(docker create --name "$CONTAINER_NAME" \
   --user "$(id -u):$(id -g)" \
-  -p "$PORT:8000" \
+  -p "127.0.0.1:$PORT:8000" \
   -e PUBLIC_URL="$BASE" \
   -e HOME=/tmp \
   -v "$DATA_DIR:/data" \
-  "$IMAGE" >/dev/null
+  "$IMAGE")
+docker start "$CONTAINER_ID" >/dev/null
 
 for _ in $(seq 1 60); do
   if curl -sf "$BASE/healthz" >/dev/null; then break; fi
   sleep 0.5
 done
 if ! curl -sf "$BASE/healthz" >/dev/null; then
-  echo "suchi never came up:"; docker logs suchi-smoke-anydoc | tail -50; exit 1
+  echo "suchi never came up:"; docker logs "$CONTAINER_ID" | tail -50; exit 1
 fi
 echo "suchi up on :$PORT"
 
@@ -62,22 +75,22 @@ echo "== confirm anydoc is on PATH inside the image =="
 # the binary should print USAGE and exit non-zero. Any other outcome
 # (segfault, missing binary, ELF format error) means the anydoc-build
 # stage produced something broken.
-USAGE_OUT=$(docker exec suchi-smoke-anydoc anydoc 2>&1 || true)
+USAGE_OUT=$(docker exec "$CONTAINER_ID" anydoc 2>&1 || true)
 if ! echo "$USAGE_OUT" | grep -qi "usage"; then
   echo "anydoc no-arg check didn't print USAGE — binary is broken"
   echo "  got: $USAGE_OUT"
-  docker exec suchi-smoke-anydoc which anydoc || echo "  not on PATH"
+  docker exec "$CONTAINER_ID" which anydoc || echo "  not on PATH"
   exit 1
 fi
 echo "  binary OK — usage line: $USAGE_OUT"
 
 echo
 echo "== bootstrap admin =="
-TOKEN=$(docker logs suchi-smoke-anydoc 2>&1 \
+TOKEN=$(docker logs "$CONTAINER_ID" 2>&1 \
         | grep 'localauth.setup.token_minted' \
         | grep -oP '"token":"\K[^"]+' | head -1)
 if [ -z "${TOKEN:-}" ]; then
-  echo "setup token not found in log"; docker logs suchi-smoke-anydoc | tail -30; exit 1
+  echo "setup token not found in log"; docker logs "$CONTAINER_ID" | tail -30; exit 1
 fi
 curl -sf -X POST "$BASE/setup" \
      -H 'Content-Type: application/json' \
@@ -95,8 +108,6 @@ fi
 echo
 echo "== craft minimal .docx with marker $MARKER =="
 DOCX="$DATA_DIR/smoke.docx"
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"; docker rm -f suchi-smoke-anydoc >/dev/null 2>&1 || true' EXIT
 
 mkdir -p "$STAGE/_rels" "$STAGE/word/_rels"
 
@@ -186,6 +197,6 @@ else
   echo "   content length: ${#CONTENT}"
   echo "   content head: ${CONTENT:0:400}"
   echo "   suchi logs (last 30 lines):"
-  docker logs suchi-smoke-anydoc 2>&1 | tail -30
+  docker logs "$CONTAINER_ID" 2>&1 | tail -30
   exit 1
 fi
