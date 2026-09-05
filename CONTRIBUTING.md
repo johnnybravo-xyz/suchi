@@ -76,6 +76,14 @@ make bench-check  # binary, startup, memory, and goroutine guardrails
 make security-check # release-time Go and frontend advisory scan
 ```
 
+`make test` reuses Go's cache for unchanged packages. To force a fresh run,
+use `make test TEST_FLAGS='-count=1 -timeout 60s'` (also used by CI). For a
+focused backend edit, start with `go test ./core/<package>`; use `-race` when
+changing concurrency. The module checks include the standalone benchmark tools.
+
+`make smoke` waits for a fresh server to become ready and removes its temporary
+data on exit. Set `PORT` to use a different local port.
+
 Tests should cover the contract being changed: authorization and refusal cases
 for handlers, validated input and output for pipeline steps, and live reload or
 restart behavior for configuration changes.

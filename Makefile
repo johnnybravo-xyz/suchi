@@ -2,8 +2,10 @@
 
 .DEFAULT_GOAL := help
 
-BIN := $(PWD)/dist/suchi
-MODULES := . plugin-api hack/emlfixtures
+BIN := $(CURDIR)/dist/suchi
+MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/tools/gen-pdf hack/bench/tools/report
+TEST_FLAGS ?= -timeout 60s
+GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.817
@@ -43,10 +45,10 @@ build:
 	@echo "built $(BIN) ($$(du -h $(BIN) | cut -f1))"
 
 test:
-	@for m in $(MODULES); do echo "=== test $$m ==="; ( cd $$m && go test -count=1 -timeout 60s ./... ) || exit 1; done
+	@for m in $(MODULES); do echo "=== test $$m ==="; ( cd "$$m" && GOWORK=off go test $(TEST_FLAGS) ./... ) || exit 1; done
 
 vet:
-	@for m in $(MODULES); do echo "=== vet $$m ==="; ( cd $$m && go vet ./... ) || exit 1; done
+	@for m in $(MODULES); do echo "=== vet $$m ==="; ( cd "$$m" && GOWORK=off go vet ./... ) || exit 1; done
 
 lint:
 	@tool="$$(command -v staticcheck || printf '%s/bin/staticcheck' "$$(go env GOPATH)")"; \
@@ -54,18 +56,18 @@ lint:
 	  test ! -x "$$tool" || actual="$$($$tool -version 2>/dev/null || true)"; \
 	  case "$$actual" in *"($$want)") ;; *) go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION);; esac; \
 	  for m in $(MODULES); do echo "=== lint $$m ==="; \
-	    ( cd "$$m" && "$$tool" ./... ) || exit 1; \
+	    ( cd "$$m" && GOWORK=off "$$tool" ./... ) || exit 1; \
 	  done
 
 fmt:
-	gofmt -w $$(find . -type f -name '*.go' -not -path './*/vendor/*')
+	@$(GO_FILES) | xargs -0 gofmt -w
 
 fmt-check:
-	@test -z "$$(gofmt -l $$(find . -type f -name '*.go' -not -path './*/vendor/*'))" || \
-	  (gofmt -l $$(find . -type f -name '*.go' -not -path './*/vendor/*'); exit 1)
+	@set -e; drift="$$( $(GO_FILES) | xargs -0 gofmt -l )"; \
+	  test -z "$$drift" || { printf '%s\n' "$$drift" 'Run make fmt to format these files.'; exit 1; }
 
 tidy:
-	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd $$m && go mod tidy ) || exit 1; done
+	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd "$$m" && GOWORK=off go mod tidy ) || exit 1; done
 
 check: fmt-check vet test lint ui-check
 
@@ -82,12 +84,28 @@ security-check:
 
 # Convenience: build + smoke-test the running server.
 smoke: build
-	@rm -rf /tmp/suchi-smoke && mkdir -p /tmp/suchi-smoke
-	@PUBLIC_URL=http://127.0.0.1:8765 LISTEN_ADDR=:8765 DATA_DIR=/tmp/suchi-smoke $(BIN) serve & \
-	  echo "pid=$$!"; sleep 1; \
-	  curl -sf http://127.0.0.1:8765/healthz || (kill $$! ; exit 1); \
-	  curl -sf http://127.0.0.1:8765/readyz || (kill $$! ; exit 1); \
-	  kill $$!
+	@set -eu; smoke_dir="$$(mktemp -d /tmp/suchi-smoke.XXXXXXXX)"; smoke_pid=''; \
+	  trap 'test -z "$$smoke_pid" || { kill "$$smoke_pid" 2>/dev/null || true; wait "$$smoke_pid" 2>/dev/null || true; }; rm -rf "$$smoke_dir"' EXIT; \
+	  trap 'exit 1' HUP INT TERM; \
+	  port="$${PORT:-8765}"; url="http://127.0.0.1:$$port"; \
+	  if curl -s --max-time 1 "$$url/healthz" >/dev/null; then \
+	    printf 'smoke: %s is already serving; choose another PORT\n' "$$url" >&2; exit 1; \
+	  fi; \
+	  PUBLIC_URL="$$url" LISTEN_ADDR="127.0.0.1:$$port" DATA_DIR="$$smoke_dir" \
+	    SUCHI_DEV=0 SUCHI_DEMO_MODE=0 OIDC_ISSUER_URL='' INGEST_FS_DIR='' \
+	    INGEST_FS_OWNER_EMAIL='' LLM_ENDPOINT_URL='' \
+	    "$(BIN)" serve >"$$smoke_dir/server.log" 2>&1 & smoke_pid=$$!; \
+	  attempts=0; \
+	  until curl -fsS --max-time 1 "$$url/healthz" >/dev/null 2>&1 && \
+	        curl -fsS --max-time 1 "$$url/readyz" >/dev/null 2>&1; do \
+	    attempts=$$((attempts + 1)); \
+	    if ! kill -0 "$$smoke_pid" 2>/dev/null || test "$$attempts" -ge 60; then \
+	      cat "$$smoke_dir/server.log" >&2; exit 1; \
+	    fi; \
+	    sleep 0.1; \
+	  done; \
+	  kill -0 "$$smoke_pid"; \
+	  printf 'smoke: health and readiness passed at %s\n' "$$url"
 
 run: build
 	@mkdir -p /tmp/suchi-dev
@@ -143,14 +161,13 @@ smoke-ingest:
 smoke-mail:
 	@cd deploy/mail-mbsync && ./smoke-test.sh
 
-# Copy tracked hooks into .git/hooks. Idempotent; re-run after adding a
-# new script under hooks/. Uses install -D so a fresh clone that
-# doesn't yet have .git/hooks/ still works.
+# Resolve hooks through Git so installation also works in linked worktrees.
 install-hooks:
-	@set -e; for f in hooks/*; do \
+	@set -e; hooks_dir="$$(git rev-parse --git-path hooks)"; mkdir -p "$$hooks_dir"; \
+	  for f in hooks/*; do \
 	  case "$$f" in hooks/README.md) continue;; esac; \
-	  install -D -m 0755 "$$f" .git/hooks/"$$(basename $$f)"; \
-	  echo "installed .git/hooks/$$(basename $$f)"; \
+	  install -m 0755 "$$f" "$$hooks_dir/$$(basename "$$f")"; \
+	  echo "installed $$hooks_dir/$$(basename "$$f")"; \
 	done
 
 # Perf guardrail: rebuild suchi and re-measure idle RAM, cold start,
@@ -158,5 +175,3 @@ install-hooks:
 # `hard` threshold in hack/bench/thresholds.json.
 bench-check: build
 	@./hack/bench/bench.sh --scenario 01 --scenario 02 --scenario 03 --scenario 07 --thresholds
-
-.PHONY: bench-check

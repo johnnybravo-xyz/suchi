@@ -6,14 +6,14 @@ Per-clone install:
 make install-hooks
 ```
 
-That copies every executable in `hooks/` into `.git/hooks/`. Run it once
-after `git clone`, and again after adding a new hook to this dir.
+That copies the scripts into Git's hooks directory, including when run from a
+linked worktree. Linked worktrees share those hooks. Run it once after cloning,
+and again after changing a hook.
 
 ## Hooks that live here
 
-- **pre-commit** — runs `gofmt -l` against every tracked `*.go` file and
-  refuses the commit if anything would be reformatted. Matches CI's
-  `gofmt` gate exactly, saves a bounce.
+- **pre-commit** — runs `make fmt-check` over project Go files, including new
+  files, excluding Git metadata, frontend dependencies, and vendored code.
 
 No pre-commit *framework* dep — these are plain shell scripts, portable
 back to the git-in-1998 hook interface.
