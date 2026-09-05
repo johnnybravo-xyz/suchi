@@ -26,6 +26,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- `doctor` drops a misleading shard-capacity sample whose threshold cannot
+  occur in the hash-prefix layout. Explicit CAS integrity checks are unchanged.
 - Reviewed tool and dependency pins advance to compatible previous-stable
   releases, including Go 1.27.0, Bun 1.4.1, AnyDoc 0.2.3, and SQLite 1.57.
   CI actions use immutable commits, and AnyDoc builds honor its Cargo lockfile.

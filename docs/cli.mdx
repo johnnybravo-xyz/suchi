@@ -168,10 +168,10 @@ One-shot diagnostic report. Prints:
 - `$DATA_DIR` writability
 - Operational indicators: last-backup age (WARN past 2× `BACKUP_INTERVAL`),
   dead-job count, oldest running job (WARN >15m), effective upload cap,
-  last boot's orphaned-job reclaim count, one sampled CAS shard, and the
+  last boot's orphaned-job reclaim count, and the
   `audit_events` row total against the retention window
 
-It does not test remote connectivity, available disk space, every CAS shard,
+It does not test remote connectivity, available disk space, CAS shard capacity,
 or operator-script egress. Use `--scrub-cas` for the explicit full CAS hash
 walk.
 
