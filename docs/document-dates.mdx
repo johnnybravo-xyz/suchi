@@ -30,14 +30,44 @@ For each document, the existing classification request may propose up to three
 important dates. Suchi validates the date, its role, and the supporting text
 before storing it. This does not add a second model request.
 
-Dates can have these roles:
+The model chooses a role from the document's context. These are the eight
+allowed roles and their intended meanings, not hard-coded classification rules:
 
-```text
-issued, due, start, end, expiry, renewal, service, other
-```
+| Role | Intended meaning |
+| --- | --- |
+| `issued` | When a document was issued |
+| `due` | A payment or action deadline |
+| `start` | When an agreement, coverage, or activity begins |
+| `end` | When a period or activity ends |
+| `expiry` | When something stops being valid |
+| `renewal` | When an agreement or subscription renews |
+| `service` | When a service was provided |
+| `other` | Another relevant date that does not fit those roles |
 
-Examples include an invoice due date, policy expiry, flight date, lease renewal,
-or the issue date printed on a form.
+Suchi checks date format, allowed roles, and supporting text. Those checks do
+not independently verify the model's interpretation of a role. Read the source
+quote; turn automatic dates off if each new date should need a human decision
+in Approvals before reaching Calendar.
+
+## Date precision and confidence
+
+Precision describes how much of the date the document supplies. There are
+exactly three values:
+
+| Precision | Meaning | Example display |
+| --- | --- | --- |
+| `day` | A specific day | 6 Aug 2026 |
+| `month` | A month, without a known day | Aug 2026 |
+| `year` | A year, without a known month or day | 2026 |
+
+Calendar and Approvals display only the known precision. For storage and
+sorting, August 2026 uses `2026-08-01` and the year 2026 uses `2026-01-01`.
+Those first-day placeholders do not mean the document names that exact day.
+
+Confidence is separate: it is the model's self-reported score for its extraction,
+not a measured probability of correctness. A model can be highly confident that
+the document names only a year. Percentages are rounded; even **100%** is not a
+guarantee. Check the source text before relying on a date.
 
 ## Choose automatic or reviewed dates
 
@@ -78,6 +108,10 @@ Calendar distinguishes how each date got there:
 - A **reviewed** date records the person's decision and review time. Rejected
   dates do not appear on Calendar.
 
+Calendar's agenda shows the date role and **Automatic** or **Reviewed** status.
+Expand that status to see **LLM Classifier confidence: N%**. The date itself
+conveys its precision, without a separate `day`, `month`, or `year` label.
+
 Rescanning refreshes unreviewed machine output from the current document and
 extractor version. It does not overwrite a person's accepted or rejected
 decision. This prevents stale automatic results from accumulating while keeping
@@ -106,13 +140,51 @@ See [Approvals](/approvals) for permissions and API behavior.
 Calendar shows dates added automatically and dates approved in Approvals. It
 supports:
 
-- month and agenda views;
+- a month grid, a full-width day agenda, or an all-dates agenda for
+  document-scoped links;
 - date-role filtering;
 - all accessible documents or one saved View; and
 - direct links back to each source document.
 
 Calendar always reapplies document access rules. A date cannot reveal a document
 the viewer is not allowed to read.
+
+Only exact-day dates appear in day cells. Month-only and year-only dates stay in
+the agenda. Month filtering still uses the stored sorting date: a month-only
+date appears in that month's agenda, and a year-only date in January's agenda.
+It does not repeat a year-only date in every month. Research links below avoid
+this month filter and include all months and years.
+
+### Open a day's dates
+
+Select a day number in the month grid to open its full-width agenda. This lists
+every exact-day date for that day, keeping the selected **Document view** and
+**Date role**. Month/year placeholders never appear as dates on the first day.
+More than 500 matching facts use **Previous** and **Next** pages.
+
+**Back to Month YYYY** returns to the month you came from with those filters
+intact. Calendar keeps its month, selected day, View, and role in the URL, so
+reload and browser Back/Forward retain that context. A day agenda can be linked
+directly, for example `#/calendar?month=2026-08&date=2026-08-06&role=due`.
+
+### Dates linked from archive research
+
+**Open N calendar dates** in Archive research opens an agenda for all retrieved
+documents in that answer, across every month and year. The banner reads
+**Dates from N selected documents · All months and years**. Entries appear in
+chronological order with the full year, source document, and supporting text.
+The document count in the banner is separate from the number of dates.
+
+**Date role** still filters the agenda. The month controls and **Document view**
+selector are hidden because the link already supplies the document scope.
+Opening a different document-scoped link clears the previous saved View, date
+role, and page. More than 500 matching dates use **Previous** and **Next** pages;
+they are not limited to the current month.
+
+**Open full calendar** removes the document scope and returns to the unfiltered
+current-month grid.
+
+### Search by date
 
 You can also use dates in the [query language](/query-language):
 
@@ -150,7 +222,8 @@ between unprocessed, stale, and completed documents.
 Check these in order:
 
 1. **Approvals:** the date may be waiting for a decision.
-2. **Calendar filters:** reset the month, date role, and Document view.
+2. **Calendar filters:** check the date role and document scope. On the full
+   calendar, also check the month and Document view.
 3. **Document text:** open the document and confirm extraction captured the date.
 4. **Model settings:** confirm the model is active and automatic dates are set as
    intended.

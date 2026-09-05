@@ -190,14 +190,24 @@ open.
 
 **Save retrieved documents as a view** opens the View creator with exact
 document IDs, not inferred question words. Dates waiting for a decision link to
-Approvals; dates already available link to Calendar. Archive Q&A itself is
-read-only and never extracts or saves data.
+Approvals; dates already available link to an all-dates Calendar agenda for the
+retrieved documents, across months and years. Archive Q&A itself is read-only
+and never extracts or saves data.
 
 Members with **Manage document dates** can extract dates from a Documents
 selection, review dates in Approvals, and use accepted dates in Calendar and
-rich queries. Calendar's **Document view** selector sends the saved View ID; the
-server applies its complete filter and ACLs. See [Document dates](/document-dates)
-for the threshold, review, rescan, and troubleshooting rules.
+rich queries. The full Calendar's **Document view** selector sends the saved View
+ID; the server applies its complete filter and ACLs. Research links instead show
+their selected-document scope with **Date role** and **Open full calendar**.
+Selecting a day number opens a full-width agenda for that exact day, retaining
+the View and role. **Back to Month YYYY** returns to the originating month;
+the URL preserves month, day, View, and role across reload and browser navigation.
+Calendar and Approvals preserve day, month, or year precision in the displayed
+date. Partial dates appear in month/all-dates agendas, not day cells or exact-day
+agendas. Expand an agenda entry's **Automatic** or **Reviewed** status to see
+**LLM Classifier confidence: N%**.
+See [Document dates](/document-dates) for precision, month-filter limits, scope,
+review, rescan, and troubleshooting rules.
 
 See [Archive research](/archive-chat) for the complete workflow and contracts.
 

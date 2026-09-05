@@ -102,6 +102,174 @@ func TestIntelligenceListAppliesCapabilityACLAndStatus(t *testing.T) {
 	}
 }
 
+func TestIntelligenceScopedCalendarPaginationAcrossYears(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 57, 3, "Zulu policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 58, 1, "Alpha policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 59, 1, "Hidden policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 60, 3, "Unrelated policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 61, 3, "Trashed policy", "Dates", "internal", true)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at)
+		VALUES ('document', 58, 'user', 3, 1, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert out of order; equal dates sort by document title, then fact ID.
+	last := seedDateIntelligence(t, s, 57, "accepted", "2028-01-01")
+	zulu := seedDateIntelligence(t, s, 57, "accepted", "2026-09-01")
+	alpha := seedDateIntelligence(t, s, 58, "accepted", "2026-09-01")
+	first := seedDateIntelligence(t, s, 57, "accepted", "2024-12-31")
+	if _, err := s.DB.Write.ExecContext(context.Background(),
+		`UPDATE document_intelligence SET role = 'issued' WHERE id = ?`, alpha); err != nil {
+		t.Fatal(err)
+	}
+	alphaSecond := seedDateIntelligence(t, s, 58, "accepted", "2026-09-01")
+	seedDateIntelligence(t, s, 59, "accepted", "2020-01-01")
+	seedDateIntelligence(t, s, 60, "accepted", "2020-01-01")
+	seedDateIntelligence(t, s, 61, "accepted", "2020-01-01")
+	seedDateIntelligence(t, s, 57, "pending", "2020-01-01")
+	seedDateIntelligence(t, s, 57, "rejected", "2020-01-02")
+
+	for _, test := range []struct {
+		name, bounds string
+		pageSize     int
+		want         []int64
+	}{
+		{"all years across pages", "", 2, []int64{first, alpha, alphaSecond, zulu, last}},
+		{"calendar page size", "", 500, []int64{first, alpha, alphaSecond, zulu, last}},
+		{"inclusive month bounds", "&sort_from=2026-09-01&sort_to=2026-09-30", 2, []int64{alpha, alphaSecond, zulu}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := "/api/intelligence/?type=date&status=accepted&document_ids=57,58,59,61&page_size=" + itoa(int64(test.pageSize)) + test.bounds
+			for offset := 0; offset < len(test.want); offset += test.pageSize {
+				rec := doIntelligenceRequest(t, s, http.MethodGet, path, "", memberPrincipal(3))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+				}
+				var envelope Envelope[IntelligenceRow]
+				if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				want := test.want[offset:min(offset+test.pageSize, len(test.want))]
+				if envelope.Count != len(test.want) || len(envelope.Results) != len(want) {
+					t.Fatalf("offset=%d count=%d results=%+v", offset, envelope.Count, envelope.Results)
+				}
+				for i, row := range envelope.Results {
+					if row.ID != want[i] {
+						t.Fatalf("offset=%d row=%d ID=%d, want %d", offset, i, row.ID, want[i])
+					}
+				}
+				if (envelope.Next != "") != (offset+len(want) < len(test.want)) || (envelope.Previous != "") != (offset > 0) {
+					t.Fatalf("offset=%d next=%q previous=%q", offset, envelope.Next, envelope.Previous)
+				}
+				path = envelope.Next
+			}
+		})
+	}
+}
+
+func TestIntelligencePrecisionFiltersBeforeScopedPagination(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 71, 3, "Visible policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 72, 1, "Hidden policy", "Dates", "internal", false)
+	seedChatDoc(t, s, 73, 3, "Unrelated policy", "Dates", "internal", false)
+	// All facts sort on January 1, but only two identify that exact day.
+	for _, fact := range []struct {
+		id, documentID int64
+		precision      string
+	}{{101, 71, "month"}, {102, 71, "year"}, {103, 71, "day"}, {104, 71, ""}, {105, 72, "day"}, {106, 73, "day"}} {
+		value := map[string]string{"date": "2026-01-01"}
+		if fact.precision != "" {
+			value["precision"] = fact.precision
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.Write.ExecContext(context.Background(), `
+			INSERT INTO document_intelligence(
+				id, document_id, intelligence_type, role, value_json, sort_value,
+				raw_text, evidence_text, confidence, status, extractor, extraction_version,
+				created_at, updated_at
+			) VALUES (?, ?, 'date', 'renewal', ?, '2026-01-01', 'January',
+			          'Recorded date', 0.9, 'accepted', 'test', 1, 0, 0)
+		`, fact.id, fact.documentID, string(encoded)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, test := range []struct {
+		precision string
+		want      []int64
+	}{
+		{"", []int64{101, 102, 103, 104}},
+		{"day", []int64{103, 104}},
+		{"month", []int64{101}},
+		{"year", []int64{102}},
+	} {
+		t.Run("precision="+test.precision, func(t *testing.T) {
+			path := "/api/intelligence/?type=date&document_ids=71,72&sort_from=2026-01-01&sort_to=2026-01-01&page_size=1"
+			if test.precision != "" {
+				path += "&precision=" + test.precision
+			}
+			for i, wantID := range test.want {
+				rec := doIntelligenceRequest(t, s, http.MethodGet, path, "", memberPrincipal(3))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+				}
+				var envelope Envelope[IntelligenceRow]
+				if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Count != len(test.want) || len(envelope.Results) != 1 || envelope.Results[0].ID != wantID {
+					t.Fatalf("page=%d response=%+v", i+1, envelope)
+				}
+				if (envelope.Next != "") != (i+1 < len(test.want)) {
+					t.Fatalf("page=%d next=%q", i+1, envelope.Next)
+				}
+				path = envelope.Next
+			}
+		})
+	}
+}
+
+func TestIntelligenceRejectsInvalidPrecisionFilters(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	for _, query := range []string{"precision=day", "type=date&precision=week", "type=amount&precision=day"} {
+		rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?"+query, "", adminPrincipal(1))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query=%q status=%d body=%s", query, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestIntelligenceRejectsNonemptyDocumentScopeWithoutIDs(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 71, 3, "Visible policy", "Dates", "internal", false)
+	seedDateIntelligence(t, s, 71, "accepted", "2026-01-01")
+	for _, query := range []string{"document_ids=,,,", "document_ids=%20%20", "document_ids=,%20,"} {
+		rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?type=date&"+query, "", memberPrincipal(3))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_document_ids"`) {
+			t.Fatalf("malformed scope %q: status=%d body=%s", query, rec.Code, rec.Body.String())
+		}
+	}
+	for _, query := range []string{"", "&document_ids="} {
+		rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?type=date"+query, "", memberPrincipal(3))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("empty scope %q: status=%d body=%s", query, rec.Code, rec.Body.String())
+		}
+		var envelope Envelope[IntelligenceRow]
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Count != 1 || len(envelope.Results) != 1 || envelope.Results[0].DocumentID != 71 {
+			t.Fatalf("empty scope %q changed full-calendar behavior: %+v", query, envelope)
+		}
+	}
+}
+
 func TestIntelligenceResolveIsPerDocumentAuthorized(t *testing.T) {
 	s := newIntelligenceTestServer(t)
 	seedChatDoc(t, s, 50, 2, "Editable policy", "Renews 2026-09-01", "internal", false)

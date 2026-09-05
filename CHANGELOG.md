@@ -58,6 +58,14 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Archive research opens its retrieved documents' Calendar dates in an all-dates
+  agenda across months and years, with explicit scope and pagination. New date
+  links clear stale Calendar filters; the ordinary Calendar stays month-based.
+  Partial dates no longer display invented days in Calendar or Approvals;
+  Calendar keeps labeled model confidence behind Automatic/Reviewed details.
+- Calendar day links open paginated exact-day agendas, retain the month, View,
+  and role in the URL, and return to the originating month. Server-side precision
+  filtering excludes month/year placeholders before counting or pagination.
 - Archive research allows a bounded 4,096-token generation budget so reasoning
   models can finish their JSON answer. Truncation has a distinct error; citation
   validation and the 6,000-character answer limit remain unchanged. Failure logs

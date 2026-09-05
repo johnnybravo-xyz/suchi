@@ -244,6 +244,12 @@ Dates available to Calendar may be included beside their original source
 snippet in a later archive answer. The original document remains the evidence
 and is still cited.
 
+**Open N calendar dates** counts accepted date facts across all retrieved
+documents, including sources the answer did not cite. It opens their all-dates
+agenda, not just the current month. See
+[Document dates: Research links](/document-dates#dates-linked-from-archive-research)
+for scope, filters, and pagination.
+
 ## Authorization
 
 Archive research requires:
@@ -389,6 +395,11 @@ List filters include `status`, `type`, `role`, `sort_from`, `sort_to`,
 `document_ids`, `view_id`, `q`, and normal pagination. `q` uses the same rich
 query compiler as Search and Documents. `view_id` is resolved server-side and
 applies the complete owned/shared View filter plus document ACLs.
+
+The document-scoped Calendar agenda uses this same list endpoint with
+`status=accepted`, `type=date`, `document_ids`, `page`, and `page_size=500`, without
+`sort_from` or `sort_to`. Results remain in chronological order across pages;
+the optional `role` filter still applies.
 
 ## Maintainer file map
 

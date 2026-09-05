@@ -1466,6 +1466,7 @@ Returns the standard pagination envelope. Filters:
 | `status` | `pending`, `accepted` (default), or `rejected` |
 | `type` | Registered type, currently `date` |
 | `role` | Type-specific role; requires `type` |
+| `precision` | Optional `day`, `month`, or `year`; requires `type=date` |
 | `sort_from`, `sort_to` | Type-specific normalized range; dates use `YYYY-MM-DD` |
 | `document_ids` | Up to 500 comma-separated source document IDs |
 | `view_id` | Owned or shared saved View; server applies its complete filter and document ACLs |
@@ -1484,10 +1485,37 @@ Stats responses expose the pending extracted-fact count as
 `view_id` cannot be combined with `q` or `document_ids`. The server resolves
 the View rather than trusting client-reconstructed filters, including legacy
 tag, correspondent, type, category, and sensitivity fields.
+A nonempty `document_ids` value must contain at least one valid ID; an empty
+CSV list returns `400` instead of widening the scope to all documents.
 
 Rows contain generic `type`, `role`, `value`, `sort_value`, evidence,
 confidence, review state, extractor/version, and source-document presentation
 fields.
+
+For `type=date`, `value` contains `date` and `precision`. Exactly three
+precisions are supported:
+
+| `precision` | Example `date` | Meaning |
+| --- | --- | --- |
+| `day` | `2026-08-06` | A specific day |
+| `month` | `2026-08-01` | August 2026; day must be `01` |
+| `year` | `2026-01-01` | The year 2026; month/day must be `01-01` |
+
+`sort_value` equals this normalized date. First-day values for month/year
+precision are sorting placeholders, not exact dates. `sort_from` and `sort_to`
+compare those values; a January range includes a year-only fact, but an August
+range does not. Omitting those bounds retrieves all periods in the selected
+document scope. Confidence is a separate model-reported score, not a measured
+probability. See [Document dates](/document-dates#date-precision-and-confidence)
+for display and review behavior.
+
+The optional `precision` filter applies in SQL before the total count and
+pagination, together with the document scope and ACLs. Unsupported values or a
+precision filter without `type=date` return `400`. Exact-day agendas use
+`precision=day` with the same date in `sort_from` and `sort_to`, so month/year
+placeholders are excluded even on the first day of a month or year. Omitting
+`precision` preserves the existing all-precision behavior. Legacy rows without
+stored precision are treated as `day` by this filter.
 
 ### `POST /api/intelligence/extract`
 

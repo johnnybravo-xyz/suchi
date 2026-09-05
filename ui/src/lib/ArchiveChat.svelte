@@ -345,7 +345,7 @@
                   </a>
                 {:else if acceptedDateCount(turn) > 0}
                   <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={closeForNavigation}>
-                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} calendar date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>Automatic and reviewed dates</small></span>
+                    <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} calendar date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>All dates from retrieved documents</small></span>
                   </a>
                 {/if}
               {/if}

@@ -126,9 +126,10 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		scope.DocumentIDs, err = parseBoundedCSVIDs(q.Get("document_ids"), bulkEditMaxDocuments)
-		if err != nil {
-			s.writeError(w, http.StatusBadRequest, "bad_document_ids", "document_ids must contain at most 500 positive integers")
+		rawDocumentIDs := q.Get("document_ids")
+		scope.DocumentIDs, err = parseBoundedCSVIDs(rawDocumentIDs, bulkEditMaxDocuments)
+		if err != nil || (rawDocumentIDs != "" && len(scope.DocumentIDs) == 0) {
+			s.writeError(w, http.StatusBadRequest, "bad_document_ids", "document_ids must contain 1 to 500 positive integers")
 			return
 		}
 	}
@@ -155,6 +156,12 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	role := strings.TrimSpace(q.Get("role"))
 	if role != "" && (candidateType == "" || !intelligence.ValidRole(candidateType, role)) {
 		s.writeError(w, http.StatusBadRequest, "bad_role", "role is invalid for this intelligence type")
+		return
+	}
+	precision := strings.TrimSpace(q.Get("precision"))
+	if precision != "" && (candidateType != intelligence.TypeDate ||
+		(precision != "day" && precision != "month" && precision != "year")) {
+		s.writeError(w, http.StatusBadRequest, "bad_precision", "precision requires type=date and must be day, month, or year")
 		return
 	}
 	sortFrom := strings.TrimSpace(q.Get("sort_from"))
@@ -185,6 +192,11 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 	if role != "" {
 		where = append(where, "di.role = ?")
 		args = append(args, role)
+	}
+	if precision != "" {
+		// Legacy date facts without precision retain their exact-day behavior.
+		where = append(where, "COALESCE(json_extract(di.value_json, '$.precision'), 'day') = ?")
+		args = append(args, precision)
 	}
 	if sortFrom != "" {
 		where = append(where, "di.sort_value >= ?")

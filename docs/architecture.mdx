@@ -222,7 +222,11 @@ are the state-machine engine for human decisions. Do not introduce a second
 workflow engine for a new intake source or integration.
 
 `core/intelligence` validates reviewable extracted facts; its API applies
-source-document visibility. Archive chat is bounded, on-demand retrieval in
+source-document visibility and fact filters before counts and pagination.
+Calendar's exact-day requests use the date `precision` filter so month/year
+sorting placeholders cannot become day events; see [Document dates](/document-dates)
+and the [API reference](/api#extracted-facts-archive_intelligence).
+Archive chat is bounded, on-demand retrieval in
 `core/api/chat.go`, not a background job or a general agent runtime. It uses
 the same configured model integration through explicit callbacks. Preserve
 evidence limits, review decisions, and human-edited metadata when changing
