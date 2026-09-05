@@ -1,4 +1,5 @@
 <script>
+  import { session } from './session.svelte.js'
   import { uploadDocument, getDocument, patchDocument, listTasks } from '../lib/api.js'
   import { SENSITIVITY_OPTIONS, fmtBytes } from '../lib/format.js'
   import { markUploaded } from '../lib/upload_bus.svelte.js'
@@ -10,14 +11,16 @@
   let fileInput
 
   // Poll the durable post-ingest job while refreshing the document details.
-  async function hydrate(entry) {
+  async function hydrate(entry, user) {
     for (let attempt = 0; attempt < 40; attempt++) {
       await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 2500))
+      if (session.user !== user) return
       try {
         const [d, tasks] = await Promise.all([
           getDocument(entry.id),
           listTasks({ include: 'jobs', doc_id: entry.id, kind: 'post-ingest', limit: 1 }),
         ])
+        if (session.user !== user) return
         entry.doc = d
         const job = tasks?.results?.[0]
         if (!job) { entry.processing = false; return }
@@ -32,11 +35,14 @@
   }
 
   async function send(files) {
+    const user = session.user
     for (const f of files) {
+      if (session.user !== user) return
       const entry = $state({ name: f.name, size: f.size, status: 'uploading', doc: null, processing: false })
       queue = [entry, ...queue]
       try {
         const res = await uploadDocument(f)
+        if (session.user !== user) return
         entry.id = res?.id
         markUploaded()
         if (res?.deduplicated) {
@@ -45,14 +51,15 @@
         } else {
           entry.status = 'done'
           entry.processing = true
-          hydrate(entry)
+          hydrate(entry, user)
         }
       } catch (ex) {
+        if (session.user !== user) return
         if (ex.status === 413) { entry.status = 'error'; entry.msg = 'larger than the server allows' }
         else { entry.status = 'error'; entry.msg = ex.message }
       }
     }
-    notify?.('Upload finished')
+    if (session.user === user) notify?.('Upload finished')
   }
 
   function onDrop(e) {

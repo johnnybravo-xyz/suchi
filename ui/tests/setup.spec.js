@@ -1,5 +1,196 @@
 import { expect, test } from '@playwright/test'
 
+test('clears account data and rejects late reads after signing in as another user', async ({ page }) => {
+  await mockAPI(page, {
+    documentsCount: 731,
+    setupCompletedAt: 1,
+    filingTreeChosen: true,
+    jdCategories: [{ id: 4, code: 11, name: 'Private estate plan', area_code: 10, area_name: 'Private affairs', system: false }],
+  })
+  let actor = 1
+  let oldRead
+  let oldIdentity
+  let identityReads = 0
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/logout') {
+      actor = 0
+      return route.fulfill({ status: 204 })
+    }
+    if (path === '/api/login') {
+      actor = 2
+      return route.fulfill({ json: { ok: true } })
+    }
+    if (path === '/api/whoami') {
+      if (actor === 1 && ++identityReads > 1) {
+        oldIdentity = route
+        return
+      }
+      return route.fulfill({ json: { user_id: actor, email: 'second@example.test', display_name: 'Second user', role: 'member', capabilities: [] } })
+    }
+    if (path === '/api/documents/' && actor === 1) {
+      oldRead = route
+      return
+    }
+    if (actor === 2 && ['/api/documents/', '/api/jd/categories/', '/api/stats/'].includes(path)) {
+      return route.fulfill({ status: 503, json: { error: path === '/api/documents/' ? 'Second account documents unavailable' : 'Second account metadata unavailable' } })
+    }
+    return route.fallback()
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.getByText('Private affairs', { exact: true })).toHaveCount(1)
+  await expect(page.getByText('731', { exact: true })).toBeVisible()
+  await expect.poll(() => !!oldRead).toBe(true)
+  const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
+  if (await navigation.isVisible()) await navigation.click()
+  await page.getByRole('link', { name: 'Profile & settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect.poll(() => !!oldIdentity).toBe(true)
+  if (await navigation.isVisible()) await navigation.click()
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await page.getByLabel('Email', { exact: true }).fill('second@example.test')
+  await page.getByLabel('Password', { exact: true }).fill('test-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.getByText('Second account documents unavailable', { exact: true })).toBeVisible()
+  const finished = page.waitForEvent('requestfinished', request => request === oldRead.request())
+  await oldRead.fulfill({ json: { count: 1, results: [{ id: 41, title: 'First account confidential title', created_at: 1780000000 }] } })
+  await finished
+  const identityFinished = page.waitForEvent('requestfinished', request => request === oldIdentity.request())
+  await oldIdentity.fulfill({ json: { user_id: 1, email: 'first@example.test', display_name: 'First user', role: 'admin' } })
+  await identityFinished
+  await page.waitForTimeout(50)
+  await expect(page.getByText('First user', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('First account confidential title', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Private affairs', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('731', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Second account documents unavailable', { exact: true })).toBeVisible()
+})
+
+for (const switchAccount of [false, true]) {
+  test(`demo upgrade ${switchAccount ? 'cannot restore a signed-out session' : 'retries the original visitor upload'}`, async ({ page }) => {
+    await mockAPI(page, { demoMode: true, demoSession: 'anon' })
+    await page.addInitScript(() => {
+      sessionStorage.setItem('suchi.demo.anonToken', 'first-demo-read')
+      sessionStorage.setItem('suchi.demo.landed', '1')
+    })
+    let signedIn = false
+    let upgrade
+    const uploadCredentials = []
+    await page.route('**/api/**', async route => {
+      const request = route.request()
+      const path = new URL(request.url()).pathname
+      if (path === '/api/logout') return route.fulfill({ status: 204 })
+      if (path === '/api/login') {
+        signedIn = true
+        return route.fulfill({ json: { ok: true } })
+      }
+      if (path === '/api/whoami' && signedIn) {
+        return route.fulfill({ json: { user_id: 2, email: 'second@example.test', role: 'member', capabilities: [] } })
+      }
+      if (path === '/api/documents/' && request.method() === 'POST') {
+        uploadCredentials.push(request.headers()['authorization'] || request.headers()['x-suchi-demo-token'])
+        if (uploadCredentials.length === 1) {
+          return route.fulfill({ status: 403, json: { code: 'demo_upgrade_required' } })
+        }
+        return route.fulfill({ json: { id: 41, deduplicated: true } })
+      }
+      if (path === '/api/demo/session/upgrade') {
+        upgrade = route
+        return
+      }
+      return route.fallback()
+    })
+    await page.goto('/#/upload')
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'first.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-test-one'),
+    })
+    await expect.poll(() => !!upgrade).toBe(true)
+    if (switchAccount) {
+      const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
+      if (await navigation.isVisible()) await navigation.click()
+      await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+      await page.getByLabel('Email', { exact: true }).fill('second@example.test')
+      await page.getByLabel('Password', { exact: true }).fill('test-password')
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+    }
+    const finished = page.waitForEvent('requestfinished', request => request === upgrade.request())
+    await upgrade.fulfill({ json: { token: 'first-demo-write' } })
+    await finished
+    if (switchAccount) {
+      await page.waitForTimeout(50)
+      expect(await page.evaluate(() => localStorage.getItem('suchi.token'))).toBeNull()
+      expect(uploadCredentials).toEqual(['first-demo-read'])
+      await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+    } else {
+      await expect(page.getByText('duplicate', { exact: true })).toBeVisible()
+      expect(uploadCredentials).toEqual(['first-demo-read', 'Token first-demo-write'])
+      expect(await page.evaluate(() => localStorage.getItem('suchi.token'))).toBe('first-demo-write')
+    }
+  })
+}
+
+for (const input of ['drop', 'picker']) {
+  test('stops queued ' + input + ' uploads when the account changes', async ({ page }) => {
+    await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+    let actor = 1
+    let firstUpload
+    const uploadActors = []
+    await page.route('**/api/**', async route => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/logout') {
+        actor = 0
+        return route.fulfill({ status: 204 })
+      }
+      if (path === '/api/login') {
+        actor = 2
+        return route.fulfill({ json: { ok: true } })
+      }
+      if (path === '/api/whoami') {
+        return route.fulfill({ json: { user_id: actor, email: 'second@example.test', display_name: 'Second user', role: 'member', capabilities: [] } })
+      }
+      if (path === '/api/documents/' && route.request().method() === 'POST') {
+        uploadActors.push(actor)
+        if (!firstUpload) {
+          firstUpload = route
+          return
+        }
+        return route.fulfill({ json: { id: 42, deduplicated: true } })
+      }
+      return route.fallback()
+    })
+    await page.goto(input === 'picker' ? '/#/upload' : '/#/dashboard')
+    if (input === 'picker') {
+      await page.locator('input[type=file]').setInputFiles([
+        { name: 'first.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-test-one') },
+        { name: 'second.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-test-two') },
+      ])
+    } else {
+      await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+      await page.evaluate(() => {
+        const transfer = new DataTransfer()
+        transfer.items.add(new File(['%PDF-test-one'], 'first.pdf', { type: 'application/pdf' }))
+        transfer.items.add(new File(['%PDF-test-two'], 'second.pdf', { type: 'application/pdf' }))
+        window.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer }))
+      })
+    }
+    await expect.poll(() => !!firstUpload).toBe(true)
+    const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
+    if (await navigation.isVisible()) await navigation.click()
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+    await page.getByLabel('Email', { exact: true }).fill('second@example.test')
+    await page.getByLabel('Password', { exact: true }).fill('test-password')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+    const finished = page.waitForEvent('requestfinished', request => request === firstUpload.request())
+    await firstUpload.fulfill({ json: { id: 41, deduplicated: true } })
+    await finished
+    await page.waitForTimeout(50)
+    expect(uploadActors).toEqual([1])
+  })
+}
+
+
 const presets = [
   { id: 'solo', name: 'Solo', description: 'One person', areas: [] },
   { id: 'household', name: 'Household', description: 'A family', areas: [] },

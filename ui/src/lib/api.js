@@ -4,21 +4,30 @@ const TOKEN_KEY = 'suchi.token'
 const DEMO_ANON_KEY = 'suchi.demo.anonToken'
 
 export function getToken() { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
-export function setToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {} }
+export function setToken(t) {
+  pendingGets.clear()
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {}
+}
 
 export function getDemoAnonToken() { try { return sessionStorage.getItem(DEMO_ANON_KEY) } catch { return null } }
-export function setDemoAnonToken(t) { try { t ? sessionStorage.setItem(DEMO_ANON_KEY, t) : sessionStorage.removeItem(DEMO_ANON_KEY) } catch {} }
+export function setDemoAnonToken(t) {
+  pendingGets.clear()
+  try { t ? sessionStorage.setItem(DEMO_ANON_KEY, t) : sessionStorage.removeItem(DEMO_ANON_KEY) } catch {}
+}
 
 class ApiError extends Error {
   constructor(status, code, message, data) { super(message || code || `HTTP ${status}`); this.status = status; this.code = code; this.data = data }
 }
 
 async function req(method, path, body, opts = {}) {
+  const token = getToken()
+  const anon = getDemoAnonToken()
   const res = await sendOnce(method, path, body, opts)
   // `_noUpgrade` prevents recursion when the upgrade endpoint refuses a token.
-  if (res.status === 403 && res.data?.code === 'demo_upgrade_required' && !opts._noUpgrade) {
-    const upgraded = await upgradeDemoSession()
-    if (upgraded) {
+  if (res.status === 403 && res.data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
+      token === getToken() && anon === getDemoAnonToken()) {
+    const upgraded = await upgradeDemoSession(anon)
+    if (upgraded && getToken() === upgraded.token && !getDemoAnonToken()) {
       return req(method, path, body, { ...opts, _noUpgrade: true })
     }
   }
@@ -59,16 +68,15 @@ export async function mintDemoSession() {
 
 export const getDemoMode = () => api.get('/api/demo/mode')
 
-async function upgradeDemoSession() {
-  const anon = getDemoAnonToken()
-  if (!anon) return null
+async function upgradeDemoSession(anon) {
+  if (!anon || getToken()) return null
   const r = await fetch('/api/demo/session/upgrade', {
     method: 'POST',
     headers: { 'X-Suchi-Demo-Token': anon },
   })
   if (!r.ok) return null
   const j = await r.json().catch(() => null)
-  if (!j?.token) return null
+  if (!j?.token || getDemoAnonToken() !== anon || getToken()) return null
   setToken(j.token)
   setDemoAnonToken(null)
   return j
