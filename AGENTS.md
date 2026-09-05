@@ -36,6 +36,8 @@ Optional integrations must preserve useful local operation.
 
 ## Invariants
 
+- Register HTTP token access in `distro/cmd/suchi/serve_token_policy.go`;
+  unlisted routes stay session-only. Scopes do not replace role or document ACLs.
 - Put document visibility inside list/search SQL, including counts and pages.
 - Use the single write pool and enqueue work with its state mutation. Keep
   network calls and subprocesses outside write transactions.

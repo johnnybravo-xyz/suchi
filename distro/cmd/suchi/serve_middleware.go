@@ -19,6 +19,7 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 		metrics.HTTPInstrument,
 		httpx.BodyLimit(cfg.BodyLimit),
 		httpx.Authenticate(authChain, log),
+		httpx.EnforceTokenScopes(tokenScopeResolver(mux)),
 		httpx.SecFetchSite,
 	}
 	if cfg.DemoMode {
