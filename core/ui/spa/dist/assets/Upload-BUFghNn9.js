@@ -1,1 +1,0 @@
-import{Bn as e,Dn as t,Qn as n,kn as r,on as i}from"./index-hKRpG1w3.js";import a from"./UploadBox-B0iGi2Aa.js";var o=r(`<div class="upload-wrap"><!></div>`);function s(r,s){let c=i(s,`jdCategories`,19,()=>[]);var l=o(),u=e(l);a(u,{get notify(){return s.notify},get jdCategories(){return c()}}),n(l),t(r,l)}export{s as default};

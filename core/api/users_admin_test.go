@@ -384,7 +384,8 @@ func TestWhoami_capabilities(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{
 		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		PublicURL: "https://suchi.example.com",
+		PublicURL:    "https://suchi.example.com",
+		BuildVersion: "v0.1.0-beta.2", BuildRevision: "1234567890ab",
 	}
 	seedMember(t, s, 5, `["mailboxes"]`)
 
@@ -402,14 +403,25 @@ func TestWhoami_capabilities(t *testing.T) {
 	if self.InstanceHost != "suchi.example.com" {
 		t.Fatalf("whoami instance_host = %q", self.InstanceHost)
 	}
+	if self.BuildVersion != s.BuildVersion || self.BuildRevision != s.BuildRevision {
+		t.Fatalf("whoami build identity = %q, %q", self.BuildVersion, self.BuildRevision)
+	}
 
 	// A member with no caps still sees the field as [], not omitted.
 	seedMember(t, s, 6, `[]`)
+	s.BuildRevision = ""
 	rec = doAdmin(t, s, "GET", "/api/whoami", "", memberPrincipal(6))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"capabilities":[]`) {
 		t.Fatalf("empty caps must serialize as []; got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"build_revision"`) {
+		t.Fatalf("unknown revision must be omitted; got %s", rec.Body.String())
+	}
+	rec = doAdmin(t, s, "GET", "/api/whoami", "", nil)
+	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), s.BuildVersion) {
+		t.Fatalf("anonymous whoami: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

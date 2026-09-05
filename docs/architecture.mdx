@@ -54,6 +54,12 @@ Follow `runServe` when a service works in a unit test but is absent at runtime:
 This is a single-server-process design. The single writer and startup job
 reclamation are not coordination for multiple servers sharing one database.
 
+The executable resolves its build version and source revision once at boot and
+passes them to the API. Authenticated `/api/whoami` responses expose
+`build_version` and optional `build_revision`; Settings displays that existing
+session metadata. Docker builds receive the revision explicitly because their
+context excludes `.git`. This is build identification, not an update service.
+
 ## From upload to usable document
 
 ```mermaid

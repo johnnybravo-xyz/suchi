@@ -93,6 +93,12 @@ The workflow builds standard and full multi-architecture images, cross-platform
 binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
 the changelog. Tag pushes alone do not publish anything.
 
+Release builds inject the version and source revision into the Go binary.
+Settings displays them from `/api/whoami`; `suchi version` retains the release
+version. Docker has no `.git` directory, so manual builds must pass `REVISION`
+as well as `VERSION` to retain source identification. Missing revisions are
+omitted, not guessed.
+
 ## Publishing container images without Actions
 
 GHCR images can be built and pushed directly when Actions is unavailable. Build
@@ -141,6 +147,7 @@ docker buildx build \
   --target standard \
   --platform linux/amd64 \
   --build-arg VERSION="$VERSION" \
+  --build-arg REVISION="$(git rev-parse HEAD)" \
   --tag "$IMAGE:$VERSION-amd64" \
   --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
   --label org.opencontainers.image.version="$VERSION" \
@@ -161,6 +168,7 @@ docker buildx build \
   --target standard \
   --platform linux/arm64 \
   --build-arg VERSION="$VERSION" \
+  --build-arg REVISION="$(git rev-parse HEAD)" \
   --tag "$IMAGE:$VERSION-arm64" \
   --label org.opencontainers.image.source=https://github.com/johnnybravo-xyz/suchi \
   --label org.opencontainers.image.version="$VERSION" \

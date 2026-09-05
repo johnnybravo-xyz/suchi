@@ -65,6 +65,12 @@
   {:else}
     <AccountSettings {notify} />
   {/if}
+
+  {#if session.user?.build_version}
+    <footer class="build-info" aria-label="Suchi build">
+      Suchi {session.user.build_version}{session.user.build_revision ? ` · ${session.user.build_revision}` : ''}
+    </footer>
+  {/if}
 </div>
 
 <style>
@@ -80,6 +86,7 @@
   .setup-row b { font-size:.86rem }
   .setup-row span { color:var(--muted);font-size:.8rem }
   .settings-section { padding:6px 0 28px;margin-bottom:26px;border-bottom:1px solid var(--line) }
+  .build-info { padding:20px 0;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere }
   @media (max-width: 520px) {
     .setup-row { align-items:flex-start;flex-direction:column }
   }

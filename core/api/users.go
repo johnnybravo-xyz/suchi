@@ -23,15 +23,17 @@ import (
 
 // UserSelf is returned by GET /api/whoami and PATCH /api/users/me.
 type UserSelf struct {
-	Kind         string   `json:"kind"`
-	UserID       int64    `json:"user_id"`
-	Email        string   `json:"email"`
-	DisplayName  string   `json:"display_name,omitempty"`
-	InstanceHost string   `json:"instance_host,omitempty"`
-	Role         string   `json:"role"`
-	AuthNBy      string   `json:"authn_by,omitempty"`
-	AvatarURL    string   `json:"avatar_url,omitempty"`
-	Capabilities []string `json:"capabilities"`
+	Kind          string   `json:"kind"`
+	UserID        int64    `json:"user_id"`
+	Email         string   `json:"email"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	InstanceHost  string   `json:"instance_host,omitempty"`
+	BuildVersion  string   `json:"build_version,omitempty"`
+	BuildRevision string   `json:"build_revision,omitempty"`
+	Role          string   `json:"role"`
+	AuthNBy       string   `json:"authn_by,omitempty"`
+	AvatarURL     string   `json:"avatar_url,omitempty"`
+	Capabilities  []string `json:"capabilities"`
 }
 
 // Whoami serves GET /api/whoami. Reads the current user row so
@@ -48,6 +50,7 @@ func (s *Server) Whoami(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	self.InstanceHost = s.publicHost()
+	self.BuildVersion, self.BuildRevision = s.BuildVersion, s.BuildRevision
 	s.writeJSON(w, http.StatusOK, self)
 }
 

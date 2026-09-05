@@ -195,7 +195,9 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
-          build-args: VERSION=${{ needs.notes.outputs.artifact_version }}
+          build-args: |
+            VERSION=${{ needs.notes.outputs.artifact_version }}
+            REVISION=${{ github.sha }}
           cache-from: |
             type=gha,scope=suchi-images
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
@@ -228,7 +230,9 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
-          build-args: VERSION=${{ needs.notes.outputs.artifact_version }}
+          build-args: |
+            VERSION=${{ needs.notes.outputs.artifact_version }}
+            REVISION=${{ github.sha }}
           cache-from: |
             type=gha,scope=suchi-images
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
@@ -299,7 +303,7 @@ jobs:
           [ "$GOOS" = "windows" ] && bin=${bin}.exe
           go build \
             -trimpath \
-            -ldflags="-s -w -X main.version=${ARTIFACT_VERSION}" \
+            -ldflags="-s -w -X main.version=${ARTIFACT_VERSION} -X main.revision=${GITHUB_SHA}" \
             -o "$RUNNER_TEMP/$bin" ./distro/cmd/suchi
           # emit a per-binary sha256 line (concatenated later)
           ( cd "$RUNNER_TEMP" && sha256sum "$bin" > "$bin.sha256" )

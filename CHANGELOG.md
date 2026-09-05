@@ -58,6 +58,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Settings identifies the running server version and source revision for bug
+  reports. JSON API errors retain their codes even with mislabeled response
+  headers, so Archive research can show the relevant failure message.
 - Mail attachments with invalid or generic MIME headers are identified from
   their bytes. Explicit rescans repair existing PDFs labeled as binary files
   and restore preview and password handling without changing originals.

@@ -143,6 +143,9 @@ after setting the same kind of session cookie.
 Returns the authenticated Principal + profile fields. The SPA reads
 `display_name` for the topbar avatar menu and `avatar_url` for the
 image (initials fallback until an avatar is set).
+`build_version` identifies the running server; `build_revision` is its short
+source revision when known, with `.dirty` for locally modified source. These
+read-only fields are not user profile settings.
 
 ```json
 {
@@ -151,6 +154,8 @@ image (initials fallback until an avatar is set).
   "email": "you@example.com",
   "display_name": "You (Admin)",
   "instance_host": "suchi.example.com",
+  "build_version": "v0.1.0-beta.2",
+  "build_revision": "1234567890ab",
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
   "avatar_url": "/api/users/1/avatar"

@@ -89,7 +89,10 @@ type Server struct {
 	Jobs      *jobs.Dispatcher
 	trash     *trash.Service
 	PublicURL string // validated external origin, wired from config at boot
-	decrypt   DecryptDeps
+	// Build identity is injected by the executable, not frontend package metadata.
+	BuildVersion  string
+	BuildRevision string
+	decrypt       DecryptDeps
 	// PasswordHasher is set at boot by main.go from the local-auth
 	// plugin so /api/admin/users can hash new passwords without this
 	// package importing plugins/*. Nil-check in handlers.

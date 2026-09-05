@@ -56,6 +56,7 @@ RUN wget -q -O source.tar.gz \
 # under core/ui/spa/dist; make ui-check and release preflight verify that copy.
 FROM ${GO_IMAGE} AS build
 ARG VERSION=dev
+ARG REVISION
 
 WORKDIR /src
 
@@ -68,7 +69,7 @@ COPY hack hack
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/suchi ./distro/cmd/suchi
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/suchi ./distro/cmd/suchi
 
 # Full runtime: Debian packages OCRmyPDF and its archive-processing stack.
 FROM ${DEBIAN_IMAGE} AS full

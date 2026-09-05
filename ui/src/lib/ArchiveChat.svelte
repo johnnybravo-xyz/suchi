@@ -127,6 +127,8 @@
         ? 'Request canceled.'
         : ex?.code === 'invalid_provider_response'
           ? 'The model returned an answer without valid citations. Try again.'
+          : ex?.code === 'provider_response_truncated'
+            ? 'The model reached its output limit before finishing. Try a narrower question or another model.'
           : (ex?.message || 'The archive question could not be answered.')
       updateTurn(turn.id, { error })
       if (canceled && requestState.restoreDraft && !draft) draft = question

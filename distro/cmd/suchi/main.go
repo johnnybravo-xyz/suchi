@@ -53,8 +53,9 @@ import (
 var targetSchemaVersion int
 var loadedConfigFile string
 
-// version is set by release builds with -X main.version=vX.Y.Z.
+// Release builds inject these with -X; Docker builds have no .git metadata.
 var version string
+var revision string
 
 func main() {
 	// The release's suchi-mcp symlink keeps MCP client commands concise.
@@ -144,32 +145,38 @@ func buildVersion(info *debug.BuildInfo) string {
 	if version != "" {
 		return version
 	}
-	if info == nil {
-		return "dev"
+	v, rev := buildIdentity(info)
+	if rev != "" {
+		v += "+" + rev
 	}
-	var rev, mod string
-	for _, s := range info.Settings {
-		if s.Key == "vcs.revision" {
-			rev = s.Value
+	return v
+}
+
+func buildIdentity(info *debug.BuildInfo) (string, string) {
+	v, rev, modified := version, revision, false
+	if info != nil {
+		if v == "" {
+			v = info.Main.Version
 		}
-		if s.Key == "vcs.modified" {
-			mod = s.Value
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && revision == "" {
+				rev = setting.Value
+			}
+			if setting.Key == "vcs.modified" {
+				modified = setting.Value == "true"
+			}
 		}
 	}
-	v := info.Main.Version
 	if v == "" || v == "(devel)" {
 		v = "dev"
 	}
-	if rev != "" {
-		if len(rev) > 12 {
-			rev = rev[:12]
-		}
-		v += "+" + rev
-		if mod == "true" {
-			v += ".dirty"
-		}
+	if len(rev) > 12 {
+		rev = rev[:12]
 	}
-	return v
+	if rev != "" && modified {
+		rev += ".dirty"
+	}
+	return v, rev
 }
 
 func runServe() int {
@@ -548,6 +555,8 @@ func runServe() int {
 		return 1
 	}
 	apiSrv.PublicURL = cfg.PublicURL
+	buildInfo, _ := debug.ReadBuildInfo()
+	apiSrv.BuildVersion, apiSrv.BuildRevision = buildIdentity(buildInfo)
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.LLMAEAD = decryptKey

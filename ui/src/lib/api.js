@@ -22,8 +22,7 @@ async function req(method, path, body, opts = {}) {
     payload = JSON.stringify(body)
   }
   const r = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal: opts.signal })
-  const isJSON = (r.headers.get('content-type') || '').includes('json')
-  const data = isJSON ? await r.json().catch(() => null) : null
+  const data = await r.json().catch(() => null)
   // At most one retry, and never after the caller's account changes.
   if (r.status === 403 && data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
       revision === sessionRevision) {

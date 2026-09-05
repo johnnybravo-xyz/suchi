@@ -270,6 +270,8 @@ async function mockAPI(page, options = {}) {
       display_name: options.demoSession ? 'Demo visitor' : 'Admin',
       role: options.userRole || (options.demoSession ? 'member' : 'admin'),
       authn_by: options.demoSession ? 'demo' : 'local',
+      build_version: options.buildVersion,
+      build_revision: options.buildRevision,
       capabilities: options.capabilities ?? ['mailboxes'],
       ...(options.demoSession ? { demo: options.demoSession } : {}),
     }
@@ -696,6 +698,23 @@ test('opens Archive configuration after choosing a filing tree', async ({ page }
   await expect(configuration.getByRole('link', { name: /Classification/ }).last()).toBeVisible()
   await expect(configuration.getByRole('link', { name: /OCR and backups/ }).last()).toBeVisible()
 })
+
+for (const userRole of ['admin', 'member']) {
+  test(`shows the running build in ${userRole} settings`, async ({ page }) => {
+    await mockAPI(page, {
+      userRole, buildVersion: 'v0.1.0-beta.2', buildRevision: '1234567890ab',
+      setupCompletedAt: 1, filingTreeChosen: true,
+    })
+    await page.goto('/#/settings')
+    await expect(page.getByRole('contentinfo', { name: 'Suchi build' }))
+      .toHaveText('Suchi v0.1.0-beta.2 · 1234567890ab')
+    await page.route('**/api/whoami', route => route.fulfill({ json: {
+      user_id: 1, email: 'admin@example.test', role: userRole, capabilities: [], build_version: 'dev',
+    } }))
+    await page.reload()
+    await expect(page.getByRole('contentinfo', { name: 'Suchi build' })).toHaveText('Suchi dev')
+  })
+}
 
 test('separates completed archive administration from account settings', async ({ page }, testInfo) => {
   const llmSettingsRequests = []
@@ -2005,23 +2024,28 @@ test('closes archive research outside without reopening the Omnibox menu', async
   await expect(page.getByRole('listbox')).toHaveCount(0)
 })
 
-test('explains invalid model citations without exposing provider details', async ({ page }) => {
-  await mockAPI(page, {
-    chatEnabled: true,
-    failPaths: ['/api/chat'],
-    failureStatus: 502,
-    failureCode: 'invalid_provider_response',
-    failureMessage: 'upstream service error',
-    setupCompletedAt: Math.floor(Date.now() / 1000),
-    filingTreeChosen: true,
+for (const [code, message] of Object.entries({
+  invalid_provider_response: 'The model returned an answer without valid citations. Try again.',
+  provider_response_truncated: 'The model reached its output limit before finishing. Try a narrower question or another model.',
+})) {
+  test(`explains ${code} without exposing provider details`, async ({ page }) => {
+    await mockAPI(page, {
+      chatEnabled: true,
+      failPaths: ['/api/chat'],
+      failureStatus: 502,
+      failureCode: code,
+      failureMessage: 'upstream service error',
+      setupCompletedAt: Math.floor(Date.now() / 1000),
+      filingTreeChosen: true,
+    })
+    await page.goto('/#/dashboard')
+    const omnibox = page.getByLabel('Search or run a command')
+    await omnibox.fill('How much did I spend?')
+    await page.getByRole('button', { name: 'Ask the archive' }).click()
+    await expect(page.getByText(message)).toBeVisible()
+    await expect(page.getByText('upstream service error')).toHaveCount(0)
   })
-  await page.goto('/#/dashboard')
-  const omnibox = page.getByLabel('Search or run a command')
-  await omnibox.fill('How much did I spend?')
-  await page.getByRole('button', { name: 'Ask the archive' }).click()
-  await expect(page.getByText('The model returned an answer without valid citations. Try again.')).toBeVisible()
-  await expect(page.getByText('upstream service error')).toHaveCount(0)
-})
+}
 
 test('publishes exact Inbox, Documents, and Search scopes to archive research', async ({ page }) => {
   const chatRequests = []
