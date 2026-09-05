@@ -284,16 +284,29 @@ All-or-nothing group. Set the whole set or none:
 | `OIDC_CLIENT_SECRET` or `OIDC_CLIENT_SECRET_FILE` | The secret. `_FILE` variant reads from disk (docker/k8s secrets).                                                 |
 | `ADMIN_EMAIL`                                     | Required when OIDC is enabled. The email that gets admin role on first login. Everyone else defaults to `member`. |
 
-<Info>
-  Any OIDC provider works: Pocket-ID, Authentik, Keycloak, Microsoft Entra,
-  Google.
-</Info>
+The provider must support discovery and return a signed ID token containing
+`email` and the boolean `email_verified: true`. Suchi requests `openid email
+profile`; configure the provider's ID-token claim mapping accordingly. Claims
+available only from UserInfo are not sufficient. Missing, false, or non-boolean
+verification claims are rejected in both browser and bearer sign-in. A provider
+that cannot truthfully supply verified-email claims is not supported.
+
+Suchi binds this verified email to its local account, including existing accounts
+and `ADMIN_EMAIL`. Only configure an issuer you trust to control email assignment;
+never map arbitrary user-editable attributes to verified email. Email can change
+or be reassigned and is not a stable OIDC subject identifier, so review account
+ownership before changing issuers or reassigning an address. See the
+[OIDC standard claims and identity limits](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability).
 
 When OIDC is configured, it owns interactive sign-in: anonymous browser entry
 points redirect to the provider, and local bootstrap/password-login endpoints
 are disabled. Existing Suchi sessions and scoped API tokens remain valid; API
 tokens are still the supported path for unattended clients. The health and
 readiness endpoints remain public for container orchestration.
+Both `Authorization: Token <suchi-token>` and `Authorization: Bearer
+<suchi-token>` remain supported: Suchi's 64-lowercase-hex token shape goes to
+local token authentication, while other Bearer values must validate as OIDC
+ID tokens. Invalid credentials never fall back to a browser session.
 
 ## Filesystem-watch ingest
 

@@ -51,6 +51,11 @@ Two credential shapes, both routed through the same auth chain:
   are exactly 64 lowercase hex chars; anything else with `Bearer`
   scheme falls through to the OIDC authenticator.
 
+OIDC ID tokens must contain `email` and the boolean `email_verified: true`.
+This applies to direct Bearer authentication and browser sign-in; see
+[provider requirements](/config#oidc). Invalid credentials do not fall back to
+an existing browser session.
+
 API tokens are limited by an explicit route allowlist in
 `distro/cmd/suchi/serve_token_policy.go`. Document reads (including search,
 chat, previews, and shared vocabulary) require `documents:read`; document

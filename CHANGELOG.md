@@ -79,6 +79,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Both OIDC sign-in paths now require signed verified-email claims before
+  binding local accounts. Providers without truthful `email_verified: true`
+  claims are no longer supported. Suchi Bearer tokens work with OIDC enabled,
+  and unknown credentials cannot fall back to a browser session.
 - Share-link bearers are no longer copied into creation audit events or HTTP
   access logs. Logs and metrics retain matched routes across authentication.
 - Signing out clears retained archive data; delayed reads, profile refreshes,

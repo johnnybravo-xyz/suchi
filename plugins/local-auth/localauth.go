@@ -240,7 +240,7 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	case strings.EqualFold(scheme, "Token"):
 		// Canonical suchi shape — pass through.
 	case strings.EqualFold(scheme, "Bearer"):
-		if !looksLikeAPIToken(tok) {
+		if !auth.IsAPIToken(tok) {
 			// Probably an OIDC JWT — let the chain continue.
 			return nil, nil
 		}
@@ -265,12 +265,6 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 		 WHERE t.token_hash = ? AND u.disabled = 0
 	`, hashHex).Scan(&tokenID, &userID, &scopes, &revoked, &email, &display, &role)
 	if err == sql.ErrNoRows {
-		// Bearer path: unknown token might be an OIDC JWT; don't halt
-		// the chain. Token path: we've explicitly asked for a suchi
-		// token, so unknown is a real error.
-		if strings.EqualFold(scheme, "Bearer") {
-			return nil, nil
-		}
 		return nil, errors.New("token not recognized")
 	}
 	if err != nil {
@@ -339,23 +333,6 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-// looksLikeAPIToken returns true if s has the exact shape suchi issues:
-// 64 lowercase hex characters. Cheap way to disambiguate an OIDC JWT
-// (which has dots and a longer body) from a suchi API token, so we can
-// let the auth chain fall through to OIDC when Bearer carries a JWT.
-func looksLikeAPIToken(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 // argon2id parameters tuned for a ~2GB RAM box; interactive cost, not

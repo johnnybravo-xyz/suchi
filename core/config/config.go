@@ -46,7 +46,8 @@ type Config struct {
 	// gated by an explicit env var so it cannot be flipped by accident.
 	DevMode bool
 
-	// OIDC (all-or-nothing group; empty issuer disables OIDC entirely)
+	// OIDC requires signed ID-token email + email_verified=true claims.
+	// All-or-nothing group; empty issuer disables OIDC entirely.
 	OIDCIssuerURL    string
 	OIDCClientID     string
 	OIDCClientSecret string

@@ -1,9 +1,8 @@
 // Package oidcauth is the generic OpenID Connect authenticator plugin.
 //
-// Any IdP that speaks OIDC discovery works: Pocket-ID, Authentik,
-// Keycloak, Entra, Google. Config carries the issuer URL, client id,
-// client secret. First login for a given email binds a users row — the
-// admin-email env var gates who is admitted as admin on that first bind.
+// The configured issuer must provide verified email claims in signed ID tokens.
+// Suchi trusts that issuer to control account-email assignment; first login
+// binds a users row by verified email, with AdminEmail selecting the initial role.
 package oidcauth
 
 import (
@@ -22,6 +21,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -56,7 +56,6 @@ type Plugin struct {
 	cfg      Config
 	db       *db.DB
 	log      *slog.Logger
-	provider *oidc.Provider
 	verifier *oidc.IDTokenVerifier
 	oauth    *oauth2.Config
 }
@@ -90,7 +89,6 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 		cfg:      cfg,
 		db:       d,
 		log:      log.With("plugin", Name),
-		provider: provider,
 		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		oauth:    oauth,
 	}, nil
@@ -106,28 +104,24 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 	if h == "" {
 		return nil, nil
 	}
-	scheme, rest, ok := strings.Cut(h, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
+	scheme, rest, _ := strings.Cut(h, " ")
+	if !strings.EqualFold(scheme, "Bearer") {
 		return nil, nil // not our header shape
 	}
 	tok := strings.TrimSpace(rest)
 	if tok == "" {
 		return nil, errors.New("empty bearer token")
 	}
+	if auth.IsAPIToken(tok) {
+		return nil, nil // local-auth validates Suchi tokens after this plugin
+	}
 	idTok, err := p.verifier.Verify(r.Context(), tok)
 	if err != nil {
 		return nil, fmt.Errorf("verify id token: %w", err)
 	}
-	var claims struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
-	}
-	if err := idTok.Claims(&claims); err != nil {
-		return nil, fmt.Errorf("read claims: %w", err)
-	}
-	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	if claims.Email == "" {
-		return nil, errors.New("id token has no email")
+	claims, err := verifiedClaims(idTok)
+	if err != nil {
+		return nil, err
 	}
 	userID, role, display, err := p.upsertUser(r.Context(), claims.Email, claims.Name)
 	if err != nil {
@@ -209,18 +203,10 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity token was rejected", http.StatusBadRequest)
 		return
 	}
-	var claims struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
-	}
-	if err := idTok.Claims(&claims); err != nil {
+	claims, err := verifiedClaims(idTok)
+	if err != nil {
 		p.log.Warn("oidc.claims.fail", "err", err.Error())
 		http.Error(w, "identity claims were rejected", http.StatusBadRequest)
-		return
-	}
-	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
-	if claims.Email == "" {
-		http.Error(w, "id token has no email", http.StatusBadRequest)
 		return
 	}
 	userID, _, _, err := p.upsertUser(r.Context(), claims.Email, claims.Name)
@@ -251,6 +237,25 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+type identityClaims struct {
+	Email         string `json:"email"`
+	Name          string `json:"name"`
+	EmailVerified bool   `json:"email_verified"`
+}
+
+// Both login paths must establish verified address control before email binding.
+func verifiedClaims(token *oidc.IDToken) (identityClaims, error) {
+	var claims identityClaims
+	if err := token.Claims(&claims); err != nil {
+		return claims, fmt.Errorf("read identity claims: %w", err)
+	}
+	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	if claims.Email == "" || !claims.EmailVerified {
+		return claims, errors.New("id token requires email and email_verified=true")
+	}
+	return claims, nil
+}
+
 // upsertUser binds the OIDC identity to a users row. First-time bind for
 // AdminEmail creates an admin; other first-timers are members.
 func (p *Plugin) upsertUser(ctx context.Context, email, displayName string) (userID int64, role, display string, err error) {
@@ -263,8 +268,6 @@ func (p *Plugin) upsertUser(ctx context.Context, email, displayName string) (use
 	}
 	err = p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		// SELECT first because sqlite RETURNING is not universally
-		// available in modernc CTE contexts we might want later.
 		row := tx.QueryRowContext(ctx,
 			"SELECT id, role, display_name, disabled FROM users WHERE email = ?", email)
 		var existingRole, existingDisplay string

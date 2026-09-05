@@ -147,7 +147,11 @@ policy, and Fetch Metadata checks around the normalized API mux.
 These gates answer different questions:
 
 - **Authentication:** `core/auth` establishes a principal. OIDC is checked
-  before local authentication; anonymous demo authentication is last.
+  before local authentication and delegates Suchi's exact API-token shape to
+  it; anonymous demo authentication is last. Invalid credentials cannot fall
+  back to a browser session. Both OIDC login paths require signed verified-email
+  claims before binding a local account. The configured issuer remains trusted
+  to control email assignment; email is not a stable subject identifier.
 - **Token authority:** `serve_token_policy.go` explicitly lists routes available
   to local API tokens and demo scratch tokens. Unlisted routes are session-only;
   an admin role does not bypass this boundary. Add a route's scope deliberately

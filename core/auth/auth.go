@@ -16,6 +16,21 @@ type ctxKey struct{ name string }
 
 var principalKey = ctxKey{"principal"}
 
+// IsAPIToken distinguishes Suchi's 64-lowercase-hex credentials from OIDC JWTs.
+// Matching this shape routes authentication; it does not validate a credential.
+func IsAPIToken(token string) bool {
+	if len(token) != 64 {
+		return false
+	}
+	for i := range token {
+		c := token[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // Chain evaluates authenticators in order. Nil chain / empty chain =>
 // anonymous (Principal is nil).
 type Chain struct {
