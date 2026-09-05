@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
+	"github.com/johnnybravo-xyz/suchi/core/similar"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -44,28 +47,16 @@ const PipelineVersionLLM = 2
 // avoid holding the SQLite writer during a slow LLM call.
 type Handler struct {
 	plugin *Plugin
-	db     dbHandle
+	db     *db.DB
 	log    *slog.Logger
 }
 
-// dbHandle mirrors the small surface of *core/db.DB that Handler
-// touches. Left as an interface so tests can inject a mock without
-// standing up a real SQLite.
-type dbHandle interface {
-	WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) error
-	ReadQueryRow(ctx context.Context, query string, args ...any) *sql.Row
-	ReadQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	SiblingTitles(ctx context.Context, docID int64, limit int) ([]string, error)
-}
-
-// NewHandler wraps a Plugin as a Subscriber. Returns nil when the
-// plugin is nil so callers can pass `NewHandler(llm)` unconditionally
-// and `if h != nil { disp.Register(h) }` in main.
-func NewHandler(p *Plugin, db dbHandle, log *slog.Logger) *Handler {
+// NewHandler returns nil when the plugin is nil.
+func NewHandler(p *Plugin, database *db.DB, log *slog.Logger) *Handler {
 	if p == nil {
 		return nil
 	}
-	return &Handler{plugin: p, db: db, log: log.With("component", "llm-classifier.handler")}
+	return &Handler{plugin: p, db: database, log: log.With("component", "llm-classifier.handler")}
 }
 
 // Kinds implements pluginapi.Subscriber.
@@ -104,7 +95,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// "Utilities:electricity bill - 10/2026"). One-classify-per-doc
 	// invariant means we inject them into THIS call, not a follow-up.
 	// Empty slice on read error is a clean no-op.
-	siblings, err := h.db.SiblingTitles(ctx, e.DocID, 5)
+	siblings, err := h.loadSiblingTitles(ctx, e.DocID, 5)
 	if err != nil {
 		log.Warn("llm-classifier.siblings_load_error", "err", err.Error())
 	}
@@ -318,7 +309,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 
 func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, sourceBlob string, err error) {
 	var contentNull sql.NullString
-	err = h.db.ReadQueryRow(ctx, `
+	err = h.db.Read.QueryRowContext(ctx, `
 		SELECT title, content, original_blob FROM documents
 		WHERE id = ? AND trashed_at IS NULL
 	`, id).Scan(&title, &contentNull, &sourceBlob)
@@ -336,7 +327,7 @@ func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, source
 // the LLM should never pick them as a suggested classification, and
 // dropping them from the prompt cuts token cost.
 func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
-	rows, err := h.db.ReadQuery(ctx,
+	rows, err := h.db.Read.QueryContext(ctx,
 		`SELECT code, name FROM jd_categories WHERE system = 0 ORDER BY code`)
 	if err != nil {
 		return nil, err
@@ -351,6 +342,32 @@ func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// Similar titles are scoped to the document owner's ACLs, even for an admin.
+func (h *Handler) loadSiblingTitles(ctx context.Context, docID int64, limit int) ([]string, error) {
+	var ownerID int64
+	if err := h.db.Read.QueryRowContext(ctx,
+		`SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&ownerID); err != nil {
+		return nil, err
+	}
+	groups, err := authz.LoadGroups(ctx, h.db, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := similar.TopDocs(ctx, h.db, docID, limit, &similar.Principal{
+		UserID: ownerID, Role: "user", Groups: groups,
+	})
+	if err != nil {
+		return nil, err
+	}
+	titles := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		if doc.Title != "" {
+			titles = append(titles, doc.Title)
+		}
+	}
+	return titles, nil
 }
 
 type preparedDateCandidate struct {

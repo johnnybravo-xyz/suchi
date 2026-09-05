@@ -338,7 +338,7 @@ func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(p, Adapt(d), silentLog())
+	h := NewHandler(p, d, silentLog())
 	if err := h.Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +588,7 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewHandler(p, Adapt(d), silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -638,7 +638,7 @@ func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewHandler(p, Adapt(d), silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
 
