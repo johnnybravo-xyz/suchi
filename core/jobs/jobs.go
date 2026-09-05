@@ -155,9 +155,6 @@ func (d *Dispatcher) Run(ctx context.Context) {
 
 	d.log.Info("jobs.dispatcher.start", "kinds", d.kindList())
 	for {
-		if err := d.pollOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			d.log.Error("jobs.poll.error", "err", err.Error())
-		}
 		select {
 		case <-ctx.Done():
 			d.log.Info("jobs.dispatcher.stop", "reason", "context")
@@ -165,6 +162,24 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		case <-d.stopCh:
 			d.log.Info("jobs.dispatcher.stop", "reason", "stop")
 			return
+		default:
+		}
+
+		batch, err := d.claim(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			d.log.Error("jobs.poll.error", "err", err.Error())
+		}
+		if err == nil && len(batch) > 0 {
+			for _, job := range batch {
+				d.runJob(ctx, job)
+			}
+			continue
+		}
+
+		// Polling is only an idle fallback; queued and follow-up work runs now.
+		select {
+		case <-ctx.Done():
+		case <-d.stopCh:
 		case <-t.C:
 		case <-d.nudge:
 		}
@@ -184,23 +199,6 @@ func (d *Dispatcher) kindList() []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-// pollOnce claims one batch of ready jobs and runs each. We claim with
-// a single UPDATE...RETURNING so only one dispatcher instance could ever
-// grab the same job — future-proofing for the E4 external-worker split.
-func (d *Dispatcher) pollOnce(ctx context.Context) error {
-	rows, err := d.claim(ctx)
-	if err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	for _, r := range rows {
-		d.runJob(ctx, r)
-	}
-	return nil
 }
 
 type row struct {
