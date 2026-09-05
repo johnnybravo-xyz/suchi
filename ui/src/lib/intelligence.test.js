@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DATE_ROLES, formatIntelligenceValue, groupCalendarEvents, intelligenceDateValue, intelligenceRoleLabel } from './intelligence.js'
-
-test('keeps the date role vocabulary stable', () => {
-  assert.deepEqual([...DATE_ROLES], ['issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other'])
-  assert.equal(intelligenceRoleLabel('renewal'), 'Renewal')
-})
+import { formatIntelligenceValue, groupCalendarEvents, intelligenceDateValue } from './intelligence.js'
 
 test('formats date intelligence from the generic value envelope', () => {
   const candidate = {

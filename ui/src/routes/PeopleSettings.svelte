@@ -61,7 +61,6 @@
     try {
       await adminPatchUser(u.id, { capabilities: newCaps })
       u.capabilities = newCaps
-      users = [...users]
       notify?.(has ? `Revoked ${cap.label} from ${u.email}` : `Granted ${cap.label} to ${u.email}`)
     } catch (ex) { notify?.(ex.message || 'Could not update capabilities') }
     finally { userBusy = false }
@@ -74,7 +73,6 @@
     try {
       await adminPatchUser(u.id, { disabled })
       u.disabled = disabled
-      users = [...users]
       notify?.(disabled ? `Disabled ${u.email}` : `Enabled ${u.email}`)
     } catch (ex) { notify?.(ex.message || 'Could not update user') }
     finally { userBusy = false }

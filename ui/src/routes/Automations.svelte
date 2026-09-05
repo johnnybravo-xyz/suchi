@@ -96,10 +96,7 @@
     if (mode === 'json') {
       try { body = JSON.parse(jsonDraft) }
       catch (ex) { draftErr = ex.message || 'Not valid JSON.'; return }
-    } else {
-      try { body = editing }
-      catch (ex) { draftErr = ex.message; return }
-    }
+    } else body = editing
     if (!body.name?.trim()) { draftErr = 'Give it a name.'; return }
     for (const t of body.triggers || []) for (const k of ['type','filter_has_tag','filter_has_correspondent','filter_has_document_type']) t[k] = Number(t[k]) || 0
     for (const a of body.actions || []) for (const k of Object.keys(a.params || {}))
@@ -147,7 +144,6 @@
     try {
       await patchAutomation(a.id, { enabled })
       a.enabled = enabled
-      items = [...items]
       notify?.(enabled ? 'Enabled' : 'Disabled')
     } catch (ex) { notify?.(ex.message || 'Could not update the automation') }
     finally { toggleID = null }

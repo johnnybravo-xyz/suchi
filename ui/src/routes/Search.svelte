@@ -1,15 +1,17 @@
 <script>
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { search, listLanguages } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
-  import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
+  import { createQueryAssistant } from '../lib/queryAssist.js'
 
   let { onScopeChange } = $props()
 
-  let q = $state(route.query.get('q') || '')
-  let lang = $state(route.query.get('lang') || '')
+  const urlQuery = $derived(route.query.get('q') || '')
+  const urlLanguage = $derived(route.query.get('lang') || '')
+  let q = $state('')
+  let lang = $state('')
   let hits = $state([])
   let count = $state(0)
   let page = $state(1)
@@ -48,6 +50,8 @@
     const version = ++runVersion
     activeController?.abort()
     activeController = undefined
+    loading = false
+    err = ''
     const query = q.trim()
     if (!query) {
       hits = []; count = 0; searched = false
@@ -58,7 +62,7 @@
     const requestLang = lang
     const controller = new AbortController()
     activeController = controller
-    loading = true; err = ''; searched = true
+    loading = true; searched = true
     try {
       const params = { page: requestPage, page_size: 25 }
       if (requestLang) params.lang = requestLang
@@ -75,7 +79,7 @@
       count = res?.count ?? hits.length
     } catch (ex) {
       if (version === runVersion) {
-        err = queryErrorMessage(ex, 'Search failed.')
+        err = ex.message || 'Search failed.'
         hits = []
         count = 0
         searched = false
@@ -111,31 +115,18 @@
     e.preventDefault(); page = 1
     navigateToQuery()
   }
-  // Sync q FROM the URL when the URL changes — but never read q inside
-  // this effect, or every keystroke would re-fire it and clobber the
-  // user's typing. Locally-cached lastURLQ guards against re-running
-  // the search on unrelated route changes.
-  let lastURLQ = route.query.get('q') || ''
-  let lastURLLang = route.query.get('lang') || ''
   $effect(() => {
-    const rq = route.query.get('q') || ''
-    const rl = route.query.get('lang') || ''
-    if (rq !== lastURLQ || rl !== lastURLLang) {
-      lastURLQ = rq
-      lastURLLang = rl
-      q = rq
-      lang = rl
+    const query = urlQuery
+    const language = urlLanguage
+    // Only applied URL values trigger a search; typing and pagination do not.
+    untrack(() => {
+      q = query
+      lang = language
       queryAssistant.clear()
       page = 1
-      if (rq) run()
-      else {
-        runVersion++
-        hits = []; count = 0; searched = false; loading = false; err = ''
-        publishEmptyScope()
-      }
-    }
+      run()
+    })
   })
-  queueMicrotask(() => { if (q) run(); else publishEmptyScope() })  // initial query from the URL
   const pages = $derived(Math.max(1, Math.ceil(count / 25)))
 </script>
 
