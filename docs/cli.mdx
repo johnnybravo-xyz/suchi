@@ -54,24 +54,26 @@ Point `--from` at your existing DMS's export bundle. See
 Mark-and-sweep the CAS: walks every blob under `$DATA_DIR/blobs/`
 and deletes anything **not referenced** by a document original, archive,
 decrypted copy, thumbnail, or user avatar. Trashed document rows still count.
-The blob's on-disk mtime gates a grace window — a fresh-uploaded blob whose
-database row is still in a pending write won't be reclaimed.
+The blob's on-disk mtime gates a grace window. It is a retention buffer, not
+protection against concurrent writes: an upload can reuse an old blob before
+committing its new database reference.
 
 Dry-run by default. Nothing is deleted until you pass `--apply`.
+Before applying, stop Suchi and every other archive writer, including CLI
+imports. Keep them stopped until GC finishes. Do not apply GC while a backup
+is copying the blob tree.
 
 ### Flags
 
 | Flag                      | Default          | Purpose                                             |
 | ------------------------- | ---------------- | --------------------------------------------------- |
-| `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this. Longer is safer.        |
-| `--apply`                 | off              | Actually delete candidate blobs. Otherwise dry-run. |
+| `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this; not a concurrency guarantee. |
+| `--apply`                 | off              | Delete candidate blobs with all archive writers stopped. |
 | `--verbose`               | off              | Log every kept and every candidate blob.            |
 
-<Info>
-  Recommended cadence: nightly `suchi gc --apply` via cron once the instance is
-  a few weeks old. The design doc keeps this deliberately manual — automatic gc
-  on hostile data is how you lose files.
-</Info>
+Trash and its automatic retention remove document rows and rendered files,
+but retain CAS blobs for this offline collection. Run GC during a planned
+maintenance window after taking a [complete backup](/backup-restore).
 
 ## `suchi taxonomy validate <file>`
 

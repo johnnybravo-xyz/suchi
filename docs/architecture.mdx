@@ -120,15 +120,19 @@ $DATA_DIR/blobs/sha256/ab/cd/ef/<full-hash>
 
 `CAS.Put` hashes a stream into a temporary file at the CAS root, then renames it
 into its shard on the same filesystem. SQLite and the filesystem are not one
-transaction: a later database failure can leave an unreferenced blob, which
-the GC path can reclaim. Do not delete by hash on a request failure; another
-document may reference it.
+transaction: a later database failure can leave an unreferenced blob. Online
+purge never deletes CAS bytes: it cannot distinguish an unused hash from an
+in-flight publisher reusing it. Only offline GC reclaims blobs, with the server
+and all other archive writers stopped. A blob's age is not a concurrency guard.
+Do not delete by hash on a request failure; another document may reference it.
 
 Preserve `original_blob` and the original MIME type. Decryption, normalization,
 and OCR create derived objects rather than overwriting the upload. The rendered
-Johnny.Decimal tree is a rebuildable projection. Trash, retention, and
-`core/gc/` own deletion and reference-aware reclamation. Back up the complete
-data directory, including the keys that decrypt sealed credentials.
+Johnny.Decimal tree is a rebuildable projection. Trash and retention remove
+document state and rendered files; `core/gc/` owns physical CAS reclamation.
+Back up the complete data directory with writers stopped or an atomic whole-
+directory snapshot, including the keys that decrypt sealed credentials. A
+database-only snapshot is not a complete archive backup.
 
 Migrations are embedded and ordered. Fold unreleased schema changes into the
 current release migration; never rewrite a migration already published in a

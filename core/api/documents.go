@@ -276,8 +276,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 // SoftDeleteDocument starts the fixed 30-day recovery window. Automatic
-// retention cleanup or an explicit Trash action permanently deletes the row
-// and reclaims blobs that no other database row references.
+// retention cleanup or an explicit Trash action permanently deletes the row.
+// Original and derived blobs remain until offline garbage collection.
 func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return

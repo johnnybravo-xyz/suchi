@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	"github.com/johnnybravo-xyz/suchi/core/db"
 	trashservice "github.com/johnnybravo-xyz/suchi/core/trash"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -32,7 +34,7 @@ func newTrashAPIServer(t *testing.T) (*Server, *http.ServeMux, *blob.CAS) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	retention, err := trashservice.New(database, cas, renderRoot, log)
+	retention, err := trashservice.New(database, renderRoot, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +231,86 @@ func TestUploadDoesNotRestoreExpiredDuplicate(t *testing.T) {
 	}
 	if replacement.Restored || replacement.ID == original.ID {
 		t.Fatalf("expired row was restored: original=%+v replacement=%+v", original, replacement)
+	}
+}
+
+func TestUploadRetainsOriginalAcrossConcurrentPurge(t *testing.T) {
+	server, mux, cas := newTrashAPIServer(t)
+	content := []byte("shared original survives online purge")
+	oldID := seedTrashAPIDocument(t, server, cas, 1, string(content), true, time.Now().Unix())
+	seedUser(t, server.DB, 2)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	// Pause the real handler's Inbox lookup after CAS.Put but before its write.
+	// Purge uses the ordinary read pool, so the interleaving is deterministic.
+	readGate, err := sql.Open("sqlite", "file:"+server.DB.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readGate.Close()
+	readGate.SetMaxOpenConns(1)
+	held, err := readGate.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	uploader := &Server{
+		DB:  &db.DB{Read: readGate, Write: server.DB.Write, Path: server.DB.Path},
+		CAS: cas, Log: server.Log, Authz: server.Authz,
+	}
+	request := sourceUploadRequest(t, "shared.txt", content, memberPrincipal(2))
+	request = request.WithContext(auth.WithPrincipal(ctx, memberPrincipal(2)))
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		uploader.UploadDocument(response, request)
+	}()
+	defer func() {
+		cancel()
+		_ = held.Close()
+		<-done
+	}()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for readGate.Stats().WaitCount == 0 {
+		select {
+		case <-ticker.C:
+		case <-done:
+			t.Fatal("upload finished before the Inbox gate")
+		case <-ctx.Done():
+			t.Fatal("upload never reached the Inbox gate")
+		}
+	}
+	purge := doTrashAPIRequest(t, mux, http.MethodDelete, "/api/trash/"+itoa(oldID), memberPrincipal(1))
+	if purge.Code != http.StatusNoContent {
+		t.Fatalf("purge status=%d body=%s", purge.Code, purge.Body.String())
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	var uploaded UploadResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	if err := server.DB.Read.QueryRowContext(ctx,
+		`SELECT original_blob FROM documents WHERE id = ? AND owner_id = 2`, uploaded.ID).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	original, err := cas.Get(hash)
+	if err != nil {
+		t.Fatalf("successful upload lost its original: %v", err)
+	}
+	defer original.Close()
+	got, err := io.ReadAll(original)
+	if err != nil || string(got) != string(content) {
+		t.Fatalf("original=%q err=%v", got, err)
 	}
 }
 

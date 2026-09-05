@@ -44,7 +44,7 @@ func newTestService(t *testing.T) (*Service, *db.DB, *blob.CAS, string) {
 	if err := os.MkdirAll(renderRoot, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(database, cas, renderRoot, log)
+	service, err := New(database, renderRoot, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,12 +129,12 @@ func TestPurgeExpiredUsesExactThirtyDayBoundary(t *testing.T) {
 			t.Fatalf("document %d was purged inside its recovery window", id)
 		}
 	}
-	if _, err := cas.Stat(expiredHash); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("expired document blob error=%v, want blob.ErrNotFound", err)
+	if _, err := cas.Stat(expiredHash); err != nil {
+		t.Fatalf("retention removed blob before offline GC: %v", err)
 	}
 }
 
-func TestPurgeRemovesOwnedStateAndOnlyUnreferencedFiles(t *testing.T) {
+func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 	service, database, cas, renderRoot := newTestService(t)
 	trashedAt := time.Now().Add(-time.Hour).Unix()
 	sharedHash := putBlob(t, cas, "shared-document-blob")
@@ -196,7 +196,7 @@ func TestPurgeRemovesOwnedStateAndOnlyUnreferencedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Purged != 1 || report.RenderedFilesRemoved != 1 || report.BlobsRemoved != 2 || report.CleanupFailures != 1 {
+	if report.Purged != 1 || report.RenderedFilesRemoved != 1 || report.CleanupFailures != 1 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 	if rowExists(t, database, "documents", 10) || !rowExists(t, database, "documents", 11) {
@@ -225,14 +225,11 @@ func TestPurgeRemovesOwnedStateAndOnlyUnreferencedFiles(t *testing.T) {
 	if content, err := os.ReadFile(outsidePath); err != nil || string(content) != "keep" {
 		t.Fatalf("unsafe render path touched: content=%q err=%v", content, err)
 	}
-	for name, hash := range map[string]string{"shared": sharedHash, "avatar": avatarHash} {
+	for name, hash := range map[string]string{
+		"shared": sharedHash, "avatar": avatarHash, "archive": archiveHash, "decrypted": decryptedHash,
+	} {
 		if _, err := cas.Stat(hash); err != nil {
 			t.Fatalf("%s hash was removed: %v", name, err)
-		}
-	}
-	for name, hash := range map[string]string{"archive": archiveHash, "decrypted": decryptedHash} {
-		if _, err := cas.Stat(hash); !errors.Is(err, blob.ErrNotFound) {
-			t.Fatalf("%s hash error=%v, want blob.ErrNotFound", name, err)
 		}
 	}
 

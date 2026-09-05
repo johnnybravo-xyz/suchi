@@ -9,19 +9,14 @@
 //  2. Walk the CAS via CAS.List().
 //  3. Anything in the CAS that isn't in the reference set is a
 //     candidate for deletion.
-//  4. Optional grace period — skip blobs whose file mtime is newer
-//     than time.Now().Add(-grace). Protects freshly-uploaded blobs
-//     that haven't been referenced YET because their doc row is still
-//     in a pending transaction (should be a millisecond, but a
-//     minutes-to-days grace is cheap defense).
+//  4. Skip blobs whose file mtime is newer than time.Now().Add(-grace).
 //
 // gc never touches the DB — it only reads. Actual deletions are on
 // the filesystem via CAS.Delete.
 //
-// Contract: safe against a concurrent uploader as long as the grace
-// is longer than the maximum ingest wall-clock. Default grace is
-// 30 days — an inbox mailbox that lands a doc at t=0 and gets
-// classified at t=29d29h stays safe.
+// Apply requires the server and every other archive writer to be stopped.
+// CAS.Put can reuse an old blob before its database reference is committed;
+// no mtime grace period makes deletion safe against concurrent publishers.
 package gc
 
 import (
@@ -41,10 +36,11 @@ import (
 // Options carries the gc knobs. Zero value is a runnable dry-run.
 type Options struct {
 	// Grace skips blobs whose mtime is newer than (now - Grace).
-	// Zero disables the grace check entirely. Default: 30 days.
+	// Zero uses the default of 30 days. This is retention, not a writer lock.
 	Grace time.Duration
 
-	// Apply actually deletes candidate blobs. Default is dry-run.
+	// Apply deletes candidate blobs and requires all archive writers stopped.
+	// Default is dry-run.
 	Apply bool
 
 	// Verbose logs every kept + every candidate at Info. Otherwise
@@ -72,8 +68,7 @@ type Failure struct {
 	Err    string
 }
 
-// Run performs the mark-and-sweep. Idempotent; safe to run on any
-// schedule.
+// Run performs the mark-and-sweep. Apply is only safe with all writers stopped.
 func Run(ctx context.Context, d *db.DB, cas *blob.CAS, casRoot string, log *slog.Logger, opts Options) (*Report, error) {
 	if opts.Grace == 0 {
 		opts.Grace = 30 * 24 * time.Hour

@@ -14,9 +14,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
-	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/gc"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -33,7 +31,6 @@ var ErrNotTrashed = errors.New("document is not in trash")
 type Report struct {
 	Purged               int `json:"purged"`
 	RenderedFilesRemoved int `json:"rendered_files_removed,omitempty"`
-	BlobsRemoved         int `json:"blobs_removed,omitempty"`
 	CleanupFailures      int `json:"cleanup_failures,omitempty"`
 }
 
@@ -41,7 +38,6 @@ type Report struct {
 // filesystem cleanup implementation.
 type Service struct {
 	db             *db.DB
-	cas            *blob.CAS
 	renderRoot     string
 	realRenderRoot string
 	log            *slog.Logger
@@ -50,7 +46,6 @@ type Service struct {
 type candidate struct {
 	id      int64
 	ownerID int64
-	blobs   []string
 }
 
 type purgeFilter struct {
@@ -59,9 +54,9 @@ type purgeFilter struct {
 }
 
 // New constructs a permanent-delete service. renderRoot must already exist.
-func New(database *db.DB, cas *blob.CAS, renderRoot string, log *slog.Logger) (*Service, error) {
-	if database == nil || cas == nil || log == nil {
-		return nil, errors.New("trash.New: DB, CAS, and Log are required")
+func New(database *db.DB, renderRoot string, log *slog.Logger) (*Service, error) {
+	if database == nil || log == nil {
+		return nil, errors.New("trash.New: DB and Log are required")
 	}
 	if renderRoot == "" {
 		return nil, errors.New("trash.New: render root is required")
@@ -75,7 +70,7 @@ func New(database *db.DB, cas *blob.CAS, renderRoot string, log *slog.Logger) (*
 		return nil, fmt.Errorf("trash.New: resolve real render root: %w", err)
 	}
 	return &Service{
-		db: database, cas: cas, renderRoot: absRoot, realRenderRoot: realRoot,
+		db: database, renderRoot: absRoot, realRenderRoot: realRoot,
 		log: log.With("component", "trash"),
 	}, nil
 }
@@ -177,7 +172,6 @@ func (s *Service) runSweep(ctx context.Context) {
 	s.log.Info("trash.retention.completed",
 		"purged", report.Purged,
 		"rendered_files_removed", report.RenderedFilesRemoved,
-		"blobs_removed", report.BlobsRemoved,
 		"cleanup_failures", report.CleanupFailures,
 	)
 }
@@ -188,7 +182,7 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		rendered   []string
 	)
 	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		query := `SELECT id, owner_id, original_blob, archive_blob, decrypted_blob, thumb_sha
+		query := `SELECT id, owner_id
 			FROM documents WHERE trashed_at IS NOT NULL`
 		var args []any
 		if filter.idsJSON != "" {
@@ -206,20 +200,10 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 			return err
 		}
 		for rows.Next() {
-			var (
-				c                         candidate
-				original                  string
-				archive, decrypted, thumb sql.NullString
-			)
-			if err := rows.Scan(&c.id, &c.ownerID, &original, &archive, &decrypted, &thumb); err != nil {
+			var c candidate
+			if err := rows.Scan(&c.id, &c.ownerID); err != nil {
 				_ = rows.Close()
 				return err
-			}
-			c.blobs = append(c.blobs, original)
-			for _, value := range []sql.NullString{archive, decrypted, thumb} {
-				if value.Valid && value.String != "" {
-					c.blobs = append(c.blobs, value.String)
-				}
 			}
 			candidates = append(candidates, c)
 		}
@@ -323,7 +307,9 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		})
 	}
 	s.cleanupRendered(rendered, &report)
-	s.cleanupBlobs(ctx, candidates, &report)
+	// CAS publishers store bytes before committing their references. Online
+	// purge cannot distinguish those in-flight writes from unused blobs.
+	// Physical blob reclamation belongs to offline GC, never this service.
 	return report, nil
 }
 
@@ -381,34 +367,6 @@ func (s *Service) renderedTarget(relative string) (string, bool) {
 		return "", false
 	}
 	return target, true
-}
-
-func (s *Service) cleanupBlobs(ctx context.Context, candidates []candidate, report *Report) {
-	candidateHashes := make(map[string]struct{})
-	for _, c := range candidates {
-		for _, hash := range c.blobs {
-			if hash != "" {
-				candidateHashes[hash] = struct{}{}
-			}
-		}
-	}
-	references, err := gc.CollectReferences(ctx, s.db)
-	if err != nil {
-		report.CleanupFailures++
-		s.log.Warn("trash.blob_recheck_failed", "err", err.Error())
-		return
-	}
-	for hash := range candidateHashes {
-		if references[hash] {
-			continue
-		}
-		if err := s.cas.Delete(hash); err != nil {
-			report.CleanupFailures++
-			s.log.Warn("trash.blob_remove_failed", "err", err.Error())
-			continue
-		}
-		report.BlobsRemoved++
-	}
 }
 
 func underRoot(root, target string) bool {

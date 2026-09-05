@@ -25,9 +25,10 @@ directory. The database without `blobs/` has metadata but no document bytes.
 The database without `.decrypt-key` cannot open sealed mailbox, OAuth,
 PDF-password, or LLM credentials.
 
-`rendered/`, `suchi.db-wal`, and `suchi.db-shm` do not need independent copies.
-The rendered tree is generated state; WAL files are meaningful only with the
-database at the same instant.
+`rendered/` is generated state and can be rebuilt. A cleanly stopped database
+does not need its WAL or shared-memory files. An atomic snapshot of a live
+archive must include the database and its WAL together; never copy them at
+different times.
 
 The mbsync deployment keeps credentials and Maildir state outside `DATA_DIR`;
 back up its deployment directory separately when that path is used.
@@ -43,13 +44,16 @@ $DATA_DIR/backups/suchi-<UTC timestamp>.db
 
 It retains the newest `BACKUP_KEEP` snapshots, defaulting to seven.
 `BACKUP_INTERVAL=0` disables the loop. These snapshots contain only the
-database; pair one with the blob tree and keys for disaster recovery.
+database, not a complete archive backup. Offline GC consults the live database,
+not these older snapshots, so it can reclaim bytes that an older snapshot
+still references. Keep a complete backup for disaster recovery.
 
 ## Backup methods
 
 ### Stop and copy
 
-Stopping Suchi before copying the directory is the simplest consistent method:
+Stopping Suchi before copying the directory is the simplest consistent method.
+Stop CLI imports and other archive writers too; do not run GC during the copy:
 
 ```sh
 systemctl stop suchi
@@ -57,25 +61,15 @@ tar -czf suchi-backup-$(date -u +%F).tar.gz -C /var/lib suchi
 systemctl start suchi
 ```
 
-### Online copy
+### Atomic filesystem snapshot
 
-For an online point-in-time copy, use SQLite's backup command, then copy the
-immutable blobs and keys:
+Filesystem snapshots such as ZFS, btrfs, or LVM are suitable when they capture
+the whole data directory atomically, including the database WAL, blobs, and
+keys. Copy from that stable snapshot, not from the changing live directory.
+Encrypted backup tools such as restic or Borg can archive the snapshot off-host.
 
-```sh
-mkdir -p /snap/suchi
-sqlite3 "$DATA_DIR/suchi.db" '.backup /snap/suchi/suchi.db'
-rsync -a --delete "$DATA_DIR/blobs/" /snap/suchi/blobs/
-install -m 600 "$DATA_DIR/.decrypt-key" /snap/suchi/.decrypt-key
-```
-
-Do not run `suchi gc --apply` while making this online copy. A concurrent hard
-delete and garbage-collection pass could remove a blob still referenced by the
-database snapshot. Extra blobs copied after the snapshot are harmless.
-
-Filesystem snapshots such as ZFS, btrfs, or LVM are also suitable when they
-capture the whole data directory atomically. Encrypted backup tools such as
-restic or Borg can archive the resulting snapshot off-host.
+A database snapshot followed by a live blob-tree copy is not an atomic archive
+backup. A separate GC process could remove bytes still needed by that snapshot.
 
 Do not copy only a live `suchi.db`, copy WAL files separately, or omit blobs.
 
@@ -99,10 +93,12 @@ chmod 600 /var/lib/suchi/.decrypt-key
 systemctl start suchi
 ```
 
-The restore drill included in the manually dispatched `checks` workflow
-confirms that built-in snapshots open and pass SQLite integrity checks. It does
-not validate an operator's blob or off-host backup, so restore those into a
-scratch instance periodically.
+The restore drill in the manually dispatched `checks` workflow verifies a
+built-in database snapshot, then stops and copies a synthetic archive into a
+fresh directory. After restart it checks database integrity, key preservation,
+original document download, and search. Run it locally with `make build` and
+`bash hack/smoke-restore.sh`. It does not validate an operator's off-host backup
+or external credentials; restore those into a scratch instance periodically.
 
 ## Upgrade and rollback
 
@@ -121,9 +117,11 @@ opened by a newer release.
 Choose retention based on recovery needs and applicable law. Deleting a
 document does not remove bytes from existing snapshots or external backups.
 
-`suchi gc` reports unreferenced CAS blobs; `suchi gc --apply` removes them.
-Take a recoverable backup before applying garbage collection after a large
-deletion. See [CLI](/cli#suchi-gc-flags).
+Trash and its automatic 30-day retention permanently remove document rows and
+rendered files, but leave original and derived CAS bytes in place. `suchi gc`
+reports unreferenced blobs; `suchi gc --apply` removes them only during offline
+maintenance. Stop the server and all other archive writers before applying GC,
+and take a complete recoverable backup first. See [CLI](/cli#suchi-gc-flags).
 
 Moving to another host uses the same procedure: create a consistent backup,
 restore it under the destination `DATA_DIR`, update ownership and `PUBLIC_URL`,

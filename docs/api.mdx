@@ -901,8 +901,9 @@ archive-wide. Returns `200 OK` with `{"purged": N}`.
 Permanent deletion removes document-owned metadata and workflow state, revokes
 every share link containing the document, clears non-foreign-key references,
 and replaces prior document audit history with a minimal `document.purge`
-record. Rendered files are removed safely. CAS blobs are deleted only after a
-post-commit reference check confirms no document or avatar still uses them.
+record. Rendered files are removed safely. Original and derived CAS blobs stay
+on disk until [offline garbage collection](/cli#suchi-gc-flags), which reclaims
+bytes no document or avatar references while all archive writers are stopped.
 
 ### `GET /api/tasks/`
 

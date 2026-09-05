@@ -21,7 +21,8 @@ Notable user-visible changes to Suchi are recorded here.
   denied; the tour uses an anonymized Northstar document cluster.
 - A fixed 30-day Trash recovery window with automatic expiry, confirmed
   permanent deletion and Empty Trash actions, share-link revocation, minimal
-  purge auditing, and reference-safe blob cleanup.
+  purge auditing. Original and derived blobs remain until offline GC; online
+  cleanup cannot safely identify in-flight uploads reusing those bytes.
 
 ### Changed
 
@@ -45,6 +46,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Permanent deletion no longer removes an in-flight upload's original bytes.
+  GC now explicitly requires stopped archive writers, and the restore drill
+  verifies a real document's bytes, extracted content, and search after restart.
 - Clearing Search cancels its pending request and resets loading/error state.
 - Replaying a demo manifest skips existing documents without adding tags or
   jobs to an unrelated document.

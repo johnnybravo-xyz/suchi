@@ -65,13 +65,16 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("open backup: %v", err)
 	}
 	defer verify.Close()
-	var version int
+	var version, currentVersion int
 	if err := verify.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("query backup: %v", err)
 	}
-	// user_version isn't set by suchi (schema_migrations tracks it)
-	// but the query proves the file is a well-formed SQLite DB.
-	_ = version
+	if err := d.Read.QueryRow(`PRAGMA user_version`).Scan(&currentVersion); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentVersion || version == 0 {
+		t.Fatalf("snapshot schema version=%d, live=%d", version, currentVersion)
+	}
 }
 
 func TestSchedulerActivatesFromDisabledConfiguration(t *testing.T) {

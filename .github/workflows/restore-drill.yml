@@ -1,11 +1,7 @@
 name: restore-drill
 
-# A backup that was never opened is a hope, not a backup. This drill
-# boots suchi against a fresh data dir, forces a VACUUM INTO snapshot,
-# opens the snapshot with the sqlite3 CLI, and confirms
-# PRAGMA integrity_check + PRAGMA user_version. Guards against
-# silent breakage of the backup loop (schema drift, VACUUM INTO
-# regression, half-written file on disk-full).
+# Upload a real document, verify a database snapshot, then stop, copy, and
+# restore the complete archive. Check original bytes and search after restart.
 #
 # Called by the manually dispatched checks workflow. It has no push,
 # pull-request, or scheduled trigger of its own.
@@ -32,58 +28,8 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -trimpath -o /tmp/suchi ./distro/cmd/suchi
 
-      - name: install sqlite3 CLI
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends sqlite3
+      - name: install restore tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends sqlite3 jq
 
-      - name: seed data dir + trigger snapshot
-        env:
-          DATA_DIR: /tmp/suchi-nightly
-          LISTEN_ADDR: 127.0.0.1:9876
-          PUBLIC_URL: http://127.0.0.1:9876
-          # 1-second interval so we don't wait 24h for the first tick.
-          # BACKUP_KEEP=1 so the newest snapshot is the only survivor
-          # — matches what the restore-drill wants to open.
-          BACKUP_INTERVAL: 1s
-          BACKUP_KEEP: "1"
-          # Retention 100d so we don't accidentally exercise the prune
-          # path during the seed loop.
-          AUDIT_RETENTION_DAYS: "100"
-        run: |
-          mkdir -p "$DATA_DIR"
-          /tmp/suchi serve &
-          echo $! > /tmp/suchi.pid
-          # Wait for /readyz. If it never comes up in 15s, fail loud.
-          for i in {1..30}; do
-            curl -sf http://127.0.0.1:9876/readyz && break
-            sleep 0.5
-          done
-          # First backup tick fires 1s after start. Give it a couple
-          # of intervals to write, then stop the server so we're not
-          # opening a live WAL.
-          sleep 3
-          kill "$(cat /tmp/suchi.pid)"
-          # Wait for exit + WAL checkpoint to flush.
-          wait "$(cat /tmp/suchi.pid)" 2>/dev/null || true
-          ls -la "$DATA_DIR/backups/" || (echo "no backups dir"; exit 1)
-
-      - name: open + query the newest snapshot
-        env:
-          DATA_DIR: /tmp/suchi-nightly
-        run: |
-          # Newest suchi-*.db under backups/. Filename format is
-          # suchi-<UTC-timestamp>.db (zero-padded, lex-sortable).
-          NEWEST="$(ls -1 "$DATA_DIR"/backups/suchi-*.db | tail -n 1)"
-          echo "opening $NEWEST"
-          test -s "$NEWEST" || (echo "snapshot empty"; exit 1)
-          # PRAGMA integrity_check must return "ok" — SQLite verifies
-          # every page against its checksum and the b-tree invariants.
-          RESULT="$(sqlite3 "$NEWEST" 'PRAGMA integrity_check;')"
-          echo "integrity_check: $RESULT"
-          test "$RESULT" = "ok" || (echo "integrity check failed"; exit 1)
-          # suchi tracks migration state in PRAGMA user_version (see
-          # core/db/migrate.go), not a schema_migrations table. A fresh-
-          # migrated DB has user_version >= 1; a raw sqlite file with
-          # no migrations reports 0.
-          UV="$(sqlite3 "$NEWEST" 'PRAGMA user_version;')"
-          echo "user_version: $UV"
-          test "$UV" -ge 1 || (echo "no migrations in snapshot"; exit 1)
+      - name: restore and retrieve an uploaded document
+        run: SUCHI_BIN=/tmp/suchi PORT=9876 bash hack/smoke-restore.sh

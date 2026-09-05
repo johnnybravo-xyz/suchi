@@ -21,8 +21,8 @@ import (
 func runGC(args []string) int {
 	fs := flag.NewFlagSet("suchi gc", flag.ContinueOnError)
 	var (
-		grace   = fs.Duration("older-than", 30*24*time.Hour, "skip blobs newer than this; protects freshly-uploaded blobs from a race with pending doc-row inserts")
-		apply   = fs.Bool("apply", false, "actually delete the candidate blobs. Default is dry-run.")
+		grace   = fs.Duration("older-than", 30*24*time.Hour, "skip blobs newer than this; does not protect concurrent uploads")
+		apply   = fs.Bool("apply", false, "delete candidate blobs; stop the server and all other archive writers first (default is dry-run)")
 		verbose = fs.Bool("verbose", false, "log every candidate + skipped blob (default is summary only)")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -36,6 +36,9 @@ func runGC(args []string) int {
 	}
 	log := logx.Setup(os.Stdout, cfg.LogLevel)
 	slog.SetDefault(log)
+	if *apply {
+		log.Warn("gc.offline_required", "message", "the server, imports, and all other archive writers must remain stopped until GC completes")
+	}
 
 	ctx := context.Background()
 
@@ -89,7 +92,7 @@ suchi gc (apply=%v, grace=%s).
 		}
 	}
 	if !*apply && rep.OrphanCandidates > 0 {
-		fmt.Fprintln(os.Stderr, "\nDry-run — re-run with --apply to actually delete.")
+		fmt.Fprintln(os.Stderr, "\nDry-run — stop the server and all other archive writers before re-running with --apply.")
 	}
 	return 0
 }

@@ -111,9 +111,10 @@ Deleting a document first moves it to Trash, where it remains recoverable for
 30 days. Suchi purges expired Trash at startup and daily; confirmed permanent
 deletion can remove one document or empty the caller's Trash sooner. A purge
 removes document-owned database state, revokes share links containing the
-document, and deletes CAS blobs only when no document or avatar still references
-them. Database snapshots and external backups may retain deleted data until
-their separate backup lifecycle expires.
+document, and removes rendered files. Original and derived CAS bytes remain
+on disk until the operator runs offline garbage collection with all archive
+writers stopped. Database snapshots and external backups may retain deleted
+data until their separate backup lifecycle expires.
 
 Share links are random, revocable bearer tokens. Revoking a link stops future
 access but cannot retract a file a recipient already downloaded.

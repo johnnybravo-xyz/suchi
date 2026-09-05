@@ -332,7 +332,7 @@ func runServe() int {
 	if err := renderer.Reconcile(ctx); err != nil {
 		log.Warn("main.view.reconcile", "err", err.Error())
 	}
-	trashService, err := trash.New(d, cas, cfg.DataDir+"/rendered", log)
+	trashService, err := trash.New(d, cfg.DataDir+"/rendered", log)
 	if err != nil {
 		log.Error("main.trash.new", "err", err.Error())
 		return 1
