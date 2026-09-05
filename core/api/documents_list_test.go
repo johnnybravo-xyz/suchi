@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -130,6 +131,44 @@ func TestListDocuments_OrderingHasStableIDTieBreak(t *testing.T) {
 		_, rows, _ = doList(t, s, "/api/documents/?ordering="+test.ordering, adminPrincipal(1))
 		if len(rows) != 2 || rows[0].ID != test.want[0] || rows[1].ID != test.want[1] {
 			t.Fatalf("ordering %q rows=%+v, want ids=%v", test.ordering, rows, test.want)
+		}
+	}
+}
+
+func TestListDocuments_CorrespondentsPreferJunctionAndPreserveFallback(t *testing.T) {
+	s := newListServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	fallback := seedStatsDoc(t, s.DB, 1, "corr-fallback", "singular", inbox, false, 100)
+	junction := seedStatsDoc(t, s.DB, 1, "corr-junction", "multiple roles", inbox, false, 200)
+	junctionOnly := seedStatsDoc(t, s.DB, 1, "corr-junction-only", "junction only", inbox, false, 300)
+	empty := seedStatsDoc(t, s.DB, 1, "corr-empty", "none", inbox, false, 400)
+	if _, err := s.DB.Write.ExecContext(t.Context(), `
+		INSERT INTO correspondents(id, name, slug, created_at, updated_at) VALUES
+			(1, 'Alpha', 'alpha', 0, 0), (2, 'Beta', 'beta', 0, 0), (3, 'Gamma', 'gamma', 0, 0);
+		UPDATE documents SET correspondent_id = 1 WHERE id IN (?, ?)
+	`, fallback, junction); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Write.ExecContext(t.Context(), `
+		INSERT INTO document_correspondents(document_id, correspondent_id, role) VALUES
+			(?, 3, 'recipient'), (?, 2, 'sender'), (?, 2, 'recipient'), (?, 2, 'sender')
+	`, junction, junction, junction, junctionOnly); err != nil {
+		t.Fatal(err)
+	}
+
+	code, rows, count := doList(t, s, "/api/documents/", adminPrincipal(1))
+	if code != 200 || count != 4 || len(rows) != 4 {
+		t.Fatalf("status=%d count=%d rows=%+v", code, count, rows)
+	}
+	want := map[int64][]string{
+		fallback:     {"Alpha"},
+		junction:     {"Beta", "Beta", "Gamma"},
+		junctionOnly: {"Beta"},
+		empty:        nil,
+	}
+	for _, row := range rows {
+		if !reflect.DeepEqual(row.Correspondents, want[row.ID]) {
+			t.Errorf("doc %d correspondents=%v, want %v", row.ID, row.Correspondents, want[row.ID])
 		}
 	}
 }
