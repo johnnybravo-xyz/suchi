@@ -72,6 +72,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Signing out clears retained archive data; delayed reads, profile refreshes,
+  demo upgrades, and queued uploads cannot carry work into another account.
+- Mail and AnyDoc smoke checks now own isolated temporary data and containers,
+  bind loopback, and retain scratch data if teardown fails.
 - API tokens now enforce a fail-closed route policy. Narrow document/event
   tokens cannot inherit account/settings administration from an admin owner;
   profiling and raw-original downloads require a session. Admin-token metrics
