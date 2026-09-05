@@ -1,4 +1,4 @@
-package audit_test
+package audit
 
 // Sliding-window retention over audit_events. Verifies:
 //   - rows older than the window are gone
@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
@@ -51,7 +50,7 @@ func TestPrune_WindowDropsOldKeepsNew(t *testing.T) {
 	insertEventAt(t, d, old, "document.trash")
 	insertEventAt(t, d, fresh, "document.update")
 
-	n, err := audit.Prune(context.Background(), d, log, 20)
+	n, err := Prune(context.Background(), d, log, 20)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -74,7 +73,7 @@ func TestPrune_NoOpNoAuditRow(t *testing.T) {
 	insertEventAt(t, d, now, "document.create")
 
 	before := countEvents(t, d)
-	n, err := audit.Prune(context.Background(), d, log, 20)
+	n, err := Prune(context.Background(), d, log, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func TestPrune_ZeroDaysDisabled(t *testing.T) {
 	old := time.Now().Unix() - int64(365*24*time.Hour/time.Second)
 	insertEventAt(t, d, old, "document.create")
 
-	n, err := audit.Prune(context.Background(), d, log, 0)
+	n, err := Prune(context.Background(), d, log, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

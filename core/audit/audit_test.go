@@ -1,4 +1,4 @@
-package audit_test
+package audit
 
 // Tests for the AuditSink fanout wiring. Focus on the boundary: a
 // registered sink receives the same event that lands in audit_events,
@@ -10,10 +10,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
-	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -21,6 +19,8 @@ import (
 
 func setupDB(t *testing.T) *db.DB {
 	t.Helper()
+	clearSinks()
+	t.Cleanup(clearSinks)
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := db.Open(ctx, path)
@@ -41,14 +41,11 @@ func setupDB(t *testing.T) *db.DB {
 
 // captureSink records every event it receives.
 type captureSink struct {
-	mu     sync.Mutex
 	events []pluginapi.AuditEvent
 }
 
 func (c *captureSink) Kind() string { return "capture" }
 func (c *captureSink) Emit(_ context.Context, e pluginapi.AuditEvent) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.events = append(c.events, e)
 	return nil
 }
@@ -68,13 +65,12 @@ func TestFanout_EventReachesSink(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	sink := &captureSink{}
-	audit.RegisterSink(sink)
-	t.Cleanup(clearSinks)
+	RegisterSink(sink)
 
 	principal := &pluginapi.Principal{
 		Kind: "user", UserID: 42, Email: "a@example.com",
 	}
-	audit.Log(context.Background(), d, log, audit.Event{
+	Log(context.Background(), d, log, Event{
 		Actor:      principal,
 		Action:     "document.create",
 		ObjectKind: "document",
@@ -83,8 +79,6 @@ func TestFanout_EventReachesSink(t *testing.T) {
 		RequestID:  "req-abc",
 	})
 
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
 	if len(sink.events) != 1 {
 		t.Fatalf("want 1 event, got %d", len(sink.events))
 	}
@@ -114,16 +108,11 @@ func TestFanout_MultipleSinksAllReceive(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	s1, s2 := &captureSink{}, &captureSink{}
-	audit.RegisterSink(s1)
-	audit.RegisterSink(s2)
-	t.Cleanup(clearSinks)
+	RegisterSink(s1)
+	RegisterSink(s2)
 
-	audit.Log(context.Background(), d, log, audit.Event{Action: "test.event"})
+	Log(context.Background(), d, log, Event{Action: "test.event"})
 
-	s1.mu.Lock()
-	defer s1.mu.Unlock()
-	s2.mu.Lock()
-	defer s2.mu.Unlock()
 	if len(s1.events) != 1 || len(s2.events) != 1 {
 		t.Errorf("both sinks should have received one event; s1=%d s2=%d",
 			len(s1.events), len(s2.events))
@@ -136,18 +125,15 @@ func TestFanout_FailingSinkDoesNotBlockWrite(t *testing.T) {
 
 	fail := &failSink{}
 	ok := &captureSink{}
-	audit.RegisterSink(fail)
-	audit.RegisterSink(ok)
-	t.Cleanup(clearSinks)
+	RegisterSink(fail)
+	RegisterSink(ok)
 
 	// Should not panic, not error visibly, and still reach the ok sink.
-	audit.Log(context.Background(), d, log, audit.Event{Action: "test.event"})
+	Log(context.Background(), d, log, Event{Action: "test.event"})
 
 	if fail.called != 1 {
 		t.Errorf("failing sink should still be called; got %d", fail.called)
 	}
-	ok.mu.Lock()
-	defer ok.mu.Unlock()
 	if len(ok.events) != 1 {
 		t.Errorf("ok sink should still fire after fail sink; got %d events",
 			len(ok.events))
@@ -163,14 +149,9 @@ func TestFanout_FailingSinkDoesNotBlockWrite(t *testing.T) {
 	}
 }
 
-// clearSinks resets the package-level registry between tests. There's
-// no exported clear so tests reach through — kept internal since
-// production code never wants this.
+// Tests run serially because the sink registry is process-wide.
 func clearSinks() {
-	// Best we can do without exported plumbing: register a sink, then
-	// re-register nils won't remove others. The package doesn't expose
-	// removal on purpose (sinks are boot-time only). Tests using
-	// t.Cleanup live with the accumulation as long as each test doesn't
-	// rely on sink COUNT from other tests. Add a subtest-scoped filter
-	// if that becomes a problem.
+	sinkMu.Lock()
+	sinks = nil
+	sinkMu.Unlock()
 }
