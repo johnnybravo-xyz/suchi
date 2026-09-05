@@ -5,9 +5,6 @@
 // same tokenizer + BM25 SQL + ACL splice. Cross-package cycle
 // prevention — api imports automations, so the shared helper can't
 // live in api.
-//
-// When task #128 (sqlite-vec) ships, this package swaps its ORDER BY
-// under the hood; every caller inherits the improvement.
 
 package similar
 
@@ -48,8 +45,7 @@ const MaxContentBytes = 4096
 // around 1e-6, while genuine overlap on multiple discriminative
 // tokens scores several orders of magnitude higher. A caller
 // filtering below this floor drops the noise band. The API endpoint
-// applies it; the archive classifier keeps its
-// per-rule configurable floor for finer control.
+// applies it; archive classification uses all returned neighbours.
 const MinScore = 0.001
 
 // Principal is the caller's identity used for the visibility splice.

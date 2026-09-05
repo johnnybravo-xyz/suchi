@@ -1,21 +1,4 @@
 #!/usr/bin/env sh
-# pre-commit hook: refuse commits that would fail CI's gofmt gate.
-#
-# CI runs `gofmt -d $(find ... -name '*.go')` against the whole tree
-# and hard-fails on any drift. Matching that check here saves a bounce.
-#
-# Install per-clone with:  make install-hooks
-
 set -eu
 
-# Match the Makefile's whole-tree formatting gate while ignoring files
-# deleted by the current refactor.
-drift=$(find . -type f -name '*.go' -not -path './*/vendor/*' -print0 |
-    xargs -0 -r gofmt -l)
-if [ -n "$drift" ]; then
-    printf 'pre-commit: gofmt drift in these files:\n' >&2
-    printf '  %s\n' $drift >&2
-    printf '\nFix:  make fmt\n' >&2
-    printf 'Or:   gofmt -w $(git ls-files "*.go")\n' >&2
-    exit 1
-fi
+exec make --no-print-directory fmt-check

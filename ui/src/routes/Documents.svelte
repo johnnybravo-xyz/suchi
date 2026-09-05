@@ -8,7 +8,7 @@
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
-  import { createQueryAssistant, queryErrorMessage } from '../lib/queryAssist.js'
+  import { createQueryAssistant } from '../lib/queryAssist.js'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
         canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
@@ -116,7 +116,7 @@
       const visibleIDs = new Set(docs.map((document) => document.id))
       sel = new Set([...sel].filter((id) => visibleIDs.has(id)))
     } catch (ex) {
-      if (version === loadVersion) err = queryErrorMessage(ex, 'Could not load documents.')
+      if (version === loadVersion) err = ex.message || 'Could not load documents.'
     } finally {
       if (activeController === controller) activeController = undefined
       if (version === loadVersion) loading = false
@@ -228,7 +228,6 @@
     try {
       await decryptDocument(d.id, { password, remember: true })
       d.encryption_state = 'decrypted'
-      docs = docs   // nudge reactivity
       unlockPw = { ...unlockPw, [d.id]: '' }
       notify?.(`Unlocked "${d.title || 'document #' + d.id}"`)
     } catch (ex) {

@@ -1,12 +1,5 @@
 import { autocomplete } from './api.js'
 
-async function querySuggestions(query, limit = 8, signal) {
-  const value = String(query || '')
-  if (!value.trim()) return []
-  const response = await autocomplete(value, limit, signal)
-  return (response?.results || response || []).filter((suggestion) => suggestion.query)
-}
-
 export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } = {}) {
   let timer
   let version = 0
@@ -40,7 +33,8 @@ export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } =
       const controller = new AbortController()
       activeController = controller
       try {
-        const next = await querySuggestions(value, limit, controller.signal)
+        const response = await autocomplete(value, limit, controller.signal)
+        const next = (response?.results || response || []).filter((suggestion) => suggestion.query)
         if (current === version) onSuggestions(next)
       } catch {
         if (current === version) onSuggestions([])
@@ -51,9 +45,4 @@ export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } =
   }
 
   return { update, clear, dispose: cancel }
-}
-
-export function queryErrorMessage(error, fallback) {
-  if (error?.code === 'bad_query') return error.message || 'Invalid query.'
-  return error?.message || fallback
 }

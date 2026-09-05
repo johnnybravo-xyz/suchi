@@ -1,6 +1,9 @@
+const dateFormatter = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+
 export function fmtDate(unix) {
   if (!unix) return ''
-  return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  const date = new Date(unix * 1000)
+  return Number.isNaN(date.getTime()) ? 'Invalid Date' : dateFormatter.format(date)
 }
 export function fmtBytes(n) {
   if (!n && n !== 0) return ''

@@ -22,7 +22,7 @@ jobs:
           go-version-file: go.work
           cache-dependency-path: '**/go.sum'
       - run: make vet
-      - run: make test
+      - run: make test TEST_FLAGS='-count=1 -timeout 60s'
 
   build-cross:
     # Prove the code compiles for every shipping OS/arch. linux/amd64 is

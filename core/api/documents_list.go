@@ -256,10 +256,7 @@ func hydrateTagsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow,
 	return nil
 }
 
-// hydrateCorrespondentsForList surfaces correspondent names for the
-// row. Multi-party form (sender + recipient + cc) via the junction
-// table; falls back to the singular correspondent_id if the doc
-// hasn't been migrated to the multi-party shape yet.
+// Junction rows take precedence over the singular correspondent_id fallback.
 func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
@@ -269,16 +266,17 @@ func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []Docume
 	for i, id := range ids {
 		args[i] = id
 	}
-	// Multi-party first.
 	rows, err := rdb.QueryContext(ctx, `
-		SELECT dc.document_id, c.name
-		  FROM document_correspondents dc
-		  JOIN correspondents c ON c.id = dc.correspondent_id
-		 WHERE dc.document_id IN (`+placeholders+`)
-		 ORDER BY dc.document_id, c.name`, args...)
+		SELECT d.id, c.name
+		  FROM documents d
+		  LEFT JOIN document_correspondents dc ON dc.document_id = d.id
+		  JOIN correspondents c ON c.id = COALESCE(dc.correspondent_id, d.correspondent_id)
+		 WHERE d.id IN (`+placeholders+`)
+		 ORDER BY d.id, c.name`, args...)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	byDoc := map[int64][]string{}
 	for rows.Next() {
 		var (
@@ -286,16 +284,11 @@ func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []Docume
 			name string
 		)
 		if err := rows.Scan(&id, &name); err != nil {
-			rows.Close()
 			return err
 		}
 		byDoc[id] = append(byDoc[id], name)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	for i := range out {
@@ -303,29 +296,5 @@ func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []Docume
 			out[i].Correspondents = v
 		}
 	}
-	// Singular fallback for rows that didn't hit the junction.
-	fallback, err := rdb.QueryContext(ctx, `
-		SELECT d.id, c.name
-		  FROM documents d
-		  JOIN correspondents c ON c.id = d.correspondent_id
-		 WHERE d.id IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return err
-	}
-	defer fallback.Close()
-	for fallback.Next() {
-		var (
-			id   int64
-			name string
-		)
-		if err := fallback.Scan(&id, &name); err != nil {
-			return err
-		}
-		for i := range out {
-			if out[i].ID == id && len(out[i].Correspondents) == 0 {
-				out[i].Correspondents = []string{name}
-			}
-		}
-	}
-	return fallback.Err()
+	return nil
 }

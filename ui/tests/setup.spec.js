@@ -1043,6 +1043,39 @@ test('runs a changed search once and keeps its newest response', async ({ page }
   expect(queries).toEqual(['paris', 'london'])
 })
 
+test('clearing an applied search cancels the request and leaves search usable', async ({ page }) => {
+  await mockAPI(page, {
+    searchByQuery: {
+      paris: {
+        delay: 1000,
+        results: [{ id: 41, title: 'Canceled Paris result', created_at: 1780000000 }],
+      },
+      london: {
+        results: [{ id: 42, title: 'Current London result', created_at: 1780000000 }],
+      },
+    },
+  })
+  const firstRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/search/' && url.searchParams.get('q') === 'paris'
+  })
+  await page.goto('/#/search?q=paris')
+  const request = await firstRequest
+  const canceled = page.waitForEvent('requestfailed', failed => failed === request)
+  const input = page.getByPlaceholder('Search text or use jd:, tag:, from:…')
+  const submit = page.getByRole('button', { name: 'Search', exact: true })
+  await input.fill('')
+  await submit.click()
+  await canceled
+  await expect(page).toHaveURL(/#\/search$/)
+  await expect(page.getByText('Canceled Paris result')).toHaveCount(0)
+
+  await submit.click()
+  await input.fill('london')
+  await submit.click()
+  await expect(page.getByText('Current London result')).toBeVisible()
+})
+
 
 test('resets document pagination when route filters change', async ({ page }) => {
   await mockAPI(page, {

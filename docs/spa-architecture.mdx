@@ -154,14 +154,17 @@ workflow rather than hiding administrative actions without an alternative.
 
 ## Security
 
-The browser receives a session cookie; scripts do not read its value. Mutating
-requests remain same-origin and pass Fetch Metadata protection on the server.
+Ordinary browser login uses a session cookie; scripts do not read its value.
+The public demo keeps its anonymous read token in `sessionStorage` and its
+upgraded scratch-user API token in `localStorage`. The API helper supports that
+token alongside cookie sessions. Cookie-authenticated mutations remain
+same-origin and pass Fetch Metadata protection on the server.
 Preview content is served by dedicated endpoints under a restrictive CSP, not
 injected into component HTML.
 
 Render ordinary text through Svelte escaping. The only intentionally marked-up
-search content is sanitized before display. Never store API tokens, mailbox
-credentials, or provider keys in browser storage.
+search content is sanitized before display. Do not extend browser token storage
+to ordinary login, or store mailbox credentials or provider keys there.
 
 ## Adding or changing a screen
 

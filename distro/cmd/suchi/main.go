@@ -445,7 +445,7 @@ func runServe() int {
 		}),
 		postingest.WithPreConsume(cfg.PreConsumeScript),
 	))
-	disp.Register(llmclassifier.NewHandler(llm, llmclassifier.Adapt(d), log))
+	disp.Register(llmclassifier.NewHandler(llm, d, log))
 	disp.Register(view.NewHandler(renderer))
 	// The API uses the same approvals engine as the outbox subscriber.
 	apvEngine := approvals.New(d, log)
