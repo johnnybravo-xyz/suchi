@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/api"
-	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
-func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.CAS, apiServer *api.Server, anon *demo.AnonAuthenticator, issueSession func(http.ResponseWriter, *http.Request, int64, time.Duration) error, log *slog.Logger) (*httpx.RateLimit, error) {
+func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, apiServer *api.Server, anon *demo.AnonAuthenticator, issueSession func(http.ResponseWriter, *http.Request, int64, time.Duration) error, log *slog.Logger) (*httpx.RateLimit, error) {
 	apiServer.SetDemo(api.DemoConfig{
 		Enabled:      cfg.DemoMode,
 		CookieSecure: strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://"),
@@ -45,7 +44,7 @@ func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.
 		"body_limit_bytes", cfg.BodyLimit,
 		"scratch_ttl_minutes", cfg.DemoScratchTTLMinutes)
 	go demo.Loop(ctx, demo.TickerOptions{
-		DB: d, CAS: cas, Log: log,
+		DB: d, Log: log,
 		TTL: time.Duration(cfg.DemoScratchTTLMinutes) * time.Minute,
 	})
 	apiServer.SetDemoMinter(anon.Mint)

@@ -104,12 +104,16 @@ visitor's upload.
 
 Scratch users use the `visitor-*@demo.local` pattern. The reset ticker runs at
 half the configured TTL and deletes expired matching users, their documents,
-and CAS blobs that no other document references. It cannot select ordinary
-users or seeded demo rows. CAS deletion happens after the database transaction;
-an interrupted cleanup leaves an orphan that `suchi gc` can reclaim.
+and cascading session/token records. It cannot select ordinary users or seeded
+demo rows; disabled visitors are retained for operator investigation.
+It never deletes CAS bytes: a reference check cannot account for an in-flight
+upload reusing a blob. Expiry removes access, not physical bytes. Reclaim disk
+space with the server and all archive writers stopped, using `suchi gc`, or
+through the deployment's full volume reset.
 
-The sibling deployment resets by recreating its dedicated volume and letting
-the image entrypoint seed it again. Suchi does not expose a partial in-place
+The sibling deployment's nightly reset stops the server, recreates only its
+dedicated demo volume and lets the image entrypoint seed it again. Suchi does
+not expose a partial in-place
 reset that could leave corpus blobs or metadata behind.
 
 ## Deployment boundaries

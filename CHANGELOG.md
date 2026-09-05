@@ -58,6 +58,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Demo visitor expiry also leaves CAS bytes for offline reclamation, preventing
+  it from removing an in-flight upload or another document version's original.
+  The existing stopped demo-volume reset remains the disk-reclamation path.
 - Setup, egress, and filing-recovery logs preserve their structured event name
   instead of emitting duplicate JSON `msg` fields.
 - Demo dashboard counts now include the visible corpus. Visitor uploads preview
