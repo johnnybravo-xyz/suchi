@@ -51,6 +51,21 @@ Two credential shapes, both routed through the same auth chain:
   are exactly 64 lowercase hex chars; anything else with `Bearer`
   scheme falls through to the OIDC authenticator.
 
+API tokens are limited by an explicit route allowlist in
+`distro/cmd/suchi/serve_token_policy.go`. Document reads (including search,
+chat, previews, and shared vocabulary) require `documents:read`; document
+mutations require `documents:write`; the activity feed requires `events:read`.
+Write scope does not imply read scope, and scopes never bypass ownership,
+role, capability, or document-visibility checks.
+
+Account/settings administration, credential vaults, global taxonomy mutations,
+profile management, raw-original downloads (`raw=1`), and profiling require a
+browser/OIDC session. Unlisted routes fail closed for API tokens with
+`403 token_route_forbidden`; a listed route with a missing scope returns
+`403 insufficient_scope`. Token minting retains its subset-only rule for
+existing-token callers; `/metrics` retains admin-token support. New HTTP
+routes must explicitly declare their token access at the assembly boundary.
+
 ## Endpoints (selected — see index above for the full list)
 
 ### `GET /healthz`
@@ -75,8 +90,8 @@ and authenticated non-admin requests return 403. Per-route request counts and
 job-queue depth are internals a public scraper should not see. Send
 `Authorization: Token <admin-token>` on scrapes.
 
-When `SUCHI_PPROF=1`, `/debug/pprof/*` has the same admin-authenticated
-boundary. Health probes (`/healthz`, `/readyz`) stay public.
+When `SUCHI_PPROF=1`, `/debug/pprof/*` requires an admin browser/OIDC session
+(API tokens are not accepted). Health probes (`/healthz`, `/readyz`) stay public.
 
 Metrics include:
 

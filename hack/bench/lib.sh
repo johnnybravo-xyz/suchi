@@ -64,7 +64,7 @@ bench_build_tools() {
 
 bench_start_suchi() {
     PUBLIC_URL="http://127.0.0.1:$SUCHI_PORT" \
-    LISTEN_ADDR=":$SUCHI_PORT" \
+    LISTEN_ADDR="127.0.0.1:$SUCHI_PORT" \
     DATA_DIR="$DATA_DIR" \
     LOG_LEVEL=warn \
     SUCHI_DEV=0 \
@@ -81,6 +81,10 @@ bench_start_suchi() {
 # Spawn a clean instance and wait for its health endpoint.
 bench_boot_suchi() {
     SUCHI_PORT="${SUCHI_PORT:-$PORT}"
+    if curl -sS --max-time 1 -o /dev/null "http://127.0.0.1:$SUCHI_PORT/healthz" 2>/dev/null; then
+        echo "bench_boot_suchi: port $SUCHI_PORT already serves HTTP; choose another PORT" >&2
+        return 1
+    fi
     DATA_DIR="$(mktemp -d -t suchi-bench-XXXXXXXX)"
     case "$DATA_DIR" in
         /tmp/*) : ;;
@@ -91,6 +95,7 @@ bench_boot_suchi() {
     bench_start_suchi
 
     for _ in $(seq 1 80); do
+        if ! kill -0 "$SUCHI_PID" 2>/dev/null; then break; fi
         if curl -sfS "http://127.0.0.1:$SUCHI_PORT/healthz" >/dev/null 2>&1; then
             echo "suchi up on :$SUCHI_PORT (pid=$SUCHI_PID data=$DATA_DIR)" >&2
             return 0
@@ -104,7 +109,7 @@ bench_boot_suchi() {
 
 # ---------------------------------------------------------------------------
 # bench_bootstrap_admin — scrape the setup token from the log, POST /setup,
-# POST /api/login, export ADMIN_TOKEN + ADMIN_EMAIL.
+# Login for an admin cookie, then mint ADMIN_TOKEN for document calls.
 # Requires bench_boot_suchi to have run first. Setup log line is emitted
 # at LOG_LEVEL=warn because it's a one-shot bootstrap event.
 # ---------------------------------------------------------------------------
@@ -131,12 +136,19 @@ bench_bootstrap_admin() {
         -d "{\"token\":\"$token\",\"email\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" \
         >/dev/null
 
-    ADMIN_TOKEN="$(curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/login" \
+    ADMIN_COOKIES="$DATA_DIR/admin.cookies"
+    curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/login" \
+        --cookie-jar "$ADMIN_COOKIES" \
+        -H 'Content-Type: application/json' \
+        -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" >/dev/null
+    export ADMIN_COOKIES
+
+    ADMIN_TOKEN="$(curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/token/" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
         -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" \
         | grep -oP '"token":"\K[^"]+' | head -1)"
     if [ -z "${ADMIN_TOKEN:-}" ]; then
-        echo "bench_bootstrap_admin: /api/login returned no token" >&2
+        echo "bench_bootstrap_admin: /api/token/ returned no token" >&2
         return 1
     fi
     export ADMIN_TOKEN
@@ -146,16 +158,19 @@ bench_bootstrap_admin() {
 # ---------------------------------------------------------------------------
 # bench_mint_member <email> <password> — create a capability-empty user and
 # log them in. Echoes the API token on stdout for the caller to capture.
-# Requires ADMIN_TOKEN. Non-fatal 409 on duplicate creation is tolerated.
+# Requires ADMIN_COOKIES. Non-fatal 409 on duplicate creation is tolerated.
 # ---------------------------------------------------------------------------
 bench_mint_member() {
-    local email="$1" password="$2"
-    curl -sS -o /dev/null -X POST "http://127.0.0.1:$SUCHI_PORT/api/admin/users" \
-        -H "Authorization: Token $ADMIN_TOKEN" \
-        -H 'Content-Type: application/json' \
-        -d "{\"email\":\"$email\",\"password\":\"$password\",\"capabilities\":[]}" \
-        || true
-    curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/login" \
+    local email="$1" password="$2" status
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$SUCHI_PORT/api/admin/users" \
+        --cookie "$ADMIN_COOKIES" \
+        -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' \
+        -d "{\"email\":\"$email\",\"password\":\"$password\",\"capabilities\":[]}")"
+    if [ "$status" != 201 ] && [ "$status" != 409 ]; then
+        echo "bench_mint_member: account creation returned HTTP $status" >&2
+        return 1
+    fi
+    curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/token/" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
         -d "{\"email\":\"$email\",\"password\":\"$password\"}" \
         | grep -oP '"token":"\K[^"]+' | head -1

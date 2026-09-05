@@ -165,6 +165,7 @@
     })
 
   async function boot() {
+    const user = session.user
     clearInterval(pollTimer)
     const categories = loadTaxonomy()
     // Keep a fresh-install reminder for 48 hours, until the admin opens it,
@@ -172,6 +173,7 @@
     // browser-local acknowledgement leaking into a new installation.
     const setup = session.user?.role === 'admin'
       ? setupState().then(state => {
+          if (session.user !== user) return
           const startedAt = Number(state?.started_at || 0)
           const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
           setupReminderKey = setupDismissalKey(startedAt)
@@ -181,18 +183,24 @@
       : Promise.resolve()
     const chat = pollChatStatus()
     await Promise.all([pollStats(), categories, setup, chat])
+    if (session.user !== user) return
     pollTimer = setInterval(() => { pollStats(); pollChatStatus() }, 60_000)
   }
 
   async function loadTaxonomy() {
+    const user = session.user
     taxonomyError = ''
     try {
       const cats = await listJDCategories()
+      if (session.user !== user) return
       if (!cats?.results) return
       buildTree(cats.results)
       revealPendingInbox()
-    } catch (ex) { taxonomyError = ex.message || 'Could not load the filing tree.' }
-    finally { taxonomyLoaded = true }
+    } catch (ex) {
+      if (session.user === user) taxonomyError = ex.message || 'Could not load the filing tree.'
+    } finally {
+      if (session.user === user) taxonomyLoaded = true
+    }
   }
 
   function buildTree(cats) {
@@ -215,41 +223,50 @@
   }
 
   async function pollStats() {
+    const user = session.user
     try {
-      st = await fetchStats()
+      const result = await fetchStats()
+      if (session.user !== user) return
+      st = result
       statsError = ''
       inboxCount = st?.inbox_count ?? 0
       revealPendingInbox()
     } catch (ex) {
-      if (!st) statsError = ex.message || 'Could not load archive status.'
+      if (session.user === user && !st) statsError = ex.message || 'Could not load archive status.'
     }
   }
 
   async function pollChatStatus() {
+    const user = session.user
     if (!canUseArchiveChat) {
       chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
       return
     }
     try {
-      chatStatusInfo = await chatStatus()
+      const result = await chatStatus()
+      if (session.user !== user) return
+      chatStatusInfo = result
       chatEnabled = !!chatStatusInfo?.enabled
     } catch {
+      if (session.user !== user) return
       chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
     }
   }
 
   async function loadRecentDocuments({ background = false } = {}) {
+    const user = session.user
     if (!background) {
       recentDocs = undefined
       recentError = ''
     }
     try {
       const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
+      if (session.user !== user) return
       recentDocs = r?.results || []
     } catch (ex) {
-      if (!background) {
+      if (session.user === user && !background) {
         recentDocs = []
         recentError = ex.message || 'Could not load recent documents.'
       }
@@ -262,6 +279,7 @@
   }
 
   async function globalDrop(e) {
+    const user = session.user
     e.preventDefault()
     dragDepth = 0
     if (page === 'upload' || !session.user) return   // upload page has its own zone
@@ -270,12 +288,14 @@
     notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
     let ok = 0, dup = 0, fail = 0
     for (const f of files) {
+      if (session.user !== user) return
       try {
         const result = await uploadDocument(f)
         result?.deduplicated ? dup++ : ok++
       }
       catch { fail++ }
     }
+    if (session.user !== user) return
     notify([ok && `${ok} uploaded`, dup && `${dup} duplicate${dup === 1 ? '' : 's'}`, fail && `${fail} failed`].filter(Boolean).join(' · '))
     refreshVisibleData()
   }
@@ -373,8 +393,34 @@
   }
 
   async function handleSignOut() {
-    clearInterval(pollTimer)
     await signOut()
+    clearInterval(pollTimer)
+    clearTimeout(toastTimer)
+    jdTree = []
+    inboxCategory = null
+    taxonomyLoaded = false
+    taxonomyError = ''
+    inboxCount = 0
+    st = null
+    statsError = ''
+    recentDocs = undefined
+    recentError = ''
+    setupNeeded = false
+    setupEngaged = false
+    setupReminderKey = ''
+    mobileNavOpen = false
+    uploadOpen = false
+    dragDepth = 0
+    toast = ''
+    chatEnabled = false
+    chatStatusInfo = { enabled: false, provider: '', local: false }
+    chatOpen = false
+    chatParked = false
+    ChatDrawer = null
+    chatRequest = { id: 0, question: '' }
+    chatReturnFocus = null
+    chatOpenedFromRibbon = false
+    visibleChatScope = null
   }
 
   $effect(() => {

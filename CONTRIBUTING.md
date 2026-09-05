@@ -96,6 +96,12 @@ when the reason is not obvious. No contribution trailer is required.
 
 Documentation ships with the behavior it describes:
 
+- Read [Backend architecture](docs/architecture.mdx) and
+  [Frontend architecture](docs/spa-architecture.mdx) before changing boundaries.
+- Architecture changes update those guides and affected linked design guides
+  in the same change: ownership, entry points, data flow, storage, trust/egress,
+  and verification. If none changed, note that in the commit or PR. The local
+  hook reminds on structural paths but cannot validate architectural meaning.
 - CLI or config changes update `docs/cli.mdx` or `docs/config.mdx`.
 - API changes update `docs/api.mdx`.
 - Feature changes update the relevant guide.

@@ -34,7 +34,11 @@ make build >/dev/null
 echo
 echo "== boot suchi =="
 PUBLIC_URL="http://127.0.0.1:$PORT" \
-LISTEN_ADDR=":$PORT" \
+LISTEN_ADDR="127.0.0.1:$PORT" \
+SUCHI_DEV=0 \
+SUCHI_DEMO_MODE=0 \
+OIDC_ISSUER_URL='' \
+LLM_ENDPOINT_URL='' \
 DATA_DIR="$DATA_DIR" \
 INGEST_FS_DIR="$INGEST_DIR" \
 INGEST_FS_OWNER_EMAIL="$ADMIN_EMAIL" \
@@ -64,16 +68,17 @@ curl -sf -X POST "http://127.0.0.1:$PORT/setup" \
      -d "{\"token\":\"$TOKEN\",\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
      >/dev/null
 
-API_TOKEN=$(curl -s -X POST "http://127.0.0.1:$PORT/api/login" \
+ADMIN_COOKIES="$DATA_DIR/admin.cookies"
+curl -sfS -X POST "http://127.0.0.1:$PORT/api/login" \
+    --cookie-jar "$ADMIN_COOKIES" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
-    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
-    | grep -oP '"token":"\K[^"]+')
-echo "admin created, API token acquired"
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" >/dev/null
+echo "admin created, session acquired"
 
 echo
 echo "== activate fs-watch live =="
 curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
-    -H "Authorization: Token $API_TOKEN" \
+    --cookie "$ADMIN_COOKIES" -H 'Sec-Fetch-Site: same-origin' \
     -H 'Content-Type: application/json' \
     -d "{\"fs_watch_dir\":\"$INGEST_DIR\",\"fs_watch_owner_email\":\"$ADMIN_EMAIL\"}" \
     >/dev/null

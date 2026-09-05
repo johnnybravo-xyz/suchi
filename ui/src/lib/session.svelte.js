@@ -8,7 +8,15 @@ export const session = $state({
 })
 
 export async function refreshSession() {
-  try { session.user = await whoami() } catch { session.user = null }
+  const user = session.user
+  try {
+    const current = await whoami()
+    if (session.user !== user) return
+    session.user = current
+  } catch {
+    if (session.user !== user) return
+    session.user = null
+  }
   session.checked = true
 }
 

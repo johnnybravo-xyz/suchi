@@ -23,6 +23,9 @@ docker compose logs -f mbsync suchi
 
 `setup.sh` asks for provider, credentials, folders, limits, and local UID/GID.
 It writes `config/.env` for container settings and `.env` for Compose settings.
+Suchi binds to `127.0.0.1` only. Use a TLS reverse proxy for remote access.
+Compose scopes container and build-image names to the deployment project;
+use service names such as `suchi` and `bridge` in Compose commands.
 
 For Proton, initialize the Bridge profile first and use the Bridge-generated
 IMAP password:
@@ -63,8 +66,13 @@ root-equivalent capability merely to automate a sidecar reload.
 ## Verification
 
 `./smoke-test.sh` exercises the generic provider handoff, EML ingest, and
-attachment fanout with synthetic data. It requires Docker and cleans up its
-test containers.
+attachment fanout with synthetic data. It requires Docker, Go, curl, sqlite3,
+and `ss`; ImageMagick adds an optional HEIC check. It builds the current checkout
+in a temporary recipe directory with a unique Compose project and a loopback-only
+port. Existing recipe credentials, containers, mail, and archives are untouched.
+On exit it removes its test containers, project images, and temporary files. If teardown
+fails, it retains the temporary directory and prints its location and project
+name for recovery.
 
 Common issues:
 

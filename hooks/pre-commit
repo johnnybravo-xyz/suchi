@@ -1,4 +1,25 @@
 #!/usr/bin/env sh
 set -eu
 
-exec make --no-print-directory fmt-check
+make --no-print-directory fmt-check
+
+# This is a review reminder, not a claim that file paths reveal semantic changes.
+if ! git diff --cached --quiet -- docs/architecture.mdx docs/spa-architecture.mdx docs/plugins.mdx docs/pipeline-versions.mdx; then
+    exit 0
+fi
+
+git diff --cached --name-only -- \
+    'distro/cmd/suchi/*.go' 'core/db/*' 'core/jobs/*' 'core/httpx/*' \
+    'core/auth/*' 'core/authz/*' 'core/pipeline/*' 'plugin-api/*' \
+    'core/api/api.go' 'ui/src/App.svelte' 'ui/src/lib/api.js' \
+    'ui/src/lib/session.svelte.js' 'ui/src/lib/router*' 'ui/src/lib/*Routes*' \
+    'go.mod' 'ui/package.json' |
+while IFS= read -r path; do
+    case "$path" in
+        *_test.go|*.test.js|*.spec.js|*/go.sum) continue ;;
+    esac
+    printf '%s\n' 'Architecture review: structural entry points changed without architecture docs.' \
+        'Review docs/architecture.mdx and docs/spa-architecture.mdx (and linked design guides).' \
+        'Update affected docs in this change, or state why architecture is unchanged in the commit/PR.' >&2
+    break
+done
