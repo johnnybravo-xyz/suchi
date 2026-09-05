@@ -26,6 +26,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Release preflight now includes fresh code/UI checks and advisory scans.
+  Artifacts-only branch builds use legal snapshot names and skip signing;
+  image publication waits for the binary builds.
 - Ready jobs and follow-up pipeline stages drain without a polling delay
   between batches. Document lists load correspondent names in one query.
 - The web app reuses its date formatter and removes redundant search state

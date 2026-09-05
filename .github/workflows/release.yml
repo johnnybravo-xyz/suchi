@@ -34,11 +34,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
-      - name: verify embedded web app
-        run: make ui-check
+      - name: verify candidate
+        run: make check security-check TEST_FLAGS='-count=1 -timeout 60s'
       - name: validate publish ref
         if: inputs.publish == 'true'
         env:
@@ -98,11 +102,17 @@ jobs:
       body:       ${{ steps.extract.outputs.body }}
       prerelease: ${{ steps.extract.outputs.prerelease }}
       channel:    ${{ steps.extract.outputs.channel }}
+      artifact_version: ${{ steps.extract.outputs.artifact_version }}
     steps:
       - uses: actions/checkout@v6
       - id: extract
         run: |
           set -euo pipefail
+          artifact_version="$GITHUB_REF_NAME"
+          if [ "${{ inputs.publish }}" != "true" ]; then
+            artifact_version="snapshot-${GITHUB_SHA:0:12}"
+          fi
+          echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
           ver=${GITHUB_REF_NAME#v}
           echo "prerelease=$([[ "$ver" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           case "$ver" in
@@ -137,7 +147,7 @@ jobs:
   # -------------------------------------------------------------------
   images:
     runs-on: ubuntu-latest
-    needs: notes
+    needs: [notes, binaries, anydoc-binaries]
     outputs:
       standard_digest: ${{ steps.standard.outputs.digest }}
       full_digest: ${{ steps.full.outputs.digest }}
@@ -157,7 +167,7 @@ jobs:
       # The standard image owns the unsuffixed tags.
       - id: standard_tags
         run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}"
           if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
             tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
@@ -179,7 +189,7 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=${{ needs.notes.outputs.artifact_version }}
           cache-from: |
             type=gha,scope=suchi-images
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
@@ -188,12 +198,12 @@ jobs:
           tags: ${{ steps.standard_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.version=${{ needs.notes.outputs.artifact_version }}
             org.opencontainers.image.licenses=AGPL-3.0
 
       - id: full_tags
         run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-full"
+          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}-full"
           if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
             tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-full"
           elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
@@ -212,7 +222,7 @@ jobs:
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
           sbom: true
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=${{ needs.notes.outputs.artifact_version }}
           cache-from: |
             type=gha,scope=suchi-images
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
@@ -221,7 +231,7 @@ jobs:
           tags: ${{ steps.full_tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.version=${{ needs.notes.outputs.artifact_version }}
             org.opencontainers.image.licenses=AGPL-3.0
 
       - name: cosign sign images (keyless)
@@ -235,8 +245,8 @@ jobs:
       - name: SBOM (SPDX + CycloneDX)
         if: inputs.publish == 'true'
         run: |
-          standard=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-          full=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-full
+          standard=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}
+          full=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}-full
           syft "$standard" -o spdx-json --file suchi-standard.spdx.json
           syft "$standard" -o cyclonedx-json --file suchi-standard.cyclonedx.json
           syft "$full" -o spdx-json --file suchi-full.spdx.json
@@ -276,13 +286,14 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          ARTIFACT_VERSION: ${{ needs.notes.outputs.artifact_version }}
         run: |
           set -euo pipefail
-          bin=suchi-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}
+          bin=suchi-${ARTIFACT_VERSION}-${GOOS}-${GOARCH}
           [ "$GOOS" = "windows" ] && bin=${bin}.exe
           go build \
             -trimpath \
-            -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -ldflags="-s -w -X main.version=${ARTIFACT_VERSION}" \
             -o "$RUNNER_TEMP/$bin" ./distro/cmd/suchi
           # emit a per-binary sha256 line (concatenated later)
           ( cd "$RUNNER_TEMP" && sha256sum "$bin" > "$bin.sha256" )
@@ -339,6 +350,7 @@ jobs:
           ANYDOC_COMMIT: ${{ steps.pin.outputs.commit }}
           RUST_IMAGE: ${{ steps.pin.outputs.rust_image }}
           ARCH: ${{ matrix.arch }}
+          ARTIFACT_VERSION: ${{ needs.notes.outputs.artifact_version }}
         run: |
           set -euo pipefail
           mkdir -p out
@@ -374,7 +386,7 @@ jobs:
           text: https://github.com/firecrawl/anydoc
           EOF
           # Package tarball; version stamp comes from the release ref.
-          bin="anydoc-${GITHUB_REF_NAME}-linux-${ARCH}"
+          bin="anydoc-${ARTIFACT_VERSION}-linux-${ARCH}"
           mkdir -p "$RUNNER_TEMP/$bin"
           mv out/* "$RUNNER_TEMP/$bin/"
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/${bin}.tar.gz" "$bin"
@@ -411,6 +423,7 @@ jobs:
           rm -f suchi-*.sha256 anydoc-*.sha256
 
       - name: cosign sign the checksums file (blob signature)
+        if: inputs.publish == 'true'
         working-directory: /tmp/artifacts
         run: |
           cosign sign-blob --yes \

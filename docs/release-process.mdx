@@ -220,8 +220,11 @@ before calling the release complete.
 - `ci.yml` runs formatting, tests, vet, lint, and UI checks when called by it.
 - `smoke.yml` tests the built images and ingest paths when called by it.
 - `restore-drill.yml` validates backup restoration when called by it.
-- `release.yml` is manually dispatched from an existing tag. Its preflight
-  rebuilds and compares the web app before any image or artifact can publish.
+- `release.yml` publishes only when manually dispatched from an existing tag.
+  Its preflight runs fresh Go/UI checks, embedded bundle parity, and dependency
+  advisory scans. Images wait for both binary matrices before publication.
+  Artifacts-only branch runs use `snapshot-<commit>` names and skip signing
+  and publication; they still produce ordinary workflow artifacts and GHA caches.
 
 Pushes, pull requests, and schedules do not start Actions. A maintainer chooses
 **checks** in the Actions tab and clicks **Run workflow** to run all validation
