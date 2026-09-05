@@ -42,8 +42,9 @@ const (
 	chatMaxSourceDetailed = 4800
 	chatMaxFactsPerSource = 3
 	chatMaxFactsTotal     = 12
-	chatMaxOutputTokens   = 700
-	chatMaxAnswerRunes    = 6000
+	// Provider reasoning shares this budget with the visible JSON answer.
+	chatMaxOutputTokens = 4096
+	chatMaxAnswerRunes  = 6000
 	// FDD0-FDEF supplies 32 noncharacters; 16 runes give each marker 80 bits.
 	chatFTSMarkerRunes   = 16
 	chatFTSMarkerBase    = rune(0xfdd0)
@@ -301,7 +302,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	terms := normalizedChatTerms(in.Question)
 	if len(terms) == 0 && len(in.ContextSourceIDs) == 0 {
 		researchContext := chatResearchContextForMode(settings.ResolveResearchContextMode(r.Context(), s.DB))
-		s.logChatEvidence("api.chat.no_evidence", researchContext, 0, nil)
+		s.logChatEvidence("api.chat.no_evidence", researchContext, 0, nil, "")
 		s.writeJSON(w, http.StatusOK, ChatResponse{
 			Answer: chatNoEvidenceAnswer, Sources: []ChatSource{}, Citations: []int{},
 		})
@@ -343,7 +344,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(sources) == 0 {
-		s.logChatEvidence("api.chat.no_evidence", researchContext, passageCount, sources)
+		s.logChatEvidence("api.chat.no_evidence", researchContext, passageCount, sources, "")
 		s.writeJSON(w, http.StatusOK, ChatResponse{
 			Answer: chatNoEvidenceAnswer, Sources: []ChatSource{}, Citations: []int{},
 		})
@@ -374,13 +375,19 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	messages = append(messages, ChatCompletionMessage{Role: "user", Content: buildChatEvidencePrompt(in.Question, sources)})
 	rawAnswer, err := s.ChatCompletion(r.Context(), chatSystemPrompt, messages, chatMaxOutputTokens)
 	if err != nil {
-		s.logChatEvidence("api.chat.provider_error", researchContext, passageCount, sources)
+		var truncated interface{ CompletionTruncated() bool }
+		if errors.As(err, &truncated) && truncated.CompletionTruncated() {
+			s.logChatEvidence("api.chat.provider_error", researchContext, passageCount, sources, "output_limit")
+			s.writeError(w, http.StatusBadGateway, "provider_response_truncated", "archive research provider reached its output limit before finishing; try a narrower question or another model")
+			return
+		}
+		s.logChatEvidence("api.chat.provider_error", researchContext, passageCount, sources, "provider_failure")
 		s.writeError(w, http.StatusBadGateway, "provider_failure", "archive research provider unavailable")
 		return
 	}
 	answer, citations, grounded, err := parseChatModelAnswer(rawAnswer, len(sources))
 	if err != nil {
-		s.logChatEvidence("api.chat.invalid_response", researchContext, passageCount, sources)
+		s.logChatEvidence("api.chat.invalid_response", researchContext, passageCount, sources, err.Error())
 		s.writeError(w, http.StatusBadGateway, "invalid_provider_response", "archive research provider returned an invalid grounded answer")
 		return
 	}
@@ -388,7 +395,7 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 		answer = chatInsufficientAnswer
 		citations = []int{}
 	}
-	s.logChatEvidence("api.chat.completed", researchContext, passageCount, sources)
+	s.logChatEvidence("api.chat.completed", researchContext, passageCount, sources, "")
 	s.writeJSON(w, http.StatusOK, ChatResponse{
 		Answer: answer, Sources: sources, Citations: citations, Grounded: grounded,
 		Intelligence: intelligenceSummary,
@@ -1188,6 +1195,7 @@ func boundedChatFactValue(valueJSON string) json.RawMessage {
 	return json.RawMessage(bounded)
 }
 
+// Errors are fixed log-safe reasons, never provider text or decoder details.
 func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(raw, "```") {
@@ -1198,11 +1206,12 @@ func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, err
 	}
 	var model chatModelAnswer
 	if err := json.Unmarshal([]byte(raw), &model); err != nil {
-		return "", nil, false, err
+		// Decoder errors can contain provider-controlled field names or values.
+		return "", nil, false, errors.New("invalid_answer_json")
 	}
 	model.Answer = strings.TrimSpace(model.Answer)
 	if model.Answer == "" || utf8.RuneCountInString(model.Answer) > chatMaxAnswerRunes {
-		return "", nil, false, errors.New("answer is empty or too long")
+		return "", nil, false, errors.New("invalid_answer_length")
 	}
 	if !model.Sufficient {
 		return model.Answer, []int{}, false, nil
@@ -1212,7 +1221,7 @@ func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, err
 	seen := make(map[int]bool, len(model.Citations))
 	for _, citation := range model.Citations {
 		if citation < 1 || citation > sourceCount {
-			return "", nil, false, errors.New("citation is outside supplied sources")
+			return "", nil, false, errors.New("citation_out_of_range")
 		}
 		if !seen[citation] {
 			seen[citation] = true
@@ -1223,10 +1232,10 @@ func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, err
 	markers := chatCitationMarkers(model.Answer)
 	for citation := range markers {
 		if citation < 1 || citation > sourceCount {
-			return "", nil, false, errors.New("answer marker is outside supplied sources")
+			return "", nil, false, errors.New("answer_marker_out_of_range")
 		}
 		if len(citations) > 0 && !seen[citation] {
-			return "", nil, false, errors.New("citation list and answer markers differ")
+			return "", nil, false, errors.New("citation_mismatch")
 		}
 	}
 	if len(citations) == 0 {
@@ -1250,7 +1259,7 @@ func parseChatModelAnswer(raw string, sourceCount int) (string, []int, bool, err
 	}
 	model.Answer += citationSuffix.String()
 	if utf8.RuneCountInString(model.Answer) > chatMaxAnswerRunes {
-		return "", nil, false, errors.New("answer is too long after adding citations")
+		return "", nil, false, errors.New("invalid_answer_length")
 	}
 	return model.Answer, citations, true, nil
 }
@@ -1277,12 +1286,16 @@ func chatCitationMarkers(answer string) map[int]bool {
 }
 
 func (s *Server) logChatEvidence(event string, researchContext chatResearchContext,
-	passageCount int, sources []ChatSource) {
+	passageCount int, sources []ChatSource, reason string) {
 	evidenceRunes := 0
 	for _, source := range sources {
 		evidenceRunes += utf8.RuneCountInString(source.Snippet)
 	}
-	s.Log.Info(event,
+	log := s.Log
+	if reason != "" {
+		log = log.With("reason", reason)
+	}
+	log.Info(event,
 		"research_context_mode", researchContext.mode,
 		"passage_count", passageCount,
 		"source_count", len(sources),

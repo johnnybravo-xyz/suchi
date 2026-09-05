@@ -58,6 +58,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Archive research allows a bounded 4,096-token generation budget so reasoning
+  models can finish their JSON answer. Truncation has a distinct error; citation
+  validation and the 6,000-character answer limit remain unchanged. Failure logs
+  include fixed diagnostic reasons without question, evidence, or provider text.
 - Settings identifies the running server version and source revision for bug
   reports. JSON API errors retain their codes even with mislabeled response
   headers, so Archive research can show the relevant failure message.

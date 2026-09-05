@@ -94,6 +94,16 @@ func (e *providerHTTPError) Unwrap() error {
 // guidance without exposing the provider response body.
 func (e *providerHTTPError) UpstreamStatusCode() int { return e.status }
 
+type completionTruncatedError struct{}
+
+func (*completionTruncatedError) Error() string {
+	return "llm-classifier: completion output limit reached"
+}
+
+// CompletionTruncated lets callers distinguish a token limit from an outage
+// without exposing the provider's partial answer.
+func (*completionTruncatedError) CompletionTruncated() bool { return true }
+
 // Config carries per-instance knobs. Zero-value = disabled.
 type Config struct {
 	EndpointURL string // e.g. https://api.openai.com/v1 or http://localhost:11434/v1
@@ -397,8 +407,8 @@ func (p *Plugin) complete(ctx context.Context, system string, messages []Complet
 	if rt == nil {
 		return "", ErrDisabled
 	}
-	if maxTokens <= 0 || maxTokens > 700 {
-		maxTokens = 700
+	if maxTokens <= 0 || maxTokens > 4096 {
+		maxTokens = 4096
 	}
 	wireMessages := make([]CompletionMessage, 0, len(messages)+1)
 	wireMessages = append(wireMessages, CompletionMessage{Role: "system", Content: system})
@@ -680,7 +690,8 @@ func normalizeClassifierJSON(raw string) ([]byte, error) {
 func parseCompletionContent(body []byte) (string, error) {
 	var envelope struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -690,6 +701,10 @@ func parseCompletionContent(body []byte) (string, error) {
 	}
 	if len(envelope.Choices) == 0 {
 		return "", errors.New("no choices in response")
+	}
+	// A token-limited result is incomplete even if its prefix is valid JSON.
+	if envelope.Choices[0].FinishReason == "length" {
+		return "", &completionTruncatedError{}
 	}
 	raw := strings.TrimSpace(envelope.Choices[0].Message.Content)
 	if raw == "" {

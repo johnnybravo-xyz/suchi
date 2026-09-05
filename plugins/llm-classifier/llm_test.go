@@ -303,11 +303,11 @@ func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 	}
 	answer, err := p.Complete(context.Background(), "trusted system", []CompletionMessage{
 		{Role: "user", Content: "question"}, {Role: "assistant", Content: "prior answer"},
-	}, 900)
+	}, 9000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer != "Grounded answer [1]." || got.Model != "model-x" || got.MaxTokens != 700 {
+	if answer != "Grounded answer [1]." || got.Model != "model-x" || got.MaxTokens != 4096 {
 		t.Fatalf("answer=%q model=%q max=%d", answer, got.Model, got.MaxTokens)
 	}
 	if len(got.Messages) != 3 || got.Messages[0].Role != "system" || got.Messages[0].Content != "trusted system" {
@@ -316,12 +316,54 @@ func TestCompleteSharesOpenAITransportAndBoundsOutput(t *testing.T) {
 	if got.ResponseFormat != nil {
 		t.Fatalf("plain completion response_format=%v", got.ResponseFormat)
 	}
-	if _, err := p.CompleteJSON(context.Background(), "trusted system",
-		[]CompletionMessage{{Role: "user", Content: "question"}}, 100); err != nil {
-		t.Fatal(err)
+	for _, limit := range []int{-1, 0, 100, 4096} {
+		if _, err := p.CompleteJSON(context.Background(), "trusted system",
+			[]CompletionMessage{{Role: "user", Content: "question"}}, limit); err != nil {
+			t.Fatal(err)
+		}
+		want := limit
+		if want <= 0 {
+			want = 4096
+		}
+		if got.ResponseFormat["type"] != "json_object" || got.MaxTokens != want {
+			t.Fatalf("JSON completion requested=%d max=%d response_format=%v", limit, got.MaxTokens, got.ResponseFormat)
+		}
 	}
-	if got.ResponseFormat["type"] != "json_object" {
-		t.Fatalf("JSON completion response_format=%v", got.ResponseFormat)
+}
+
+func TestCompletionRejectsTruncatedProviderResponses(t *testing.T) {
+	for _, content := range []string{"", `{"answer":"private partial`, `{"answer":"private complete-looking JSON"}`} {
+		t.Run(content, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"choices": []any{map[string]any{
+					"finish_reason": "length", "message": map[string]string{"content": content},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+			p, err := New(Config{EndpointURL: srv.URL, Model: "test"}, silentLog())
+			if err != nil {
+				t.Fatal(err)
+			}
+			answer, err := p.CompleteJSON(context.Background(), "system", nil, 700)
+			var truncated interface{ CompletionTruncated() bool }
+			if !errors.As(err, &truncated) || !truncated.CompletionTruncated() || answer != "" || calls != 1 {
+				t.Fatalf("truncation: answer=%q error=%v calls=%d", answer, err, calls)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatal("truncation error exposed partial output")
+			}
+			if _, err := parseChatCompletion(body); !errors.As(err, &truncated) {
+				t.Fatalf("classifier accepted truncated result: %v", err)
+			}
+		})
 	}
 }
 

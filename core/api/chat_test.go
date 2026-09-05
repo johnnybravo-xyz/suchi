@@ -70,6 +70,63 @@ func doChatRequest(t *testing.T, s *Server, method, path, body string, p *plugin
 	return rec
 }
 
+type testChatTruncatedError struct{}
+
+func (testChatTruncatedError) Error() string             { return "private provider detail" }
+func (testChatTruncatedError) CompletionTruncated() bool { return true }
+
+func TestChatFailureReasonsExcludePrivateContent(t *testing.T) {
+	for _, test := range []struct {
+		name, raw, reason, code string
+		providerError           error
+	}{
+		{name: "truncated", providerError: fmt.Errorf("wrapped: %w", testChatTruncatedError{}), reason: "output_limit", code: "provider_response_truncated"},
+		{name: "unavailable", providerError: errors.New("private provider detail"), reason: "provider_failure", code: "provider_failure"},
+		{name: "invalid JSON", raw: `{"answer":"private partial`, reason: "invalid_answer_json"},
+		{name: "invalid shape", raw: `{"answer":{"private provider detail":1}}`, reason: "invalid_answer_json"},
+		{name: "empty answer", raw: `{"answer":"","citations":[1],"sufficient":true}`, reason: "invalid_answer_length"},
+		{name: "out of range", raw: `{"answer":"private answer","citations":[3],"sufficient":true}`, reason: "citation_out_of_range"},
+		{name: "out of range marker", raw: `{"answer":"private answer [3]","citations":[1],"sufficient":true}`, reason: "answer_marker_out_of_range"},
+		{name: "mismatched citation", raw: `{"answer":"private answer [2]","citations":[1],"sufficient":true}`, reason: "citation_mismatch"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newChatTestServer(t)
+			seedChatDoc(t, s, 1, 1, "Private source title", "private evidence marker", "public", false)
+			seedChatDoc(t, s, 2, 1, "Private second title", "private evidence marker", "public", false)
+			var logs bytes.Buffer
+			s.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+			calls := 0
+			s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
+				calls++
+				return test.raw, test.providerError
+			}
+			rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"private question evidence"}`, adminPrincipal(1))
+			code := test.code
+			if code == "" {
+				code = "invalid_provider_response"
+			}
+			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"code":"`+code+`"`) || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", rec.Code, calls, rec.Body.String())
+			}
+			var entry struct {
+				Reason        string `json:"reason"`
+				SourceCount   int    `json:"source_count"`
+				PassageCount  int    `json:"passage_count"`
+				EvidenceRunes int    `json:"evidence_runes"`
+			}
+			if err := json.NewDecoder(bytes.NewReader(logs.Bytes())).Decode(&entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry.Reason != test.reason || entry.SourceCount != 2 || entry.PassageCount != 2 || entry.EvidenceRunes == 0 {
+				t.Fatalf("failure metadata=%+v", entry)
+			}
+			if strings.Contains(strings.ToLower(logs.String()+rec.Body.String()), "private") {
+				t.Fatal("failure exposed private question, source, provider error, or answer")
+			}
+		})
+	}
+}
+
 func TestChatStatusCapabilityAndDemoDenial(t *testing.T) {
 	s := newChatTestServer(t)
 	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
@@ -113,7 +170,7 @@ func TestChatRetrievalEnforcesACLTrashSensitivityAndSourceLimit(t *testing.T) {
 
 	var captured []ChatCompletionMessage
 	s.ChatCompletion = func(_ context.Context, system string, messages []ChatCompletionMessage, maxTokens int) (string, error) {
-		if !strings.Contains(system, "untrusted") || !strings.Contains(system, "Never use tools") || maxTokens != 700 {
+		if !strings.Contains(system, "untrusted") || !strings.Contains(system, "Never use tools") || maxTokens != 4096 {
 			t.Errorf("unsafe system/max contract: %q max=%d", system, maxTokens)
 		}
 		captured = messages

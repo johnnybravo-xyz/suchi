@@ -62,7 +62,8 @@ from ranked Search are centralized in
   summary still counts every visible fact by status. Their existing 1,600
   Unicode-character value and evidence bounds do not grow with Research context.
 - Context IDs are loaded directly in requested order without a prior-term test.
-- Model output is capped at 700 tokens and 6,000 answer characters.
+- Model generation is capped at 4,096 tokens, including provider reasoning where
+  applicable; the visible answer remains capped at 6,000 characters.
 - One provider call per successful turn.
 
 No provider call occurs when retrieval finds no evidence.
@@ -171,6 +172,12 @@ numbers at all, Suchi returns a stable insufficient-evidence answer and retains
 the retrieved source boundary. Malformed responses and invalid source numbers
 return `502 invalid_provider_response`.
 
+A provider response with `finish_reason: "length"` returns
+`502 provider_response_truncated`, even if its partial text happens to be valid
+JSON. Suchi never displays that partial answer or retries automatically. Try a
+narrower question or another model if the provider repeatedly reaches its output
+limit. Other provider failures return `502 provider_failure`.
+
 Document text remains untrusted prompt data. The system instruction tells the
 model to ignore role changes and instructions inside evidence. Archive research
 has no tools and no write operations, limiting prompt-injection impact to the
@@ -276,7 +283,9 @@ pairs, and each selected source's title, sensitivity, snippet, and—when the us
 has `archive_intelligence`—accepted fact value and evidence. It receives no ACL
 rows or unrelated document metadata.
 The archive-evidence assembly event records only the chosen context mode,
-passage count, source count, and bounded evidence size. Separate operational
+passage count, source count, and bounded evidence size. Failures add a fixed
+reason such as `output_limit`, `invalid_answer_json`, or `citation_out_of_range`;
+provider bodies and decoder error text are never logged. Separate operational
 events still record the normal HTTP method, path, status, byte count, duration,
 and request ID; calls to a hosted model also record its host and model name.
 Sanitized failures may be logged. None of these events includes questions,
