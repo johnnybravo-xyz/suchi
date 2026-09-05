@@ -4,6 +4,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-09-05
+
 ### Added
 
 - Screenshot paste previews with explicit upload confirmation and file-picker
@@ -236,5 +238,6 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...HEAD
+[0.1.0-beta.2]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/johnnybravo-xyz/suchi/releases/tag/v0.1.0-beta.1

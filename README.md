@@ -21,7 +21,7 @@ Suchi combines SQLite, content-addressed storage, a Svelte interface, and an
 integration-friendly HTTP API. It needs no database server, queue, cache, or
 telemetry service.
 
-Status: **v0.1 beta candidate**, suitable for evaluation but not yet critical
+Status: **v0.1.0-beta.2 candidate**, suitable for evaluation but not yet critical
 archives. The API and storage layout are stabilising but not frozen.
 
 [Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·
