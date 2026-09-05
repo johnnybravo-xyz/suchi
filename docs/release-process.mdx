@@ -95,6 +95,9 @@ The workflow builds standard and full multi-architecture images, cross-platform
 binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
 the changelog. Tag pushes alone do not publish anything.
 
+Release notes travel as a workflow artifact into the collector, rather than a
+multiline job output that GitHub's secret detection may silently suppress.
+
 Release builds inject the version and source revision into the Go binary.
 Settings reads the identity from `/api/whoami`, showing only the version for
 tagged production releases. Unversioned builds use the source's

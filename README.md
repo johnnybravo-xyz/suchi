@@ -21,7 +21,7 @@ Suchi combines SQLite, content-addressed storage, a Svelte interface, and an
 integration-friendly HTTP API. It needs no database server, queue, cache, or
 telemetry service.
 
-Status: **v0.1 beta candidate**, suitable for evaluation but not yet critical
+Status: **v0.1.0-beta.2**, suitable for evaluation but not yet critical
 archives. The API and storage layout are stabilising but not frozen.
 
 [Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·
@@ -78,11 +78,11 @@ production deployment paths.
 
 ## Images
 
-- `standard` / `beta` / `beta-standard`: Alpine. Supports all listed formats
-  and indexes scanned PDFs with Tesseract. The two beta tags resolve to the
-  same image.
-- `full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned PDFs can
-  retain a searchable text layer.
+- `v0.1.0-beta.2` / `beta` / `beta-standard`: Alpine. Supports all listed formats
+  and indexes scanned PDFs with Tesseract. The beta channel tags resolve to the
+  current beta's standard image.
+- `v0.1.0-beta.2-full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned
+  PDFs can retain a searchable text layer.
 
 Both images include anydoc, DjVu, HEIC/HEIF, and Outlook MSG support. The full
 image changes only the scanned-PDF archive behavior. See [Supported file

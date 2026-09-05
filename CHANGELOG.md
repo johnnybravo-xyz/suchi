@@ -4,30 +4,7 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
-### Fixed
-
-- Dismissed processing-update approvals no longer reappear after restart for
-  the same pipeline revision. Startup closes already-recreated duplicates while
-  preserving explicitly approved work and prompts for newer revisions.
-- Public demo Calendar now exposes read-only, source-backed example dates
-  across months and years. The tour links to usable Search and Calendar screens
-  and clearly identifies Archive research as private-installation-only;
-  demo model calls, date mutations, and non-demo facts remain denied.
-- Demo navigation and first-visit tour detection now use the server's actual
-  session identity field, including after upgrade to a scratch session.
-- Documents and Inbox preserve pagination through browser Back, Forward, and
-  reload, with numbered page links and URL-backed date filters. Invalid or
-  vanished pages return to an available page without adding a history entry.
-- Touchscreen document links no longer shift under taps when hover-only quick
-  actions appear; filing and Trash remain available in document detail.
-- Preset filing keywords match whole words and phrases: `lease` no longer
-  matches `please`. Existing unchanged preset rules receive the same correction.
-- Filing approvals close as superseded when a document has already been filed
-  elsewhere, preserving its current category and recording the dismissal.
-- Email backfills fetch small, checkpointed batches instead of one oversized
-  IMAP command, preserving completed progress when a later batch fails.
-- Successful mailbox connection tests no longer hide ingestion errors or
-  overwrite the last successful sync timestamp.
+## [0.1.0-beta.2] - 2026-09-08
 
 ### Added
 
@@ -49,9 +26,9 @@ Notable user-visible changes to Suchi are recorded here.
 - A generic extracted-fact ledger with single-call date extraction,
   user-controlled confidence-based Calendar entry, optional bulk review, and
   rich-query date filters.
-- A first-visit public-demo guide for rich queries and the Archive research
-  workflow, plus a persistent help launcher. Public model access remains
-  denied; the tour uses an anonymized Northstar document cluster.
+- A first-visit public-demo guide for rich queries and source-backed Calendar
+  dates, plus a persistent help launcher. Archive research is clearly marked
+  private-installation-only; public model access remains denied.
 - A fixed 30-day Trash recovery window with automatic expiry, confirmed
   permanent deletion and Empty Trash actions, share-link revocation, minimal
   purge auditing. Original and derived blobs remain until offline GC; online
@@ -101,6 +78,28 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Dismissed processing-update approvals no longer reappear after restart for
+  the same pipeline revision. Startup closes already-recreated duplicates while
+  preserving explicitly approved work and prompts for newer revisions.
+- Public demo Calendar now exposes read-only, source-backed example dates
+  across months and years. The tour links to usable Search and Calendar screens
+  and clearly identifies Archive research as private-installation-only;
+  demo model calls, date mutations, and non-demo facts remain denied.
+- Demo navigation and first-visit tour detection now use the server's actual
+  session identity field, including after upgrade to a scratch session.
+- Documents and Inbox preserve pagination through browser Back, Forward, and
+  reload, with numbered page links and URL-backed date filters. Invalid or
+  vanished pages return to an available page without adding a history entry.
+- Touchscreen document links no longer shift under taps when hover-only quick
+  actions appear; filing and Trash remain available in document detail.
+- Preset filing keywords match whole words and phrases: `lease` no longer
+  matches `please`. Existing unchanged preset rules receive the same correction.
+- Filing approvals close as superseded when a document has already been filed
+  elsewhere, preserving its current category and recording the dismissal.
+- Email backfills fetch small, checkpointed batches instead of one oversized
+  IMAP command, preserving completed progress when a later batch fails.
+- Successful mailbox connection tests no longer hide ingestion errors or
+  overwrite the last successful sync timestamp.
 - Successful confident classification clears only its own obsolete review tags.
   Existing, manually assigned and rule-maintained tags remain untouched.
 - Photo OCR keeps its normal text and supplements it with confident lines from
@@ -261,5 +260,6 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...HEAD
+[0.1.0-beta.2]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/johnnybravo-xyz/suchi/releases/tag/v0.1.0-beta.1

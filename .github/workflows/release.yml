@@ -99,7 +99,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: preflight
     outputs:
-      body:       ${{ steps.extract.outputs.body }}
       prerelease: ${{ steps.extract.outputs.prerelease }}
       channel:    ${{ steps.extract.outputs.channel }}
       artifact_version: ${{ steps.extract.outputs.artifact_version }}
@@ -136,11 +135,13 @@ jobs:
             awk '/^## \[Unreleased\]/ { flag=1; next } flag && /^## \[/ { exit } flag { print }' \
               CHANGELOG.md > /tmp/notes.md
           fi
-          {
-            echo 'body<<END_NOTES'
-            cat /tmp/notes.md
-            echo 'END_NOTES'
-          } >> "$GITHUB_OUTPUT"
+      # GitHub may suppress long job outputs that resemble a secret. The notes
+      # are public changelog text; carry the file through the existing collector.
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-notes
+          path: /tmp/notes.md
+          if-no-files-found: error
 
   # -------------------------------------------------------------------
   # Build and sign both image variants for linux/amd64 and linux/arm64.
@@ -452,7 +453,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: suchi ${{ github.ref_name }}
-          body: ${{ needs.notes.outputs.body }}
+          body_path: /tmp/artifacts/notes.md
           prerelease: ${{ needs.notes.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: |
