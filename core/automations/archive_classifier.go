@@ -114,18 +114,9 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 	if err != nil {
 		return fmt.Errorf("archive classifier: fetch neighbours: %w", err)
 	}
-	// Filter by minimum score floor.
-	kept := neighbours[:0]
-	for _, n := range neighbours {
-		if n.Score >= 0 {
-			kept = append(kept, n)
-		}
-	}
-	neighbours = kept
 	log.Info("archive_classifier.considered",
 		"doc_id", docID,
-		"neighbours", len(neighbours),
-		"min_score", 0)
+		"neighbours", len(neighbours))
 	if len(neighbours) < 3 {
 		// Not enough signal. The considered log above is the only trace
 		// operators auditing "why didn't heuristics propose?" can grep for.
@@ -137,11 +128,9 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 	// SQL — no user input is stringified.
 	ids := make([]int64, len(neighbours))
 	scoreByID := make(map[int64]float64, len(neighbours))
-	titleByID := make(map[int64]string, len(neighbours))
 	for i, n := range neighbours {
 		ids[i] = n.ID
 		scoreByID[n.ID] = n.Score
-		titleByID[n.ID] = n.Title
 	}
 
 	metadata, err := loadNeighbourMetadata(ctx, d, ids)
@@ -149,8 +138,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 		return fmt.Errorf("archive classifier: load neighbour metadata: %w", err)
 	}
 
-	// Aggregate votes. `scalarTally` maps field → value → cumulative
-	// score. `scalarLabels` caches the label the SPA card shows.
+	// Aggregate votes. `scalarTally` maps field → value → cumulative score.
 	scalarTally := map[string]map[int64]float64{
 		"jd_category":   {},
 		"correspondent": {},
