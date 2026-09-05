@@ -31,6 +31,12 @@ index. Add a converter (or wait for a future ingester) to fill in
 
 ## PDF pipeline in detail
 
+Email attachments with missing, generic, or malformed MIME headers (such as
+`bin`) are identified from their bytes. If an older PDF appears as a binary
+file, select it in Documents and choose **Rescan** after upgrading. Post-ingest
+corrects that MIME label before routing; password-protected PDFs then enter
+the normal decryption flow below. Original bytes are unchanged.
+
 The PDF path is the most involved because it fans out based on content:
 
 ```mermaid

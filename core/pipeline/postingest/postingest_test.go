@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -89,7 +92,7 @@ func TestHandleRoutingContracts(t *testing.T) {
 		wantEncrypted   bool
 		wantPostContent bool
 	}{
-		{name: "opaque", mime: "application/octet-stream", body: []byte("opaque"), wantPostContent: true},
+		{name: "opaque", mime: "application/octet-stream", body: []byte{0, 1, 2}, wantPostContent: true},
 		{name: "text", mime: "text/plain; charset=utf-8", body: []byte("plain text body"), wantContent: "plain text body", wantPostContent: true},
 		{name: "eml", mime: "message/rfc822", body: []byte("From: sender@example.com\r\nSubject: Direct EML\r\n\r\nemail body\r\n"), wantContent: "email body", wantPostContent: true},
 		{name: "malformed eml", mime: "message/rfc822", body: []byte("not an RFC 822 message"), wantPostContent: true},
@@ -213,6 +216,101 @@ func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 	}
 	if inheritedSender != 1 {
 		t.Fatalf("inherited sender rows = %d, want 1", inheritedSender)
+	}
+}
+
+func TestHandleEmailRefinesGenericAttachmentMIME(t *testing.T) {
+	for _, declared := range []string{"bin", "application/octet-stream"} {
+		t.Run(declared, func(t *testing.T) {
+			ctx := context.Background()
+			d, cas := openPostIngestHarness(t)
+			source := []byte("%PDF-1.7\nattachment fixture\n")
+			raw := strings.ReplaceAll(msgConvertedEmail, "application/pdf", declared)
+			raw = strings.ReplaceAll(raw, "invoice.pdf", "statement.bin")
+			raw = strings.ReplaceAll(raw, "SGVsbG8gd29ybGQK", base64.StdEncoding.EncodeToString(source))
+			parentID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(raw))
+			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err := h.Handle(ctx, pluginapi.Event{DocID: parentID}); err != nil {
+				t.Fatal(err)
+			}
+			var childID int64
+			var mime, sha string
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT id, mime_type, original_blob FROM documents WHERE email_parent_id = ?
+			`, parentID).Scan(&childID, &mime, &sha); err != nil {
+				t.Fatal(err)
+			}
+			if mime != "application/pdf" {
+				t.Fatalf("attachment MIME = %q, want application/pdf from bytes", mime)
+			}
+			got, err := h.readBlob(sha)
+			if err != nil || !bytes.Equal(got, source) {
+				t.Fatalf("attachment original changed: err=%v", err)
+			}
+			var queuedMIME string
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT json_extract(payload, '$.mime_type') FROM jobs WHERE doc_id = ? AND kind = ?
+			`, childID, Kind).Scan(&queuedMIME); err != nil {
+				t.Fatal(err)
+			}
+			if queuedMIME != mime {
+				t.Fatalf("queued MIME = %q, want %q", queuedMIME, mime)
+			}
+		})
+	}
+}
+
+func TestRescanRepairsGenericPDFMIMEAndPreview(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	source := []byte("%PDF-1.7\nencrypted PDF fixture\n")
+	docID := seedPostIngestDocument(t, d, cas, "bin", source)
+	if _, err := d.ExecWrite(ctx, `UPDATE documents SET pipeline_version_content = ? WHERE id = ?`,
+		PipelineVersionContent, docID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := rescan.Enqueue(ctx, d, rescan.Options{IDs: []int64{docID}}); err != nil || n != 1 {
+		t.Fatalf("explicit rescan enqueue = %d, err=%v", n, err)
+	}
+	var payload string
+	if err := d.Read.QueryRowContext(ctx, `SELECT payload FROM jobs WHERE doc_id = ? AND kind = ?`,
+		docID, Kind).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	event := pluginapi.Event{DocID: docID}
+	if err := json.Unmarshal([]byte(payload), &event.Payload); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\necho 'invalid password' >&2\nexit 2\n")
+	t.Setenv("PATH", binDir)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(d, cas, log)
+	if err := h.Handle(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var mime, state string
+	if err := d.Read.QueryRowContext(ctx, `SELECT mime_type, encryption_state FROM documents WHERE id = ?`,
+		docID).Scan(&mime, &state); err != nil {
+		t.Fatal(err)
+	}
+	if mime != "application/pdf" || state != "encrypted" {
+		t.Fatalf("rescanned MIME/state = %q/%q, want PDF awaiting password", mime, state)
+	}
+	server, err := ui.New(d, cas, nil, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/documents/"+strconv.FormatInt(docID, 10)+"/preview", nil)
+	req.SetPathValue("id", strconv.FormatInt(docID, 10))
+	req = req.WithContext(auth.WithPrincipal(ctx, &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}))
+	rec := httptest.NewRecorder()
+	server.Preview(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/pdf" {
+		t.Fatalf("preview status/type = %d/%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if !bytes.Equal(rec.Body.Bytes(), source) {
+		t.Fatal("preview changed the encrypted original")
 	}
 }
 

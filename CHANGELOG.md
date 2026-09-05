@@ -58,6 +58,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Mail attachments with invalid or generic MIME headers are identified from
+  their bytes. Explicit rescans repair existing PDFs labeled as binary files
+  and restore preview and password handling without changing originals.
 - Both container variants now produce real PDFs from images, including HEIC:
   standard includes the missing ImageMagick PDF encoder, and full permits PDF
   writing while keeping decoding restricted. The duplicate HEIC conversion

@@ -2,6 +2,29 @@ package mimeutil
 
 import "testing"
 
+func TestRefineByContent(t *testing.T) {
+	tests := []struct {
+		declared string
+		data     string
+		want     string
+	}{
+		{"bin", "%PDF-1.7\n", "application/pdf"},
+		{"", "%PDF-1.7\n", "application/pdf"},
+		{"application/octet-stream", "%PDF-1.7\n", "application/pdf"},
+		{"application/octet-stream; name=statement.pdf", "%PDF-1.7\n", "application/pdf"},
+		{"not a MIME type", "%PDF-1.7\n", "application/pdf"},
+		{"bin", "\x00\x01\x02", "application/octet-stream"},
+		{"application/vnd.ms-outlook", "\x00\x01\x02", "application/vnd.ms-outlook"},
+		{"image/heic", "\x00\x01\x02", "image/heic"},
+		{"text/plain; charset=iso-8859-1", "text", "text/plain; charset=iso-8859-1"},
+	}
+	for _, tt := range tests {
+		if got := RefineByContent(tt.declared, []byte(tt.data)); got != tt.want {
+			t.Errorf("RefineByContent(%q, %q) = %q, want %q", tt.declared, tt.data, got, tt.want)
+		}
+	}
+}
+
 func TestRefineByFilename(t *testing.T) {
 	tests := []struct {
 		detected string

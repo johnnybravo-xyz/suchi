@@ -1,10 +1,22 @@
-// Package mimeutil refines generic content sniffing with filename hints.
+// Package mimeutil refines generic MIME types using content and filename hints.
 package mimeutil
 
 import (
+	"mime"
+	"net/http"
 	"path/filepath"
 	"strings"
 )
+
+// RefineByContent sniffs missing, generic, or invalid MIME labels. Specific
+// source types are retained because net/http cannot identify every format.
+func RefineByContent(declared string, data []byte) string {
+	base, _, err := mime.ParseMediaType(declared)
+	if err == nil && strings.Contains(base, "/") && base != "application/octet-stream" {
+		return declared
+	}
+	return http.DetectContentType(data)
+}
 
 var extensionMIME = map[string]string{
 	".csv":  "text/csv",

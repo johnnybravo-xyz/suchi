@@ -86,6 +86,12 @@ For a new upload, `UploadDocument` follows this sequence:
    local archive matching, automations, filing-view and thumbnail refresh, and
    the optional `post-classify` handoff.
 
+Mail attachment creation and post-ingest refine missing, generic, or malformed
+MIME labels from the original bytes through `core/mimeutil`. Specific valid
+source types remain intact. An explicit rescan can therefore repair a PDF
+previously labeled `bin` and reach the ordinary encrypted-PDF gate; it does not
+modify the original CAS object or require a pipeline revision change.
+
 Filesystem and IMAP intake have their own producer code and use the same
 transactional document/job pattern. Import is deliberately different:
 `core/importer/bundle/` can restore supplied content, archive bytes, and

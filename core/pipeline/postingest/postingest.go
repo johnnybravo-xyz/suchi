@@ -24,6 +24,7 @@ import (
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
+	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/anydoc"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/barcode"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
@@ -309,6 +310,23 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	origBytes, err := h.readBlob(origBlob)
 	if err != nil {
 		return fmt.Errorf("cas get %s: %w", origBlob, err)
+	}
+
+	// Mail headers can label a real PDF as "bin" or octet-stream. Resniff
+	// only unspecified types so an explicit rescan also repairs existing rows.
+	if refined := mimeutil.RefineByContent(mime, origBytes); refined != mime {
+		result, err := h.db.ExecWrite(ctx, `
+			UPDATE documents SET mime_type = ?, updated_at = ?
+			WHERE id = ? AND original_blob = ? AND trashed_at IS NULL
+		`, refined, time.Now().Unix(), e.DocID, origBlob)
+		if err != nil {
+			return fmt.Errorf("refine source MIME: %w", err)
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return fmt.Errorf("refine source MIME: document changed or unavailable (rows=%d, err=%v)", n, err)
+		}
+		log.Info("post-ingest.mime.refined", "previous_mime", mime, "mime", refined)
+		mime = refined
 	}
 
 	// Optional operator pre-consume hook. Runs BEFORE any built-in
@@ -1109,10 +1127,8 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 	if filesOnly && parsed != nil && parsed.Subject != "" && parsed.Subject != title {
 		title = "[" + parsed.Subject + "] " + title
 	}
-	mime := att.ContentType
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
+	mime := mimeutil.RefineByContent(att.ContentType, att.Bytes)
+	mime = mimeutil.RefineByFilename(mime, att.Filename)
 	// source_mtime = email Date. Cheap on the parent-lives path (child
 	// timeline reflects when the mail landed, not when the pipeline
 	// ran) and essential on the files_only path (the email row
