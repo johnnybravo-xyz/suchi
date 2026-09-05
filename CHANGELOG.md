@@ -25,6 +25,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Ready jobs and follow-up pipeline stages drain without a polling delay
+  between batches. Document lists load correspondent names in one query.
+- The web app reuses its date formatter and removes redundant search state
+  updates and request wrappers.
 - Beta.2 schema changes now ship as one migration, so beta.1 archives advance
   in a single transactional step.
 - Rich-query lists now start from matching FTS rows, ranked Search bounds
@@ -41,6 +45,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Clearing Search cancels its pending request and resets loading/error state.
+- Replaying a demo manifest skips existing documents without adding tags or
+  jobs to an unrelated document.
 - Approvals bound to trashed documents now disappear from REST and MCP inboxes;
   restoring the document makes them available again only if the task and its
   run are still active.

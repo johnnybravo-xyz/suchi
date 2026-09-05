@@ -95,6 +95,8 @@ process.
 
 Subscribers must be idempotent and respect context cancellation. Network calls
 and subprocess work happen after the producer transaction commits.
+Ready jobs drain in serial batches; the polling interval is an idle fallback,
+so a backlog or follow-up stage does not wait between batches.
 
 Common job families include:
 
