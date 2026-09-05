@@ -7,18 +7,17 @@
 //                                        wire: most visitors only ever
 //                                        touch this endpoint + reads.
 //   - POST /api/demo/session/upgrade   — trade an anonymous token for a
-//                                        scratch user + API token. Only
+//                                        scratch user + browser session. Only
 //                                        invoked when the visitor tries
 //                                        something that needs a writer,
 //                                        i.e. `POST /api/documents/`.
 //
-// The upgrade endpoint costs one INSERT-user + one INSERT-token; the
+// The upgrade endpoint costs one INSERT-user + one INSERT-session; the
 // reset ticker (distro/demo/ticker.go) sweeps both on TTL.
 
 package api
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -72,7 +71,7 @@ type DemoTokenMinter func(ttl time.Duration) (token string, expiry time.Time, er
 
 // DemoScratchUserProvisioner creates a per-visitor scratch user and
 // returns its id. Wired at boot; nil disables /upgrade (503).
-type DemoScratchUserProvisioner func(ctx context.Context, email, displayName string) (userID int64, err error)
+type DemoScratchUserProvisioner func(w http.ResponseWriter, r *http.Request, email, displayName string) (userID int64, err error)
 
 // SetDemo is wired at boot from main.go. Nil is fine — the endpoint
 // then reports enabled=false, matching a normal deployment.
@@ -93,16 +92,15 @@ func (s *Server) GetDemoMode(w http.ResponseWriter, r *http.Request) {
 }
 
 type demoSessionResp struct {
-	Kind        string `json:"kind"`  // "anon" or "scratch"
-	Token       string `json:"token"` // opaque; the SPA sends it back
+	Kind        string `json:"kind"` // "anon" or "scratch"
+	Token       string `json:"token,omitempty"`
 	ExpiresUnix int64  `json:"expires_unix,omitempty"`
-	Header      string `json:"header"` // header the SPA should send it in
+	Header      string `json:"header,omitempty"`
 }
 
 // PostDemoSession — POST /api/demo/session. Unauthenticated. Mints an
-// anonymous read-only token. Idempotent per-visitor at the wire level:
-// the SPA is expected to cache the token in sessionStorage and call
-// this only when it doesn't have one.
+// anonymous read-only cookie. Header-based clients may also use the returned
+// token; the browser never needs access to the credential.
 //
 // Failure modes:
 //   - 404 demo_disabled — demo mode is off.
@@ -125,8 +123,7 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 	// Plant the token in a cookie so the browser attaches it to direct
 	// resource fetches (<iframe src="/preview/{id}">, /download/{id})
 	// where JavaScript can't set X-Suchi-Demo-Token. HttpOnly keeps the
-	// SPA from double-reading it (sessionStorage remains the source of
-	// truth for header-based /api/* calls).
+	// SPA from reading or persisting the credential.
 	http.SetCookie(w, &http.Cookie{
 		Name:     DemoAnonCookieName,
 		Value:    token,
@@ -135,11 +132,6 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   s.demo.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
-	})
-	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Action:     "demo_session.mint",
-		ObjectKind: "demo_session",
-		After:      map[string]any{"remote_ip": r.RemoteAddr},
 	})
 	s.writeJSON(w, http.StatusOK, demoSessionResp{
 		Kind:        "anon",
@@ -151,9 +143,8 @@ func (s *Server) PostDemoSession(w http.ResponseWriter, r *http.Request) {
 
 // PostDemoSessionUpgrade — POST /api/demo/session/upgrade. Requires an
 // anonymous token (the auth chain has already vetted it). Provisions a
-// scratch user `visitor-<nanoid>@demo.local`, mints an API token bound
-// to it, returns the token. The SPA then swaps its X-Suchi-Demo-Token
-// header for `Authorization: Token <new>` and retries the write.
+// scratch user `visitor-<nanoid>@demo.local` and issues a bounded HttpOnly
+// browser session. The same cookie authorizes API and direct resource requests.
 //
 // Failure modes:
 //   - 401 unauthorized      — no valid anon token on the request.
@@ -164,7 +155,7 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, "demo_disabled", "demo mode is not enabled on this instance")
 		return
 	}
-	if s.demoScratch == nil || s.TokenIssuer == nil {
+	if s.demoScratch == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "demo_unwired", "demo scratch provisioner is not wired")
 		return
 	}
@@ -183,23 +174,16 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	email := "visitor-" + suffix + "@demo.local"
-	uid, err := s.demoScratch(r.Context(), email, "Demo visitor")
+	uid, err := s.demoScratch(w, r, email, "Demo visitor")
 	if err != nil {
 		s.Log.Warn("api.demo.upgrade.provision_err", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "provision_failed", "could not mint scratch user")
 		return
 	}
-	token, err := s.TokenIssuer(r.Context(), uid, "demo-visitor",
-		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite+","+auth.ScopeDemoCorpusRead)
-	if err != nil {
-		s.Log.Warn("api.demo.upgrade.token_err", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "token_failed", "could not mint token")
-		return
-	}
-	// Scratch tokens follow the standard API token TTL; the ticker
-	// bounds usability by sweeping the user row on its TTL. We don't
-	// emit an explicit ExpiresUnix because the client should be
-	// resilient to a 401 mid-flight and re-mint.
+	http.SetCookie(w, &http.Cookie{
+		Name: DemoAnonCookieName, Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.demo.CookieSecure, SameSite: http.SameSiteLaxMode,
+	})
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 		Action:     "demo_session.upgrade",
 		ObjectKind: "user",
@@ -207,9 +191,7 @@ func (s *Server) PostDemoSessionUpgrade(w http.ResponseWriter, r *http.Request) 
 		After:      map[string]any{"email": email, "remote_ip": r.RemoteAddr},
 	})
 	s.writeJSON(w, http.StatusOK, demoSessionResp{
-		Kind:   "scratch",
-		Token:  token,
-		Header: "Authorization",
+		Kind: "scratch",
 	})
 }
 

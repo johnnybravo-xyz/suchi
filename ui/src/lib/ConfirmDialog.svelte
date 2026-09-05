@@ -2,26 +2,25 @@
   import Icon from './Icon.svelte'
 
   let { title, message, confirmLabel = 'Confirm', busyLabel = 'Moving…', busy = false, onConfirm, onCancel } = $props()
+  let dialog
   let cancelButton
 
   function cancel() {
-    if (!busy) onCancel?.()
+    if (busy) return
+    dialog.close()
+    onCancel?.()
   }
 
-  function onKey(e) {
-    if (e.key === 'Escape') cancel()
-  }
-
-  $effect(() => { cancelButton?.focus() })
+  $effect(() => {
+    dialog.showModal()
+    cancelButton.focus()
+    return () => dialog.close()
+  })
 </script>
 
-<svelte:window onkeydown={onKey} />
-
-<div class="modal-veil" onclick={cancel} role="presentation">
-  <div class="modal" style="width:min(430px,94vw)"
-       onclick={(e) => e.stopPropagation()}
-       onkeydown={(e) => e.stopPropagation()}
-       role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" tabindex="-1">
+<dialog bind:this={dialog} class="modal" style="width:min(430px,94vw)"
+        oncancel={(event) => { event.preventDefault(); cancel() }}
+        role="alertdialog" aria-labelledby="confirm-dialog-title">
     <div class="modal-head">
       <h3 id="confirm-dialog-title">{title}</h3>
       <button class="btn sm" disabled={busy} onclick={cancel} title="Close" aria-label="Close confirmation"><Icon name="x" size={13} /></button>
@@ -33,5 +32,9 @@
       </button>
       <button class="btn sm" disabled={busy} onclick={cancel} bind:this={cancelButton}>Cancel</button>
     </div>
-  </div>
-</div>
+</dialog>
+
+<style>
+  dialog { margin: auto; color: var(--ink); }
+  dialog::backdrop { background: rgba(0, 0, 0, .45); }
+</style>

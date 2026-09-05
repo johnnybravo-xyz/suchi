@@ -224,7 +224,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// signed token. Only meaningful when demo mode is on; otherwise
 	// the handler returns 404 demo_disabled.
 	mux.HandleFunc("POST /api/demo/session", s.PostDemoSession)
-	// Upgrade an anonymous session to a scratch user + real API token.
+	// Upgrade an anonymous session to a scratch user + browser session.
 	// Requires an anon token on the request.
 	mux.HandleFunc("POST /api/demo/session/upgrade", s.PostDemoSessionUpgrade)
 

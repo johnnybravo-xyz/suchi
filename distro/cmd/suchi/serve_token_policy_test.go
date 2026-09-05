@@ -108,6 +108,28 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	}
 }
 
+func TestScratchBrowserEntriesKeepAPIRestrictions(t *testing.T) {
+	mux := http.NewServeMux()
+	public := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	for _, pattern := range []string{"GET /app/", "GET /app", "GET /{$}", "GET /login", "GET /api/admin/users"} {
+		mux.HandleFunc(pattern, public)
+	}
+	h := httpx.EnforceTokenScopes(tokenScopeResolver(mux))(mux)
+	for _, path := range []string{"/", "/app", "/app/", "/app/assets/index.js", "/login", "/api/admin/users", "/unknown"} {
+		r := httptest.NewRequest("GET", path, nil)
+		r = r.WithContext(auth.WithPrincipal(r.Context(), &pluginapi.Principal{Kind: "demo-scratch", Role: "member"}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := http.StatusNoContent
+		if path == "/api/admin/users" || path == "/unknown" {
+			want = http.StatusForbidden
+		}
+		if w.Code != want {
+			t.Errorf("%s status=%d want=%d", path, w.Code, want)
+		}
+	}
+}
+
 func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/documents/{id}/decrypt", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })

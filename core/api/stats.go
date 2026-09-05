@@ -116,7 +116,7 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	out.PendingApprovals = int64(pendingApprovals)
 
 	canReviewIntelligence := isAdmin
-	if !canReviewIntelligence {
+	if !canReviewIntelligence && p.Kind != PrincipalKindDemoAnon {
 		capabilities, err := s.userCapabilities(ctx, p.UserID)
 		if err != nil {
 			s.serverErr(w, "stats.intelligence_capability", err)

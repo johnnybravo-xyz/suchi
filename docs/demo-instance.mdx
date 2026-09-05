@@ -63,15 +63,24 @@ for a normal archive.
 ## Visitor sessions
 
 `POST /api/demo/session` returns a signed anonymous token for read-only
-browsing. It requires no database write. The SPA stores it in session storage
-and sends it as `X-Suchi-Demo-Token`.
+browsing. It requires no database write. The browser uses an HttpOnly cookie;
+JavaScript does not store a credential. Header-based read clients can still
+send the returned token as `X-Suchi-Demo-Token`.
 
 The first mutation receives `demo_upgrade_required`. The SPA calls
-`POST /api/demo/session/upgrade`, receives a regular API token for a scratch
-user, and retries the request. Scratch users can upload and modify their own
+`POST /api/demo/session/upgrade`, receives an HttpOnly session cookie for a
+scratch user, and retries the request. Concurrent writes share one upgrade.
+The same session authorizes preview/download links and survives a page reload.
+It expires at the configured scratch TTL; reload to begin a new visit after
+expiry. Signing out revokes the session and clears both demo cookies.
+Scratch users can upload and modify their own
 documents but cannot read another visitor's uploads or mutate shared
 configuration and taxonomy. The seeded corpus remains read-only and visible to
 every visitor.
+
+Cookie-authenticated demo mutations use the same same-origin Fetch Metadata
+checks as ordinary browser sessions. A scratch cookie does not grant access to
+account administration, token management, or another visitor's documents.
 
 Both session endpoints use a per-IP token bucket. The default is 5 requests
 per second with a burst of 10.

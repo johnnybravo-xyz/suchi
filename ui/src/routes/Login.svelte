@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { login, setDemoAnonToken, setToken } from '../lib/api.js'
+  import { login } from '../lib/api.js'
   import { getLoginPath, usesExternalLogin } from '../lib/login.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
   import BrandMark from '../lib/BrandMark.svelte'
@@ -20,10 +20,6 @@
     e.preventDefault()
     err = ''; busy = true
     try {
-      // A revoked token would make auth middleware reject the public login
-      // request before it reaches the password handler.
-      setToken(null)
-      setDemoAnonToken(null)
       await login(email.trim(), password)
       await refreshSession()
       if (!session.user) throw new Error('Sign-in did not stick — check the server log.')

@@ -70,7 +70,6 @@ for (const switchAccount of [false, true]) {
   test(`demo upgrade ${switchAccount ? 'cannot restore a signed-out session' : 'retries the original visitor upload'}`, async ({ page }) => {
     await mockAPI(page, { demoMode: true, demoSession: 'anon' })
     await page.addInitScript(() => {
-      sessionStorage.setItem('suchi.demo.anonToken', 'first-demo-read')
       sessionStorage.setItem('suchi.demo.landed', '1')
     })
     let signedIn = false
@@ -88,7 +87,7 @@ for (const switchAccount of [false, true]) {
         return route.fulfill({ json: { user_id: 2, email: 'second@example.test', role: 'member', capabilities: [] } })
       }
       if (path === '/api/documents/' && request.method() === 'POST') {
-        uploadCredentials.push(request.headers()['authorization'] || request.headers()['x-suchi-demo-token'])
+        uploadCredentials.push(request.headers()['authorization'] || request.headers()['x-suchi-demo-token'] || 'cookie')
         if (uploadCredentials.length === 1) {
           return route.fulfill({ status: 403, json: { code: 'demo_upgrade_required' } })
         }
@@ -114,18 +113,16 @@ for (const switchAccount of [false, true]) {
       await page.getByRole('button', { name: 'Sign in', exact: true }).click()
       await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
     }
-    const finished = page.waitForEvent('requestfinished', request => request === upgrade.request())
-    await upgrade.fulfill({ json: { token: 'first-demo-write' } })
-    await finished
+    await upgrade.fulfill({ json: { kind: 'scratch' } })
     if (switchAccount) {
       await page.waitForTimeout(50)
       expect(await page.evaluate(() => localStorage.getItem('suchi.token'))).toBeNull()
-      expect(uploadCredentials).toEqual(['first-demo-read'])
+      expect(uploadCredentials).toEqual(['cookie'])
       await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
     } else {
       await expect(page.getByText('duplicate', { exact: true })).toBeVisible()
-      expect(uploadCredentials).toEqual(['first-demo-read', 'Token first-demo-write'])
-      expect(await page.evaluate(() => localStorage.getItem('suchi.token'))).toBe('first-demo-write')
+      expect(uploadCredentials).toEqual(['cookie', 'cookie'])
+      expect(await page.evaluate(() => localStorage.getItem('suchi.token'))).toBeNull()
     }
   })
 }
@@ -2404,7 +2401,18 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
   await page.getByRole('button', { name: 'Delete permanently' }).first().click()
   let dialog = page.getByRole('alertdialog', { name: 'Delete permanently?' })
   await expect(dialog).toContainText('any share link containing it will be revoked')
-  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await page.locator('button').filter({ hasText: 'Empty trash' }).first().evaluate(button => button.focus())
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  for (let step = 0; step < 5; step++) {
+    await page.keyboard.press('Tab')
+    // Native dialogs may yield to browser chrome, but never to the inert page.
+    expect(await dialog.evaluate(element => document.activeElement === document.body || element.contains(document.activeElement))).toBe(true)
+  }
+  await dialog.getByRole('button', { name: 'Cancel' }).focus()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Delete permanently' }).first()).toBeFocused()
   await expect(page.getByText('Old electricity bill', { exact: true })).toBeVisible()
   expect(permanentDeleteRequests).toEqual([])
 

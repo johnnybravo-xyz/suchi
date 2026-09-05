@@ -49,6 +49,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Demo dashboard counts now include the visible corpus. Visitor uploads preview
+  and download through the same bounded session after navigation or reload.
+- Destructive confirmation dialogs use native modal focus, Escape handling,
+  and an inert background, restoring focus when cancelled.
 - Permanent deletion no longer removes an in-flight upload's original bytes.
   GC now explicitly requires stopped archive writers, and the restore drill
   verifies a real document's bytes, extracted content, and search after restart.
@@ -79,6 +83,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Browser demo credentials no longer live in JavaScript storage. Scratch
+  sessions retain their restricted identity, expire at the visitor TTL, and
+  enforce same-origin mutation checks; concurrent writes share one upgrade.
 - Both OIDC sign-in paths now require signed verified-email claims before
   binding local accounts. Providers without truthful `email_verified: true`
   claims are no longer supported. Suchi Bearer tokens work with OIDC enabled,

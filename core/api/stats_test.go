@@ -97,6 +97,20 @@ func TestStats_Unauthenticated(t *testing.T) {
 	}
 }
 
+func TestStats_DemoAnonymousNeedsNoUserRow(t *testing.T) {
+	s := newStatsServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	seedStatsDoc(t, s.DB, 1, "demo:public", "Corpus", inbox, false, time.Now().Unix())
+	seedStatsDoc(t, s.DB, 2, "private-scratch", "Private upload", inbox, false, time.Now().Unix())
+	if _, err := s.DB.ExecWrite(t.Context(), `UPDATE users SET email='corpus@demo.suchi.page' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := doStats(t, s, &pluginapi.Principal{Kind: PrincipalKindDemoAnon, Role: "member"})
+	if code != 200 || body.DocumentsTotal != 1 || body.PendingIntelligence != 0 {
+		t.Fatalf("demo stats status=%d body=%+v", code, body)
+	}
+}
+
 func TestStats_AdminSeesEverything(t *testing.T) {
 	s := newStatsServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

@@ -321,13 +321,20 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 	if time.Now().Unix() > expires {
 		return nil, errors.New("session expired")
 	}
-	return &pluginapi.Principal{
+	principal := &pluginapi.Principal{
 		Kind:    "user",
 		UserID:  userID,
 		Email:   email,
 		Display: display,
 		Role:    role,
-	}, nil
+	}
+	// This reserved identity pattern also owns scratch retention in distro/demo.
+	// A demo cookie must never become an unrestricted member session.
+	if p.demoMode && strings.HasPrefix(email, "visitor-") && strings.HasSuffix(email, "@demo.local") {
+		principal.Kind = "demo-scratch"
+		principal.Scopes = []string{auth.ScopeDocumentsRead, auth.ScopeDocumentsWrite, auth.ScopeDemoCorpusRead}
+	}
+	return principal, nil
 }
 
 func digest(value string) string {

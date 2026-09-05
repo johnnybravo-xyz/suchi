@@ -1,18 +1,12 @@
-// Auth uses a session cookie or persisted API token. Demo read tokens use a
-// separate header and upgrade to an API token on the first write.
-const TOKEN_KEY = 'suchi.token'
-const DEMO_ANON_KEY = 'suchi.demo.anonToken'
+// All browser credentials are HttpOnly cookies, including demo sessions.
+let sessionRevision = 0
+let demoUpgrade
 
-export function getToken() { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
-export function setToken(t) {
+function resetSessionRequests() {
+  sessionRevision++
   pendingGets.clear()
-  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch {}
-}
-
-export function getDemoAnonToken() { try { return sessionStorage.getItem(DEMO_ANON_KEY) } catch { return null } }
-export function setDemoAnonToken(t) {
-  pendingGets.clear()
-  try { t ? sessionStorage.setItem(DEMO_ANON_KEY, t) : sessionStorage.removeItem(DEMO_ANON_KEY) } catch {}
+  demoUpgrade?.controller.abort()
+  demoUpgrade = null
 }
 
 class ApiError extends Error {
@@ -20,14 +14,13 @@ class ApiError extends Error {
 }
 
 async function req(method, path, body, opts = {}) {
-  const token = getToken()
-  const anon = getDemoAnonToken()
+  const revision = sessionRevision
   const res = await sendOnce(method, path, body, opts)
   // `_noUpgrade` prevents recursion when the upgrade endpoint refuses a token.
   if (res.status === 403 && res.data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
-      token === getToken() && anon === getDemoAnonToken()) {
-    const upgraded = await upgradeDemoSession(anon)
-    if (upgraded && getToken() === upgraded.token && !getDemoAnonToken()) {
+      revision === sessionRevision) {
+    const upgraded = await upgradeDemoSession()
+    if (upgraded && revision === sessionRevision) {
       return req(method, path, body, { ...opts, _noUpgrade: true })
     }
   }
@@ -39,13 +32,6 @@ async function req(method, path, body, opts = {}) {
 
 async function sendOnce(method, path, body, opts) {
   const headers = { ...(opts.headers || {}) }
-  const token = getToken()
-  if (token) {
-    headers['Authorization'] = `Token ${token}`
-  } else {
-    const anon = getDemoAnonToken()
-    if (anon) headers['X-Suchi-Demo-Token'] = anon
-  }
   let payload = body
   if (body !== undefined && !(body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'
@@ -58,28 +44,21 @@ async function sendOnce(method, path, body, opts) {
 }
 
 export async function mintDemoSession() {
-  const r = await fetch('/api/demo/session', { method: 'POST' })
-  if (!r.ok) return null
-  const j = await r.json().catch(() => null)
-  if (!j?.token) return null
-  setDemoAnonToken(j.token)
-  return j
+  return api.post('/api/demo/session')
 }
 
 export const getDemoMode = () => api.get('/api/demo/mode')
 
-async function upgradeDemoSession(anon) {
-  if (!anon || getToken()) return null
-  const r = await fetch('/api/demo/session/upgrade', {
-    method: 'POST',
-    headers: { 'X-Suchi-Demo-Token': anon },
+function upgradeDemoSession() {
+  if (demoUpgrade) return demoUpgrade.promise
+  const controller = new AbortController()
+  const promise = fetch('/api/demo/session/upgrade', {
+    method: 'POST', credentials: 'same-origin', signal: controller.signal,
+  }).then(r => r.ok).finally(() => {
+    if (demoUpgrade?.promise === promise) demoUpgrade = null
   })
-  if (!r.ok) return null
-  const j = await r.json().catch(() => null)
-  if (!j?.token || getDemoAnonToken() !== anon || getToken()) return null
-  setToken(j.token)
-  setDemoAnonToken(null)
-  return j
+  demoUpgrade = { controller, promise }
+  return promise
 }
 
 const api = {
@@ -90,7 +69,10 @@ const api = {
   del: (p) => req('DELETE', p),
 }
 
-export const logout = () => api.post('/api/logout')
+export function logout() {
+  resetSessionRequests()
+  return api.post('/api/logout')
+}
 
 const pendingGets = new Map()
 function singleFlightGet(path) {
@@ -113,7 +95,10 @@ function qs(params) {
 }
 
 export const whoami = () => api.get('/api/whoami')
-export const login = (email, password) => api.post('/api/login', { email, password })
+export function login(email, password) {
+  resetSessionRequests()
+  return api.post('/api/login', { email, password })
+}
 
 export const listDocuments = (params, signal) => api.get(`/api/documents/${qs(params)}`, { signal })
 export const getDocument = (id) => api.get(`/api/documents/${id}`)
@@ -134,11 +119,8 @@ export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve
 // suchi-taxonomy/v1 admin import/export.
 export const importTaxonomy = (b) => api.post('/api/admin/taxonomy/import', b)
 export async function exportTaxonomy(format = 'huml') {
-  const headers = {}
-  const t = getToken()
-  if (t) headers['Authorization'] = `Token ${t}`
   const r = await fetch(`/api/admin/taxonomy/export?format=${encodeURIComponent(format)}`,
-    { headers, credentials: 'same-origin' })
+    { credentials: 'same-origin' })
   if (!r.ok) throw new ApiError(r.status, 'export_failed', `export failed (${r.status})`)
   return r.text()
 }

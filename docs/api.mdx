@@ -1892,7 +1892,7 @@ deployment, so third-party clients can probe safely.
 ```
 GET  /api/demo/mode              → 200 {"enabled": true|false, "next_reset_unix": <int>?}
 POST /api/demo/session           → 200 {"kind":"anon", "token":"demoanon.<...>", "expires_unix":<int>, "header":"X-Suchi-Demo-Token"}
-POST /api/demo/session/upgrade   → 200 {"kind":"scratch", "token":"<64hex>", "header":"Authorization"}
+POST /api/demo/session/upgrade   → 200 {"kind":"scratch"} + HttpOnly session cookie
 ```
 
 - `mode` is unauthenticated — the SPA calls it on boot to decide
@@ -1900,12 +1900,14 @@ POST /api/demo/session/upgrade   → 200 {"kind":"scratch", "token":"<64hex>", "
 - `session` is unauthenticated — mints a signed anonymous token
   scoped read-only. No DB write; the token verifies statelessly via
   HMAC-SHA256 against a per-instance secret at `$DATA_DIR/.demo-anon-key`.
-  TTL defaults to 15 minutes. Send back in `X-Suchi-Demo-Token` on
-  subsequent calls, or trade up via `session/upgrade`.
+  TTL defaults to 15 minutes. Browsers use the issued HttpOnly cookie;
+  non-browser read clients can send the token in `X-Suchi-Demo-Token`.
 - `session/upgrade` requires a valid anonymous token. Provisions a
-  scratch user `visitor-<hex>@demo.local`, mints a real API token
-  bound to it, returns the token. The SPA then swaps its
-  `X-Suchi-Demo-Token` header for `Authorization: Token <new>`.
+  scratch user `visitor-<hex>@demo.local` and replaces the anonymous cookie
+  with a digest-backed browser session. Its lifetime is the configured scratch
+  TTL, not the normal 30-day login lifetime. It retains the constrained
+  `demo-scratch` identity for both API calls and direct preview/download URLs.
+  Upgrade clients must retain response cookies; no API token is returned.
 
 Any mutation from an anonymous demo caller returns
 `403 {"code":"demo_upgrade_required"}` except the upgrade endpoint itself.

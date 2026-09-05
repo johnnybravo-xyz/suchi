@@ -153,7 +153,7 @@ These gates answer different questions:
   claims before binding a local account. The configured issuer remains trusted
   to control email assignment; email is not a stable subject identifier.
 - **Token authority:** `serve_token_policy.go` explicitly lists routes available
-  to local API tokens and demo scratch tokens. Unlisted routes are session-only;
+  to local API tokens and restricted demo scratch identities. Unlisted routes are session-only;
   an admin role does not bypass this boundary. Add a route's scope deliberately
   and test the assembled handler, not only the bare API method.
 - **Roles and capabilities:** handlers enforce administration or feature grants,
@@ -172,6 +172,14 @@ cannot read document content. Document-read access still needs a document ACL.
 Token management requires a browser/OIDC identity: API tokens cannot mint,
 list, or revoke credentials. Admin-token metrics remain a deliberate exception;
 read [HTTP API](/api) before changing compatibility.
+
+Browser demo visitors use HttpOnly cookies too. The anonymous cookie is signed
+and stateless; the first write exchanges it for an ordinary digest-backed
+session bounded by the scratch TTL. Local authentication recognizes the reserved
+scratch user and retains its restricted scopes on API, preview, and download
+requests; it must never become an unrestricted member session. The CLI injects
+local session issuance into the demo provisioner, without a separate credential
+store or schema. See [Demo instance](/demo-instance) for retention and isolation.
 
 Preview/download aliases share `core/ui`'s blob-serving behavior, including
 object checks, reveal gates, ETags, and preview CSP. Thumbnails have their own

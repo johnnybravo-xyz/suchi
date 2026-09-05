@@ -96,6 +96,15 @@ var tokenRouteScopes = map[string]string{
 
 func tokenScopeResolver(mux *http.ServeMux) httpx.TokenScopeResolver {
 	return func(r *http.Request) (string, bool) {
+		// Scratch cookies need the same public shell/assets as anonymous visitors,
+		// without acquiring ordinary member access to session-only APIs.
+		if p := auth.FromContext(r.Context()); p != nil && p.Kind == "demo-scratch" {
+			_, pattern := mux.Handler(r)
+			switch pattern {
+			case "GET /app/", "GET /app", "GET /{$}", "GET /login":
+				return "", true
+			}
+		}
 		pattern := tokenRequestPattern(mux, r)
 		scope, allowed := tokenRouteScopes[pattern]
 		if !allowed {

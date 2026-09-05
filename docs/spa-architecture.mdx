@@ -154,13 +154,18 @@ workflow rather than hiding administrative actions without an alternative.
 
 ## Security
 
-Ordinary browser login uses a session cookie; scripts do not read its value.
-The public demo keeps its anonymous read token in `sessionStorage` and its
-upgraded scratch-user API token in `localStorage`. The API helper supports that
-token alongside cookie sessions. Cookie-authenticated mutations remain
-same-origin and pass Fetch Metadata protection on the server.
+All browser authentication uses HttpOnly cookies, including the anonymous demo
+and its upgraded scratch session. The SPA does not read or persist credentials.
+Concurrent demo writes share one upgrade request; signing out or signing in
+invalidates pending reads/retries and cancels an unfinished upgrade.
+The scratch session retains its restricted demo identity on both API and direct
+resource requests. Cookie-authenticated mutations remain same-origin and pass
+Fetch Metadata protection on the server.
 Preview content is served by dedicated endpoints under a restrictive CSP, not
 injected into component HTML.
+
+Destructive confirmations use native modal dialogs for Escape, focus return,
+and an inert background rather than a custom keyboard/focus manager.
 
 Render ordinary text through Svelte escaping. The only intentionally marked-up
 search content is sanitized before display. Do not extend browser token storage

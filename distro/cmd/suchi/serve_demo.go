@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
-func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.CAS, apiServer *api.Server, anon *demo.AnonAuthenticator, log *slog.Logger) (*httpx.RateLimit, error) {
+func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.CAS, apiServer *api.Server, anon *demo.AnonAuthenticator, issueSession func(http.ResponseWriter, *http.Request, int64, time.Duration) error, log *slog.Logger) (*httpx.RateLimit, error) {
 	apiServer.SetDemo(api.DemoConfig{
 		Enabled:      cfg.DemoMode,
 		CookieSecure: strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://"),
@@ -48,7 +49,8 @@ func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.
 		TTL: time.Duration(cfg.DemoScratchTTLMinutes) * time.Minute,
 	})
 	apiServer.SetDemoMinter(anon.Mint)
-	apiServer.SetDemoScratchProvisioner(func(rctx context.Context, email, displayName string) (int64, error) {
+	apiServer.SetDemoScratchProvisioner(func(w http.ResponseWriter, r *http.Request, email, displayName string) (int64, error) {
+		rctx := r.Context()
 		var userID int64
 		err := d.WriteTx(rctx, func(tx *sql.Tx) error {
 			now := time.Now().Unix()
@@ -62,7 +64,10 @@ func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, cas *blob.
 			userID, _ = res.LastInsertId()
 			return nil
 		})
-		return userID, err
+		if err != nil {
+			return 0, err
+		}
+		return userID, issueSession(w, r, userID, time.Duration(cfg.DemoScratchTTLMinutes)*time.Minute)
 	})
 	return limiter, nil
 }

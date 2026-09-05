@@ -1,4 +1,4 @@
-import { logout, whoami, setToken, setDemoAnonToken } from './api.js'
+import { logout, whoami } from './api.js'
 import { getLoginPath, usesExternalLogin } from './login.js'
 
 export const session = $state({
@@ -21,15 +21,7 @@ export async function refreshSession() {
 }
 
 export async function signOut() {
-  try {
-    await logout()
-  } catch {
-    // A stale Authorization token prevents cookie fallback in the auth chain.
-    setToken(null)
-    try { await logout() } catch {}
-  }
-  setToken(null)
-  setDemoAnonToken(null)
+  try { await logout() } catch {}
   session.user = null
   if (usesExternalLogin()) {
     location.assign(getLoginPath())

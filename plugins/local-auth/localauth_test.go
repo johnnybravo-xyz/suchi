@@ -53,6 +53,47 @@ func TestNewWithOptions_DisablesLocalSetup(t *testing.T) {
 	}
 }
 
+func TestDemoBrowserSessionIsBoundedAndConstrained(t *testing.T) {
+	p := openTestPlugin(t)
+	p.demoMode = true
+	p.cookieSecure = true
+	ctx := t.Context()
+	_, err := p.db.ExecWrite(ctx, `INSERT INTO users(id,email,display_name,role,created_at,updated_at)
+		VALUES(1,'visitor-test@demo.local','Visitor','member',0,0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/api/demo/session/upgrade", nil)
+	w := httptest.NewRecorder()
+	if err := p.IssueDemoSession(w, r, 1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	cookie := w.Result().Cookies()[0]
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || time.Until(cookie.Expires) > time.Minute {
+		t.Fatalf("invalid demo cookie attributes: name=%s expires=%s", cookie.Name, cookie.Expires)
+	}
+	r.AddCookie(cookie)
+	principal, err := p.Authenticate(r)
+	if err != nil || principal == nil || principal.Kind != "demo-scratch" || !auth.HasScope(principal, auth.ScopeDocumentsWrite) {
+		t.Fatalf("scratch principal=%+v error=%v", principal, err)
+	}
+	var lifetime int64
+	if err := p.db.Read.QueryRowContext(ctx, `SELECT expires_at-created_at FROM sessions`).Scan(&lifetime); err != nil || lifetime != 60 {
+		t.Fatalf("session lifetime=%d error=%v", lifetime, err)
+	}
+	if _, err := p.db.ExecWrite(ctx, `UPDATE sessions SET expires_at=0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Authenticate(r); err == nil {
+		t.Fatal("expired demo session authenticated")
+	}
+	p.LogoutHandler(httptest.NewRecorder(), r)
+	var sessions int
+	if err := p.db.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatalf("logout left sessions=%d error=%v", sessions, err)
+	}
+}
+
 func TestEnsureDevAdmin_Refusals(t *testing.T) {
 	ctx := context.Background()
 

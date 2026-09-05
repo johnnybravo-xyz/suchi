@@ -675,7 +675,7 @@ func runServe() int {
 	apiSrv.EmailwatchAEAD = decryptKey
 	apiSrv.EmailwatchMSAL = msalManager
 	apiSrv.WithJobs(disp).Register(mux)
-	demoRL, err := configureDemo(ctx, cfg, d, cas, apiSrv, demoAnon, log)
+	demoRL, err := configureDemo(ctx, cfg, d, cas, apiSrv, demoAnon, la.IssueDemoSession, log)
 	if err != nil {
 		log.Error("main.demo.refused", "reason", err.Error())
 		return 1

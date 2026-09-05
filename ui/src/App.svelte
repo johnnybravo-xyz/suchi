@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, getDemoAnonToken, getToken, chatStatus } from './lib/api.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
@@ -129,25 +129,15 @@
 
   initTheme()
 
-  // Demo visitors receive a read token and a synthetic session. api.js upgrades
-  // the token on the first write; regular deployments continue through whoami.
+  // Demo credentials are cookies too; an existing scratch session takes
+  // precedence over the stateless read cookie minted on each visit.
   getDemoMode()
     .then(async j => {
       if (j?.enabled) demoMode = true
-      if (j?.enabled && !getToken() && !getDemoAnonToken()) {
+      if (j?.enabled) {
         try { await mintDemoSession() } catch {}
       }
       await refreshSession()
-      if (!session.user && j?.enabled && getDemoAnonToken()) {
-        session.user = {
-          user_id: 0,
-          email: 'visitor@demo.local',
-          display_name: 'Demo visitor',
-          role: 'member',
-          demo: 'anon',
-        }
-        session.checked = true
-      }
       if (session.user) boot()
       // Preserve demo deep links; redirect only the first default-route visit.
       if (j?.enabled && session.user?.demo === 'anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {

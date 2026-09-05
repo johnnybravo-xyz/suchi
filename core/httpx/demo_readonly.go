@@ -27,7 +27,7 @@ func DemoReadOnly(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/login" || r.URL.Path == "/api/login" ||
+		if r.URL.Path == "/api/demo/session" || r.URL.Path == "/login" || r.URL.Path == "/api/login" ||
 			r.URL.Path == "/api/token/" || r.URL.Path == "/api/logout" {
 			next.ServeHTTP(w, r)
 			return
@@ -44,10 +44,6 @@ func DemoReadOnly(next http.Handler) http.Handler {
 			return
 		}
 		if p != nil && p.Kind == demoScratchPrincipalKind && isScratchDocumentMutation(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if p == nil && r.URL.Path == "/api/demo/session" {
 			next.ServeHTTP(w, r)
 			return
 		}

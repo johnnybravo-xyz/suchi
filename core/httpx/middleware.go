@@ -190,15 +190,14 @@ func SecFetchSite(next http.Handler) http.Handler {
 		// so principal kind alone cannot distinguish it from a cookie session.
 		// Authorization credentials are explicit and cannot be supplied by a
 		// cross-site form; keep both local Token and Bearer calls exempt.
-		if hasTokenAuthorization(r.Header.Get("Authorization")) {
+		p := auth.FromContext(r.Context())
+		if hasTokenAuthorization(r.Header.Get("Authorization")) ||
+			(p != nil && p.Kind == "demo-anon" && strings.HasPrefix(r.Header.Get("X-Suchi-Demo-Token"), "demoanon.")) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		p := auth.FromContext(r.Context())
-		// Only browser sessions rely on ambient cookies. Token, demo-token,
-		// anonymous, and other explicitly authenticated callers are outside the
-		// CSRF threat model for this check.
-		if p == nil || p.Kind != "user" {
+		// Demo identities also use ambient cookies in the browser.
+		if p == nil || (p.Kind != "user" && p.Kind != "demo-anon" && p.Kind != "demo-scratch") {
 			next.ServeHTTP(w, r)
 			return
 		}

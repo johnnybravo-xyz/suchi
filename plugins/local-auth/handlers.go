@@ -342,6 +342,26 @@ func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) 
 // Exported because the OIDC plugin's callback delegates cookie-issuance
 // here — one code path mints all cookies.
 func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request) (string, error) {
+	return p.issueSession(ctx, userID, r, SessionTTL)
+}
+
+// IssueDemoSession uses the normal digest-backed session with the visitor TTL.
+// Scratch identity and scopes are resolved from its reserved user row on reads.
+func (p *Plugin) IssueDemoSession(w http.ResponseWriter, r *http.Request, userID int64, ttl time.Duration) error {
+	if !p.demoMode || ttl <= 0 {
+		return errors.New("demo session requires demo mode and a positive lifetime")
+	}
+	sid, err := p.issueSession(r.Context(), userID, r, ttl)
+	if err != nil {
+		return err
+	}
+	cookie := p.sessionCookie(sid)
+	cookie.Expires = time.Now().Add(ttl)
+	http.SetCookie(w, cookie)
+	return nil
+}
+
+func (p *Plugin) issueSession(ctx context.Context, userID int64, r *http.Request, ttl time.Duration) (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -352,7 +372,7 @@ func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, digest(sid), userID, now.Unix(), now.Add(SessionTTL).Unix(), now.Unix(),
+		`, digest(sid), userID, now.Unix(), now.Add(ttl).Unix(), now.Unix(),
 			r.UserAgent(), r.RemoteAddr)
 		return err
 	})
@@ -398,6 +418,12 @@ func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		Name: CookieName, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
 	})
+	if p.demoMode {
+		http.SetCookie(w, &http.Cookie{
+			Name: "suchi_demo_anon", Path: "/", MaxAge: -1,
+			HttpOnly: true, Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
