@@ -232,7 +232,7 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 		log.Warn("llm-classifier.egress",
 			"host", rt.host,
 			"model", rt.cfg.Model,
-			"msg", "OCR text of every classified document leaves the box")
+			"detail", "OCR text of every classified document leaves the box")
 	}
 	p := &Plugin{log: log}
 	p.rt.Store(rt)

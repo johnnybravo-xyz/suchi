@@ -49,6 +49,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Setup, egress, and filing-recovery logs preserve their structured event name
+  instead of emitting duplicate JSON `msg` fields.
 - Demo dashboard counts now include the visible corpus. Visitor uploads preview
   and download through the same bounded session after navigation or reload.
 - Destructive confirmation dialogs use native modal focus, Escape handling,

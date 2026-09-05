@@ -264,7 +264,7 @@ func repairInbox(ctx context.Context, d *db.DB, log *slog.Logger) error {
 		return fmt.Errorf("jd repair: no system category present, cannot recover: %w", err)
 	}
 	log.Warn("jd.inbox.repaired", "new_id", id,
-		"msg", "jd_inbox_category_id was missing or stale — repointed to a live system category")
+		"detail", "jd_inbox_category_id was missing or stale — repointed to a live system category")
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
 		return writeSetting(ctx, tx, SettingInboxCategoryID, id, time.Now().Unix())
 	})

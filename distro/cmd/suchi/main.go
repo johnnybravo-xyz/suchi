@@ -760,7 +760,7 @@ func runHealthcheck() int {
 func logEgressSurface(log *slog.Logger, egress []string) {
 	if len(egress) == 0 {
 		log.Info("main.egress.surface", "outbound", "none",
-			"msg", "stock install; no configured outbound connections")
+			"detail", "stock install; no configured outbound connections")
 	} else {
 		log.Info("main.egress.surface", "outbound", egress)
 	}

@@ -106,7 +106,7 @@ func (p *Plugin) mintSetupToken() error {
 	p.setupToken = hex.EncodeToString(b[:])
 	p.setupTokenIssuedAt = time.Now()
 	p.log.Warn("localauth.setup.token_minted",
-		"msg", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
+		"detail", "first-boot setup token — one-time use; open /bootstrap in your browser (or POST to /setup) with an admin email + password within 24h",
 		"token", p.setupToken)
 	return nil
 }
@@ -198,7 +198,7 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	p.setupToken = ""
 	p.log.Warn("localauth.dev_admin.ready",
 		"email", email,
-		"msg", "SUCHI_DEV=1 — admin auto-provisioned; do not use in production")
+		"detail", "SUCHI_DEV=1 — admin auto-provisioned; do not use in production")
 	return nil
 }
 
