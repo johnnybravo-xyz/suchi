@@ -69,7 +69,7 @@ jobs:
           docker run -d \
               --name suchi-smoke-$LANE \
               --network suchi-smoke-net-$LANE \
-              -p $HOST_PORT:8000 \
+              -p 127.0.0.1:$HOST_PORT:8000 \
               -e PUBLIC_URL=http://127.0.0.1:$HOST_PORT \
               -v suchi-smoke-data-$LANE:/data \
               suchi:smoke-$LANE
@@ -86,6 +86,36 @@ jobs:
         run: |
           docker exec suchi-smoke-$LANE sh -c \
             'command -v anydoc && command -v djvutxt && command -v msgconvert'
+
+      - name: Verify image PDF encoding and interpreter policy
+        run: |
+          docker cp /tmp/samples/scanned.pdf suchi-smoke-$LANE:/tmp/codec-input.pdf
+          docker cp /tmp/samples/text-native.ps suchi-smoke-$LANE:/tmp/codec-input.ps
+          docker exec -i suchi-smoke-$LANE sh -eu <<'SH'
+          converter=$(command -v magick || command -v convert)
+          pdftoppm -singlefile -f 1 -png /tmp/codec-input.pdf /tmp/codec
+          "$converter" /tmp/codec.png /tmp/codec.jpg
+          for source in /tmp/codec.png /tmp/codec.jpg; do
+            "$converter" "$source" PDF:/tmp/codec-output.pdf
+            test "$(head -c 5 /tmp/codec-output.pdf)" = '%PDF-'
+            pdfinfo /tmp/codec-output.pdf >/dev/null
+          done
+
+          # Query the installed modules so new aliases cannot bypass the policy.
+          coders=$("$converter" -list format | awk '$2 ~ /^(PDF|PS|PS2|PS3|XPS)$/ {gsub(/\*/, "", $1); print $1 ":" $2}')
+          test -n "$coders"
+          for entry in $coders; do
+            coder=${entry%:*}
+            sample=/tmp/codec-input.ps
+            test "${entry#*:}" != PDF || sample=/tmp/codec-input.pdf
+            if "$converter" "$coder:$sample" /tmp/codec-read.png 2>/tmp/codec-error; then
+              echo "ImageMagick unexpectedly decoded $coder" >&2
+              exit 1
+            fi
+            # Unsupported input alone is not evidence of a working security policy.
+            grep -qi 'security policy' /tmp/codec-error || { cat /tmp/codec-error >&2; exit 1; }
+          done
+          SH
 
       - name: Bootstrap admin via /setup
         run: |

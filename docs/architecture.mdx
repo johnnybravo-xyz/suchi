@@ -243,6 +243,15 @@ or impose process memory limits. Keep format-specific input/output limits and
 deployment isolation explicit; a unit test with a stub executable does not
 establish the safety or availability of the real parser.
 
+`core/pipeline/imgpdf/` owns all supported raster-to-PDF conversion, including
+HEIC/HEIF; there is no separate HEIC adapter or intermediate PNG step. It
+explicitly requests PDF encoding and rejects output without the PDF signature
+before OCR/CAS publication. Container ImageMagick policy permits the necessary
+PDF writes without enabling PDF reads. Verify the actual encoder and policy,
+not merely an executable's presence or an `archive_blob` value. See
+[Supported file types](/formats) and [Pipeline versions](/pipeline-versions)
+for frame handling, dependencies and repair of older image archives.
+
 ## Change and verification map
 
 Start with the affected boundary, then run the aggregate loop.

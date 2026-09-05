@@ -119,13 +119,13 @@ curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
     -d "{\"fs_watch_dir\":\"/ingest\",\"fs_watch_owner_email\":\"$EMAIL\"}" \
     >/dev/null
 for i in $(seq 1 30); do
-    if compose logs suchi 2>&1 | grep -q 'fswatch.start'; then
+    if compose logs suchi 2>&1 | grep -F 'fswatch.start' >/dev/null; then
         echo "  fs-watch active after ${i}s without restarting suchi"
         break
     fi
     sleep 1
 done
-compose logs suchi 2>&1 | grep -q 'fswatch.start'
+compose logs suchi 2>&1 | grep -F 'fswatch.start' >/dev/null
 
 echo
 echo "== drop 9 synthetic fixtures =="
@@ -137,9 +137,10 @@ echo "== drop 9 synthetic fixtures =="
 # When magick isn't on the host we skip and drop the HEIC assertion.
 heic_expected=0
 if command -v magick >/dev/null 2>&1; then
-    magick -size 240x240 -background white -fill black \
-        -gravity center label:'suchi smoke-test HEIC' \
-        ./ingest/canary.heic 2>/dev/null \
+    magick -size 800x300 -background white -fill black -pointsize 48 \
+        -gravity center label:MAILHEICMARKER \
+        "$SCRATCH_DIR/canary.heic" 2>/dev/null \
+        && cp "$SCRATCH_DIR/canary.heic" ./ingest/canary.heic \
         && heic_expected=1 \
         && echo "  + canary.heic dropped"
 fi
@@ -156,7 +157,9 @@ for i in $(seq 1 60); do
         "SELECT COUNT(*) FROM documents WHERE trashed_at IS NULL" 2>/dev/null || echo 0)
     if [ "$docs" = "$prev" ]; then
         stable=$((stable + 1))
-        if [ "$stable" -ge 5 ]; then
+        pending=$(sqlite3 suchi-data/suchi.db \
+            "SELECT COUNT(*) FROM jobs WHERE kind='post-ingest' AND state IN ('pending','running')" 2>/dev/null || echo 1)
+        if [ "$stable" -ge 5 ] && [ "$pending" = 0 ]; then
             echo "  stable at $docs docs for 5 seconds"
             break
         fi
@@ -195,21 +198,27 @@ inherited=$(sqlite3 suchi-data/suchi.db \
 enc_title=$(sqlite3 suchi-data/suchi.db \
     "SELECT title FROM documents WHERE email_message_id='<04-encoded@fixtures.suchi>'")
 
-dedup_fired=0
-compose logs suchi 2>&1 | grep -q 'post-ingest.email.dedup' && dedup_fired=1
-
 check "email docs (parents)"            "$email_docs" "8"
 check "attachment child docs"           "$child_docs" "6"
 check "total docs alive"                "$total_docs" "$((14 + heic_expected))"
 check "dedup: one doc for dup msgID"    "$dup_msgid"  "1"
-check "dedup log line fired"            "$dedup_fired" "1"
 check "children inherit sender"         "$inherited"   "6"
 check "encoded subject decoded"         "$enc_title"   "Statement — 2026"
 
 if [ "$heic_expected" = "1" ]; then
-    heic_archived=$(sqlite3 suchi-data/suchi.db \
-        "SELECT COUNT(*) FROM documents WHERE mime_type='image/heic' AND archive_blob IS NOT NULL AND trashed_at IS NULL")
-    check "HEIC doc has PDF archive"        "$heic_archived" "1"
+    heic_id=$(sqlite3 suchi-data/suchi.db \
+        "SELECT id FROM documents WHERE mime_type='image/heic' AND trashed_at IS NULL")
+    heic_indexed=$(sqlite3 suchi-data/suchi.db \
+        "SELECT COUNT(*) FROM documents WHERE mime_type='image/heic' AND content LIKE '%MAILHEICMARKER%' AND trashed_at IS NULL")
+    check "HEIC text indexed by OCR" "$heic_indexed" "1"
+    curl -sf "http://127.0.0.1:$PORT/download/$heic_id" \
+        --cookie "$SCRATCH_DIR/cookies" -o "$SCRATCH_DIR/heic.pdf"
+    compose exec -T suchi pdfinfo - < "$SCRATCH_DIR/heic.pdf" >/dev/null
+    echo "  HEIC archive download parses as PDF"
+    curl -sf "http://127.0.0.1:$PORT/download/$heic_id?raw=1" \
+        --cookie "$SCRATCH_DIR/cookies" -o "$SCRATCH_DIR/heic-original.heic"
+    cmp "$SCRATCH_DIR/canary.heic" "$SCRATCH_DIR/heic-original.heic"
+    echo "  HEIC original download matches input bytes"
 fi
 
 echo

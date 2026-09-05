@@ -1,8 +1,9 @@
-// Package imgpdf wraps raster images in a single-page PDF so the standard OCR
+// Package imgpdf wraps raster images in a PDF so the standard OCR
 // path can extract text. Only OCRmyPDF embeds that text in the PDF.
 package imgpdf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -53,8 +54,7 @@ type Result struct {
 }
 
 // Recognized reports whether mime is a raster image format we can
-// wrap. Explicitly excludes vector formats (SVG) — they don't need
-// image OCR. HEIC is handled by the dedicated heic package.
+// wrap. Explicitly excludes vector formats (SVG) — they don't need image OCR.
 func Recognized(mime string) bool {
 	m := strings.ToLower(mime)
 	if idx := strings.IndexByte(m, ';'); idx > 0 {
@@ -64,20 +64,10 @@ func Recognized(mime string) bool {
 	case "image/jpeg", "image/jpg", "image/pjpeg",
 		"image/png",
 		"image/tiff", "image/x-tiff",
+		"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence",
 		"image/webp",
 		"image/gif",
 		"image/bmp", "image/x-bmp", "image/x-ms-bmp":
-		return true
-	}
-	return false
-}
-
-// Available reports whether an ImageMagick binary is on PATH.
-func Available() bool {
-	if _, err := exec.LookPath(DefaultBinary); err == nil {
-		return true
-	}
-	if _, err := exec.LookPath(FallbackBinary); err == nil {
 		return true
 	}
 	return false
@@ -132,14 +122,18 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		return nil, err
 	}
 
-	// One-shot conversion — direct image → PDF works for jpeg/png/tiff/
-	// webp/gif/bmp on both Alpine and Debian ImageMagick. Only HEIC
-	// needs the two-step PNG intermediate (see the heic package).
+	// HEIC/HEIF uses the still frame, not the rest of a photo sequence.
+	// Other formats retain every page, including multipage TIFF scans.
+	if inExt == "heic" || inExt == "heif" {
+		inputPath += "[0]"
+	}
 	pdfArgs := []string{binary, inputPath}
 	if opts.Quality > 0 && opts.Quality <= 100 {
 		pdfArgs = append(pdfArgs, "-quality", fmt.Sprintf("%d", opts.Quality))
 	}
-	pdfArgs = append(pdfArgs, outputPath)
+	// An unavailable PDF coder can silently preserve the input format when
+	// only the extension is supplied. Explicitly require PDF encoding.
+	pdfArgs = append(pdfArgs, "PDF:"+outputPath)
 
 	start := time.Now()
 	res, err := sandbox.Run(ctx, sandbox.Opts{
@@ -165,6 +159,10 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 			Duration:   dur,
 		}, nil
 	}
+	if !bytes.HasPrefix(pdf, []byte("%PDF-")) {
+		log.Warn("imgpdf.skip.invalid_output", "bytes", len(pdf))
+		return &Result{Skipped: true, StderrTail: "ImageMagick did not produce a PDF", Duration: dur}, nil
+	}
 
 	return &Result{
 		PDF:        pdf,
@@ -187,6 +185,10 @@ func ExtFromMIME(mime string) string {
 		return "png"
 	case "image/tiff", "image/x-tiff":
 		return "tiff"
+	case "image/heic", "image/heic-sequence":
+		return "heic"
+	case "image/heif", "image/heif-sequence":
+		return "heif"
 	case "image/webp":
 		return "webp"
 	case "image/gif":

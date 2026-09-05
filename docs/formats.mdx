@@ -262,9 +262,26 @@ lands in `documents.content` as `barcode:<value>` tokens so the FTS5
 index picks them up — search for `barcode:INV-2026-0042` and the doc
 surfaces.
 
-Common raster images are wrapped in a one-page PDF before OCR and also pass
-through the in-process barcode decoder. Other image formats receive the
-barcode pass only.
+Supported raster images use one `imgpdf` conversion path before OCR. PNG/JPEG
+produce one page, multipage TIFF/GIF retain their pages, and HEIC/HEIF sequences
+use the first still frame. The original bytes are never replaced. Barcode
+decoding also runs where the in-process decoder supports the source format;
+HEIC/HEIF text comes through ImageMagick and OCR, not a native Go HEIF decoder.
+Other image formats receive the barcode pass only.
+
+ImageMagick must include a PDF encoder and allow PDF **writing**. On Alpine the
+encoder is in `imagemagick-pdf`, alongside `imagemagick-heic` for HEIF decoding.
+Alpine's PDF package also brings its Ghostscript dependency; it is not a
+standalone lightweight encoder. Both images permit PDF writing while denying
+ImageMagick reads through PDF aliases and PostScript/EPS/XPS coders. Poppler
+handles PDF input. A `.pdf` filename alone does not prove the
+encoder worked: some installations silently write the source image format.
+Suchi explicitly requests PDF and rejects output without its signature.
+
+Beta.2 fixes the packaged encoder/policy and removes the old HEIC-to-PNG
+workaround. Select affected photos/scans in Documents and **Rescan** to rebuild
+older missing or invalid image archives. See [Pipeline versions](/pipeline-versions)
+for explicit rescans; this bug fix does not advance the pipeline revision.
 
 ## EPUB
 

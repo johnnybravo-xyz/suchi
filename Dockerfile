@@ -91,7 +91,9 @@ RUN apt-get update && \
       tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-RUN sed -i 's|<policy domain="coder" rights="none" pattern="HEIC" />||g; s|<policy domain="coder" rights="none" pattern="HEIF" />||g' /etc/ImageMagick-6/policy.xml || true
+# Suchi encodes raster images as PDFs; PDF decoding (including coder aliases)
+# stays with Poppler.
+RUN sed -i 's|<policy domain="coder" rights="none" pattern="PDF" />|<policy domain="coder" rights="write" pattern="{PDF,PDFA,AI,EPDF,POCKETMOD}" />|; /<\/policymap>/i\  <policy domain="coder" rights="none" pattern="{PS,PS2,PS3,EPS,EPS2,EPS3,EPSF,EPSI,EPI,XPS}" />' /etc/ImageMagick-6/policy.xml
 RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 
@@ -119,6 +121,7 @@ RUN apk add --no-cache \
       djvulibre \
       imagemagick \
       imagemagick-heic \
+      imagemagick-pdf \
       perl \
       perl-email-mime \
       perl-io-string \
@@ -127,6 +130,8 @@ RUN apk add --no-cache \
       qpdf \
       tesseract-ocr \
       tesseract-ocr-data-eng
+
+RUN sed -i '/<\/policymap>/i\  <policy domain="coder" rights="write" pattern="{PDF,PDFA,AI,EPDF,POCKETMOD}" />\n  <policy domain="coder" rights="none" pattern="{PS,PS2,PS3,EPS,EPS2,EPS3,EPSF,EPSI,EPI,XPS}" />' /etc/ImageMagick-7/policy.xml
 
 RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data

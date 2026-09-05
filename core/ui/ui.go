@@ -541,7 +541,7 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	switch {
 	case servingArchive:
 		// Archive blobs are always PDF by construction (post-ingest
-		// wraps images/HEIC/etc. into PDF via imgpdf/heic before OCR).
+		// wraps raster images into PDF via imgpdf before OCR).
 		// Serving them with the source doc's mime_type (e.g. image/jpeg)
 		// sends PDF bytes with a jpeg Content-Type and the browser
 		// refuses to render them.

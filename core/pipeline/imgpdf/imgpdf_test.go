@@ -8,6 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
@@ -26,7 +29,10 @@ func TestRecognized(t *testing.T) {
 		{"image/bmp", true},
 		{"IMAGE/JPEG", true},
 		{"image/jpeg; charset=binary", true},
-		{"image/heic", false}, // handled by the heic package
+		{"image/heic", true},
+		{"image/heif", true},
+		{"image/heic-sequence", true},
+		{"image/heif-sequence", true},
 		{"image/svg+xml", false},
 		{"application/pdf", false},
 		{"text/plain", false},
@@ -48,7 +54,10 @@ func TestExtFromMIME(t *testing.T) {
 		"image/gif":                  "gif",
 		"image/bmp":                  "bmp",
 		"image/jpeg; charset=binary": "jpg",
-		"image/heic":                 "img", // unknown here
+		"image/heic":                 "heic",
+		"image/heif":                 "heif",
+		"image/heic-sequence":        "heic",
+		"image/heif-sequence":        "heif",
 	}
 	for mime, want := range cases {
 		if got := imgpdf.ExtFromMIME(mime); got != want {
@@ -57,43 +66,86 @@ func TestExtFromMIME(t *testing.T) {
 	}
 }
 
-// TestConvert exercises the ImageMagick path end-to-end when a magick
-// binary is on PATH. Skipped otherwise — the package's Skipped=true
-// return is the fallback and doesn't need a binary to verify.
+// Exercise real encoders and parse their output, not just a PDF-looking name.
 func TestConvert(t *testing.T) {
-	if !imgpdf.Available() {
-		t.Skip("ImageMagick not available")
+	binary, err := exec.LookPath(imgpdf.DefaultBinary)
+	if err != nil {
+		binary, err = exec.LookPath(imgpdf.FallbackBinary)
+		if err != nil {
+			t.Skip("ImageMagick not available")
+		}
 	}
+	if _, err := exec.LookPath("pdfinfo"); err != nil {
+		t.Skip("pdfinfo not available")
+	}
+	for _, tc := range []struct {
+		mime   string
+		frames int
+		pages  int
+	}{
+		{"image/png", 1, 1},
+		{"image/jpeg", 1, 1},
+		{"image/heic", 1, 1},
+		{"image/heif-sequence", 2, 1},
+		{"image/tiff", 2, 2},
+	} {
+		t.Run(tc.mime, func(t *testing.T) {
+			dir := t.TempDir()
+			ext := imgpdf.ExtFromMIME(tc.mime)
+			inputPath := filepath.Join(dir, "in."+ext)
+			args := []string{"-size", "64x64", "xc:red"}
+			if tc.frames == 2 {
+				args = append(args, "xc:blue")
+			}
+			args = append(args, inputPath)
+			if out, err := exec.Command(binary, args...).CombinedOutput(); err != nil {
+				t.Skipf("ImageMagick cannot synthesize %s: %v: %s", tc.mime, err, out)
+			}
+			info, err := exec.Command(binary, inputPath, "-format", "%n\n", "info:").CombinedOutput()
+			if err != nil || len(strings.Fields(string(info))) != tc.frames {
+				t.Fatalf("want %d input frames, got %q: %v", tc.frames, info, err)
+			}
+			src, err := os.ReadFile(inputPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := imgpdf.Convert(context.Background(), bytes.NewReader(src),
+				slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Ext: ext})
+			if err != nil || res.Skipped {
+				t.Fatalf("Convert: result=%+v err=%v", res, err)
+			}
+			cmd := exec.Command("pdfinfo", "-")
+			cmd.Stdin = bytes.NewReader(res.PDF)
+			info, err = cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("pdfinfo: %v: %s", err, info)
+			}
+			pages := regexp.MustCompile(`(?m)^Pages:\s+(\d+)$`).FindSubmatch(info)
+			if len(pages) != 2 || string(pages[1]) != strconv.Itoa(tc.pages) {
+				t.Fatalf("want %d PDF pages, got: %s", tc.pages, info)
+			}
+		})
+	}
+}
 
-	// Synthesize a tiny PNG via magick.
-	dir := t.TempDir()
-	pngPath := filepath.Join(dir, "in.png")
-	cmd := exec.Command("magick", "-size", "64x64", "xc:red", pngPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("magick can't produce PNG in this build (%v): %s", err, out)
+func TestConvertRejectsNonPDFOutput(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("requires /bin/sh")
 	}
-	src, err := os.ReadFile(pngPath)
+	// Reproduce ImageMagick's successful exit with PNG bytes in out.pdf.
+	binary := filepath.Join(t.TempDir(), "magick")
+	if err := os.WriteFile(binary, []byte(`#!/bin/sh
+for output; do :; done
+printf '\211PNG\r\n\032\n' > "${output#PDF:}"
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := imgpdf.Convert(context.Background(), bytes.NewReader([]byte("fixture")),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Binary: binary})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(src) < 32 {
-		t.Fatalf("synthesized PNG too small (%d bytes)", len(src))
-	}
-
-	res, err := imgpdf.Convert(context.Background(), bytes.NewReader(src),
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		imgpdf.Options{Ext: "png"})
-	if err != nil {
-		t.Fatalf("Convert: %v", err)
-	}
-	if res.Skipped {
-		t.Fatalf("Convert reported Skipped=true: %s", res.StderrTail)
-	}
-	if !bytes.HasPrefix(res.PDF, []byte("%PDF")) {
-		n := 8
-		if len(res.PDF) < n {
-			n = len(res.PDF)
-		}
-		t.Fatalf("output isn't a PDF (first %d bytes: %q)", n, res.PDF[:n])
+	if !res.Skipped || len(res.PDF) != 0 || res.StderrTail != "ImageMagick did not produce a PDF" {
+		t.Fatalf("non-PDF output was not rejected: %+v", res)
 	}
 }

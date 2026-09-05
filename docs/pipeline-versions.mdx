@@ -62,6 +62,13 @@ the detector cancels the obsolete open proposal on the next boot.
 
 ## Explicit rescans
 
+Beta.2's raster/HEIC encoder correction keeps content revision `2` and OCR
+revision `1`. It does not propose an archive-wide rescan for this image-only
+bug fix. Original images remain available even when an earlier installation
+stored invalid derived bytes or skipped conversion. Select affected images
+in Documents and choose **Rescan** to regenerate their archive and indexed
+text. Upgrading alone does not repair previously processed images.
+
 Use the Documents selection controls for ordinary operator-driven rescans. The
 CLI provides narrower filters and dry runs:
 

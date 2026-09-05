@@ -29,7 +29,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/djvu"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
-	"github.com/johnnybravo-xyz/suchi/core/pipeline/heic"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/ocrmypdf"
@@ -99,7 +98,7 @@ type ContentLimits struct {
 	DjVu   int64
 }
 
-// OCR engine selectors. "auto" prefers tessocr (~300 MB smaller image)
+// OCR engine selectors. "auto" prefers tessocr
 // when its binaries are on PATH, else falls back to ocrmypdf.
 const (
 	OCREngineAuto      = "auto"
@@ -383,58 +382,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return h.postContentSteps(ctx, log, e.DocID)
 	}
 
-	// HEIC / HEIF path: iPhones photograph documents in this format by
-	// default. ImageMagick converts to a single-page PDF; that PDF then
-	// flows through the standard OCR engine so a photograph of a
-	// receipt becomes full-text searchable. Original HEIC bytes stay
-	// in the CAS; archive_blob holds the converted PDF and has an embedded
-	// text layer only when OCRmyPDF produced it. This route must precede
-	// the generic barcode route, which accepts every image type.
-	if heic.Recognized(mime) {
-		res, herr := heic.Convert(ctx, bytes.NewReader(origBytes), log, heic.Options{})
-		if herr != nil {
-			return fmt.Errorf("heic: %w", herr)
-		}
-		if res.Skipped || len(res.PDF) == 0 {
-			log.Info("post-ingest.route.heic.skipped", "reason", res.StderrTail)
-			if err := h.updateDoc(ctx, e.DocID, "", "", 0); err != nil {
-				return err
-			}
-			return h.postContentSteps(ctx, log, e.DocID)
-		}
-		log.Info("post-ingest.route.heic", "pdf_bytes", len(res.PDF), "took", res.Duration.String())
-
-		// Keep the converted PDF for preview when the OCR engine does not
-		// produce its own archive.
-		content, archiveBlob, archiveSize, err := h.runOCR(ctx, log, res.PDF)
-		if err != nil {
-			return fmt.Errorf("heic.ocr: %w", err)
-		}
-		if archiveBlob == "" {
-			ref, cerr := h.cas.Put(bytes.NewReader(res.PDF))
-			if cerr != nil {
-				return fmt.Errorf("heic.cas: %w", cerr)
-			}
-			archiveBlob = ref.SHA256
-			archiveSize = ref.Size
-			if strings.TrimSpace(content) == "" {
-				log.Warn("post-ingest.route.heic.archive_no_ocr",
-					"doc_id", e.DocID,
-					"reason", "no OCR text was extracted; archive is a plain PDF wrapper",
-					"hint", "install tesseract or ocrmypdf, then reingest")
-			} else {
-				log.Debug("post-ingest.route.heic.archive_plain", "doc_id", e.DocID,
-					"reason", "OCR engine extracted text without rewriting the PDF")
-			}
-		}
-		if err := h.updateDoc(ctx, e.DocID, content, archiveBlob, archiveSize); err != nil {
-			return err
-		}
-		return h.postContentSteps(ctx, log, e.DocID)
-	}
-
-	// Raster image path: wrap to a single-page PDF, run OCR, and merge
-	// with barcode tokens. Same "wrap → OCR" pattern as HEIC — standard
+	// Raster image path: wrap to PDF, run OCR, and merge barcode tokens. Standard
 	// (tessocr) and full (ocrmypdf) both work; the archive PDF stays
 	// as the preview when the OCR engine is absent. When magick is
 	// missing entirely, falls through to barcode-only content, which

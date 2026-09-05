@@ -58,6 +58,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Both container variants now produce real PDFs from images, including HEIC:
+  standard includes the missing ImageMagick PDF encoder, and full permits PDF
+  writing while keeping decoding restricted. The duplicate HEIC conversion
+  path is gone; non-PDF converter output is rejected. Explicitly rescan affected
+  images to repair older results; pipeline revisions and originals stay intact.
+- Mail smoke checks wait for ingestion, verify OCR text and parse the downloaded
+  HEIC archive instead of accepting any non-null blob or a fragile log match.
 - Demo visitor expiry also leaves CAS bytes for offline reclamation, preventing
   it from removing an in-flight upload or another document version's original.
   The existing stopped demo-volume reset remains the disk-reclamation path.
