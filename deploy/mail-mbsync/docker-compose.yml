@@ -11,19 +11,16 @@ services:
     profiles: [proton]
     build:
       context: ./bridge
-    image: suchi-mail-bridge:local
-    container_name: protonmail-bridge
     restart: unless-stopped
     volumes:
       - ./bridge-data:/root
     networks:
-      - mail
+      mail:
+        aliases: [protonmail-bridge]
 
   mbsync:
     build:
       context: ./mbsync
-    image: suchi-mail-mbsync:local
-    container_name: suchi-mail-mbsync
     restart: unless-stopped
     depends_on:
       # required: false lets non-Proton providers skip Bridge entirely.
@@ -46,10 +43,8 @@ services:
 
   suchi:
     build:
-      context: ../..
+      context: "${SUCHI_BUILD_CONTEXT:-../..}"
       target: standard
-    image: suchi:local-standard
-    container_name: suchi
     restart: unless-stopped
     depends_on:
       - mbsync
@@ -65,7 +60,7 @@ services:
       - ./suchi-data:/data
       - ./ingest:/ingest
     ports:
-      - "${SUCHI_PORT:-8000}:8000"
+      - "127.0.0.1:${SUCHI_PORT:-8000}:8000"
     networks:
       - mail
 

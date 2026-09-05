@@ -3,7 +3,7 @@
 #
 # Drives setup.sh non-interactively with the `generic` provider (dummy
 # host, no real IMAP), boots the compose stack, drops synthetic .eml
-# fixtures into ./ingest, and asserts suchi's fs-watch → post-ingest
+# fixtures into a temporary recipe, and asserts suchi's fs-watch → post-ingest
 # chain produces the expected doc count + attachment fanout + Message-Id
 # dedup + parent→child correspondent inheritance.
 #
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$ROOT"
+REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 
 PORT="${PORT:-8001}"
 EMAIL="canary@example.com"
@@ -32,14 +32,39 @@ if ss -ltn "sport = :$PORT" | grep -q LISTEN; then
     exit 1
 fi
 
+SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/suchi-mail-smoke.XXXXXXXX")"
+PROJECT="$(basename "$SCRATCH_DIR" | tr '[:upper:].' '[:lower:]-')"
+stack_attempted=0
+
+compose() {
+    COMPOSE_PROFILES='' SUCHI_BUILD_CONTEXT="$REPO_ROOT" SUCHI_PORT="$PORT" \
+        docker compose --project-name "$PROJECT" \
+        --project-directory "$SCRATCH_DIR" \
+        --file "$SCRATCH_DIR/docker-compose.yml" \
+        --env-file "$SCRATCH_DIR/.env" "$@"
+}
+
 cleanup() {
+    local status=$?
+    trap - EXIT
     echo
     echo "== cleanup =="
-    docker compose down 2>&1 | tail -3 || true
-    rm -rf .env config/.env templates/mbsyncrc.tmpl \
-           maildir ingest suchi-data bridge-data
+    if [ "$stack_attempted" -eq 1 ] && ! compose down --rmi local 2>&1 | tail -3; then
+        echo "teardown failed; temporary state retained at $SCRATCH_DIR (project $PROJECT)" >&2
+        exit 1
+    fi
+    cd "$ROOT"
+    rm -rf -- "$SCRATCH_DIR"
+    exit "$status"
 }
 trap cleanup EXIT
+
+# Copy recipe source only, never existing credentials, mail, or archive data.
+cp "$ROOT/docker-compose.yml" "$ROOT/setup.sh" "$SCRATCH_DIR/"
+cp -R "$ROOT/mbsync" "$ROOT/bridge" "$SCRATCH_DIR/"
+mkdir "$SCRATCH_DIR/templates"
+cp "$ROOT/templates/generic.mbsyncrc.tmpl" "$SCRATCH_DIR/templates/"
+cd "$SCRATCH_DIR"
 
 echo "== drive setup.sh (generic provider, dummy creds) =="
 # option 4 = generic, then host/port/ssl/user/pw/folders/max_msg/max_size/port
@@ -49,7 +74,8 @@ echo "  config/.env + .env rendered, template symlinked"
 
 echo
 echo "== boot stack =="
-docker compose up -d 2>&1 | tail -3
+stack_attempted=1
+compose up --build -d 2>&1 | tail -3
 
 echo
 echo "== wait for suchi /healthz =="
@@ -64,12 +90,12 @@ curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null
 
 echo
 echo "== bootstrap admin =="
-TOKEN=$(docker compose logs suchi 2>&1 \
+TOKEN=$(compose logs suchi 2>&1 \
     | grep 'localauth.setup.token_minted' \
     | grep -oP '"token":"\K[^"]+' | head -1)
 if [ -z "$TOKEN" ]; then
     echo "no setup token in suchi log" >&2
-    docker compose logs suchi 2>&1 | tail -20 >&2
+    compose logs suchi 2>&1 | tail -20 >&2
     exit 1
 fi
 curl -sf -X POST "http://127.0.0.1:$PORT/setup" \
@@ -81,27 +107,29 @@ echo "  admin created"
 
 echo
 echo "== activate fs-watch live =="
-API_TOKEN=$(curl -sf -X POST "http://127.0.0.1:$PORT/api/login" \
+curl -sf -X POST "http://127.0.0.1:$PORT/api/login" \
+    --cookie-jar "$SCRATCH_DIR/cookies" \
     -H 'Accept: application/json' -H 'Content-Type: application/json' \
     -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
-    | grep -oP '"token":"\K[^"]+')
+    >/dev/null
 curl -sf -X POST "http://127.0.0.1:$PORT/api/admin/settings/ingest" \
-    -H "Authorization: Token $API_TOKEN" \
+    --cookie "$SCRATCH_DIR/cookies" \
+    -H 'Sec-Fetch-Site: same-origin' \
     -H 'Content-Type: application/json' \
     -d "{\"fs_watch_dir\":\"/ingest\",\"fs_watch_owner_email\":\"$EMAIL\"}" \
     >/dev/null
 for i in $(seq 1 30); do
-    if docker compose logs suchi 2>&1 | grep -q 'fswatch.start'; then
+    if compose logs suchi 2>&1 | grep -q 'fswatch.start'; then
         echo "  fs-watch active after ${i}s without restarting suchi"
         break
     fi
     sleep 1
 done
-docker compose logs suchi 2>&1 | grep -q 'fswatch.start'
+compose logs suchi 2>&1 | grep -q 'fswatch.start'
 
 echo
 echo "== drop 9 synthetic fixtures =="
-go run ../../hack/emlfixtures -out ./ingest 2>&1 | tail -1
+(cd "$REPO_ROOT" && go run ./hack/emlfixtures -out "$SCRATCH_DIR/ingest") 2>&1 | tail -1
 
 # Also drop a HEIC fixture when the host has ImageMagick — the standard
 # image ships imagemagick-heic and the HEIC route feeds converted PDFs
@@ -168,7 +196,7 @@ enc_title=$(sqlite3 suchi-data/suchi.db \
     "SELECT title FROM documents WHERE email_message_id='<04-encoded@fixtures.suchi>'")
 
 dedup_fired=0
-docker compose logs suchi 2>&1 | grep -q 'post-ingest.email.dedup' && dedup_fired=1
+compose logs suchi 2>&1 | grep -q 'post-ingest.email.dedup' && dedup_fired=1
 
 check "email docs (parents)"            "$email_docs" "8"
 check "attachment child docs"           "$child_docs" "6"
@@ -189,6 +217,6 @@ if [ "$FAIL" -eq 0 ]; then
     echo "ALL ASSERTIONS PASSED"
 else
     echo "FAILURES ABOVE. Recent suchi log:"
-    docker compose logs suchi 2>&1 | tail -30
+    compose logs suchi 2>&1 | tail -30
     exit 1
 fi
