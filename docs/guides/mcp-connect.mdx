@@ -20,11 +20,11 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
 - A scoped API token. **Do NOT use an admin token.** Generate one via:
 
   ```bash
-  # If you have a session cookie (browser login), curl through the
-  # cookie jar — or use the endpoint from /api/tokens/:
+  # Copy the suchi_session cookie value from an authenticated browser session.
+  export SUCHI_SESSION='...'
   curl -sS -X POST http://127.0.0.1:8000/api/tokens/ \
     -H "Content-Type: application/json" \
-    --cookie-jar /tmp/suchi.jar --cookie /tmp/suchi.jar \
+    -H "Cookie: suchi_session=$SUCHI_SESSION" \
     -d '{"name":"mcp-desktop","scopes":"documents:read,documents:write"}'
   # → {"token":"...", "name":"mcp-desktop", "scopes":"..."}
   ```
@@ -145,18 +145,23 @@ insufficient scopes; generate a new one with `documents:read` and
 
 ## Revoking access
 
+Token management is session-only. Use Settings in the web app or an
+authenticated browser/OIDC session; the MCP token cannot list or revoke
+tokens itself. The commands below assume `SUCHI_SESSION` contains the signed-in
+browser's `suchi_session` cookie value.
+
 ```bash
-# List your tokens.
+# List your tokens with the session cookie.
 curl -sS http://127.0.0.1:8000/api/tokens/ \
-  -H "Authorization: Token $SUCHI_TOKEN" | jq
+  -H "Cookie: suchi_session=$SUCHI_SESSION" | jq
 
 # Revoke by id.
 curl -sS -X DELETE http://127.0.0.1:8000/api/tokens/7 \
-  -H "Authorization: Token $SUCHI_TOKEN"
+  -H "Cookie: suchi_session=$SUCHI_SESSION"
 ```
 
-Revocation is immediate. In-flight requests carrying the revoked
-token get 401 on their next call.
+Revocation is immediate. Subsequent requests carrying the revoked token fail
+authentication.
 
 ## Not covered here
 

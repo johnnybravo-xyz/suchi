@@ -1,7 +1,6 @@
-// /api/tokens/ — self-service API-token management for authenticated
-// callers. Works for both cookie sessions (browser login) and OIDC
-// sessions (post-callback) — anyone the auth chain resolves to a
-// Principal with a UserID can mint, list, and revoke their own tokens.
+// /api/tokens/ — session-only, self-service API-token management. Browser
+// cookie and OIDC sessions can mint, list, and revoke tokens; API-token
+// credentials are rejected at the route boundary.
 //
 // Sibling to /api/token/ (singular), which is the direct
 // credential-exchange endpoint (email+password → token). /api/tokens/
@@ -42,15 +41,10 @@ type CreateTokenRequest struct {
 
 // CreateToken — POST /api/tokens/.
 //
-// Authentication: any principal the auth chain resolves. Session
-// (cookie / OIDC) is the intended flow; existing-token callers work
-// too but that's less useful (they already have a token). Anonymous
-// callers get 401.
+// Authentication: browser cookie or OIDC session. API-token credentials are
+// rejected at the route boundary; anonymous callers get 401.
 //
-// A member can only mint scopes they'd be allowed to use themselves.
-// For today that means: sessions (browser + OIDC) can mint any scope
-// in the closed vocabulary; existing tokens can only mint scopes they
-// already carry (no privilege escalation via token daisy-chain).
+// Sessions can mint any scope in the closed vocabulary.
 func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil || p.UserID == 0 {
@@ -95,17 +89,6 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	scopes := strings.Join(scopeList, ",")
-	// If the caller is a token themselves, enforce the "no privilege
-	// escalation" rule: the new token's scopes must be a subset of the
-	// caller's. Session callers (Kind=="user") skip this — the session
-	// itself is unscoped and the operator granted it explicitly.
-	if p.Kind == "token" || p.Kind == PrincipalKindDemoScratch {
-		if !scopesSubset(scopes, p.Scopes) {
-			s.writeError(w, http.StatusForbidden, "scope_escalation",
-				"can't mint a token with scopes beyond the caller's own")
-			return
-		}
-	}
 
 	token, err := s.TokenIssuer(r.Context(), p.UserID, name, scopes)
 	if err != nil {
@@ -209,22 +192,4 @@ func (s *Server) DeleteToken(w http.ResponseWriter, r *http.Request) {
 		RequestID: logx.RequestID(r.Context()),
 	})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// scopesSubset reports whether every child scope is present in parent.
-func scopesSubset(child string, parent []string) bool {
-	parentSet := map[string]bool{}
-	for _, s := range parent {
-		parentSet[strings.TrimSpace(s)] = true
-	}
-	for _, want := range strings.Split(child, ",") {
-		want = strings.TrimSpace(want)
-		if want == "" {
-			continue
-		}
-		if !parentSet[want] {
-			return false
-		}
-	}
-	return true
 }

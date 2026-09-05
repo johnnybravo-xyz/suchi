@@ -161,8 +161,9 @@ These gates answer different questions:
 The public token scopes are `documents:read`, `documents:write`, and
 `events:read`; they are distinct grants, not a hierarchy. A feed-only token
 cannot read document content. Document-read access still needs a document ACL.
-The policy preserves deliberate exceptions such as admin-token metrics and
-scope-subset token creation; read [HTTP API](/api) before changing compatibility.
+Token management requires a browser/OIDC identity: API tokens cannot mint,
+list, or revoke credentials. Admin-token metrics remain a deliberate exception;
+read [HTTP API](/api) before changing compatibility.
 
 Preview/download aliases share `core/ui`'s blob-serving behavior, including
 object checks, reveal gates, ETags, and preview CSP. Thumbnails have their own

@@ -58,13 +58,14 @@ mutations require `documents:write`; the activity feed requires `events:read`.
 Write scope does not imply read scope, and scopes never bypass ownership,
 role, capability, or document-visibility checks.
 
-Account/settings administration, credential vaults, global taxonomy mutations,
-profile management, raw-original downloads (`raw=1`), and profiling require a
+Account/settings administration, API-token management, credential vaults,
+global taxonomy mutations, profile management, raw-original downloads (`raw=1`), and profiling require a
 browser/OIDC session. Unlisted routes fail closed for API tokens with
 `403 token_route_forbidden`; a listed route with a missing scope returns
-`403 insufficient_scope`. Token minting retains its subset-only rule for
-existing-token callers; `/metrics` retains admin-token support. New HTTP
-routes must explicitly declare their token access at the assembly boundary.
+`403 insufficient_scope`. API tokens cannot mint, list, or revoke tokens;
+use a browser/OIDC session for token management. `/metrics` retains admin-token
+support. New HTTP routes must explicitly declare their token access at the
+assembly boundary.
 
 ## Endpoints (selected — see index above for the full list)
 

@@ -59,14 +59,16 @@ curl -sS -X POST http://127.0.0.1:8000/api/token/ \
 ```
 
 This generates a token with the default `documents:read,documents:write`
-scopes. Use `/api/tokens/` if you need narrower scopes.
+scopes. Use `/api/tokens/` from a browser or OIDC session if you need narrower
+scopes.
 
 ### From OIDC
 
 If OIDC is enabled, complete the OIDC login flow in a browser first
 (cookies get set). Then use the "browser session" recipe above —
-`/api/tokens/` accepts any authenticated principal, cookie or token
-alike. OIDC deployments do not expose the local password-exchange endpoint.
+`/api/tokens/` accepts browser and OIDC sessions, while API-token credentials
+are intentionally rejected. OIDC deployments do not expose the local
+password-exchange endpoint.
 
 ## 2. Attach the token to requests
 
@@ -125,9 +127,8 @@ The closed scope vocabulary:
 | `documents:write` | Document mutations, approval resolution, and share-link creation; pair with `documents:read` for both       |
 | `events:read`     | Read the activity-event feed                                                                                  |
 
-Session-authed callers (browser cookie / OIDC) can mint any scope.
-Token-authed callers can only generate tokens whose scopes are a
-**subset** of their own — no privilege escalation via daisy-chain.
+Browser and OIDC sessions can mint any scope in this vocabulary. API tokens
+cannot call the token-management endpoints.
 
 Best practice: generate the narrowest possible scope. A backup cron that only
 reads gets `documents:read`; an importer that files new documents gets
@@ -146,24 +147,28 @@ or remove local-password access after establishing a supported OIDC login.
 
 ## 6. Rotation
 
-Tokens have no built-in expiry. Rotate by generating a new one and
-deleting the old:
+Tokens have no built-in expiry. Rotate from an authenticated browser or OIDC
+session by generating a new one and deleting the old:
+
+The commands below assume `SUCHI_SESSION` contains the signed-in browser's
+`suchi_session` cookie value.
 
 ```bash
 # Generate the new one.
 NEW=$(curl -sS -X POST "$SUCHI_URL/api/tokens/" \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Token $SUCHI_TOKEN" \
+  -H "Cookie: suchi_session=$SUCHI_SESSION" \
   -d '{"name":"backup-cron-2026-q3","scopes":"documents:read"}' \
   | jq -r .token)
 
 # Deploy $NEW to the integration.
 # When you're confident it's active, delete the old:
 curl -sS "$SUCHI_URL/api/tokens/" \
-  -H "Authorization: Token $NEW" | jq '.results[] | select(.name=="backup-cron")'
+  -H "Cookie: suchi_session=$SUCHI_SESSION" \
+  | jq '.results[] | select(.name=="backup-cron")'
 # copy the id, then:
 curl -sS -X DELETE "$SUCHI_URL/api/tokens/7" \
-  -H "Authorization: Token $NEW"
+  -H "Cookie: suchi_session=$SUCHI_SESSION"
 ```
 
 Recommended cadence:
@@ -178,20 +183,19 @@ Recommended cadence:
 
 Two paths:
 
-- **Self-service**: `DELETE /api/tokens/{id}` from any of the
-  token's own future calls, or from the user's browser session.
-- **Admin override**: an admin can revoke any token via the same
-  endpoint.
+- **Self-service**: `DELETE /api/tokens/{id}` from the user's browser or OIDC
+  session.
+- **Admin override**: an admin browser or OIDC session can revoke any token via
+  the same endpoint.
 
-Revocation is immediate. Any in-flight request carrying the
-revoked token will fail with 401 on the next `auth_tokens` lookup
-(no cache — every request re-checks).
+Revocation is immediate. Subsequent requests carrying the revoked token fail
+authentication because every request checks the token table without a cache.
 
 ## 8. Audit trail
 
-Every generation + revocation lands in `audit_events` with the actor
-(`user:5` or `token:42`), action (`api_token.create` /
-`api_token.revoke`), and request id.
+Every generation and revocation lands in `audit_events` with the session user
+as actor, the `api_token.create` or `api_token.revoke` action, and the request
+id.
 
 Every mutation performed by a token is audit-logged with
 `Actor.kind = token`, `Actor.user_id = <the owner>`. When you're

@@ -78,8 +78,9 @@ Notable user-visible changes to Suchi are recorded here.
   bind loopback, and retain scratch data if teardown fails.
 - API tokens now enforce a fail-closed route policy. Narrow document/event
   tokens cannot inherit account/settings administration from an admin owner;
-  profiling and raw-original downloads require a session. Admin-token metrics
-  and subset-only token minting remain supported.
+  profiling and raw-original downloads require a session. Token management is
+  session-only, removing token delegation and cross-user credential revocation
+  through narrow admin tokens. Admin-token metrics remain supported.
 - Model-provider logs retain only the endpoint host, never URL paths or query
   strings that may contain tenant or credential material.
 

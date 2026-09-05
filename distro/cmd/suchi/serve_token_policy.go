@@ -22,9 +22,6 @@ var tokenRouteScopes = map[string]string{
 	"POST /api/demo/session":         "",
 	"POST /api/demo/session/upgrade": "",
 	"GET /api/whoami":                "",
-	"GET /api/tokens/":               "",
-	"POST /api/tokens/":              "",
-	"DELETE /api/tokens/{id}":        "",
 	// Metrics still requires the administrator role in its handler.
 	"GET /metrics":                     "",
 	"GET /healthz":                     "",

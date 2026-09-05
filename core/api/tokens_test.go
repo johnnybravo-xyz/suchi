@@ -9,19 +9,6 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-func TestScopesSubsetUsesExactGranularScopes(t *testing.T) {
-	parent := []string{auth.ScopeDocumentsRead, auth.ScopeDocumentsWrite}
-	if !scopesSubset(auth.ScopeDocumentsRead, parent) {
-		t.Fatal("exact child scope should be allowed")
-	}
-	if scopesSubset(auth.ScopeEventsRead, parent) {
-		t.Fatal("unheld child scope should be rejected")
-	}
-	if scopesSubset(auth.ScopeDocumentsRead, []string{"read", "write"}) {
-		t.Fatal("coarse scopes must not expand")
-	}
-}
-
 func TestReadOnlyTokenCannotUseMCPWrites(t *testing.T) {
 	s := &Server{}
 	principal := &pluginapi.Principal{

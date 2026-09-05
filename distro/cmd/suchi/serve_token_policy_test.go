@@ -41,11 +41,17 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES
 		(1,'admin@example.test','Admin','admin',0,0),(2,'member@example.test','Member','member',0,0);
 		INSERT INTO documents(id,owner_id,original_blob,original_size,title,content,jd_category_id,created_at,updated_at)
-		VALUES(1,2,'fixture',0,'Private fixture','PRIVATE_OCR_MARKER',(SELECT id FROM jd_categories LIMIT 1),0,0)`)
+		VALUES(1,2,'fixture',0,'Private fixture','PRIVATE_OCR_MARKER',(SELECT id FROM jd_categories LIMIT 1),0,0);
+		INSERT INTO api_tokens(id,user_id,name,token_hash,scopes,created_at)
+		VALUES(2,2,'member-device','fixture-token-hash','documents:read',0)`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &api.Server{DB: d, Log: log, Authz: authz.ACLAuthorizer{DB: d}, PasswordHasher: localauth.HashPassword}
+	local, err := localauth.New(ctx, d, log, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &api.Server{DB: d, Log: log, Authz: authz.ACLAuthorizer{DB: d}, PasswordHasher: localauth.HashPassword, TokenIssuer: local.IssueAPIToken}
 	mux := http.NewServeMux()
 	s.Register(mux)
 	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), log)
@@ -59,6 +65,13 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		{name: "scope does not replace document ACL", method: "GET", path: "/api/documents/1", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 3, want: 403},
 		{name: "admin read token cannot create account", method: "POST", path: "/api/admin/users", body: `{"email":"blocked@example.test","password":"test-password-123","role":"admin"}`, scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "admin session can create account", method: "POST", path: "/api/admin/users", body: `{"email":"allowed@example.test","password":"test-password-123","role":"admin"}`, role: "admin", kind: "user", userID: 1, want: 201},
+		{name: "admin token cannot list credentials", method: "GET", path: "/api/tokens/", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "admin token cannot revoke member credential", method: "DELETE", path: "/api/tokens/2", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "token cannot delegate itself", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 403},
+		{name: "scratch cannot mint credentials", method: "POST", path: "/api/tokens/", body: `{"name":"blocked-token","scopes":"documents:read"}`, scope: auth.ScopeDocumentsRead, role: "member", kind: "demo-scratch", userID: 2, want: 403},
+		{name: "member session can mint credential", method: "POST", path: "/api/tokens/", body: `{"name":"allowed-token","scopes":"documents:read"}`, role: "member", kind: "user", userID: 2, want: 201},
+		{name: "admin session can list credentials", method: "GET", path: "/api/tokens/", role: "admin", kind: "user", userID: 1, want: 200},
+		{name: "admin session can revoke member credential", method: "DELETE", path: "/api/tokens/2", role: "admin", kind: "user", userID: 1, want: 204},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
@@ -83,6 +96,15 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	}
 	if blocked != 0 || allowed != 1 {
 		t.Fatalf("persisted accounts: blocked=%d allowed=%d", blocked, allowed)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE name='blocked-token'`).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE name='allowed-token'`).Scan(&allowed); err != nil {
+		t.Fatal(err)
+	}
+	if blocked != 0 || allowed != 1 {
+		t.Fatalf("persisted tokens: blocked=%d allowed=%d", blocked, allowed)
 	}
 }
 
@@ -113,7 +135,7 @@ func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 		{"profiling session only", "GET", "/debug/pprof/", auth.ScopeDocumentsRead, "admin", "token", 403},
 		{"metrics admin token compatibility", "GET", "/metrics", auth.ScopeEventsRead, "admin", "token", 204},
 		{"metrics remains admin only", "GET", "/metrics", auth.ScopeEventsRead, "member", "token", 403},
-		{"token mint handler retains subset policy", "POST", "/api/tokens/", auth.ScopeDocumentsRead, "member", "token", 204},
+		{"token management session only", "POST", "/api/tokens/", auth.ScopeDocumentsRead, "member", "token", 403},
 		{"chat reads documents", "POST", "/api/chat", auth.ScopeDocumentsRead, "member", "token", 204},
 		{"chat denies events token", "POST", "/api/chat", auth.ScopeEventsRead, "member", "token", 403},
 		{"approval registration write compatibility", "POST", "/api/approvals/definitions", auth.ScopeDocumentsWrite, "admin", "token", 204},
