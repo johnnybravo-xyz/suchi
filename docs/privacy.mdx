@@ -63,6 +63,12 @@ document text. Audit events record metadata changes and request IDs, not
 document content or plaintext credentials. Health and metrics endpoints expose
 operational state, not archive content.
 
+HTTP access logs record matched route patterns, not raw paths or query strings;
+share-link credentials are omitted from audit payloads and downstream sinks.
+Older builds recorded share bearers in access logs and creation audit records.
+Review retained copies and revoke affected passwordless shares if those records
+left the archive's trusted operator boundary; upgrading does not erase old logs.
+
 Unexpected server and LLM-provider failures are sanitized before reaching the
 UI. A mailbox owner or administrator running **Test connection** receives the
 mail provider's connection or authentication diagnostic so they can repair the

@@ -79,6 +79,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Share-link bearers are no longer copied into creation audit events or HTTP
+  access logs. Logs and metrics retain matched routes across authentication.
 - Signing out clears retained archive data; delayed reads, profile refreshes,
   demo upgrades, and queued uploads cannot carry work into another account.
 - Mail and AnyDoc smoke checks now own isolated temporary data and containers,

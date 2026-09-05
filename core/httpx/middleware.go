@@ -95,18 +95,20 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// AccessLog emits one info line per request with method, path, status,
-// bytes, and duration. Log body is intentionally spartan — the log is a
-// forensic tool, not a metrics one; /metrics owns the counts.
+// AccessLog records route patterns, never URLs containing share credentials.
 func AccessLog(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			sw := &statusWriter{ResponseWriter: w, status: 200}
 			next.ServeHTTP(sw, r)
+			path := muxPatternPath(r.Pattern)
+			if path == "" {
+				path = "unmatched"
+			}
 			log.LogAttrs(r.Context(), slog.LevelInfo, "http.access",
 				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
+				slog.String("path", path),
 				slog.Int("status", sw.status),
 				slog.Int64("bytes", sw.bytes),
 				slog.Duration("took", time.Since(start)),
@@ -140,6 +142,7 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			original := r
 			p, err := chain.Authenticate(r)
 			if err != nil {
 				log.LogAttrs(r.Context(), slog.LevelInfo, "auth.reject",
@@ -151,6 +154,9 @@ func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 				r = r.WithContext(auth.WithPrincipal(r.Context(), p))
 			}
 			next.ServeHTTP(w, r)
+			// Authentication copies the request; propagate its matched route
+			// back to the outer access log and metrics middleware.
+			original.Pattern = r.Pattern
 		})
 	}
 }

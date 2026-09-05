@@ -228,7 +228,7 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		Action:     "share_link.create",
 		ObjectKind: "share_link",
 		ObjectID:   id,
-		After:      map[string]any{"token": token, "doc_ids": in.DocIDs, "label": in.Label},
+		After:      map[string]any{"doc_ids": in.DocIDs, "label": in.Label},
 		RequestID:  r.Header.Get("X-Request-Id"),
 	})
 	s.writeJSON(w, http.StatusCreated, map[string]any{

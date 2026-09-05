@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,39 @@ func TestShareLinks_cap_gate(t *testing.T) {
 		`{"doc_ids":[42]}`, memberPrincipal(6))
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("cap-holder should not see 403, got body=%s", rec.Body.String())
+	}
+}
+
+func TestShareLinkAuditOmitsBearerCredential(t *testing.T) {
+	s := newStatsServer(t)
+	category := seedStatsJDInbox(t, s.DB)
+	docID := seedStatsDoc(t, s.DB, 1, "share-audit-fixture", "Audit fixture", category, false, 0)
+	response := shareCall(t, s, "POST", "/api/share_links/",
+		`{"doc_ids":[`+itoa(docID)+`],"label":"audit fixture"}`,
+		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID    int64  `json:"id"`
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Token == "" {
+		t.Fatal("share response must return its credential")
+	}
+	var after string
+	if err := s.DB.Read.QueryRow(`SELECT after_json FROM audit_events
+		WHERE action='share_link.create' AND object_id=?`, created.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(after, created.Token) || strings.Contains(after, `"token"`) {
+		t.Fatalf("share credential leaked into audit: %s", after)
+	}
+	if !strings.Contains(after, `"doc_ids"`) || !strings.Contains(after, `"label":"audit fixture"`) {
+		t.Fatalf("useful audit metadata missing: %s", after)
 	}
 }
 

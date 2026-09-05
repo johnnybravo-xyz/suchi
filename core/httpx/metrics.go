@@ -3,7 +3,6 @@ package httpx
 import (
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,10 +71,7 @@ func (m *Metrics) HTTPInstrument(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		route := r.Pattern
-		if _, path, ok := strings.Cut(route, " "); ok {
-			route = path
-		}
+		route := muxPatternPath(r.Pattern)
 		if route == "" {
 			route = "unmatched"
 		}

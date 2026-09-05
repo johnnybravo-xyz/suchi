@@ -178,7 +178,9 @@ session-only surface.
 
 Mailbox secrets, OAuth caches, PDF passwords, and model keys are sealed.
 Browser session identifiers and API tokens are stored as digests. Audit events
-must exclude document bodies and credentials. See [Permissions](/permissions)
+must exclude document bodies and credentials, including share bearers. Access
+logs and metrics use matched route patterns; request copies must propagate that
+pattern back to the outer middleware. See [Permissions](/permissions)
 and [Privacy](/privacy) for the user-facing contract.
 
 ## Retrieval, filing, and human review
