@@ -251,29 +251,24 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 				return err
 			}
 
-			res, err := tx.ExecContext(ctx, `
+			var docID int64
+			err = tx.QueryRowContext(ctx, `
 				INSERT INTO documents(
 					owner_id, original_blob, original_size, title, mime_type,
 					jd_category_id, correspondent_id, document_type_id,
 					sensitivity, languages,
 					added_at, created_at, updated_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT DO NOTHING
+				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
 				jdCatID, corrID, dtID,
 				nullString(f.Sensitivity), f.Language,
-				now, now, now)
-			if err != nil {
-				return err
-			}
-			docID, err := res.LastInsertId()
-			if err != nil {
-				return err
-			}
-			if docID == 0 {
-				// Already seeded (ON CONFLICT hit). Skip tag + job wiring
-				// so re-runs stay silent.
+				now, now, now).Scan(&docID)
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil
+			}
+			if err != nil {
+				return err
 			}
 			created = true
 
