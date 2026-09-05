@@ -2,7 +2,9 @@
   import { setupState } from '../lib/api.js'
   import { session } from '../lib/session.svelte.js'
   import AccountSettings from './AccountSettings.svelte'
-  import ArchiveSettings from './ArchiveSettings.svelte'
+  import Lazy from '../lib/Lazy.svelte'
+
+  const loadArchive = () => import('./ArchiveSettings.svelte')
 
   let {
     notify, initialTab = '', initialSection = '', onTaxonomyChanged,
@@ -58,7 +60,7 @@
         <div class="skel" style="width:76%"></div>
       </div>
     {:else if !setupNeedsAttention}
-      <ArchiveSettings {notify} {initialSection} {onTaxonomyChanged} setupSnapshot={setup} />
+      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged, setupSnapshot: setup }} />
     {/if}
   {:else}
     <AccountSettings {notify} />

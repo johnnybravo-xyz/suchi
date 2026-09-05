@@ -56,41 +56,62 @@ The built tree is committed so contributors changing only Go do not need a
 JavaScript toolchain. A UI change is incomplete when `ui/dist` differs from the
 embedded copy.
 
-The beta build groups lazy routes by the work a person is doing. The small route
-entry files under `ui/src/lib` make those boundaries explicit without custom
-bundler rules. Keep the shell at or below 35 KB gzip and remeasure every chunk
-after UI changes.
+`App.svelte` imports each route directly through the existing `Lazy.svelte`
+component. There are no route re-export wrappers or custom chunk rules: Vite
+extracts shared dependencies. My account defers archive configuration and loads
+mailbox code only for members who can manage mailboxes. Keep the shell at or
+below 35 KB gzip and remeasure the actual route dependency set after UI changes.
 
-Current production sizes, measured with system `gzip`:
+Current production JavaScript sizes, measured with system `gzip -nc`. Route
+rows include their static dependencies **in addition to the already loaded
+shell**, with an otherwise empty cache:
 
-| Chunk | Screens or purpose | JavaScript bytes | CSS bytes |
-| --- | --- | ---: | ---: |
-| Shell | Navigation, Dashboard, and login | 34,306 | 4,944 |
-| Document work | Documents, document detail, and Upload | 16,578 | 0 |
-| Search | Search | 2,481 | 0 |
-| Organize | Views, Calendar, and Trash | 7,686 | 2,759 |
-| Workflow | Approvals and Automations | 11,125 | 1,953 |
-| Configuration | Settings and Setup | 32,457 | 4,416 |
-| Demo | Demo workspace | 2,360 | 1,445 |
-| Archive research | On-demand research drawer | 5,269 | 2,352 |
-| Query helpers | Shared by Documents and Search | 467 | 0 |
-| Date helpers | Shared by Calendar and Approvals | 500 | 0 |
-| **All chunks** | Complete production asset set | **113,229** | **17,869** |
+| Entry | Raw bytes | Gzip bytes |
+| --- | ---: | ---: |
+| Shell: navigation, Dashboard, login | 95,565 | 34,672 |
+| Documents / Inbox | 25,011 | 9,191 |
+| Document detail | 25,944 | 9,000 |
+| Upload | 6,432 | 2,992 |
+| Search | 5,807 | 2,807 |
+| Views | 14,428 | 5,282 |
+| Calendar | 9,222 | 3,805 |
+| Trash | 5,536 | 2,639 |
+| Approvals | 18,701 | 6,708 |
+| Automations | 17,941 | 5,969 |
+| My account, without mailbox capability | 12,677 | 4,671 |
+| Archive configuration, including its Settings entry | 107,256 | 35,650 |
+| Setup | 66,502 | 22,267 |
+| Demo | 5,583 | 2,343 |
+| Archive research drawer | 13,616 | 5,276 |
+| **All unique JavaScript chunks** | **347,929** | **124,334** |
 
-The initial application transfer is the 34,306-byte shell plus 4,944 bytes of
-shell CSS. Route CSS loads with its lazy JavaScript chunk; a route transfer also
-includes its small shared helper where listed. These are transfer-size
-measurements, not browser-memory or container-size claims. The complete
-embedded SPA tree is 426,030 bytes before HTTP compression, but ordinary
-navigation fetches only the shell, the selected route group, and their listed
-dependencies.
+The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
+20,338 gzip bytes. The complete embedded SPA tree is 434,470 raw bytes. Shared
+chunks are cached across navigation; do not sum the route rows to estimate the
+complete build. A mailbox-capable member additionally loads 10,540 gzip bytes
+of mailbox JavaScript on My account.
+
+Smaller route transfers trade some whole-build compression for not fetching
+unrelated screens. Compared with the former grouped entries at the same pins,
+Documents needs 48% less route JavaScript, Upload 83% less, and ordinary My
+account 86% less. The sum of all compressed JavaScript is 8.3% larger, and the
+shell grows by 197 bytes. These are transfer-size measurements, not browser
+memory or startup-latency claims.
+
+```sh
+make ui
+for asset in ui/dist/assets/*.js; do
+  printf '%s ' "$asset"
+  gzip -nc "$asset" | wc -c
+done
+```
 
 ## Routing and loading
 
 `router.svelte.js` tracks the URL hash and exposes route state. `App.svelte`
-selects the route component and owns the persistent navigation. Larger routes
-load through `Lazy.svelte`, keeping the startup bundle small without splitting
-every component into its own chunk.
+selects the route component and owns the persistent navigation. Routes load
+through `Lazy.svelte`; keep ordinary nested components together unless a
+conditional feature would otherwise force unrelated code into the request.
 
 New screens should use a stable path, support browser back and forward, and
 have a useful narrow-screen layout. Avoid adding a second router or navigation

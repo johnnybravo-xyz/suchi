@@ -1,0 +1,1 @@
+import{Un as e}from"./index-hKRpG1w3.js";var t=e({revision:0});function n(){t.revision++}export{t as n,n as t};

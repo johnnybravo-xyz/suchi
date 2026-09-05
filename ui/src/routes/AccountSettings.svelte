@@ -5,7 +5,9 @@
   import { fmtDate } from '../lib/format.js'
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
-  import EmailAccounts from '../lib/EmailAccounts.svelte'
+  import Lazy from '../lib/Lazy.svelte'
+
+  const loadMailboxes = () => import('../lib/EmailAccounts.svelte')
 
   let { notify } = $props()
   let tokens = $state([])
@@ -205,7 +207,7 @@
           <p>Connected inboxes and their latest sync status.</p>
         </div>
       </div>
-        <EmailAccounts {notify} viewerRole={session.user?.role} />
+        <Lazy load={loadMailboxes} props={{ notify, viewerRole: session.user?.role }} />
     </section>
   {/if}
 

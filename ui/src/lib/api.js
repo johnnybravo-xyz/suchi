@@ -15,22 +15,6 @@ class ApiError extends Error {
 
 async function req(method, path, body, opts = {}) {
   const revision = sessionRevision
-  const res = await sendOnce(method, path, body, opts)
-  // `_noUpgrade` prevents recursion when the upgrade endpoint refuses a token.
-  if (res.status === 403 && res.data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
-      revision === sessionRevision) {
-    const upgraded = await upgradeDemoSession()
-    if (upgraded && revision === sessionRevision) {
-      return req(method, path, body, { ...opts, _noUpgrade: true })
-    }
-  }
-  if (res.status === 204) return null
-  if (!res.ok) throw new ApiError(res.status, res.data?.code,
-    res.data?.message || res.data?.detail || res.data?.error, res.data)
-  return res.data
-}
-
-async function sendOnce(method, path, body, opts) {
   const headers = { ...(opts.headers || {}) }
   let payload = body
   if (body !== undefined && !(body instanceof FormData)) {
@@ -40,13 +24,21 @@ async function sendOnce(method, path, body, opts) {
   const r = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal: opts.signal })
   const isJSON = (r.headers.get('content-type') || '').includes('json')
   const data = isJSON ? await r.json().catch(() => null) : null
-  return { status: r.status, ok: r.ok, data }
+  // At most one retry, and never after the caller's account changes.
+  if (r.status === 403 && data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
+      revision === sessionRevision) {
+    const upgraded = await upgradeDemoSession()
+    if (upgraded && revision === sessionRevision) {
+      return req(method, path, body, { ...opts, _noUpgrade: true })
+    }
+  }
+  if (r.status === 204) return null
+  if (!r.ok) throw new ApiError(r.status, data?.code,
+    data?.message || data?.detail || data?.error, data)
+  return data
 }
 
-export async function mintDemoSession() {
-  return api.post('/api/demo/session')
-}
-
+export const mintDemoSession = () => api.post('/api/demo/session')
 export const getDemoMode = () => api.get('/api/demo/mode')
 
 function upgradeDemoSession() {

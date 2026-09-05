@@ -12,27 +12,20 @@
   import BrandMark from './lib/BrandMark.svelte'
   import SetupReminder from './lib/SetupReminder.svelte'
 
-  const documentRoutes = () => import('./lib/documentRoutes.js')
-  const searchRoute = () => import('./lib/searchRoute.js')
-  const organizeRoutes = () => import('./lib/organizeRoutes.js')
-  const workflowRoutes = () => import('./lib/workflowRoutes.js')
-  const configurationRoutes = () => import('./lib/configurationRoutes.js')
-  const demoRoute = () => import('./lib/demoRoute.js')
-  const bundled = (load, name) => () => load().then(m => ({ default: m[name] }))
   const lazyRoutes = {
-    documents:   bundled(documentRoutes, 'Documents'),
-    detail:      bundled(documentRoutes, 'DocumentDetail'),
-    upload:      bundled(documentRoutes, 'Upload'),
-    uploadBox:   bundled(documentRoutes, 'UploadBox'),
-    search:      bundled(searchRoute, 'Search'),
-    trash:       bundled(organizeRoutes, 'Trash'),
-    views:       bundled(organizeRoutes, 'Views'),
-    calendar:    bundled(organizeRoutes, 'Calendar'),
-    tasks:       bundled(workflowRoutes, 'Tasks'),
-    automations: bundled(workflowRoutes, 'Automations'),
-    settings:    bundled(configurationRoutes, 'Settings'),
-    setup:       bundled(configurationRoutes, 'Setup'),
-    demo:        bundled(demoRoute, 'Demo'),
+    documents:   () => import('./routes/Documents.svelte'),
+    detail:      () => import('./routes/DocumentDetail.svelte'),
+    upload:      () => import('./routes/Upload.svelte'),
+    uploadBox:   () => import('./lib/UploadBox.svelte'),
+    search:      () => import('./routes/Search.svelte'),
+    trash:       () => import('./routes/Trash.svelte'),
+    views:       () => import('./routes/Views.svelte'),
+    calendar:    () => import('./routes/Calendar.svelte'),
+    tasks:       () => import('./routes/Tasks.svelte'),
+    automations: () => import('./routes/Automations.svelte'),
+    settings:    () => import('./routes/Settings.svelte'),
+    setup:       () => import('./routes/Setup.svelte'),
+    demo:        () => import('./routes/Demo.svelte'),
   }
 
   let mobileNavOpen = $state(false)

@@ -26,6 +26,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- The web app imports screens directly and defers archive/mailbox configuration,
+  removing six route wrappers. At the same dependency pins, Documents loads 48%
+  less route JavaScript, Upload 83% less, and My account without mailbox access
+  86% less. Finer chunks increase the all-routes compressed total by 8.3%.
 - `doctor` drops a misleading shard-capacity sample whose threshold cannot
   occur in the hash-prefix layout. Explicit CAS integrity checks are unchanged.
 - Reviewed tool and dependency pins advance to compatible previous-stable
