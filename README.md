@@ -90,7 +90,7 @@ types](docs/formats.mdx) for the exact routing and bare-metal dependencies.
 
 ## Development
 
-The workspace requires Go 1.26.7 or newer; `plugin-api` remains compatible
+The workspace requires Go 1.27.0 or newer; `plugin-api` remains compatible
 with Go 1.24.
 SPA and documentation development require Bun.
 

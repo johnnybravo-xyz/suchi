@@ -8,7 +8,7 @@ TEST_FLAGS ?= -timeout 60s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
-MINT_VERSION := 4.2.817
+MINT_VERSION := 4.2.874
 
 help:
 	@printf '%s\n' \

@@ -97,9 +97,14 @@ curl -sf -X POST "$BASE/setup" \
      -d "{\"token\":\"$TOKEN\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
      >/dev/null
 
-API_TOKEN=$(curl -s -X POST "$BASE/api/login" \
-    -H 'Accept: application/json' -H 'Content-Type: application/json' \
-    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+curl -fsS -X POST "$BASE/api/login" \
+    --cookie-jar "$SMOKE_DIR/admin.cookies" \
+    -H 'Content-Type: application/json' \
+    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/dev/null
+API_TOKEN=$(curl -fsS -X POST "$BASE/api/tokens" \
+    --cookie "$SMOKE_DIR/admin.cookies" \
+    -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' \
+    -d '{"name":"anydoc-smoke","scopes":"documents:read,documents:write"}' \
     | grep -oP '"token":"\K[^"]+')
 if [ -z "$API_TOKEN" ]; then
   echo "no API token"; exit 1

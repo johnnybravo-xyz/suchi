@@ -30,7 +30,7 @@ jobs:
       LANE: ${{ matrix.lane }}
       SMOKE_PASSWORD: suchi-smoke-password
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Build the ${{ matrix.lane }} image
         run: docker build --target ${{ matrix.target }} -t suchi:smoke-${{ matrix.lane }} .
@@ -100,13 +100,19 @@ jobs:
               -H 'Content-Type: application/json' \
               -d "{\"token\":\"$TOKEN\",\"email\":\"smoke@ex.dev\",\"password\":\"$SMOKE_PASSWORD\"}"
 
-      - name: Login → API token
+      - name: Login and create scoped API token
         run: |
-          API_TOKEN=$(curl -s -X POST http://127.0.0.1:$HOST_PORT/api/login \
-              -H 'Accept: application/json' \
+          curl -fsS -X POST http://127.0.0.1:$HOST_PORT/api/login \
+              --cookie-jar /tmp/admin.cookies \
               -H 'Content-Type: application/json' \
-              -d "{\"email\":\"smoke@ex.dev\",\"password\":\"$SMOKE_PASSWORD\"}" \
+              -d "{\"email\":\"smoke@ex.dev\",\"password\":\"$SMOKE_PASSWORD\"}" >/dev/null
+          API_TOKEN=$(curl -fsS -X POST http://127.0.0.1:$HOST_PORT/api/tokens \
+              --cookie /tmp/admin.cookies \
+              -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' \
+              -d '{"name":"image-smoke","scopes":"documents:read,documents:write"}' \
               | grep -oP '"token":"\K[^"]+')
+          test -n "$API_TOKEN"
+          echo "::add-mask::$API_TOKEN"
           echo "API_TOKEN=$API_TOKEN" >> $GITHUB_ENV
 
       - name: Upload PDF and Outlook fixtures
@@ -188,7 +194,7 @@ jobs:
         run: |
           for path in "/api/tasks/?state=done" "/api/tags/" "/api/automations/"; do
               curl -sf "http://127.0.0.1:$HOST_PORT$path" \
-                  -H "Authorization: Token $API_TOKEN" \
+                  --cookie /tmp/admin.cookies \
                   | python3 -c "import json,sys; r=json.load(sys.stdin).get('results'); sys.exit(0 if isinstance(r, list) else 1)" \
                 || (echo "$path did not return results:list"; exit 1)
               echo "$path OK"
@@ -210,7 +216,7 @@ jobs:
 
       - name: Upload container logs on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: smoke-${{ matrix.lane }}-logs
           path: /tmp/suchi-${{ matrix.lane }}.log

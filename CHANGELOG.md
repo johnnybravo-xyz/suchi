@@ -26,6 +26,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Reviewed tool and dependency pins advance to compatible previous-stable
+  releases, including Go 1.27.0, Bun 1.4.1, AnyDoc 0.2.3, and SQLite 1.57.
+  CI actions use immutable commits, and AnyDoc builds honor its Cargo lockfile.
 - Release preflight now includes fresh code/UI checks and advisory scans.
   Artifacts-only branch builds use legal snapshot names and skip signing;
   image publication waits for the binary builds.

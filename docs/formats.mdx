@@ -321,7 +321,7 @@ from the anydoc repo into a static musl binary and installs it as
 
 **`examples/convert.rs` is not upstream-guaranteed as a stable CLI.**
 It's an example — the argv shape could shift between anydoc releases.
-As of `v0.2.2` it's `convert <file> [-f <fmt>] [-o <out>]
+As of `v0.2.3` it's `convert <file> [-f <fmt>] [-o <out>]
 [--assets <dir>]`. suchi shells out with just `anydoc <file>`, reading
 stdout for Markdown. If a future upstream tag changes this shape,
 suchi's extractor at `core/pipeline/anydoc/anydoc.go` needs a matching

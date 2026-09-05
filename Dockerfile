@@ -4,16 +4,17 @@
 #
 # Toolchain images are digest-pinned so a release can be rebuilt from its tag.
 
+# Hold Rust until N-1 includes the 1.98.1 vtable-miscompilation fix.
 ARG RUST_IMAGE=rust:1.97.1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
-ARG ALPINE_IMAGE=alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-ARG GO_IMAGE=golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468
-ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+ARG ALPINE_IMAGE=alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+ARG GO_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
+ARG DEBIAN_IMAGE=debian:bookworm-20260803-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # Build the pinned anydoc converter once for both runtime images. The readable
 # tag is audited by hack/pin-bumper.sh; the resolved commit controls checkout.
 FROM ${RUST_IMAGE} AS anydoc-build
-ARG ANYDOC_TAG=v0.2.2
-ARG ANYDOC_COMMIT=c9d4eee742f66dd79c45e02c93f75996e671c2c4
+ARG ANYDOC_TAG=v0.2.3
+ARG ANYDOC_COMMIT=bf3d33e61731580d1ee1c6a85e56093d715a21a6
 ARG TARGETARCH
 
 RUN apk add --no-cache git musl-dev pkgconfig
@@ -27,7 +28,7 @@ RUN git init . && \
 
 RUN --mount=type=cache,id=anydoc-cargo-${TARGETARCH},target=/var/cache/cargo,sharing=locked \
     --mount=type=cache,id=anydoc-target-${TARGETARCH},target=/src/target,sharing=locked \
-    CARGO_HOME=/var/cache/cargo cargo build --release --example convert && \
+    CARGO_HOME=/var/cache/cargo cargo build --locked --release --example convert && \
     cp target/release/examples/convert /out-anydoc
 
 RUN strip /out-anydoc && \
