@@ -38,7 +38,9 @@ type Config struct {
 	// feed can't push storage growth without an operator conscious
 	// decision. 0 disables pruning.
 	AuditRetentionDays int
-	OCRLanguages       []string
+	// TODO(ocr-languages): discover installed language data, validate selections,
+	// and test mixed-script OCR (including eng+hin). See docs/formats.mdx.
+	OCRLanguages []string
 
 	// DevMode gates a small pile of DX conveniences intended for local
 	// iteration only: admin auto-provisioning, setup-token skip, and a

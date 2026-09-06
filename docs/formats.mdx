@@ -298,6 +298,24 @@ density without resizing the image, so the standard OCR rasterizer retains its
 original pixel resolution. This corrects camera metadata; it does not infer the
 reading direction of mixed labels or straighten photographed perspective.
 
+### Additional OCR languages (TODO)
+
+The default is English (`eng`). Selecting another language does not install
+its Tesseract data. For example, Hindi and English text needs both language
+packs and `OCR_LANGUAGES=eng,hin` (or the equivalent OCR language preference).
+Orientation correction and QR decoding do not supply missing language data.
+
+TODO(ocr-languages), tracked beside `Config.OCRLanguages` in code:
+
+- Discover installed language packs and validate configured choices, with a
+  clear missing-pack error and available choices in OCR settings.
+- Document and verify adding language packs to both Docker targets and
+  bare-metal installations, without silently downloading them at runtime.
+- Add synthetic image and PDF regression tests for mixed-script extraction,
+  starting with Hindi + English, including missing-pack behavior and rescans.
+
+### Image conversion requirements
+
 ImageMagick must include a PDF encoder and allow PDF **writing**. On Alpine the
 encoder is in `imagemagick-pdf`, alongside `imagemagick-heic` for HEIF decoding.
 Alpine's PDF package also brings its Ghostscript dependency; it is not a
