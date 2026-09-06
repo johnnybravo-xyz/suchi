@@ -10,6 +10,7 @@
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { createQueryAssistant } from '../lib/queryAssist.js'
   import { copyText } from '../lib/clipboard.js'
+  import LinkQR from '../lib/LinkQR.svelte'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
         canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
@@ -363,11 +364,14 @@
 {/if}
 
 {#if shareURL}
-  <div class="toolbar" role="group" aria-label="Created share link">
+  <div class="card" role="group" aria-label="Created share link">
+    <div class="toolbar">
     <input class="input mono" style="flex:1;min-width:0" aria-label="Share link" readonly value={shareURL}
            onclick={(event) => event.currentTarget.select()} />
     <button class="btn sm" onclick={copyShareLink}>Copy link</button>
     <button class="btn sm" aria-label="Dismiss share link" onclick={() => (shareURL = '')}><Icon name="x" size={13} /></button>
+    </div>
+    <LinkQR url={shareURL} />
   </div>
 {/if}
 

@@ -8,6 +8,8 @@
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { copyText } from '../lib/clipboard.js'
+  import LinkQR from '../lib/LinkQR.svelte'
+  import DocumentLinkDialog from '../lib/DocumentLinkDialog.svelte'
 
   let { id, notify, jdCategories = [] } = $props()
 
@@ -22,6 +24,7 @@
   let languagesDraft = $state('')
   let shareURL = $state('')
   let shareBusy = $state(false)
+  let documentLinkOpen = $state(false)
   let similar = $state(null)   // {results, method} | null
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
@@ -86,6 +89,8 @@
     editingTitle = false
     editingLanguages = false
     shareOpen = false
+    shareLinks = []
+    documentLinkOpen = false
     shareURL = ''
     trashOpen = false
     deleteOpen = false
@@ -239,11 +244,18 @@
   })
 
   async function openShare() {
+    const user = session.user
+    const documentID = id
+    shareLinks = []
     shareOpen = true
     try {
       const r = await listShareLinks()
-      shareLinks = (r?.results || r || []).filter(l => (l.doc_ids || []).includes(Number(id)))
-    } catch { shareLinks = [] }
+      if (!disposed && session.user === user && id === documentID) {
+        shareLinks = (r?.results || r || []).filter(l => (l.doc_ids || []).includes(Number(documentID)))
+      }
+    } catch {
+      if (!disposed && session.user === user && id === documentID) shareLinks = []
+    }
   }
   async function makeLink() {
     if (shareBusy) return
@@ -266,12 +278,26 @@
     finally { shareBusy = false }
   }
   async function copyShareLink() {
-    const copied = await copyText(shareURL)
+    const user = session.user
+    const documentID = id
+    const url = shareURL
+    const copied = await copyText(url)
+    if (disposed || session.user !== user || id !== documentID || shareURL !== url) return
     notify?.(copied ? 'Share link copied' : 'Share link ready. Select the link and copy it manually.')
   }
   async function revoke(l) {
-    try { await deleteShareLink(l.id); shareLinks = shareLinks.filter(x => x.id !== l.id); notify?.('Link revoked') }
-    catch (ex) { notify?.(ex.message || 'Could not revoke') }
+    const user = session.user
+    const documentID = id
+    try {
+      await deleteShareLink(l.id)
+      if (disposed || session.user !== user || id !== documentID) return
+      shareLinks = shareLinks.filter(x => x.id !== l.id)
+      if (shareURL === (l.public_url || `${location.origin}/s/${l.token}`)) shareURL = ''
+      notify?.('Link revoked')
+    }
+    catch (ex) {
+      if (!disposed && session.user === user && id === documentID) notify?.(ex.message || 'Could not revoke')
+    }
   }
 
   async function trash() {
@@ -329,7 +355,10 @@
     {#if canShareLinks}
       <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
     {/if}
-    {#if !trashed}<button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>{/if}
+    {#if !trashed}
+      <button class="btn sm" onclick={() => (documentLinkOpen = true)}>Open on my phone</button>
+      <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
+    {/if}
   {/if}
 </div>
 
@@ -639,6 +668,10 @@
     onCancel={() => (deleteOpen = false)} />
 {/if}
 
+{#if documentLinkOpen && doc && !trashed}
+  <DocumentLinkDialog {id} onClose={() => (documentLinkOpen = false)} />
+{/if}
+
 {#if shareOpen}
   <div class="modal-veil" onclick={() => (shareOpen = false)} role="presentation">
     <div class="modal" style="width:min(520px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') shareOpen = false }} role="dialog" aria-label="Share document" tabindex="-1">
@@ -669,6 +702,7 @@
                  onclick={(event) => event.currentTarget.select()} />
           <button class="btn sm" onclick={copyShareLink}>Copy link</button>
         </div>
+        <LinkQR url={shareURL} />
       {/if}
       {#if shareLinks.length}
         <h3 style="font-size:.85rem;margin:6px 0 4px">Active links</h3>
@@ -678,6 +712,7 @@
               <span class="dot" class:warn={l.has_passwd || l.HasPasswd}></span>
               <span class="title grow mono" style="font-size:.74rem">{l.public_url || `/s/${l.token}`}</span>
               {#if l.has_passwd || l.HasPasswd}<span class="pill warn">password</span>{/if}
+              <button class="btn sm" onclick={() => (shareURL = l.public_url || `${location.origin}/s/${l.token}`)}>Show link</button>
               <button class="btn sm" onclick={() => revoke(l)}>Revoke</button>
             </div>
           {/each}

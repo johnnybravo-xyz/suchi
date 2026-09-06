@@ -35,6 +35,15 @@ successful uploads.
 Document and selection sharing always displays the created link. **Copy link**
 retries clipboard copying without creating another link; if the browser blocks
 clipboard access, select the displayed URL and copy it manually.
+**Show QR code** encodes that same link locally in the browser. Expiry, password,
+and revocation still apply; displaying or copying it does not create another link.
+Document sharing's **Show link** also reopens an existing active link.
+
+**Open on my phone** on a live document displays its private browser URL and a QR
+code, with **Copy link** and manual selection as fallbacks. It does not publish
+the document or issue a credential. The phone needs network access to the same
+server and an account allowed to read the document. A `localhost` address only
+works on the original computer; open Suchi using its network address first.
 
 ## Dashboard behavior
 

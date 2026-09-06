@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Browser-local QR codes for opening private documents on a phone and for
+  existing document or selection share links, with ordinary copy fallbacks.
 - One bounded rich query language across ranked search, Documents, the
   omnibox, and new saved views, with text prefixes, phrases, negation,
   filing metadata, dates, document state, qualifier suggestions, and

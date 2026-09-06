@@ -1709,6 +1709,90 @@ test('protects restricted previews like confidential documents', async ({ page }
   await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'false')
 })
 
+test('opens a private document QR without creating a share or copying automatically', async ({ page }, testInfo) => {
+  await mockAPI(page, { userRole: 'member', capabilities: [] })
+  await page.addInitScript(() => {
+    window.copiedLinks = []
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { async writeText(value) { window.copiedLinks.push(value) } },
+    })
+  })
+  const shareRequests = []
+  await page.route('**/api/share_links/**', route => {
+    shareRequests.push(route.request().url())
+    return route.fulfill({ status: 403, json: { error: 'Not allowed' } })
+  })
+  await page.goto('/#/doc/42')
+  const open = page.getByRole('button', { name: 'Open on my phone', exact: true })
+  await open.click()
+  const dialog = page.getByRole('dialog', { name: 'Open on my phone', exact: true })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('This does not create a public share link.')
+  await expect(dialog).toContainText('This address only works on this computer.')
+  const link = dialog.getByLabel('Document link', { exact: true })
+  await expect(link).toHaveValue('http://127.0.0.1:5173/app/#/doc/42')
+  const qr = dialog.getByRole('img', { name: 'QR code for the displayed link' })
+  await expect(qr).toBeVisible()
+  await qr.screenshot({ path: testInfo.outputPath('document-qr.png') })
+  expect(await page.evaluate(() => window.copiedLinks)).toEqual([])
+  expect(shareRequests).toEqual([])
+  await dialog.getByRole('button', { name: 'Copy link', exact: true }).click()
+  await expect(dialog.getByRole('status')).toHaveText('Link copied')
+  expect(await page.evaluate(() => window.copiedLinks)).toEqual(['http://127.0.0.1:5173/app/#/doc/42'])
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(open).toBeFocused()
+  await open.click()
+  await page.evaluate(() => { location.hash = '#/doc/41' })
+  await expect(dialog).toHaveCount(0)
+})
+
+test('keeps a private document link selectable when clipboard access fails', async ({ page }) => {
+  await mockAPI(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+  })
+  await page.goto('/#/doc/42')
+  await page.getByRole('button', { name: 'Open on my phone', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Open on my phone', exact: true })
+  await dialog.getByRole('button', { name: 'Copy link', exact: true }).click()
+  await expect(dialog.getByRole('status')).toHaveText('Select the link and copy it manually.')
+  const link = dialog.getByLabel('Document link', { exact: true })
+  await link.click()
+  expect(await link.evaluate(input => input.selectionEnd - input.selectionStart)).toBe((await link.inputValue()).length)
+})
+
+test('reopens an existing password-protected share QR and clears it on revocation', async ({ page }) => {
+  await mockAPI(page)
+  let deleted = false
+  const writes = []
+  await page.route('**/api/share_links/**', route => {
+    const request = route.request()
+    if (request.method() === 'DELETE') {
+      deleted = true
+      return route.fulfill({ status: 204 })
+    }
+    if (request.method() !== 'GET') writes.push(request.method())
+    return route.fulfill({ json: { results: deleted ? [] : [{
+      id: 7, doc_ids: [42], public_url: 'https://archive.example.test/s/protected', has_passwd: true,
+    }] } })
+  })
+  await page.goto('/#/doc/42')
+  await page.getByRole('button', { name: 'Share', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Share document' })
+  await expect(dialog.getByText('password', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Show link', exact: true }).click()
+  await expect(dialog.getByLabel('Share link', { exact: true })).toHaveValue('https://archive.example.test/s/protected')
+  await dialog.getByRole('button', { name: 'Show QR code', exact: true }).click()
+  await expect(dialog.getByRole('img', { name: 'QR code for the displayed link' })).toBeVisible()
+  expect(writes).toEqual([])
+  await dialog.getByRole('button', { name: 'Revoke', exact: true }).click()
+  await expect(dialog.getByLabel('Share link', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByRole('img', { name: 'QR code for the displayed link' })).toHaveCount(0)
+  expect(deleted).toBe(true)
+})
+
 test('shows share controls only with the share-links capability', async ({ page }) => {
   const documents = [{
     id: 42, title: 'Electricity bill', mime_type: 'application/pdf',
@@ -1726,6 +1810,29 @@ test('shows share controls only with the share-links capability', async ({ page 
   await mockAPI(page, { userRole: 'member', capabilities: ['share_links'], documents })
   await page.reload()
   await expect(page.locator('.toolbar').getByRole('button', { name: 'Share' })).toBeVisible()
+})
+
+test('does not show a previous document share link while the next list is loading', async ({ page }) => {
+  await mockAPI(page)
+  let reads = 0
+  let pending
+  await page.route('**/api/share_links/', route => {
+    if (++reads === 1) return route.fulfill({ json: { results: [{
+      id: 7, doc_ids: [42], public_url: 'https://archive.example.test/s/first-document-bearer',
+    }] } })
+    pending = route
+  })
+  await page.goto('/#/doc/42')
+  await page.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect(page.getByText('https://archive.example.test/s/first-document-bearer', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Close sharing', exact: true }).click()
+  await page.evaluate(() => { location.hash = '#/doc/41' })
+  await expect(page.getByTitle('Rename', { exact: true })).toContainText('Document 41')
+  await page.getByRole('button', { name: 'Share', exact: true }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  await expect(page.getByText('https://archive.example.test/s/first-document-bearer', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Show link', exact: true })).toHaveCount(0)
+  await pending.fulfill({ json: { results: [] } })
 })
 
 for (const screen of ['list', 'detail']) {
@@ -1772,6 +1879,9 @@ for (const screen of ['list', 'detail']) {
         : 'Share link ready. Select the link and copy it manually.')
       expect(creations).toHaveLength(1)
       expect(creations[0].doc_ids).toEqual([42])
+      await panel.getByRole('button', { name: 'Show QR code', exact: true }).click()
+      await expect(panel.getByRole('img', { name: 'QR code for the displayed link' })).toBeVisible()
+      expect(creations).toHaveLength(1)
       await link.click()
       expect(await link.evaluate(input => input.value.slice(input.selectionStart, input.selectionEnd))).toBe(url)
       await page.evaluate(() => {
