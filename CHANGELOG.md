@@ -58,6 +58,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Startup rejects duplicate or invalid migration versions before changing any
+  schema, identifying the conflicting migrations for developers.
 - Dropping files onto the upload dialog submits each file once. Uploads dropped
   elsewhere refresh the visible document list immediately.
 - Trash documents open in the existing viewer with read-only metadata and

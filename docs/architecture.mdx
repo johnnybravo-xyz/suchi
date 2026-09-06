@@ -149,7 +149,10 @@ database-only snapshot is not a complete archive backup.
 
 Migrations are embedded and ordered. Fold unreleased schema changes into the
 current release migration; never rewrite a migration already published in a
-release. See [Release process](/release-process).
+release. Features targeting a later release use the next migration after the
+prepared release. Startup validates every version before touching the database
+and rejects duplicate or nonpositive versions with the conflicting names.
+See [Release process](/release-process).
 
 ## HTTP and security boundaries
 

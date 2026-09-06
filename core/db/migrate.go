@@ -23,12 +23,22 @@ type Migration struct {
 }
 
 // Migrate applies every migration with Version > current PRAGMA user_version,
-// each in its own transaction. Idempotent: safe to run at every boot.
+// each in its own transaction. The complete version list is validated before
+// touching the database. Idempotent: safe to run at every boot.
 func Migrate(ctx context.Context, d *DB, migs []Migration, log *slog.Logger) error {
 	if len(migs) == 0 {
 		return fmt.Errorf("no migrations loaded")
 	}
+	migs = append([]Migration(nil), migs...)
 	sort.Slice(migs, func(i, j int) bool { return migs[i].Version < migs[j].Version })
+	for i, migration := range migs {
+		if migration.Version <= 0 {
+			return fmt.Errorf("migration %q has invalid version %d: must be positive", migration.Name, migration.Version)
+		}
+		if i > 0 && migs[i-1].Version == migration.Version {
+			return fmt.Errorf("duplicate migration version %d: %q and %q", migration.Version, migs[i-1].Name, migration.Name)
+		}
+	}
 
 	var current int
 	if err := d.Write.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
