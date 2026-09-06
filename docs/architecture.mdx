@@ -282,7 +282,10 @@ establish the safety or availability of the real parser.
 `core/pipeline/tessocr/` runs rasterization and all OCR pages under one context
 deadline and text-output cap. Successful empty pages get one sparse-segmentation
 retry; already extracted text is kept. It indexes text without embedding a PDF
-text layer and does not infer orientation or perspective correction. See
+text layer. Raster-image callers additionally request one 2400-pixel sparse TSV
+pass; confident whole lines supplement, rather than replace, normal OCR under
+the same deadline/output cap. PDF-input callers retain the normal page path.
+Neither path infers orientation or perspective correction. See
 [OCR engine dispatch](/formats#ocr-engine-dispatch) for language and engine choices.
 
 `core/pipeline/imgpdf/` owns all supported raster-to-PDF conversion, including

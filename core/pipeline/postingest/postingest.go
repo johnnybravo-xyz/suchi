@@ -429,7 +429,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			"mime", mime, "pdf_bytes", len(pdfRes.PDF),
 			"took", pdfRes.Duration.String())
 
-		ocrContent, archiveBlob, archiveSize, err := h.runOCR(ctx, log, pdfRes.PDF)
+		ocrContent, archiveBlob, archiveSize, err := h.runOCR(ctx, log, pdfRes.PDF, true)
 		if err != nil {
 			return fmt.Errorf("image.ocr: %w", err)
 		}
@@ -444,7 +444,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				log.Warn("post-ingest.route.image.archive_no_ocr",
 					"mime", mime, "doc_id", e.DocID,
 					"reason", "no OCR text was extracted; archive is a plain PDF wrapper",
-					"hint", "install tesseract or ocrmypdf, then reingest")
+					"hint", "check OCR availability, languages, and image quality; then rescan")
 			} else {
 				log.Debug("post-ingest.route.image.archive_plain",
 					"mime", mime, "doc_id", e.DocID,
@@ -629,7 +629,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		log.Info("post-ingest.route.text_native", "chars", ins.NonBlank)
 	} else {
 		// 3b. OCR path — engine dispatch.
-		c, ab, as, err := h.runOCR(ctx, log, pdfBytes)
+		c, ab, as, err := h.runOCR(ctx, log, pdfBytes, false)
 		if err != nil {
 			return err
 		}
@@ -1428,7 +1428,7 @@ func (h *Handler) ocrLanguages() []string {
 //
 // The engine decision is logged once per invocation so operators can
 // verify which path fired without turning on Debug.
-func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte) (content, archiveBlob string, archiveSize int64, err error) {
+func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte, imageInput bool) (content, archiveBlob string, archiveSize int64, err error) {
 	engine := h.ocrEngine
 	if engine == OCREngineAuto {
 		if tessocr.Available() {
@@ -1443,6 +1443,7 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte)
 		res, err := tessocr.OCR(ctx, bytes.NewReader(pdfBytes), log, tessocr.Options{
 			Languages:    h.ocrLanguages(),
 			MaxTextBytes: h.limits.PDF,
+			ImageInput:   imageInput,
 		})
 		if err != nil {
 			return "", "", 0, fmt.Errorf("tessocr: %w", err)

@@ -115,6 +115,15 @@ bounded by the configured output cap. It does not infer rotation from unreliable
 orientation guesses or correct photographed perspective. Configure
 `OCR_LANGUAGES` for the languages on the page; the default is English.
 
+For raster-image inputs, it also preserves the normal result and adds distinct
+lines from one sparse pass rasterized at a 2400-pixel longest edge. Only whole
+lines with mean Tesseract word confidence of at least 70 and at least four
+letters/digits are added, filtering common background noise. This pass shares
+the same deadline and bounded output; it changes neither stored pixels nor the
+PDF-input OCR path. It improves isolated photo headings, not every stylized font,
+curved package label, or perspective-distorted line. Check the extracted text
+before relying on exact model numbers or other critical details.
+
 ### Password-protected PDFs
 
 Encrypted PDFs go through a candidate-passwords loop before being

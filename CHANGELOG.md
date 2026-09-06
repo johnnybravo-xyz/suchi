@@ -58,6 +58,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Photo OCR keeps its normal text and supplements it with confident lines from
+  one bounded sparse-text pass, recovering isolated headings without replacing
+  invoice text or changing ordinary PDF OCR. Low-confidence and short background
+  noise is filtered; curved labels and perspective can still limit recognition.
 - Difficult photographed QR codes now get a bounded local ZBar fallback when
   the Go reader cannot decode them; both runtime images include the tool.
 - Lightweight OCR retries empty pages once using sparse-text segmentation for

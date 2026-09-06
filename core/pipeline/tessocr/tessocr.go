@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -65,6 +66,7 @@ type Options struct {
 	Timeout      time.Duration // whole-chain
 	RasterDPI    int
 	MaxTextBytes int64
+	ImageInput   bool // supplement raster-image input with bounded, confident sparse text
 }
 
 // Result mirrors ocrmypdf.Result minus ArchivePDF — tessocr never
@@ -192,12 +194,19 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 		if int64(buf.Len()) >= maxBytes {
 			return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
 		}
+		separatorBytes := int64(0)
+		if buf.Len() > 0 {
+			separatorBytes = 1
+		}
 		res, err := sandbox.Run(ctx, sandbox.Opts{
 			Args:      []string{tesseract, p, "stdout", "-l", langArg},
 			Timeout:   timeout,
 			MaxStdout: maxBytes - int64(buf.Len()) + 1,
 			Dir:       dir,
 		})
+		if err == nil && (res.StdoutTruncated || int64(buf.Len()+len(res.Stdout))+separatorBytes > maxBytes) {
+			return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
+		}
 		// Automatic page segmentation can miss isolated labels completely.
 		// Retry only an empty successful page, preserving all existing text.
 		if err == nil && len(bytes.TrimSpace(res.Stdout)) == 0 {
@@ -214,13 +223,12 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 				return nil, fmt.Errorf("tessocr page %d: %w", i+1, ctx.Err())
 			}
 			lastErr = tail(res.Stderr)
+			if lastErr == "" {
+				lastErr = err.Error()
+			}
 			log.Info("tessocr.page_failed",
 				"page", i+1, "exit", res.ExitCode, "stderr", lastErr)
 			continue // one bad page shouldn't kill the whole document
-		}
-		separatorBytes := int64(0)
-		if buf.Len() > 0 {
-			separatorBytes = 1
 		}
 		if res.StdoutTruncated || int64(buf.Len()+len(res.Stdout))+separatorBytes > maxBytes {
 			return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
@@ -229,6 +237,63 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 			buf.WriteString("\n")
 		}
 		buf.Write(res.Stdout)
+		if !opts.ImageInput {
+			continue
+		}
+
+		// Photo backgrounds and oversized lettering confuse page segmentation.
+		// Keep normal OCR, then add confident lines from one smaller sparse pass.
+		// This only changes OCR scratch pixels, never the stored image/PDF.
+		sparsePrefix := filepath.Join(dir, fmt.Sprintf("sparse-%d", i+1))
+		sparseRaster, sparseErr := sandbox.Run(ctx, sandbox.Opts{
+			Args: []string{pdftoppm, "-r", fmt.Sprint(dpi),
+				"-f", fmt.Sprint(i + 1), "-l", fmt.Sprint(i + 1),
+				"-singlefile", "-scale-to", "2400", "-gray", inputPath, sparsePrefix},
+			Timeout: timeout, MaxStdout: 1024, Dir: dir,
+		})
+		if sparseErr != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("tessocr image rasterize: %w", ctx.Err())
+			}
+			log.Info("tessocr.image_sparse_failed", "page", i+1, "stage", "rasterize", "stderr", tail(sparseRaster.Stderr))
+			continue
+		}
+		sparse, sparseErr := sandbox.Run(ctx, sandbox.Opts{
+			Args:    []string{tesseract, sparsePrefix + ".pgm", "stdout", "-l", langArg, "--psm", "11", "tsv"},
+			Timeout: timeout, MaxStdout: maxBytes + 1, Dir: dir,
+		})
+		if sparseErr != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("tessocr image sparse OCR: %w", ctx.Err())
+			}
+			log.Info("tessocr.image_sparse_failed", "page", i+1, "stage", "ocr", "stderr", tail(sparse.Stderr))
+			continue
+		}
+		if sparse.StdoutTruncated || int64(len(sparse.Stdout)) > maxBytes {
+			return nil, fmt.Errorf("tessocr: sparse TSV exceeded cap of %d bytes", maxBytes)
+		}
+		seen := make(map[string]bool)
+		for _, line := range strings.Split(buf.String(), "\n") {
+			seen[strings.Join(strings.Fields(line), " ")] = true
+		}
+		added := 0
+		for _, line := range confidentSparseLines(sparse.Stdout) {
+			if seen[line] {
+				continue
+			}
+			separator := ""
+			if buf.Len() > 0 && buf.Bytes()[buf.Len()-1] != '\n' {
+				separator = "\n"
+			}
+			if int64(buf.Len()+len(separator)+len(line)) > maxBytes {
+				return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
+			}
+			buf.WriteString(separator)
+			buf.WriteString(line)
+			seen[line] = true
+			added++
+		}
+		log.Info("tessocr.image_sparse_added", "page", i+1, "lines", added)
 	}
 
 	text := strings.TrimSpace(buf.String())
@@ -247,6 +312,48 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 		Pages:      len(pages),
 		Duration:   dur,
 	}, nil
+}
+
+// TSV level 5 records are words. Preserve only whole lines with mean word
+// confidence >= 70 and at least four letters/digits, excluding photo noise.
+func confidentSparseLines(tsv []byte) []string {
+	var lines, words []string
+	var key string
+	var confidenceSum float64
+	flush := func() {
+		line := strings.Join(words, " ")
+		alphanumeric := 0
+		for _, r := range line {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				alphanumeric++
+			}
+		}
+		if len(words) > 0 && confidenceSum/float64(len(words)) >= 70 && alphanumeric >= 4 {
+			lines = append(lines, line)
+		}
+		words = nil
+		confidenceSum = 0
+	}
+	for _, row := range strings.Split(string(tsv), "\n") {
+		fields := strings.SplitN(row, "\t", 12)
+		if len(fields) != 12 || fields[0] != "5" {
+			continue
+		}
+		nextKey := strings.Join(fields[1:5], "\t")
+		if nextKey != key {
+			flush()
+			key = nextKey
+		}
+		confidence, err := strconv.ParseFloat(fields[10], 64)
+		word := strings.TrimSpace(fields[11])
+		if err != nil || confidence < 0 || confidence > 100 || word == "" {
+			continue
+		}
+		words = append(words, word)
+		confidenceSum += confidence
+	}
+	flush()
+	return lines
 }
 
 // listPGMs returns pdftoppm's output files in reading order. pdftoppm
