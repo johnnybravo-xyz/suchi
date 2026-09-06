@@ -143,6 +143,12 @@ precision for Calendar and Approvals. Month/year sorting placeholders stay out
 of Calendar day cells. Agenda status details use native disclosure controls
 for `LLM Classifier confidence: N%`, without custom interaction state.
 
+Calendar serializes explicitly requested, reviewed exact-day events through
+`lib/calendarExport.js` into local iCalendar downloads. It escapes text, folds
+UTF-8 lines, and preserves an event identifier across repeated exports. A native
+disclosure explains what leaves Suchi when the user imports the file. No API,
+schema, subscription, or document-access changes are involved.
+
 ## API conventions
 
 `api.js` owns fetch behavior, JSON errors, and the named product operations

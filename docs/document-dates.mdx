@@ -184,6 +184,27 @@ they are not limited to the current month.
 **Open full calendar** removes the document scope and returns to the unfiltered
 current-month grid.
 
+### Add a reviewed date to another calendar
+
+In an agenda entry, expand **Add to calendar**, read the export notice, and
+choose **Download .ics**. Open or import the file in a calendar application.
+This is available for reviewed, accepted dates with an exact day, for any date
+role. Automatic dates do not offer export. Neither do month/year-only dates,
+whose sorting placeholders are not known calendar days.
+
+The downloaded file contains one all-day event with the document title, date
+role, and a link to the source document. It contains no document attachment or
+source quote. The link still requires the recipient's normal Suchi access; an
+export does not create a public share link.
+
+Suchi generates the file locally in the browser, without connecting a calendar
+account. Importing it into a synced calendar may send its contents to that
+calendar's provider. The file is a snapshot, not a subscription: later changes
+in Suchi do not update an imported event. Repeated exports from the same archive
+URL retain the event's identifier, but duplicate-import behavior depends on the
+calendar application. No reminder, recurrence, or time zone is inferred, and
+the event does not mark the day as busy.
+
 ### Search by date
 
 You can also use dates in the [query language](/query-language):

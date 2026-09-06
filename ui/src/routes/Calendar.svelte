@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate, formatIntelligenceDate, groupCalendarEvents } from '../lib/intelligence.js'
+  import { calendarDateFile, canExportCalendarDate } from '../lib/calendarExport.js'
   import { go } from '../lib/router.svelte.js'
   import Icon from '../lib/Icon.svelte'
 
@@ -10,6 +11,7 @@
   let views = $state([])
   let loading = $state(true)
   let error = $state('')
+  let exportError = $state('')
   let eventTotal = $state(0)
   let pageNumber = $state(1)
   let loadVersion = 0
@@ -73,6 +75,21 @@
     return event.reviewed_at ? 'Reviewed' : 'Automatic'
   }
 
+  function downloadDate(event) {
+    exportError = ''
+    try {
+      const file = calendarDateFile(event, window.location.href)
+      const link = document.createElement('a')
+      const url = URL.createObjectURL(new Blob([file.contents], { type: 'text/calendar;charset=utf-8' }))
+      link.href = url
+      link.download = file.filename
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      link.click()
+    } catch (ex) {
+      exportError = ex.message || 'Could not download the calendar event.'
+    }
+  }
+
   async function load() {
     const version = ++loadVersion
     activeController?.abort()
@@ -80,6 +97,7 @@
     activeController = controller
     loading = true
     error = ''
+    exportError = ''
     events = []
     try {
       const response = await listIntelligence({
@@ -177,6 +195,7 @@
   {#if error}
     <div class="err calendar-error"><span>{error}</span><button class="btn sm" onclick={load}>Retry</button></div>
   {/if}
+  {#if exportError}<p class="err" role="alert">{exportError}</p>{/if}
 
   <div class="calendar-layout" class:agenda-only={agendaOnly}>
     {#if !agendaOnly}
@@ -250,6 +269,13 @@
                 <a class="agenda-document" href={`#/doc/${event.document_id}`}><b>{event.document_title || `Document #${event.document_id}`}</b><Icon name="chev" size={13} /></a>
                 <span>“{event.evidence_text}”</span>
                 <small>{formatIntelligenceDate(event, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small>
+                {#if canExportCalendarDate(event)}
+                  <details class="calendar-export">
+                    <summary>Add to calendar</summary>
+                    <p>The .ics file includes the document title, date, and a private document link. Importing it into a synced calendar shares those details with your calendar provider. The document still requires Suchi access.</p>
+                    <button class="btn sm" onclick={() => downloadDate(event)}><Icon name="download" size={13} />Download .ics</button>
+                  </details>
+                {/if}
               </div>
             </article>
           {/each}
@@ -329,6 +355,9 @@
   .date-details { min-width: 0; }
   .date-details summary { width: fit-content; cursor: pointer; }
   .date-details p { max-width: 38ch; margin: 6px 0; color: var(--muted); font-size: .65rem; line-height: 1.5; }
+  .calendar-export { margin-top: 5px; }
+  .calendar-export summary { width: fit-content; color: var(--accent); font-size: .7rem; cursor: pointer; }
+  .calendar-export p { margin: 7px 0; color: var(--muted); font-size: .68rem; line-height: 1.5; }
   .agenda-copy > small { color: var(--faint); font-size: .59rem; }
   .agenda-document { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .76rem; text-decoration: none; }
   .agenda-document b { overflow-wrap: anywhere; }

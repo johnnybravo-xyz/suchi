@@ -2648,6 +2648,49 @@ test('shows automatic and reviewed dates on the calendar', async ({ page }) => {
   expect(intelligenceQueries.at(-1)).not.toHaveProperty('sensitivity')
 })
 
+test('downloads a reviewed exact-day calendar event only after disclosing its contents', async ({ page }) => {
+  const apiRequests = []
+  const event = {
+    id: 81, document_id: 28, document_title: 'Home insurance renewal',
+    type: 'date', role: 'renewal', status: 'accepted', reviewed_at: 1780200000,
+    value: { date: '2028-02-29', precision: 'day' }, evidence_text: 'Private policy quote',
+  }
+  await mockAPI(page, {
+    setupCompletedAt: 1, filingTreeChosen: true, apiRequests,
+    intelligence: [
+      event,
+      { ...event, id: 82, document_title: 'Automatic policy', reviewed_at: null },
+      { ...event, id: 83, document_title: 'Month-only policy', value: { date: '2028-02-01', precision: 'month' } },
+      { ...event, id: 84, document_title: 'Year-only policy', value: { date: '2028-01-01', precision: 'year' } },
+    ],
+  })
+  await page.goto('/#/calendar?document_ids=28')
+  const entry = page.locator('.agenda-event').filter({ hasText: 'Home insurance renewal' })
+  const downloads = []
+  page.on('download', download => downloads.push(download))
+  await expect(page.getByText('Add to calendar', { exact: true })).toHaveCount(1)
+  await expect(entry.getByRole('button', { name: 'Download .ics' })).toBeHidden()
+  await entry.getByText('Add to calendar', { exact: true }).click()
+  await expect(entry.getByText(/synced calendar shares those details with your calendar provider/)).toBeVisible()
+  expect(downloads).toHaveLength(0)
+  const requestCount = apiRequests.length
+  const pendingDownload = page.waitForEvent('download')
+  await entry.getByRole('button', { name: 'Download .ics' }).click()
+  const download = await pendingDownload
+  expect(download.suggestedFilename()).toBe('suchi-date-81-2028-02-29.ics')
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  const contents = Buffer.concat(chunks).toString('utf8').replace(/\r\n[ \t]/g, '')
+  expect(contents).toContain('DTSTART;VALUE=DATE:20280229\r\nDTEND;VALUE=DATE:20280301\r\n')
+  expect(contents).toContain('SUMMARY:Renewal: Home insurance renewal\r\n')
+  expect(contents).toContain(`URL:${new URL(page.url()).origin}/#/doc/28\r\n`)
+  expect(contents).not.toContain('Private policy quote')
+  expect(apiRequests.slice(requestCount)).toEqual([])
+  await expect(entry.getByRole('link', { name: 'Home insurance renewal' })).toHaveAttribute('href', '#/doc/28')
+  await expect(page).toHaveURL(/#\/calendar\?document_ids=28$/)
+})
+
 test('opens research calendar links across all years and replaces stale calendar filters', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-09-15T12:00:00Z'))
   const intelligenceQueries = []
@@ -2778,10 +2821,10 @@ test('keeps calendar date precision and explains model confidence without naviga
   await expect(year.getByText('year', { exact: true })).toHaveCount(0)
   const confidence = month.getByText('LLM Classifier confidence: 92%', { exact: true })
   await expect(confidence).toBeHidden()
-  await expect(day.locator('summary')).toHaveText('Reviewed')
-  await expect(month.locator('summary')).toHaveText('Automatic')
+  await expect(day.locator('.date-details summary')).toHaveText('Reviewed')
+  await expect(month.locator('.date-details summary')).toHaveText('Automatic')
 
-  const status = month.locator('summary')
+  const status = month.locator('.date-details summary')
   if (testInfo.project.use.hasTouch) await status.tap()
   else { await status.focus(); await page.keyboard.press('Enter') }
   await expect(month.locator('details')).toHaveAttribute('open', '')

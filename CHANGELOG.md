@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Local `.ics` downloads for reviewed exact-day Calendar entries, with explicit
+  export disclosure and private source-document links.
 - Browser-local QR codes for opening private documents on a phone and for
   existing document or selection share links, with ordinary copy fallbacks.
 - One bounded rich query language across ranked search, Documents, the
