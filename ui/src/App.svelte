@@ -2,9 +2,8 @@
   import { untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
+  import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
-  import { markUploaded } from './lib/upload_bus.svelte.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
   import Dashboard from './routes/Dashboard.svelte'
@@ -32,6 +31,7 @@
   let mobileNavOpen = $state(false)
   let sidebarCollapsed = $state(false)
   let uploadOpen = $state(false)
+  let uploadFiles = $state([])
   let uploadDialog = $state(null)
   let uploadReturnFocus = null
   let dragDepth = $state(0)   // window-level drop target (except on #/upload)
@@ -262,7 +262,7 @@
     if (page === 'dashboard') loadRecentDocuments({ background: true })
   }
 
-  async function globalDrop(e) {
+  function globalDrop(e) {
     const user = session.user
     const handled = e.defaultPrevented
     e.preventDefault()
@@ -270,24 +270,12 @@
     if (handled || uploadOpen || page === 'upload' || !user) return
     const files = [...(e.dataTransfer?.files || [])]
     if (!files.length) return
-    notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
-    let ok = 0, dup = 0, fail = 0
-    for (const f of files) {
-      if (session.user !== user) return
-      try {
-        const result = await uploadDocument(f)
-        if (session.user !== user) return
-        markUploaded()
-        result?.deduplicated ? dup++ : ok++
-      }
-      catch { fail++ }
-    }
-    if (session.user !== user) return
-    notify([ok && `${ok} uploaded`, dup && `${dup} duplicate${dup === 1 ? '' : 's'}`, fail && `${fail} failed`].filter(Boolean).join(' · '))
-    refreshVisibleData()
+    openUpload()
+    uploadFiles = files
   }
 
   function openUpload() {
+    uploadFiles = []
     uploadReturnFocus = document.activeElement
     uploadOpen = true
     queueMicrotask(() => uploadDialog?.focus())
@@ -296,6 +284,7 @@
   function closeUpload({ refresh = false } = {}) {
     if (!uploadOpen) return
     uploadOpen = false
+    uploadFiles = []
     if (refresh) refreshVisibleData()
     queueMicrotask(() => uploadReturnFocus?.focus?.())
   }
@@ -397,6 +386,7 @@
     setupReminderKey = ''
     mobileNavOpen = false
     uploadOpen = false
+    uploadFiles = []
     dragDepth = 0
     toast = ''
     chatEnabled = false
@@ -631,7 +621,7 @@
           <button class="btn sm" onclick={() => closeUpload({ refresh: true })}
                   title="Close upload" aria-label="Close upload"><Icon name="x" size={13} /></button>
         </div>
-        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories }} />
+        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories, initialFiles: uploadFiles }} />
       </div>
     </div>
   {/if}

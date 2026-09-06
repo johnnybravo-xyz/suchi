@@ -198,7 +198,13 @@ visible labels should use the terms documented in the Web app guide.
 - Session state is shared because every route needs the current principal.
 - Successful uploads increment a small shared revision so visible document
   lists can refresh in the same tab, including window-level drops. The shell
-  ignores drops already handled by the upload dialog or Upload screen.
+  ignores drops already handled by the upload dialog or Upload screen and hands
+  other drops to its existing lazy Upload dialog. `UploadBox.svelte` owns picker,
+  drop, and confirmed paste batches through one upload path. Accepted batches
+  continue during in-app navigation while the account remains unchanged.
+  Its unfinished post-processing task reads precede document reads, and polling
+  timeouts stay explicit rather than declaring success. Poll timers and local
+  paste-preview URLs are released when the component unmounts.
 - Builder vocabularies come from their focused API endpoints, such as
   `/api/automations/schema`; local values only keep the editor usable while a
   request is unavailable.

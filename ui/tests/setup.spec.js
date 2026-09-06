@@ -151,11 +151,9 @@ for (const target of ['page', 'modal']) {
       dropTarget.dispatchEvent(new DragEvent('dragenter', { dataTransfer: transfer, bubbles: true, cancelable: true }))
       dropTarget.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }))
     }, target)
-    if (target === 'modal') {
-      await expect(page.getByText('duplicate', { exact: true })).toBeVisible()
-      await expect(page.locator('.dropveil')).toHaveCount(0)
-      await page.getByRole('button', { name: 'Close upload' }).click()
-    }
+    await expect(page.getByText('duplicate', { exact: true })).toBeVisible()
+    await expect(page.locator('.dropveil')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Close upload' }).click()
     await expect(page.getByRole('link', { name: /Dropped receipt.pdf/ })).toBeVisible()
     expect(uploads).toBe(1)
   })
@@ -206,6 +204,7 @@ for (const input of ['drop', 'picker']) {
       })
     }
     await expect.poll(() => !!firstUpload).toBe(true)
+    if (input === 'drop') await page.getByRole('button', { name: 'Close upload' }).click()
     const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
     if (await navigation.isVisible()) await navigation.click()
     await page.getByRole('button', { name: 'Sign out', exact: true }).click()

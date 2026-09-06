@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Screenshot paste previews with explicit upload confirmation and file-picker
+  fallback, using the same upload path as drag-and-drop.
 - Full extracted-text reading and copying, including manual copy fallback and
   the existing sensitive-document reveal gate.
 - Local `.ics` downloads for reviewed exact-day Calendar entries, with explicit
@@ -32,6 +34,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Upload receipts distinguish new, duplicate, restored and failed files, and
+  retain honest processing state when automatic status checks pause.
 - Settings displays the release version in production. Development builds
   identify the source version line and revision, or explicitly unavailable metadata.
 - OCR language documentation now covers installing packs in both Docker variants

@@ -29,8 +29,19 @@ Search results with the complete Omnibox text. Query-filter suggestions live in
 the Search and Documents fields rather than the global command palette.
 
 Drop files onto **Upload** or anywhere on the archive page to add documents.
-Each dropped file uploads once, and the visible document list refreshes after
-successful uploads.
+Window-level drops open the Upload dialog with per-file results. Each file uploads
+once, and the visible document list refreshes after successful uploads.
+
+In Upload, focus the drop area and paste a screenshot. **Upload image** confirms
+sending it; **Discard** removes the local preview. The file picker remains available,
+and ordinary pasting into text fields is unchanged.
+
+Upload results distinguish new documents, duplicates, restored documents, and
+failed uploads. **Text extracted** or **No text found** appears after post-processing
+finishes; failed or unavailable checks remain explicit. After about 100 seconds,
+automatic checks pause without declaring completion. **Check again** resumes them.
+Accepted batches continue across in-app navigation while the same account remains
+signed in; closing the browser can interrupt unfinished uploads.
 
 Document and selection sharing always displays the created link. **Copy link**
 retries clipboard copying without creating another link; if the browser blocks
@@ -257,6 +268,9 @@ Calendar and Approvals preserve day, month, or year precision in the displayed
 date. Partial dates appear in month/all-dates agendas, not day cells or exact-day
 agendas. Expand an agenda entry's **Automatic** or **Reviewed** status to see
 **LLM Classifier confidence: N%**.
+For a reviewed exact-day entry, **Add to calendar** offers a local `.ics` download
+after an export notice. Automatic and partial dates do not offer export; importing
+the file does not establish calendar synchronization.
 See [Document dates](/document-dates) for precision, month-filter limits, scope,
 review, rescan, and troubleshooting rules.
 
