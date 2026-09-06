@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -19,16 +20,56 @@ import (
 	"github.com/makiuchi-d/gozxing/datamatrix"
 )
 
-func fakeZBar(t *testing.T, body string) {
+type zbarFixture struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Wait     bool
+}
+
+func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) != "zbarimg" {
+		os.Exit(m.Run())
+	}
+	// Reuse the already-built test executable. Fresh shell scripts have large,
+	// variable launch costs on macOS when many package tests spawn together.
+	if strings.Join(os.Args[1:], " ") != "--quiet --xml --set disable --set qrcode.enable png:-" {
+		os.Exit(7)
+	}
+	if _, err := png.Decode(os.Stdin); err != nil {
+		os.Exit(8)
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(os.Args[0]), "response.json"))
+	if err != nil {
+		os.Exit(9)
+	}
+	var fixture zbarFixture
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		os.Exit(10)
+	}
+	if fixture.Wait {
+		time.Sleep(10 * time.Second)
+	}
+	_, _ = os.Stdout.WriteString(fixture.Stdout)
+	_, _ = os.Stderr.WriteString(fixture.Stderr)
+	os.Exit(fixture.ExitCode)
+}
+
+func fakeZBar(t *testing.T, fixture zbarFixture) {
 	t.Helper()
 	dir := t.TempDir()
-	// The adapter must request only QR, use XML (not newline-delimited text),
-	// and pass a PNG through stdin rather than forwarding a filename or URL.
-	script := "#!/bin/sh\n" +
-		"test \"$1\" = --quiet && test \"$2\" = --xml && test \"$3\" = --set && " +
-		"test \"$4\" = disable && test \"$5\" = --set && test \"$6\" = qrcode.enable && test \"$7\" = png:- || exit 7\n" +
-		"/bin/cat >/dev/null\n" + body
-	if err := os.WriteFile(filepath.Join(dir, "zbarimg"), []byte(script), 0o700); err != nil {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(dir, "zbarimg")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "response.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
@@ -48,13 +89,13 @@ func blankBarcodeImage(t *testing.T) []byte {
 }
 
 func TestQRDecodeFallbackKeepsMultilineAndURLValues(t *testing.T) {
-	fakeZBar(t, `printf '%s' '<barcodes xmlns="http://zbar.sourceforge.net/2008/barcode"><source><index>
+	fakeZBar(t, zbarFixture{Stdout: `<barcodes xmlns="http://zbar.sourceforge.net/2008/barcode"><source><index>
 <symbol type="QR-Code"><data><![CDATA[https://example.invalid/item?a=1&b=2]]></data></symbol>
 <symbol type="QR-Code"><data><![CDATA[first line
 second line]]></data></symbol>
 <symbol type="QR-Code"><data format="base64">dGV4dCBwYXlsb2Fk</data></symbol>
 <symbol type="CODE-128"><data>ignore other symbologies</data></symbol>
-</index></source></barcodes>'`)
+</index></source></barcodes>`})
 	got, err := barcode.DecodeBytes(t.Context(), blankBarcodeImage(t))
 	if err != nil {
 		t.Fatal(err)
@@ -72,17 +113,18 @@ second line]]></data></symbol>
 
 func TestQRDecodeFallbackFailuresStayBoundedAndPrivate(t *testing.T) {
 	for _, tc := range []struct {
-		name, script string
-		wantErr      bool
+		name    string
+		fixture zbarFixture
+		wantErr bool
 	}{
-		{"no QR", "exit 4\n", false},
-		{"process failure", "printf PRIVATE_BARCODE_PAYLOAD >&2\nexit 2\n", true},
-		{"malformed XML", "printf '<PRIVATE_BARCODE_PAYLOAD'\n", true},
-		{"wrong root", "printf '<PRIVATE_BARCODE_PAYLOAD/>'\n", true},
-		{"output cap", "i=0; while test $i -lt 2200; do printf PRIVATE_BARCODE_PAYLOAD_0123456789; i=$((i + 1)); done\n", true},
+		{"no QR", zbarFixture{ExitCode: 4}, false},
+		{"process failure", zbarFixture{Stderr: "PRIVATE_BARCODE_PAYLOAD", ExitCode: 2}, true},
+		{"malformed XML", zbarFixture{Stdout: "<PRIVATE_BARCODE_PAYLOAD"}, true},
+		{"wrong root", zbarFixture{Stdout: "<PRIVATE_BARCODE_PAYLOAD/>"}, true},
+		{"output cap", zbarFixture{Stdout: strings.Repeat("PRIVATE_BARCODE_PAYLOAD_0123456789", 2200)}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeZBar(t, tc.script)
+			fakeZBar(t, tc.fixture)
 			got, err := barcode.DecodeBytes(t.Context(), blankBarcodeImage(t))
 			if (err != nil) != tc.wantErr || len(got) != 0 {
 				t.Fatalf("result=%v err=%v", got, err)
@@ -103,7 +145,7 @@ func TestQRDecodeFallbackMissingBinaryIsOptional(t *testing.T) {
 }
 
 func TestQRDecodeSkipsFallbackWhenGoReaderSucceeds(t *testing.T) {
-	fakeZBar(t, "exit 2\n")
+	fakeZBar(t, zbarFixture{ExitCode: 2})
 	got, err := barcode.DecodeBytes(t.Context(), makeQRImagePNG(t, "GO-QR-RESULT"))
 	if err != nil || len(got) != 1 || got[0].Text != "GO-QR-RESULT" {
 		t.Fatalf("result=%v err=%v", got, err)
@@ -111,7 +153,7 @@ func TestQRDecodeSkipsFallbackWhenGoReaderSucceeds(t *testing.T) {
 }
 
 func TestQRDecodeFallbackPreservesGoDataMatrixOnFailure(t *testing.T) {
-	fakeZBar(t, "exit 2\n")
+	fakeZBar(t, zbarFixture{ExitCode: 2})
 	matrix, err := datamatrix.NewDataMatrixWriter().Encode("GO-DATAMATRIX-RESULT", gozxing.BarcodeFormat_DATA_MATRIX, 200, 200, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +180,7 @@ func TestQRDecodeFallbackPreservesGoDataMatrixOnFailure(t *testing.T) {
 }
 
 func TestQRDecodeFallbackHonorsCancellation(t *testing.T) {
-	fakeZBar(t, "exec /bin/sleep 10\n")
+	fakeZBar(t, zbarFixture{Wait: true})
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
