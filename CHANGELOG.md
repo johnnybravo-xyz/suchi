@@ -58,6 +58,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Created share links remain visible and selectable when clipboard access is
+  unavailable. Copy can be retried without creating another link; delayed
+  creation responses cannot copy links after account or document navigation.
 - Startup rejects duplicate or invalid migration versions before changing any
   schema, identifying the conflicting migrations for developers.
 - Dropping files onto the upload dialog submits each file once. Uploads dropped

@@ -1,0 +1,1 @@
+async function e(e){if(!navigator.clipboard?.writeText)return!1;try{return await navigator.clipboard.writeText(e),!0}catch{return!1}}export{e as t};

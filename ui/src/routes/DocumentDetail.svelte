@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
@@ -6,6 +7,7 @@
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import { copyText } from '../lib/clipboard.js'
 
   let { id, notify, jdCategories = [] } = $props()
 
@@ -19,6 +21,7 @@
   let editingLanguages = $state(false)
   let languagesDraft = $state('')
   let shareURL = $state('')
+  let shareBusy = $state(false)
   let similar = $state(null)   // {results, method} | null
   let access = $state(null)    // owner/admin-only {results, principals}
   let canManageAccess = $state(false)
@@ -29,6 +32,8 @@
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
   let loadVersion = 0
+  let disposed = false
+  onDestroy(() => { disposed = true })
 
   const ACCESS_LEVELS = [
     ['1', 'View'],
@@ -241,18 +246,28 @@
     } catch { shareLinks = [] }
   }
   async function makeLink() {
+    if (shareBusy) return
+    const user = session.user
+    const documentID = id
+    shareBusy = true
     try {
       const res = await createShareLink({
-        doc_ids: [Number(id)], label: doc?.title || '',
+        doc_ids: [Number(documentID)], label: doc?.title || '',
         expires_in_sec: Number(sh.expiry), password: sh.password,
       })
-      const url = res?.public_url || `${location.origin}/s/${res?.token}`
-      await navigator.clipboard?.writeText(url)
-      shareURL = url
-      notify?.(sh.password ? 'Password-protected link copied' : 'Share link copied')
+      if (disposed || session.user !== user || id !== documentID) return
+      shareURL = res?.public_url || `${location.origin}/s/${res?.token}`
       sh = { expiry: '0', password: '' }
       openShare()
-    } catch (ex) { notify?.(ex.message || 'Could not create the link') }
+      await copyShareLink()
+    } catch (ex) {
+      if (!disposed && session.user === user && id === documentID) notify?.(ex.message || 'Could not create the link')
+    }
+    finally { shareBusy = false }
+  }
+  async function copyShareLink() {
+    const copied = await copyText(shareURL)
+    notify?.(copied ? 'Share link copied' : 'Share link ready. Select the link and copy it manually.')
   }
   async function revoke(l) {
     try { await deleteShareLink(l.id); shareLinks = shareLinks.filter(x => x.id !== l.id); notify?.('Link revoked') }
@@ -475,8 +490,9 @@
         </dl>
         {#if shareURL}
           <div class="field" style="margin-top:12px;margin-bottom:0">
-            <label for="share">Share link (copied)</label>
-            <input id="share" class="input mono" style="font-size:.76rem" readonly value={shareURL} />
+            <label for="share">Share link</label>
+            <input id="share" class="input mono" style="font-size:.76rem" readonly value={shareURL}
+                   onclick={(event) => event.currentTarget.select()} />
           </div>
         {/if}
       </div>
@@ -645,11 +661,14 @@
         </select>
         <input class="input" type="password" style="flex:1" placeholder="Password (optional)"
                bind:value={sh.password} autocomplete="new-password" />
-        <button class="btn primary sm" onclick={makeLink}><Icon name="link" size={13} /> Create &amp; copy</button>
+        <button class="btn primary sm" disabled={shareBusy} onclick={makeLink}><Icon name="link" size={13} /> {shareBusy ? 'Creating…' : 'Create & copy'}</button>
       </div>
       {#if shareURL}
-        <input class="input mono" style="font-size:.74rem;margin-bottom:12px" readonly value={shareURL}
-               onclick={(e) => e.target.select()} />
+        <div class="toolbar" style="margin-bottom:12px">
+          <input class="input mono" style="flex:1;min-width:0;font-size:.74rem" aria-label="Share link" readonly value={shareURL}
+                 onclick={(event) => event.currentTarget.select()} />
+          <button class="btn sm" onclick={copyShareLink}>Copy link</button>
+        </div>
       {/if}
       {#if shareLinks.length}
         <h3 style="font-size:.85rem;margin:6px 0 4px">Active links</h3>

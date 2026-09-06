@@ -9,6 +9,7 @@
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { createQueryAssistant } from '../lib/queryAssist.js'
+  import { copyText } from '../lib/clipboard.js'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
         canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
@@ -41,10 +42,12 @@
   ]))
   let loadedFilterKey = ''
   let loadVersion = 0
+  let disposed = false
   let activeController // cancel superseded filters, not only their UI updates
   let suggestions = $state([])
   const queryAssistant = createQueryAssistant((next) => (suggestions = next))
   onDestroy(() => {
+    disposed = true
     loadVersion++
     queryAssistant.dispose()
     activeController?.abort()
@@ -157,6 +160,7 @@
   let sel = $state(new Set())
   let lastIdx = $state(-1)      // anchor for shift-range and j/k cursor
   let bulkBusy = $state(false)
+  let shareURL = $state('')
 
   function toggleSel(i, ev) {
     const d = docs[i]
@@ -189,14 +193,21 @@
   const bulkRescan = () => bulk('Rescan enqueued', 'rescan_enqueue', {})
   const bulkTrash = () => (trashRequest = { kind: 'bulk', count: sel.size })
   async function bulkShare() {
+    const user = session.user
     bulkBusy = true
     try {
       const res = await createShareLink({ doc_ids: [...sel], label: `Selection of ${sel.size}` })
-      const url = res?.public_url || `${location.origin}/s/${res?.token}`
-      await navigator.clipboard?.writeText(url)
-      notify?.('Share link for the selection copied')
-    } catch (ex) { notify?.(ex.message || 'Could not create the bundle') }
-    bulkBusy = false
+      if (disposed || session.user !== user) return
+      shareURL = res?.public_url || `${location.origin}/s/${res?.token}`
+      await copyShareLink()
+    } catch (ex) {
+      if (!disposed && session.user === user) notify?.(ex.message || 'Could not create the bundle')
+    } finally { bulkBusy = false }
+  }
+
+  async function copyShareLink() {
+    const copied = await copyText(shareURL)
+    notify?.(copied ? 'Share link copied' : 'Share link ready. Select the link and copy it manually.')
   }
 
   async function bulkExtractDates() {
@@ -348,6 +359,15 @@
       <Icon name="zap" size={12} /> Rescan
     </button>
     <button class="btn sm" onclick={clearSel}>Clear</button>
+  </div>
+{/if}
+
+{#if shareURL}
+  <div class="toolbar" role="group" aria-label="Created share link">
+    <input class="input mono" style="flex:1;min-width:0" aria-label="Share link" readonly value={shareURL}
+           onclick={(event) => event.currentTarget.select()} />
+    <button class="btn sm" onclick={copyShareLink}>Copy link</button>
+    <button class="btn sm" aria-label="Dismiss share link" onclick={() => (shareURL = '')}><Icon name="x" size={13} /></button>
   </div>
 {/if}
 

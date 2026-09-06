@@ -1713,6 +1713,110 @@ test('shows share controls only with the share-links capability', async ({ page 
   await expect(page.locator('.toolbar').getByRole('button', { name: 'Share' })).toBeVisible()
 })
 
+for (const screen of ['list', 'detail']) {
+  for (const clipboard of ['unavailable', 'rejected', 'available']) {
+    test(`keeps ${screen} share links usable when clipboard is ${clipboard}`, async ({ page }) => {
+      const documents = [{ id: 42, title: 'Electricity bill', created_at: 1780000000, tags: [] }]
+      await mockAPI(page, { userRole: 'member', capabilities: ['share_links'], documents })
+      await page.addInitScript(clipboard => {
+        window.copiedLinks = []
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: clipboard === 'unavailable' ? undefined : {
+            async writeText(text) {
+              if (clipboard === 'rejected') throw new DOMException('Clipboard denied', 'NotAllowedError')
+              window.copiedLinks.push(text)
+            },
+          },
+        })
+      }, clipboard)
+      const url = 'https://archive.example.test/s/shared-token'
+      const creations = []
+      await page.route('**/api/share_links/', async route => {
+        if (route.request().method() === 'POST') {
+          creations.push(route.request().postDataJSON())
+          return route.fulfill({ json: { id: 7, doc_ids: [42], public_url: url } })
+        }
+        return route.fulfill({ json: { results: creations.length ? [{ id: 7, doc_ids: [42], public_url: url }] : [] } })
+      })
+      await page.goto(screen === 'list' ? '/#/documents' : '/#/doc/42')
+      if (screen === 'list') {
+        await page.getByLabel('Select Electricity bill').check()
+        await page.locator('.bulkbar').getByRole('button', { name: 'Share', exact: true }).click()
+      } else {
+        await page.locator('.toolbar').getByRole('button', { name: 'Share', exact: true }).click()
+        await page.getByRole('button', { name: 'Create & copy' }).click()
+      }
+      const panel = screen === 'list'
+        ? page.getByRole('group', { name: 'Created share link' })
+        : page.getByRole('dialog', { name: 'Share document' })
+      const link = panel.getByRole('textbox', { name: 'Share link', exact: true })
+      await expect(link).toHaveValue(url)
+      await expect(page.locator('.toast')).toHaveText(clipboard === 'available'
+        ? 'Share link copied'
+        : 'Share link ready. Select the link and copy it manually.')
+      expect(creations).toHaveLength(1)
+      expect(creations[0].doc_ids).toEqual([42])
+      await link.click()
+      expect(await link.evaluate(input => input.value.slice(input.selectionStart, input.selectionEnd))).toBe(url)
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { async writeText(text) { window.copiedLinks.push(text) } },
+        })
+      })
+      await panel.getByRole('button', { name: 'Copy link', exact: true }).click()
+      await expect(page.locator('.toast')).toHaveText('Share link copied')
+      expect(await page.evaluate(() => window.copiedLinks)).toEqual(clipboard === 'available' ? [url, url] : [url])
+      expect(creations).toHaveLength(1)
+    })
+  }
+}
+
+for (const screen of ['list', 'detail']) {
+  test(`ignores late ${screen} share creation after leaving its account or document`, async ({ page }) => {
+    await mockAPI(page, {
+      userRole: 'member', capabilities: ['share_links'],
+      documents: [{ id: 42, title: 'Electricity bill', created_at: 1780000000, tags: [] }],
+    })
+    await page.addInitScript(() => {
+      window.copiedLinks = []
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { async writeText(text) { window.copiedLinks.push(text) } },
+      })
+    })
+    let pendingShare
+    await page.route('**/api/share_links/', async route => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      pendingShare = route
+    })
+    await page.goto(screen === 'list' ? '/#/documents' : '/#/doc/42')
+    if (screen === 'list') {
+      await page.getByLabel('Select Electricity bill').check()
+      await page.locator('.bulkbar').getByRole('button', { name: 'Share', exact: true }).click()
+    } else {
+      await page.locator('.toolbar').getByRole('button', { name: 'Share', exact: true }).click()
+      await page.getByRole('button', { name: 'Create & copy' }).click()
+    }
+    await expect.poll(() => !!pendingShare).toBe(true)
+    if (screen === 'list') {
+      const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
+      if (await navigation.isVisible()) await navigation.click()
+      await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+    } else {
+      await page.evaluate(() => { location.hash = '#/doc/43' })
+      await expect(page.getByText('Document 43', { exact: true })).toBeVisible()
+    }
+    const finished = page.waitForEvent('requestfinished', request => request === pendingShare.request())
+    await pendingShare.fulfill({ json: { public_url: 'https://archive.example.test/s/late-link' } })
+    await finished
+    expect(await page.evaluate(() => window.copiedLinks)).toEqual([])
+    await expect(page.getByRole('textbox', { name: 'Share link', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: 'Share document' })).toHaveCount(0)
+  })
+}
+
 test('keeps list rows stable when a thumbnail is missing', async ({ page }) => {
   const document = {
     title: 'Stable document row', created_at: 1780000000, sensitivity: '',

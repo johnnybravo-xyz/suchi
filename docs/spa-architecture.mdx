@@ -73,25 +73,25 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,740 | 34,747 |
-| Documents / Inbox | 25,011 | 9,191 |
-| Document detail | 28,767 | 9,756 |
-| Upload | 6,432 | 2,990 |
-| Search | 5,807 | 2,804 |
-| Views | 14,630 | 5,356 |
-| Calendar | 13,357 | 5,121 |
-| Trash | 6,025 | 2,808 |
-| Approvals | 18,903 | 6,782 |
-| Automations | 17,941 | 5,969 |
-| My account, without mailbox capability | 12,965 | 4,773 |
-| Archive configuration, including its Settings entry | 107,544 | 35,756 |
-| Setup | 66,502 | 22,271 |
-| Demo | 5,583 | 2,343 |
-| Archive research drawer | 13,759 | 5,324 |
-| **All unique JavaScript chunks** | **355,982** | **126,798** |
+| Shell: navigation, Dashboard, login | 95,846 | 34,868 |
+| Documents / Inbox | 25,728 | 9,455 |
+| Document detail | 29,411 | 10,131 |
+| Upload | 6,276 | 2,837 |
+| Search | 5,807 | 2,759 |
+| Views | 14,629 | 5,277 |
+| Calendar | 13,356 | 5,090 |
+| Trash | 6,025 | 2,802 |
+| Approvals | 18,903 | 6,772 |
+| Automations | 17,938 | 5,948 |
+| My account, without mailbox capability | 12,964 | 4,759 |
+| Archive configuration, including its Settings entry | 107,549 | 35,718 |
+| Setup | 66,511 | 22,231 |
+| Demo | 5,578 | 2,339 |
+| Archive research drawer | 13,765 | 5,292 |
+| **All unique JavaScript chunks** | **357,257** | **127,125** |
 
 The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-21,407 gzip bytes. The complete embedded SPA tree is 444,831 raw bytes. Shared
+21,407 gzip bytes. The complete embedded SPA tree is 446,106 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
 complete build. A mailbox-capable member additionally loads 10,541 gzip bytes
 of mailbox JavaScript on My account.
@@ -195,6 +195,11 @@ visible labels should use the terms documented in the Web app guide.
   request is unavailable.
 - Optimistic updates are limited to reversible interactions and must restore
   state on failure.
+
+Document and selection sharing publish the created URL before attempting
+clipboard access. `lib/clipboard.js` reports whether copying succeeded; the
+same URL stays selectable for manual copy. Late creation responses are ignored
+after navigation or an account transition, including their clipboard effects.
 
 Use semantic controls, visible focus, labels for icon-only actions, and stable
 dimensions for toolbars and repeated rows. Mobile layouts must preserve every
