@@ -65,8 +65,10 @@ also show the source revision. The CLI's `developmentVersion` owns the default
 source version line when no release version was injected.
 
 `App.svelte` imports each route directly through the existing `Lazy.svelte`
-component. There are no route re-export wrappers or custom chunk rules: Vite
-extracts shared dependencies. My account defers archive configuration and loads
+component. There are no route re-export wrappers. One native Rolldown group
+combines small document controls, link display, clipboard/query helpers, and
+upload-list refresh state; other shared dependencies use normal chunking.
+The QR encoder remains a separate on-demand import. My account defers archive configuration and loads
 mailbox code only for members who can manage mailboxes. Keep the shell at or
 below 35 KB gzip and remeasure the actual route dependency set after UI changes.
 
@@ -76,32 +78,43 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,846 | 34,867 |
-| Documents / Inbox | 25,728 | 9,455 |
-| Document detail | 29,411 | 10,131 |
-| Upload | 6,276 | 2,837 |
-| Search | 5,807 | 2,759 |
-| Views | 14,629 | 5,277 |
-| Calendar | 13,356 | 5,090 |
-| Trash | 6,025 | 2,802 |
-| Approvals | 18,410 | 6,613 |
-| Automations | 17,938 | 5,948 |
-| My account, without mailbox capability | 12,964 | 4,759 |
-| Archive configuration, including its Settings entry | 107,549 | 35,718 |
-| Setup | 66,511 | 22,231 |
-| Demo | 5,578 | 2,339 |
-| Archive research drawer | 13,765 | 5,292 |
-| **All unique JavaScript chunks** | **356,764** | **126,956** |
+| Shell: navigation, Dashboard, login | 95,566 | 34,707 |
+| Documents / Inbox | 27,373 | 10,056 |
+| Document detail | 35,118 | 12,242 |
+| Upload | 13,112 | 5,962 |
+| Search | 8,894 | 4,285 |
+| Views | 14,629 | 5,289 |
+| Calendar | 16,334 | 6,375 |
+| Trash | 8,327 | 3,921 |
+| Approvals | 18,351 | 6,551 |
+| Automations | 17,940 | 5,919 |
+| My account, without mailbox capability | 13,156 | 4,817 |
+| Archive configuration, including its Settings entry | 107,746 | 35,701 |
+| Setup | 66,511 | 22,202 |
+| Demo | 5,578 | 2,338 |
+| Archive research drawer | 13,763 | 5,282 |
+| **All unique JavaScript chunks** | **388,668** | **138,128** |
 
 The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-21,392 gzip bytes. The complete embedded SPA tree is 445,450 raw bytes. Shared
+22,018 gzip bytes. The complete embedded SPA tree is 481,087 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
-complete build. A mailbox-capable member additionally loads 10,541 gzip bytes
+complete build. A mailbox-capable member additionally loads 10,511 gzip bytes
 of mailbox JavaScript on My account.
 
 Smaller route transfers trade some whole-build compression for not fetching
 unrelated screens. These are transfer-size measurements, not browser memory
 or startup-latency claims.
+
+At the same source and dependency pins, grouping document controls reduces
+unique JavaScript chunks from 24 to 21 and Documents' additional requests from
+five to two. The initial shell remains one request. First visits to Upload,
+Search, and Trash transfer roughly 1–2 KB more compressed controls, then reuse
+that cached chunk. Heavy settings, research, and the QR encoder stay deferred.
+`ui/src/bundle.test.js` builds the production graph in memory and checks the
+35 KiB initial budget, document request count, deferred features, and static
+dependency cycles. Production browser tests use
+`PLAYWRIGHT_PRODUCTION=1 bun run e2e`; preview serves its built assets locally
+and proxies only backend routes.
 
 ```sh
 make ui

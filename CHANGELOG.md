@@ -34,6 +34,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Small document controls share one deferred bundle, reducing document-screen
+  requests without loading administration or QR encoding on the initial page.
+  Production-browser tests now exercise generated assets through local preview.
 - Upload receipts distinguish new, duplicate, restored and failed files, and
   retain honest processing state when automatic status checks pause.
 - Settings displays the release version in production. Development builds

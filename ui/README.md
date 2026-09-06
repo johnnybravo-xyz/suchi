@@ -26,6 +26,8 @@ From the repository root:
   `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` at a local Chromium binary.
 - `make ui` installs dependencies, builds the SPA, and refreshes
   `core/ui/spa/dist/`.
+- `PLAYWRIGHT_PRODUCTION=1 bun run e2e` rebuilds and tests the actual production
+  assets through Vite preview. It needs port 5173 free; API mocks remain mocks.
 
 Use `bun run check` for diagnostics without a production build. `bun.lock` is
 the only frontend lockfile and is checked by the root Make targets.
