@@ -58,6 +58,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Lightweight OCR retries empty pages once using sparse-text segmentation for
+  isolated labels. Rasterization, pages and retries share one real timeout, and
+  cancellation/output-limit failures cannot be recorded as successful empty OCR.
+  OCR revision 2 offers the existing controlled rescan path for older results.
 - Camera photos retain their EXIF orientation in generated PDFs. Raster images
   use 300-DPI page density without changing pixel resolution, preventing the
   OCR stage from enlarging ordinary phone photos into hundreds of megapixels.

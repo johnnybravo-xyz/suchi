@@ -8,17 +8,16 @@
 //   - **No searchable-PDF archive.** The caller writes documents.content
 //     but archive_blob stays NULL. FTS + full-text search still work
 //     because they index documents.content, not the archive.
-//   - **No auto-deskew / rotate / despeckle.** Modern scans usually
-//     don't need this; badly-aligned scans get worse text quality here
-//     than under ocrmypdf. If quality matters, install ocrmypdf and
-//     set OCR_ENGINE=ocrmypdf.
+//   - **No inferred rotation or perspective correction.** imgpdf honors
+//     camera EXIF orientation. Empty pages get one sparse-text retry;
+//     low-confidence text orientation never rotates the document.
 //   - **~4× smaller Docker image.** ocrmypdf pulls Python + pikepdf +
 //     Pillow + reportlab (~300 MB after deps). This path needs only
 //     poppler-utils (~25 MB) + tesseract-ocr (~10 MB) + eng data (~10 MB).
 //
 // Contract mirrors ocrmypdf.OCR: missing binary → Skipped, non-zero exit
 // → Skipped with StderrTail, timeout → error, output cap → error. Every
-// subprocess runs through core/sandbox (empty env, no network, bounded
+// subprocess runs through core/sandbox (empty env, bounded
 // output, hard timeout).
 package tessocr
 
@@ -120,6 +119,8 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 	if timeout == 0 {
 		timeout = DefaultTimeout()
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	dpi := opts.RasterDPI
 	if dpi == 0 {
 		dpi = DefaultRasterDPI
@@ -159,6 +160,9 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 		Dir:       dir,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("tessocr rasterize: %w", ctx.Err())
+		}
 		log.Info("tessocr.skip.pdftoppm_failed",
 			"exit", rasterRes.ExitCode, "stderr", tail(rasterRes.Stderr))
 		return &Result{Skipped: true, StderrTail: tail(rasterRes.Stderr), Duration: time.Since(start)}, nil
@@ -182,10 +186,11 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 		lastErr string
 	)
 	for i, p := range pages {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("tessocr page %d: %w", i+1, ctx.Err())
+		}
 		if int64(buf.Len()) >= maxBytes {
-			log.Warn("tessocr.truncated",
-				"cap_bytes", maxBytes, "read_pages", i, "total_pages", len(pages))
-			break
+			return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
 		}
 		res, err := sandbox.Run(ctx, sandbox.Opts{
 			Args:      []string{tesseract, p, "stdout", "-l", langArg},
@@ -193,16 +198,34 @@ func OCR(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*R
 			MaxStdout: maxBytes - int64(buf.Len()) + 1,
 			Dir:       dir,
 		})
+		// Automatic page segmentation can miss isolated labels completely.
+		// Retry only an empty successful page, preserving all existing text.
+		if err == nil && len(bytes.TrimSpace(res.Stdout)) == 0 {
+			log.Info("tessocr.page_retry_sparse", "page", i+1)
+			res, err = sandbox.Run(ctx, sandbox.Opts{
+				Args:      []string{tesseract, p, "stdout", "-l", langArg, "--psm", "11"},
+				Timeout:   timeout,
+				MaxStdout: maxBytes - int64(buf.Len()) + 1,
+				Dir:       dir,
+			})
+		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("tessocr page %d: %w", i+1, ctx.Err())
+			}
 			lastErr = tail(res.Stderr)
 			log.Info("tessocr.page_failed",
 				"page", i+1, "exit", res.ExitCode, "stderr", lastErr)
 			continue // one bad page shouldn't kill the whole document
 		}
-		if res.StdoutTruncated {
-			log.Warn("tessocr.page_truncated", "page", i+1)
-		}
+		separatorBytes := int64(0)
 		if buf.Len() > 0 {
+			separatorBytes = 1
+		}
+		if res.StdoutTruncated || int64(buf.Len()+len(res.Stdout))+separatorBytes > maxBytes {
+			return nil, fmt.Errorf("tessocr: text exceeded cap of %d bytes", maxBytes)
+		}
+		if separatorBytes != 0 {
 			buf.WriteString("\n")
 		}
 		buf.Write(res.Stdout)

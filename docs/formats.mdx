@@ -107,6 +107,14 @@ want the archive PDF (e.g. long-term retention where the searchable
 PDF matters more than image size), or set to `auto` and let the image
 you deployed decide.
 
+The lightweight engine retries a successfully processed page once with sparse
+text segmentation (`--psm 11`) only when normal OCR found no text. This helps
+isolated labels without replacing text already found. Rasterization, every page,
+and any retry share one `SUCHI_TESSERACT_TIMEOUT` deadline; extracted text is
+bounded by the configured output cap. It does not infer rotation from unreliable
+orientation guesses or correct photographed perspective. Configure
+`OCR_LANGUAGES` for the languages on the page; the default is English.
+
 ### Password-protected PDFs
 
 Encrypted PDFs go through a candidate-passwords loop before being

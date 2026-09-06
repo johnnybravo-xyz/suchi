@@ -270,6 +270,12 @@ or impose process memory limits. Keep format-specific input/output limits and
 deployment isolation explicit; a unit test with a stub executable does not
 establish the safety or availability of the real parser.
 
+`core/pipeline/tessocr/` runs rasterization and all OCR pages under one context
+deadline and text-output cap. Successful empty pages get one sparse-segmentation
+retry; already extracted text is kept. It indexes text without embedding a PDF
+text layer and does not infer orientation or perspective correction. See
+[OCR engine dispatch](/formats#ocr-engine-dispatch) for language and engine choices.
+
 `core/pipeline/imgpdf/` owns all supported raster-to-PDF conversion, including
 HEIC/HEIF; there is no separate HEIC adapter or intermediate PNG step. It
 explicitly requests PDF encoding and rejects output without the PDF signature

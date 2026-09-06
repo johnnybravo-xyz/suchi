@@ -87,7 +87,7 @@ const Kind = "post-ingest"
 // this pipeline" — a fresh row before its first post-ingest tick.
 const (
 	PipelineVersionContent = 2
-	PipelineVersionOCR     = 1
+	PipelineVersionOCR     = 2
 )
 
 // ContentLimits carries the per-format byte caps applied when writing
