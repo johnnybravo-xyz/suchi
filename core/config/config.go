@@ -39,7 +39,7 @@ type Config struct {
 	// decision. 0 disables pruning.
 	AuditRetentionDays int
 	// TODO(ocr-languages): discover installed language data, validate selections,
-	// and test mixed-script OCR (including eng+hin). See docs/formats.mdx.
+	// and test mixed-script OCR. See docs/formats.mdx.
 	OCRLanguages []string
 
 	// DevMode gates a small pile of DX conveniences intended for local

@@ -26,6 +26,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- OCR language documentation now covers installing packs in both Docker variants
+  and bare-metal deployments, verifying model discovery, configuration precedence
+  and rescanning existing documents.
 - The web app imports screens directly and defers archive/mailbox configuration,
   removing six route wrappers. At the same dependency pins, Documents loads 48%
   less route JavaScript, Upload 83% less, and My account without mailbox access

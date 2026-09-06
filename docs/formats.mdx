@@ -307,24 +307,153 @@ density without resizing the image, so the standard OCR rasterizer retains its
 original pixel resolution. This corrects camera metadata; it does not infer the
 reading direction of mixed labels or straighten photographed perspective.
 
-### Additional OCR languages (TODO)
+### Additional OCR languages
 
-The default is English (`eng`). Selecting another language does not install
-its Tesseract data. For example, Hindi and English text needs both language
-packs and `OCR_LANGUAGES=eng,hin` (or the equivalent OCR language preference).
+Both supported OCR engines use Tesseract language data. The default is English
+(`eng`); selecting another language does not install its data. Additional
+languages require both installed packs and an OCR language setting. The examples
+below combine English, Nepali, and German; other codes are listed in
+[Tesseract's language data](https://github.com/tesseract-ocr/tessdata_fast).
 Orientation correction and QR decoding do not supply missing language data.
+
+#### Docker installations
+
+Language packs belong in a derived image: the supplied Compose service has a
+read-only root filesystem, and both runtime images run as user `65532:65532`.
+Installing packages in a running container is not persistent across replacement.
+
+The standard image's Alpine repository does not package Nepali separately.
+Its example uses the upstream `tessdata_fast` 4.1.0 model, downloaded into the
+build directory once:
+
+```sh
+curl -fL --output nep.traineddata \
+  https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/nep.traineddata
+```
+
+For the Alpine-based **standard** image, `Dockerfile.ocr` contains:
+
+```dockerfile
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:beta
+FROM ${SUCHI_BASE}
+USER root
+RUN apk add --no-cache tesseract-ocr-data-deu
+COPY --chmod=0644 nep.traineddata /usr/share/tessdata/nep.traineddata
+RUN echo '280ba9450b4f21afbf5985e0de87857b75a972577c50ef0603c141ddde4f1cb8  /usr/share/tessdata/nep.traineddata' \
+    | sha256sum -c -
+USER 65532:65532
+```
+
+For the Debian-based **full** image, the equivalent file contains:
+
+```dockerfile
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:beta-full
+FROM ${SUCHI_BASE}
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr-nep tesseract-ocr-deu \
+    && rm -rf /var/lib/apt/lists/*
+USER 65532:65532
+```
+
+Either file builds and verifies with:
+
+```sh
+docker build -f Dockerfile.ocr -t suchi-ocr:local .
+docker run --rm --entrypoint /usr/bin/env suchi-ocr:local \
+  -i /usr/bin/tesseract --list-langs
+```
+
+The output should include `eng`, `nep`, and `deu`. `--build-arg SUCHI_BASE=...`
+can select a specific release tag or digest of the same image variant.
+The repository's Compose file selects this derived image when its `.env`
+contains `SUCHI_IMAGE=suchi-ocr:local`.
+
+#### Bare-metal installations
+
+Language data is installed for the Tesseract installation used by the Suchi
+service, not on the browser or mobile device:
+
+| Installation | Additional language data |
+| --- | --- |
+| Debian/Ubuntu | `sudo apt-get update` followed by `sudo apt-get install tesseract-ocr-nep tesseract-ocr-deu` |
+| Alpine | `sudo apk add --no-cache tesseract-ocr-data-deu`; Nepali uses the upstream model described below |
+| macOS with Homebrew | `brew install tesseract-lang` installs the additional language collection |
+
+For Alpine, the same pinned `nep.traineddata` download above can be verified
+before installation:
+
+```sh
+echo '280ba9450b4f21afbf5985e0de87857b75a972577c50ef0603c141ddde4f1cb8  nep.traineddata' \
+  | sha256sum -c -
+sudo install -m 0644 nep.traineddata /usr/share/tessdata/nep.traineddata
+```
+
+Suchi starts OCR subprocesses with an empty environment. Setting
+`TESSDATA_PREFIX` on the server alone therefore does not redirect model lookup.
+Package installation uses Tesseract's default data directory. Manually supplied
+`.traineddata` files also need to be readable there by the service user.
+This command checks the selected executable without relying on a shell's
+`TESSDATA_PREFIX`; a service with a different executable path needs that path
+checked instead:
+
+```sh
+env -i "$(command -v tesseract)" --list-langs
+```
+
+#### Select languages and reprocess documents
+
+Suchi uses comma-separated codes: `OCR_LANGUAGES=eng,nep,deu`. A TOML configuration
+uses `ocr_languages = ["eng", "nep", "deu"]`. Suchi converts the list to Tesseract's
+`eng+nep+deu` syntax; installing a pack alone does not activate it.
+
+For Compose, this is an addition to the existing `suchi` service's environment:
+
+```yaml
+services:
+  suchi:
+    environment:
+      OCR_LANGUAGES: eng,nep,deu
+```
+
+`docker compose up -d suchi` applies the selected image and environment changes.
+An entry in `.env` alone is not passed to the container unless Compose references
+it. Bare-metal file or environment changes take effect after a service restart.
+
+The web app's **Archive configuration → OCR and backups** settings can select
+the same comma-separated codes without a restart when neither a config file nor
+the process environment pins `OCR_LANGUAGES`. Pinned values override saved web
+settings, including when a boot key is present but empty. Removing that key and
+restarting or recreating the server allows live UI control; see
+[Configuration precedence](/config#precedence).
+The current settings form checks code syntax, not installed packs, and rejects
+some valid Tesseract names such as `chi_sim`. Those names can be selected through
+the environment or configuration file.
+
+Language changes affect subsequent OCR jobs, not previously stored text.
+After a small new upload confirms recognition, selecting existing documents in
+**Documents → Rescan** reprocesses them from their originals. Language changes
+do not change the pipeline version, so a version-based stale rescan does not
+necessarily select affected documents. The empty-content filter also misses
+documents with partial OCR or decoded barcode text.
+
+`suchi doctor` checks OCR binaries, not language-pack availability. A successful
+upload or job alone does not establish that all requested languages were read.
+Multiple enabled languages add CPU and memory work; detected document-language
+metadata does not choose OCR packs.
+
+#### Remaining language support work
 
 TODO(ocr-languages), tracked beside `Config.OCRLanguages` in code:
 
 - Discover installed language packs and validate configured choices, with a
   clear missing-pack error and available choices in OCR settings.
-- Document and verify adding language packs to both Docker targets and
-  bare-metal installations, without silently downloading them at runtime.
+- Add container smoke coverage for additional packs in both Docker targets.
 - Add synthetic image and PDF regression tests for mixed-script extraction,
-  starting with Hindi + English, including missing-pack behavior and rescans.
+  including missing-pack behavior and rescans.
 - Deployment evaluation of local multilingual engines remains pending.
   [PaddleOCR PP-OCRv5](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.html)
-  is the first candidate: its Devanagari recognizer supports Hindi and English
+  is the first candidate: its Devanagari recognizer supports Nepali and English
   together. [EasyOCR](https://github.com/JaidedAI/EasyOCR) is another candidate.
   Further evaluation covers text accuracy, CPU latency, peak memory, model size,
   and offline deployment on printed scans and camera photos. Preliminary
@@ -453,7 +582,7 @@ Every existing extractor is a template.
 | `PDF_MAX_CONTENT_BYTES`  | `8M`    | Cap on `pdftotext` output length.                                                 |
 | `ANYDOC_MAX_CONTENT_BYTES` | `32M` | Cap on EPUB and office-document Markdown output.                                 |
 | `DJVU_MAX_CONTENT_BYTES` | `32M`   | Cap on `djvutxt` output.                                                          |
-| `OCR_LANGUAGES`          | `eng`   | Comma-separated Tesseract language codes. `eng,deu,hin` etc.                      |
+| `OCR_LANGUAGES`          | `eng`   | Comma-separated Tesseract language codes, such as `eng,nep,deu`.                 |
 
 All accept `K`/`M`/`G` suffixes or raw byte counts. Truncation is logged;
 the doc still lands and FTS indexes what fit.
