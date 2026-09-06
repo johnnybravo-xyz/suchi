@@ -207,6 +207,9 @@ func (s *Server) WithDeviceOCRMinConfidence(confidence float64) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	// Public compatibility probe. Clients call this before sending credentials.
 	mux.HandleFunc("GET /api/handshake", s.GetHandshake)
+	mux.HandleFunc("POST /api/mobile/pairing", s.CreateMobilePairing)
+	mux.HandleFunc("DELETE /api/mobile/pairing", s.DeleteMobilePairing)
+	mux.HandleFunc("POST /api/mobile/pairing/exchange", s.ExchangeMobilePairing)
 
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)

@@ -16,13 +16,14 @@ var tokenRouteScopes = map[string]string{
 	"GET /api/handshake": "",
 	// Compatibility, credential exchange, identity inspection, and current
 	// credential logout are deliberately available without a content scope.
-	"POST /api/login":                "",
-	"POST /api/token/":               "",
-	"POST /api/logout":               "",
-	"GET /api/demo/mode":             "",
-	"POST /api/demo/session":         "",
-	"POST /api/demo/session/upgrade": "",
-	"GET /api/whoami":                "",
+	"POST /api/login":                   "",
+	"POST /api/token/":                  "",
+	"POST /api/mobile/pairing/exchange": "",
+	"POST /api/logout":                  "",
+	"GET /api/demo/mode":                "",
+	"POST /api/demo/session":            "",
+	"POST /api/demo/session/upgrade":    "",
+	"GET /api/whoami":                   "",
 	// Metrics still requires the administrator role in its handler.
 	"GET /metrics":                     "",
 	"GET /healthz":                     "",

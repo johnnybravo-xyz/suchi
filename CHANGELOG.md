@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Pair a mobile device from a signed-in browser using a locally generated QR
+  with a five-minute, single-use code and document-only token scopes.
 - First-party mobile clients can negotiate API compatibility, inspect token
   scopes, submit timestamped PDF OCR with explicit provenance, retry document
   and version uploads idempotently, resolve QR-split children, request bounded

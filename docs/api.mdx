@@ -18,6 +18,7 @@ an `X-Request-Id` header — carry it into bug reports.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Health / metrics        | `/healthz`, `/readyz`, `/metrics`                                                                                                                                                     |
 | Client compatibility     | `GET /api/handshake` (public; no credentials)                                                                                                                                         |
+| Mobile pairing           | `POST/DELETE /api/mobile/pairing` (session), `POST /api/mobile/pairing/exchange` (one-time code)                                                                                         |
 | Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `/oidc/login` and `/oidc/callback`                                                                                                               |
 | Auth (JSON)             | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`                                                                          |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
@@ -100,6 +101,51 @@ credentials. The response contains no deployment or user state:
 Clients must require `product` to equal `suchi`, require an API version they
 support, and compare `min_app_version` as numeric semantic-version components.
 Redirects are not compatibility responses and must not receive credentials.
+
+### `POST /api/mobile/pairing`
+
+Create a five-minute mobile pairing from a browser/OIDC session. API tokens and
+demo identities cannot create or cancel pairings. An optional JSON
+`{"name":"My phone"}` names the resulting device token; omission or blank uses
+`Suchi mobile`, and names are limited to 64 characters. Each new pairing
+replaces that user's previous unused code.
+
+**201** `{"pairing_url":"suchi://pair?…","qr_data_url":"data:image/png;base64,…","expires_at":1793495100,"name":"My phone","code":"<64 lowercase hex chars>"}`
+
+The link contract is
+`suchi://pair?v=1&server=<URL-encoded origin>&code=<code>`. Its server is the
+canonical configured `PUBLIC_URL` origin, never a request or forwarded host.
+The 320-pixel PNG is generated locally, without a QR service. The code has 256
+random bits; storage contains only its SHA-256 digest, owner, name, and expiry.
+Treat the code, link, and QR as temporary credentials: anyone holding one can
+pair until it expires, is replaced, is cancelled, or is used.
+
+### `DELETE /api/mobile/pairing`
+
+Session-only cancellation accepts JSON `{"code":"<code>"}` and returns **204**
+even if that user's matching code is already gone. It deletes only the supplied
+code, so closing an old dialog cannot cancel a newer pairing. Invalid code
+syntax returns **400** `pairing_invalid`.
+
+### `POST /api/mobile/pairing/exchange`
+
+Public exchange accepts JSON `{"code":"<64 lowercase hex chars>"}`. The app
+must first validate the scanned link, confirm the server with the user, and
+check `/api/handshake` without credentials or redirects. Production origins
+require HTTPS; physical-device HTTP testing remains an explicit local-development
+exception.
+
+**200** `{"token":"<API token>","name":"My phone","scopes":"documents:read,documents:write"}`
+
+Scopes are a comma-separated string, matching the existing token-management
+response. The code is atomically consumed for an enabled user before token
+issuance; concurrent scans cannot issue two tokens. Invalid, expired, replaced,
+used, and disabled-account codes all return **400** `pairing_invalid`. If token
+issuance fails or its response is lost, start a new pairing: consumed codes are
+never replayed. The device token can later be revoked through session-only
+token management. Pairing endpoints use `Cache-Control: no-store`, create no
+browser session, and never log the code, link, QR, or token. Creation and exchange
+share the login rate limit, including trailing-slash aliases.
 
 ### `GET /metrics`
 

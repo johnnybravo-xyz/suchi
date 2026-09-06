@@ -37,3 +37,10 @@ CREATE TABLE upload_idempotency (
 
 CREATE INDEX upload_idempotency_created_at
     ON upload_idempotency(created_at);
+
+CREATE TABLE mobile_pairings (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
+    name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+    expires_at INTEGER NOT NULL
+) STRICT;

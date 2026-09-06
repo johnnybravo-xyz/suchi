@@ -53,6 +53,10 @@ func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	}
 	assertSchemaVersion(t, d, 3)
 	assertBeta2Schema(t, d)
+	var pairingCount int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM mobile_pairings`).Scan(&pairingCount); err != nil || pairingCount != 0 {
+		t.Fatalf("mobile pairing schema count=%d err=%v", pairingCount, err)
+	}
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatalf("repeat mobile migration: %v", err)
 	}
