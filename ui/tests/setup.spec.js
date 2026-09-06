@@ -2145,6 +2145,73 @@ test('cancels mobile codes that finish after closing the prompt', async ({ page 
   await expect(page.getByText('suchi://pair?late-secret')).toHaveCount(0)
 })
 
+for (const refreshedUserID of [1, 2]) {
+  test(`clears mobile pairing secrets when the session refreshes as user ${refreshedUserID}`, async ({ page }) => {
+    await mockAPI(page)
+    let identityReads = 0
+    let pendingIdentity
+    let creates = 0
+    const code = 'd'.repeat(64)
+    const pairingURL = `suchi://pair?v=1&server=https%3A%2F%2Farchive.example.test&code=${code}`
+    await page.route('**/api/whoami', async route => {
+      if (++identityReads === 1) return route.fallback()
+      pendingIdentity = route
+    })
+    await page.route('**/api/mobile/pairing', async route => {
+      if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 })
+      creates++
+      return route.fulfill({ status: 201, json: {
+        code, pairing_url: pairingURL, expires_at: Math.floor(Date.now() / 1000) + 300,
+        qr_data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+      } })
+    })
+    await page.goto('/#/settings')
+    await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+    await expect.poll(() => !!pendingIdentity).toBe(true)
+    await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Pair mobile app', exact: true })
+    await dialog.getByRole('button', { name: 'Generate QR code' }).click()
+    await expect(dialog.locator('#pairing-link')).toHaveValue(pairingURL)
+
+    await pendingIdentity.fulfill({ json: {
+      user_id: refreshedUserID, email: 'refreshed@example.test', display_name: 'Refreshed user',
+      role: 'member', capabilities: [], authn_by: 'local',
+    } })
+    await expect(dialog).toHaveCount(0)
+    await expect(page.locator('#pairing-link')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Copy pairing link' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+    await expect(dialog).toBeVisible()
+    await expect(dialog.locator('#pairing-link')).toHaveCount(0)
+    await expect(dialog.locator('img')).toHaveCount(0)
+    expect(creates).toBe(1)
+  })
+}
+
+test('route changes cancel and clear an open mobile pairing code', async ({ page }) => {
+  await mockAPI(page)
+  const code = 'e'.repeat(64)
+  let cancelled
+  await page.route('**/api/mobile/pairing', async route => {
+    if (route.request().method() === 'DELETE') {
+      cancelled = route.request().postDataJSON()
+      return route.fulfill({ status: 204 })
+    }
+    return route.fulfill({ status: 201, json: {
+      code, pairing_url: 'suchi://pair?route-secret', expires_at: Math.floor(Date.now() / 1000) + 300,
+      qr_data_url: 'data:image/png;base64,',
+    } })
+  })
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  await page.getByRole('button', { name: 'Generate QR code' }).click()
+  await expect(page.locator('#pairing-link')).toHaveValue('suchi://pair?route-secret')
+  await page.evaluate(() => { location.hash = '#/documents' })
+  await expect(page.getByRole('dialog', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
+  await expect.poll(() => cancelled).toEqual({ code })
+  await expect(page.locator('#pairing-link')).toHaveCount(0)
+})
+
 test('groups metadata reviews by document', async ({ page }) => {
   await mockAPI(page)
 

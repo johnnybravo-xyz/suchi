@@ -21,6 +21,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Mobile pairing prompts clear and close on session refresh or account changes;
+  stale prompts cannot generate codes or copy the previous account's link.
 - Developer mode binds loopback by default and requires an explicit matching
   private interface opt-in for physical-device LAN testing. Production startup
   rejects an enabled account retaining the public development credentials.

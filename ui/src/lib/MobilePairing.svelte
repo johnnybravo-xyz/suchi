@@ -27,7 +27,7 @@
 
   async function generate(event) {
     event.preventDefault()
-    if (busy || !deviceName.trim()) return
+    if (disposed || session.user !== user || busy || !deviceName.trim()) return
     busy = true
     error = ''
     copyMessage = ''
@@ -45,12 +45,22 @@
   }
 
   async function copyLink() {
+    if (disposed || session.user !== user) return
     const link = pairing?.pairing_url
     if (!link || !remaining) return
     const copied = await copyText(link)
     if (disposed || session.user !== user || pairing?.pairing_url !== link) return
     copyMessage = copied ? 'Pairing link copied.' : 'Select the pairing link below and copy it manually.'
   }
+
+  $effect(() => {
+    if (session.user !== user) {
+      pairing = null
+      copyMessage = ''
+      error = ''
+      onClose?.()
+    }
+  })
 
   onMount(() => {
     dialog.showModal()
@@ -59,7 +69,10 @@
   })
   onDestroy(() => {
     disposed = true
-    void cancelCode(pairing?.code)
+    const code = pairing?.code
+    pairing = null
+    copyMessage = ''
+    void cancelCode(code)
     dialog?.close()
   })
 </script>
