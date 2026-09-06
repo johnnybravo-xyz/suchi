@@ -195,8 +195,11 @@ local session issuance into the demo provisioner, without a separate credential
 store or schema. See [Demo instance](/demo-instance) for retention and isolation.
 
 Preview/download aliases share `core/ui`'s blob-serving behavior, including
-object checks, reveal gates, ETags, and preview CSP. Thumbnails have their own
-handler in `core/api/documents_thumb.go`. High sensitivity is a reveal posture,
+object checks, reveal gates, ETags, and preview CSP. These endpoints allow
+trashed documents only for their owner or an administrator, matching the Trash
+scope; ordinary ACL readers and public share links cannot fetch trashed bytes.
+Thumbnails have their own live-document handler in `core/api/documents_thumb.go`.
+High sensitivity is a reveal posture,
 not an additional tenant boundary. Normal API document reads can return content
 to an authorized reader; untouched `raw=1` downloads are an administrator
 session-only surface.

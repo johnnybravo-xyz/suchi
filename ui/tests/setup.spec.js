@@ -211,6 +211,7 @@ async function mockAPI(page, options = {}) {
   let taxonomyApplied = false
   let researchContextMode = options.researchContextMode || 'balanced'
   let trashDocuments = [...(options.trashDocuments || [])]
+  const restoredDocuments = new Set()
   await page.route('**/preview/**', async route => {
     await route.fulfill({
       contentType: 'text/html',
@@ -220,12 +221,14 @@ async function mockAPI(page, options = {}) {
   await page.route('**/api/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
+    options.apiRequests?.push({ method: request.method(), path })
     const thumb = path.match(/^\/api\/documents\/(\d+)\/thumb\/?$/)
     const documentDetail = path.match(/^\/api\/documents\/(\d+)$/)
     const documentVersions = path.match(/^\/api\/documents\/(\d+)\/versions\/$/)
     const similarDocuments = path.match(/^\/api\/documents\/(\d+)\/similar$/)
     const documentAccess = path.match(/^\/api\/acls\/document\/(\d+)$/)
     const trashDocument = path.match(/^\/api\/trash\/(\d+)$/)
+    const restoreDocument = path.match(/^\/api\/documents\/(\d+)\/restore$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -480,6 +483,14 @@ async function mockAPI(page, options = {}) {
       await route.fulfill({ status: 204 })
       return
     }
+    else if (restoreDocument && request.method() === 'POST') {
+      const documentID = Number(restoreDocument[1])
+      options.restoreRequests?.push(documentID)
+      restoredDocuments.add(documentID)
+      trashDocuments = trashDocuments.filter(document => document.id !== documentID)
+      await route.fulfill({ status: 204 })
+      return
+    }
     else if (path === '/api/email-accounts') body = {
       accounts: [
         {
@@ -570,7 +581,9 @@ async function mockAPI(page, options = {}) {
         ],
         tags: [],
         correspondents: [],
+        ...options.trashDocuments?.find(document => document.id === documentID),
         ...response?.document,
+        ...(restoredDocuments.has(documentID) ? { trashed_at: null, deletes_at: null } : {}),
       }
     }
     else if (documentVersions) body = { results: [] }
@@ -2722,6 +2735,123 @@ test('shows scoped calendar loading and retry before its empty state', async ({ 
   await expect(page.getByText('Date service unavailable', { exact: true })).toHaveCount(0)
   await expect(page.locator('.month-grid')).toHaveCount(0)
 })
+
+test('opens a readable Trash document without overlapping actions and restores its live controls', async ({ page }, testInfo) => {
+  const now = Math.floor(Date.now() / 1000)
+  const title = 'Household insurance renewal and equipment protection schedule for September 2026.pdf'
+  const apiRequests = []
+  const restoreRequests = []
+  await mockAPI(page, {
+    setupCompletedAt: 1, filingTreeChosen: true, userID: 7, userRole: 'member', capabilities: ['share_links'],
+    apiRequests, restoreRequests,
+    documentContent: 'Policy number 1234. Equipment and household cover renewal schedule.',
+    trashDocuments: [{
+      id: 31, owner_id: 7, title, mime_type: 'application/pdf', original_size: 2048,
+      sensitivity: 'restricted', trashed_at: now - 86400, deletes_at: now + 29 * 86400,
+    }],
+  })
+  await page.goto('/#/trash')
+  const row = page.locator('.trash-row').filter({ hasText: title })
+  const documentLink = row.locator('.trash-document')
+  const actions = row.locator('.trash-actions')
+  await expect(documentLink).toHaveAttribute('href', '#/doc/31')
+  await expect(documentLink).toContainText(title)
+  await expect(documentLink.getByRole('button')).toHaveCount(0)
+  await expect(actions.getByRole('button', { name: 'Restore', exact: true })).toBeVisible()
+  await expect(actions.getByRole('button', { name: 'Delete permanently', exact: true })).toBeVisible()
+  const linkBox = await documentLink.boundingBox()
+  const actionsBox = await actions.boundingBox()
+  const rowBox = await row.boundingBox()
+  const viewport = page.viewportSize()
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(viewport.width)
+  if (viewport.width <= 700) expect(actionsBox.y).toBeGreaterThanOrEqual(linkBox.y + linkBox.height)
+  else expect(actionsBox.x).toBeGreaterThanOrEqual(linkBox.x + linkBox.width)
+  expect(await documentLink.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('trash-list.png'), fullPage: true })
+  if (testInfo.project.use.hasTouch) await documentLink.tap()
+  else { await documentLink.focus(); await page.keyboard.press('Enter') }
+  await expect(page).toHaveURL(/#\/doc\/31$/)
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
+  const trashNotice = page.getByRole('region', { name: 'Trashed document', exact: true })
+  await expect(trashNotice.getByRole('heading', { name: 'Document in Trash', exact: true })).toBeVisible()
+  await expect(trashNotice).toContainText('Read-only. Deletes permanently')
+  await expect(trashNotice).toContainText('Restore to make changes.')
+  await expect(page.getByRole('link', { name: 'Back to Trash', exact: true })).toHaveAttribute('href', '#/trash')
+  await expect(page.getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', '/download/31')
+  await expect(page.getByTitle('Rename', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.detail select')).toHaveCount(0)
+  for (const name of ['Edit', 'Share', 'Access', 'Trash']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
+  }
+  const preview = page.locator('.preview')
+  await expect(preview.locator('iframe')).toHaveCount(0)
+  await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'true')
+  await preview.getByRole('button', { name: 'Reveal preview', exact: true }).click()
+  await expect(preview.locator('iframe')).toHaveAttribute('src', '/preview/31?reveal=1')
+  await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'false')
+  const liveOnlyPaths = ['/api/documents/31/versions/', '/api/documents/31/similar', '/api/acls/document/31']
+  expect(apiRequests.filter(request => liveOnlyPaths.includes(request.path))).toEqual([])
+  await page.screenshot({ path: testInfo.outputPath('trashed-document.png'), fullPage: true })
+  await page.getByRole('button', { name: 'Restore', exact: true }).click()
+  await expect(page.getByTitle('Rename', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Sensitivity')).toHaveValue('restricted')
+  await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(0)
+  await expect(trashNotice).toHaveCount(0)
+  await expect(page).toHaveURL(/#\/doc\/31$/)
+  expect(restoreRequests).toEqual([31])
+  await expect.poll(() => apiRequests.map(request => request.path)).toEqual(expect.arrayContaining(liveOnlyPaths))
+})
+
+test('confirms permanent deletion from Trash detail and retains the document after an error', async ({ page }) => {
+  const apiRequests = []
+  const permanentDeleteRequests = []
+  const failPaths = ['/api/trash/31']
+  const now = Math.floor(Date.now() / 1000)
+  await mockAPI(page, {
+    setupCompletedAt: 1, filingTreeChosen: true, apiRequests, permanentDeleteRequests,
+    failPaths, failureMessage: 'Storage is unavailable; try again.',
+    trashDocuments: [{ id: 31, owner_id: 2, title: 'Old insurance notice', mime_type: 'application/pdf', trashed_at: now - 86400, deletes_at: now + 86400 }],
+  })
+  await page.goto('/#/doc/31')
+  await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Delete permanently', exact: true }).click()
+  const dialog = page.getByRole('alertdialog', { name: 'Delete permanently?', exact: true })
+  await expect(dialog).toContainText('Old insurance notice')
+  await expect(dialog).toContainText('This cannot be undone.')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(apiRequests.filter(request => request.method === 'DELETE')).toEqual([])
+  await page.getByRole('button', { name: 'Delete permanently', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Delete permanently', exact: true }).click()
+  await expect(page.getByText('Storage is unavailable; try again.', { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  await expect(page).toHaveURL(/#\/doc\/31$/)
+  failPaths.length = 0
+  await dialog.getByRole('button', { name: 'Delete permanently', exact: true }).click()
+  await expect(page).toHaveURL(/#\/trash$/)
+  await expect(page.getByText('Trash is empty.', { exact: true })).toBeVisible()
+  expect(permanentDeleteRequests).toEqual([31])
+  expect(apiRequests.filter(request => request.path === '/api/trash/31' && request.method === 'DELETE')).toHaveLength(2)
+})
+
+for (const scenario of [
+  { name: 'its retention deadline has passed', userRole: 'admin', ownerID: 7, expiresIn: -1 },
+  { name: 'the reader is not its owner', userRole: 'member', ownerID: 8, expiresIn: 86400 },
+]) {
+  test(`does not offer Restore in Trash detail when ${scenario.name}`, async ({ page }) => {
+    const now = Math.floor(Date.now() / 1000)
+    await mockAPI(page, {
+      setupCompletedAt: 1, filingTreeChosen: true, userID: 7, userRole: scenario.userRole,
+      trashDocuments: [{ id: 31, owner_id: scenario.ownerID, title: 'Read-only trashed document', mime_type: 'application/pdf', trashed_at: now - 31 * 86400, deletes_at: now + scenario.expiresIn }],
+    })
+    await page.goto('/#/doc/31')
+    await expect(page.getByRole('heading', { name: 'Read-only trashed document', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Restore', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Back to Trash', exact: true })).toBeVisible()
+  })
+}
 
 test('confirms permanent Trash deletion before removing rows', async ({ page }) => {
   const permanentDeleteRequests = []

@@ -73,25 +73,25 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,679 | 34,718 |
-| Documents / Inbox | 25,011 | 9,187 |
-| Document detail | 25,944 | 8,999 |
+| Shell: navigation, Dashboard, login | 95,740 | 34,747 |
+| Documents / Inbox | 25,011 | 9,191 |
+| Document detail | 28,767 | 9,756 |
 | Upload | 6,432 | 2,990 |
-| Search | 5,807 | 2,803 |
+| Search | 5,807 | 2,804 |
 | Views | 14,630 | 5,356 |
-| Calendar | 13,357 | 5,120 |
-| Trash | 5,536 | 2,638 |
+| Calendar | 13,357 | 5,121 |
+| Trash | 6,025 | 2,808 |
 | Approvals | 18,903 | 6,782 |
 | Automations | 17,941 | 5,969 |
 | My account, without mailbox capability | 12,965 | 4,773 |
-| Archive configuration, including its Settings entry | 107,544 | 35,754 |
-| Setup | 66,502 | 22,268 |
+| Archive configuration, including its Settings entry | 107,544 | 35,756 |
+| Setup | 66,502 | 22,271 |
 | Demo | 5,583 | 2,343 |
 | Archive research drawer | 13,759 | 5,324 |
-| **All unique JavaScript chunks** | **352,609** | **125,834** |
+| **All unique JavaScript chunks** | **355,982** | **126,798** |
 
 The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-20,629 gzip bytes. The complete embedded SPA tree is 440,580 raw bytes. Shared
+21,407 gzip bytes. The complete embedded SPA tree is 444,831 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
 complete build. A mailbox-capable member additionally loads 10,541 gzip bytes
 of mailbox JavaScript on My account.
@@ -118,6 +118,14 @@ conditional feature would otherwise force unrelated code into the request.
 New screens should use a stable path, support browser back and forward, and
 have a useful narrow-screen layout. Avoid adding a second router or navigation
 registry.
+
+Trash links use the existing `#/doc/{id}` route. `DocumentDetail.svelte` uses
+the server's `trashed_at`, `deletes_at`, and `owner_id` fields to show a read-only
+recovery screen rather than a second document viewer. It skips versions,
+similarity, and access-management requests while trashed. Restore reloads the
+same document; confirmed permanent deletion returns to Trash. Blob access is
+enforced by the server, not these UI conditions. Trash row links and recovery
+buttons are separate semantic controls, with actions below the title on mobile.
 
 Calendar links with `document_ids` open the same route's all-dates agenda;
 ordinary `#/calendar` keeps the month grid and saved-View selector. Calendar's

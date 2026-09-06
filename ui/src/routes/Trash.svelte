@@ -11,6 +11,7 @@
   let err = $state('')
   let deleteRequest = $state(null)
   let deleteBusy = $state(false)
+  let restoringID = $state(null)
 
   async function load() {
     loading = true
@@ -27,6 +28,7 @@
   }
 
   async function restore(d) {
+    restoringID = d.id
     try {
       await restoreDocument(d.id)
       rows = rows.filter(x => x.id !== d.id)
@@ -34,6 +36,8 @@
       notify?.('Restored')
     } catch (ex) {
       notify?.(ex.message || 'Could not restore')
+    } finally {
+      restoringID = null
     }
   }
 
@@ -87,23 +91,26 @@
   {:else}
     <div class="index">
       {#each rows as d (d.id)}
-        <div class="irow">
-          <span class="dot"></span>
-          <span class="grow">
-            <span class="title" style="display:block">{d.title || `Document #${d.id}`}</span>
-            <span class="sub">
-              {d.mime_type || ''} {d.original_size ? '· ' + fmtBytes(d.original_size) : ''}
-              · trashed {fmtDate(d.trashed_at)} · Deletes permanently {fmtDate(d.deletes_at)}
+        <div class="irow trash-row">
+          <a class="trash-document" href={`#/doc/${d.id}`}>
+            <span class="file-icon"><Icon name="docs" size={23} /></span>
+            <span class="trash-info">
+              <span class="title">{d.title || `Document #${d.id}`}</span>
+              <span class="sub">{d.mime_type || 'Unknown format'}{d.original_size ? ' · ' + fmtBytes(d.original_size) : ''}</span>
+              <span class="sub">Trashed {fmtDate(d.trashed_at)} · Deletes permanently {fmtDate(d.deletes_at)}</span>
             </span>
-          </span>
-          <span class="toolbar" style="margin:0">
+            <Icon name="chev" size={15} />
+          </a>
+          <div class="trash-actions">
             {#if d.deletes_at > Math.floor(Date.now() / 1000)}
-              <button class="btn sm" onclick={() => restore(d)}><Icon name="left" size={13} /> Restore</button>
+              <button class="btn sm" disabled={restoringID !== null} onclick={() => restore(d)}>
+                <Icon name="refresh" size={13} /> {restoringID === d.id ? 'Restoring…' : 'Restore'}
+              </button>
             {/if}
             <button class="btn sm danger" onclick={() => (deleteRequest = { kind: 'document', document: d })}>
               <Icon name="trash" size={13} /> Delete permanently
             </button>
-          </span>
+          </div>
         </div>
       {/each}
     </div>
@@ -122,3 +129,19 @@
     onConfirm={confirmDelete}
     onCancel={() => (deleteRequest = null)} />
 {/if}
+
+<style>
+  .trash-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; cursor: default; }
+  .trash-document { display: flex; align-items: center; gap: 12px; min-width: 0; text-decoration: none; }
+  .file-icon { display: grid; place-items: center; width: 36px; height: 44px; flex: none; color: var(--muted); background: var(--surface-2); border-radius: var(--r-sm); }
+  .trash-info { display: grid; gap: 3px; min-width: 0; flex: 1; }
+  .trash-row .title, .trash-row .sub { white-space: normal; overflow-wrap: anywhere; }
+  .trash-document:hover .title { color: var(--accent); }
+  .trash-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .trash-actions .btn { min-height: 40px; }
+  @media (max-width: 700px) {
+    .trash-row { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px; }
+    .trash-document { align-items: flex-start; }
+    .trash-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+  }
+</style>

@@ -58,6 +58,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Trash documents open in the existing viewer with read-only metadata and
+  owner/admin preview, download, restore, and confirmed permanent deletion.
+  Mobile rows keep document titles above their actions; sensitive reveal gates
+  and public-share exclusions remain in place.
 - Archive research opens its retrieved documents' Calendar dates in an all-dates
   agenda across months and years, with explicit scope and pagination. New date
   links clear stale Calendar filters; the ordinary Calendar stays month-based.

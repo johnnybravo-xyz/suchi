@@ -250,9 +250,11 @@ func (s *Server) Preview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; img-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; sandbox")
 	var sens, mimeType, content sql.NullString
+	principal := auth.FromContext(r.Context())
 	err := s.DB.Read.QueryRowContext(r.Context(),
 		`SELECT sensitivity, mime_type, content FROM documents
-		 WHERE id = ? AND trashed_at IS NULL`, id).Scan(&sens, &mimeType, &content)
+		 WHERE id = ? AND (trashed_at IS NULL OR owner_id = ? OR ?)`,
+		id, principal.UserID, principal.Role == "admin").Scan(&sens, &mimeType, &content)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -485,10 +487,13 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 		origBlob, archBlob, decBlob sql.NullString
 		title, mime                 sql.NullString
 	)
+	// Trash bytes follow the owner/admin Trash scope, not grants to other readers.
+	// The caller already checked ordinary document-view permission.
+	principal := auth.FromContext(r.Context())
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT original_blob, archive_blob, decrypted_blob, title, mime_type
-		FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, id).Scan(&origBlob, &archBlob, &decBlob, &title, &mime)
+		FROM documents WHERE id = ? AND (trashed_at IS NULL OR owner_id = ? OR ?)
+	`, id, principal.UserID, principal.Role == "admin").Scan(&origBlob, &archBlob, &decBlob, &title, &mime)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return

@@ -539,6 +539,7 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
 	ID           int64  `json:"id"`
+	OwnerID      int64  `json:"owner_id"`
 	Title        string `json:"title"`
 	Content      string `json:"content"`
 	OriginalBlob string `json:"original_blob"`
@@ -564,6 +565,7 @@ type DocumentDetail struct {
 	// real creation date. Nil when the ingest path didn't carry it.
 	SourceMTime    *int64             `json:"source_mtime,omitempty"`
 	TrashedAt      *int64             `json:"trashed_at,omitempty"`
+	DeletesAt      *int64             `json:"deletes_at,omitempty"`
 	Sources        []DocumentSource   `json:"sources"`
 	Tags           []string           `json:"tags"`
 	Correspondents []DocCorrespondent `json:"correspondents"`
@@ -687,7 +689,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		sourceMTime     sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT d.id, d.title, COALESCE(d.content, ''),
+		SELECT d.id, d.owner_id, d.title, COALESCE(d.content, ''),
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
 		       d.jd_category_id, d.sensitivity,
@@ -699,7 +701,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
 		WHERE d.id = ?
-	`, id).Scan(&d.ID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+	`, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
@@ -739,6 +741,8 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if trashed.Valid {
 		v := trashed.Int64
 		d.TrashedAt = &v
+		deletesAt := v + int64(trash.Retention/time.Second)
+		d.DeletesAt = &deletesAt
 	}
 	if sourceMTime.Valid {
 		v := sourceMTime.Int64

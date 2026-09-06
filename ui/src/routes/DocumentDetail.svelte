@@ -1,5 +1,5 @@
 <script>
-  import { getDocument, patchDocument, deleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
@@ -26,6 +26,8 @@
   let accessOpen = $state(false)
   let trashOpen = $state(false)
   let trashBusy = $state(false)
+  let deleteOpen = $state(false)
+  let recoveryBusy = $state(false)
   let loadVersion = 0
 
   const ACCESS_LEVELS = [
@@ -36,7 +38,11 @@
 
   const highSensitivity = $derived(isHighSensitivity(doc?.sensitivity))
   const blurred = $derived(highSensitivity && !revealed)
-  const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
+  const trashed = $derived(doc?.trashed_at != null)
+  const canManageTrash = $derived(trashed && (session.user?.role === 'admin' || doc?.owner_id === session.user?.user_id))
+  const canRestore = $derived(canManageTrash && doc?.deletes_at > Math.floor(Date.now() / 1000))
+  const canReadFile = $derived(!trashed || canManageTrash)
+  const canShareLinks = $derived(!trashed && hasCapability(session.user, 'share_links'))
   // Inline-previewable formats: archive_blob is always PDF, browsers render
   // common media natively, and the server turns stored email bodies into a
   // sandboxed HTML preview. Other formats swap the iframe for a download panel.
@@ -72,11 +78,18 @@
     similar = null
     access = null
     canManageAccess = false
+    editingTitle = false
+    editingLanguages = false
+    shareOpen = false
+    shareURL = ''
+    trashOpen = false
+    deleteOpen = false
     try {
       const loaded = await getDocument(documentID)
       if (version !== loadVersion) return
       doc = loaded
       titleDraft = loaded.title
+      if (loaded.trashed_at != null) return
       documentVersions(documentID)
         .then((result) => { if (version === loadVersion) versions = result?.results || result || [] })
         .catch(() => {})
@@ -257,11 +270,32 @@
     finally { trashBusy = false }
   }
 
+  async function restore() {
+    recoveryBusy = true
+    try {
+      await restoreDocument(id)
+      notify?.('Restored')
+      await load()
+    } catch (ex) { notify?.(ex.message || 'Could not restore') }
+    finally { recoveryBusy = false }
+  }
+
+  async function permanentlyDelete() {
+    recoveryBusy = true
+    try {
+      await permanentlyDeleteDocument(id)
+      deleteOpen = false
+      notify?.('Permanently deleted')
+      go('#/trash')
+    } catch (ex) { notify?.(ex.message || 'Could not permanently delete') }
+    finally { recoveryBusy = false }
+  }
+
   $effect(() => { id; revealed = false; accessOpen = false; load() })
 </script>
 
 <div class="toolbar">
-  <a class="btn sm" href="#/documents"><Icon name="left" size={13} /> All documents</a>
+  <a class="btn sm" href={trashed ? '#/trash' : '#/documents'}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
   <span class="spacer"></span>
   {#if doc}
     {#if highSensitivity}
@@ -273,14 +307,14 @@
         <Icon name="eye" size={13} /> {revealed ? 'Hide' : 'Reveal'}
       </button>
     {/if}
-    <a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>
+    {#if canReadFile}<a class="btn sm" href={downloadPath(id)} download><Icon name="download" size={13} /> Download</a>{/if}
     {#if canManageAccess}
       <button class="btn sm" onclick={() => (accessOpen = true)}><Icon name="shield" size={13} /> Access</button>
     {/if}
     {#if canShareLinks}
       <button class="btn sm" onclick={openShare}><Icon name="link" size={13} /> Share</button>
     {/if}
-    <button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>
+    {#if !trashed}<button class="btn sm danger" onclick={() => (trashOpen = true)}><Icon name="trash" size={13} /> Trash</button>{/if}
   {/if}
 </div>
 
@@ -296,9 +330,27 @@
 {:else if err}
   <div class="err">{err}</div>
 {:else if doc}
+  {#if trashed}
+    <section class="trash-notice" aria-label="Trashed document">
+      <div>
+        <h2><Icon name="trash" size={17} /> Document in Trash</h2>
+        <p class="sub">Read-only. Deletes permanently {fmtDate(doc.deletes_at)}.{canRestore ? ' Restore to make changes.' : ''}</p>
+      </div>
+      {#if canManageTrash}
+        <div class="trash-actions">
+          {#if canRestore}
+            <button class="btn sm primary" disabled={recoveryBusy} onclick={restore}><Icon name="refresh" size={13} /> {recoveryBusy && !deleteOpen ? 'Restoring…' : 'Restore'}</button>
+          {/if}
+          <button class="btn sm danger" disabled={recoveryBusy} onclick={() => (deleteOpen = true)}><Icon name="trash" size={13} /> Delete permanently</button>
+        </div>
+      {/if}
+    </section>
+  {/if}
   <div class="detail">
     <div class="preview" class:blurred>
-      {#if blurred}
+      {#if !canReadFile}
+        <div class="reveal"><span class="sub">Only the owner or an administrator can preview files in Trash.</span></div>
+      {:else if blurred}
         <div class="reveal">
           <span class="pill danger">{sensitivityLabel(doc.sensitivity)}</span>
           <button class="btn" onclick={() => (revealed = true)}><Icon name="eye" size={14} /> Reveal preview</button>
@@ -319,7 +371,9 @@
 
     <div style="display:flex;flex-direction:column;gap:14px">
       <div class="card">
-        {#if editingTitle}
+        {#if trashed}
+          <h2 style="font-size:1.15rem;overflow-wrap:anywhere">{doc.title || `Document #${doc.id}`}</h2>
+        {:else if editingTitle}
           <form onsubmit={(e) => { e.preventDefault(); editingTitle = false; save({ title: titleDraft }, 'Title saved') }}>
             <input class="input" bind:value={titleDraft} />
           </form>
@@ -334,7 +388,7 @@
         <dl class="kv" style="margin-top:12px">
           <dt>Filed under</dt>
           <dd>
-            {#if jdCategories.length}
+            {#if !trashed && jdCategories.length}
               <select class="input" style="padding:4px 8px;font-size:.8rem"
                       value={doc.jd_category_id}
                       onchange={(e) => save({ jd_category_id: Number(e.target.value) }, 'Refiled')}>
@@ -351,6 +405,9 @@
           </dd>
           <dt>Sensitivity</dt>
           <dd>
+            {#if trashed}
+              {sensitivityLabel(doc.sensitivity)}
+            {:else}
             <select class="input" style="padding:4px 8px;font-size:.8rem"
                     aria-label="Sensitivity"
                     value={doc.sensitivity || ''}
@@ -360,6 +417,7 @@
                 <option value={option.value}>{option.label}</option>
               {/each}
             </select>
+            {/if}
           </dd>
           <dt>Added</dt><dd>{fmtDate(doc.added_at || doc.created_at)}</dd>
           {#if doc.sources?.length}
@@ -411,7 +469,7 @@
               {:else}
                 <span class="sub">not detected</span>
               {/if}
-              <button class="btn sm" style="margin-left:8px" onclick={startEditLanguages} type="button">Edit</button>
+              {#if !trashed}<button class="btn sm" style="margin-left:8px" onclick={startEditLanguages} type="button">Edit</button>{/if}
             {/if}
           </dd>
         </dl>
@@ -554,6 +612,17 @@
     onCancel={() => (trashOpen = false)} />
 {/if}
 
+{#if deleteOpen}
+  <ConfirmDialog
+    title="Delete permanently?"
+    message={`“${doc?.title || `Document #${id}`}” will be permanently deleted, and any share link containing it will be revoked. This cannot be undone.`}
+    confirmLabel="Delete permanently"
+    busyLabel="Deleting…"
+    busy={recoveryBusy}
+    onConfirm={permanentlyDelete}
+    onCancel={() => (deleteOpen = false)} />
+{/if}
+
 {#if shareOpen}
   <div class="modal-veil" onclick={() => (shareOpen = false)} role="presentation">
     <div class="modal" style="width:min(520px,94vw)" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') shareOpen = false }} role="dialog" aria-label="Share document" tabindex="-1">
@@ -598,3 +667,14 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .trash-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; margin-bottom: 18px; background: var(--warn-soft); border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--r); }
+  .trash-notice h2 { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 1rem; }
+  .trash-notice .sub { margin: 3px 0 0; color: var(--muted); font-size: .82rem; }
+  .trash-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .trash-actions .btn { min-height: 40px; }
+  @media (max-width: 700px) {
+    .trash-notice { align-items: stretch; flex-direction: column; gap: 12px; }
+  }
+</style>

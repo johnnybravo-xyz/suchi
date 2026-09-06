@@ -95,6 +95,40 @@ func TestListTrashIncludesFixedDeletionDateAndOwnerScope(t *testing.T) {
 	}
 }
 
+func TestDocumentDetailIncludesTrashOwnershipAndDeadline(t *testing.T) {
+	s, mux, cas := newTrashAPIServer(t)
+	trashedAt := time.Now().Unix()
+	id := seedTrashAPIDocument(t, s, cas, 1, "Recoverable document", true, trashedAt)
+	path := "/api/documents/" + itoa(id)
+	response := doTrashAPIRequest(t, mux, http.MethodGet, path, memberPrincipal(1))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var detail DocumentDetail
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.OwnerID != 1 || detail.TrashedAt == nil || *detail.TrashedAt != trashedAt ||
+		detail.DeletesAt == nil || *detail.DeletesAt != trashedAt+int64(trashservice.Retention/time.Second) {
+		t.Fatalf("unexpected Trash detail: %+v", detail)
+	}
+	response = doTrashAPIRequest(t, mux, http.MethodPost, path+"/restore", memberPrincipal(1))
+	if response.Code != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = doTrashAPIRequest(t, mux, http.MethodGet, path, memberPrincipal(1))
+	if response.Code != http.StatusOK {
+		t.Fatalf("restored detail status=%d body=%s", response.Code, response.Body.String())
+	}
+	var restored map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored["owner_id"] != float64(1) || restored["trashed_at"] != nil || restored["deletes_at"] != nil {
+		t.Fatalf("restored detail still advertises a deletion deadline: %+v", restored)
+	}
+}
+
 func TestPurgeTrashDocumentRequiresTrashedStateAndDeletePermission(t *testing.T) {
 	server, mux, cas := newTrashAPIServer(t)
 	now := time.Now().Unix()

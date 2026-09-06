@@ -319,13 +319,21 @@ Dedup state machine:
 Full projection of one document: title, extracted content (post-OCR),
 MIME, blobs, JD category, tags (slug list), correspondents. Trashed
 docs are visible with `trashed_at` set so mobile clients can render
-the undelete flow.
+the undelete flow. `owner_id` identifies the document owner; trashed documents
+also include `deletes_at`, exactly 30 days after `trashed_at`. Live and restored
+documents omit both deletion timestamps.
+
+Authenticated owners and administrators can preview and download trashed
+documents until permanent deletion. Other ACL readers
+cannot fetch trashed bytes, and public share links never serve trashed documents.
+The normal sensitivity-reveal and raw-original download restrictions still apply.
 
 **200 OK**
 
 ```json
 {
   "id": 1,
+  "owner_id": 1,
   "title": "Electricity bill March 2026",
   "content": "Electricity bill for March 2026...",
   "original_blob": "sha256hex...",

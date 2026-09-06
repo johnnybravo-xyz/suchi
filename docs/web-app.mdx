@@ -16,7 +16,7 @@ sidebar, top bar, and settings labels below match the v0.1 interface exactly.
 | **Views** | Saved document searches and filing shortcuts. |
 | **Approvals** | Human decisions, processing-revision rescan proposals, and **Dead jobs — needs attention**. |
 | **Automations** | Rules that tag, title, and file incoming documents. Administrators can edit them; members see a read-only view. |
-| **Trash** | Soft-deleted documents and **Restore** actions. |
+| **Trash** | Open soft-deleted documents, restore them, or confirm permanent deletion. |
 
 The **Index** appears below the main navigation after a filing tree is chosen.
 It contains only normal filing areas and categories. The protected system
@@ -67,6 +67,22 @@ Suggestions appear while typing; validation happens only when the user applies
 the query. A rejected query stays visible with its error instead of becoming an
 empty result. Ranking, recency, completion, similarity, and Archive research
 retrieval are centralized in [Search architecture](/search).
+
+## Trash
+
+Select a document in Trash to open its normal document URL in read-only mode.
+Owners and administrators can preview and download the file, read its metadata
+and extracted text, restore it within 30 days, or confirm permanent deletion.
+Sensitive previews and extracted text still require **Reveal**. Public share
+links cannot serve trashed documents.
+
+The detail screen prominently labels the document **Document in Trash**, with
+a warning colour, read-only notice, and permanent-deletion date. It hides
+editing, filing, sharing, access management, versions,
+and similar-document controls until the document is restored. **Back to Trash**
+returns to the list; restoring keeps the document open and restores its ordinary
+controls. On phones, each Trash row puts the document title and deletion date
+above its **Restore** and **Delete permanently** actions.
 
 ## Saved views
 
