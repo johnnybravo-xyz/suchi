@@ -1396,7 +1396,8 @@ subset, so a later ACL change cannot leak hidden version metadata.
 Upload a new version of {id}. Multipart, same shape as
 `POST /api/documents/`. Result row's `previous_version_id` = {id}.
 Default carry-forward: title (if uploader gave a bland filename)
-and JD category (a filed doc's version stays filed).
+and JD category (a filed doc's version stays filed). The new version keeps the
+predecessor's owner and explicit document ACL grants.
 
 The device OCR, `source_mtime`, and `Idempotency-Key` rules are identical to a
 fresh document upload. A matching keyed response-loss retry replays before live
@@ -1406,7 +1407,10 @@ version row. Without a replay, bytes already owned by any live document for the
 predecessor's owner return
 `409 {"code":"duplicate_version_blob","existing_id":<id>,...}` instead of a
 database error. The existing row may be the predecessor, another version in
-the chain, or an unrelated document. Trashed rows do not block a new version.
+the chain, or an unrelated document. `existing_id` is omitted unless the caller
+can view that row. Replays also require current permission to view the result;
+a trashed result returns `409 version_target_unavailable`. Trashed rows do not
+block a new version.
 
 ### `GET /api/tags/`
 

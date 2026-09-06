@@ -92,6 +92,16 @@ For a new upload, `UploadDocument` follows this sequence:
    local archive matching, automations, filing-view and thumbnail refresh, and
    the optional `post-classify` handoff.
 
+Document and version uploads share `core/api/upload_prepare.go` for multipart
+validation, rewind-safe MIME detection, source attribution, CAS storage, and
+idempotency fingerprints. Each handler owns its transaction and authorization.
+Keyed retries persist their response with the document and job in
+`upload_idempotency`; subsequent keyed uploads prune records older than 30
+days. Device OCR is provisional PDF text gated by the configured confidence;
+native PDF text remains authoritative, and empty extraction cannot erase
+accepted device text. Split children retain their immutable upload origin so
+clients can resolve completed parts after the parent is retired.
+
 Mail attachment creation and post-ingest refine missing, generic, or malformed
 MIME labels from the original bytes through `core/mimeutil`. Specific valid
 source types remain intact. An explicit rescan can therefore repair a PDF
@@ -163,6 +173,11 @@ prepared release. Startup validates every version before touching the database
 and rejects duplicate or nonpositive versions with the conflicting names.
 See [Release process](/release-process).
 
+The mobile release adds `0003_mobile_ingest.sql` after the unchanged beta.2
+`0002_document_intelligence.sql`. It contains OCR provenance, split origins,
+and the upload-idempotency table and retention index. Upgrade coverage starts
+from a populated beta.2 archive as well as a fresh database.
+
 ## HTTP and security boundaries
 
 `distro/cmd/suchi/serve_middleware.go: buildHTTPHandler` composes request IDs,
@@ -197,6 +212,12 @@ cannot read document content. Document-read access still needs a document ACL.
 Token management requires a browser/OIDC identity: API tokens cannot mint,
 list, or revoke credentials. Admin-token metrics remain a deliberate exception;
 read [HTTP API](/api) before changing compatibility.
+
+First-party clients probe public `GET /api/handshake` before sending credentials.
+`GET /api/whoami` reports the actual token scopes alongside the build identity.
+Password exchange at `/api/token/` creates only an API token; browser login at
+`/api/login` creates only a session. Mobile reads reuse the existing ACL-filtered
+API, with metadata-only detail requests and sensitive search snippets withheld.
 
 Browser demo visitors use HttpOnly cookies too. The anonymous cookie is signed
 and stateless; the first write exchanges it for an ordinary digest-backed

@@ -12,7 +12,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
 
-func TestMobileIngestMigrationUpgradesPopulatedBaseline(t *testing.T) {
+func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	ctx := context.Background()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "upgrade.db"))
 	if err != nil {
@@ -25,17 +25,19 @@ func TestMobileIngestMigrationUpgradesPopulatedBaseline(t *testing.T) {
 	}
 	var baseline []db.Migration
 	for _, migration := range migs {
-		if migration.Version == 1 {
+		if migration.Version <= 2 {
 			baseline = append(baseline, migration)
 		}
 	}
-	if len(baseline) != 1 {
-		t.Fatalf("baseline migrations = %d, want 1", len(baseline))
+	if len(baseline) != 2 {
+		t.Fatalf("beta.2 migrations = %d, want 2", len(baseline))
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := db.Migrate(ctx, d, baseline, log); err != nil {
 		t.Fatal(err)
 	}
+	assertSchemaVersion(t, d, 2)
+	assertBeta2Schema(t, d)
 	seedMobileMigrationOwnerAndCategory(t, d)
 	if _, err := d.ExecWrite(ctx, `
 		INSERT INTO documents(
@@ -48,6 +50,11 @@ func TestMobileIngestMigrationUpgradesPopulatedBaseline(t *testing.T) {
 
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
+	}
+	assertSchemaVersion(t, d, 3)
+	assertBeta2Schema(t, d)
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatalf("repeat mobile migration: %v", err)
 	}
 
 	var (

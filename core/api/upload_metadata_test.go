@@ -14,13 +14,29 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
+
+func newUploadTestServer(t *testing.T, d *db.DB, cas *blob.CAS) *Server {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	retention, err := trash.New(d, t.TempDir(), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(d, cas, retention, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 func TestParseUploadMetadata(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
@@ -134,10 +150,7 @@ func TestUploadNewVersionPersistsDeviceOCRProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := newUploadTestServer(t, d, cas)
 	s.WithDeviceOCRMinConfidence(0.65)
 	principal := &pluginapi.Principal{
 		Kind: "user", UserID: 1, Email: "owner@example.test", Role: "member",
@@ -272,7 +285,7 @@ func TestDedupeAndRestoreDoNotMutateDeviceOCRProvenance(t *testing.T) {
 	}
 	assertNoStoredDeviceProvenance(t, d, 1)
 
-	if _, err := d.Write.Exec(`UPDATE documents SET trashed_at = 10 WHERE id = 1`); err != nil {
+	if _, err := d.ExecWrite(context.Background(), `UPDATE documents SET trashed_at = ? WHERE id = 1`, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
 	restored := httptest.NewRecorder()
@@ -311,10 +324,7 @@ func newUploadMetadataServer(t *testing.T) (*Server, *db.DB, *pluginapi.Principa
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := newUploadTestServer(t, d, cas)
 	s.Authz = authz.ACLAuthorizer{DB: d}
 	s.WithDeviceOCRMinConfidence(0.65)
 	principal := &pluginapi.Principal{

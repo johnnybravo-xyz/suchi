@@ -1,3 +1,4 @@
+-- Mobile ships after beta.2; its schema is one forward step from version 2.
 ALTER TABLE documents
     ADD COLUMN content_source TEXT NOT NULL DEFAULT ''
     CHECK (content_source IN ('', 'device_ocr', 'server'));
@@ -33,3 +34,6 @@ CREATE TABLE upload_idempotency (
     created_at          INTEGER NOT NULL,
     PRIMARY KEY (user_id, idempotency_key)
 ) STRICT;
+
+CREATE INDEX upload_idempotency_created_at
+    ON upload_idempotency(created_at);

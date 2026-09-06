@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -194,7 +193,7 @@ func TestUploadDocumentIdempotentDedupeAndRestore(t *testing.T) {
 				t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
 			}
 			if tc.trashFirst {
-				if _, err := d.ExecWrite(context.Background(), `UPDATE documents SET trashed_at = 10 WHERE id = 1`); err != nil {
+				if _, err := d.ExecWrite(context.Background(), `UPDATE documents SET trashed_at = ? WHERE id = 1`, time.Now().Unix()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -477,10 +476,7 @@ func TestUploadNewVersionRejectsLiveDuplicateBlob(t *testing.T) {
 					}
 				}
 			}
-			s, err := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			if err != nil {
-				t.Fatal(err)
-			}
+			s := newUploadTestServer(t, d, cas)
 			principal := &pluginapi.Principal{
 				Kind: "user", UserID: 1, Email: "owner@example.test", Role: "member",
 				Scopes: []string{"documents:write"},
@@ -611,10 +607,7 @@ func newVersionUploadServer(t *testing.T, previousSHA string) (*Server, *db.DB, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := newUploadTestServer(t, d, cas)
 	principal := &pluginapi.Principal{
 		Kind: "user", UserID: 1, Email: "owner@example.test", Role: "member",
 		Scopes: []string{"documents:read", "documents:write"},
