@@ -2,12 +2,33 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+type failingMCPTransport struct{}
+
+func (failingMCPTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("private-transport-detail")
+}
+
+func TestSuchiClientRedactsTransportFailures(t *testing.T) {
+	client := newSuchiClient("https://suchi.example", "private-token")
+	client.http.Transport = failingMCPTransport{}
+	_, err := client.do(context.Background(), "GET", "/api/search/?q=private-query", nil)
+	if err == nil || err.Error() != "suchi GET /api/search/: request failed" {
+		t.Fatalf("transport error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.do(ctx, "GET", "/api/search/?q=private-query", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled request error = %v", err)
+	}
+}
 
 func TestSuchiClientRejectsRedirectWithoutForwardingToken(t *testing.T) {
 	const token = "private-token-value"

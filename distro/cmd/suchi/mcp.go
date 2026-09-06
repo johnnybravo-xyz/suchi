@@ -160,7 +160,7 @@ func newSuchiClient(base, token string) *suchiClient {
 func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("suchi request could not be constructed")
 	}
 	req.Header.Set("Authorization", "Token "+c.token)
 	req.Header.Set("Accept", "application/json")
@@ -169,13 +169,16 @@ func (c *suchiClient) do(ctx context.Context, method, path string, body io.Reade
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("suchi %s %s: request failed", method, req.URL.EscapedPath())
 	}
 	defer resp.Body.Close()
 	// Keep responses bounded even when a configured origin is not Suchi.
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPResponseBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, errors.New("suchi response could not be read")
 	}
 	if len(b) > maxMCPResponseBytes {
 		return nil, errors.New("suchi response exceeds 8 MiB")

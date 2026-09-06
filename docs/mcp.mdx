@@ -34,6 +34,10 @@ The adapter never follows HTTP redirects, so it cannot forward its token to a
 redirect target. API responses must be bounded, valid `application/json`;
 redirects, unexpected content types, and malformed or oversized bodies fail
 closed.
+Failures expose the operation, HTTP status and safe error code when available;
+request queries, response bodies and transport diagnostics are not copied into
+tool errors. A transport failure means the configured server could not be
+reached; verify its address and connectivity before retrying.
 
 ## Transports
 

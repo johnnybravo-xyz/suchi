@@ -130,6 +130,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- MCP refuses redirects, malformed or oversized responses, and unexpected
+  content types. Tool errors omit document queries, response bodies and raw
+  transport diagnostics.
 - Browser demo credentials no longer live in JavaScript storage. Scratch
   sessions retain their restricted identity, expire at the visitor TTL, and
   enforce same-origin mutation checks; concurrent writes share one upgrade.

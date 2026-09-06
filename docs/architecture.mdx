@@ -257,6 +257,11 @@ endpoints require explicit egress acknowledgement, and redirects are rejected.
 Intake and identity integrations have their own configured destinations; do not
 make useful local operation depend on a Suchi-operated service.
 
+The MCP adapter calls the configured Suchi origin without following redirects.
+It accepts bounded valid JSON and keeps query values, response bodies and
+transport diagnostics out of tool errors. Its tool contracts remain ordinary
+scoped API requests; it does not bypass HTTP or object authorization.
+
 External parsers run through `core/sandbox` with timeouts, bounded captured
 stdout/stderr, explicit environment, and temporary working directories.
 Unix cancellation kills the process group. This is a subprocess resource
