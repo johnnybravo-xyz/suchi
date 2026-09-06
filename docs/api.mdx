@@ -115,6 +115,12 @@ replaces that user's previous unused code.
 The link contract is
 `suchi://pair?v=1&server=<URL-encoded origin>&code=<code>`. Its server is the
 canonical configured `PUBLIC_URL` origin, never a request or forwarded host.
+The mobile app accepts HTTPS, or HTTP only for `localhost`, loopback literal
+IPs, RFC1918 IPv4, and unique-local IPv6. Pairing creation returns **503**
+`pairing_unavailable` for other HTTP hosts (including `.local`/private DNS names
+and link-local IPs), invalid origins, or ports outside 1–65535. Configure HTTPS
+or a supported literal address; a refused origin does not replace an existing
+pending code.
 The 320-pixel PNG is generated locally, without a QR service. The code has 256
 random bits; storage contains only its SHA-256 digest, owner, name, and expiry.
 Treat the code, link, and QR as temporary credentials: anyone holding one can

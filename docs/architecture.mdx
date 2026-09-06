@@ -224,8 +224,12 @@ API, with metadata-only detail requests and sensitive search snippets withheld.
 mobile device without a password in the QR. Session-only creation replaces a
 five-minute pairing and renders its PNG locally through the existing QR library.
 The link binds the opaque code to configured `PUBLIC_URL`, never forwarded host
-headers. `mobile_pairings` stores only a SHA-256 code digest, owner, token name,
-and expiry; user deletion cascades, and later creation prunes expired rows.
+headers. Creation applies the mobile client's HTTPS/local-HTTP boundary:
+HTTP accepts only localhost, loopback and private literal IPs, not the broader
+integration-egress policy's local DNS or link-local addresses. Invalid origins
+fail before replacing a pending code. `mobile_pairings` stores only a SHA-256
+code digest, owner, token name, and expiry; user deletion cascades, and later
+creation prunes expired rows.
 Public exchange atomically deletes one valid code for an enabled user, commits,
 then calls the existing `TokenIssuer` outside the write transaction with fixed
 document-read/write scopes. A failed or lost exchange is not replayable. No

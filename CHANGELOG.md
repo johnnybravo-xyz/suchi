@@ -21,6 +21,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Pairing creation rejects origins the mobile app cannot use: HTTP requires
+  localhost, loopback or private literal IPs, with an actionable configuration
+  error for named/public HTTP hosts and link-local addresses.
 - Mobile pairing prompts clear and close on session refresh or account changes;
   stale prompts cannot generate codes or copy the previous account's link.
 - Developer mode binds loopback by default and requires an explicit matching

@@ -303,15 +303,47 @@ func TestMobilePairingOrigin(t *testing.T) {
 	for raw, want := range map[string]string{
 		"https://Archive.Example:443/": "https://archive.example", "http://localhost:80": "http://localhost",
 		"http://[::1]:8000/": "http://[::1]:8000", "https://[2001:db8::1]:443": "https://[2001:db8::1]",
+		"http://LOCALHOST:8000": "http://localhost:8000", "http://127.0.0.1:8000": "http://127.0.0.1:8000",
+		"http://127.255.255.254": "http://127.255.255.254", "http://10.1.2.3": "http://10.1.2.3",
+		"http://172.16.0.1": "http://172.16.0.1", "http://172.31.255.1": "http://172.31.255.1",
+		"http://192.168.4.2": "http://192.168.4.2", "http://[fc00::1]": "http://[fc00::1]",
+		"http://[fd00::12]": "http://[fd00::12]", "https://printer.local": "https://printer.local",
+		"https://archive.example:00443": "https://archive.example", "https://archive.example:08443": "https://archive.example:8443",
 	} {
 		got, err := mobilePairingOrigin(raw)
 		if err != nil || got != want {
 			t.Errorf("origin=%q want=%q err=%v", got, want, err)
 		}
 	}
-	for _, raw := range []string{"", "/", "https://user:secret@example.com", "https://example.com/path", "https://example.com/?secret=x", "https://example.com/#", "ftp://example.com"} {
+	for _, raw := range []string{
+		"", "/", "https://user:secret@example.com", "https://example.com/path", "https://example.com/?secret=x", "https://example.com/#", "ftp://example.com",
+		"http://suchi.example.com", "http://printer.local", "http://localhost.example.com", "http://app.localhost", "http://localhost.",
+		"http://8.8.8.8", "http://169.254.1.1", "http://[fe80::1]", "http://172.15.255.255", "http://172.32.0.1", "http://192.169.0.1",
+		"http://0.0.0.0", "http://[::]", "http://[::ffff:127.0.0.1]", "http://[fd00::1%25en0]",
+		"https://example.com:0", "https://example.com:00", "https://example.com:65536",
+	} {
 		if _, err := mobilePairingOrigin(raw); err == nil {
 			t.Errorf("accepted non-origin %q", raw)
+		}
+	}
+}
+
+func TestMobilePairingRejectsUnusableOriginWithoutReplacingPendingCode(t *testing.T) {
+	s, _ := newMobilePairingServer(t)
+	current := createMobilePairing(t, s)
+	wantHash := sha256.Sum256([]byte(current.Code))
+	for _, origin := range []string{"http://archive.example:8000", "http://archive.local:8000", "http://169.254.1.1", "https://archive.example:0"} {
+		s.PublicURL = origin
+		w := mobilePairingRequest(s, "POST", "/api/mobile/pairing", `{}`, memberPrincipal(1))
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Cache-Control") != "no-store" ||
+			!strings.Contains(w.Body.String(), `"code":"pairing_unavailable"`) ||
+			!strings.Contains(w.Body.String(), "HTTPS origin") || !strings.Contains(w.Body.String(), "private literal IP") {
+			t.Fatalf("origin=%s status=%d body=%s", origin, w.Code, w.Body.String())
+		}
+		var storedHash string
+		if err := s.DB.Read.QueryRow(`SELECT code_hash FROM mobile_pairings WHERE user_id=1`).Scan(&storedHash); err != nil ||
+			storedHash != hex.EncodeToString(wantHash[:]) {
+			t.Fatalf("invalid origin replaced the pending code: %v", err)
 		}
 	}
 }

@@ -12,7 +12,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -64,7 +66,7 @@ func (s *Server) CreateMobilePairing(w http.ResponseWriter, r *http.Request) {
 	}
 	origin, err := mobilePairingOrigin(s.PublicURL)
 	if err != nil {
-		s.writeError(w, http.StatusServiceUnavailable, "pairing_unavailable", "configure a valid PUBLIC_URL before pairing")
+		s.writeError(w, http.StatusServiceUnavailable, "pairing_unavailable", "configure PUBLIC_URL as an HTTPS origin, or HTTP on localhost or a private literal IP address, before pairing")
 		return
 	}
 	var raw [32]byte
@@ -232,6 +234,22 @@ func mobilePairingOrigin(raw string) (string, error) {
 		return "", errors.New("invalid origin")
 	}
 	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if port != "" {
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || number == 0 {
+			return "", errors.New("invalid origin port")
+		}
+		port = strconv.FormatUint(number, 10)
+	}
+	if u.Scheme == "http" && host != "localhost" {
+		// Match the mobile ServerOrigin policy, which is narrower than the
+		// integration-egress local-host policy: no DNS names or link-local IPs.
+		addr, err := netip.ParseAddr(host)
+		if err != nil || addr.Is4In6() || addr.Zone() != "" ||
+			(!addr.IsLoopback() && !addr.IsPrivate()) {
+			return "", errors.New("mobile pairing requires HTTPS or approved local HTTP")
+		}
+	}
 	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
 		port = ""
 	}
