@@ -127,6 +127,40 @@ for (const switchAccount of [false, true]) {
   })
 }
 
+for (const target of ['page', 'modal']) {
+  test(`uploads each ${target} drop once and refreshes the document list`, async ({ page }) => {
+    const options = { setupCompletedAt: 1, filingTreeChosen: true, documents: [] }
+    await mockAPI(page, options)
+    let uploads = 0
+    await page.route('**/api/documents/', async route => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      uploads++
+      options.documents = [{ id: 41, title: 'Dropped receipt.pdf', created_at: 1780000000 }]
+      return route.fulfill({ json: { id: 41, deduplicated: true } })
+    })
+    await page.goto('/#/documents')
+    await expect(page.getByText('No documents match.', { exact: true })).toBeVisible()
+    if (target === 'modal') {
+      await page.getByRole('button', { name: 'Upload documents', exact: true }).click()
+      await expect(page.getByRole('dialog', { name: 'Upload documents' }).locator('.drop')).toBeVisible()
+    }
+    await page.evaluate(target => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['%PDF-test-one'], 'receipt.pdf', { type: 'application/pdf' }))
+      const dropTarget = target === 'modal' ? document.querySelector('.modal .drop') : window
+      dropTarget.dispatchEvent(new DragEvent('dragenter', { dataTransfer: transfer, bubbles: true, cancelable: true }))
+      dropTarget.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }))
+    }, target)
+    if (target === 'modal') {
+      await expect(page.getByText('duplicate', { exact: true })).toBeVisible()
+      await expect(page.locator('.dropveil')).toHaveCount(0)
+      await page.getByRole('button', { name: 'Close upload' }).click()
+    }
+    await expect(page.getByRole('link', { name: /Dropped receipt.pdf/ })).toBeVisible()
+    expect(uploads).toBe(1)
+  })
+}
+
 for (const input of ['drop', 'picker']) {
   test('stops queued ' + input + ' uploads when the account changes', async ({ page }) => {
     await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })

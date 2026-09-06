@@ -4,6 +4,7 @@
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, uploadDocument, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
+  import { markUploaded } from './lib/upload_bus.svelte.js'
   import Icon from './lib/Icon.svelte'
   import Login from './routes/Login.svelte'
   import Dashboard from './routes/Dashboard.svelte'
@@ -263,9 +264,10 @@
 
   async function globalDrop(e) {
     const user = session.user
+    const handled = e.defaultPrevented
     e.preventDefault()
     dragDepth = 0
-    if (page === 'upload' || !session.user) return   // upload page has its own zone
+    if (handled || uploadOpen || page === 'upload' || !user) return
     const files = [...(e.dataTransfer?.files || [])]
     if (!files.length) return
     notify(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`)
@@ -274,6 +276,8 @@
       if (session.user !== user) return
       try {
         const result = await uploadDocument(f)
+        if (session.user !== user) return
+        markUploaded()
         result?.deduplicated ? dup++ : ok++
       }
       catch { fail++ }
@@ -461,7 +465,7 @@
 </script>
 
 <svelte:window onkeydown={onKey}
-  ondragenter={(e) => { if (e.dataTransfer?.types?.includes('Files') && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
+  ondragenter={(e) => { if (e.dataTransfer?.types?.includes('Files') && !uploadOpen && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
   ondragleave={() => (dragDepth = Math.max(0, dragDepth - 1))}
   ondragover={(e) => { if (dragDepth > 0) e.preventDefault() }}
   ondrop={globalDrop} />

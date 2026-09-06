@@ -58,6 +58,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Dropping files onto the upload dialog submits each file once. Uploads dropped
+  elsewhere refresh the visible document list immediately.
 - Trash documents open in the existing viewer with read-only metadata and
   owner/admin preview, download, restore, and confirmed permanent deletion.
   Mobile rows keep document titles above their actions; sensitive reveal gates

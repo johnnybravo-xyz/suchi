@@ -188,7 +188,8 @@ visible labels should use the terms documented in the Web app guide.
 - Server responses are the source of truth for documents and settings.
 - Session state is shared because every route needs the current principal.
 - Successful uploads increment a small shared revision so visible document
-  lists can refresh in the same tab.
+  lists can refresh in the same tab, including window-level drops. The shell
+  ignores drops already handled by the upload dialog or Upload screen.
 - Builder vocabularies come from their focused API endpoints, such as
   `/api/automations/schema`; local values only keep the editor usable while a
   request is unavailable.
