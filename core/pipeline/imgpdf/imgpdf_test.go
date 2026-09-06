@@ -3,6 +3,7 @@ package imgpdf_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -17,8 +18,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/imgpdf"
+	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 )
 
 func TestRecognized(t *testing.T) {
@@ -218,5 +221,91 @@ printf '\211PNG\r\n\032\n' > "${output#PDF:}"
 	}
 	if !res.Skipped || len(res.PDF) != 0 || res.StderrTail != "ImageMagick did not produce a PDF" {
 		t.Fatalf("non-PDF output was not rejected: %+v", res)
+	}
+}
+
+func TestConvertFailureCannotBecomeSuccessfulEmptyRescan(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		cancel  bool
+		wantErr error
+	}{
+		{"converter timeout", 40 * time.Millisecond, false, sandbox.ErrTimeout},
+		{"caller cancellation", time.Second, true, context.Canceled},
+		{"invalid timeout", -time.Second, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "magick")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexec /bin/sleep 5\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			start := time.Now()
+			res, err := imgpdf.Convert(ctx, strings.NewReader("fixture"),
+				slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Binary: binary, Timeout: tc.timeout})
+			if err == nil || res != nil || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
+				t.Fatalf("result=%+v err=%v, want hard error %v", res, err, tc.wantErr)
+			}
+			if time.Since(start) > time.Second {
+				t.Fatalf("conversion did not stop promptly: %s", time.Since(start))
+			}
+		})
+	}
+}
+
+func TestConvertCallerDeadlineIsNotSkipped(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "magick")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexec /bin/sleep 5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	res, err := imgpdf.Convert(ctx, strings.NewReader("fixture"),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Binary: binary, Timeout: time.Second})
+	if res != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("result=%+v err=%v, want caller deadline", res, err)
+	}
+}
+
+func TestConvertOutputCapRejectsOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cap    int64
+		wantOK bool
+	}{
+		{"exact cap", 12, true}, {"overflow", 11, false}, {"invalid cap", -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "magick")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nfor output; do :; done\nprintf '%s' '%PDF-fixture' > \"${output#PDF:}\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			res, err := imgpdf.Convert(t.Context(), strings.NewReader("fixture"),
+				slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Binary: binary, MaxOutputBytes: tc.cap})
+			if tc.wantOK {
+				if err != nil || res.Skipped || string(res.PDF) != "%PDF-fixture" {
+					t.Fatalf("result=%+v err=%v", res, err)
+				}
+			} else if err == nil || res != nil || !strings.Contains(err.Error(), "cap") {
+				t.Fatalf("result=%+v err=%v, want cap error", res, err)
+			}
+		})
+	}
+}
+
+func TestConvertUnsupportedCoderStillSkips(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "magick")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'PDF coder unavailable' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := imgpdf.Convert(t.Context(), strings.NewReader("fixture"),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Binary: binary})
+	if err != nil || !res.Skipped || res.StderrTail != "PDF coder unavailable" {
+		t.Fatalf("result=%+v err=%v, want optional unsupported coder skip", res, err)
 	}
 }

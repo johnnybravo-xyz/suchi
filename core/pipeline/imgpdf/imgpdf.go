@@ -5,9 +5,11 @@ package imgpdf
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,8 +78,12 @@ func Recognized(mime string) bool {
 // Convert streams image bytes to a tempfile and runs ImageMagick to
 // produce a PDF. Skipped=true when no ImageMagick is installed — safe
 // caller behavior is "keep the image as-is; someone can install magick
-// later and re-run".
+// later and re-run". Timeouts, cancellation, and oversized output return an
+// error so a rescan cannot replace prior content with a successful empty result.
 func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options) (*Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("imgpdf: %w", err)
+	}
 	log = log.With("component", "imgpdf")
 
 	binary := opts.Binary
@@ -100,6 +106,9 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	maxBytes := opts.MaxOutputBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxOutputBytes
+	}
+	if maxBytes < 0 || maxBytes == math.MaxInt64 {
+		return nil, errors.New("imgpdf: output cap must be positive and leave room for an overflow byte")
 	}
 
 	dir, err := os.MkdirTemp("", "suchi-imgpdf-")
@@ -146,21 +155,31 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	})
 	dur := time.Since(start)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("imgpdf convert: %w", ctx.Err())
+		}
+		if errors.Is(err, sandbox.ErrTimeout) || res == nil {
+			return nil, fmt.Errorf("imgpdf convert: %w", err)
+		}
 		log.Info("imgpdf.skip.exit_nonzero",
 			"exit", res.ExitCode, "stderr", tail(res.Stderr))
 		return &Result{Skipped: true, StderrTail: tail(res.Stderr), Duration: dur}, nil
 	}
 
-	pdf, readErr := os.ReadFile(outputPath)
+	output, readErr := os.Open(outputPath)
 	if readErr != nil {
 		return &Result{Skipped: true, StderrTail: readErr.Error(), Duration: dur}, nil
 	}
+	defer output.Close()
+	pdf, readErr := io.ReadAll(io.LimitReader(output, maxBytes+1))
+	if readErr != nil {
+		return nil, fmt.Errorf("imgpdf read output: %w", readErr)
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("imgpdf read output: %w", ctx.Err())
+	}
 	if int64(len(pdf)) > maxBytes {
-		log.Warn("imgpdf.truncated_output", "bytes", len(pdf), "cap", maxBytes)
-		return &Result{Skipped: true,
-			StderrTail: fmt.Sprintf("output %d bytes exceeded cap %d", len(pdf), maxBytes),
-			Duration:   dur,
-		}, nil
+		return nil, fmt.Errorf("imgpdf: output exceeded cap of %d bytes", maxBytes)
 	}
 	if !bytes.HasPrefix(pdf, []byte("%PDF-")) {
 		log.Warn("imgpdf.skip.invalid_output", "bytes", len(pdf))
