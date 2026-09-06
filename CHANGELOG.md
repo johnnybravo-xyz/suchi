@@ -30,8 +30,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
-- Settings displays the server version and source revision; development builds
-  without revision metadata say so explicitly.
+- Settings displays the release version in production. Development builds
+  identify the source version line and revision, or explicitly unavailable metadata.
 - OCR language documentation now covers installing packs in both Docker variants
   and bare-metal deployments, verifying model discovery, configuration precedence
   and rescanning existing documents.

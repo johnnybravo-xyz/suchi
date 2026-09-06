@@ -129,11 +129,12 @@ an empty Views screen does not fetch every vocabulary in advance.
 
 ## Settings
 
-The Settings footer shows the running Suchi version and source revision when known.
-Include this text when reporting a problem. `dev` means no release version was
-injected; `.dirty` marks a build from modified source. Development builds with
-no embedded revision say **revision unavailable** rather than implying a known
-build. This display is limited to Settings, works offline, and does not check
+The Settings footer shows the running Suchi version, such as `v0.1.0-beta.2`.
+Development builds identify their version line (`v0.1.0-beta.2-dev`) and add the
+short source revision when available; `.dirty` marks modified source. Missing
+development revision metadata is labeled **revision unavailable**. Tagged
+production releases display only their version. Include this text when reporting
+a problem. This display is limited to Settings, works offline, and does not check
 for updates.
 
 Every user has **Settings > My account**:

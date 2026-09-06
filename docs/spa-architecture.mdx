@@ -60,6 +60,9 @@ Settings reads `build_version` and optional `build_revision` from the existing
 `/api/whoami` session response. The executable supplies this identity once at
 startup from release linker values or Go VCS metadata, not `ui/package.json`.
 Do not add a separate frontend version, version request, or update checker.
+Tagged production builds show only the version in Settings; development builds
+also show the source revision. The CLI's `developmentVersion` owns the default
+source version line when no release version was injected.
 
 `App.svelte` imports each route directly through the existing `Lazy.svelte`
 component. There are no route re-export wrappers or custom chunk rules: Vite

@@ -757,7 +757,8 @@ for (const userRole of ['admin', 'member']) {
     })
     await page.goto('/#/settings')
     await expect(page.getByRole('contentinfo', { name: 'Suchi build' }))
-      .toHaveText('Suchi v0.1.0-beta.2 · 1234567890ab')
+      .toHaveText('Suchi v0.1.0-beta.2')
+    await expect(page.getByText('1234567890ab', { exact: false })).toHaveCount(0)
     await page.route('**/api/whoami', route => route.fulfill({ json: {
       user_id: 1, email: 'admin@example.test', role: userRole, capabilities: [], build_version: 'dev',
     } }))
@@ -768,7 +769,7 @@ for (const userRole of ['admin', 'member']) {
 
 test('keeps the running revision in Settings only', async ({ page }) => {
   await mockAPI(page, {
-    buildVersion: 'dev', buildRevision: '1234567890ab.dirty',
+    buildVersion: 'v0.1.0-beta.2-dev', buildRevision: '1234567890ab.dirty',
     setupCompletedAt: 1, filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
@@ -778,7 +779,7 @@ test('keeps the running revision in Settings only', async ({ page }) => {
   await expect(page.getByText('1234567890ab.dirty', { exact: false })).toHaveCount(0)
   await page.getByRole('link', { name: 'Profile & settings', exact: true }).click()
   await expect(page.getByRole('contentinfo', { name: 'Suchi build' }))
-    .toHaveText('Suchi dev · 1234567890ab.dirty')
+    .toHaveText('Suchi v0.1.0-beta.2-dev · 1234567890ab.dirty')
 })
 
 test('separates completed archive administration from account settings', async ({ page }, testInfo) => {

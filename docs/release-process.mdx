@@ -53,7 +53,9 @@ Only the current pre-1.0 release is supported.
    git diff -- core/ui/spa/dist
    ```
 
-2. Move the `[Unreleased]` entries under the new version and date.
+2. Move the `[Unreleased]` entries under the new version and date. Update
+   `developmentVersion` in `distro/cmd/suchi/main.go` to the current source version
+   line with a `-dev` suffix.
 3. Confirm the shipped Microsoft OAuth registration still permits personal and
    work/school device-code sign-in.
 4. Run the local verification suite:
@@ -94,10 +96,15 @@ binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
 the changelog. Tag pushes alone do not publish anything.
 
 Release builds inject the version and source revision into the Go binary.
-Settings displays them from `/api/whoami`; `suchi version` retains the release
-version. Docker has no `.git` directory, so manual builds must pass `REVISION`
-as well as `VERSION` to retain source identification. Missing revisions are
-omitted, not guessed.
+Settings reads the identity from `/api/whoami`, showing only the version for
+tagged production releases. Unversioned builds use the source's
+`developmentVersion` (currently `v0.1.0-beta.2-dev`) and append the short revision
+when available. `suchi version` likewise retains an injected release version and
+adds the revision for development builds. Docker has no `.git` directory, so
+manual builds must pass `REVISION` to retain source identification and `VERSION`
+for a tagged release. Local VCS builds without an injected version use the source
+version line, not Go's tag-derived module pseudo-version. Missing development
+revisions are labeled unavailable, not guessed.
 
 ## Publishing container images without Actions
 

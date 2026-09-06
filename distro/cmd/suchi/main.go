@@ -53,6 +53,8 @@ import (
 var targetSchemaVersion int
 var loadedConfigFile string
 
+const developmentVersion = "v0.1.0-beta.2-dev"
+
 // Release builds inject these with -X; Docker builds have no .git metadata.
 var version string
 var revision string
@@ -142,11 +144,8 @@ func printVersion() {
 }
 
 func buildVersion(info *debug.BuildInfo) string {
-	if version != "" {
-		return version
-	}
 	v, rev := buildIdentity(info)
-	if rev != "" {
+	if v == developmentVersion && rev != "" {
 		v += "+" + rev
 	}
 	return v
@@ -159,16 +158,22 @@ func buildIdentity(info *debug.BuildInfo) (string, string) {
 			v = info.Main.Version
 		}
 		for _, setting := range info.Settings {
-			if setting.Key == "vcs.revision" && revision == "" {
-				rev = setting.Value
+			if setting.Key == "vcs.revision" {
+				if revision == "" {
+					rev = setting.Value
+				}
+				// Local builds may carry a tag-derived Go pseudo-version.
+				if version == "" {
+					v = developmentVersion
+				}
 			}
 			if setting.Key == "vcs.modified" {
 				modified = setting.Value == "true"
 			}
 		}
 	}
-	if v == "" || v == "(devel)" {
-		v = "dev"
+	if v == "" || v == "(devel)" || v == "dev" {
+		v = developmentVersion
 	}
 	if len(rev) > 12 {
 		rev = rev[:12]
