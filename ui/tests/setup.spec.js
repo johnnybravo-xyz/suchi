@@ -2045,6 +2045,106 @@ test('names scoped tokens and account vault records', async ({ page }) => {
   await expect(page.locator('#minted')).toHaveValue('new-token-secret')
 })
 
+for (const clipboard of ['available', 'denied']) {
+  test(`pairs mobile with a private expiring QR and ${clipboard} clipboard fallback`, async ({ page }) => {
+    await mockAPI(page)
+    await page.addInitScript(denied => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+        writeText: async text => {
+          if (denied) throw new Error('Clipboard denied')
+          window.copiedPairing = text
+        },
+      } })
+    }, clipboard === 'denied')
+    const code = 'a'.repeat(64)
+    const pairingURL = `suchi://pair?v=1&server=https%3A%2F%2Farchive.example.test&code=${code}`
+    const requests = []
+    await page.route('**/api/mobile/pairing', async route => {
+      requests.push({ method: route.request().method(), body: route.request().postDataJSON() })
+      if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 })
+      return route.fulfill({ status: 201, json: {
+        pairing_url: pairingURL, code, name: 'My phone', expires_at: Math.floor(Date.now() / 1000) + 300,
+        qr_data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+      } })
+    })
+    await page.goto('/#/settings')
+    await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Pair mobile app', exact: true })
+    await expect(dialog).toBeVisible()
+    expect(requests).toEqual([])
+    await dialog.getByLabel('Device name').fill('My phone')
+    await dialog.getByRole('button', { name: 'Generate QR code' }).click()
+    await expect(dialog.getByAltText('Scan this QR code in the Suchi app to pair with this archive')).toBeVisible()
+    await expect(dialog.getByText(/Expires in .* Usable once/)).toBeVisible()
+    await expect(dialog.getByText(/document read and write access/)).toBeVisible()
+    await expect(dialog.getByText(/sign in manually/)).toBeVisible()
+    const link = dialog.getByLabel('Can’t scan? Paste this pairing link in the app.')
+    await expect(link).toHaveValue(pairingURL)
+    await dialog.getByRole('button', { name: 'Copy pairing link' }).click()
+    await expect(dialog.getByRole('status')).toHaveText(clipboard === 'denied'
+      ? 'Select the pairing link below and copy it manually.' : 'Pairing link copied.')
+    if (clipboard === 'available') expect(await page.evaluate(() => window.copiedPairing)).toBe(pairingURL)
+    await link.click()
+    expect(await link.evaluate(input => input.selectionEnd - input.selectionStart)).toBe(pairingURL.length)
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect.poll(() => requests).toEqual([
+      { method: 'POST', body: { name: 'My phone' } },
+      { method: 'DELETE', body: { code } },
+    ])
+  })
+}
+
+test('retries failed mobile pairing and removes expired QR secrets', async ({ page }) => {
+  await mockAPI(page)
+  let attempts = 0
+  await page.route('**/api/mobile/pairing', async route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 })
+    if (++attempts === 1) return route.fulfill({ status: 503, json: { message: 'Pairing unavailable. Try again.' } })
+    return route.fulfill({ status: 201, json: {
+      pairing_url: 'suchi://pair?expired-secret', code: 'b'.repeat(64),
+      expires_at: Math.floor(Date.now() / 1000) - 1, qr_data_url: 'data:image/png;base64,',
+    } })
+  })
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Pair mobile app', exact: true })
+  await dialog.getByRole('button', { name: 'Generate QR code' }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Pairing unavailable. Try again.')
+  await dialog.getByRole('button', { name: 'Generate QR code' }).click()
+  await expect(dialog.getByRole('status')).toHaveText('This code has expired. Generate a new code to pair another device.')
+  await expect(dialog.locator('img')).toHaveCount(0)
+  await expect(dialog.locator('#pairing-link')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: 'Generate new code' })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+})
+
+test('cancels mobile codes that finish after closing the prompt', async ({ page }) => {
+  await mockAPI(page)
+  let pending
+  let cancelled
+  await page.route('**/api/mobile/pairing', async route => {
+    if (route.request().method() === 'DELETE') {
+      cancelled = route.request().postDataJSON()
+      return route.fulfill({ status: 204 })
+    }
+    pending = route
+  })
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  await page.getByRole('button', { name: 'Generate QR code' }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  await page.getByRole('button', { name: 'Close mobile pairing' }).click()
+  const code = 'c'.repeat(64)
+  await pending.fulfill({ status: 201, json: {
+    code, pairing_url: 'suchi://pair?late-secret', expires_at: Math.floor(Date.now() / 1000) + 300,
+  } })
+  await expect.poll(() => cancelled).toEqual({ code })
+  await expect(page.getByRole('dialog', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
+  await expect(page.getByText('suchi://pair?late-secret')).toHaveCount(0)
+})
+
 test('groups metadata reviews by document', async ({ page }) => {
   await mockAPI(page)
 

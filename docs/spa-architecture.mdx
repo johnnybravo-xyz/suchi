@@ -69,7 +69,11 @@ component. There are no route re-export wrappers. One native Rolldown group
 combines small document controls, link display, clipboard/query helpers, and
 upload-list refresh state; other shared dependencies use normal chunking.
 The QR encoder remains a separate on-demand import. My account defers archive configuration and loads
-mailbox code only for members who can manage mailboxes. Keep the shell at or
+mailbox code only for members who can manage mailboxes. The mobile pairing
+prompt loads only after its button is selected; it keeps the single-use secret
+in component memory, clears expired QR/link displays, and cancels an unused
+code on close. Late responses cannot populate another account's prompt.
+Keep the shell at or
 below 35 KB gzip and remeasure the actual route dependency set after UI changes.
 
 Current production JavaScript sizes, measured with system `gzip -nc`. Route

@@ -8,6 +8,7 @@
   import Lazy from '../lib/Lazy.svelte'
 
   const loadMailboxes = () => import('../lib/EmailAccounts.svelte')
+  const loadMobilePairing = () => import('../lib/MobilePairing.svelte')
 
   let { notify } = $props()
   let tokens = $state([])
@@ -15,6 +16,7 @@
   let newName = $state('')
   let tokenAccess = $state('read')
   let minted = $state('')   // freshly created secret, shown once
+  let pairingOpen = $state(false)
 
   let profile = $state({ display_name: session.user?.display_name || '', email: session.user?.email || '' })
   let profileBusy = $state(false)
@@ -144,6 +146,22 @@
     </div>
   </section>
 
+
+  {#if !session.user?.demo}
+    <section class="settings-section" aria-labelledby="mobile-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="mobile-heading">Mobile app</h2>
+          <p>Connect the Suchi app to this archive using a short-lived QR code.</p>
+        </div>
+        <button class="btn sm" onclick={() => pairingOpen = true}>Pair mobile app</button>
+      </div>
+    </section>
+  {/if}
+
+  {#if pairingOpen}
+    <Lazy load={loadMobilePairing} props={{ notify, onClose: () => { pairingOpen = false; load() } }} />
+  {/if}
 
   <section class="settings-section" aria-labelledby="tokens-heading">
     <div class="section-heading">

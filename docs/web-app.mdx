@@ -160,9 +160,22 @@ for updates.
 Every user has **Settings > My account**:
 
 - **Profile**
+- **Mobile app**, outside demo sessions
 - **API tokens**
 - **Mailboxes**, only for a member with **Manage mailboxes**
 - **Saved decryption passwords**
+
+**Pair mobile app** opens a prompt to name the device and generate a QR code.
+Scan it in the Suchi app and confirm the displayed server address before
+connecting. The code is private, works once, and expires after five minutes.
+A new code replaces the previous one; closing the prompt cancels an unused
+code. The linked device appears under API tokens with document read and write
+access and can be revoked there.
+
+If scanning or clipboard access is unavailable, select and copy the pairing
+link manually, then use **Paste pairing link** in the app. Manual server and
+password/API-token sign-in remains available. Pairing is part of the later
+mobile release, not the beta.2 server release.
 
 Administrators also have **Settings > Archive configuration**. Its overview
 uses these exact groups and sections:

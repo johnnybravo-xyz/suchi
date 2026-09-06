@@ -86,6 +86,10 @@ function qs(params) {
 }
 
 export const whoami = () => api.get('/api/whoami')
+export const createMobilePairing = (name) =>
+  req('POST', '/api/mobile/pairing', { name }, { signal: AbortSignal.timeout(15000) })
+export const cancelMobilePairing = (code) =>
+  req('DELETE', '/api/mobile/pairing', { code }, { signal: AbortSignal.timeout(10000) })
 export function login(email, password) {
   resetSessionRequests()
   return api.post('/api/login', { email, password })
