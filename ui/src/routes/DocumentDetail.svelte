@@ -18,6 +18,9 @@
   let loading = $state(true)
   let err = $state('')
   let revealed = $state(false)
+  let fullText = $state(false)
+  let textCopyFallback = $state(false)
+  let textCopyStatus = $state('')
   let editingTitle = $state(false)
   let titleDraft = $state('')
   let editingLanguages = $state(false)
@@ -82,6 +85,9 @@
     loading = true
     err = ''
     doc = null
+    fullText = false
+    textCopyFallback = false
+    textCopyStatus = ''
     versions = []
     similar = null
     access = null
@@ -284,6 +290,15 @@
     const copied = await copyText(url)
     if (disposed || session.user !== user || id !== documentID || shareURL !== url) return
     notify?.(copied ? 'Share link copied' : 'Share link ready. Select the link and copy it manually.')
+  }
+  async function copyExtractedText() {
+    if (blurred || !doc?.content) return
+    const user = session.user
+    const documentID = id
+    const copied = await copyText(doc.content)
+    if (disposed || session.user !== user || id !== documentID || blurred) return
+    textCopyFallback = !copied
+    textCopyStatus = copied ? 'Text copied' : 'Select the text below and copy it manually.'
   }
   async function revoke(l) {
     const user = session.user
@@ -575,19 +590,29 @@
       {/if}
 
       {#if doc.content}
-        <div class="card">
-          <h3 style="display:flex;align-items:center;gap:8px">
+        <section class="card" aria-label="Extracted text">
+          <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             Extracted text
             {#if blurred}
               <span class="pill danger" style="font-size:.7rem">{sensitivityLabel(doc.sensitivity)}</span>
               <button class="btn sm" style="margin-left:auto" onclick={() => (revealed = true)}><Icon name="eye" size={12} /> Reveal</button>
+            {:else}
+              <button class="btn sm" style="margin-left:auto" onclick={copyExtractedText}>Copy text</button>
             {/if}
           </h3>
-          <p class="sub extracted"
-             class:blurred
-             style="white-space:pre-wrap;max-height:220px;overflow:auto;font-size:.8rem;color:var(--muted);margin:0"
-             aria-hidden={blurred}>{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? '…' : ''}</p>
-        </div>
+          {#if !blurred && textCopyStatus}<p class="sub" role="status">{textCopyStatus}</p>{/if}
+          {#if !blurred && textCopyFallback}
+            <textarea class="input extracted-copy" aria-label="Full extracted text for copying" readonly value={doc.content}
+                      onclick={(event) => event.currentTarget.select()} rows="12"></textarea>
+          {:else}
+            <p class="sub extracted" class:blurred class:expanded={fullText}
+               aria-hidden={blurred}>{blurred ? 'Reveal to read extracted text.' : fullText ? doc.content : doc.content.slice(0, 2000)}{!blurred && !fullText && doc.content.length > 2000 ? '…' : ''}</p>
+            {#if !blurred && doc.content.length > 2000}
+              <button class="btn sm" style="margin-top:10px" aria-expanded={fullText}
+                      onclick={() => (fullText = !fullText)}>{fullText ? 'Show less' : 'Read all'}</button>
+            {/if}
+          {/if}
+        </section>
       {/if}
     </div>
   </div>
@@ -723,6 +748,9 @@
 {/if}
 
 <style>
+  .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
+  .extracted.expanded { max-height: 65vh; }
+  .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }
   .trash-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; margin-bottom: 18px; background: var(--warn-soft); border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--r); }
   .trash-notice h2 { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 1rem; }
   .trash-notice .sub { margin: 3px 0 0; color: var(--muted); font-size: .82rem; }

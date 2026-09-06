@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Full extracted-text reading and copying, including manual copy fallback and
+  the existing sensitive-document reveal gate.
 - Local `.ics` downloads for reviewed exact-day Calendar entries, with explicit
   export disclosure and private source-document links.
 - Browser-local QR codes for opening private documents on a phone and for

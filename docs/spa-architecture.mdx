@@ -217,6 +217,11 @@ server endpoint, outbound request, persistence, or credential issuance. The
 native document-link dialog keeps the normal authenticated document route;
 share codes retain the existing link's access, expiry, and revocation rules.
 
+Document detail expands and copies the full `content` already returned by its
+authorized API read. High-sensitivity text stays behind Reveal, including manual
+copy fallbacks. Copy failures provide a read-only text field; route/account
+changes discard late feedback. No extraction or clipboard-read request is added.
+
 Approval cards display decision context and deadlines without internal workflow
 or assignee identifiers. Rescan proposals use an **Affected documents** disclosure
 only when document links are available.

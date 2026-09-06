@@ -1710,6 +1710,51 @@ test('protects restricted previews like confidential documents', async ({ page }
   await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'false')
 })
 
+for (const clipboard of ['available', 'rejected']) {
+  test(`reads and copies full extracted text with ${clipboard} clipboard`, async ({ page }) => {
+    const content = 'First line\n' + 'A clear line of text. '.repeat(180) + '\nFinal line beyond preview'
+    await mockAPI(page, { documentContent: content, documentSensitivity: 'confidential' })
+    await page.addInitScript(clipboard => {
+      window.copiedText = []
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { async writeText(value) {
+          if (clipboard === 'rejected') throw new DOMException('Denied', 'NotAllowedError')
+          window.copiedText.push(value)
+        } },
+      })
+    }, clipboard)
+    await page.goto('/#/doc/42')
+    const text = page.getByRole('region', { name: 'Extracted text', exact: true })
+    await expect(text.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0)
+    await expect(text).not.toContainText('Final line beyond preview')
+    await text.getByRole('button', { name: 'Reveal', exact: true }).click()
+    await expect(text).not.toContainText('Final line beyond preview')
+    await text.getByRole('button', { name: 'Read all', exact: true }).click()
+    await expect(text.getByText(content, { exact: true })).toBeVisible()
+    await text.getByRole('button', { name: 'Show less', exact: true }).click()
+    await expect(text).not.toContainText('Final line beyond preview')
+    await text.getByRole('button', { name: 'Copy text', exact: true }).click()
+    if (clipboard === 'available') {
+      await expect(text.getByRole('status')).toHaveText('Text copied')
+      expect(await page.evaluate(() => window.copiedText)).toEqual([content])
+    } else {
+      const field = text.getByLabel('Full extracted text for copying', { exact: true })
+      await expect(field).toHaveValue(content)
+      await field.click()
+      expect(await field.evaluate(input => input.value.slice(input.selectionStart, input.selectionEnd))).toBe(content)
+      await expect(text.getByRole('status')).toHaveText('Select the text below and copy it manually.')
+    }
+    await page.getByRole('button', { name: 'Hide', exact: true }).click()
+    await expect(text.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0)
+    await expect(text.getByRole('textbox')).toHaveCount(0)
+    await expect(text).not.toContainText('Final line beyond preview')
+    await page.evaluate(() => { location.hash = '#/doc/41' })
+    await expect(text.getByRole('button', { name: 'Reveal', exact: true })).toBeVisible()
+    await expect(text.getByRole('status')).toHaveCount(0)
+  })
+}
+
 test('opens a private document QR without creating a share or copying automatically', async ({ page }, testInfo) => {
   await mockAPI(page, { userRole: 'member', capabilities: [] })
   await page.addInitScript(() => {
