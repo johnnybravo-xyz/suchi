@@ -45,7 +45,7 @@ func makeQRImagePNG(t *testing.T, text string) []byte {
 
 func TestDecodeQR(t *testing.T) {
 	pngBytes := makeQRImagePNG(t, "INV-2026-42")
-	got, err := barcode.DecodeBytes(pngBytes)
+	got, err := barcode.DecodeBytes(t.Context(), pngBytes)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRecognized(t *testing.T) {
 }
 
 func TestDecodeEmpty(t *testing.T) {
-	if _, err := barcode.DecodeBytes(nil); err == nil {
+	if _, err := barcode.DecodeBytes(t.Context(), nil); err == nil {
 		t.Error("nil bytes should error")
 	}
 }

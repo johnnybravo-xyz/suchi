@@ -98,6 +98,15 @@ source types remain intact. An explicit rescan can therefore repair a PDF
 previously labeled `bin` and reach the ordinary encrypted-PDF gate; it does not
 modify the original CAS object or require a pipeline revision change.
 
+Image barcode extraction keeps the in-process Go readers and uses optional
+`zbarimg` only when QR decoding fails. It validates source dimensions before
+pixel allocation, passes a re-encoded PNG over stdin, and parses bounded XML
+through the existing subprocess runner with a five-second timeout and empty
+environment. Native failures preserve successful Go results, and no decoded
+payload or stderr is logged. This does not add an OS network sandbox or fetch
+decoded URLs. Both runtime images supply the local fallback; see [Supported
+file types](/formats#images-barcodes).
+
 Filesystem and IMAP intake have their own producer code and use the same
 transactional document/job pattern. Import is deliberately different:
 `core/importer/bundle/` can restore supplied content, archive bytes, and

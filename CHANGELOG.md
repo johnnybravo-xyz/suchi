@@ -58,6 +58,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Difficult photographed QR codes now get a bounded local ZBar fallback when
+  the Go reader cannot decode them; both runtime images include the tool.
 - Lightweight OCR retries empty pages once using sparse-text segmentation for
   isolated labels. Rasterization, pages and retries share one real timeout, and
   cancellation/output-limit failures cannot be recorded as successful empty OCR.

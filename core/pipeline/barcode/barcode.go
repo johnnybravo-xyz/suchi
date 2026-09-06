@@ -1,39 +1,37 @@
-// Package barcode extracts QR / DataMatrix / Code128 / ... values
-// from image documents and returns them as searchable strings.
+// Package barcode extracts QR, DataMatrix, and Aztec values from images.
 //
 // Post-ingest appends each decoded value as `barcode:<value>` tokens
 // to documents.content. FTS5's AFTER-UPDATE trigger picks up the
 // content change automatically, so a search for `barcode:INV-2024-42`
 // or plain `barcode:INV` returns the doc.
 //
-// Image uploads only (image/*). PDF pages need
-// rasterization via pdftoppm before gozxing can see them; deferred
-// until we bake pdftoppm into the Docker "full" image and confirm
-// the extra dep earns its keep.
-//
-// Design principle "hostile-input posture": image decoding happens
-// in-process (no subprocess), so a crafted image can trigger a Go
-// decoder bug but not shell command injection. gozxing is pure Go —
-// no cgo — so the surface area is Go's stdlib image decoders (jpeg,
-// png, gif) plus a Rust-inspired barcode-detection state machine.
+// Go decoders remain the default. When QR decoding fails, optional zbarimg
+// receives a re-encoded PNG through the shared bounded subprocess runner.
+// Decoded values are data: they are never logged, executed, or fetched.
 package barcode
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"image"
+	"image/png"
 	"io"
+	"os/exec"
 	"strings"
-	"sync"
+	"time"
+	"unicode/utf8"
 
 	// Register stdlib image decoders so image.Decode can dispatch on
 	// magic bytes. Ordering matters here — a blank import must come
 	// before the first image.Decode call.
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
 
+	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/aztec"
 	"github.com/makiuchi-d/gozxing/datamatrix"
@@ -69,15 +67,25 @@ func TokensFor(bs []Barcode) string {
 	return b.String()
 }
 
-// Decode reads img (a stdlib-recognized image format) and returns every
-// barcode gozxing can find. Empty result + nil error = image parsed
-// fine but no barcodes were present.
-//
-// The multi-format reader tries every symbology; running each family
-// separately (qrcode, datamatrix, aztec, oned) lets us report the
-// format alongside the text without paying the full-scan cost twice.
-func Decode(r io.Reader) ([]Barcode, error) {
-	img, _, err := image.Decode(r)
+// Decode reads a stdlib-recognized image. No symbol or absent zbarimg is not an
+// error. An optional decoder failure returns any valid Go results alongside
+// the error, so callers can retain useful content while reporting the failure.
+func Decode(ctx context.Context, r io.Reader) ([]Barcode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Replay the header bytes consumed by DecodeConfig without copying the
+	// entire upload. Reject decompression-sized dimensions before allocation.
+	var header bytes.Buffer
+	config, _, err := image.DecodeConfig(io.TeeReader(r, &header))
+	if err != nil {
+		return nil, fmt.Errorf("barcode: image config: %w", err)
+	}
+	const maxPixels = 64 * 1024 * 1024
+	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
+		return nil, errors.New("barcode: image exceeds 64 megapixel decode limit")
+	}
+	img, _, err := image.Decode(io.MultiReader(&header, r))
 	if err != nil {
 		return nil, fmt.Errorf("barcode: image decode: %w", err)
 	}
@@ -87,10 +95,12 @@ func Decode(r io.Reader) ([]Barcode, error) {
 	}
 
 	var out []Barcode
+	qrFound := false
 
 	// QR is the by-far common case — try it first.
 	if res, err := qrcode.NewQRCodeReader().Decode(bmp, nil); err == nil {
 		out = append(out, Barcode{Text: res.GetText(), Format: "QR"})
+		qrFound = true
 	}
 	// DataMatrix (small industrial codes).
 	if res, err := datamatrix.NewDataMatrixReader().Decode(bmp, nil); err == nil {
@@ -100,20 +110,21 @@ func Decode(r io.Reader) ([]Barcode, error) {
 	if res, err := aztec.NewAztecReader().Decode(bmp, nil); err == nil {
 		out = append(out, Barcode{Text: res.GetText(), Format: "AZTEC"})
 	}
-	// Linear/1D symbologies (Code128, EAN, UPC, PDF417) aren't wired
-	// yet — the 2D formats above cover the common invoice / letter /
-	// scan case. Add a 1D pass when a real user needs it; scope
-	// keeps the tested surface small.
+	if !qrFound {
+		qr, err := decodeZBarQR(ctx, img)
+		out = append(out, qr...)
+		return out, err
+	}
 	return out, nil
 }
 
 // DecodeBytes is a convenience wrapper for callers that already hold
 // bytes. Uses a bytes.Reader so no seeking behavior is required.
-func DecodeBytes(b []byte) ([]Barcode, error) {
+func DecodeBytes(ctx context.Context, b []byte) ([]Barcode, error) {
 	if len(b) == 0 {
 		return nil, errors.New("barcode: empty bytes")
 	}
-	return Decode(bytes.NewReader(b))
+	return Decode(ctx, bytes.NewReader(b))
 }
 
 // Recognized returns true when we can attempt barcode decoding on a
@@ -124,7 +135,66 @@ func Recognized(mime string) bool {
 	return strings.HasPrefix(mime, "image/")
 }
 
-// stdlib image init is idempotent under sync.Once — future callers
-// that add more format registrations (webp, heic, tiff) will import
-// them here. Placeholder for now.
-var _ sync.Once
+func decodeZBarQR(ctx context.Context, img image.Image) ([]Barcode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	binary, err := exec.LookPath("zbarimg")
+	if err != nil {
+		return nil, nil
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		return nil, errors.New("barcode: could not encode fallback image")
+	}
+	res, err := sandbox.Run(ctx, sandbox.Opts{
+		Args:  []string{binary, "--quiet", "--xml", "--set", "disable", "--set", "qrcode.enable", "png:-"},
+		Stdin: &encoded, Timeout: 5 * time.Second, MaxStdout: 64 << 10, MaxStderr: 4 << 10,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if res != nil && res.ExitCode == 4 && !res.StdoutTruncated {
+			return nil, nil // zbarimg's documented "no symbols found" exit.
+		}
+		// Native decoder output can contain document or barcode content.
+		return nil, errors.New("barcode: optional QR decoder failed")
+	}
+	if res.StdoutTruncated {
+		return nil, errors.New("barcode: QR decoder output exceeded 64 KiB")
+	}
+	var document struct {
+		XMLName xml.Name `xml:"barcodes"`
+		Symbols []struct {
+			Type string `xml:"type,attr"`
+			Data struct {
+				Format string `xml:"format,attr"`
+				Text   string `xml:",chardata"`
+			} `xml:"data"`
+		} `xml:"source>index>symbol"`
+	}
+	if err := xml.Unmarshal(res.Stdout, &document); err != nil {
+		return nil, errors.New("barcode: invalid QR decoder XML")
+	}
+	var out []Barcode
+	for _, symbol := range document.Symbols {
+		if symbol.Type != "QR-Code" {
+			continue
+		}
+		text := symbol.Data.Text
+		if symbol.Data.Format == "base64" {
+			decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text))
+			if err != nil || !utf8.Valid(decoded) {
+				continue // Binary payloads are not searchable text.
+			}
+			text = string(decoded)
+		} else if symbol.Data.Format != "" {
+			continue
+		}
+		if text != "" {
+			out = append(out, Barcode{Text: text, Format: "QR"})
+		}
+	}
+	return out, nil
+}

@@ -90,6 +90,7 @@ RUN apt-get update && \
       poppler-utils \
       qpdf \
       tesseract-ocr \
+      zbar-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Suchi encodes raster images as PDFs; PDF decoding (including coder aliases)
@@ -130,7 +131,8 @@ RUN apk add --no-cache \
       poppler-utils \
       qpdf \
       tesseract-ocr \
-      tesseract-ocr-data-eng
+      tesseract-ocr-data-eng \
+      zbar
 
 RUN sed -i '/<\/policymap>/i\  <policy domain="coder" rights="write" pattern="{PDF,PDFA,AI,EPDF,POCKETMOD}" />\n  <policy domain="coder" rights="none" pattern="{PS,PS2,PS3,EPS,EPS2,EPS3,EPSF,EPSI,EPI,XPS}" />' /etc/ImageMagick-7/policy.xml
 

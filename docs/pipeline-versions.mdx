@@ -63,7 +63,7 @@ the detector cancels the obsolete open proposal on the next boot.
 ## Explicit rescans
 
 Camera-image fixes correct EXIF orientation and the page density of image-derived
-PDFs. They retain
+PDFs, and retry difficult QR codes when local ZBar is available. They retain
 content revision `2`; existing revision-2 documents need an explicit selected rescan.
 OCR revision `2` adds one sparse-text retry for empty pages in the lightweight
 engine. The existing approval path offers older OCR results for rescan.

@@ -406,7 +406,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// missing entirely, falls through to barcode-only content, which
 	// matches the pre-change behavior for these MIME types.
 	if imgpdf.Recognized(mime) {
-		bcs, berr := barcode.DecodeBytes(origBytes)
+		bcs, berr := barcode.DecodeBytes(ctx, origBytes)
 		if berr != nil {
 			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
 		}
@@ -469,7 +469,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// values land in content. No OCR here — these formats either
 	// don't rasterize well (SVG) or don't come with printable text.
 	if barcode.Recognized(mime) {
-		bcs, berr := barcode.DecodeBytes(origBytes)
+		bcs, berr := barcode.DecodeBytes(ctx, origBytes)
 		if berr != nil {
 			log.Info("post-ingest.image.decode_failed", "err", berr.Error())
 		}

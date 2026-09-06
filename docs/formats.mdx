@@ -15,7 +15,7 @@ shows up.
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | :----------------------------------: | :------------------------------------: |
 | `application/pdf`                             | qpdf normalize → pdf-inspector routes text-native vs OCR → ZUGFeRD invoice extraction                                                                                    | `qpdf`, `pdftotext`, tessocr (`pdftoppm`+`tesseract`) OR `ocrmypdf` | ✅ full PDF chain (no OCR'd archive) | ✅ full PDF chain (with OCR'd archive) |
 | Common raster images (PNG, JPEG, GIF, TIFF, WebP, BMP) | ImageMagick wraps the image in a PDF; OCR text and QR / DataMatrix / Aztec barcode tokens land in `documents.content`                                              | ImageMagick plus the configured OCR engine                          |                  ✅                  |                   ✅                   |
-| Other `image/*` formats                       | QR / DataMatrix / Aztec barcodes are decoded into `documents.content` as `barcode:<value>` tokens                                                                         | none (pure Go via gozxing)                                          |                  ✅                  |                   ✅                   |
+| Other `image/*` formats                       | QR / DataMatrix / Aztec barcodes are decoded into `documents.content` as `barcode:<value>` tokens                                                                         | Go decoders; optional ZBar QR fallback                              |                  ✅                  |                   ✅                   |
 | `application/epub+zip`, `application/epub`    | `anydoc` converts the EPUB spine to GitHub-flavored Markdown in `documents.content`                                                                                       | `anydoc`                                                            |                  ✅                  |                   ✅                   |
 | Office, OpenDocument, RTF, and CSV             | `anydoc` converts the document to GitHub-flavored Markdown                                                                                                                | `anydoc`                                                            |                  ✅                  |                   ✅                   |
 | Plain text, Markdown, and HTML                 | Original text is indexed directly, capped at 1 MiB                                                                                                                        | none                                                                |                  ✅                  |                   ✅                   |
@@ -271,7 +271,16 @@ Recognised attachment names (case-insensitive): `factur-x.xml`,
 ## Images (barcodes)
 
 Every image upload runs QR / DataMatrix / Aztec decoding via gozxing
-(pure Go, in-process, no external binary). Any decoded barcode value
+(pure Go, in-process). If the Go QR reader cannot decode a symbol, optional
+`zbarimg` retries QR only against a locally re-encoded PNG. Both Docker images
+include it (`zbar` on Alpine, `zbar-tools` on Debian); bare-metal installations
+without it retain the Go readers. This handles some photographed QR codes that
+fail the Go reader's checksum verification, without relaxing either decoder's
+checksum checks. The fallback has a five-second timeout and a 64-KiB XML output
+limit; failures never discard successfully decoded Go results. Image dimensions
+above 64 megapixels skip barcode decoding before pixel allocation; the separate
+OCR conversion path remains available. Decoded links are indexed, never opened,
+and native output is not logged. Any decoded barcode value
 lands in `documents.content` as `barcode:<value>` tokens so the FTS5
 index picks them up — search for `barcode:INV-2026-0042` and the doc
 surfaces.

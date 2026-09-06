@@ -147,9 +147,15 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 
 	out := &Result{TotalPages: len(pngs)}
 	for _, p := range pngs {
-		if isSeparator(p.path, token, log) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if isSeparator(ctx, p.path, token, log) {
 			out.SeparatorPages = append(out.SeparatorPages, p.n)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	out.Segments = computeSegments(len(pngs), out.SeparatorPages)
 	log.Debug("docsplit.done",
@@ -160,18 +166,17 @@ func Analyze(ctx context.Context, pdfBytes []byte, log *slog.Logger, opts Option
 }
 
 // isSeparator returns true when any QR/DataMatrix/Aztec on the page
-// matches token. Decode failures are logged at Debug and treated as
-// "not a separator" — a genuinely broken page shouldn't force a split.
-func isSeparator(pngPath, token string, log *slog.Logger) bool {
+// matches token. Decode failures are logged at Debug without discarding valid
+// symbols from another reader. A broken page alone cannot force a split.
+func isSeparator(ctx context.Context, pngPath, token string, log *slog.Logger) bool {
 	data, err := os.ReadFile(pngPath)
 	if err != nil {
 		log.Debug("docsplit.page.read_failed", "path", pngPath, "err", err.Error())
 		return false
 	}
-	codes, err := barcode.DecodeBytes(data)
+	codes, err := barcode.DecodeBytes(ctx, data)
 	if err != nil {
 		log.Debug("docsplit.page.decode_failed", "path", pngPath, "err", err.Error())
-		return false
 	}
 	for _, c := range codes {
 		if strings.TrimSpace(c.Text) == token {
