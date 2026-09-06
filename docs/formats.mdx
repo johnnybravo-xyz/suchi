@@ -322,6 +322,23 @@ TODO(ocr-languages), tracked beside `Config.OCRLanguages` in code:
   bare-metal installations, without silently downloading them at runtime.
 - Add synthetic image and PDF regression tests for mixed-script extraction,
   starting with Hindi + English, including missing-pack behavior and rescans.
+- Deployment evaluation of local multilingual engines remains pending.
+  [PaddleOCR PP-OCRv5](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.html)
+  is the first candidate: its Devanagari recognizer supports Hindi and English
+  together. [EasyOCR](https://github.com/JaidedAI/EasyOCR) is another candidate.
+  Further evaluation covers text accuracy, CPU latency, peak memory, model size,
+  and offline deployment on printed scans and camera photos. Preliminary
+  CPU-only checks on five images found improvements in Devanagari and packaging
+  text, but both engines also missed text recovered by Tesseract and required
+  substantially larger runtimes. This small sample does not establish dependable
+  extraction across languages or document types. Neither dependency is integrated.
+
+OCR processing runs locally. The optional LLM classifier receives bounded
+extracted text rather than document images and does not act as an OCR fallback.
+Automatic remote vision OCR was not selected because it would disclose source
+image content to the configured provider and add image-inference costs.
+Local multilingual engines remain evaluation candidates rather than production
+OCR backends.
 
 ### Image conversion requirements
 
