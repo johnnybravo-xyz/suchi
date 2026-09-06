@@ -275,6 +275,12 @@ decoding also runs where the in-process decoder supports the source format;
 HEIC/HEIF text comes through ImageMagick and OCR, not a native Go HEIF decoder.
 Other image formats receive the barcode pass only.
 
+Camera EXIF orientation is applied before PDF conversion, including the
+quarter-turn metadata used by phone photos. The derived PDF uses 300-DPI page
+density without resizing the image, so the standard OCR rasterizer retains its
+original pixel resolution. This corrects camera metadata; it does not infer the
+reading direction of mixed labels or straighten photographed perspective.
+
 ImageMagick must include a PDF encoder and allow PDF **writing**. On Alpine the
 encoder is in `imagemagick-pdf`, alongside `imagemagick-heic` for HEIF decoding.
 Alpine's PDF package also brings its Ghostscript dependency; it is not a
@@ -287,7 +293,7 @@ Suchi explicitly requests PDF and rejects output without its signature.
 Beta.2 fixes the packaged encoder/policy and removes the old HEIC-to-PNG
 workaround. Select affected photos/scans in Documents and **Rescan** to rebuild
 older missing or invalid image archives. See [Pipeline versions](/pipeline-versions)
-for explicit rescans; this bug fix does not advance the pipeline revision.
+for controlled processing upgrades and explicit rescans from originals.
 
 ## EPUB
 

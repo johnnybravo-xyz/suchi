@@ -3,6 +3,11 @@ package imgpdf_test
 import (
 	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"os"
@@ -42,6 +47,72 @@ func TestRecognized(t *testing.T) {
 		if got := imgpdf.Recognized(tc.mime); got != tc.want {
 			t.Errorf("Recognized(%q) = %v, want %v", tc.mime, got, tc.want)
 		}
+	}
+}
+
+func TestConvertPreservesPixelsAndHonorsCameraOrientation(t *testing.T) {
+	if _, err := exec.LookPath(imgpdf.DefaultBinary); err != nil {
+		t.Skip("ImageMagick not available")
+	}
+	if _, err := exec.LookPath("pdftoppm"); err != nil {
+		t.Skip("pdftoppm not available")
+	}
+	photo := image.NewRGBA(image.Rect(0, 0, 1200, 800))
+	draw.Draw(photo, photo.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
+	draw.Draw(photo, image.Rect(0, 0, 600, 400), image.NewUniform(color.RGBA{R: 255, A: 255}), image.Point{}, draw.Src)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, photo, nil); err != nil {
+		t.Fatal(err)
+	}
+	data := encoded.Bytes()
+	for _, tc := range []struct {
+		name        string
+		orientation byte
+		width       int
+		height      int
+		redCorner   image.Point
+	}{
+		{"upright", 1, 1200, 800, image.Pt(100, 100)},
+		{"camera-upside-down", 3, 1200, 800, image.Pt(1100, 700)},
+		{"camera-rotated-right", 6, 800, 1200, image.Pt(700, 100)},
+		{"camera-rotated-left", 8, 800, 1200, image.Pt(100, 1100)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A small generated EXIF IFD keeps real camera metadata in the JPEG;
+			// setting only ImageMagick's orientation property does not create EXIF.
+			exif := []byte{
+				0xff, 0xe1, 0, 34, 'E', 'x', 'i', 'f', 0, 0,
+				'I', 'I', 42, 0, 8, 0, 0, 0, 1, 0,
+				0x12, 1, 3, 0, 1, 0, 0, 0, tc.orientation, 0, 0, 0,
+				0, 0, 0, 0,
+			}
+			var source bytes.Buffer
+			source.Write(data[:2])
+			source.Write(exif)
+			source.Write(data[2:])
+			res, err := imgpdf.Convert(context.Background(), &source,
+				slog.New(slog.NewTextHandler(io.Discard, nil)), imgpdf.Options{Ext: "jpg"})
+			if err != nil || res.Skipped {
+				t.Fatalf("Convert: result=%+v err=%v", res, err)
+			}
+			cmd := exec.Command("pdftoppm", "-r", "300", "-singlefile", "-png", "-")
+			cmd.Stdin = bytes.NewReader(res.PDF)
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			raster, err := png.Decode(bytes.NewReader(output))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raster.Bounds().Dx() != tc.width || raster.Bounds().Dy() != tc.height {
+				t.Fatalf("300-DPI raster = %v, want original oriented pixels %dx%d", raster.Bounds(), tc.width, tc.height)
+			}
+			red, green, blue, _ := raster.At(tc.redCorner.X, tc.redCorner.Y).RGBA()
+			if red < 60000 || green > 1000 || blue > 1000 {
+				t.Fatalf("orientation %d: red marker did not rotate to %v", tc.orientation, tc.redCorner)
+			}
+		})
 	}
 }
 

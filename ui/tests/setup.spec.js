@@ -1939,6 +1939,8 @@ test('shows affected document titles in rescan details', async ({ page }) => {
   await page.goto('/#/tasks')
 
   await page.getByText('Affected documents', { exact: true }).click()
+  await expect(page.getByText('Text extraction has improved. 5 documents can be updated.', { exact: true })).toBeVisible()
+  await expect(page.getByText(/can be updated to v\d/)).toHaveCount(0)
   await expect(page.getByText('Affected documents')).toBeVisible()
   await expect(page.getByRole('link', { name: 'SBI account statement August 2026.pdf' })).toHaveAttribute('href', '#/doc/18')
   await expect(page.getByRole('link', { name: 'HDFC Infinia card statement August 2026.pdf' })).toHaveAttribute('href', '#/doc/20')

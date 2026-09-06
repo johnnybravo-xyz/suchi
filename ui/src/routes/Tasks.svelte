@@ -89,7 +89,7 @@
   }
 
   function pipelineLabel(kind) {
-    return { llm: 'LLM classification', ocr: 'OCR', content: 'content extraction' }[kind] || kind
+    return { llm: 'LLM classification', ocr: 'OCR', content: 'Text extraction' }[kind] || kind
   }
 
   function rescanTargets(t) {
@@ -383,8 +383,8 @@
                 <div class="prompt decision">{decisionPrompt(t)}</div>
               {#if t.approval_name === 'rescan-proposal' && t.vars}
                 <div class="rescan-context">
-                  <b>{pipelineLabel(t.vars.kind)}</b> has a newer processing revision.
-                  {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} can be updated to v{t.vars.current_version}.
+                  <b>{pipelineLabel(t.vars.kind)}</b> has improved.
+                  {t.vars.stale_count} document{t.vars.stale_count === 1 ? '' : 's'} can be updated.
                 </div>
               {/if}
               {#if t.approval_name === 'document-change' && t.vars}

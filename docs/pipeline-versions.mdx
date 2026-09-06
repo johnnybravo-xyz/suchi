@@ -43,8 +43,8 @@ Password-protected PDFs waiting for decryption are also excluded. A rescan
 cannot advance them while the password gate is closed; supplying a password
 already re-enqueues the document through the current pipeline.
 
-The proposal in **Approvals** reports the pipeline, target revision, and
-matching document count. Its actions are:
+The proposal in **Approvals** names the improved processing step and matching
+document count, without displaying internal revision numbers. Its actions are:
 
 - **Rescan all N**: enqueue every matching document.
 - **Try 20 first**: enqueue up to 20 random matches. This only appears when
@@ -62,12 +62,14 @@ the detector cancels the obsolete open proposal on the next boot.
 
 ## Explicit rescans
 
-Beta.2's raster/HEIC encoder correction keeps content revision `2` and OCR
-revision `1`. It does not propose an archive-wide rescan for this image-only
-bug fix. Original images remain available even when an earlier installation
-stored invalid derived bytes or skipped conversion. Select affected images
-in Documents and choose **Rescan** to regenerate their archive and indexed
-text. Upgrading alone does not repair previously processed images.
+Camera-image fixes correct EXIF orientation and the page density of image-derived
+PDFs. They retain
+content revision `2`; existing revision-2 documents need an explicit selected rescan.
+Original images remain available even when an earlier
+installation stored invalid derived bytes or skipped conversion. Select affected
+images in Documents and choose **Rescan**, or accept the relevant proposal, to
+regenerate their archive and indexed text from the immutable original. Upgrading
+alone does not repair previously processed images.
 
 Use the Documents selection controls for ordinary operator-driven rescans. The
 CLI provides narrower filters and dry runs:

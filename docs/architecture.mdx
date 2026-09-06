@@ -273,7 +273,11 @@ establish the safety or availability of the real parser.
 `core/pipeline/imgpdf/` owns all supported raster-to-PDF conversion, including
 HEIC/HEIF; there is no separate HEIC adapter or intermediate PNG step. It
 explicitly requests PDF encoding and rejects output without the PDF signature
-before OCR/CAS publication. Container ImageMagick policy permits the necessary
+before OCR/CAS publication. Camera EXIF orientation is applied to derived pixels,
+and PDFs use 300-DPI page density without resampling, matching the OCR rasterizer
+instead of inflating phone photos into oversized pages. ImageMagick scratch stays
+inside the converter's temporary directory and is removed after conversion.
+Container ImageMagick policy permits the necessary
 PDF writes without enabling PDF reads. Verify the actual encoder and policy,
 not merely an executable's presence or an `archive_blob` value. See
 [Supported file types](/formats) and [Pipeline versions](/pipeline-versions)

@@ -58,6 +58,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Camera photos retain their EXIF orientation in generated PDFs. Raster images
+  use 300-DPI page density without changing pixel resolution, preventing the
+  OCR stage from enlarging ordinary phone photos into hundreds of megapixels.
+  Content remains at revision 2; selected rescans repair older results from
+  immutable originals. Rescan prompts omit internal revision numbers.
 - Approval cards omit internal workflow names, assignee IDs and step metadata.
   Decisions retain confidence, evidence and deadlines; rescan proposals list
   their affected documents under an explicit label.

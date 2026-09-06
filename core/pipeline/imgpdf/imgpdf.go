@@ -127,7 +127,9 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 	if inExt == "heic" || inExt == "heif" {
 		inputPath += "[0]"
 	}
-	pdfArgs := []string{binary, inputPath}
+	// Normalize camera orientation and page density without resampling pixels.
+	// Otherwise 72-DPI phone photos become enormous pages when OCR renders at 300 DPI.
+	pdfArgs := []string{binary, inputPath, "-auto-orient", "-units", "PixelsPerInch", "-density", "300"}
 	if opts.Quality > 0 && opts.Quality <= 100 {
 		pdfArgs = append(pdfArgs, "-quality", fmt.Sprintf("%d", opts.Quality))
 	}
@@ -140,6 +142,7 @@ func Convert(ctx context.Context, src io.Reader, log *slog.Logger, opts Options)
 		Args:    pdfArgs,
 		Timeout: timeout,
 		Dir:     dir,
+		Env:     map[string]string{"MAGICK_TEMPORARY_PATH": dir},
 	})
 	dur := time.Since(start)
 	if err != nil {
