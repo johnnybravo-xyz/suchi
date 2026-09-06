@@ -762,9 +762,24 @@ for (const userRole of ['admin', 'member']) {
       user_id: 1, email: 'admin@example.test', role: userRole, capabilities: [], build_version: 'dev',
     } }))
     await page.reload()
-    await expect(page.getByRole('contentinfo', { name: 'Suchi build' })).toHaveText('Suchi dev')
+    await expect(page.getByRole('contentinfo', { name: 'Suchi build' })).toHaveText('Suchi dev · revision unavailable')
   })
 }
+
+test('keeps the running revision in Settings only', async ({ page }) => {
+  await mockAPI(page, {
+    buildVersion: 'dev', buildRevision: '1234567890ab.dirty',
+    setupCompletedAt: 1, filingTreeChosen: true,
+  })
+  await page.goto('/#/dashboard')
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+  const navigation = page.getByRole('button', { name: 'Open navigation', exact: true })
+  if (await navigation.isVisible()) await navigation.click()
+  await expect(page.getByText('1234567890ab.dirty', { exact: false })).toHaveCount(0)
+  await page.getByRole('link', { name: 'Profile & settings', exact: true }).click()
+  await expect(page.getByRole('contentinfo', { name: 'Suchi build' }))
+    .toHaveText('Suchi dev · 1234567890ab.dirty')
+})
 
 test('separates completed archive administration from account settings', async ({ page }, testInfo) => {
   const llmSettingsRequests = []
