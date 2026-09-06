@@ -269,7 +269,8 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			}
 			if confidence >= cfg.AutoThreshold {
 				if _, err := tx.ExecContext(ctx,
-					`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+					`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+					 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 					docID, tagID); err != nil {
 					return fmt.Errorf("archive classifier: auto-apply tag %d: %w", tagID, err)
 				}

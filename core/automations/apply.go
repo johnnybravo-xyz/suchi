@@ -306,7 +306,8 @@ func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
 		ids := intList(a.Params["tag_ids"])
 		for _, id := range ids {
 			if _, err := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 				docID, id); err != nil {
 				return err
 			}

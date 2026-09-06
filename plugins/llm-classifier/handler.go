@@ -16,6 +16,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"github.com/johnnybravo-xyz/suchi/core/similar"
+	"github.com/johnnybravo-xyz/suchi/core/slug"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -142,6 +143,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return fmt.Errorf("prepare date candidates: %w", err)
 	}
 
+	var reviewTagsRemoved int64
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
 		if err := replaceDateCandidatesInTx(ctx, tx, e.DocID, sourceBlob, preparedDates, now); err != nil {
@@ -149,7 +151,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		}
 
 		if lowConfidence {
-			if err := upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now); err != nil {
+			if _, err := upsertTagAndAttach(ctx, tx, "needs-review", e.DocID, now, true); err != nil {
 				return err
 			}
 			if res.Title != "" && res.Title != title {
@@ -258,14 +260,33 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			}
 		}
 
+		tagArgs := []any{e.DocID}
 		for _, tag := range res.Tags {
 			tag = strings.TrimSpace(tag)
 			if tag == "" {
 				continue
 			}
-			if err := upsertTagAndAttach(ctx, tx, tag, e.DocID, now); err != nil {
+			reviewTag := slug.Make(tag) == "needs-review"
+			tagID, err := upsertTagAndAttach(ctx, tx, tag, e.DocID, now, reviewTag)
+			if err != nil {
 				return err
 			}
+			tagArgs = append(tagArgs, tagID)
+		}
+		// Only review markers can be classifier-owned. Manual and rule
+		// assignments clear ownership, including edits during the model call.
+		// Preserve requested tag IDs because canonical names/slugs can differ.
+		cleanup := `DELETE FROM document_tags WHERE document_id = ? AND classifier_owned = 1`
+		if len(tagArgs) > 1 {
+			cleanup += ` AND tag_id NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(tagArgs)-1), ",") + `)`
+		}
+		result, err := tx.ExecContext(ctx, cleanup, tagArgs...)
+		if err != nil {
+			return err
+		}
+		reviewTagsRemoved, err = result.RowsAffected()
+		if err != nil {
+			return err
 		}
 
 		// Language — the LLM returns an ISO code (or short CSV) in
@@ -302,6 +323,9 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return view.EnqueueMove(ctx, tx, e.DocID)
 	}); err != nil {
 		return err
+	}
+	if reviewTagsRemoved > 0 {
+		log.Info("llm-classifier.review_resolved", "removed_tags", reviewTagsRemoved)
 	}
 
 	return nil
@@ -432,13 +456,13 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 	return nil
 }
 
-func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int64, now int64) error {
+func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int64, now int64, classifierOwned bool) (int64, error) {
 	tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
-		docID, tagID)
-	return err
+		`INSERT OR IGNORE INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, ?)`,
+		docID, tagID, classifierOwned)
+	return tagID, err
 }

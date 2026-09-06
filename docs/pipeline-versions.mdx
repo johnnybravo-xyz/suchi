@@ -22,6 +22,12 @@ low-confidence response is still a completed classification: Suchi adds the
 `needs-review` tag and records the current LLM revision without applying its
 uncertain metadata.
 
+A later successful classification at or above the configured threshold clears
+an earlier classifier-owned `needs-review` assignment if the new result does not
+request that tag. It does not remove manual, rule-assigned, imported, or legacy
+tags without recorded classifier ownership. A changed title alone does not
+establish confidence; failed requests and low-confidence results retain the tag.
+
 This distinction matters when the LLM is first enabled. Existing version-zero
 documents are not automatically presented as outdated LLM results because
 they have no prior LLM result to upgrade. Select the documents in **Documents**

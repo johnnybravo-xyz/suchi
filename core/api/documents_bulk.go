@@ -274,7 +274,8 @@ func (s *Server) applyBulkEdit(r *http.Request, method string, params map[string
 		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 			for _, id := range ids {
 				if _, err := tx.ExecContext(r.Context(),
-					"INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)",
+					`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+					 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 					id, v); err != nil {
 					return err
 				}

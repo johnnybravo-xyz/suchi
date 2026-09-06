@@ -76,6 +76,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Successful confident classification clears only its own obsolete review tags.
+  Existing, manually assigned and rule-maintained tags remain untouched.
 - Photo OCR keeps its normal text and supplements it with confident lines from
   one bounded sparse-text pass, recovering isolated headings without replacing
   invoice text or changing ordinary PDF OCR. Low-confidence and short background

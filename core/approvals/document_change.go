@@ -175,7 +175,10 @@ func applyDocumentChange(ctx context.Context, tx *sql.Tx, log *slog.Logger, run 
 	case "document_type":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET document_type_id = ?, updated_at = ? WHERE id = ? AND document_type_id IS NULL`, change.ValueID, now, docID)
 	case "tag":
-		result, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`, docID, change.ValueID)
+		result, err = tx.ExecContext(ctx, `
+			INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+			ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0
+			WHERE classifier_owned = 1`, docID, change.ValueID)
 	case "title":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET title = ?, updated_at = ? WHERE id = ?`, change.Value, now, docID)
 	}

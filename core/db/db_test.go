@@ -115,6 +115,19 @@ func TestBeta1UpgradeToBeta2(t *testing.T) {
 			VALUES ('beta1-probe', '"preserved"', 1)`); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := d.ExecWrite(ctx, `
+			INSERT INTO users(id, email, display_name, role, created_at, updated_at)
+			VALUES (1, 'owner@example.com', 'Owner', 'admin', 0, 0);
+			INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (0, 9, 'System', 0);
+			INSERT INTO jd_categories(id, area_start, code, name) VALUES (1, 0, 1, 'Inbox');
+			INSERT INTO documents(id, owner_id, original_blob, original_size, jd_category_id, created_at, updated_at)
+			VALUES (1, 1, 'legacy-review-document', 1, 1, 0, 0);
+			INSERT INTO tags(id, name, slug, created_at, updated_at)
+			VALUES (1, 'needs-review', 'needs-review', 0, 0);
+			INSERT INTO document_tags(document_id, tag_id) VALUES (1, 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := db.Migrate(ctx, d, migs, log); err != nil {
 			t.Fatal(err)
@@ -129,6 +142,17 @@ func TestBeta1UpgradeToBeta2(t *testing.T) {
 		}
 		if value != `"preserved"` {
 			t.Fatalf("preserved setting = %q", value)
+		}
+		var owned int
+		if err := d.Read.QueryRowContext(ctx,
+			`SELECT classifier_owned FROM document_tags WHERE document_id = 1 AND tag_id = 1`).Scan(&owned); err != nil {
+			t.Fatal(err)
+		}
+		if owned != 0 {
+			t.Fatalf("legacy tag classifier ownership = %d, want 0", owned)
+		}
+		if _, err := d.ExecWrite(ctx, `UPDATE document_tags SET classifier_owned = 2`); err == nil {
+			t.Fatal("classifier ownership accepted a non-boolean value")
 		}
 	})
 

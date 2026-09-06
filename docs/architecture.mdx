@@ -247,6 +247,17 @@ the same configured model integration through explicit callbacks. Preserve
 evidence limits, review decisions, and human-edited metadata when changing
 extraction or classification.
 
+The LLM handler records `document_tags.classifier_owned` only when it creates a
+review-tag assignment. The default is false, including assignments migrated
+from older releases. In the same write transaction that applies a successful
+high-confidence result, it removes its earlier review marker only when the
+result no longer requests it. It never adopts an existing assignment. Explicit
+tag additions, approved suggestions, deterministic rules, source metadata, and
+user-directed tag renames/merges clear ownership in their own write transactions;
+a human reassertion during the model call therefore survives result application.
+Other model tags remain additive. This is a narrow cleanup marker, not a tag
+history or general metadata-provenance ledger. See [LLM classifier](/llm-classifier).
+
 ## Durable work and optional integrations
 
 `core/jobs/jobs.go` owns claims, retries, and dead letters. Current job kinds

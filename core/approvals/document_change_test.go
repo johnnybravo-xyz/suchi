@@ -81,6 +81,59 @@ func TestDocumentChangeUsesApprovalLifecycle(t *testing.T) {
 	}
 }
 
+func TestApprovedTagTakesOwnershipOfClassifierReview(t *testing.T) {
+	e := newEngine(t)
+	ctx := context.Background()
+	seedDocumentForChange(t, e.DB())
+	if _, err := e.DB().Write.ExecContext(ctx, `
+		INSERT INTO tags(id, name, slug, created_at, updated_at)
+		VALUES (99, 'needs-review', 'needs-review', 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+			Field: "tag", ValueID: 99, Label: "needs-review", Confidence: 0.65, Source: "archive",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `SELECT id FROM approval_runs WHERE doc_id = 10`).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	if _, err := e.DB().Write.ExecContext(ctx,
+		`INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (10, 99, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	actor := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
+	if err := e.Resolve(ctx, tasks[0].ID, "apply", actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var count, owned int
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT COUNT(*), SUM(classifier_owned) FROM document_tags WHERE document_id = 10
+	`).Scan(&count, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || owned != 0 {
+		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
 func TestDocumentChangeCannotResolveWhileDocumentIsTrashed(t *testing.T) {
 	e := newEngine(t)
 	ctx := context.Background()

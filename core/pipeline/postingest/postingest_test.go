@@ -79,6 +79,34 @@ func TestPostContentUsesOneClassifierStateSnapshot(t *testing.T) {
 	}
 }
 
+func TestPreConsumeTagsTakeOwnershipOfClassifierReview(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "text/plain", []byte("Review this document"))
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO tags(id, name, slug, created_at, updated_at)
+		VALUES (99, 'needs-review', 'needs-review', 0, 0);
+		INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
+	`, docID); err != nil {
+		t.Fatal(err)
+	}
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for range 2 {
+		if err := h.applyPreConsumeMetadata(ctx, docID, []string{"needs-review"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count, owned int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*), SUM(classifier_owned) FROM document_tags WHERE document_id = ?
+	`, docID).Scan(&count, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || owned != 0 {
+		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
 func TestHandleRoutingContracts(t *testing.T) {
 	tests := []struct {
 		name            string

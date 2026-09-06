@@ -142,13 +142,12 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		}
 
 		if opts.Kind == KindTag {
-			// Junction rewrite. INSERT OR IGNORE handles the case where
-			// a doc already carries BOTH tags (junction is UNIQUE on
-			// (document_id, tag_id), so the "into" row already exists —
-			// we just delete the "from" row).
+			// A user-directed merge takes ownership of the resulting tag,
+			// including documents that already carry both source and target.
 			if _, err := tx.ExecContext(ctx, `
-				INSERT OR IGNORE INTO document_tags(document_id, tag_id)
+				INSERT INTO document_tags(document_id, tag_id)
 				SELECT document_id, ? FROM document_tags WHERE tag_id = ?
+				ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0
 			`, intoID, fromID); err != nil {
 				return err
 			}

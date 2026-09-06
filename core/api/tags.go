@@ -241,6 +241,12 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 		if n == 0 {
 			return errNotFound
 		}
+		if in.Name != nil || in.Slug != nil {
+			if _, err := tx.ExecContext(r.Context(),
+				`UPDATE document_tags SET classifier_owned = 0 WHERE tag_id = ?`, id); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

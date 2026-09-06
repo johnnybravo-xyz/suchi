@@ -1,4 +1,8 @@
 -- v0.1.0-beta.2 schema changes. Immutable after publication.
+-- Existing tag assignments have no provenance and remain user-controlled.
+ALTER TABLE document_tags ADD COLUMN classifier_owned INTEGER NOT NULL DEFAULT 0
+    CHECK (classifier_owned IN (0, 1));
+
 CREATE TABLE document_intelligence (
     id                 INTEGER PRIMARY KEY,
     document_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

@@ -90,6 +90,42 @@ func TestTagCRUD_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestTagRenameTakesOwnershipOfClassifierReview(t *testing.T) {
+	for _, field := range []string{"name", "slug", "color"} {
+		t.Run(field, func(t *testing.T) {
+			s := newBulkServer(t)
+			docID := seedStatsDoc(t, s.DB, 1, "rename-review-sha", "Review", seedStatsJDInbox(t, s.DB), false, 0)
+			if _, err := s.DB.Write.ExecContext(context.Background(), `
+				INSERT INTO tags(id, name, slug, created_at, updated_at)
+				VALUES (99, 'needs-review', 'needs-review', 0, 0);
+				INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
+			`, docID); err != nil {
+				t.Fatal(err)
+			}
+			value, wantOwned := "review-myself", 0
+			if field == "color" {
+				value, wantOwned = "#ff0000", 1
+			}
+			ctx := auth.WithPrincipal(context.Background(), adminPrincipal(1))
+			req := httptest.NewRequest("PATCH", "/api/tags/99",
+				bytes.NewReader(mustJSON(t, map[string]any{field: value}))).WithContext(ctx)
+			req.SetPathValue("id", "99")
+			rec := httptest.NewRecorder()
+			s.UpdateTag(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var owned int
+			if err := s.DB.Read.QueryRow(`SELECT classifier_owned FROM document_tags WHERE document_id = ?`, docID).Scan(&owned); err != nil {
+				t.Fatal(err)
+			}
+			if owned != wantOwned {
+				t.Fatalf("classifier_owned=%d, want %d", owned, wantOwned)
+			}
+		})
+	}
+}
+
 func TestCreateTag_MemberForbidden(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}

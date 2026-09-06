@@ -858,7 +858,8 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 				return err
 			}
 			if _, err := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 				docID, tagID); err != nil {
 				return err
 			}

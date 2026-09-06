@@ -70,6 +70,39 @@ func TestApplyDocumentAdded(t *testing.T) {
 	}
 }
 
+func TestAssignTagsTakesOwnershipOfClassifierReview(t *testing.T) {
+	ctx := context.Background()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	tagID := seedTag(t, ctx, d, "needs-review")
+	docID := seedDoc(t, ctx, d, "Review", "Review this document")
+	if _, err := d.Write.ExecContext(ctx,
+		`INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, 1)`, docID, tagID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := automations.New(d).Create(ctx, automations.Automation{
+		Name: "always review", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count, owned int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*), SUM(classifier_owned) FROM document_tags WHERE document_id = ?
+	`, docID).Scan(&count, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || owned != 0 {
+		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
 // A trigger whose filter doesn't match must skip actions cleanly.
 func TestApplySkipsWhenFilterMisses(t *testing.T) {
 	ctx := context.Background()

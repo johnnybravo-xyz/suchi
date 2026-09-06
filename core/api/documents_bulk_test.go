@@ -106,6 +106,36 @@ func TestBulkEdit_TrashHappyPath(t *testing.T) {
 	}
 }
 
+func TestBulkEditAddTagTakesOwnershipOfClassifierReview(t *testing.T) {
+	s := newBulkServer(t)
+	docID := seedStatsDoc(t, s.DB, 1, "review-sha", "Review", seedStatsJDInbox(t, s.DB), false, 0)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO tags(id, name, slug, created_at, updated_at)
+		VALUES (99, 'needs-review', 'needs-review', 0, 0);
+		INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
+	`, docID); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		code, body := doBulkEdit(t, s, map[string]any{
+			"documents": []int64{docID}, "method": "add_tag",
+			"parameters": map[string]any{"tag_id": 99},
+		}, adminPrincipal(1))
+		if code != 200 || body.Applied != 1 {
+			t.Fatalf("status=%d body=%+v", code, body)
+		}
+	}
+	var count, owned int
+	if err := s.DB.Read.QueryRow(`
+		SELECT COUNT(*), SUM(classifier_owned) FROM document_tags WHERE document_id = ?
+	`, docID).Scan(&count, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || owned != 0 {
+		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
 func TestBulkEdit_TrashRequiresDeletePermission(t *testing.T) {
 	s := newBulkServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)

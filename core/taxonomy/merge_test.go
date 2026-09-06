@@ -70,6 +70,43 @@ func TestMergeTags(t *testing.T) {
 	}
 }
 
+func TestMergeTagsTakesOwnershipOfResultingReviewTags(t *testing.T) {
+	ctx := context.Background()
+	d := setup(t, ctx)
+	seedUser(t, ctx, d)
+	seedTag(t, ctx, d, "follow-up")
+	seedTag(t, ctx, d, "needs-review")
+	both := seedDoc(t, ctx, d, "Both tags")
+	sourceOnly := seedDoc(t, ctx, d, "Source only")
+	untouched := seedDoc(t, ctx, d, "Target only")
+	tagJunction(t, ctx, d, both, "follow-up")
+	tagJunction(t, ctx, d, both, "needs-review")
+	tagJunction(t, ctx, d, sourceOnly, "follow-up")
+	tagJunction(t, ctx, d, untouched, "needs-review")
+	if _, err := d.Write.ExecContext(ctx, `
+		UPDATE document_tags SET classifier_owned = 1
+		WHERE tag_id = (SELECT id FROM tags WHERE name = 'needs-review')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := taxonomy.Merge(ctx, d, taxonomy.Options{
+		Kind: taxonomy.KindTag, FromName: "follow-up", IntoName: "needs-review", Apply: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for docID, wantOwned := range map[int64]int{both: 0, sourceOnly: 0, untouched: 1} {
+		var count, owned int
+		if err := d.Read.QueryRowContext(ctx, `
+			SELECT COUNT(*), SUM(classifier_owned) FROM document_tags WHERE document_id = ?
+		`, docID).Scan(&count, &owned); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 || owned != wantOwned {
+			t.Fatalf("document=%d tags=%d classifier_owned=%d, want 1/%d", docID, count, owned, wantOwned)
+		}
+	}
+}
+
 func TestMergeCorrespondents(t *testing.T) {
 	ctx := context.Background()
 	d := setup(t, ctx)

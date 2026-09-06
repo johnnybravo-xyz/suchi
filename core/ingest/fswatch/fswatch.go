@@ -521,7 +521,8 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 			return fmt.Errorf("upsert tag %q: %w", name, err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO document_tags(document_id, tag_id) VALUES (?, ?)`,
+			`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
+			 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
 			docID, tagID); err != nil {
 			return err
 		}
