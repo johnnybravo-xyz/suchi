@@ -73,7 +73,7 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,846 | 34,868 |
+| Shell: navigation, Dashboard, login | 95,846 | 34,867 |
 | Documents / Inbox | 25,728 | 9,455 |
 | Document detail | 29,411 | 10,131 |
 | Upload | 6,276 | 2,837 |
@@ -81,17 +81,17 @@ shell**, with an otherwise empty cache:
 | Views | 14,629 | 5,277 |
 | Calendar | 13,356 | 5,090 |
 | Trash | 6,025 | 2,802 |
-| Approvals | 18,903 | 6,772 |
+| Approvals | 18,410 | 6,613 |
 | Automations | 17,938 | 5,948 |
 | My account, without mailbox capability | 12,964 | 4,759 |
 | Archive configuration, including its Settings entry | 107,549 | 35,718 |
 | Setup | 66,511 | 22,231 |
 | Demo | 5,578 | 2,339 |
 | Archive research drawer | 13,765 | 5,292 |
-| **All unique JavaScript chunks** | **357,257** | **127,125** |
+| **All unique JavaScript chunks** | **356,764** | **126,956** |
 
 The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-21,407 gzip bytes. The complete embedded SPA tree is 446,106 raw bytes. Shared
+21,392 gzip bytes. The complete embedded SPA tree is 445,450 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
 complete build. A mailbox-capable member additionally loads 10,541 gzip bytes
 of mailbox JavaScript on My account.
@@ -200,6 +200,10 @@ Document and selection sharing publish the created URL before attempting
 clipboard access. `lib/clipboard.js` reports whether copying succeeded; the
 same URL stays selectable for manual copy. Late creation responses are ignored
 after navigation or an account transition, including their clipboard effects.
+
+Approval cards display decision context and deadlines without internal workflow
+or assignee identifiers. Rescan proposals use an **Affected documents** disclosure
+only when document links are available.
 
 Use semantic controls, visible focus, labels for icon-only actions, and stable
 dimensions for toolbars and repeated rows. Mobile layouts must preserve every

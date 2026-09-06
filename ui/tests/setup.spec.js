@@ -1883,7 +1883,9 @@ test('groups metadata reviews by document', async ({ page }) => {
   await expect(page.getByText('2 suggestions')).toBeVisible()
   await expect(page.getByText('Add “banking” tag?')).toBeVisible()
   await expect(page.getByText('Set correspondent to “HDFC Bank”?')).toBeVisible()
-  await expect(page.getByText('document-change', { exact: true }).first()).toBeHidden()
+  await expect(page.getByText('document-change', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Details', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('user:1', { exact: true })).toHaveCount(0)
   if ((page.viewportSize()?.width || 0) > 1050) {
     expect(Math.round((await page.locator('.approval-grid[data-approval-kind="workflow"]').boundingBox()).width)).toBeLessThanOrEqual(820)
   }
@@ -1936,7 +1938,7 @@ test('shows affected document titles in rescan details', async ({ page }) => {
   })
   await page.goto('/#/tasks')
 
-  await page.getByText('Details', { exact: true }).click()
+  await page.getByText('Affected documents', { exact: true }).click()
   await expect(page.getByText('Affected documents')).toBeVisible()
   await expect(page.getByRole('link', { name: 'SBI account statement August 2026.pdf' })).toHaveAttribute('href', '#/doc/18')
   await expect(page.getByRole('link', { name: 'HDFC Infinia card statement August 2026.pdf' })).toHaveAttribute('href', '#/doc/20')

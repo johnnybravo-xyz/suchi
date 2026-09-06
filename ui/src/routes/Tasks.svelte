@@ -402,11 +402,11 @@
                   </button>
                 {/each}
               </div>
-              <details class="task-details">
-                <summary>Details</summary>
-                {#if targets.length}
+              {#if dl}<div class="meta" class:deadline-soon={dl.soon}>{dl.text}</div>{/if}
+              {#if targets.length}
+                <details class="task-details">
+                  <summary>Affected documents</summary>
                   <div class="rescan-targets">
-                    <b>Affected documents</b>
                     <ul>
                       {#each targets as target (target.id)}
                         <li><a href={`#/doc/${target.id}`}>{target.title || `Document #${target.id}`}</a></li>
@@ -416,15 +416,8 @@
                       <span>and {Number(t.vars.stale_count) - targets.length} more</span>
                     {/if}
                   </div>
-                {/if}
-                <div class="meta">
-                  {#if t.approval_name}<span>{t.approval_name}</span>{/if}
-                  {#if t.assignee}<span>{t.assignee}</span>{/if}
-                  <span>step <code>{t.state_key}</code></span>
-                  <span>opened {fmtDate(t.created_at)}</span>
-                  {#if dl}<span class:deadline-soon={dl.soon}>{dl.text}</span>{/if}
-                </div>
-              </details>
+                </details>
+              {/if}
               </section>
             {/each}
           </div>
@@ -517,9 +510,7 @@
   .choices { margin-top:14px }
   .task-details { margin-top:10px;color:var(--muted);font-size:.75rem }
   .task-details summary { cursor:pointer;width:max-content }
-  .task-details .meta { margin-top:6px }
   .rescan-targets { margin-top:9px;max-width:720px }
-  .rescan-targets b { color:var(--ink);font-size:.78rem }
   .rescan-targets ul { margin:5px 0 3px;padding-left:18px }
   .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
   .rescan-targets a { color:var(--accent) }

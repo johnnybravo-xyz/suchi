@@ -58,6 +58,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Approval cards omit internal workflow names, assignee IDs and step metadata.
+  Decisions retain confidence, evidence and deadlines; rescan proposals list
+  their affected documents under an explicit label.
 - Created share links remain visible and selectable when clipboard access is
   unavailable. Copy can be retried without creating another link; delayed
   creation responses cannot copy links after account or document navigation.
