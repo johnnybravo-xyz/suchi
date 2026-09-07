@@ -34,3 +34,19 @@ CREATE INDEX idx_document_intelligence_document
 CREATE INDEX documents_live_created
     ON documents(created_at DESC, id DESC)
     WHERE trashed_at IS NULL;
+
+-- Repair preset keyword matching. Preset edits become user-owned copies;
+-- only generated, still-preset-owned keyword rules receive word boundaries.
+UPDATE automation_triggers
+SET filter_content_re = '(?:^|[^\p{L}\p{N}_])(?:' || filter_content_re || ')(?:$|[^\p{L}\p{N}_])'
+WHERE type = 'document_added'
+  AND filter_content_re IS NOT NULL AND filter_content_re != ''
+  AND instr(filter_content_re, '(?:^|[^\p{L}\p{N}_])(?:') != 1
+  AND automation_id IN (
+    SELECT a.id FROM automations a
+    JOIN automation_actions aa ON aa.automation_id = a.id
+    WHERE COALESCE(a.preset_slug, '') != ''
+      AND aa.kind = 'assign_jd_category'
+      AND json_type(aa.params_json, '$._preset_keywords') = 'array'
+      AND json_array_length(aa.params_json, '$._preset_keywords') > 0
+  );

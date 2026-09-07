@@ -90,6 +90,19 @@ Reapplying the preset does not overwrite the copy. The Automations screen
 keeps preset-owned entries in a collapsed **Built-in automations** list so
 user-created rules remain easy to scan.
 
+Preset category keywords match case-insensitive whole words or phrases, not
+substrings: `lease` matches a lease document but not `please`. Migration `0002`
+repairs existing generated preset keyword rules. User-owned copies and other
+regex filters retain their explicit matching semantics. This correction does
+not refile previously processed documents. Review incorrect categories before relying on archive
+matching, which can otherwise reuse those documents as examples.
+
+Pre-release databases already at schema version 2 will not rerun that migration.
+Back up the database and apply only the final **Repair preset keyword matching**
+SQL block from `core/db/migrations/0002_document_intelligence.sql` once to those
+databases. That block is safe to repeat. Do not reset `user_version` or rerun
+the entire migration: its earlier statements create existing tables and columns.
+
 ## API
 
 Automations use `/api/automations/`; updates replace supplied trigger and

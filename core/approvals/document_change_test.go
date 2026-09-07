@@ -267,6 +267,70 @@ func TestDocumentChangeSweepClosesSatisfiedReview(t *testing.T) {
 	}
 }
 
+func TestDocumentChangeSweepSupersededFiling(t *testing.T) {
+	for _, current := range []int{10, 11, 12} {
+		e := newEngine(t)
+		ctx := context.Background()
+		seedDocumentForChange(t, e.DB())
+		if _, err := e.DB().Write.ExecContext(ctx, `
+			INSERT INTO jd_categories(id, area_start, code, name) VALUES (11, 10, 11, 'Housing'), (12, 10, 12, 'Banking');
+			INSERT INTO settings(key, value_json, updated_at) VALUES ('jd_inbox_category_id', '10', 0);
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+			return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
+				Field: "jd_category", ValueID: 11, Label: "Housing", Confidence: .7, Source: "archive",
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var runID int64
+		if err := e.DB().Read.QueryRow(`SELECT id FROM approval_runs WHERE doc_id = 10`).Scan(&runID); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Advance(ctx, runID, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.DB().Write.ExecContext(ctx, `UPDATE documents SET jd_category_id = ? WHERE id = 10`, current); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if err := e.TimeoutSweep(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var status, choice, resolver string
+		if err := e.DB().Read.QueryRow(`SELECT status, COALESCE(resolved_choice, ''), COALESCE(resolved_by, '') FROM approval_tasks WHERE run_id = ?`, runID).Scan(&status, &choice, &resolver); err != nil {
+			t.Fatal(err)
+		}
+		if current == 10 {
+			if status != "open" {
+				t.Fatalf("unfiled document (%v): task %s", current, status)
+			}
+			continue
+		}
+		wantChoice, wantReason := "apply", "system:satisfied"
+		if current == 12 {
+			wantChoice, wantReason = "reject", "system:superseded"
+		}
+		if status != "resolved" || choice != wantChoice || resolver != wantReason {
+			t.Fatalf("category %v: status=%s choice=%s resolver=%s", current, status, choice, resolver)
+		}
+		if err := e.Advance(ctx, runID, choice); err != nil {
+			t.Fatal(err)
+		}
+		var category int
+		if err := e.DB().Read.QueryRow(`SELECT jd_category_id FROM documents WHERE id = 10`).Scan(&category); err != nil || category != current {
+			t.Fatalf("existing filing changed: category=%d err=%v", category, err)
+		}
+		var events int
+		if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action IN ('document.suggestion_satisfied', 'document.suggestion_superseded')`).Scan(&events); err != nil || events != 1 {
+			t.Fatalf("expected one closure audit: count=%d err=%v", events, err)
+		}
+	}
+}
+
 func seedDocumentForChange(t *testing.T, d interface {
 	WriteTx(context.Context, func(*sql.Tx) error) error
 }) {

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,7 +125,17 @@ func TestBeta1UpgradeToBeta2(t *testing.T) {
 			VALUES (1, 1, 'legacy-review-document', 1, 1, 0, 0);
 			INSERT INTO tags(id, name, slug, created_at, updated_at)
 			VALUES (1, 'needs-review', 'needs-review', 0, 0);
-			INSERT INTO document_tags(document_id, tag_id) VALUES (1, 1)
+			INSERT INTO document_tags(document_id, tag_id) VALUES (1, 1);
+			INSERT INTO automations(id, name, preset_slug, created_at, updated_at)
+			VALUES (1, 'Housing keywords', 'solo', 0, 0),
+			       (2, 'Edited Housing keywords', NULL, 0, 0),
+			       (3, 'Explicit preset regex', 'solo', 0, 0);
+			INSERT INTO automation_triggers(automation_id, type, filter_content_re, created_at)
+			SELECT id, 'document_added', 'lease|electricity bill', 0 FROM automations;
+			INSERT INTO automation_actions(automation_id, kind, params_json, created_at)
+			VALUES (1, 'assign_jd_category', '{"jd_category_id":1,"_preset_keywords":["lease","electricity bill"]}', 0),
+			       (2, 'assign_jd_category', '{"jd_category_id":1,"_preset_keywords":["lease","electricity bill"]}', 0),
+			       (3, 'assign_jd_category', '{"jd_category_id":1}', 0);
 		`); err != nil {
 			t.Fatal(err)
 		}
@@ -134,6 +145,37 @@ func TestBeta1UpgradeToBeta2(t *testing.T) {
 		}
 		assertSchemaVersion(t, d, 2)
 		assertBeta2Schema(t, d)
+		// Already-version-2 development archives can safely apply only the repair.
+		_, repair, ok := strings.Cut(migs[1].SQL, "-- Repair preset keyword matching.")
+		if !ok {
+			t.Fatal("missing standalone preset repair block")
+		}
+		for range 2 {
+			if _, err := d.ExecWrite(ctx, "-- Repair preset keyword matching."+repair); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, id := range []int{1, 2, 3} {
+			var pattern string
+			if err := d.Read.QueryRow(`SELECT filter_content_re FROM automation_triggers WHERE automation_id = ?`, id).Scan(&pattern); err != nil {
+				t.Fatal(err)
+			}
+			re := regexp.MustCompile("(?i)" + pattern)
+			if !re.MatchString("Your LEASE.") || !re.MatchString("electricity bill") {
+				t.Fatalf("rule %d lost keyword matches: %q", id, pattern)
+			}
+			for _, text := range []string{"Please find attached", "leaseholder", "electricity billing", "élease", "lease租"} {
+				if got := re.MatchString(text); got != (id != 1) {
+					t.Fatalf("rule %d matched %q: %v", id, text, got)
+				}
+			}
+			if id != 1 && pattern != "lease|electricity bill" {
+				t.Fatalf("custom rule %d changed to %q", id, pattern)
+			}
+			if id == 1 && strings.Count(pattern, "(?:^|") != 1 {
+				t.Fatalf("repair wrapped the pattern more than once: %q", pattern)
+			}
+		}
 		var value string
 		if err := d.Read.QueryRowContext(ctx,
 			"SELECT value_json FROM settings WHERE key = 'beta1-probe'",

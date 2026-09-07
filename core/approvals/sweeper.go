@@ -17,8 +17,8 @@ const SweepInterval = 30 * time.Second
 
 // TimeoutSweep is called by the approval:timeout-sweep subscriber. It:
 //  1. Finds running runs whose deadline passed and document suggestions
-//     whose proposed value is already present.
-//  2. Enqueues timeout or apply advances through the normal state machine.
+//     whose proposed value is already present or whose filing was superseded.
+//  2. Enqueues timeout, apply, or reject advances through the normal state machine.
 //  3. Re-enqueues itself with run_after = now + SweepInterval.
 //
 // Deadline_at is cleared as part of the transition so a run can't be
@@ -47,14 +47,13 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	satisfied, err := e.satisfiedDocumentChanges(ctx)
-	if err != nil {
-		return err
-	}
-	if len(due) == 0 && len(satisfied) == 0 {
-		return e.rescheduleSweep(ctx)
-	}
+	settledCount := 0
 	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		settled, err := settledDocumentChanges(ctx, tx)
+		if err != nil {
+			return err
+		}
+		settledCount = len(settled)
 		for _, id := range due {
 			payload, err := json.Marshal(map[string]any{
 				"run_id":  id,
@@ -75,13 +74,17 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 				return err
 			}
 		}
-		for _, item := range satisfied {
+		for _, item := range settled {
+			reason := "satisfied"
+			if item.choice == "reject" {
+				reason = "superseded"
+			}
 			res, err := tx.ExecContext(ctx, `
 				UPDATE approval_tasks
-				SET status = 'resolved', resolved_choice = 'apply',
-				    resolved_by = 'system:satisfied', resolved_at = ?
+				SET status = 'resolved', resolved_choice = ?,
+				    resolved_by = ?, resolved_at = ?
 				WHERE id = ? AND status IN ('open', 'claimed')
-			`, now, item.taskID)
+			`, item.choice, "system:"+reason, now, item.taskID)
 			if err != nil {
 				return err
 			}
@@ -92,11 +95,11 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 			if changed == 0 {
 				continue
 			}
-			if err := enqueueAdvanceWithTrigger(ctx, tx, item.runID, "apply"); err != nil {
+			if err := enqueueAdvanceWithTrigger(ctx, tx, item.runID, item.choice); err != nil {
 				return err
 			}
 			audit.LogInTx(ctx, tx, e.log, audit.Event{
-				Action: "document.suggestion_satisfied", ObjectKind: "document", ObjectID: item.docID,
+				Action: "document.suggestion_" + reason, ObjectKind: "document", ObjectID: item.docID,
 				After: map[string]any{
 					"run_id": item.runID, "field": item.field, "label": item.label,
 				},
@@ -107,22 +110,25 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if e.log != nil {
-		e.log.Info("approvals.sweep.fired", "timeouts", len(due), "satisfied", len(satisfied))
+	if e.log != nil && (len(due) > 0 || settledCount > 0) {
+		e.log.Info("approvals.sweep.fired", "timeouts", len(due), "settled", settledCount)
 	}
 	return e.rescheduleSweep(ctx)
 }
 
-type satisfiedDocumentChange struct {
+type settledDocumentChange struct {
 	taskID, runID, docID int64
-	field, label         string
+	field, label, choice string
 }
 
-func (e *Engine) satisfiedDocumentChanges(ctx context.Context) ([]satisfiedDocumentChange, error) {
-	rows, err := e.db.Read.QueryContext(ctx, `
+func settledDocumentChanges(ctx context.Context, tx *sql.Tx) ([]settledDocumentChange, error) {
+	rows, err := tx.QueryContext(ctx, `
 		SELECT t.id, r.id, r.doc_id,
 		       COALESCE(json_extract(r.vars_json, '$.field'), ''),
-		       COALESCE(json_extract(r.vars_json, '$.label'), '')
+		       COALESCE(json_extract(r.vars_json, '$.label'), ''),
+		       CASE WHEN json_extract(r.vars_json, '$.field') = 'jd_category'
+		         AND doc.jd_category_id != CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
+		         THEN 'reject' ELSE 'apply' END
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
 		JOIN approval_defs def ON def.id = r.def_id
@@ -131,7 +137,10 @@ func (e *Engine) satisfiedDocumentChanges(ctx context.Context) ([]satisfiedDocum
 		  AND t.status IN ('open', 'claimed')
 		  AND (
 		    (json_extract(r.vars_json, '$.field') = 'jd_category'
-		      AND doc.jd_category_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
+		      AND (doc.jd_category_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
+		        OR (doc.jd_category_id IS NOT NULL AND doc.jd_category_id != COALESCE((
+		          SELECT CAST(value_json AS INTEGER) FROM settings WHERE key = 'jd_inbox_category_id'
+		        ), 0))))
 		    OR (json_extract(r.vars_json, '$.field') = 'correspondent'
 		      AND doc.correspondent_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
 		    OR (json_extract(r.vars_json, '$.field') = 'document_type'
@@ -149,10 +158,10 @@ func (e *Engine) satisfiedDocumentChanges(ctx context.Context) ([]satisfiedDocum
 		return nil, err
 	}
 	defer rows.Close()
-	var out []satisfiedDocumentChange
+	var out []settledDocumentChange
 	for rows.Next() {
-		var item satisfiedDocumentChange
-		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.field, &item.label); err != nil {
+		var item settledDocumentChange
+		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.field, &item.label, &item.choice); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

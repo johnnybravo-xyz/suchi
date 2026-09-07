@@ -133,6 +133,12 @@ approval sweep closes it as `system:satisfied` and records
 `document.suggestion_satisfied` in the audit log. It does not linger as an
 actionable approval or disappear without history.
 
+If a document has instead been filed into a different non-Inbox category, the
+sweep dismisses its obsolete filing proposal as `system:superseded`, with a
+`document.suggestion_superseded` audit event. Its existing filing is unchanged.
+Inbox documents keep their pending filing proposals. The sweep runs every 30
+seconds through the job queue; an ingestion backlog can delay it.
+
 This remains the extension pattern for future action workflows: a producer
 starts an approval in its existing transaction, and a typed handler performs
 the approved write. Reviewable extracted facts use the deliberately separate

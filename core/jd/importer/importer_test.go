@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -38,6 +39,14 @@ func TestApplyReplace_SeedsTreeKeywordsAndAutomations(t *testing.T) {
 
 	assertQueryEquals(t, d, `SELECT COUNT(*) FROM automations WHERE preset_slug = ?`,
 		[]any{pf.ID}, 2)
+	var pattern string
+	if err := d.Read.QueryRow(`SELECT filter_content_re FROM automation_triggers WHERE automation_id = (SELECT id FROM automations WHERE name = 'smalltest: file 11 Bills')`).Scan(&pattern); err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile("(?i)" + pattern)
+	if !re.MatchString("Your electricity bill.") || re.MatchString("electricity billing") {
+		t.Fatalf("preset keyword pattern does not respect word boundaries: %q", pattern)
+	}
 
 	// jd_category_code → jd_category_id resolved.
 	var resolved int

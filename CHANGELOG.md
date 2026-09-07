@@ -6,6 +6,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Preset filing keywords match whole words and phrases: `lease` no longer
+  matches `please`. Existing unchanged preset rules receive the same correction.
+- Filing approvals close as superseded when a document has already been filed
+  elsewhere, preserving its current category and recording the dismissal.
 - Email backfills fetch small, checkpointed batches instead of one oversized
   IMAP command, preserving completed progress when a later batch fails.
 - Successful mailbox connection tests no longer hide ingestion errors or

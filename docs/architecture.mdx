@@ -242,6 +242,14 @@ Automations are the deterministic trigger/condition/action engine; approvals
 are the state-machine engine for human decisions. Do not introduce a second
 workflow engine for a new intake source or integration.
 
+`core/jd/importer` seeds literal word/phrase patterns for preset keywords;
+migration `0002` repairs existing generated preset rules without changing
+user-owned copies or document categories. There is no runtime compatibility
+layer. The approval sweep checks and resolves satisfied or superseded filing suggestions
+in one write transaction; superseded proposals reject through the existing
+state machine without changing the document. See [Automations](/automations)
+and [Approvals](/approvals) for operator-facing behavior and existing-data limits.
+
 `core/intelligence` validates reviewable extracted facts; its API applies
 source-document visibility and fact filters before counts and pagination.
 Calendar's exact-day requests use the date `precision` filter so month/year

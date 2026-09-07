@@ -530,7 +530,7 @@ func seedKeywordAutomations(ctx context.Context, tx *sql.Tx, pf *presetfile.Pres
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO automation_triggers(automation_id, type, filter_content_re, created_at)
 				VALUES (?, 'document_added', ?, ?)
-			`, automationID, strings.Join(patterns, "|"), now); err != nil {
+			`, automationID, `(?:^|[^\p{L}\p{N}_])(?:`+strings.Join(patterns, "|")+`)(?:$|[^\p{L}\p{N}_])`, now); err != nil {
 				return keywordsSeeded, err
 			}
 			params, err := json.Marshal(map[string]any{
