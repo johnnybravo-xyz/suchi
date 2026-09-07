@@ -78,25 +78,25 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,566 | 34,707 |
-| Documents / Inbox | 27,373 | 10,056 |
-| Document detail | 35,118 | 12,242 |
-| Upload | 13,112 | 5,962 |
-| Search | 8,894 | 4,285 |
-| Views | 14,629 | 5,289 |
-| Calendar | 16,334 | 6,375 |
-| Trash | 8,327 | 3,921 |
-| Approvals | 18,351 | 6,551 |
-| Automations | 17,940 | 5,919 |
-| My account, without mailbox capability | 13,156 | 4,817 |
-| Archive configuration, including its Settings entry | 107,746 | 35,701 |
-| Setup | 66,511 | 22,202 |
-| Demo | 5,578 | 2,338 |
+| Shell: navigation, Dashboard, login | 95,644 | 34,687 |
+| Documents / Inbox | 28,792 | 10,519 |
+| Document detail | 35,118 | 12,219 |
+| Upload | 13,112 | 5,964 |
+| Search | 8,894 | 4,284 |
+| Views | 14,629 | 5,290 |
+| Calendar | 16,334 | 6,407 |
+| Trash | 8,327 | 3,922 |
+| Approvals | 18,351 | 6,576 |
+| Automations | 17,940 | 5,955 |
+| My account, without mailbox capability | 13,156 | 4,818 |
+| Archive configuration, including its Settings entry | 107,746 | 35,639 |
+| Setup | 66,511 | 22,155 |
+| Demo | 5,578 | 2,339 |
 | Archive research drawer | 13,763 | 5,282 |
-| **All unique JavaScript chunks** | **388,668** | **138,128** |
+| **All unique JavaScript chunks** | **390,165** | **138,601** |
 
-The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-22,018 gzip bytes. The complete embedded SPA tree is 481,087 raw bytes. Shared
+The initial shell also transfers 5,219 gzip bytes of CSS. All CSS together is
+22,145 gzip bytes. The complete embedded SPA tree is 483,137 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
 complete build. A mailbox-capable member additionally loads 10,511 gzip bytes
 of mailbox JavaScript on My account.
@@ -134,6 +134,16 @@ conditional feature would otherwise force unrelated code into the request.
 New screens should use a stable path, support browser back and forward, and
 have a useful narrow-screen layout. Avoid adding a second router or navigation
 registry.
+
+`Documents.svelte` derives Documents/Inbox pagination, filters, and date bounds
+from the hash query. Page links preserve the current route and query; filter
+controls remove `page`. There is no separate page-state cache. A bounded page
+window keeps the footer compact on mobile. Invalid or out-of-range pages use
+`go(hash, { replace: true })`, which replaces browser history and synchronizes
+route state without creating a Back-button loop. Existing abort/version guards
+discard stale list reads. Browser regressions cover history, reload, date/sort
+state, Inbox scope, and shrinking result sets:
+`cd ui && bun run e2e --grep 'document pagination|inbox pagination'`.
 
 Trash links use the existing `#/doc/{id}` route. `DocumentDetail.svelte` uses
 the server's `trashed_at`, `deletes_at`, and `owner_id` fields to show a read-only

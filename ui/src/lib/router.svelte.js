@@ -11,4 +11,9 @@ export const route = $state(parse())
 
 window.addEventListener('hashchange', () => Object.assign(route, parse()))
 
-export function go(hash) { location.hash = hash }
+export function go(hash, { replace = false } = {}) {
+  if (replace) {
+    history.replaceState(null, '', hash)
+    Object.assign(route, parse())
+  } else location.hash = hash
+}

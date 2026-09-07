@@ -92,12 +92,25 @@ Document-list links use the following hash parameters:
 | Document type | `document_type__id` | `#/documents?document_type__id=2` |
 | Sensitivity | `sensitivity` | `#/documents?sensitivity=confidential` |
 | Sort order | `ordering` | `#/documents?ordering=title` |
+| Page | `page` | `#/documents?page=3` |
+| Added on or after (Unix seconds) | `created_at__gte` | `#/documents?created_at__gte=1788220800` |
+| Added on or before (Unix seconds, inclusive) | `created_at__lte` | `#/documents?created_at__lte=1790812799` |
 
 `jd_category_id` is the API and saved-view field. It is translated to `jd`
 when the app creates a browser link and is not a supported browser parameter.
-Changing a URL filter returns the document list to page one. If two requests
-overlap during fast navigation, only the response for the newest route is
-shown.
+Documents and Inbox keep the current page in the URL. Opening a document and
+using browser Back restores that page and its filters; Forward and reload work
+the same way. The footer provides nearby numbered pages, first/last pages, and
+Previous/Next controls. Page one may omit the `page` parameter.
+
+Changing a filter or sort control starts at page one. Following a URL with an
+explicit page restores that page, including across filter changes in browser
+history. Invalid page values become page one; pages beyond the current result
+count move to the last available page without adding a history entry. If two
+requests overlap during fast navigation, only the newest response is shown.
+
+Hover quick actions appear on mouse/trackpad devices. On touchscreens, tap the
+document to open it and use its filing or Trash controls there.
 
 Search results and Documents accept the same [query language](/query-language).
 Suggestions appear while typing; validation happens only when the user applies

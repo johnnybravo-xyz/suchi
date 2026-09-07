@@ -17,7 +17,8 @@
 
   let docs = $state([])
   let count = $state(0)
-  let page = $state(1)
+  const requestedPage = $derived(Number(route.query.get('page')))
+  const page = $derived(Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1)
   let loading = $state(true)
   let err = $state('')
   let tags = $state([]), correspondents = $state([]), types = $state([])
@@ -29,19 +30,14 @@
   const fSens = $derived(route.query.get('sensitivity') || '')
   const fDocumentIDs = $derived(route.query.get('document_ids') || '')
   const ordering = $derived(route.query.get('ordering') || '-created_at')
-  let dateFrom = $state('')   // yyyy-mm-dd → created_at__gte (unix)
-  let dateTo = $state('')
+  const dateFrom = $derived(dateFilterValue('created_at__gte'))
+  const dateTo = $derived(dateFilterValue('created_at__lte'))
   let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
   const isInbox = $derived(inboxMode)
   const jdFilter = $derived(route.query.get('jd') || '')
   const canShareLinks = $derived(hasCapability(session.user, 'share_links'))
-  const activeFilterKey = $derived(JSON.stringify([
-    ordering, fQuery, fTag, fCorr, fType, fSens, fDocumentIDs, jdFilter,
-    inbox?.id || '', taxonomyLoaded, dateFrom, dateTo,
-  ]))
-  let loadedFilterKey = ''
   let loadVersion = 0
   let disposed = false
   let activeController // cancel superseded filters, not only their UI updates
@@ -60,9 +56,29 @@
     const normalized = String(value ?? '').trim()
     if (normalized) params.set(key, normalized)
     else params.delete(key)
-    page = 1
+    params.delete('page')
     const query = params.toString()
-    go(`#/documents${query ? `?${query}` : ''}`)
+    go(`#${route.path}${query ? `?${query}` : ''}`)
+  }
+
+  function pageHash(target) {
+    const params = new URLSearchParams(route.query)
+    if (target > 1) params.set('page', String(target))
+    else params.delete('page')
+    const query = params.toString()
+    return `#${route.path}${query ? `?${query}` : ''}`
+  }
+
+  function dateFilterValue(key) {
+    const value = route.query.get(key)
+    if (!value) return ''
+    const date = new Date(Number(value) * 1000)
+    return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : ''
+  }
+
+  function setDateFilter(key, value) {
+    const timestamp = value ? Math.floor(new Date(value).getTime() / 1000) : ''
+    setRouteFilter(key, timestamp === '' ? '' : timestamp + (key === 'created_at__lte' ? 86399 : 0))
   }
 
   async function loadFacets() {
@@ -117,6 +133,11 @@
       if (version !== loadVersion) return
       docs = res?.results || []
       count = res?.count ?? docs.length
+      const lastPage = Math.max(1, Math.ceil(count / pageSize))
+      if (page > lastPage || (route.query.has('page') && requestedPage !== page)) {
+        go(pageHash(Math.min(page, lastPage)), { replace: true })
+        return
+      }
       const visibleIDs = new Set(docs.map((document) => document.id))
       sel = new Set([...sel].filter((id) => visibleIDs.has(id)))
     } catch (ex) {
@@ -130,8 +151,7 @@
   async function fileTo(doc, jdId) {
     try {
       await patchDocument(doc.id, { jd_category_id: Number(jdId) })
-      if (isInbox) { docs = docs.filter(d => d.id !== doc.id); count = Math.max(0, count - 1) }
-      else load()
+      await load()
       notify?.('Filed')
     } catch (ex) { notify?.(ex.message || 'Could not file it') }
   }
@@ -148,8 +168,7 @@
     } else {
       try {
         await deleteDocument(request.doc.id)
-        docs = docs.filter(d => d.id !== request.doc.id)
-        count = Math.max(0, count - 1)
+        await load()
         trashRequest = null
         notify?.('Trashed')
       } catch (ex) { notify?.(ex.message || 'Could not trash it') }
@@ -295,17 +314,9 @@
 
   loadFacets()
   $effect(() => {
-    const key = activeFilterKey
     uploadBus.revision
-    const filterChanged = loadedFilterKey && loadedFilterKey !== key
-    if (filterChanged) clearSel()
-    if (filterChanged && page !== 1) {
-      loadedFilterKey = key
-      page = 1
-      return
-    }
-    loadedFilterKey = key
-    page
+    route.query.get('page')
+    clearSel()
     load()
   })
   $effect(() => {
@@ -315,6 +326,12 @@
   })
 
   const pages = $derived(Math.max(1, Math.ceil(count / pageSize)))
+  const pageNumbers = $derived.by(() => {
+    if (pages <= 5) return Array.from({ length: pages }, (_, index) => index + 1)
+    const start = Math.max(1, Math.min(page - 1, pages - 2))
+    return [...new Set([1, start, Math.min(start + 1, pages), Math.min(start + 2, pages), pages])]
+      .sort((a, b) => a - b)
+  })
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -409,12 +426,12 @@
       {/each}
     </select>
     <span class="document-date-filter">
-      <input class="input" type="date" bind:value={dateFrom} title="Added on or after"
+      <input class="input" type="date" value={dateFrom} onchange={(e) => setDateFilter('created_at__gte', e.currentTarget.value)} title="Added on or after"
              aria-label="Added on or after" placeholder="dd/mm/yyyy" />
       {#if !dateFrom}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
     </span>
     <span class="document-date-filter">
-      <input class="input" type="date" bind:value={dateTo} title="Added on or before"
+      <input class="input" type="date" value={dateTo} onchange={(e) => setDateFilter('created_at__lte', e.currentTarget.value)} title="Added on or before"
              aria-label="Added on or before" placeholder="dd/mm/yyyy" />
       {#if !dateTo}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
     </span>
@@ -528,11 +545,22 @@
   </div>
   {/if}
   {#if pages > 1}
-    <div class="pager">
-      <button class="btn sm" disabled={page <= 1} onclick={() => page--}>‹ Prev</button>
-      <span>page {page} of {pages} · {count} documents</span>
-      <button class="btn sm" disabled={page >= pages} onclick={() => page++}>Next ›</button>
-    </div>
+    <nav class="pager document-pagination" aria-label="Document pages">
+      <span>Page {page} of {pages} · {count} documents</span>
+      <div class="page-links">
+        <button class="btn sm page-direction" disabled={page <= 1} onclick={() => go(pageHash(page - 1))} aria-label="Previous page">
+          <span aria-hidden="true">‹</span><span class="direction-label">Prev</span>
+        </button>
+        {#each pageNumbers as number, index (number)}
+          {#if index > 0 && number > pageNumbers[index - 1] + 1}<span class="page-gap" aria-hidden="true">…</span>{/if}
+          <a class="btn sm page-number" class:primary={number === page} href={pageHash(number)}
+             aria-label={`Page ${number}`} aria-current={number === page ? 'page' : undefined}>{number}</a>
+        {/each}
+        <button class="btn sm page-direction" disabled={page >= pages} onclick={() => go(pageHash(page + 1))} aria-label="Next page">
+          <span class="direction-label">Next</span><span aria-hidden="true">›</span>
+        </button>
+      </div>
+    </nav>
   {/if}
 {/if}
 

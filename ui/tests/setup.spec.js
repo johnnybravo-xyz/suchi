@@ -1371,7 +1371,127 @@ test('resets document pagination when route filters change', async ({ page }) =>
   })
   await page.evaluate(() => { location.hash = '#/documents?jd=6' })
   await filteredFirstPage
-  await expect(page.getByText(/page 1 of 2/)).toBeVisible()
+  await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
+})
+
+test('document pagination survives detail navigation, history and reload', async ({ page }, testInfo) => {
+  await mockAPI(page, { documentsCount: 743 })
+  await page.route('**/api/documents/?*', route => {
+    const params = new URL(route.request().url()).searchParams
+    const current = Number(params.get('page') || 1)
+    return route.fulfill({ json: {
+      count: 743,
+      results: [{ id: 42, title: `Receipt on page ${current}`, created_at: 1780000000, tags: [] }],
+    } })
+  })
+  await page.goto('/#/documents?q=receipt&ordering=title')
+  const pager = page.getByRole('navigation', { name: 'Document pages' })
+  await pager.getByRole('link', { name: 'Page 3', exact: true }).click()
+  await expect(page).toHaveURL(/q=receipt&ordering=title&page=3$/)
+  await expect(page.getByText('Receipt on page 3', { exact: true })).toBeVisible()
+  const documentLink = page.getByText('Receipt on page 3', { exact: true })
+  if (testInfo.project.name === 'mobile') await documentLink.tap()
+  else await documentLink.click()
+  await expect(page).toHaveURL(/#\/doc\/42$/)
+  await page.goBack()
+  await expect(page.getByText('Receipt on page 3', { exact: true })).toBeVisible()
+  await expect(pager.getByRole('link', { name: 'Page 3', exact: true })).toHaveAttribute('aria-current', 'page')
+  await page.reload()
+  await expect(page.getByText('Receipt on page 3', { exact: true })).toBeVisible()
+  await pager.getByRole('link', { name: 'Page 15', exact: true }).click()
+  await expect(page.getByText('Receipt on page 15', { exact: true })).toBeVisible()
+  await expect(pager.getByRole('button', { name: 'Next page' })).toBeDisabled()
+  await page.goBack()
+  await expect(page.getByText('Receipt on page 3', { exact: true })).toBeVisible()
+  await page.goForward()
+  await expect(page.getByText('Receipt on page 15', { exact: true })).toBeVisible()
+  await pager.getByRole('link', { name: 'Page 1', exact: true }).click()
+  await expect(page).toHaveURL(/q=receipt&ordering=title$/)
+  await expect(pager.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+  // A middle page exercises both ellipses on narrow screens.
+  if (testInfo.project.name === 'mobile') await page.setViewportSize({ width: 320, height: 740 })
+  await page.goto('/#/documents?page=8')
+  await expect(pager.getByRole('link', { name: 'Page 8', exact: true })).toHaveAttribute('aria-current', 'page')
+  expect(await pager.getByRole('link').allTextContents()).toEqual(['1', '7', '8', '9', '15'])
+  const bounds = await pager.locator('.page-links').boundingBox()
+  const container = await pager.boundingBox()
+  expect(bounds.x).toBeGreaterThanOrEqual(container.x)
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(container.x + container.width)
+  await pager.screenshot({ path: testInfo.outputPath('document-pagination.png') })
+})
+
+test('document pagination preserves dates and resets on filter or sort changes', async ({ page }) => {
+  await mockAPI(page, {
+    documentsCount: 743,
+    documents: [{ id: 42, title: 'Receipt', created_at: 1780000000, tags: [] }],
+  })
+  await page.goto('/#/documents?page=3')
+  await page.getByLabel('Added on or after', { exact: true }).fill('2026-09-01')
+  await page.getByLabel('Added on or after', { exact: true }).press('Tab')
+  await expect(page).toHaveURL(/#\/documents\?created_at__gte=1788220800$/)
+  await page.getByLabel('Added on or before', { exact: true }).fill('2026-09-30')
+  await page.getByLabel('Added on or before', { exact: true }).press('Tab')
+  const pager = page.getByRole('navigation', { name: 'Document pages' })
+  await pager.getByRole('link', { name: 'Page 3', exact: true }).click()
+  await page.reload()
+  await expect(page.getByLabel('Added on or after', { exact: true })).toHaveValue('2026-09-01')
+  await expect(page.getByLabel('Added on or before', { exact: true })).toHaveValue('2026-09-30')
+  await expect(pager).toContainText('Page 3 of 15')
+  const sorted = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' && url.searchParams.get('page') === '1'
+      && url.searchParams.get('ordering') === 'title'
+      && url.searchParams.get('created_at__gte') === '1788220800'
+      && url.searchParams.get('created_at__lte') === '1790812799'
+  })
+  await page.locator('select').filter({ has: page.locator('option', { hasText: 'Title A–Z' }) }).selectOption('title')
+  await sorted
+  await expect(pager).toContainText('Page 1 of 15')
+  await page.goBack()
+  await expect(pager).toContainText('Page 3 of 15')
+})
+
+test('document pagination corrects invalid and vanished pages without trapping history', async ({ page }) => {
+  const options = { documentsCount: 101, documents: [{ id: 42, title: 'Receipt', created_at: 1780000000, tags: [] }] }
+  await mockAPI(page, options)
+  await page.goto('/#/documents?page=3')
+  const pager = page.getByRole('navigation', { name: 'Document pages' })
+  await expect(pager).toContainText('Page 3 of 3')
+  options.documentsCount = 100
+  await page.getByRole('button', { name: 'Refresh documents', exact: true }).click()
+  await expect(page).toHaveURL(/#\/documents\?page=2$/)
+  await expect(pager).toContainText('Page 2 of 2')
+  await pager.getByRole('link', { name: 'Page 1', exact: true }).click()
+  await page.goto('/#/documents?page=999')
+  await expect(page).toHaveURL(/#\/documents\?page=2$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/documents$/)
+  for (const value of ['-1', 'abc', '2.5']) {
+    await page.goto(`/#/documents?page=${value}`)
+    await expect(page).toHaveURL(/#\/documents$/)
+    await expect(pager).toContainText('Page 1 of 2')
+  }
+})
+
+test('inbox pagination keeps its scope through detail and browser Back', async ({ page }) => {
+  await mockAPI(page, {
+    documentsCount: 150,
+    jdCategories: [{ id: 49, code: 49, name: 'Inbox', area_code: 40, system: true }],
+    documents: [{ id: 42, title: 'Unfiled receipt', created_at: 1780000000, tags: [] }],
+  })
+  await page.goto('/#/inbox')
+  const thirdPage = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' && url.searchParams.get('page') === '3'
+      && !!url.searchParams.get('jd_category_id')
+  })
+  await page.getByRole('link', { name: 'Page 3', exact: true }).click()
+  await thirdPage
+  await expect(page).toHaveURL(/#\/inbox\?page=3$/)
+  await page.getByText('Unfiled receipt', { exact: true }).click()
+  await expect(page).toHaveURL(/#\/doc\/42$/)
+  await page.goBack()
+  await expect(page.getByRole('navigation', { name: 'Document pages' })).toContainText('Page 3 of 3')
 })
 
 test('opens dashboard views through user-facing document routes', async ({ page }) => {

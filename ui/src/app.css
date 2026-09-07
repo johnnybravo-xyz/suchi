@@ -313,6 +313,16 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 @keyframes pulse { 50% { opacity: .45; } }
 
 .pager { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 16px 0 4px; color: var(--muted); font-size: .84rem; }
+.document-pagination { flex-direction: column; gap: 8px; }
+.document-pagination .page-links { display: flex; align-items: center; gap: 4px; }
+.document-pagination .btn { min-width: 34px; min-height: 36px; justify-content: center; font-variant-numeric: tabular-nums; }
+.document-pagination .page-number { padding: 6px; text-decoration: none; }
+.document-pagination .page-gap { padding: 0 2px; }
+@media (max-width: 520px) {
+  .document-pagination .btn { min-width: 32px; }
+  .document-pagination .direction-label { display: none; }
+  .document-pagination .page-direction { padding: 6px; }
+}
 
 /* ---------- login ---------- */
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -497,8 +507,10 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .gmeta { display: flex; gap: 8px; align-items: center; padding: 0 12px; min-width: 0; }
 .gmeta .title { font-size: .84rem; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hoveracts { display: none; gap: 6px; align-items: center; }
-.irow.hoverable:hover .hoveracts,
-.irow.hoverable:focus-within .hoveracts { display: inline-flex; }
+@media (hover: hover) and (pointer: fine) {
+  .irow.hoverable:hover .hoveracts,
+  .irow.hoverable:focus-within .hoveracts { display: inline-flex; }
+}
 /* the timestamp never hides; actions slide in beside it */
 
 /* ---------- upload modal / admin / locked ---------- */

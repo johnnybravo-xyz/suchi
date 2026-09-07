@@ -6,6 +6,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Documents and Inbox preserve pagination through browser Back, Forward, and
+  reload, with numbered page links and URL-backed date filters. Invalid or
+  vanished pages return to an available page without adding a history entry.
+- Touchscreen document links no longer shift under taps when hover-only quick
+  actions appear; filing and Trash remain available in document detail.
 - Preset filing keywords match whole words and phrases: `lease` no longer
   matches `please`. Existing unchanged preset rules receive the same correction.
 - Filing approvals close as superseded when a document has already been filed
