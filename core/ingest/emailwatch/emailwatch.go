@@ -30,6 +30,7 @@ import (
 	"net"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ import (
 const (
 	PluginName         = "email-ingest" // plugin_kv namespace for msg-id dedup
 	imapCommandTimeout = 30 * time.Second
+	// Bound even sparse, ten-digit UIDs below IMAP command-size limits.
+	imapFetchBatchSize = 50
 )
 
 var errMessageTooLarge = errors.New("emailwatch: raw message too large")
@@ -389,6 +392,9 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
+	slices.Sort(uids)
+	// IMAP's N:* range can include the last message even when N is higher.
+	uids = slices.DeleteFunc(uids, func(uid uint32) bool { return uid <= lastUID })
 	if len(uids) == 0 {
 		// Even with no messages, persist a UIDVALIDITY stamp on first
 		// cycle so a future drift is detectable. Skip when nothing
@@ -405,7 +411,22 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	}
 	w.log.Info("emailwatch.new_messages", "count", len(uids), "cursor", lastUID)
 
-	// Fetch bodies + envelopes in one round-trip.
+	for batch := range slices.Chunk(uids, imapFetchBatchSize) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := w.fetchBatch(ctx, c, batch, lastUID, uidValidity); err != nil {
+			return err
+		}
+		lastUID = w.account.LastUIDSeen
+		w.log.Info("emailwatch.batch_completed", "count", len(batch), "cursor", lastUID)
+	}
+	return nil
+}
+
+// Each batch checkpoints only after imports and mailbox bookkeeping succeed.
+// Stop the cycle on failure so later batches cannot skip an earlier failed UID.
+func (w *Watcher) fetchBatch(ctx context.Context, c *imapclient.Client, uids []uint32, lastUID, uidValidity uint32) error {
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(uids...)
 	section := &imap.BodySectionName{Peek: true} // don't set \Seen implicitly
@@ -433,7 +454,8 @@ func (w *Watcher) cycle(ctx context.Context) error {
 	}
 	for m := range msgs {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			_ = c.Terminate()
+			continue // Drain replies so the fetch goroutine can finish.
 		}
 		raw, msgID, err := w.materialize(m, section)
 		if err != nil {
@@ -479,12 +501,17 @@ func (w *Watcher) cycle(ctx context.Context) error {
 		}
 	}
 	fetchErr := <-done
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	vanishedUIDs := missingUIDs(uids, completedUIDs, failedUIDs)
 	if fetchErr == nil {
 		if len(vanishedUIDs) > 0 {
 			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
 		}
 	} else if isConcurrentDeleteFetchError(fetchErr) {
+		criteria := imap.NewSearchCriteria()
+		criteria.Uid = seqset
 		remaining, searchErr := c.UidSearch(criteria)
 		if searchErr != nil {
 			fetchErr = fmt.Errorf("recheck after concurrent delete: %w", searchErr)
@@ -494,6 +521,9 @@ func (w *Watcher) cycle(ctx context.Context) error {
 			var retryUIDs []uint32
 			vanishedUIDs, retryUIDs = partitionMissingUIDs(vanishedUIDs, remaining)
 			failedUIDs = append(failedUIDs, retryUIDs...)
+			if len(retryUIDs) > 0 {
+				recordCycleErr(fmt.Errorf("fetch: %d messages still present but not returned", len(retryUIDs)))
+			}
 			w.log.Info("emailwatch.messages_disappeared", "count", len(vanishedUIDs))
 			fetchErr = nil
 		}

@@ -113,6 +113,12 @@ transactional document/job pattern. Import is deliberately different:
 metadata without automatically scheduling fresh extraction. Do not assume
 every document row means a new processing job.
 
+IMAP history is fetched in ascending UID batches of at most 50 messages.
+`core/ingest/emailwatch` checkpoints each batch after imports and configured
+mailbox bookkeeping; a failed batch stops the cycle without losing earlier
+progress. Connection tests do not clear polling failures. See
+[Mail intake](/guides/mail-intake) for history, rules and health semantics.
+
 `document_sources` describes acquisition, not document identity. The same owner
 and original hash can have several sources; one CAS object can be referenced by
 different documents. Mailbox history retains its observed name/folder even if

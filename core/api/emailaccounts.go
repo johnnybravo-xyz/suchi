@@ -726,9 +726,8 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 		fail("Login failed", err, true)
 		return
 	}
-	// A connection test is not a mailbox sync. Clear a stale error while
-	// preserving the last successful poll timestamp.
-	_ = emailaccounts.MarkSync(r.Context(), s.DB, acc.ID, acc.LastSyncAt, "")
+	// Authentication says nothing about fetching mail. Only a successful poll
+	// clears a sync error; testing must not overwrite concurrent poll status.
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "message": "Connected — mailbox reachable.",
 	})

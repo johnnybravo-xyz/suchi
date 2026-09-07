@@ -118,12 +118,26 @@ password authentication. There is no separate authentication-mode switch.
 
 `sync_since` is an absolute initial-history floor expressed as Unix seconds.
 Set it to an earlier time to backfill or to zero to allow all history. The
-durable UID cursor still prevents already processed messages from being read
-again.
+date applies to the configured source folder; intake rules still decide which
+messages are archived. Changing the date resets the UID cursor to rescan that
+history. Already archived messages are deduplicated.
+
+Mail is downloaded in batches of at most 50 messages. Each completed batch saves
+its UID cursor, so a later failure resumes from that batch's checkpoint rather
+than downloading the whole history again. Logs report `emailwatch.batch_completed`
+with the batch count and cursor. Accepted documents appear as they are imported;
+they do not wait for the entire history to finish.
 
 If a message fails, the cursor does not advance past it. Deduplication uses
 `Message-ID` per owner, including messages that also arrive through a watched
 folder or mbsync.
+
+**Test connection** checks connectivity and authentication, not folder search or
+message downloads. A successful test does not clear a sync failure or update the
+last successful sync time; only a successful polling cycle does that. The amber
+**never synced** state means no successful cycle has been recorded, while a red
+**error** state reports the last failure. Reload the mailbox list to see updated
+polling status.
 
 Changing connection or source-folder settings resets that mailbox's UID cursor
 so a cursor from the old source is not reused against the new one.

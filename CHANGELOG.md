@@ -4,6 +4,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Email backfills fetch small, checkpointed batches instead of one oversized
+  IMAP command, preserving completed progress when a later batch fails.
+- Successful mailbox connection tests no longer hide ingestion errors or
+  overwrite the last successful sync timestamp.
+
 ### Added
 
 - Screenshot paste previews with explicit upload confirmation and file-picker

@@ -526,9 +526,20 @@ func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const syncError = "fetch: Command Error. 10"
+	if err := emailaccounts.MarkSync(context.Background(), s.DB, acc.ID, 1234, syncError); err != nil {
+		t.Fatal(err)
+	}
 	rec := call(t, s, "POST", "/api/email-accounts/"+strconv.FormatInt(acc.ID, 10)+"/test", "", adminPrincipal(1))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	after, err := emailaccounts.Get(context.Background(), s.DB, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LastSyncAt != 1234 || after.LastError != syncError {
+		t.Fatalf("connection test changed sync health: timestamp=%d error=%q", after.LastSyncAt, after.LastError)
 	}
 	select {
 	case err := <-serverDone:
