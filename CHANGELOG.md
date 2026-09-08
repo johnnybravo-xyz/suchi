@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- Release images reuse the verified AnyDoc binaries built for standalone
+  downloads, avoiding a second Rust compilation for each architecture. Local
+  Docker builds and standalone packages share the same pinned build recipe.
+
 ## [0.1.0-beta.2] - 2026-09-08
 
 ### Added

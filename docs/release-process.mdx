@@ -98,6 +98,14 @@ the changelog. Tag pushes alone do not publish anything.
 Release notes travel as a workflow artifact into the collector, rather than a
 multiline job output that GitHub's secret detection may silently suppress.
 
+AnyDoc is compiled once per Linux architecture through the Dockerfile's
+`anydoc` export target. Those binaries and licenses are packaged for standalone
+downloads. The image job downloads only that run's AnyDoc artifacts, verifies
+their checksums, and supplies them as an `anydoc` named build context for both
+runtime variants. Docker selects the matching `amd64` or `arm64` directory;
+missing or damaged artifacts fail the build instead of triggering recompilation.
+Plain local Docker builds omit that context and still compile from pinned source.
+
 Release builds inject the version and source revision into the Go binary.
 Settings reads the identity from `/api/whoami`, showing only the version for
 tagged production releases. Unversioned builds use the source's
@@ -212,12 +220,13 @@ docker pull --platform linux/arm64 "$IMAGE:$VERSION"
 
 The first successful native build seeds its architecture's registry cache.
 Later local releases import those caches, while the release workflow imports
-both native caches and maintains its own GitHub Actions cache. Because the
-`anydoc` source commit and build instructions are pinned independently of the
-Suchi version, its completed Rust layer is reused until that pin or recipe
-changes. Cargo registry and target cache mounts also retain incremental work in
-the local BuildKit builder when a compile is interrupted before its image layer
-can be exported.
+both native caches for runtime layers and maintains its own GitHub Actions cache.
+Release images obtain AnyDoc from the standalone artifacts described above.
+For local source builds, the `anydoc` source commit and build instructions are
+pinned independently of the Suchi version, so the completed Rust layer is reused
+until that pin or recipe changes. Cargo registry and target cache mounts also
+retain incremental work in the local BuildKit builder when a compile is
+interrupted before its image layer can be exported.
 
 The `full` image follows the same process with `--target full` and temporary
 tags ending in `-full-amd64` and `-full-arm64`; publish the final tags as
@@ -237,10 +246,14 @@ before calling the release complete.
 - `checks.yml` is the single manual entry point for repository validation.
 - `ci.yml` runs formatting, tests, vet, lint, and UI checks when called by it.
 - `smoke.yml` tests the built images and ingest paths when called by it.
+  Both variants are rebuilt with the exported AnyDoc context and an unusable
+  Rust base to catch accidental recompilation; binary and license bytes must
+  match the export before the usual ingestion checks run.
 - `restore-drill.yml` validates backup restoration when called by it.
 - `release.yml` publishes only when manually dispatched from an existing tag.
   Its preflight runs fresh Go/UI checks, embedded bundle parity, and dependency
-  advisory scans. Images wait for both binary matrices before publication.
+  advisory scans. Images wait for both binary matrices before publication and
+  reuse the AnyDoc matrix's verified binaries rather than rebuilding them.
   Artifacts-only branch runs use `snapshot-<commit>` names and skip signing
   and publication; they still produce ordinary workflow artifacts and GHA caches.
 

@@ -35,6 +35,15 @@ jobs:
       - name: Build the ${{ matrix.lane }} image
         run: docker build --target ${{ matrix.target }} -t suchi:smoke-${{ matrix.lane }} .
 
+      - name: Rebuild with exported AnyDoc
+        run: |
+          docker buildx build --target anydoc \
+            --output "type=local,dest=$RUNNER_TEMP/anydoc" .
+          # An unusable Rust base proves the artifact context bypasses compilation.
+          docker build --target ${{ matrix.target }} \
+            --build-context "anydoc=$RUNNER_TEMP/anydoc" \
+            --build-arg RUST_IMAGE=scratch -t suchi:smoke-${{ matrix.lane }} .
+
       - name: Prepare sample PDFs (text-native + scanned)
         run: |
           # ghostscript builds both fixtures deterministically without
@@ -84,8 +93,13 @@ jobs:
 
       - name: Assert shared format tools
         run: |
-          docker exec suchi-smoke-$LANE sh -c \
+          docker exec "suchi-smoke-$LANE" sh -c \
             'command -v anydoc && command -v djvutxt && command -v msgconvert'
+          arch=$(docker image inspect "suchi:smoke-$LANE" --format '{{.Architecture}}')
+          docker cp "suchi-smoke-$LANE:/usr/local/bin/anydoc" "$RUNNER_TEMP/image-anydoc"
+          docker cp "suchi-smoke-$LANE:/usr/local/share/licenses/anydoc/LICENSE" "$RUNNER_TEMP/image-anydoc-license"
+          cmp "$RUNNER_TEMP/anydoc/$arch/anydoc" "$RUNNER_TEMP/image-anydoc"
+          cmp "$RUNNER_TEMP/anydoc/$arch/LICENSE" "$RUNNER_TEMP/image-anydoc-license"
 
       - name: Verify image PDF encoding and interpreter policy
         run: |

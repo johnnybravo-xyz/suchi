@@ -36,6 +36,13 @@ RUN strip /out-anydoc && \
     elif [ -s LICENSE-MIT ]; then cp LICENSE-MIT /out-anydoc-license; \
     else echo "anydoc license file not found" >&2; exit 1; fi
 
+# Export the same files for standalone downloads and runtime images. Releases
+# replace this stage with an `anydoc` named context from verified job artifacts.
+FROM scratch AS anydoc
+ARG TARGETARCH
+COPY --from=anydoc-build --chmod=0755 /out-anydoc /${TARGETARCH}/anydoc
+COPY --from=anydoc-build /out-anydoc-license /${TARGETARCH}/LICENSE
+
 # Extract the Perl library used by the standard image to read Outlook .msg
 # files. Keeping this in a build stage avoids shipping wget and the tarball.
 FROM ${ALPINE_IMAGE} AS msgconvert-build
@@ -100,8 +107,9 @@ RUN useradd -u 65532 -m -s /usr/sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 
 COPY --from=build /out/suchi /usr/local/bin/suchi
-COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
-COPY --from=anydoc-build /out-anydoc-license /usr/local/share/licenses/anydoc/LICENSE
+ARG TARGETARCH
+COPY --from=anydoc --chmod=0755 /${TARGETARCH}/anydoc /usr/local/bin/anydoc
+COPY --from=anydoc /${TARGETARCH}/LICENSE /usr/local/share/licenses/anydoc/LICENSE
 COPY LICENSE /usr/local/share/licenses/suchi/LICENSE
 
 RUN ln -s suchi /usr/local/bin/suchi-mcp
@@ -140,8 +148,9 @@ RUN adduser -D -u 65532 -s /sbin/nologin suchi && \
     mkdir -p /data && chown 65532:65532 /data
 
 COPY --from=build /out/suchi /usr/local/bin/suchi
-COPY --from=anydoc-build /out-anydoc /usr/local/bin/anydoc
-COPY --from=anydoc-build /out-anydoc-license /usr/local/share/licenses/anydoc/LICENSE
+ARG TARGETARCH
+COPY --from=anydoc --chmod=0755 /${TARGETARCH}/anydoc /usr/local/bin/anydoc
+COPY --from=anydoc /${TARGETARCH}/LICENSE /usr/local/share/licenses/anydoc/LICENSE
 COPY LICENSE /usr/local/share/licenses/suchi/LICENSE
 COPY --from=msgconvert-build /out/Outlook /usr/local/share/perl5/site_perl/Email/Outlook
 COPY packaging/msgconvert/msgconvert /usr/local/bin/msgconvert

@@ -154,6 +154,28 @@ jobs:
       full_digest: ${{ steps.full.outputs.digest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: anydoc-linux-*
+          path: ${{ runner.temp }}/anydoc-artifacts
+      - name: prepare AnyDoc image context
+        env:
+          ARTIFACT_VERSION: ${{ needs.notes.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            bundle="anydoc-${ARTIFACT_VERSION}-linux-${arch}"
+            target="$RUNNER_TEMP/anydoc/$arch"
+            (
+              cd "$RUNNER_TEMP/anydoc-artifacts/anydoc-linux-$arch"
+              sha256sum -c "$bundle.tar.gz.sha256"
+              mkdir -p "$target"
+              tar -xzf "$bundle.tar.gz" -C "$target" --strip-components=1 \
+                "$bundle/anydoc" "$bundle/LICENSE"
+              test -s "$target/anydoc" && test -x "$target/anydoc"
+              test -s "$target/LICENSE"
+            )
+          done
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
@@ -192,6 +214,7 @@ jobs:
           context: .
           file: Dockerfile
           target: standard
+          build-contexts: anydoc=${{ runner.temp }}/anydoc
           platforms: linux/amd64,linux/arm64
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
@@ -227,6 +250,7 @@ jobs:
           context: .
           file: Dockerfile
           target: full
+          build-contexts: anydoc=${{ runner.temp }}/anydoc
           platforms: linux/amd64,linux/arm64
           push: ${{ inputs.publish == 'true' }}
           provenance: mode=max
@@ -317,13 +341,11 @@ jobs:
   # -------------------------------------------------------------------
   # anydoc-binaries: build the anydoc CLI from firecrawl/anydoc for the
   # bare-metal shipping matrix and attach the tarballs to the release.
-  # The Dockerfile already builds this for the container images (standard
-  # + full both COPY --from=anydoc-build) — this job produces the same
-  # binary as a standalone artifact so users installing suchi from the
-  # Go release binary can grab a matching anydoc.
+  # Export the Dockerfile's anydoc target once per architecture; the image
+  # job reuses these artifacts instead of compiling Rust a second time.
   #
-  # The anydoc tag, audited commit, and build image are grepped from the
-  # Dockerfile so the container and standalone artifacts share one pin record.
+  # Read the tag and audited commit only for the standalone NOTICE. The
+  # Dockerfile owns the build recipe and all toolchain/source pins.
   # -------------------------------------------------------------------
   anydoc-binaries:
     runs-on: ubuntu-latest
@@ -339,67 +361,43 @@ jobs:
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
           platforms: arm64
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: read anydoc pins from Dockerfile
         id: pin
         run: |
           set -euo pipefail
           tag=$(grep -oP 'ARG ANYDOC_TAG=\K[^\s]+' Dockerfile)
           commit=$(grep -oP 'ARG ANYDOC_COMMIT=\K[^\s]+' Dockerfile)
-          rust_image=$(grep -oP 'ARG RUST_IMAGE=\K[^\s]+' Dockerfile)
-          if [ -z "$tag" ] || [ -z "$commit" ] || [ -z "$rust_image" ]; then
+          if [ -z "$tag" ] || [ -z "$commit" ]; then
             echo "could not find anydoc pins in Dockerfile" >&2
             exit 1
           fi
           {
             echo "tag=$tag"
             echo "commit=$commit"
-            echo "rust_image=$rust_image"
           } >> "$GITHUB_OUTPUT"
       - name: build anydoc for ${{ matrix.platform }}
         env:
           ANYDOC_TAG: ${{ steps.pin.outputs.tag }}
           ANYDOC_COMMIT: ${{ steps.pin.outputs.commit }}
-          RUST_IMAGE: ${{ steps.pin.outputs.rust_image }}
           ARCH: ${{ matrix.arch }}
           ARTIFACT_VERSION: ${{ needs.notes.outputs.artifact_version }}
         run: |
           set -euo pipefail
-          mkdir -p out
-          # Mirror the Dockerfile anydoc-build stage exactly — same
-          # base image, same commands. Emitting into a mount at
-          # /host/out is the simplest way to hand the file back.
-          docker run --rm --platform ${{ matrix.platform }} \
-            -v "$PWD/out:/host/out" \
-            -e ANYDOC_TAG \
-            -e ANYDOC_COMMIT \
-            "$RUST_IMAGE" sh -c '
-              set -eux
-              apk add --no-cache git musl-dev pkgconfig
-              mkdir /src && cd /src
-              git init .
-              git remote add origin https://github.com/firecrawl/anydoc.git
-              git fetch --depth 1 origin "$ANYDOC_COMMIT"
-              git checkout --detach FETCH_HEAD
-              test "$(git rev-parse HEAD)" = "$ANYDOC_COMMIT"
-              cargo build --locked --release --example convert
-              strip target/release/examples/convert
-              cp target/release/examples/convert /host/out/anydoc
-              if [ -s LICENSE ]; then cp LICENSE /host/out/LICENSE
-              elif [ -s LICENSE-MIT ]; then cp LICENSE-MIT /host/out/LICENSE
-              else echo "anydoc license file not found" >&2; exit 1; fi
-            '
-          test -s out/LICENSE
+          docker buildx build --platform ${{ matrix.platform }} \
+            --target anydoc --output type=local,dest=out .
+          test -s "out/$ARCH/anydoc" && test -x "out/$ARCH/anydoc"
+          test -s "out/$ARCH/LICENSE"
           # NOTICE for MIT attribution — required for a redistributed
           # MIT binary.
-          cat > out/NOTICE <<EOF
+          cat > "out/$ARCH/NOTICE" <<EOF
           This anydoc build is redistributed from firecrawl/anydoc
           ${ANYDOC_TAG} (${ANYDOC_COMMIT}) under the MIT license. Source and full license
           text: https://github.com/firecrawl/anydoc
           EOF
           # Package tarball; version stamp comes from the release ref.
           bin="anydoc-${ARTIFACT_VERSION}-linux-${ARCH}"
-          mkdir -p "$RUNNER_TEMP/$bin"
-          mv out/* "$RUNNER_TEMP/$bin/"
+          mv "out/$ARCH" "$RUNNER_TEMP/$bin"
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/${bin}.tar.gz" "$bin"
           ( cd "$RUNNER_TEMP" && sha256sum "${bin}.tar.gz" > "${bin}.tar.gz.sha256" )
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
