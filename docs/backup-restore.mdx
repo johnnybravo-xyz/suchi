@@ -43,8 +43,9 @@ $DATA_DIR/backups/suchi-<UTC timestamp>.db
 ```
 
 It retains the newest `BACKUP_KEEP` snapshots, defaulting to seven.
-`BACKUP_INTERVAL=0` disables the loop. These snapshots contain only the
-database, not a complete archive backup. Offline GC consults the live database,
+`BACKUP_INTERVAL=0` disables the loop. These snapshots include only the
+database. A complete backup also needs document files, the credential key,
+and configuration. Offline GC consults the live database,
 not these older snapshots, so it can reclaim bytes that an older snapshot
 still references. Keep a complete backup for disaster recovery.
 

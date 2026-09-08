@@ -1,0 +1,1 @@
+import{An as e,Hn as t,On as n,er as r,sn as i}from"./index-hOsB9E__.js";import a from"./UploadBox-D4R5YhTW.js";var o=e(`<div class="upload-wrap"><!></div>`);function s(e,s){let c=i(s,`jdCategories`,19,()=>[]);var l=o(),u=t(l);a(u,{get notify(){return s.notify},get jdCategories(){return c()}}),r(l),n(e,l)}export{s as default};

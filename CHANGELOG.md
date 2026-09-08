@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Clarified which files are needed for a complete archive backup in Settings.
+- Clarified that local archive matching controls automatic filing and
+  suggestions, not the Similar documents box.
 - Release images reuse the verified AnyDoc binaries built for standalone
   downloads, avoiding a second Rust compilation for each architecture. Local
   Docker builds and standalone packages share the same pinned build recipe.

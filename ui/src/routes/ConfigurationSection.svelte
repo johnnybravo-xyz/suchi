@@ -571,8 +571,8 @@
         <div class="option-group independent">
           <span class="option-kind">Works without a model</span>
           <h5>Similar-document matching</h5>
-          <p>Uses only documents already filed in this archive. Saving these options keeps the model {llmStatus?.enabled ? 'enabled' : 'disabled'}.</p>
-          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Learn from similar documents in this archive</label>
+          <p>Uses documents already filed in this archive.</p>
+          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Use similar documents for automatic filing and suggestions</label>
           {#if llm.archive_enabled}
             <div class="field">
               <label for="archive-auto">Apply a matching document's filing at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
@@ -634,7 +634,7 @@
         <input id="p-ocr" class="input mono" placeholder="eng,hin,nep" bind:value={prefs.ocr_languages} /></div>
       <div class="field"><label for="p-bk">Database snapshot interval (hours, 0 disables)</label>
         <input id="p-bk" class="input" type="number" min="0" bind:value={prefs.backup_interval_hours} /></div>
-      <p class="wiz-p sub" style="font-size:.8rem">Snapshots cover the database; blobs are plain files — point restic or borg at the data directory for the full story.</p>
+      <p class="wiz-p sub" style="font-size:.8rem">Snapshots include only the database. A complete backup also needs document files, the credential key, and configuration.</p>
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy}
                 onclick={() => saveAnd(() => savePreferences({

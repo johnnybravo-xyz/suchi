@@ -901,11 +901,12 @@ test('separates model-free matching saves from validated model settings', async 
   await page.goto('/#/settings?tab=archive&section=llm')
 
   const saveMatching = page.getByRole('button', { name: 'Save matching options' })
+  await page.getByRole('checkbox', { name: 'Use similar documents for automatic filing and suggestions' }).uncheck()
   await saveMatching.click()
   await expect.poll(() => llmSettingsRequests.length).toBe(1)
   expect(llmSettingsRequests[0]).toMatchObject({
     enabled: false,
-    archive_enabled: true,
+    archive_enabled: false,
     endpoint_url: 'http://host.suchi.local:11434/v1',
     model: 'qwen2.5:7b',
   })
