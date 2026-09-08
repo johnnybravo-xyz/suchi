@@ -6,6 +6,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Public demo Calendar now exposes read-only, source-backed example dates
+  across months and years. The tour links to usable Search and Calendar screens
+  and clearly identifies Archive research as private-installation-only;
+  demo model calls, date mutations, and non-demo facts remain denied.
+- Demo navigation and first-visit tour detection now use the server's actual
+  session identity field, including after upgrade to a scratch session.
 - Documents and Inbox preserve pagination through browser Back, Forward, and
   reload, with numbered page links and URL-backed date filters. Invalid or
   vanished pages return to an available page without adding a history entry.

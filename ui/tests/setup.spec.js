@@ -310,7 +310,7 @@ async function mockAPI(page, options = {}) {
       build_version: options.buildVersion,
       build_revision: options.buildRevision,
       capabilities: options.capabilities ?? ['mailboxes'],
-      ...(options.demoSession ? { demo: options.demoSession } : {}),
+      kind: options.demoSession ? `demo-${options.demoSession}` : 'user',
     }
     else if (path === '/api/stats/') body = {
       documents_total: options.documentsCount ?? options.documents?.length ?? 0,
@@ -640,9 +640,9 @@ test('guides first-time demo visitors and keeps the help launcher available', as
   await page.goto('/#/dashboard')
 
   await expect(page).toHaveURL(/#\/demo$/)
-  await expect(page.getByRole('heading', { name: 'From a precise search to an answer with sources' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'From a precise search to dates with sources' })).toBeVisible()
   await expect(page.getByText('Rich query language', { exact: true })).toBeVisible()
-  await expect(page.getByText('Archive research', { exact: true })).toBeVisible()
+  await expect(page.getByText('Archive research · Available on your own installation', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Ask the archive' })).toHaveCount(0)
   const queryLink = page.getByRole('link', { name: /Run the guided query/ })
   await expect(queryLink).toHaveAttribute('href', '#/search?q=from%3A%22Northstar%20Cloud%22%20tag%3Arenewal')
@@ -657,6 +657,34 @@ test('guides first-time demo visitors and keeps the help launcher available', as
   await page.getByRole('link', { name: 'Open demo guide' }).click()
   await expect(page).toHaveURL(/#\/demo$/)
 })
+
+for (const demoSession of ['anon', 'scratch']) {
+  test(`demo Calendar is browsable without model access (${demoSession})`, async ({ page }) => {
+    const intelligenceQueries = []
+    await mockAPI(page, {
+      demoMode: true, demoSession, capabilities: [], chatEnabled: true,
+      setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+      intelligence: ['2026-10-31', '2027-11-30'].map((date, index) => ({
+        id: index + 1, document_id: 42, document_title: 'Northstar renewal',
+        type: 'date', role: 'renewal', status: 'accepted', extractor: 'demo-corpus',
+        value: { date, precision: 'day' }, sort_value: date, evidence_text: `Renews on ${date}`,
+      })),
+    })
+    await page.goto('/#/demo')
+    await page.getByRole('link', { name: 'Browse document dates' }).click()
+    await expect(page.getByRole('heading', { name: 'Calendar', exact: true, level: 2 })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '2 dates', exact: true })).toBeVisible()
+    await expect(page.getByText('Demo example', { exact: true })).toHaveCount(2)
+    await expect(page.getByText(/LLM Classifier confidence/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Ask the archive' })).toHaveCount(0)
+    expect(intelligenceQueries.at(-1)).not.toHaveProperty('sort_from')
+    expect(intelligenceQueries.at(-1)).not.toHaveProperty('sort_to')
+    await page.reload()
+    await expect(page.getByRole('heading', { name: '2 dates', exact: true })).toBeVisible()
+    await page.getByRole('link', { name: 'Northstar renewal', exact: true }).first().click()
+    await expect(page).toHaveURL(/#\/doc\/42$/)
+  })
+}
 
 test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) => {
   await mockAPI(page, { setupStartedAt: Math.floor(Date.now() / 1000) })

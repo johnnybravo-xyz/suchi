@@ -23,6 +23,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
@@ -184,6 +185,7 @@ func runDemo(args []string) int {
 //   - one row in `documents` (idempotent — the unique index on
 //     (owner_id, original_blob) means a re-run is a no-op)
 //   - one link row per tag in `document_tags`
+//   - optional curated date facts, accepted without invoking a model
 //   - one post-ingest job so content extraction + FTS + thumb happen
 //     in the background when serve starts
 //
@@ -193,6 +195,14 @@ func runDemo(args []string) int {
 // (code=10) if the manifest names something outside the seeded tree.
 func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(context.Context, demo.ManifestFixture, string) (bool, error) {
 	return func(ctx context.Context, f demo.ManifestFixture, path string) (bool, error) {
+		dates := make([]intelligence.Candidate, 0, len(f.Dates))
+		for _, date := range f.Dates {
+			candidate, err := intelligence.NewDateCandidate(date.Role, date.Date, "day", date.Date, date.Evidence, 0)
+			if err != nil {
+				return false, fmt.Errorf("fixture date: %w", err)
+			}
+			dates = append(dates, candidate)
+		}
 		// 1. Stream the file into the CAS.
 		file, err := os.Open(path)
 		if err != nil {
@@ -285,6 +295,19 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 					VALUES (?, ?) ON CONFLICT DO NOTHING
 				`, docID, tagID); err != nil {
 					return err
+				}
+			}
+
+			for _, date := range dates {
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO document_intelligence (
+						document_id, intelligence_type, role, value_json, sort_value,
+						raw_text, evidence_text, confidence, status, extractor,
+						source_blob, extraction_version, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'accepted', 'demo-corpus', ?, 1, ?, ?)
+				`, docID, date.Type, date.Role, date.ValueJSON, date.SortValue,
+					date.RawText, date.EvidenceText, ref.SHA256, now, now); err != nil {
+					return fmt.Errorf("seed fixture date: %w", err)
 				}
 			}
 

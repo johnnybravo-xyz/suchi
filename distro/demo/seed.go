@@ -47,14 +47,22 @@ type ManifestCluster struct {
 // ManifestFixture is one file in corpus/fixtures/ + its metadata. All
 // filenames are relative to corpus/fixtures/.
 type ManifestFixture struct {
-	Filename      string   `json:"filename"`
-	Correspondent string   `json:"correspondent"`
-	JDCategory    int      `json:"jd_category"`
-	DocumentType  string   `json:"document_type,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Language      string   `json:"language,omitempty"`
-	Cluster       string   `json:"cluster,omitempty"`
-	Sensitivity   string   `json:"sensitivity,omitempty"`
+	Filename      string         `json:"filename"`
+	Correspondent string         `json:"correspondent"`
+	JDCategory    int            `json:"jd_category"`
+	DocumentType  string         `json:"document_type,omitempty"`
+	Tags          []string       `json:"tags,omitempty"`
+	Language      string         `json:"language,omitempty"`
+	Cluster       string         `json:"cluster,omitempty"`
+	Sensitivity   string         `json:"sensitivity,omitempty"`
+	Dates         []ManifestDate `json:"dates,omitempty"`
+}
+
+// ManifestDate is a curated, source-backed example, not model output.
+type ManifestDate struct {
+	Role     string `json:"role"`
+	Date     string `json:"date"`
+	Evidence string `json:"evidence"`
 }
 
 // ReadManifest parses corpus/manifest.json from an extracted corpus

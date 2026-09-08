@@ -264,7 +264,9 @@ readable document metadata, so `documents:read` is sufficient for `date:` and
 `date-role:` predicates. Extraction and review mutations additionally require
 `documents:write` and Change permission on every source document.
 
-Public demo sessions are denied both capabilities.
+Public demo sessions are denied both capabilities. A narrow Calendar read
+exception exposes accepted, curated `demo-corpus` dates from visible documents;
+it grants no access to model output, extraction, review, or Archive research.
 
 Retrieval, source snapshots, extracted fact lists, facts used in chat, and
 calendar queries all apply document ACLs inside SQL. Confidential and

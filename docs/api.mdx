@@ -1459,7 +1459,10 @@ Approvals or Calendar is a separate browser workflow.
 These endpoints require `archive_intelligence`, implicit for administrators.
 Reads also require `documents:read`; extraction and resolution require
 `documents:write` plus Change permission on each source document. Public demo
-sessions are denied.
+sessions may read the schema and accepted `demo-corpus` date facts only, with
+the usual token read scope and source-document visibility checks. They cannot
+read pending/rejected facts, run extraction, or resolve facts. This exception
+does not grant `archive_intelligence` to demo users or other ordinary users.
 
 ### `GET /api/intelligence/schema`
 

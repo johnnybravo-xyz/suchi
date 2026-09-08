@@ -79,8 +79,11 @@ func (s *Server) intelligencePrincipal(w http.ResponseWriter, r *http.Request, w
 		return nil
 	}
 	if isDemoCorpusKind(p.Kind) {
-		s.writeError(w, http.StatusForbidden, "public_demo_denied", "archive intelligence is unavailable in public demo sessions")
-		return nil
+		if write {
+			s.writeError(w, http.StatusForbidden, "public_demo_denied", "public demo dates are read-only")
+			return nil
+		}
+		return p
 	}
 	allowed, _ := s.requireCapability(w, r, authz.CapArchiveIntelligence)
 	return allowed
@@ -148,6 +151,10 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_status", "status must be pending, accepted, or rejected")
 		return
 	}
+	if isDemoCorpusKind(p.Kind) && status != "accepted" {
+		s.writeError(w, http.StatusForbidden, "public_demo_denied", "only accepted dates are available in public demo sessions")
+		return
+	}
 	candidateType := strings.TrimSpace(q.Get("type"))
 	if candidateType != "" && !intelligence.KnownType(candidateType) {
 		s.writeError(w, http.StatusBadRequest, "bad_type", "unknown intelligence type")
@@ -185,6 +192,10 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 
 	where := []string{"di.status = ?", "d.trashed_at IS NULL"}
 	args := []any{status}
+	if isDemoCorpusKind(p.Kind) {
+		// The demo exception exposes curated dates, never other extracted facts.
+		where = append(where, "di.intelligence_type = 'date'", "di.extractor = 'demo-corpus'")
+	}
 	if candidateType != "" {
 		where = append(where, "di.intelligence_type = ?")
 		args = append(args, candidateType)
@@ -207,7 +218,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		args = append(args, sortTo)
 	}
 	where, args = appendDocumentScopePredicates(where, args, scope)
-	if p.Role != "admin" {
+	if p.Role != "admin" || isDemoCorpusKind(p.Kind) {
 		groups, err := s.principalGroups(r.Context(), p.UserID)
 		if err != nil {
 			s.serverErr(w, "intelligence.load_groups", err)

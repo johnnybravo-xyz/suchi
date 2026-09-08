@@ -78,13 +78,13 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,644 | 34,687 |
+| Shell: navigation, Dashboard, login | 95,665 | 34,709 |
 | Documents / Inbox | 28,792 | 10,519 |
 | Document detail | 35,118 | 12,219 |
 | Upload | 13,112 | 5,964 |
 | Search | 8,894 | 4,284 |
 | Views | 14,629 | 5,290 |
-| Calendar | 16,334 | 6,407 |
+| Calendar | 16,915 | 6,603 |
 | Trash | 8,327 | 3,922 |
 | Approvals | 18,351 | 6,576 |
 | Automations | 17,940 | 5,955 |
@@ -163,6 +163,15 @@ before counting and paginating, rather than dropping partial dates in the UI.
 Document-scoped research links still omit month bounds and reset stale scope
 state. Day and all-dates agendas page through 500 facts at a time. See
 [Document dates](/document-dates).
+
+`App.svelte` uses `/api/whoami`'s `kind` (`demo-anon`/`demo-scratch`), not a
+separate demo field, and separates Calendar visibility from extraction/review capability:
+demo visitors see Calendar but gain no mutation or chat controls. Their default
+Calendar opens the all-dates agenda so fixed fixtures remain discoverable over
+time; explicit month/day URLs still work. `demo-corpus` entries show **Demo
+example**, without model confidence or export controls. The tour offers real
+Search and Calendar actions and labels Archive research as private-installation
+only. Server authorization remains authoritative.
 
 `lib/intelligence.js` formats date facts to their recorded day/month/year
 precision for Calendar and Approvals. Month/year sorting placeholders stay out

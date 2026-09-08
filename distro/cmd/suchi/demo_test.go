@@ -85,6 +85,7 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 	var fixtures []demo.ManifestFixture
 	for _, name := range []string{"one", "two", "three"} {
 		fixture := demo.ManifestFixture{Filename: name + ".txt", Tags: []string{name}}
+		fixture.Dates = []demo.ManifestDate{{Role: "due", Date: "2026-10-31", Evidence: "Pay by 31 October 2026"}}
 		if err := os.WriteFile(filepath.Join(fixturesDir, fixture.Filename), []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -134,6 +135,22 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 			if documents != test.count || tags != test.count || jobs != test.count || wrongTags != 0 || wrongJobs != 0 {
 				t.Errorf("documents=%d tags=%d jobs=%d wrong_tags=%d wrong_jobs=%d, want %d/%d/%d/0/0", documents, tags, jobs, wrongTags, wrongJobs, test.count, test.count, test.count)
 			}
+			var dates, wrongDates int
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT COUNT(*), COALESCE(SUM(di.status != 'accepted' OR di.extractor != 'demo-corpus'
+					OR di.source_blob != d.original_blob OR di.sort_value != '2026-10-31'
+					OR di.evidence_text != 'Pay by 31 October 2026'), 0)
+				FROM document_intelligence di JOIN documents d ON d.id = di.document_id
+			`).Scan(&dates, &wrongDates); err != nil {
+				t.Fatal(err)
+			}
+			if dates != test.count || wrongDates != 0 {
+				t.Fatalf("dates=%d wrong_dates=%d", dates, wrongDates)
+			}
 		})
+	}
+	fixtures[0].Dates[0].Date = "2026-02-30"
+	if _, err := opts.FixtureIngest(ctx, fixtures[0], filepath.Join(fixturesDir, fixtures[0].Filename)); err == nil {
+		t.Fatal("invalid fixture date must fail validation")
 	}
 }

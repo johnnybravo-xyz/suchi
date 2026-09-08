@@ -5,7 +5,6 @@
   let { jdCategories = [] } = $props()
   const financeCategory = $derived(jdCategories.find((category) => Number(category.code) === 22))
   const northstarQuery = 'from:"Northstar Cloud" tag:renewal'
-  const researchQuestion = 'What must Priya do before the Northstar workspace renews, and what will it cost?'
 
   const cards = [
     { title: 'Filter by language',
@@ -29,7 +28,7 @@
       href: '#/tasks',
       icon: 'tasks' },
     { title: 'Upload something',
-      hint: 'Drop a PDF anywhere. Scratch uploads are cleared on reset.',
+      hint: 'Drop a PDF or image anywhere. Scratch uploads are cleared on reset.',
       href: '#/upload',
       icon: 'inbox' },
   ]
@@ -43,8 +42,8 @@
 <div class="demo-wrap">
   <header class="demo-hero">
     <span class="eyebrow">Live archive · resets daily</span>
-    <h1>See how Suchi finds, then explains</h1>
-    <p class="lede">Start with the two new workflows below. A small Northstar workspace cluster makes the examples easy to recognize, then leaves you in the real product to inspect every result.</p>
+    <h1>Find the document. See what comes next.</h1>
+    <p class="lede">Search an anonymized archive, then follow its deadlines back to the source. These examples open the real product so you can inspect every result.</p>
     <div class="hero-note"><Icon name="help" size={14} /><span>Use the help icon in the top-right from any screen to return here.</span></div>
   </header>
 
@@ -52,7 +51,7 @@
     <div class="section-head">
       <div>
         <span class="eyebrow">Two-minute guided tour</span>
-        <h2 id="guided-title">From a precise search to an answer with sources</h2>
+        <h2 id="guided-title">From a precise search to dates with sources</h2>
       </div>
       <span class="tour-time">2 steps · anonymized data</span>
     </div>
@@ -73,18 +72,17 @@
         </div>
       </article>
 
-      <article class="tour-step research-step">
+      <article class="tour-step">
         <span class="step-number">02</span>
-        <span class="step-icon"><Icon name="ask" size={20} /></span>
+        <span class="step-icon"><Icon name="calendar" size={20} /></span>
         <div class="step-copy">
-          <span class="step-kicker">Archive research</span>
-          <h3>Ask across related documents and keep the evidence attached</h3>
-          <p>On a private installation, Suchi retrieves only the scoped Northstar documents, validates every citation, and can save the retrieved documents as a View.</p>
-          <blockquote>{researchQuestion}</blockquote>
-          <a class="btn tour-action" href="https://docs.suchi.page/archive-chat" target="_blank" rel="noopener">
-            Read the grounded workflow <Icon name="chev" size={13} />
+          <span class="step-kicker">Document dates</span>
+          <h3>Find deadlines without opening every document</h3>
+          <p>See the Northstar renewal, quote expiry, and contract dates together—even across months and years. Open any entry to check its source.</p>
+          <a class="btn primary tour-action" href="#/calendar">
+            Browse document dates <Icon name="chev" size={13} />
           </a>
-          <small>Public demo identities cannot invoke a model. That boundary remains closed to prevent shared-provider abuse and cross-session leakage.</small>
+          <small>Read-only, curated examples. No live model is used in the public demo.</small>
         </div>
       </article>
     </div>
@@ -110,6 +108,15 @@
       {/each}
     </div>
   </section>
+
+  <aside class="research-note" aria-label="Archive research on private installations">
+    <Icon name="ask" size={20} />
+    <div>
+      <b>Archive research · Available on your own installation</b>
+      <p>Ask questions and get answers with document citations when you connect a model. Ask is disabled in this public demo.</p>
+      <a href="https://docs.suchi.page/archive-chat" target="_blank" rel="noopener">How Archive research works <Icon name="chev" size={13} /></a>
+    </div>
+  </aside>
 
   <footer>
     <p>Want your own? See <a href="https://docs.suchi.page/getting-started" target="_blank" rel="noopener">install docs</a> — one binary or one container.</p>
@@ -139,8 +146,11 @@
   .step-kicker { margin: 2px 45px 5px 0; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .6rem; font-weight: 700; }
   .step-copy h3 { max-width: 360px; font-size: 1rem; line-height: 1.3; }
   .step-copy p { margin: 8px 0 12px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
-  .step-copy code, .step-copy blockquote { width: 100%; margin: auto 0 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; line-height: 1.45; }
-  .step-copy blockquote { font-family: inherit; font-style: normal; }
+  .step-copy code { width: 100%; margin: auto 0 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .67rem; line-height: 1.45; }
+  .step-copy p + .tour-action { margin-top: auto; }
+  .research-note { display: flex; align-items: flex-start; gap: 12px; margin-top: 28px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; font-size: .8rem; }
+  .research-note > :global(.ico) { flex: none; color: var(--accent); }
+  .research-note p { margin: 6px 0 10px; color: var(--muted); line-height: 1.5; }
   .tour-action { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 205px; text-decoration: none; }
   .step-copy > small { margin-top: 8px; color: var(--faint); font-size: .63rem; line-height: 1.4; }
   .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }

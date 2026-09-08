@@ -102,6 +102,69 @@ func TestIntelligenceListAppliesCapabilityACLAndStatus(t *testing.T) {
 	}
 }
 
+func TestDemoCalendarIsReadOnlyAndUsesCorpusVisibility(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	if _, err := s.DB.Write.Exec(`UPDATE users SET email = ? WHERE id = 1`, authz.DemoCorpusOwnerEmail); err != nil {
+		t.Fatal(err)
+	}
+	seedChatDoc(t, s, 40, 1, "Corpus", "Dates", "internal", false)
+	seedChatDoc(t, s, 41, 2, "Other visitor", "Dates", "internal", false)
+	seedChatDoc(t, s, 42, 3, "Own upload", "Dates", "internal", false)
+	seedChatDoc(t, s, 43, 1, "Trashed corpus", "Dates", "internal", true)
+	seedUser(t, s.DB, 4)
+	seedChatDoc(t, s, 44, 4, "Private admin document", "Dates", "internal", false)
+	for _, id := range []int64{40, 41, 42, 43, 44} {
+		seedDateIntelligence(t, s, id, "accepted", "2026-09-01")
+	}
+	if _, err := s.DB.Write.Exec(`UPDATE document_intelligence SET extractor = 'demo-corpus'`); err != nil {
+		t.Fatal(err)
+	}
+	// Even visible documents must not expose non-demo extraction output.
+	seedDateIntelligence(t, s, 40, "accepted", "2027-09-01")
+	seedDateIntelligence(t, s, 40, "pending", "2026-10-01")
+	for _, test := range []struct {
+		kind   string
+		userID int64
+		count  int
+	}{
+		{PrincipalKindDemoAnon, 0, 1},
+		{PrincipalKindDemoScratch, 3, 2},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			// Demo restrictions must win even over a stale or incorrectly assigned admin role.
+			p := &pluginapi.Principal{Kind: test.kind, UserID: test.userID, Role: "admin", Scopes: []string{auth.ScopeDocumentsRead, auth.ScopeDocumentsWrite}}
+			rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?type=date&page_size=1", "", p)
+			var result struct {
+				Count   int               `json:"count"`
+				Results []IntelligenceRow `json:"results"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+			}
+			if result.Count != test.count || len(result.Results) != 1 || result.Results[0].DocumentID != 40 {
+				t.Fatalf("visible dates: %+v", result)
+			}
+			rec = doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?type=date&document_ids=41,43,44", "", p)
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || rec.Code != http.StatusOK || result.Count != 0 || len(result.Results) != 0 {
+				t.Fatalf("explicit hidden document scope: %d %s", rec.Code, rec.Body.String())
+			}
+			for _, status := range []string{"pending", "rejected"} {
+				if rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?status="+status, "", p); rec.Code != http.StatusForbidden {
+					t.Fatalf("%s: %d %s", status, rec.Code, rec.Body.String())
+				}
+			}
+			for _, path := range []string{"/api/intelligence/extract", "/api/intelligence/resolve"} {
+				if rec := doIntelligenceRequest(t, s, http.MethodPost, path, `{}`, p); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "public_demo_denied") {
+					t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+				}
+			}
+			if rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"renewal"}`, p); rec.Code != http.StatusForbidden {
+				t.Fatalf("chat: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestIntelligenceScopedCalendarPaginationAcrossYears(t *testing.T) {
 	s := newIntelligenceTestServer(t)
 	seedChatDoc(t, s, 57, 3, "Zulu policy", "Dates", "internal", false)

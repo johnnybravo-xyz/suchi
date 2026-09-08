@@ -212,6 +212,14 @@ requests; it must never become an unrestricted member session. The CLI injects
 local session issuance into the demo provisioner, without a separate credential
 store or schema. See [Demo instance](/demo-instance) for retention and isolation.
 
+Demo Calendar reads are a local exception in `core/api/intelligence.go`, not an
+authentication or capability grant. They expose only accepted `demo-corpus`
+dates, with source visibility and trash filtering inside SQL before counts and
+pagination. Extraction, review, chat, and other facts stay denied. The generic
+fixture seeder in `distro/cmd/suchi/demo.go` validates optional manifest dates
+and inserts them in the document/job transaction; the sibling demo repository
+owns their content. No schema or shared authorization helper changes are needed.
+
 Preview/download aliases share `core/ui`'s blob-serving behavior, including
 object checks, reveal gates, ETags, and preview CSP. These endpoints allow
 trashed documents only for their owner or an administrator, matching the Trash

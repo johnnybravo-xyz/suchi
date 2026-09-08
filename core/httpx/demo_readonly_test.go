@@ -69,6 +69,14 @@ func TestDemoReadOnly_AnonPrincipal(t *testing.T) {
 		wantStatus int
 	}{
 		{"anon GET anywhere", http.MethodGet, "/api/documents/", anon, http.StatusOK},
+		{"anon can read dates", http.MethodGet, "/api/intelligence/", anon, http.StatusOK},
+		{"scratch can read dates", http.MethodGet, "/api/intelligence/", scratch, http.StatusOK},
+		{"anon cannot extract dates", http.MethodPost, "/api/intelligence/extract", anon, http.StatusForbidden},
+		{"scratch cannot extract dates", http.MethodPost, "/api/intelligence/extract", scratch, http.StatusForbidden},
+		{"anon cannot review dates", http.MethodPost, "/api/intelligence/resolve", anon, http.StatusForbidden},
+		{"scratch cannot review dates", http.MethodPost, "/api/intelligence/resolve", scratch, http.StatusForbidden},
+		{"anon cannot invoke chat", http.MethodPost, "/api/chat", anon, http.StatusForbidden},
+		{"scratch cannot invoke chat", http.MethodPost, "/api/chat", scratch, http.StatusForbidden},
 		{"anon upload needs upgrade", http.MethodPost, "/api/documents/", anon, http.StatusForbidden},
 		{"anon can upgrade", http.MethodPost, "/api/demo/session/upgrade", anon, http.StatusOK},
 		{"anon can log in", http.MethodPost, "/api/login", anon, http.StatusOK},

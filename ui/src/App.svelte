@@ -38,8 +38,10 @@
   const initials = $derived((session.user?.display_name || session.user?.email || '?')
     .split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?')
   const canShareViews = $derived(hasCapability(session.user, 'share_views'))
-  const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && session.user?.demo !== 'anon' && session.user?.demo !== 'scratch')
-  const canReviewIntelligence = $derived(hasCapability(session.user, 'archive_intelligence') && session.user?.demo !== 'anon' && session.user?.demo !== 'scratch')
+  const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
+  const canUseArchiveChat = $derived(hasCapability(session.user, 'archive_chat') && !demoVisitor)
+  const canReviewIntelligence = $derived(hasCapability(session.user, 'archive_intelligence') && !demoVisitor)
+  const canViewCalendar = $derived(canReviewIntelligence || demoVisitor)
   let chatEnabled = $state(false)
   let chatStatusInfo = $state({ enabled: false, provider: '', local: false })
   let chatOpen = $state(false)
@@ -134,7 +136,7 @@
       await refreshSession()
       if (session.user) boot()
       // Preserve demo deep links; redirect only the first default-route visit.
-      if (j?.enabled && session.user?.demo === 'anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {
+      if (j?.enabled && session.user?.kind === 'demo-anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {
         try {
           if (sessionStorage.getItem('suchi.demo.landed') !== '1') {
             sessionStorage.setItem('suchi.demo.landed', '1')
@@ -415,7 +417,7 @@
     { hash: '#/documents',   ico: 'docs',     label: 'Documents',   key: 'documents' },
     { hash: '#/inbox',       ico: 'inbox',    label: 'Inbox',       key: 'inbox' },
     { hash: '#/views',       ico: 'eye',      label: 'Views',       key: 'views' },
-    ...(canReviewIntelligence
+    ...(canViewCalendar
       ? [{ hash: '#/calendar', ico: 'calendar', label: 'Calendar', key: 'calendar' }]
       : []),
     { hash: '#/tasks',       ico: 'tasks',    label: 'Approvals',   key: 'tasks' },
@@ -443,7 +445,7 @@
     if (page === 'settings' && route.query.get('tab') === 'archive' && session.user.role !== 'admin') {
       go('#/settings')
     }
-    if (page === 'calendar' && !canReviewIntelligence) go('#/dashboard')
+    if (page === 'calendar' && !canViewCalendar) go('#/dashboard')
   })
   const COMMANDS = $derived([
     { label: 'Upload documents',       ico: 'upload', run: openUpload },
@@ -601,7 +603,7 @@
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}
           {#key route.query.toString()}
-            <Lazy load={lazyRoutes.calendar} props={{ query: route.query }} />
+            <Lazy load={lazyRoutes.calendar} props={{ query: route.query, demo: demoVisitor }} />
           {/key}
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
         {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
