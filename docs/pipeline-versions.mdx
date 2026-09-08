@@ -62,8 +62,11 @@ The underlying approval choices remain `approve_all`, `approve_sample`, and
 `post-ingest` path as new uploads, so a process interruption does not lose the
 work.
 
-Dismissed proposals stay closed for that target revision. A later code revision
-can create a new proposal. If another rescan brings the matching count to zero,
+Dismissed proposals stay closed for that pipeline's target revision across
+restarts. Startup honors saved dismissals and closes duplicate proposals left
+by older builds; explicitly approved work still runs. A later code revision
+can create a new proposal, and other pipelines are unaffected.
+If another rescan brings the matching count to zero,
 the detector cancels the obsolete open proposal on the next boot.
 
 ## Explicit rescans

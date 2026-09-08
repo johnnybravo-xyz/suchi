@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Dismissed processing-update approvals no longer reappear after restart for
+  the same pipeline revision. Startup closes already-recreated duplicates while
+  preserving explicitly approved work and prompts for newer revisions.
 - Public demo Calendar now exposes read-only, source-backed example dates
   across months and years. The tour links to usable Search and Calendar screens
   and clearly identifies Archive research as private-installation-only;

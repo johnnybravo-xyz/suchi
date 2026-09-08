@@ -19,13 +19,19 @@ import (
 func newDetectorEngine(t *testing.T) (*approvals.Engine, *db.DB, int64) {
 	t.Helper()
 	d, owner := setupDB(t)
+	return detectorEngine(t, d), d, owner
+}
+
+func detectorEngine(t *testing.T, d *db.DB) *approvals.Engine {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	e := approvals.New(d, log)
 	e.RegisterHandler(rescan.NewHandler(d, rescan.Versions{OCR: 2}))
+	e.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: e, Log: log})
 	if err := e.EnsureDef(context.Background(), rescan.ProposalSlug, rescan.ProposalSpec(), sysActor()); err != nil {
 		t.Fatalf("seed proposal def: %v", err)
 	}
-	return e, d, owner
+	return e
 }
 
 func sysActor() *pluginapi.Principal {
@@ -92,6 +98,200 @@ func TestDetect_Idempotent_SameVersionNoDoubleStart(t *testing.T) {
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
 		t.Fatalf("double-boot idempotency: got %d running runs, want 1", got)
+	}
+}
+
+func resolveProposal(t *testing.T, ctx context.Context, e *approvals.Engine, choice string) int64 {
+	t.Helper()
+	var runID int64
+	if err := e.DB().Read.QueryRowContext(ctx, `
+		SELECT r.id FROM approval_runs r
+		JOIN approval_defs def ON def.id = r.def_id
+		WHERE def.slug = ? AND r.state = 'running'
+		ORDER BY r.id DESC LIMIT 1
+	`, rescan.ProposalSlug).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("proposal review: tasks=%v err=%v", tasks, err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, choice, sysActor()); err != nil {
+		t.Fatal(err)
+	}
+	return runID
+}
+
+func TestDetect_DismissalSurvivesRestart(t *testing.T) {
+	for _, completed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("advance_completed=%t", completed), func(t *testing.T) {
+			ctx := context.Background()
+			e, d, owner := newDetectorEngine(t)
+			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
+			versions := rescan.Versions{OCR: 2}
+			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+				t.Fatal(err)
+			}
+			runID := resolveProposal(t, ctx, e, "dismiss")
+			if completed {
+				if err := e.Advance(ctx, runID, "dismiss"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := db.Open(ctx, d.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			e = detectorEngine(t, reopened)
+			for range 2 {
+				if err := rescan.EnsureProposals(ctx, reopened, e, versions); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := countProposalRuns(t, ctx, reopened, "running"); got != 0 {
+				t.Fatalf("dismissed proposal reopened after restart: %d running", got)
+			}
+			if !completed {
+				if err := e.Advance(ctx, runID, "dismiss"); err != nil {
+					t.Fatalf("resume queued dismissal: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestDetect_DismissalScopedToKindAndRevision(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		versions rescan.Versions
+		kind     string
+		revision int
+	}{
+		{"new revision", rescan.Versions{OCR: 3}, "ocr", 3},
+		{"other pipeline", rescan.Versions{OCR: 2, Content: 2}, "content", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			e, d, owner := newDetectorEngine(t)
+			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
+			if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2}); err != nil {
+				t.Fatal(err)
+			}
+			runID := resolveProposal(t, ctx, e, "dismiss")
+			if err := e.Advance(ctx, runID, "dismiss"); err != nil {
+				t.Fatal(err)
+			}
+			if err := rescan.EnsureProposals(ctx, d, e, tc.versions); err != nil {
+				t.Fatal(err)
+			}
+			if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
+				t.Fatalf("want one fresh proposal, got %d", got)
+			}
+			var kind string
+			var revision int
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT json_extract(vars_json, '$.kind'), json_extract(vars_json, '$.current_version')
+				FROM approval_runs WHERE state = 'running'
+			`).Scan(&kind, &revision); err != nil {
+				t.Fatal(err)
+			}
+			if kind != tc.kind || revision != tc.revision {
+				t.Fatalf("fresh proposal %s/%d, want %s/%d", kind, revision, tc.kind, tc.revision)
+			}
+		})
+	}
+}
+
+func TestDetect_DismissalCancelsRecreatedProposalUnlessAlreadyApproved(t *testing.T) {
+	for _, choice := range []string{"", "approve_all", "approve_sample"} {
+		t.Run("later_choice="+choice, func(t *testing.T) {
+			ctx := context.Background()
+			e, d, owner := newDetectorEngine(t)
+			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
+			versions := rescan.Versions{OCR: 2}
+			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+				t.Fatal(err)
+			}
+			runID := resolveProposal(t, ctx, e, "dismiss")
+			if err := e.Advance(ctx, runID, "dismiss"); err != nil {
+				t.Fatal(err)
+			}
+			// Earlier binaries recreated a run after the completed dismissal.
+			duplicateID, err := e.Start(ctx, rescan.ProposalSlug, 0, map[string]any{
+				"kind": "ocr", "current_version": 2, "stale_count": 1,
+			}, sysActor())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if choice != "" {
+				resolveProposal(t, ctx, e, choice)
+			} else if err := e.Advance(ctx, duplicateID, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+				t.Fatal(err)
+			}
+			run, tasks, err := e.GetRun(ctx, duplicateID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantStatus := "cancelled"
+			if choice != "" {
+				wantStatus = "running"
+			}
+			if run.Status != wantStatus || len(tasks) != 0 {
+				t.Fatalf("recreated run: status=%s open tasks=%d, want %s/0", run.Status, len(tasks), wantStatus)
+			}
+			if choice != "" {
+				if err := e.Advance(ctx, duplicateID, choice); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Advance(ctx, duplicateID, ""); err != nil {
+					t.Fatal(err)
+				}
+				var queued int
+				if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE kind = 'post-ingest'`).Scan(&queued); err != nil {
+					t.Fatal(err)
+				}
+				if queued != 1 {
+					t.Fatalf("later explicit approval enqueued %d documents, want 1", queued)
+				}
+			}
+		})
+	}
+}
+
+func TestDetect_SampleApprovalStillOffersRemainingDocuments(t *testing.T) {
+	ctx := context.Background()
+	e, d, owner := newDetectorEngine(t)
+	seedDocs(t, ctx, d, owner, "sha-sample", 21)
+	versions := rescan.Versions{OCR: 2}
+	if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+		t.Fatal(err)
+	}
+	runID := resolveProposal(t, ctx, e, "approve_sample")
+	if err := e.Advance(ctx, runID, "approve_sample"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := rescan.CountProposalStale(ctx, d, "ocr", 2)
+	if err != nil || remaining != 1 {
+		t.Fatalf("after queuing sample: %d remaining, err=%v, want 1", remaining, err)
+	}
+	if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+		t.Fatal(err)
+	}
+	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
+		t.Fatalf("sample approval suppressed remaining work: %d proposals, want 1", got)
 	}
 }
 

@@ -5,7 +5,7 @@
 // For each pipeline kind (ocr / llm / content), the detector:
 //   1. Counts docs whose pipeline_version_<kind> lags the current
 //      binary's constant.
-//   2. If count > 0 and no pending run exists for that kind+version,
+//   2. If count > 0 and no pending run or dismissal exists for that kind+version,
 //      Start()s a rescan-proposal run. The engine's approve state
 //      creates a task in the tasks feed automatically.
 //   3. If a pending run exists for an OLDER version (constant bumped
@@ -142,12 +142,47 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 	// Case 2: pending run exists at a stale version. Supersede.
 	if pending != nil {
 		pendingVer, _ := pending.Vars["current_version"].(float64)
+		if int(pendingVer) > current {
+			return nil
+		}
 		if int(pendingVer) < current {
 			if err := engine.Cancel(ctx, pending.ID, "detect: superseded by newer version", systemActor()); err != nil {
 				return err
 			}
 			pending = nil
 		}
+	}
+	// Dismissal is durable as soon as Resolve commits, even if its advance
+	// job has not finished. Reuse that history across definition versions.
+	// An explicitly approved duplicate must still finish its queued work.
+	var pendingID int64
+	if pending != nil {
+		pendingID = pending.ID
+	}
+	var dismissed bool
+	err = d.Read.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM approval_runs r
+			JOIN approval_defs def ON def.id = r.def_id
+			JOIN approval_tasks t ON t.run_id = r.id
+			WHERE def.slug = ?
+			  AND json_extract(r.vars_json, '$.kind') = ?
+			  AND json_extract(r.vars_json, '$.current_version') = ?
+			  AND t.status = 'resolved' AND t.resolved_choice = 'dismiss'
+		) AND NOT EXISTS (
+			SELECT 1 FROM approval_tasks
+			WHERE run_id = ? AND status = 'resolved'
+			  AND resolved_choice IN ('approve_all', 'approve_sample')
+		)
+	`, ProposalSlug, kind, current, pendingID).Scan(&dismissed)
+	if err != nil {
+		return fmt.Errorf("check rescan dismissal for %s: %w", kind, err)
+	}
+	if dismissed {
+		if pending != nil {
+			return engine.Cancel(ctx, pending.ID, "detect: target revision dismissed", systemActor())
+		}
+		return nil
 	}
 	// Case 3: pending run at the current version — nothing to do.
 	// (Even if stale_count drifted, the operator sees the card and
