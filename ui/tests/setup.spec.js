@@ -1988,6 +1988,109 @@ test('reopens an existing password-protected share QR and clears it on revocatio
   expect(deleted).toBe(true)
 })
 
+test('edits document tags inline and preserves tags when a change is refused', async ({ page }, testInfo) => {
+  await mockAPI(page)
+  const tags = [
+    { id: 1, slug: 'airtel', name: 'Airtel' },
+    { id: 2, slug: 'receipt', name: 'Receipt' },
+    { id: 3, slug: 'payment', name: 'Payment' },
+  ]
+  const writes = []
+  const pages = []
+  let assigned = ['airtel', 'receipt']
+  let refuse = false
+  await page.route('**/api/tags/**', route => {
+    const pageNumber = Number(new URL(route.request().url()).searchParams.get('page') || 1)
+    pages.push(pageNumber)
+    return route.fulfill({ json: { results: pageNumber === 1 ? tags.slice(0, 2) : tags.slice(2), next: pageNumber === 1 ? '/api/tags/?page=2' : null } })
+  })
+  await page.route('**/api/documents/42', route => route.fulfill({ json: {
+    id: 42, title: 'Airtel payment receipt', mime_type: 'application/pdf', tags: assigned, languages: 'en',
+  } }))
+  await page.route('**/api/documents/bulk_edit', route => {
+    const body = route.request().postDataJSON()
+    writes.push(body)
+    const tag = tags.find(tag => tag.id === body.parameters.tag_id)
+    if (!refuse) assigned = body.method === 'add_tag' ? [...assigned, tag.slug] : assigned.filter(slug => slug !== tag.slug)
+    return route.fulfill({ json: { results: [{ id: 42, ok: !refuse, ...(refuse ? { code: 'forbidden' } : {}) }] } })
+  })
+  await page.goto('/#/doc/42')
+  const row = page.locator('.document-tags')
+  await expect(row.getByRole('button', { name: 'Edit tags' })).toBeVisible()
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  await expect(row.getByRole('button', { name: 'Remove tag airtel' })).toBeEnabled()
+  expect(pages).toEqual([1, 2])
+  await row.getByLabel('Tag to add').selectOption('3')
+  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(row.getByRole('button', { name: 'Remove tag payment' })).toBeEnabled()
+  await row.getByRole('button', { name: 'Remove tag receipt' }).click()
+  await expect(row.getByRole('button', { name: 'Remove tag receipt' })).toHaveCount(0)
+  expect(writes).toEqual([
+    { documents: [42], method: 'add_tag', parameters: { tag_id: 3 } },
+    { documents: [42], method: 'remove_tag', parameters: { tag_id: 2 } },
+  ])
+  await row.scrollIntoViewIfNeeded()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('document-tag-editor.png'), fullPage: true })
+  refuse = true
+  await row.getByRole('button', { name: 'Remove tag airtel' }).click()
+  await expect(row.getByRole('alert')).toHaveText('You do not have permission to edit this document.')
+  await expect(row.getByRole('button', { name: 'Remove tag airtel' })).toBeEnabled()
+  await row.getByRole('button', { name: 'Done', exact: true }).click()
+  await page.reload()
+  await expect(row.locator('.pill')).toHaveText(['airtel', 'payment'])
+})
+
+test('adds the first document tag and recovers from a tag-list error', async ({ page }) => {
+  await mockAPI(page)
+  let fail = true
+  const writes = []
+  await page.route('**/api/tags/**', route => fail
+    ? route.fulfill({ status: 503, json: { error: 'Tags temporarily unavailable' } })
+    : route.fulfill({ json: { results: [{ id: 3, slug: 'payment', name: 'Payment' }], next: null } }))
+  await page.route('**/api/documents/bulk_edit', route => {
+    writes.push(route.request().postDataJSON())
+    return route.fulfill({ json: { results: [{ id: 42, ok: true }] } })
+  })
+  await page.goto('/#/doc/42')
+  const row = page.locator('.document-tags')
+  await expect(row).toContainText('No tags')
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  await expect(row.getByRole('alert')).toHaveText('Tags temporarily unavailable')
+  fail = false
+  await row.getByRole('button', { name: 'Reload tags' }).click()
+  await row.getByLabel('Tag to add').selectOption('3')
+  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(row.locator('.pill')).toHaveText(['payment'])
+  await expect(row.getByText('No tags', { exact: true })).toHaveCount(0)
+  expect(writes).toEqual([{ documents: [42], method: 'add_tag', parameters: { tag_id: 3 } }])
+})
+
+test('ignores a late document tag save after navigating to another document', async ({ page }) => {
+  await mockAPI(page)
+  let pending
+  await page.route('**/api/tags/**', route => route.fulfill({ json: {
+    results: [{ id: 3, slug: 'payment', name: 'Payment' }], next: null,
+  } }))
+  await page.route('**/api/documents/bulk_edit', route => { pending = route })
+  await page.goto('/#/doc/42')
+  const row = page.locator('.document-tags')
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  await row.getByLabel('Tag to add').selectOption('3')
+  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  await expect(row.getByRole('button', { name: 'Add', exact: true })).toBeDisabled()
+  await page.evaluate(() => { location.hash = '#/doc/41' })
+  await expect(page.getByTitle('Rename')).toContainText('Document 41')
+  const finished = page.waitForEvent('requestfinished', request => request === pending.request())
+  await pending.fulfill({ json: { results: [{ id: 42, ok: true }] } })
+  await finished
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  await expect(row.getByLabel('Tag to add')).toBeEnabled()
+  await expect(row).toContainText('No tags')
+  await expect(row.locator('.pill')).toHaveCount(0)
+})
+
 test('shows share controls only with the share-links capability', async ({ page }) => {
   const documents = [{
     id: 42, title: 'Electricity bill', mime_type: 'application/pdf',
@@ -3288,6 +3391,7 @@ test('opens a readable Trash document without overlapping actions and restores i
   for (const name of ['Edit', 'Share', 'Access', 'Trash']) {
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
   }
+  await expect(page.getByRole('button', { name: 'Edit tags', exact: true })).toHaveCount(0)
   const preview = page.locator('.preview')
   await expect(preview.locator('iframe')).toHaveCount(0)
   await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'true')

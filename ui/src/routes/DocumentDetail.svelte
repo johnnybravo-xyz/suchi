@@ -1,6 +1,6 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listTags, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
@@ -25,6 +25,11 @@
   let titleDraft = $state('')
   let editingLanguages = $state(false)
   let languagesDraft = $state('')
+  let editingTags = $state(false)
+  let tagOptions = $state([])
+  let tagsBusy = $state(false)
+  let tagsError = $state('')
+  let tagToAdd = $state('')
   let shareURL = $state('')
   let shareBusy = $state(false)
   let documentLinkOpen = $state(false)
@@ -94,6 +99,11 @@
     canManageAccess = false
     editingTitle = false
     editingLanguages = false
+    editingTags = false
+    tagOptions = []
+    tagsBusy = false
+    tagsError = ''
+    tagToAdd = ''
     shareOpen = false
     shareLinks = []
     documentLinkOpen = false
@@ -215,6 +225,53 @@
       doc = { ...doc, ...patch }
       notify?.(label || 'Saved')
     } catch (ex) { notify?.(ex.message || 'Could not save') }
+  }
+
+  async function startEditTags() {
+    if (tagsBusy || trashed) return
+    const version = loadVersion
+    editingTags = true
+    tagsBusy = true
+    tagsError = ''
+    try {
+      const options = []
+      for (let page = 1; ; page++) {
+        const result = await listTags({ page })
+        if (disposed || version !== loadVersion) return
+        options.push(...(result.results || []))
+        if (!result.next) break
+      }
+      tagOptions = options
+    } catch (ex) {
+      if (!disposed && version === loadVersion) tagsError = ex.message || 'Could not load tags'
+    } finally {
+      if (!disposed && version === loadVersion) tagsBusy = false
+    }
+  }
+
+  async function changeTag(tag, method) {
+    if (!tag || tagsBusy || trashed) return
+    const version = loadVersion
+    const documentID = Number(id)
+    tagsBusy = true
+    tagsError = ''
+    try {
+      const result = await bulkEdit([documentID], method, { tag_id: tag.id })
+      if (disposed || version !== loadVersion) return
+      const outcome = result?.results?.find(item => item.id === documentID)
+      if (!outcome?.ok) {
+        throw new Error(outcome?.code === 'forbidden' ? 'You do not have permission to edit this document.' : 'Could not update tags')
+      }
+      doc = { ...doc, tags: method === 'add_tag'
+        ? [...new Set([...(doc.tags || []), tag.slug])].sort()
+        : (doc.tags || []).filter(slug => slug !== tag.slug) }
+      tagToAdd = ''
+      notify?.(method === 'add_tag' ? 'Tag added' : 'Tag removed')
+    } catch (ex) {
+      if (!disposed && version === loadVersion) tagsError = ex.message || 'Could not update tags'
+    } finally {
+      if (!disposed && version === loadVersion) tagsBusy = false
+    }
   }
 
   function startEditLanguages() {
@@ -502,9 +559,38 @@
               {doc.content ? 'searchable PDF' : 'PDF preview (no OCR)'} · {fmtBytes(doc.archive_size)}
             </dd>
           {/if}
-          {#if doc.tags?.length}
-            <dt>Tags</dt><dd>{#each doc.tags as t}<span class="pill" style="margin-right:5px">{t}</span>{/each}</dd>
-          {/if}
+          <dt>Tags</dt>
+          <dd class="document-tags">
+            <div class="tag-pills">
+              {#each doc.tags || [] as slug}
+                <span class="pill">{slug}
+                  {#if editingTags}
+                    <button class="tag-remove" type="button" aria-label={`Remove tag ${slug}`}
+                            disabled={tagsBusy || !tagOptions.some(tag => tag.slug === slug)}
+                            onclick={() => changeTag(tagOptions.find(tag => tag.slug === slug), 'remove_tag')}><Icon name="x" size={12} /></button>
+                  {/if}
+                </span>
+              {:else}<span class="sub">No tags</span>{/each}
+              {#if !trashed && !editingTags}<button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button>{/if}
+            </div>
+            {#if editingTags}
+              <form class="tag-actions" onsubmit={(event) => { event.preventDefault(); changeTag(tagOptions.find(tag => tag.id === Number(tagToAdd)), 'add_tag') }}>
+                <select class="input" aria-label="Tag to add" bind:value={tagToAdd} disabled={tagsBusy}>
+                  <option value="">Choose a tag</option>
+                  {#each tagOptions.filter(tag => !doc.tags?.includes(tag.slug)) as tag}
+                    <option value={tag.id}>{tag.name}</option>
+                  {/each}
+                </select>
+                <button class="btn sm" type="submit" disabled={tagsBusy || !tagToAdd}>Add</button>
+                <button class="btn sm" type="button" disabled={tagsBusy} onclick={() => { editingTags = false; tagsError = ''; tagToAdd = '' }}>Done</button>
+              </form>
+              <span class="sub">Changes save immediately.</span>
+              {#if tagsError}
+                <p class="err" role="alert">{tagsError}</p>
+                <button class="btn sm" type="button" disabled={tagsBusy} onclick={startEditTags}>Reload tags</button>
+              {/if}
+            {/if}
+          </dd>
           {#if doc.correspondents?.length}
             <dt>Correspondents</dt>
             <dd>{#each doc.correspondents as c}<span class="pill" style="margin-right:5px">{c.name} · {c.role}</span>{/each}</dd>
@@ -748,6 +834,13 @@
 {/if}
 
 <style>
+  .document-tags { min-width:0 }
+  .tag-pills, .tag-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px }
+  .tag-pills .pill { max-width:100%; white-space:normal }
+  .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }
+  .tag-remove:disabled { cursor:default; opacity:.5 }
+  .tag-actions { margin:8px 0 4px }
+  .tag-actions select { flex:1 1 140px; min-width:0; width:100% }
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }

@@ -4,6 +4,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Edit tags directly on document detail, including documents with no tags.
+
 ### Changed
 
 - Clarified which files are needed for a complete archive backup in Settings.
