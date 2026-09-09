@@ -60,6 +60,7 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - run: make vet
       - run: make test TEST_FLAGS='-count=1 -timeout 180s'
+      - run: make local-install-check
 
   build-cross:
     # Prove the code compiles for every shipping OS/arch. linux/amd64 is

@@ -24,7 +24,7 @@
           },
           {
             "group": "Getting started",
-            "pages": ["getting-started", "web-app", "companion"]
+            "pages": ["getting-started", "local-install", "web-app", "companion"]
           },
           {
             "group": "Reference",

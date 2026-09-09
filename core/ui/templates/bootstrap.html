@@ -16,8 +16,7 @@
   <main class="login-card bootstrap-card">
     <span class="brand-hero" role="img" aria-label="suchi"></span>
     <h1 class="brand">{{msg "auth.setup.title"}}</h1>
-    <p class="muted">{{msg "auth.setup.body"}}
-      <code>localauth.setup.token_minted</code>. {{msg "auth.setup.body_suffix"}}</p>
+    <p class="muted">{{msg "auth.setup.body"}}</p>
     {{ if .Error }}<p class="error">{{ .Error }}</p>{{ end }}
     <form method="post" action="/bootstrap">
       <label>

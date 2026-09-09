@@ -65,6 +65,11 @@ type Options struct {
 	MigrationSets            []db.MigrationSet
 	Actions                  []automations.ActionDefinition
 	Configure                func(*Services) error
+	// SetupTokenFile publishes the first-run token privately for a local
+	// launcher. NotifyReady runs after listeners and workers are ready, before
+	// HTTP serving begins.
+	SetupTokenFile string
+	NotifyReady    func() error
 }
 
 // Services is the small boot-time surface available to a compiled
@@ -179,7 +184,8 @@ func Run(ctx context.Context, opts Options) error {
 		return accountEmailChangeMode(cfg, p)
 	}
 	la, err := localauth.NewWithOptions(ctx, d, log, cookieSecure, cfg.DemoMode, localauth.Options{
-		DisableSetup: cfg.OIDCIssuerURL != "",
+		DisableSetup:   cfg.OIDCIssuerURL != "",
+		SetupTokenFile: opts.SetupTokenFile,
 	})
 	if err != nil {
 		log.Error("main.localauth.new", "err", err.Error())
@@ -770,6 +776,13 @@ func Run(ctx context.Context, opts Options) error {
 		Action:     "server.start",
 		ObjectKind: "server",
 	})
+	if opts.NotifyReady != nil {
+		if err := opts.NotifyReady(); err != nil {
+			log.Error("main.ready.notify_failed", "err", err)
+			return fmt.Errorf("main.ready.notify_failed: %w", err)
+		}
+	}
+
 
 	return runHTTPEndpoints(ctx, cancel, endpoints, log)
 }

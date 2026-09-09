@@ -54,6 +54,8 @@ Notable user-visible changes to Suchi are recorded here.
   overflows, symlink escapes and unreliable network-mount notifications.
   `INGEST_FS_RECURSIVE=off` restores top-level-only discovery; durable
   observations skip unchanged files, and failures remain at their source path.
+- Linux local installation adds a per-user service, browser launcher, private
+  first-run token dialog, and uninstall that preserves the archive.
 
 ## [0.2.1] - 2026-10-10
 

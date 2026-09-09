@@ -9,10 +9,9 @@ auth.login.password: Password
 auth.login.submit: Sign in
 
 auth.setup.title: Set up suchi
-auth.setup.body: First-boot admin. The one-time token is in your server log as
-auth.setup.body_suffix: Paste it below.
+auth.setup.body: Create your first administrator. Paste the one-time token from the Suchi launch dialog or your server log.
 auth.setup.token: Setup token
-auth.setup.token_placeholder: paste the token from the log
+auth.setup.token_placeholder: paste your one-time setup token
 auth.setup.email: Admin email
 auth.setup.display_name: Display name
 auth.setup.optional: (optional)

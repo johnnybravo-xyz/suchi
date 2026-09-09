@@ -28,6 +28,21 @@ Runs the HTTP server. Blocks until SIGINT/SIGTERM.
 - Logs the effective egress surface at INFO.
 - Listens on `LISTEN_ADDR` (default `:8000`).
 
+Optional flags for native service installation:
+
+- `--systemd`: on Linux, send `READY=1` to systemd's `NOTIFY_SOCKET` only after
+  startup and binding the HTTP listener. Requires a `Type=notify` service;
+  startup fails if notification is unavailable. Ordinary `serve` does not
+  notify systemd.
+- `--setup-token-file PATH`: write the bootstrap token to a private file
+  instead of the log. Its existing parent directory must be owner-private
+  (`0700`); the token file is `0600`. Rotation updates the file, and successful
+  setup removes it. This changes token delivery, not authentication or the
+  token's expiry. Do not place it inside a served directory or a shared folder.
+
+The [local Linux installer](/local-install) supplies both flags and uses an
+ephemeral per-user runtime directory for the token.
+
 ## `suchi healthcheck`
 
 Probes `LISTEN_ADDR`'s `/readyz` over loopback. Exit `0` if the server

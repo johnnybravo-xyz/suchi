@@ -60,11 +60,7 @@ func main() {
 	}
 	switch command {
 	case "serve":
-		if commandHelpRequested(os.Args[2:]) {
-			fmt.Fprintln(os.Stderr, "Usage: suchi serve")
-			return
-		}
-		os.Exit(runServe())
+		os.Exit(runServe(os.Args[2:]))
 	case "healthcheck":
 		if commandHelpRequested(os.Args[2:]) {
 			fmt.Fprintln(os.Stderr, "Usage: suchi healthcheck")
@@ -127,7 +123,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `suchi — document management, one binary
 
 Usage:
-  suchi serve                     run the HTTP server
+  suchi serve [--systemd] [--setup-token-file PATH]
+                                 run the HTTP server
   suchi healthcheck               probe /readyz on LISTEN_ADDR (for Docker HEALTHCHECK)
   suchi import [flags]            point --from at your existing DMS's export bundle
   suchi gc [flags]                reclaim unreferenced blobs (dry-run default)
@@ -193,7 +190,27 @@ func buildIdentity(info *debug.BuildInfo) (string, string) {
 	return v, rev
 }
 
-func runServe() int {
+func runServe(args []string) int {
+	options, err := parseServeOptions(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		return 2
+	}
+	notify, err := openSystemdNotify(options.systemd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+		return 1
+	}
+	if notify != nil {
+		defer notify.Close()
+	}
+	var notifyReady func() error
+	if notify != nil {
+		notifyReady = func() error { return notifySystemdReady(notify) }
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
@@ -214,9 +231,12 @@ func runServe() int {
 		BuildVersion:             buildVersion,
 		BuildRevision:            buildRevision,
 		PipelineProposalVersions: configuredPipelineProposalVersions(),
+		SetupTokenFile:           options.setupTokenFile,
+		NotifyReady:              notifyReady,
 	}); err != nil {
 		return 1
 	}
+
 	return 0
 }
 

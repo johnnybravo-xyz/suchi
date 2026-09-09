@@ -71,6 +71,10 @@ proxy or storage layout. The default host binding is `127.0.0.1`; set
 
 ## Direct binary
 
+For a per-user Linux desktop service and application launcher, see
+[On your computer](/local-install). That source-checkout preview keeps the
+archive local without Docker or a reverse proxy.
+
 Download the binary for your platform from
 [GitHub Releases](https://github.com/johnnybravo-xyz/suchi/releases), then run:
 
@@ -78,6 +82,7 @@ Download the binary for your platform from
 install -m 0755 suchi /usr/local/bin/suchi
 mkdir -p "$HOME/.local/share/suchi"
 PUBLIC_URL=http://127.0.0.1:8000 \
+LISTEN_ADDR=127.0.0.1:8000 \
 DATA_DIR="$HOME/.local/share/suchi" \
 suchi serve
 ```
@@ -111,8 +116,8 @@ suchi doctor
 schema readiness. `suchi doctor` reports the schema, filesystem, optional
 tools, taxonomy, job health, and configured egress without exposing secrets.
 
-Before storing important documents, configure TLS, create a complete backup,
-and test a restore. Follow the [upgrade and rollback checklist](/backup-restore#upgrade-and-rollback)
+Before storing important documents, create a complete backup and test a restore.
+Configure TLS if exposing Suchi beyond loopback. Follow the [upgrade and rollback checklist](/backup-restore#upgrade-and-rollback)
 before changing versions. Continue with [Mail intake](/guides/mail-intake),
 [Configuration](/config), [Backup and restore](/backup-restore), or
 [Importing from Paperless-ngx](/guides/importer).

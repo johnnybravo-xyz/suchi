@@ -122,6 +122,10 @@ This quick start is bound to loopback and pins the v0.2.1 image. A production
 server, including one reached by the mobile app, must use HTTPS and pin the
 selected release by its published image digest.
 
+Want an archive on your own computer without Docker or hosting? The
+[local Linux installation preview](docs/local-install.mdx) adds a per-user
+service and application launcher from a source checkout.
+
 ## Images
 
 - `v0.2.1` / `latest`: Alpine. Supports all listed formats and indexes scanned

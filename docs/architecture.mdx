@@ -104,6 +104,41 @@ or stale; `make ui` restores the required state. CI passes one target-SHA-bound
 bundle from its frontend job to Go test and cross-build jobs, while Docker uses
 a pinned Bun build stage and copies only generated files into the Go stage.
 
+### Local desktop installation
+
+`deploy/local-linux/` owns the Linux per-user installer, systemd unit, and
+application launcher. It starts the existing `serve` process with explicit
+loopback and private archive paths, a dedicated config file, and a clean
+service environment. It does not reuse a developer/server archive or inherit
+mail/model credentials from the launching shell. systemd owns restarts and
+optional login startup; there is no application supervisor or second frontend.
+
+`serve --systemd` reports readiness through the standard Unix datagram notify
+socket only after initialization and binding the listener. The launcher waits
+for that readiness before opening the browser, so an occupied port cannot be
+mistaken for a successful start. Notification failure is a startup error.
+
+`plugins/local-auth` owns the optional `--setup-token-file` delivery lifecycle.
+It writes the same one-time token atomically into an existing private runtime
+directory, updates it on expiry rotation, and removes it after setup. In this
+mode the token is not logged. The launcher displays it through a native dialog
+using stdin, never browser URL parameters or a new public endpoint. Existing
+setup validation, password requirements, sessions, ACLs, and egress consent
+remain authoritative; loopback does not confer authentication.
+
+Uninstall stops the service and removes program/desktop files, never the
+archive or its keys. See [On your computer](/local-install) for storage and
+operational limits. macOS and Windows installers require native verification
+before joining this distribution path.
+
+`make check` includes isolated installer/launcher contract checks. On a Linux
+desktop with native parsing tools, `make smoke-local-install` runs a uniquely
+named transient user service and temporary archive: private bootstrap,
+unauthenticated denial, scanned-receipt OCR/search, and restart persistence.
+It removes only that test service's temporary state, not an installed archive.
+Dialog presentation and login/reboot behavior still need desktop acceptance
+testing; mocks and service-restart tests do not establish those behaviors.
+
 ## From upload to usable document
 
 ```mermaid

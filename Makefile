@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail local-install-check smoke-local-install install-hooks ui ui-dev ui-check ui-verify ui-tracked-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -33,6 +33,8 @@ help:
 	  '  smoke           Build and smoke-test server health endpoints.' \
 	  '  smoke-ingest    Exercise the local document ingestion path.' \
 	  '  smoke-mail      Exercise the mbsync mail deployment path.' \
+	  '  local-install-check  Check Linux install/launcher lifecycle with mocks.' \
+	  '  smoke-local-install  Verify native Linux OCR and restart in a temporary user service.' \
 	  '  ui              Build the generated embedded SPA.' \
 	  '  ui-dev          Run the Vite development server.' \
 	  '  ui-check        Check, test, build, and verify generated SPA assets.' \
@@ -93,7 +95,14 @@ license-check:
 	  test -z "$$wrong" || { printf '%s\n' "$$wrong" '' 'Only plugin-api/ is Apache-2.0; the rest is AGPL-3.0-or-later.' >&2; exit 1; }; \
 	  printf 'license-check: every source file declares a licence\n'
 
-check: fmt-check license-check ui-check vet test lint
+check: fmt-check license-check ui-check vet test lint local-install-check
+
+local-install-check:
+	@if [ "$$(uname -s)" = Linux ]; then bash deploy/local-linux/test.sh; \
+	  else echo 'Local Linux installer checks skipped on this OS.'; fi
+
+smoke-local-install: build
+	@./hack/smoke-local-install.sh
 
 # Release-time advisory and secret scans. Kept separate from `check` because they
 # query external databases and may install pinned scanners.
