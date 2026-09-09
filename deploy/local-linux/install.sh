@@ -3,6 +3,15 @@ set -euo pipefail
 
 fail() { printf 'suchi local: %s\n' "$*" >&2; return 1; }
 
+dependency_help() {
+    printf '%s\n' \
+        'Install the required packages using your distribution package manager:' \
+        '  Debian / Ubuntu: sudo apt install zenity xdg-utils qpdf poppler-utils tesseract-ocr tesseract-ocr-eng imagemagick' \
+        '  Fedora: sudo dnf install zenity xdg-utils qpdf poppler-utils tesseract tesseract-langpack-eng ImageMagick' \
+        '  Arch: sudo pacman -S zenity xdg-utils qpdf poppler tesseract tesseract-data-eng imagemagick' \
+        'Run these commands yourself; Suchi never installs system packages.'
+}
+
 check_path() {
     # These paths are embedded in shell, systemd and Desktop Entry files.
     [[ $1 == /* && $1 != *[!a-zA-Z0-9_./\ -]* && $1 != *'/../'* && $1 != */.. ]] ||
@@ -19,31 +28,66 @@ check_owned_file() {
     fi
 }
 
-check_dependencies() {
-    local tool missing=0 imagemagick probe
-    for tool in systemctl zenity xdg-open qpdf pdftotext pdftoppm pdfinfo tesseract; do
-        if ! PATH=/usr/local/bin:/usr/bin:/bin command -v "$tool" >/dev/null; then
-            printf 'Missing dependency on the service PATH: %s\n' "$tool" >&2
+dependency_report() {
+    # TSV rows are shared by the terminal check and native status table.
+    local entry tool purpose status probe_flag missing=0 imagemagick probe languages
+    for entry in \
+        'systemctl|Keeps Suchi running in your login session' \
+        'zenity|Setup dialogs and local settings' \
+        'xdg-open|Opens your archive in the browser' \
+        'qpdf|Reads and unlocks PDFs' \
+        'pdftotext|Extracts text from PDFs' \
+        'pdftoppm|Prepares scanned PDF pages for OCR' \
+        'pdfinfo|Reads PDF page information' \
+        'tesseract|Reads text from scanned documents'; do
+        tool=${entry%%|*} purpose=${entry#*|}
+        status=Ready
+        if ! PATH=/usr/local/bin:/usr/bin:/bin command -v "$tool" >/dev/null; then status=Missing; missing=1; fi
+        probe_flag=''
+        case "$tool" in qpdf) probe_flag=--version ;; pdftotext|pdftoppm|pdfinfo) probe_flag=-v ;; esac
+        if [[ $status == Ready && -n $probe_flag ]] && ! PATH=/usr/local/bin:/usr/bin:/bin "$tool" "$probe_flag" >/dev/null 2>&1; then
+            status='Needs attention'; missing=1
+            purpose="$purpose; tool could not run"
+        fi
+        printf '%s\t%s\t%s\n' "$status" "$tool" "$purpose"
+    done
+    if languages=$(PATH=/usr/local/bin:/usr/bin:/bin tesseract --list-langs 2>/dev/null); then
+        status=Ready
+        if ! grep -qx eng <<< "$languages"; then status=Missing; missing=1; fi
+        printf '%s\tEnglish OCR data (eng)\tReads English text from scans\n' "$status"
+    else
+        printf 'Needs attention\tEnglish OCR data (eng)\tInstall Tesseract and its English language data\n'
+        missing=1
+    fi
+    imagemagick=$(PATH=/usr/local/bin:/usr/bin:/bin command -v magick || PATH=/usr/local/bin:/usr/bin:/bin command -v convert || true)
+    if [[ -z $imagemagick ]]; then
+        printf 'Missing\tImageMagick\tCreates PDFs from images\n'
+        missing=1
+    elif ! probe=$(mktemp -d); then
+        printf 'Needs attention\tImageMagick\tCould not create a temporary PDF-writing check\n'
+        missing=1
+    else
+        if printf 'P3\n1 1\n255\n255 255 255\n' > "$probe/input.ppm" &&
+            "$imagemagick" "$probe/input.ppm" "PDF:$probe/output.pdf" > "$probe/error" 2>&1 &&
+            [[ $(head -c 5 "$probe/output.pdf") == '%PDF-' ]]; then
+            printf 'Ready\tImageMagick\tCreates PDFs from images; PDF writing works\n'
+        else
+            printf 'Needs attention\tImageMagick\tPDF writing failed; review its policy and installation\n'
             missing=1
         fi
-    done
-    imagemagick=$(PATH=/usr/local/bin:/usr/bin:/bin command -v magick || PATH=/usr/local/bin:/usr/bin:/bin command -v convert || true)
-    [[ -n $imagemagick ]] || { printf 'Missing dependency: ImageMagick (magick or convert)\n' >&2; missing=1; }
-    [[ $missing == 0 ]] || { fail 'Install the required distribution packages first; see README.md.'; return 1; }
-    PATH=/usr/local/bin:/usr/bin:/bin tesseract --list-langs 2>/dev/null | grep -qx eng || {
-        fail 'The Tesseract English language data (eng) is required.'; return 1;
-    }
-    probe=$(mktemp -d)
-    printf 'P3\n1 1\n255\n255 255 255\n' > "$probe/input.ppm"
-    if ! "$imagemagick" "$probe/input.ppm" "$probe/output.pdf" > "$probe/error" 2>&1; then
-        cat "$probe/error" >&2
         rm -f -- "$probe/input.ppm" "$probe/output.pdf" "$probe/error"
         rmdir -- "$probe"
-        fail 'ImageMagick cannot create PDFs. Review its PDF-write policy; this installer does not change system policy.'
-        return 1
     fi
-    rm -f -- "$probe/input.ppm" "$probe/output.pdf" "$probe/error"
-    rmdir -- "$probe"
+    [[ $missing == 0 ]]
+}
+
+check_dependencies() {
+    local report
+    if report=$(dependency_report); then return 0; fi
+    printf 'Required local tools need attention:\n%s\n\n' "$report" >&2
+    dependency_help >&2
+    printf 'ImageMagick must allow PDF writing. Review its policy without broadly enabling PDF reading or unrelated delegates.\n' >&2
+    return 1
 }
 
 main() (
@@ -53,9 +97,10 @@ main() (
         case "$arg" in
             --port) [[ $# -gt 0 ]] || { fail '--port needs a number'; return 1; }; port=$1; shift ;;
             --start-at-login) login=1 ;;
+            --no-start-at-login) login=-1 ;;
             --uninstall) uninstall=1 ;;
             --help|-h)
-                printf 'Usage: %s /path/to/suchi [--port 8000] [--start-at-login]\n       %s --uninstall\n' "$0" "$0"
+                printf 'Usage: %s /path/to/suchi [--port 8000] [--start-at-login | --no-start-at-login]\n       %s --uninstall\n' "$0" "$0"
                 return 0 ;;
             -*) fail "Unknown option: $arg"; return 1 ;;
             *) [[ -z $binary ]] || { fail 'Specify one Suchi binary.'; return 1; }; binary=$arg ;;
@@ -87,7 +132,7 @@ main() (
         [[ -f $program/managed-by-suchi-local && ! -L $program/managed-by-suchi-local ]] || {
             fail "Existing program directory is not managed by this installer: $program"; return 1;
         }
-        for path in suchi install.sh launch.sh port; do
+        for path in suchi install.sh launch.sh suchi-tile.svg port; do
             [[ ! -L $program/$path ]] || { fail "Refusing symbolic link: $program/$path"; return 1; }
         done
     fi
@@ -114,7 +159,7 @@ main() (
         [[ -z $binary && -z $port && $login == 0 ]] || { fail '--uninstall cannot be combined with install options.'; return 1; }
         [[ -f $program/managed-by-suchi-local && -f $unit ]] || { fail 'No managed local installation found.'; return 1; }
         systemctl --user disable --now suchi-local.service || return 1
-        rm -f -- "$unit" "$desktop" "$program/suchi" "$program/install.sh" "$program/launch.sh" "$program/port" "$program/managed-by-suchi-local"
+        rm -f -- "$unit" "$desktop" "$program/suchi" "$program/install.sh" "$program/launch.sh" "$program/suchi-tile.svg" "$program/port" "$program/managed-by-suchi-local"
         rmdir -- "$program" || printf 'Kept additional files in %s\n' "$program"
         systemctl --user daemon-reload
         printf 'Suchi uninstalled. Your archive, keys and configuration were kept:\n  %s\n  %s\n' "$archive" "$config_dir"
@@ -140,6 +185,9 @@ main() (
     check_dependencies || return 1
 
     [[ -f $script_dir/install.sh && -f $script_dir/launch.sh ]] || { fail 'Keep install.sh and launch.sh together.'; return 1; }
+    local icon=$script_dir/suchi-tile.svg
+    if [[ ! -f $icon ]]; then icon=$script_dir/../../core/ui/assets/brand/suchi-tile.svg; fi
+    [[ -f $icon ]] || { fail 'The Suchi icon is missing. Extract the complete installer package.'; return 1; }
     mkdir -p -- "$program" "$archive" "$config_dir" "$(dirname -- "$unit")" "$(dirname -- "$desktop")"
     chmod 700 -- "$local_dir" "$program" "$archive" "$config_dir"
     local staged=''
@@ -161,6 +209,7 @@ main() (
     # An installed copy remains available after the download folder is removed.
     if [[ $script_dir != "$program" ]]; then install -m 700 -- "$script_dir/install.sh" "$program/install.sh"; fi
     if [[ $script_dir != "$program" ]]; then install -m 700 -- "$script_dir/launch.sh" "$program/launch.sh"; fi
+    if [[ $icon != "$program/suchi-tile.svg" ]]; then install -m 600 -- "$icon" "$program/suchi-tile.svg"; fi
     printf '%s\n' "$port" > "$program/port"
     printf 'Managed by Suchi local installer.\n' > "$program/managed-by-suchi-local"
     printf '%s\n' \
@@ -191,11 +240,21 @@ main() (
         'Name=Suchi' \
         'Comment=Open your local document archive' \
         "Exec=\"$program/launch.sh\"" \
-        'Icon=folder-documents' \
+        "Icon=$program/suchi-tile.svg" \
         'Terminal=false' \
-        'Categories=Office;' > "$desktop"
+        'Categories=Office;' \
+        'Actions=Settings;Stop;' \
+        '' \
+        '[Desktop Action Settings]' \
+        'Name=Settings' \
+        "Exec=\"$program/launch.sh\" --settings" \
+        '' \
+        '[Desktop Action Stop]' \
+        'Name=Stop Suchi' \
+        "Exec=\"$program/launch.sh\" --stop" > "$desktop"
     systemctl --user daemon-reload
     if [[ $login == 1 ]]; then systemctl --user enable suchi-local.service; fi
+    if [[ $login == -1 ]]; then systemctl --user disable suchi-local.service; fi
     if [[ $active == 1 ]]; then systemctl --user start suchi-local.service; fi
     printf 'Installed. Open Suchi from your applications menu, or run:\n  %s\nArchive: %s\nConfiguration: %s\n' "$program/launch.sh" "$archive" "$config"
 )
