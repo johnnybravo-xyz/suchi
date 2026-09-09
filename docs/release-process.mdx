@@ -283,6 +283,49 @@ for a tagged release. Local VCS builds without an injected version use the sourc
 version line, not Go's tag-derived module pseudo-version. Missing development
 revisions are labeled unavailable, not guessed.
 
+## Local installation bundles
+
+Local desktop bundles are a separate, unreleased evaluation path. The existing
+release workflow does not publish them. `native-local.yml` is a manual or
+reusable, read-only workflow that builds on native Linux and macOS runners for
+AMD64 and ARM64. Each lane checks installer contracts, runs real PDF/image OCR,
+checks original downloads and authentication after restart, then uploads a
+bundle and its SHA-256 file as workflow artifacts. macOS also exercises a
+temporary, uniquely named launchd job; the runner needs a graphical login
+domain for that check. The workflow does not install a persistent desktop app,
+prove GUI/login behavior, sign macOS apps, or publish a release.
+
+To package a locally built executable without running a workflow:
+
+```sh
+make build
+bash hack/smoke-native-archive.sh ./dist/suchi
+bash hack/package-local-test.sh
+bash hack/package-local.sh ./dist/suchi snapshot-local linux amd64 ./dist/local
+```
+
+Use `darwin` for macOS and the executable's actual architecture. The packager
+checks Go build metadata without executing foreign binaries, includes only
+that platform's scripts, icon, README and license, and refuses to overwrite an
+existing artifact. Document tools remain guided prerequisites, not downloads
+performed by the installer.
+
+Before promoting this path to a public download:
+
+1. Run the native workflow against the exact candidate commit and inspect every
+   platform result; cross-compilation and mocks are insufficient.
+2. On real Linux and macOS desktops, verify installation, setup-token copy,
+   repeated opening, occupied ports, login startup, sleep/wake, stop, update,
+   backup/restore, and data-preserving uninstall. Verify canceled dialogs do
+   not open the browser or remove files.
+3. For macOS, provide a Developer ID-signed and notarized distribution and test
+   it after an actual browser download with Gatekeeper enabled. Preserve
+   quarantine metadata; never recommend clearing it or disabling Gatekeeper.
+   Signing credentials and this acceptance check are not supplied by the
+   evaluation workflow.
+4. Publish verified artifacts and checksums from a trusted release source,
+   then update the evaluation notice in [On your computer](/local-install).
+
 ## Publishing container images without Actions
 
 GHCR images can be built and pushed directly when Actions is unavailable. Build
@@ -436,6 +479,8 @@ before calling the release complete.
   Rust base to catch accidental recompilation; binary and license bytes must
   match the export before the usual ingestion checks run.
 - `restore-drill.yml` validates backup restoration when called by it.
+- `native-local.yml` separately verifies and packages local-install evaluation
+  bundles on native Linux/macOS runners; it never publishes them.
 - `release.yml` publishes only when manually dispatched from an existing signed
   annotated tag. Its preflight repeats the complete reusable validation graph,
   race tests, security scans, local smoke and benchmark gates, Docker checks and

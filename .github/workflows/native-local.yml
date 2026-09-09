@@ -1,0 +1,98 @@
+name: native-local
+
+# Native verification is opt-in until each desktop lane has run successfully.
+# This workflow never publishes releases or changes a user's installation.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: local-${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, goos: linux, goarch: amd64, platform: linux }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, platform: linux }
+          - { runner: macos-15, goos: darwin, goarch: arm64, platform: macos }
+          - { runner: macos-15-intel, goos: darwin, goarch: amd64, platform: macos }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+      - name: install Linux test prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qpdf poppler-utils tesseract-ocr tesseract-ocr-eng imagemagick \
+            ghostscript fonts-dejavu-core jq zenity xdg-utils shellcheck
+          # Only this disposable CI VM is changed. Like the full Docker image,
+          # allow image-to-PDF output without granting ImageMagick PDF decoding.
+          sudo sed -i 's|<policy domain="coder" rights="none" pattern="PDF" />|<policy domain="coder" rights="write" pattern="PDF" />|' \
+            /etc/ImageMagick-6/policy.xml
+      - name: install macOS test prerequisites
+        if: runner.os == 'macOS'
+        run: brew install qpdf poppler tesseract imagemagick ghostscript jq shellcheck
+      - name: verify native architecture and parser availability
+        env:
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          test "$(go env GOOS)" = "$TARGET_OS"
+          test "$(go env GOARCH)" = "$TARGET_ARCH"
+          for tool in qpdf pdftotext pdftoppm pdfinfo tesseract gs jq; do command -v "$tool"; done
+          command -v magick || command -v convert
+          tesseract --list-langs 2>/dev/null | grep -qx eng
+      - name: native storage, authentication, lifecycle and parser contracts
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go test -race -count=1 -timeout 180s \
+            ./plugins/local-auth ./core/blob ./core/render/... ./core/sandbox \
+            ./distro/cmd/suchi ./core/pipeline/imgpdf ./core/pipeline/tessocr
+      - name: installer and artifact contracts
+        env:
+          LOCAL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          shellcheck hack/package-local.sh hack/package-local-test.sh
+          bash "deploy/local-$LOCAL_PLATFORM/test.sh"
+          bash hack/package-local-test.sh
+      - name: build native Suchi and verify actual OCR and restart
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-local"
+          version="snapshot-${GITHUB_SHA:0:12}"
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags="-s -w -X main.version=$version -X main.revision=$GITHUB_SHA" \
+            -o "$RUNNER_TEMP/native-local/suchi" ./distro/cmd/suchi
+          bash hack/smoke-native-archive.sh "$RUNNER_TEMP/native-local/suchi"
+      - name: verify native launchd service ownership and restart
+        if: runner.os == 'macOS'
+        run: bash deploy/local-macos/test-service.sh "$RUNNER_TEMP/native-local/suchi"
+      - name: package verified local installation
+        env:
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          bash hack/package-local.sh "$RUNNER_TEMP/native-local/suchi" \
+            "snapshot-${GITHUB_SHA:0:12}" "$TARGET_OS" "$TARGET_ARCH" \
+            "$RUNNER_TEMP/native-local/artifacts"
+      # These are unsigned evaluation bundles, not notarized macOS installers.
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: local-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/native-local/artifacts/suchi-*
+          if-no-files-found: error

@@ -158,6 +158,11 @@ unauthenticated denial, scanned-receipt OCR/search, and restart persistence.
 It removes only that test service's temporary state, not an installed archive.
 `deploy/local-macos/test-service.sh` separately checks
 native launchd ownership, private bootstrap, and restart in a temporary job.
+`hack/smoke-native-archive.sh` verifies real PDF/image OCR, original downloads,
+authentication, search, and restart persistence on Linux or macOS without
+installing a service. `native-local.yml` runs native platform checks and
+`hack/package-local.sh` packages evaluation artifacts; see the
+[release guide](/release-process#local-installation-bundles).
 Dialog presentation and login/reboot behavior still need desktop acceptance
 testing; mocks and service-restart tests do not establish those behaviors.
 
