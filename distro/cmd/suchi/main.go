@@ -335,7 +335,7 @@ func runServe() int {
 	if mode == "flat" {
 		mode2 = "flat"
 	}
-	renderer, err := view.New(d, cas, cfg.DataDir, cfg.DataDir+"/rendered", mode2, log)
+	renderer, err := view.New(d, cas, cfg.DataDir+"/rendered", mode2, log)
 	if err != nil {
 		log.Error("main.view.new", "err", err.Error())
 		return 1

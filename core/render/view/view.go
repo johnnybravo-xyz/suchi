@@ -53,7 +53,6 @@ const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ title }}_
 type Renderer struct {
 	db        *db.DB
 	cas       *blob.CAS
-	casRoot   string // absolute; used to compute symlink targets
 	renderDir string
 	mode      string // "jd" or "flat"; picks the default template
 	log       *slog.Logger
@@ -61,7 +60,7 @@ type Renderer struct {
 
 // New builds a Renderer. renderDir is created if missing. mode selects
 // the default template — normally taxonomy setting from the DB.
-func New(d *db.DB, cas *blob.CAS, casRoot, renderDir, mode string, log *slog.Logger) (*Renderer, error) {
+func New(d *db.DB, cas *blob.CAS, renderDir, mode string, log *slog.Logger) (*Renderer, error) {
 	if renderDir == "" {
 		return nil, errors.New("view: renderDir required")
 	}
@@ -69,7 +68,7 @@ func New(d *db.DB, cas *blob.CAS, casRoot, renderDir, mode string, log *slog.Log
 		return nil, fmt.Errorf("view: mkdir %s: %w", renderDir, err)
 	}
 	return &Renderer{
-		db: d, cas: cas, casRoot: casRoot, renderDir: renderDir,
+		db: d, cas: cas, renderDir: renderDir,
 		mode: mode, log: log.With("component", "view"),
 	}, nil
 }
@@ -112,7 +111,7 @@ func (r *Renderer) Render(ctx context.Context, docID int64) (string, error) {
 //
 // Semantics:
 //   - No prior render row → falls through to Render (initial baseline).
-//   - Prev == new       → no-op, no filesystem touch, no row written.
+//   - Prev == new       → repair an absent or stale link without a move row.
 //   - Prev != new       → INSERT pending → mv → UPDATE applied.
 //
 // Crash between INSERT and UPDATE is safe: Reconcile() on next boot
@@ -132,13 +131,22 @@ func (r *Renderer) Move(ctx context.Context, docID int64) error {
 		_, err := r.Render(ctx, docID)
 		return err
 	}
-	if prev == rendered {
-		return nil
-	}
-
 	fullTarget := filepath.Join(r.renderDir, rendered)
 	if !underRoot(r.renderDir, fullTarget) {
 		return fmt.Errorf("view: rendered path %q escapes renderDir", rendered)
+	}
+	if prev == rendered {
+		if target, err := os.Readlink(fullTarget); err == nil && target == src {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
+			return fmt.Errorf("view.mkdir: %w", err)
+		}
+		if err := replaceSymlink(src, fullTarget); err != nil {
+			return fmt.Errorf("view.symlink.repair: %w", err)
+		}
+		r.log.Info("view.repaired", "doc_id", docID, "path", rendered)
+		return nil
 	}
 	fullPrev := filepath.Join(r.renderDir, prev)
 
@@ -241,7 +249,10 @@ func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, stri
 	if rendered == "" {
 		return "", "", errors.New("view: rendered path empty after sanitize")
 	}
-	src := filepath.Join(r.casRoot, "blobs", "sha256", blobHash[0:2], blobHash[2:4], blobHash)
+	src, err := r.cas.Path(blobHash)
+	if err != nil {
+		return "", "", fmt.Errorf("view.blob: %w", err)
+	}
 	return rendered, src, nil
 }
 

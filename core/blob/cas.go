@@ -136,6 +136,15 @@ func (c *CAS) Get(sum string) (io.ReadCloser, error) {
 	return f, err
 }
 
+// Path returns a blob's absolute filesystem path for rendered-view symlinks.
+// It validates the hash but does not check whether the blob exists.
+func (c *CAS) Path(sum string) (string, error) {
+	if !validHash(sum) {
+		return "", fmt.Errorf("bad hash %q", sum)
+	}
+	return c.path(sum), nil
+}
+
 // Stat returns the BlobRef for a hash if it exists.
 func (c *CAS) Stat(sum string) (pluginapi.BlobRef, error) {
 	if !validHash(sum) {

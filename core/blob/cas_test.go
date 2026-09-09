@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,6 +56,17 @@ func TestPutGetStatDelete(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Errorf("payload mismatch")
+	}
+	path, err := cas.Path(wantHex)
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("blob path is relative: %s", path)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(stored, payload) {
+		t.Fatalf("read blob path: content = %q, err = %v", stored, err)
 	}
 
 	// Duplicate put is a no-op — same ref back.
@@ -104,6 +117,9 @@ func TestRejectBadHash(t *testing.T) {
 	for _, bad := range []string{"", "not-hex", "abcd", "ABCDEF" + strings.Repeat("0", 58)} {
 		if _, err := cas.Get(bad); err == nil {
 			t.Errorf("Get(%q) accepted a bad hash", bad)
+		}
+		if path, err := cas.Path(bad); err == nil || path != "" {
+			t.Errorf("Path(%q) = %q, %v; want empty path and error", bad, path, err)
 		}
 	}
 }

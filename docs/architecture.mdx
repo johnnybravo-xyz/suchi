@@ -158,6 +158,11 @@ Preserve `original_blob` and the original MIME type. Decryption, normalization,
 and OCR create derived objects rather than overwriting the upload. The rendered
 Johnny.Decimal tree is a rebuildable projection. Trash and retention remove
 document state and rendered files; `core/gc/` owns physical CAS reclamation.
+The renderer obtains filesystem targets from validated `CAS.Path`, not its own
+copy of the shard layout. Even when a filing path has not changed, a render job
+refreshes missing or stale links to the currently selected archive/original
+blob. Existing stale links are repaired on their next render/refile operation;
+startup does not walk and rewrite the entire projection.
 Back up the complete data directory with writers stopped or an atomic whole-
 directory snapshot, including the keys that decrypt sealed credentials. A
 database-only snapshot is not a complete archive backup.

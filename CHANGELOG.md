@@ -4,6 +4,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Filesystem views now link to the current blob layout and refresh after
+  processing replaces a document's derived archive. Existing stale links are
+  repaired on the next render or refile operation.
+
 ### Added
 
 - Edit tags directly on document detail, including documents with no tags.
