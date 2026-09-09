@@ -33,7 +33,7 @@ help:
 	  '  smoke           Build and smoke-test server health endpoints.' \
 	  '  smoke-ingest    Exercise the local document ingestion path.' \
 	  '  smoke-mail      Exercise the mbsync mail deployment path.' \
-	  '  local-install-check  Check Linux install/launcher lifecycle with mocks.' \
+	  '  local-install-check  Check native install/launcher lifecycle with mocks.' \
 	  '  smoke-local-install  Verify native Linux OCR and restart in a temporary user service.' \
 	  '  ui              Build the generated embedded SPA.' \
 	  '  ui-dev          Run the Vite development server.' \
@@ -98,8 +98,10 @@ license-check:
 check: fmt-check license-check ui-check vet test lint local-install-check
 
 local-install-check:
-	@if [ "$$(uname -s)" = Linux ]; then bash deploy/local-linux/test.sh; \
-	  else echo 'Local Linux installer checks skipped on this OS.'; fi
+	@case "$$(uname -s)" in \
+	  Linux) bash deploy/local-linux/test.sh ;; \
+	  Darwin) bash deploy/local-macos/test.sh ;; \
+	  *) echo 'Local installer checks skipped on this OS.' ;; esac
 
 smoke-local-install: build
 	@./hack/smoke-local-install.sh

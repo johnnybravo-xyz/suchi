@@ -1,144 +1,161 @@
 ---
 title: "On your computer"
-description: "Run a private archive on a Linux desktop without Docker, a domain, or a hosted server."
+description: "Install a private archive on Linux or macOS without Docker, a domain, or hosting."
 ---
 
-Suchi can run on your own computer and open in your usual browser. It is the
-same application and archive format as a server installation; no separate
-desktop frontend, database service, or model is needed.
+Open Suchi like an application, use it in your usual browser, and keep your
+documents on your computer. It is the same archive format and application as
+the server edition. No account with a Suchi service is required.
 
-## Linux preview
+These installers are **unreleased evaluation builds**, not included in beta.2.
+Linux has native service and ingestion checks; the macOS desktop flow still
+needs acceptance testing on a real Mac. macOS evaluation bundles are not
+Developer ID-signed or notarized. Do not disable Gatekeeper, clear quarantine,
+or change system security policy to run them. Windows installation is deferred.
 
-The local installer is currently a **source-checkout preview**, not part of
-the beta.2 download. It requires a graphical Linux session with a systemd user
-manager. macOS and Windows desktop installers are not available yet.
+## Get the right download
 
-Use your distribution's package manager to install:
+Local bundles are named `suchi-VERSION-local-OS-ARCH.tar.gz`. Choose `linux`
+for Linux or `darwin` for macOS, and `arm64` for Apple Silicon/ARM or `amd64`
+for Intel/AMD. They contain Suchi, its installer, and launchers—not document
+tools or a bundled model. You do not need Go or Docker to use a bundle.
 
-- Bash, systemd with a working user manager, and standard GNU shell utilities.
-- Zenity and `xdg-utils` for the setup dialog and browser launcher.
-- qpdf, Poppler (`pdftotext`, `pdftoppm`, `pdfinfo`), Tesseract and its English
-  language data.
-- ImageMagick (`magick` or `convert`) with PDF writing allowed.
+Verify its SHA-256 file against the trusted download source, then extract the
+whole archive. A checksum detects damage; it does not replace publisher
+verification or macOS code signing.
 
-The service searches `/usr/local/bin:/usr/bin:/bin`, not your shell's PATH.
-The installer checks these helpers and tries an actual image-to-PDF conversion.
-Some distributions disable PDF writing in ImageMagick's security policy; the
-installer stops with an explanation without changing that system-wide policy.
-Tools are not downloaded or installed by Suchi. Office/EPUB extraction needs
-AnyDoc; other optional formats need their own [format dependencies](/formats).
+## Install on Linux
 
-From a checkout containing this installer:
+Use a graphical Linux session with systemd's user manager. Open `Install.sh`
+from the extracted folder (or run `bash ./Install.sh` there). **Check your
+computer** shows each required tool and whether it is ready, missing, or needs
+attention. Installed tools can still need attention—for example, missing
+English OCR data or an image converter blocked from creating PDFs. Follow the
+manual package guidance, then choose **Check again**. Continue when the checks
+pass; choose whether Suchi should start at login, install, then **Open Suchi**.
+Login startup is off by default on a new installation.
 
-```sh
-make build
-./deploy/local-linux/install.sh ./dist/suchi
-```
-
-Do not run the installer with `sudo`. It installs for the current desktop
-user. Open **Suchi** from your application menu after installation. If port
-8000 is already occupied, choose another unused port at installation:
-
-```sh
-./deploy/local-linux/install.sh ./dist/suchi --port 8001
-```
-
-There are no hosts-file changes. The browser connects to `127.0.0.1`, and the
-service binds only to loopback. Other computers cannot connect to it.
-
-## First launch and everyday use
-
-On first launch, a dialog displays a one-time setup token. Copy it, choose
-**Open Suchi**, then paste it into the browser's setup form and create your
-administrator email and password. Cancelling the dialog leaves the browser
-closed. Suchi
-then offers its usual filing-tree and archive setup. The token is not a login
-password and is removed after setup. If it expires, launch Suchi again to see
-the current token after retrying setup.
-
-Subsequent launches open the existing archive. Closing a browser tab does not
-stop Suchi: email intake and document processing continue while the service
-runs. They cannot run while the computer is asleep or shut down. The next
-start resumes persisted work and mailbox polling.
-
-Starting at login is optional:
+Suchi guides you through missing tools; it never installs system packages for
+you. For Debian/Ubuntu, the prerequisite command is:
 
 ```sh
-systemctl --user enable suchi-local.service
+sudo apt install zenity xdg-utils qpdf poppler-utils tesseract-ocr tesseract-ocr-eng imagemagick
 ```
 
-To turn that off, use `systemctl --user disable suchi-local.service`. To stop
-the running archive, use `systemctl --user stop suchi-local.service`. Opening
-Suchi from the menu starts it again. This is a user service, not an always-on
-server; the installer does not enable systemd lingering.
+The installer also provides Fedora and Arch package guidance. It checks English
+OCR data and tries image-to-PDF conversion, not just executable names. Some
+distributions disallow ImageMagick PDF writes; installation reports that policy
+instead of changing it. Review your distribution's policy before proceeding.
 
-## Where your archive lives
+Run the Suchi installer as your desktop user, **without sudo**. Only your
+package manager needs elevated privileges. The service finds document tools
+in `/usr/local/bin:/usr/bin:/bin`.
 
-With the default Linux directory layout:
+## Install on macOS
 
-| Location | Contents |
-| --- | --- |
-| `~/.local/share/suchi-local/archive/` | Database, immutable documents, derived files, and encryption keys |
-| `~/.local/share/suchi-local/program/` | Installed executable and launcher |
-| `~/.config/suchi-local/local-install.toml` | Local installation configuration |
-
-The installer honors `XDG_DATA_HOME` and `XDG_CONFIG_HOME`. Archive and
-configuration directories are private to your OS user. Program files are
-separate so replacing the executable does not replace the archive. This
-installation does not adopt `/tmp/suchi-dev` or a server's existing database.
-
-Before an update, stop the service and back up the **entire archive directory**
-plus the configuration. Then rerun the installer with the verified new executable.
-It preserves the previous port unless `--port` is supplied, login-startup
-preference, and configuration. Open Suchi again afterward. The installer stops
-a running service before replacing its executable and restarts it only if it
-was running. Use the same XDG directory settings for install, update, and uninstall.
-Keep the service stopped while copying a backup; a database snapshot alone
-does not contain your documents or encryption keys. See
-[Backup and restore](/backup-restore) before storing important documents.
-Do not put the live archive in a file-sync folder such as Dropbox or OneDrive.
-
-Uninstall with:
+Open `Install.command` from the extracted folder. **Check your computer** shows
+ready tools and anything missing or needing attention, even if every check
+passes. It offers **Check again** after you install missing prerequisites.
+If you already use [Homebrew](https://brew.sh), run:
 
 ```sh
-./deploy/local-linux/install.sh --uninstall
+brew install qpdf poppler tesseract imagemagick
 ```
 
-An installed copy is also available at
-`~/.local/share/suchi-local/program/install.sh`, so the source checkout is not
-needed to uninstall. Paths with spaces are supported; paths containing quoting
-or escaping characters such as `%`, `$`, quotes, or newlines are rejected.
+The installer never runs this command or installs Homebrew automatically.
+Homebrew's [Tesseract package](https://formulae.brew.sh/formula/tesseract)
+includes English OCR data; additional languages need `tesseract-lang`.
+The service searches standard Apple Silicon and Intel Homebrew locations.
 
-Uninstall removes the service, application entry, and installed program files.
-It **keeps the archive and configuration**, including document bytes and keys.
-Reinstalling uses those retained files.
+Choose **Only when opened** or **Start at login**. Installation adds **Suchi**
+and **Suchi Settings** to your user Applications folder. Choose **Open Suchi**
+when installation finishes. Suchi uses a per-user LaunchAgent, not a privileged
+system daemon. Reopening the application reuses the running archive.
+
+## First launch
+
+A native dialog shows your one-time setup token. Copy it, choose **Open Suchi**,
+then paste it into the browser form and create your administrator email and
+password. Suchi then offers its filing-tree and archive setup.
+
+The token is never put into a browser URL or automatically copied to the
+clipboard. It is removed after setup and is not your login password. If it
+expires, retrying setup replaces it; open Suchi again to see the new token.
+Cancelling the dialog leaves the browser closed.
+
+The service binds only to `127.0.0.1`. No hosts-file changes, reverse proxy,
+domain, or firewall exception is needed. The launcher verifies that Suchi has
+started before opening the browser; a different application using the port
+does not count as a successful start. Normal authentication remains required.
+
+## Everyday controls
+
+On Linux, right-click Suchi's application shortcut for **Settings** or **Stop**.
+If your desktop does not expose shortcut actions, run the installed
+`program/launch.sh --settings`. On macOS, open **Suchi Settings**.
+
+Local settings let you open the archive, change startup at login, stop Suchi,
+or uninstall. Document preferences remain in the browser's Settings.
+Closing a browser tab does not stop intake or processing. Stopping Suchi pauses
+them until you open it again or it starts at your next login.
+
+While the computer sleeps or is shut down, it cannot process documents or poll
+mail. The next start resumes persisted work and mailbox polling. The Linux
+installer does not enable systemd lingering after logout.
+
+## Storage, updates, and uninstall
+
+| Purpose | Linux default | macOS |
+| --- | --- | --- |
+| Archive, database, keys | `~/.local/share/suchi-local/archive/` | `~/Library/Application Support/Suchi/archive/` |
+| Program and launchers | `~/.local/share/suchi-local/program/` | `~/Library/Application Support/Suchi/program/` |
+| Configuration | `~/.config/suchi-local/local-install.toml` | `~/Library/Application Support/Suchi/config/local-install.toml` |
+
+These directories are private to your OS user. Linux honors `XDG_DATA_HOME`
+and `XDG_CONFIG_HOME`; keep the same values for install, update, and uninstall.
+Neither installer adopts a development or server database. Paths with spaces
+work; paths with unsupported escaping characters are rejected explicitly.
+
+Before updating, stop Suchi and back up the **entire archive directory plus its
+configuration**. Keep it stopped while copying. Then run the new installer.
+Updates preserve documents, keys, configuration, port, and login preference
+unless you explicitly change an option. A running service is stopped before
+its executable is replaced. There is no background updater or automatic
+rollback across database migrations.
+
+**Uninstall Suchi** asks for confirmation, stops the application, and removes
+its managed program, launchers, and service. It **keeps your archive and
+configuration**, including keys. Reinstalling reopens them. Deleting the app
+icon alone is not the uninstall procedure.
+
+Local storage is not a backup. Database snapshots alone do not contain your
+documents and keys; follow [Backup and restore](/backup-restore). Keep the live
+archive out of Dropbox, OneDrive, iCloud Drive, and similar file-sync folders.
 
 ## Limits and troubleshooting
 
-- Share links and **Open on my phone** still use the installation's public
-  URL. A loopback address cannot be reached from another device. This installer
-  does not publish your archive or create a tunnel.
-- Optional AI and mail connections require the same explicit configuration
-  as a server installation. Installing locally does not turn them on.
-- Native parsers run as your OS user. Their timeouts and output limits are
-  not an OS security sandbox. Local installation does not isolate untrusted
-  document parsing from your other files.
-- OCR requires installed language data. Presence of a parser executable is
-  not a promise that every format, codec, or distribution policy will work.
+- Share links and **Open on my phone** use this installation's URL. Loopback
+  links cannot be reached from another device. The installer does not expose
+  Suchi to the LAN or create a tunnel.
+- Models, email, and other integrations remain opt-in. The service does not
+  inherit their credentials from your shell.
+- The required tools cover PDFs, scanned PDFs, common images, text, and email.
+  Office/EPUB extraction needs AnyDoc; see [Supported file types](/formats) for
+  optional helpers and codec limits.
+- Parsers run as your OS user. Timeouts and output limits are **not OS-level
+  isolation** from your other files. This is not a sandbox for hostile documents.
 
-If service startup fails, the dialog reports the error instead of opening a
-browser against an unready service. Inspect the service with:
+Startup errors appear in a dialog. Linux logs are available with
+`journalctl --user -u suchi-local.service`; macOS logs are in
+`~/Library/Application Support/Suchi/runtime/server.log`.
+
+To select another unused port, run the extracted installer's command-line path:
 
 ```sh
-systemctl --user status suchi-local.service
-journalctl --user -u suchi-local.service -n 50
+./install.sh ./suchi --port 8001
 ```
 
-## Remaining platform work
-
-The Linux preview proves the per-user lifecycle before adding consumer
-packages. Signed macOS packaging with a LaunchAgent and Windows installation
-with a native login task still need actual OS testing, including parser
-dependencies, subprocess cancellation, upgrades, uninstall, and complete
-restore. Cross-compiling an executable alone does not establish that support.
-Neither platform should need a second application UI or a hosted service.
+Developers can build from this checkout with `make build`, then use
+`deploy/local-linux/install.sh ./dist/suchi` or
+`deploy/local-macos/install.sh ./dist/suchi`. The platform READMEs describe
+verification and the remaining native acceptance checks.

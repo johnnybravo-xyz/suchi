@@ -123,8 +123,8 @@ server, including one reached by the mobile app, must use HTTPS and pin the
 selected release by its published image digest.
 
 Want an archive on your own computer without Docker or hosting? The
-[local Linux installation preview](docs/local-install.mdx) adds a per-user
-service and application launcher from a source checkout.
+[local installation preview](docs/local-install.mdx) adds per-user services
+and application launchers for Linux and macOS, with guided document-tool setup.
 
 ## Images
 

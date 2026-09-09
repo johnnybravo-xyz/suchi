@@ -13,6 +13,7 @@ server exposed to the mobile app.
 | [`compose.yaml`](../compose.yaml) | Minimal single-container Compose deployment. It binds to loopback by default; start here when you want editable mounts, networks, or image pins. |
 | [`systemd/`](systemd/suchi.service) | Unit file for a bare-binary install on a Linux host. Runs suchi as an unprivileged user with the usual defense-in-depth sandboxing. |
 | [`local-linux/`](local-linux/) | Per-user Linux desktop preview: loopback-only service, application launcher, and data-preserving uninstall. |
+| [`local-macos/`](local-macos/) | Per-user macOS preview: LaunchAgent, Suchi and Suchi Settings apps, and guided prerequisite setup. |
 | [`caddy/`](caddy/Caddyfile) | Reverse-proxy snippet for Caddy. Auto-TLS via Let's Encrypt when the site block uses a real hostname. |
 | [`nginx/`](nginx/suchi.conf) | Server block for nginx. Assumes certificates already exist at the paths shown — provision them however you already do. |
 | [`traefik/`](traefik/) | Dynamic-config snippet for Traefik. Assumes an existing `websecure` entrypoint and cert resolver. |
