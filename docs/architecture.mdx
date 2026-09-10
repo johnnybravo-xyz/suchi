@@ -127,8 +127,9 @@ flags weakening security, or web-app changes are involved. Missing browsers
 prompt for a new choice. Local Settings owns this preference; updates preserve
 it and uninstall removes it.
 
-`Install.sh` on Linux and `Install.command` on macOS guide prerequisite setup
-and then invoke their command-line installer. The dependency step and CLI use
+Each platform's `install.sh` opens guided setup without arguments and handles
+command-line installation when arguments are supplied. Guided setup invokes
+that same script in a fresh process for installation. The dependency step and CLI use
 the same probes: executable availability, English OCR data, and actual
 image-to-PDF output. Native dialogs distinguish ready tools, missing tools, and
 installed tools needing attention. Package commands are guidance, never run

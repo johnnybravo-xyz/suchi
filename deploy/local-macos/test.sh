@@ -197,9 +197,28 @@ main --uninstall > "$test_dir/uninstall-output"
 [[ -f $archive/keep && -f $config && -f $program/keep && ! -e $runtime/setup-token ]]
 grep -q 'were kept' "$test_dir/uninstall-output"
 
+# With no bundled binary, the actual no-argument entrypoint opens its chooser.
+mkdir "$test_dir/entrypoint"
+cp "$scripts/install.sh" "$scripts/common.sh" "$test_dir/entrypoint/"
+osascript() {
+    local script
+    script=$(cat)
+    printf '%s\n' "$script" >> "$dialog"
+    return 1
+}
+export dialog browser
+export -f osascript open
+rm -f "$browser" "$dialog"
+/bin/bash "$test_dir/entrypoint/install.sh" --help > "$test_dir/help-output"
+grep -q 'Run without arguments for guided setup' "$test_dir/help-output"
+[[ ! -e $dialog && ! -e $browser ]]
+/bin/bash "$test_dir/entrypoint/install.sh" > "$test_dir/gui-output" 2>&1
+grep -q 'choose file' "$dialog"
+[[ ! -e $browser && ! -e $loaded_job ]]
+
 if [[ $native_os == Darwin ]]; then
     # Compile each actual UI script without showing a dialog in CI.
-    for source_file in launch.sh settings.sh Install.command; do
+    for source_file in launch.sh settings.sh install.sh; do
         awk -v prefix="$test_dir/$source_file-" '/<<.APPLESCRIPT./ {n++; capture=1; next} /^APPLESCRIPT$/ {capture=0; next} capture {print > (prefix n ".applescript")}' "$scripts/$source_file"
     done
     for source_file in "$test_dir"/*.applescript; do /usr/bin/osacompile -o "$source_file.scpt" "$source_file" >/dev/null; done

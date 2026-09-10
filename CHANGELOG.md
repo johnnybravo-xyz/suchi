@@ -63,6 +63,8 @@ Notable user-visible changes to Suchi are recorded here.
   keeping the server bound to loopback, without DNS or hosts-file changes.
 - Linux can open Suchi in an installed Chromium or Chrome app window, with a
   remembered native choice and a normal default-browser tab option.
+- Local installers use one lowercase `install.sh` per platform for guided and
+  command-line setup, avoiding filename collisions on case-insensitive disks.
 - macOS launchers recognize their own service when launchd reports different
   folder casing, and no longer show startup errors for an expected absent
   service under the system Bash.

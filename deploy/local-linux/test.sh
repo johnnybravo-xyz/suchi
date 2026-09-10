@@ -260,11 +260,11 @@ grep -q 'were kept' "$dialog"
 # Exercise the same GUI and CLI files from an extracted package, without a checkout.
 package=$test_dir/package
 mkdir "$package"
-cp "$scripts/Install.sh" "$scripts/install.sh" "$scripts/launch.sh" "$scripts/../../core/ui/assets/brand/suchi-tile.svg" "$package/"
+cp "$scripts/install.sh" "$scripts/launch.sh" "$scripts/../../core/ui/assets/brand/suchi-tile.svg" "$package/"
 cp "$test_dir/suchi" "$package/suchi"
 (
-    # shellcheck source=deploy/local-linux/Install.sh
-    source "$package/Install.sh"
+    # shellcheck source=deploy/local-linux/install.sh
+    source "$package/install.sh"
     # The GUI runs a separate shell, so fake the external tool boundaries rather
     # than replacing its prerequisite checks with a sourced function override.
     # shellcheck disable=SC2329
@@ -315,6 +315,7 @@ cp "$test_dir/suchi" "$package/suchi"
     rm -- "$dependency_fault"
     dependency_cancel=0
     list_cancel=1
+    bash "$package/install.sh"
     gui_main
     [[ ! -s $commands && ! -d $installed_program ]]
     list_cancel=0

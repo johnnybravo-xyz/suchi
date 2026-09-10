@@ -21,7 +21,9 @@ and Intel Homebrew installations. Other formats need their own
 [format dependencies](https://docs.suchi.page/formats), including AnyDoc for
 Office and EPUB extraction.
 
-In an extracted, verified local-install bundle, double-click **Install.command**.
+In an extracted, verified local-install bundle, open Terminal in that folder
+and run `bash ./install.sh` to open guided setup. Supplying a binary path or
+flags uses command-line installation instead.
 The **Check your computer** step always shows the installed and missing
 requirements. PDF tools, scanned-text recognition, image-to-PDF conversion,
 and native macOS integration each report **Ready**, **Missing**, or **Needs
@@ -125,7 +127,7 @@ file-sync folder.
 
 ```sh
 bash deploy/local-macos/test.sh
-shellcheck deploy/local-macos/*.sh deploy/local-macos/Install.command
+shellcheck deploy/local-macos/*.sh
 make build
 bash deploy/local-macos/test-service.sh ./dist/suchi
 ```
@@ -143,7 +145,7 @@ private setup-token delivery, and graceful stop/restart. It requires an active
 macOS desktop login session but shows no dialogs. Cleanup removes only that
 test job and its temporary files, never an installed Suchi service.
 
-Native desktop acceptance still needs Finder installation, first-run dialog,
+Native desktop acceptance still needs guided installation, first-run dialog,
 repeated launch, sleep/wake, login/reboot, update, stop, complete restore, and
 data-preserving uninstall on a real Mac. Cross-compilation and mocked tests
 alone do not establish those behaviors.

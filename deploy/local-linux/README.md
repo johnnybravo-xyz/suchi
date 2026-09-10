@@ -1,11 +1,11 @@
 # Suchi on Linux
 
-Extract the complete native Linux package and run `./Install.sh` from your
+Extract the complete native Linux package and run `./install.sh` from your
 desktop session. **Check your computer** shows which required tools are ready,
 missing, or need attention, and explains what each does. You can continue only
 when the checks pass. The installer then offers optional startup at login and
 opens Suchi in your browser. If your file manager displays shell scripts as text,
-open a terminal in the extracted folder and run `./Install.sh` there.
+open a terminal in the extracted folder and run `bash ./install.sh` there.
 
 Suchi installs only for your user. Do not run the installer with `sudo`.
 This installer requires a graphical Linux session with a systemd user manager;
@@ -54,7 +54,7 @@ in the [supported formats guide](https://docs.suchi.page/formats).
   the current process.
   If your desktop does not expose shortcut actions, run
   `~/.local/share/suchi-local/program/launch.sh --settings`.
-- To update, extract the next package and run its `Install.sh`. The existing
+- To update, extract the next package and run its `install.sh`. The existing
   archive and configuration are preserved. The login checkbox reflects the
   current preference; changing it changes that preference.
 - Uninstall asks for confirmation and removes only the program/service/shortcut.
@@ -84,9 +84,9 @@ phone access are not remotely reachable from this loopback-only installation.
 
 ## Ownership
 
-- `Install.sh` is the native-dialog entry point for an extracted package;
-  from a checkout it uses `dist/suchi` after `make build`.
-- `install.sh BINARY [--port N] [--start-at-login | --no-start-at-login]` installs the per-user
+- `install.sh` without arguments opens guided setup; from a checkout it uses
+  `dist/suchi` after `make build`.
+  `install.sh BINARY [--port N] [--start-at-login | --no-start-at-login]` installs the per-user
   program, config, systemd unit, and Desktop Entry. `--uninstall` stops and
   removes only the managed application files, preserving archive and config.
 - `launch.sh [--settings | --stop]` owns local controls, waits for systemd

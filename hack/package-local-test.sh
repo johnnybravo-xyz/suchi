@@ -31,11 +31,12 @@ for target in linux/amd64 darwin/arm64; do
     [[ $(< "$unpacked/VERSION") == "$version" ]]
     [[ -x $unpacked/install.sh && -x $unpacked/launch.sh && -s $unpacked/README.md ]]
     if [[ $target_os == darwin ]]; then
+        cmp "$root/deploy/local-macos/install.sh" "$unpacked/install.sh"
         cmp "$root/deploy/local-macos/icon.png" "$unpacked/icon.png"
-        [[ -x $unpacked/Install.command && -x $unpacked/common.sh && -x $unpacked/settings.sh ]]
+        [[ -x $unpacked/common.sh && -x $unpacked/settings.sh ]]
     else
+        cmp "$root/deploy/local-linux/install.sh" "$unpacked/install.sh"
         cmp "$root/core/ui/assets/brand/suchi-tile.svg" "$unpacked/suchi-tile.svg"
-        [[ -x $unpacked/Install.sh ]]
     fi
     if bash "$package" "$test_dir/binary" "$version" "$target_os" "$target_arch" "$output" >/dev/null 2>&1; then
         printf 'Overwrote an existing package.\n' >&2; exit 1

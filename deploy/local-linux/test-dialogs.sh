@@ -23,13 +23,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 prefix=Suchi-test-$$
-cp "$scripts/Install.sh" "$scripts/install.sh" "$test_dir/"
+cp "$scripts/install.sh" "$test_dir/"
 printf '#!/bin/sh\nexit 0\n' > "$test_dir/suchi"
 chmod +x "$test_dir/suchi"
 export XDG_DATA_HOME=$test_dir/data
 # The real dialogs run, but installation and service access are forbidden.
-# shellcheck source=deploy/local-linux/Install.sh
-source "$test_dir/Install.sh"
+# shellcheck source=deploy/local-linux/install.sh
+source "$test_dir/install.sh"
 systemctl() { printf 'Unexpected service access\n' >> "$test_dir/unsafe"; return 1; }
 bash() { printf 'Unexpected installation\n' >> "$test_dir/unsafe"; return 1; }
 dependency_report() {

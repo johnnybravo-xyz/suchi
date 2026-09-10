@@ -25,10 +25,9 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 scripts=$root/deploy/local-$platform
 files=(install.sh launch.sh)
 if [[ $target_os == darwin ]]; then
-    files+=(common.sh settings.sh Install.command)
+    files+=(common.sh settings.sh)
     icon=$scripts/icon.png
 else
-    files+=(Install.sh)
     icon=$root/core/ui/assets/brand/suchi-tile.svg
 fi
 for file in "${files[@]}" README.md; do

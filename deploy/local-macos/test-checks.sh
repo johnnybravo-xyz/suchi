@@ -39,9 +39,7 @@ rm "$helpers/ditto"
 if report=$(check_dependencies "$helpers"); then printf 'Accepted missing native helper\n' >&2; exit 1; fi
 [[ $report == *'Missing — macOS integration'* && $report == *'Missing system tools: ditto'* && $report == *'Installed: launchctl osascript'* ]]
 
-# Exercise the Finder flow without opening dialogs or invoking a real install.
-# shellcheck source=deploy/local-macos/Install.command
-source "$scripts/Install.command"
+# Exercise guided setup without opening dialogs or invoking a real install.
 script_dir=$test_dir/bundle
 mkdir "$script_dir"
 printf '#!/bin/sh\nexit 0\n' > "$script_dir/suchi"
@@ -85,10 +83,10 @@ for ui_case in ready cancel recover fail_install; do
     [[ $ui_case != cancel ]] || probe_case=broken
     [[ $ui_case != recover ]] || probe_case=recover
     if [[ $ui_case == fail_install ]]; then
-        if install_from_finder >/dev/null 2>&1; then printf 'Reported a failed installer as successful\n' >&2; exit 1; fi
+        if guided_install >/dev/null 2>&1; then printf 'Reported a failed installer as successful\n' >&2; exit 1; fi
         grep -q 'simulated install failure' "$test_dir/install-error"
     else
-        install_from_finder >/dev/null
+        guided_install >/dev/null
     fi
     expected=1
     [[ $ui_case != recover ]] || expected=2
@@ -98,6 +96,6 @@ mkdir -p "$test_dir/user/Library/Application Support/Suchi/program"
 printf '1\n' > "$test_dir/user/Library/Application Support/Suchi/program/start-at-login"
 ui_case=ready
 probe_case=ready
-install_from_finder >/dev/null
+guided_install >/dev/null
 tail -n 1 "$test_dir/start-dialog" | grep -q 'Start at login'
-printf 'macOS dependency reports and Finder checks passed.\n'
+printf 'macOS dependency reports and guided setup checks passed.\n'
