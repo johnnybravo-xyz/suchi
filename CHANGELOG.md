@@ -59,6 +59,8 @@ Notable user-visible changes to Suchi are recorded here.
   and uninstall that preserves the archive.
 - Linux installation dialogs keep prerequisite guidance and controls within
   the window, including when tools are missing or need attention.
+- macOS installation no longer collides with its staged executable on
+  case-insensitive filesystems.
 
 ## [0.2.1] - 2026-10-10
 

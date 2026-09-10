@@ -18,7 +18,7 @@ cleanup() {
         kill "$server_pid" 2>/dev/null || true
         wait "$server_pid" 2>/dev/null || true
     fi
-    if (( result != 0 )); then
+    if (( result != 0 )) && [[ -f $smoke_dir/server.log ]]; then
         tail -n 40 "$smoke_dir/server.log" >&2 || true
     fi
     rm -rf -- "$smoke_dir"
@@ -31,7 +31,7 @@ umask 077
 mkdir -m 700 "$smoke_dir/archive" "$smoke_dir/runtime"
 printf '\n' > "$smoke_dir/config.toml"
 font=DejaVu-Sans
-[[ $(uname -s) != Darwin ]] || font=Arial
+[[ $(uname -s) != Darwin ]] || font=/System/Library/Fonts/Supplemental/Arial.ttf
 "$converter" -size 1600x900 xc:white -font "$font" -fill black -pointsize 56 \
     -gravity NorthWest -annotate +80+100 'LOCAL ARCHIVE RECEIPT' \
     -annotate +80+220 'Coffee beans purchase' -annotate +80+340 'Total 425.00' \

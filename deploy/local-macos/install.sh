@@ -207,9 +207,10 @@ main() (
         sips -z "$((size*2))" "$((size*2))" "$staging/icon.png" --out "$staging/Suchi.iconset/icon_${size}x${size}@2x.png" >/dev/null || return 1
     done
     iconutil -c icns -o "$staging/Suchi.icns" "$staging/Suchi.iconset" || return 1
-    for bundle in Suchi Settings; do mkdir -p "$staging/$bundle/Contents/MacOS" "$staging/$bundle/Contents/Resources" || return 1; done
-    write_app "$staging/Suchi" Suchi launch "$program" "$user_home" "$staging/Suchi.icns" || return 1
-    write_app "$staging/Settings" 'Suchi Settings' settings "$program" "$user_home" "$staging/Suchi.icns" || return 1
+    # App directories must not differ from the suchi executable only by case.
+    for bundle in Suchi.app 'Suchi Settings.app'; do mkdir -p "$staging/$bundle/Contents/MacOS" "$staging/$bundle/Contents/Resources" || return 1; done
+    write_app "$staging/Suchi.app" Suchi launch "$program" "$user_home" "$staging/Suchi.icns" || return 1
+    write_app "$staging/Suchi Settings.app" 'Suchi Settings' settings "$program" "$user_home" "$staging/Suchi.icns" || return 1
     plist=$staging/page.suchi.local.plist
     printf '%s\n' \
         '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -254,8 +255,8 @@ main() (
         rm -f "$login_plist" || return 1
     fi
     for bundle in "$app" "$settings_app"; do
-        local staged_app=$staging/Suchi
-        [[ $bundle != "$settings_app" ]] || staged_app=$staging/Settings
+        local staged_app=$staging/Suchi.app
+        [[ $bundle != "$settings_app" ]] || staged_app=$staging/Suchi\ Settings.app
         mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" || return 1
         chmod 700 "$bundle" "$bundle/Contents" "$bundle/Contents/MacOS" "$bundle/Contents/Resources" || return 1
         for path in Info.plist MacOS/Suchi Resources/Suchi.icns; do mv -f "$staged_app/Contents/$path" "$bundle/Contents/$path" || return 1; done
