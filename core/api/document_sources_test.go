@@ -171,3 +171,37 @@ func TestDocumentSourceUsesCurrentMailboxNameAndKeepsFallback(t *testing.T) {
 		t.Fatalf("deleted-account fallback=%q, want Old mailbox name", got)
 	}
 }
+
+func TestDocumentDetailEncryptionState(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	seedUploadCategory(t, d)
+	if _, err := d.Write.Exec(`INSERT INTO documents
+		(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (1, 1, 'original', 1, 'Statement', 1, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: d, Authz: authz.ACLAuthorizer{DB: d}, Log: slog.Default()}
+	for _, state := range []string{"", "encrypted", "decrypted"} {
+		t.Run(state, func(t *testing.T) {
+			if _, err := d.Write.Exec("UPDATE documents SET encryption_state = NULLIF(?, '') WHERE id = 1", state); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/documents/1", nil)
+			req.SetPathValue("id", "1")
+			req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}))
+			rec := httptest.NewRecorder()
+			s.GetDocument(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var detail DocumentDetail
+			if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail.EncryptionState != state {
+				t.Fatalf("encryption_state=%q, want %q", detail.EncryptionState, state)
+			}
+		})
+	}
+}

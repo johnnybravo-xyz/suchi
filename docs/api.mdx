@@ -323,6 +323,10 @@ the undelete flow. `owner_id` identifies the document owner; trashed documents
 also include `deletes_at`, exactly 30 days after `trashed_at`. Live and restored
 documents omit both deletion timestamps.
 
+`encryption_state` is `encrypted` when a password is still needed, or
+`decrypted` after a successful manual or automatic password unlock. It is
+omitted when no password unlock is recorded. The original blob is preserved.
+
 Authenticated owners and administrators can preview and download trashed
 documents until permanent deletion. Other ACL readers
 cannot fetch trashed bytes, and public share links never serve trashed documents.

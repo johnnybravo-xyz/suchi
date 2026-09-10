@@ -68,6 +68,8 @@ source version line when no release version was injected.
 component. There are no route re-export wrappers. One native Rolldown group
 combines small document controls, link display, clipboard/query helpers, and
 upload-list refresh state; other shared dependencies use normal chunking.
+The shared password-unlock indicator belongs to this group and reads the
+existing encryption state exposed by document list and detail responses.
 The QR encoder remains a separate on-demand import. My account defers archive configuration and loads
 mailbox code only for members who can manage mailboxes. Keep the shell at or
 below 35 KB gzip and remeasure the actual route dependency set after UI changes.

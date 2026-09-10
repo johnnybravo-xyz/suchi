@@ -538,16 +538,17 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 // content lands under `content`, correspondent list mirrors the multi-
 // party junction, tags are slugs. Nil-safe: empty slices, not null.
 type DocumentDetail struct {
-	ID           int64  `json:"id"`
-	OwnerID      int64  `json:"owner_id"`
-	Title        string `json:"title"`
-	Content      string `json:"content"`
-	OriginalBlob string `json:"original_blob"`
-	OriginalSize int64  `json:"original_size"`
-	ArchiveBlob  string `json:"archive_blob,omitempty"`
-	ArchiveSize  int64  `json:"archive_size,omitempty"`
-	MIME         string `json:"mime_type"`
-	JDCategoryID int64  `json:"jd_category_id"`
+	EncryptionState string `json:"encryption_state,omitempty"`
+	ID              int64  `json:"id"`
+	OwnerID         int64  `json:"owner_id"`
+	Title           string `json:"title"`
+	Content         string `json:"content"`
+	OriginalBlob    string `json:"original_blob"`
+	OriginalSize    int64  `json:"original_size"`
+	ArchiveBlob     string `json:"archive_blob,omitempty"`
+	ArchiveSize     int64  `json:"archive_size,omitempty"`
+	MIME            string `json:"mime_type"`
+	JDCategoryID    int64  `json:"jd_category_id"`
 	// Denormalized JD fields — saves every JSON consumer a round-
 	// trip to render a filing chip. The UI already does this join
 	// inline; the JSON surface catches up here. jd_area_code is
@@ -696,7 +697,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       d.created_at, COALESCE(d.added_at, d.created_at), d.updated_at, d.trashed_at,
 		       jc.code, jc.name, ja.name,
 		       d.languages, d.languages_locked,
-		       d.source_mtime
+		       d.source_mtime, COALESCE(d.encryption_state, '')
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
@@ -705,7 +706,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
-		&sourceMTime)
+		&sourceMTime, &d.EncryptionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return

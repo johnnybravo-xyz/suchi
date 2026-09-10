@@ -23,7 +23,7 @@ export default defineConfig({
         codeSplitting: {
           groups: [{
             name: 'document-controls',
-            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|LinkQR)\.svelte(?:\?|$)|clipboard\.js$|queryAssist\.js$|upload_bus\.svelte\.js$)/,
+            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|LinkQR|DocumentUnlockStatus)\.svelte(?:\?|$)|clipboard\.js$|queryAssist\.js$|upload_bus\.svelte\.js$)/,
             // Shared controls stay lazy; their shell dependencies keep their existing owner.
             includeDependenciesRecursively: false,
           }],
