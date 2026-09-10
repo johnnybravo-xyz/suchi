@@ -98,12 +98,19 @@ shellcheck deploy/local-linux/*.sh hack/smoke-local-install.sh
 make build
 bash deploy/local-linux/test.sh ./dist/suchi
 make smoke-local-install
+# Optional: actual native dialogs in an isolated X display.
+xvfb-run -a bash deploy/local-linux/test-dialogs.sh
 ```
 
 `make check` and CI include the mocked lifecycle check, including GUI cancel,
 login controls, stop, confirmed uninstall, and extracted-package installation.
 When available,
 `systemd-analyze` also validates a generated unit with spaces in its paths.
+
+The optional dialog check needs Zenity, Xvfb and xdotool. It renders the actual
+dialogs with test dependency states and exercises the guide, retry, continue
+and cancellation paths, including window-width limits. It never installs
+Suchi or modifies a real service. The native Linux workflow runs this check.
 
 The native smoke requires a working Linux user manager, parsing tools,
 `curl`, `jq`, and ImageMagick's DejaVu-Sans font. It runs a uniquely named

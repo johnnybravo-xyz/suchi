@@ -6,9 +6,13 @@ fail() { printf 'suchi local: %s\n' "$*" >&2; return 1; }
 dependency_help() {
     printf '%s\n' \
         'Install the required packages using your distribution package manager:' \
-        '  Debian / Ubuntu: sudo apt install zenity xdg-utils qpdf poppler-utils tesseract-ocr tesseract-ocr-eng imagemagick' \
-        '  Fedora: sudo dnf install zenity xdg-utils qpdf poppler-utils tesseract tesseract-langpack-eng ImageMagick' \
-        '  Arch: sudo pacman -S zenity xdg-utils qpdf poppler tesseract tesseract-data-eng imagemagick' \
+        '' 'Debian / Ubuntu' \
+        'sudo apt install zenity xdg-utils qpdf poppler-utils tesseract-ocr tesseract-ocr-eng imagemagick' \
+        '' 'Fedora' \
+        'sudo dnf install zenity xdg-utils qpdf poppler-utils tesseract tesseract-langpack-eng ImageMagick' \
+        '' 'Arch' \
+        'sudo pacman -S zenity xdg-utils qpdf poppler tesseract tesseract-data-eng imagemagick' \
+        '' \
         'Run these commands yourself; Suchi never installs system packages.'
 }
 

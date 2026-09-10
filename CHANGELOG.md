@@ -57,6 +57,8 @@ Notable user-visible changes to Suchi are recorded here.
 - Linux and macOS local installation add per-user services, guided prerequisite
   checks, native launchers and local controls, private first-run token dialogs,
   and uninstall that preserves the archive.
+- Linux installation dialogs keep prerequisite guidance and controls within
+  the window, including when tools are missing or need attention.
 
 ## [0.2.1] - 2026-10-10
 

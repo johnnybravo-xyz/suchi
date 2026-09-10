@@ -292,8 +292,10 @@ AMD64 and ARM64. Each lane checks installer contracts, runs real PDF/image OCR,
 checks original downloads and authentication after restart, then uploads a
 bundle and its SHA-256 file as workflow artifacts. macOS also exercises a
 temporary, uniquely named launchd job; the runner needs a graphical login
-domain for that check. The workflow does not install a persistent desktop app,
-prove GUI/login behavior, sign macOS apps, or publish a release.
+domain for that check. Linux also renders native dependency and installation
+dialogs under Xvfb, testing width limits and navigation without installing an
+app. The workflow does not install a persistent desktop app, prove desktop
+login behavior, sign macOS apps, or publish a release.
 
 To package a locally built executable without running a workflow:
 

@@ -14,10 +14,10 @@ show_dependency_check() {
         rows=()
         while IFS=$'\t' read -r status tool purpose; do rows+=("$status" "$tool" "$purpose"); done <<< "$report"
         button='Check again'
-        message='Install missing tools or resolve the checks below, then choose Check again. The installation guide has commands you can run yourself. Suchi does not install packages or change system policy.'
+        message='Install missing tools or fix the checks below, then choose Check again.\nOpen Installation guide for commands you can run yourself.'
         if [[ $ready == 1 ]]; then
             button=Continue
-            message='Your computer has the tools Suchi needs for PDFs, images and English OCR. Continue to choose how Suchi starts.'
+            message='Your computer is ready for PDFs, images and English OCR.\nContinue to choose how Suchi starts.'
         fi
         choice='' result=0
         choice=$(zenity --list --title='Check your computer' --width=860 --height=530 \
@@ -25,7 +25,7 @@ show_dependency_check() {
             --ok-label="$button" --cancel-label='Cancel' --extra-button='Installation guide' "${rows[@]}") || result=$?
         if [[ $choice == 'Installation guide' ]]; then
             { dependency_help; printf '\nImageMagick must allow writing PDFs. If its check fails, review your distribution policy without broadly enabling PDF reading or unrelated delegates.\n\nAfter installing the tools, return to Check your computer and choose Check again.\n'; } |
-                zenity --text-info --title='Install document tools' --width=820 --height=400 --ok-label='Back to checks' || return 1
+                zenity --text-info --title='Install document tools' --width=820 --height=540 --ok-label='Back to checks' || return 1
         elif [[ $result != 0 ]]; then
             return 1
         elif [[ $ready == 1 ]]; then
@@ -52,7 +52,7 @@ gui_main() {
     program=${XDG_DATA_HOME:-$HOME/.local/share}/suchi-local/program
     if [[ -f $program/managed-by-suchi-local ]] && systemctl --user is-enabled --quiet suchi-local.service; then checked=TRUE; fi
     choice=$(zenity --list --checklist --title='Install Suchi' --width=620 --height=330 \
-        --text='Your document archive, on this computer.\n\nSuchi opens in your browser, listens only on this computer, and keeps your documents and keys in a private user folder. No Docker or hosting account is needed. System parsing tools must be installed first.\n\nUninstalling keeps your documents and keys.' \
+        --text='Your document archive, on this computer.\n\nSuchi opens in your browser and keeps your documents and keys\nin a private user folder. No Docker or hosting account is needed.\n\nUninstalling keeps your documents and keys.' \
         --column='Enable' --column='Option' --print-column=2 --ok-label='Install' \
         "$checked" 'Start Suchi when I log in') || return 0
     local options=(--no-start-at-login)

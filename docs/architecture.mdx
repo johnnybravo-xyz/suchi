@@ -163,8 +163,10 @@ authentication, search, and restart persistence on Linux or macOS without
 installing a service. `native-local.yml` runs native platform checks and
 `hack/package-local.sh` packages evaluation artifacts; see the
 [release guide](/release-process#local-installation-bundles).
-Dialog presentation and login/reboot behavior still need desktop acceptance
-testing; mocks and service-restart tests do not establish those behaviors.
+`deploy/local-linux/test-dialogs.sh` uses real Zenity under an isolated X display
+to check layout bounds and dependency-guide navigation with test reports.
+Desktop integration, login/reboot behavior, and macOS dialog presentation still
+need acceptance testing; mocks and service-restart tests do not establish them.
 
 ## From upload to usable document
 
