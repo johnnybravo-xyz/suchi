@@ -7,6 +7,7 @@
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
+  import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { createQueryAssistant } from '../lib/queryAssist.js'
   import { copyText } from '../lib/clipboard.js'
@@ -479,6 +480,7 @@
                    onchange={(e) => toggleSel(i, e)} aria-label="Select" />
             {#if d.jd_category_code}<span class="chip">{d.jd_category_code}</span>{/if}
             <span class="title">{d.title || `Document #${d.id}`}</span>
+            <DocumentUnlockStatus state={d.encryption_state} />
           </span>
           <span class="sub" style="padding:0 12px 10px">{fmtDate(d.created_at)}</span>
         </a>
@@ -496,6 +498,7 @@
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
         {#if d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_category_code}</span>{/if}
         <span class="title grow">{d.title || `Document #${d.id}`}</span>
+        <DocumentUnlockStatus state={d.encryption_state} />
         {#if d.tags?.length}
           {#each d.tags.slice(0, 3) as t}<span class="pill">{t}</span>{/each}
         {/if}

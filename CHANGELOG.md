@@ -12,6 +12,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Show a password-unlocked indicator in document lists, grids, and detail,
+  including documents automatically unlocked with saved passwords.
+
 - Edit tags directly on document detail, including documents with no tags.
 - Edit existing saved views in place, including their name, query, filters, and
   sharing, while preserving legacy filter scopes and exact research snapshots.

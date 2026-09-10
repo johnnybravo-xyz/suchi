@@ -6,6 +6,7 @@
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
   import Icon from '../lib/Icon.svelte'
+  import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
@@ -502,6 +503,10 @@
         {/if}
 
         <dl class="kv" style="margin-top:12px">
+          {#if doc.encryption_state === 'decrypted'}
+            <dt>Password</dt>
+            <dd><DocumentUnlockStatus state={doc.encryption_state} expanded /></dd>
+          {/if}
           <dt>Filed under</dt>
           <dd>
             {#if !trashed && jdCategories.length}

@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test'
 
+test('shows password-unlocked status in lists, grids and detail', async ({ page }) => {
+  await mockAPI(page, {
+    documents: [
+      { id: 42, title: 'Unlocked statement', encryption_state: 'decrypted' },
+      { id: 43, title: 'Ordinary document' },
+      { id: 44, title: 'Locked document', encryption_state: 'encrypted' },
+    ],
+    documentDetails: { 42: { document: { encryption_state: 'decrypted' } } },
+  })
+  await page.goto('/#/documents')
+  const status = page.getByRole('img', { name: 'Password unlocked', exact: true })
+  await expect(status).toHaveCount(1)
+  await expect(status).toHaveAttribute('title', /original remains password-protected/)
+  await page.getByRole('button', { name: 'Grid', exact: true }).click()
+  await expect(status).toHaveCount(1)
+  await page.getByRole('link').filter({ hasText: 'Unlocked statement' }).click()
+  await expect(status).toBeVisible()
+  await expect(page.getByText('Password unlocked', { exact: true })).toBeVisible()
+})
+
 test('clears account data and rejects late reads after signing in as another user', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 731,
