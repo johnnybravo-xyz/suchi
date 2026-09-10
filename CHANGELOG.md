@@ -7,9 +7,13 @@ Notable user-visible changes to Suchi are recorded here.
 ### Added
 
 - Edit tags directly on document detail, including documents with no tags.
+- Edit existing saved views in place, including their name, query, filters, and
+  sharing, while preserving legacy filter scopes and exact research snapshots.
 
 ### Changed
 
+- Saved-view rows use visible Edit and delete controls instead of a decorative
+  eye badge and a hover-only delete action.
 - Clarified which files are needed for a complete archive backup in Settings.
 - Clarified that local archive matching controls automatic filing and
   suggestions, not the Similar documents box.

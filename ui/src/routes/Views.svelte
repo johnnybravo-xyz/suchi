@@ -1,5 +1,5 @@
 <script>
-  import { listSavedViews, createSavedView, deleteSavedView,
+  import { listSavedViews, createSavedView, patchSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
   import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
@@ -13,7 +13,8 @@
   let loadError = $state('')
   let saving = $state(false)
   let saveError = $state('')
-  let createOpen = $state(false)
+  let editorOpen = $state(false)
+  let editing = $state(null)
   let startCreateHandled = $state(false)
   let nameInput = $state()
   let tags = $state([]), corrs = $state([]), types = $state([])
@@ -22,6 +23,13 @@
   let facetsError = $state('')
   let loadVersion = 0
   let nv = $state(emptyView())
+  const filterFields = {
+    tag: 'tags__id__in',
+    corr: 'correspondents__id__in',
+    type: 'document_type__id',
+    jd: 'jd_category_id',
+    sens: 'sensitivity',
+  }
 
   function emptyView() {
     return { name: '', q: '', tag: '', corr: '', type: '', jd: '', sens: '', dateFrom: '', dateTo: '', dateRole: '', ids: [], shared: false }
@@ -74,10 +82,26 @@
     return summary.length ? summary : ['All documents']
   }
 
-  function openCreate() {
+  function openCreate(q = '', ids = []) {
+    editing = null
+    nv = { ...emptyView(), q, ids }
+    openEditor()
+  }
+
+  function openEdit(view) {
+    if (view.owner_id) return
+    editing = view
+    nv = { ...emptyView(), name: view.name, q: view.filters.q || '', ids: view.filters.document_ids || [], shared: !!view.shared }
+    for (const [field, key] of Object.entries(filterFields)) {
+      nv[field] = String(view.filters[key] ?? '')
+    }
+    openEditor()
+  }
+
+  function openEditor() {
     if (!nv.ids.length) loadFacets()
     saveError = ''
-    createOpen = true
+    editorOpen = true
     queueMicrotask(() => nameInput?.focus())
   }
 
@@ -97,40 +121,65 @@
     return facetsPromise
   }
 
-  function closeCreate() {
+  function closeEditor() {
     if (saving) return
-    createOpen = false
+    editorOpen = false
+    editing = null
     saveError = ''
     nv = emptyView()
     if (startCreate) go('#/views')
   }
 
-  async function create(e) {
+  async function save(e) {
     e.preventDefault()
     if (!nv.name.trim() || saving) return
 
-    const query = nv.ids.length ? '' : canonicalSavedViewQuery(nv, {
-      tags,
-      correspondents: corrs,
-      types,
-      categories: filingCategories,
-    })
-    const filters = nv.ids.length ? { document_ids: nv.ids } : (query ? { q: query } : {})
+    const filters = editing ? { ...editing.filters } : {}
+    if (nv.ids.length) {
+      filters.document_ids = nv.ids
+    } else {
+      const draft = { ...nv }
+      // Keep untouched legacy filters, including multi-value OR scopes.
+      // Only changed selections join the rich query; ordering stays intact.
+      for (const [field, key] of Object.entries(filterFields)) {
+        if (String(filters[key] ?? '') === String(nv[field])) {
+          draft[field] = ''
+        } else {
+          delete filters[key]
+        }
+      }
+      const query = canonicalSavedViewQuery(draft, {
+        tags,
+        correspondents: corrs,
+        types,
+        categories: filingCategories,
+      })
+      if (query) filters.q = query
+      else delete filters.q
+    }
 
     saveError = ''
     saving = true
     try {
-      await createSavedView({
+      const body = {
         name: nv.name.trim(),
         filter_json: JSON.stringify(filters),
-        display: 'list',
-        position: views.filter((view) => !view.owner_id).length,
         shared: canShare && nv.shared,
-      })
+      }
+      if (editing) {
+        await patchSavedView(editing.id, body)
+      } else {
+        await createSavedView({
+          ...body,
+          display: 'list',
+          position: views.filter((view) => !view.owner_id).length,
+        })
+      }
+      notify?.(editing ? 'View updated' : 'View saved')
       nv = emptyView()
-      createOpen = false
+      editing = null
+      editorOpen = false
       if (startCreate) go('#/views')
-      notify?.('View saved')
       await load()
     } catch (ex) { saveError = ex.message || 'Could not save the view.' }
     finally { saving = false }
@@ -150,9 +199,7 @@
       startCreateHandled = false
     } else if (!startCreateHandled) {
       startCreateHandled = true
-      nv.q = createQuery
-      nv.ids = parseDocumentIDs(createDocumentIDs)
-      openCreate()
+      openCreate(createQuery, parseDocumentIDs(createDocumentIDs))
     }
   })
   load()
@@ -165,7 +212,7 @@
       <h2>Shortcuts into the archive</h2>
       <p>Keep the document filters you return to. Open a view to pick up exactly where you left off.</p>
     </div>
-    <button class="btn primary new-view" onclick={openCreate}>
+    <button class="btn primary new-view" onclick={() => openCreate()}>
       <Icon name="plus" size={15} /> New view
     </button>
   </header>
@@ -183,7 +230,6 @@
       <div class="view-list" aria-label="Loading saved views">
         {#each Array(3) as _}
           <div class="view-row loading-row">
-            <span class="view-mark skeleton-mark"></span>
             <div class="loading-copy">
               <div class="skel" style="width:38%"></div>
               <div class="skel" style="width:68%"></div>
@@ -199,7 +245,6 @@
       </div>
     {:else if views.length === 0}
       <div class="empty views-empty">
-        <span class="empty-mark"><Icon name="eye" size={25} /></span>
         <b>No saved views yet</b>
       </div>
     {:else}
@@ -207,7 +252,6 @@
         {#each views as v (v.id)}
           <div class="view-row" class:shared-view={!!v.owner_id}>
             <a class="view-link" href={href(v)}>
-              <span class="view-mark"><Icon name="eye" size={17} /></span>
               <span class="view-copy">
                 <span class="view-name">
                   <strong>{v.name}</strong>
@@ -222,9 +266,12 @@
               <span class="open-view" aria-hidden="true"><Icon name="chev" size={15} /></span>
             </a>
             {#if !v.owner_id}
-              <button class="delete-view" onclick={() => remove(v)} title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`}>
-                <Icon name="trash" size={14} />
-              </button>
+              <div class="view-actions">
+                <button class="btn sm" onclick={() => openEdit(v)} aria-label={`Edit ${v.name}`}>Edit</button>
+                <button class="btn sm delete-view" onclick={() => remove(v)} title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`}>
+                  <Icon name="trash" size={14} />
+                </button>
+              </div>
             {/if}
           </div>
         {/each}
@@ -233,17 +280,17 @@
   </section>
 </div>
 
-{#if createOpen}
+{#if editorOpen}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="modal-veil" onclick={closeCreate} role="presentation">
-    <div class="modal create-modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') closeCreate() }} role="dialog" aria-modal="true" aria-labelledby="new-view-title" tabindex="-1">
-      <form onsubmit={create}>
+  <div class="modal-veil" onclick={closeEditor} role="presentation">
+    <div class="modal create-modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') closeEditor() }} role="dialog" aria-modal="true" aria-labelledby="view-editor-title" tabindex="-1">
+      <form onsubmit={save}>
       <div class="modal-head create-head">
         <div>
-          <h3 id="new-view-title">Create a view</h3>
+          <h3 id="view-editor-title">{editing ? 'Edit view' : 'Create a view'}</h3>
           <p>Choose the documents this shortcut should open.</p>
         </div>
-        <button type="button" class="btn sm" onclick={closeCreate} disabled={saving} title="Close" aria-label="Close create view"><Icon name="x" size={13} /></button>
+        <button type="button" class="btn sm" onclick={closeEditor} disabled={saving} title="Close" aria-label={editing ? 'Close edit view' : 'Close create view'}><Icon name="x" size={13} /></button>
       </div>
 
       <div class="field name-field">
@@ -281,6 +328,9 @@
             <select id="view-category" class="input" bind:value={nv.jd}>
               <option value="">Any category</option>
               {#each filingCategories as c}<option value={c.id}>{c.code} {c.name}</option>{/each}
+              {#if nv.jd && !filingCategories.some(c => String(c.id) === String(nv.jd))}
+                <option value={nv.jd}>Saved category: {nv.jd}</option>
+              {/if}
             </select>
           </div>
           <div class="field">
@@ -288,6 +338,9 @@
             <select id="view-tag" class="input" bind:value={nv.tag}>
               <option value="">Any tag</option>
               {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
+              {#if nv.tag && !tags.some(t => String(t.id) === String(nv.tag))}
+                <option value={nv.tag}>Saved tags: {nv.tag}</option>
+              {/if}
             </select>
           </div>
           <div class="field">
@@ -295,6 +348,9 @@
             <select id="view-correspondent" class="input" bind:value={nv.corr}>
               <option value="">Any correspondent</option>
               {#each corrs as c}<option value={c.id}>{c.name}</option>{/each}
+              {#if nv.corr && !corrs.some(c => String(c.id) === String(nv.corr))}
+                <option value={nv.corr}>Saved correspondents: {nv.corr}</option>
+              {/if}
             </select>
           </div>
           <div class="field">
@@ -302,6 +358,9 @@
             <select id="view-type" class="input" bind:value={nv.type}>
               <option value="">Any type</option>
               {#each types as t}<option value={t.id}>{t.name}</option>{/each}
+              {#if nv.type && !types.some(t => String(t.id) === String(nv.type))}
+                <option value={nv.type}>Saved type: {nv.type}</option>
+              {/if}
             </select>
           </div>
           <div class="field">
@@ -311,6 +370,9 @@
               {#each SENSITIVITY_OPTIONS as option (option.value)}
                 <option value={option.value}>{option.label}</option>
               {/each}
+              {#if nv.sens && !SENSITIVITY_OPTIONS.some(option => option.value === nv.sens)}
+                <option value={nv.sens}>{sensitivityLabel(nv.sens)}</option>
+              {/if}
             </select>
           </div>
           <div class="field">
@@ -346,8 +408,8 @@
       {#if saveError}<div class="err save-error" role="alert">{saveError}</div>{/if}
 
       <div class="form-actions">
-        <button type="button" class="btn" onclick={closeCreate} disabled={saving}>Cancel</button>
-        <button class="btn primary" disabled={saving || !nv.name.trim()}>{saving ? 'Saving…' : 'Save view'}</button>
+        <button type="button" class="btn" onclick={closeEditor} disabled={saving}>Cancel</button>
+        <button class="btn primary" disabled={saving || !nv.name.trim()}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Save view'}</button>
       </div>
       </form>
     </div>
@@ -371,12 +433,11 @@
   .panel-hint { text-align: right; }
 
   .view-list { display: flex; flex-direction: column; }
-  .view-row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; min-height: 78px; border-bottom: 1px solid var(--line); transition: background .14s ease; }
+  .view-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-height: 78px; border-bottom: 1px solid var(--line); transition: background .14s ease; }
   .view-row.shared-view { grid-template-columns: minmax(0, 1fr); }
   .view-row:last-child { border-bottom: 0; }
   .view-row:hover { background: var(--tint); }
   .view-link { display: flex; align-items: center; gap: 13px; min-width: 0; padding: 13px 8px 13px 17px; color: inherit; text-decoration: none; }
-  .view-mark { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 9px; background: var(--tint); color: var(--accent); }
   .view-copy { display: flex; flex: 1; flex-direction: column; gap: 7px; min-width: 0; }
   .view-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .view-name strong { overflow: hidden; font-size: .9rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -384,17 +445,14 @@
   .filter-summary > span { overflow: hidden; max-width: 220px; padding: 2px 7px; border-radius: 5px; background: var(--surface-2); color: var(--muted); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .65rem; text-overflow: ellipsis; white-space: nowrap; }
   .open-view { display: grid; place-items: center; width: 30px; height: 30px; flex: none; color: var(--faint); transition: transform .14s ease, color .14s ease; }
   .view-row:hover .open-view { transform: translateX(2px); color: var(--accent); }
-  .delete-view { align-self: stretch; width: 48px; border: 0; border-left: 1px solid transparent; background: transparent; color: var(--faint); opacity: 0; transition: opacity .14s ease, color .14s ease, background .14s ease; }
-  .view-row:hover .delete-view, .delete-view:focus-visible { opacity: 1; }
-  .delete-view:hover { border-left-color: var(--line); background: var(--danger-soft); color: var(--danger); }
+  .view-actions { display: flex; align-items: center; gap: 6px; padding: 0 17px 0 8px; }
+  .delete-view { color: var(--muted); }
+  .delete-view:hover { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 
   .loading-row { display: flex; align-items: center; gap: 13px; padding: 13px 17px; }
   .loading-row:hover { background: transparent; }
-  .skeleton-mark { border-color: var(--line); background: var(--surface-2); }
   .loading-copy { display: grid; flex: 1; gap: 10px; }
   .views-empty { padding: 64px 20px; }
-  .empty-mark { display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--accent); }
-  .views-empty > span:not(.empty-mark) { max-width: 390px; }
 
   .create-modal { width: min(720px, 94vw); }
   .create-head { align-items: flex-start; margin-bottom: 20px; }
@@ -421,15 +479,13 @@
   .share-option small { color: var(--muted); font-size: .72rem; }
   .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 
-  @media (hover: none) {
-    .delete-view { opacity: 1; }
-  }
-
   @media (max-width: 620px) {
     .views-intro { align-items: flex-start; flex-direction: column; gap: 16px; margin-top: 2px; }
     .new-view { width: 100%; justify-content: center; }
     .panel-head { align-items: flex-start; }
     .panel-hint { display: none; }
+    .view-row { grid-template-columns: minmax(0, 1fr); }
+    .view-actions { justify-content: flex-end; padding: 0 17px 13px; }
     .filter-summary { max-width: 100%; }
     .filter-summary > span { max-width: 170px; }
     .filter-grid { grid-template-columns: 1fr; }

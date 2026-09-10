@@ -156,17 +156,25 @@ field with **Filing category**, **Tag**, **Correspondent**, **Document type**,
 and **Sensitivity**. Empty filters mean all values for that field. With no
 saved views, the list says **No saved views yet**.
 
-**Save view** validates every query and filing value. A failure remains inside
-the open creator for correction. New Views store one normalized rich query;
-older flat filters remain readable. See
-[Query language: Saved Views](/query-language#saved-views).
+Select a view's name to open its matching documents. **Edit** beside a view you
+own opens the same form with its saved name, query, filters, and sharing state.
+**Save changes** updates that view in place; **Cancel** or Escape discards the
+draft. Rich-query filters appear in **Query**, where you can change or remove
+their clauses. Older flat filters retain their existing selections, including
+multi-value scopes, and editing keeps the view's saved ordering. Exact research
+snapshots can be renamed or shared without changing their saved document set.
+
+**Save view** and **Save changes** validate every query and filing value.
+A failure remains inside the open form for correction. New Views store one
+normalized rich query; unchanged older flat filters are preserved when editing.
+See [Query language: Saved Views](/query-language#saved-views).
 
 Members with **Share saved views**, and all administrators, also see **Share
 this view**. A shared view appears in every user's Views list and dashboard.
-Only its owner can delete it. Removing **Share saved views** from an owner
+Only its owner can edit or delete it. Removing **Share saved views** from an owner
 makes their shared views private without deleting them.
 
-Filter choices are loaded when the create form or an existing view needs them;
+Filter choices are loaded when the create/edit form or an existing view needs them;
 an empty Views screen does not fetch every vocabulary in advance.
 
 ## Settings

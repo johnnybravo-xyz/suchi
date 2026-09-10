@@ -198,6 +198,7 @@ export const listPresets = () => api.get('/api/presets/')
 
 export const listSavedViews = (params, signal) => api.get(`/api/saved_views/${qs(params)}`, { signal })
 export const createSavedView = (b) => api.post('/api/saved_views/', b)
+export const patchSavedView = (id, b) => api.patch(`/api/saved_views/${id}`, b)
 export const deleteSavedView = (id) => api.del(`/api/saved_views/${id}`)
 
 export const setupState = () => singleFlightGet('/api/admin/setup/state')

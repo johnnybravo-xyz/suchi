@@ -263,6 +263,7 @@ async function mockAPI(page, options = {}) {
     const documentAccess = path.match(/^\/api\/acls\/document\/(\d+)$/)
     const trashDocument = path.match(/^\/api\/trash\/(\d+)$/)
     const restoreDocument = path.match(/^\/api\/documents\/(\d+)\/restore$/)
+    const savedView = path.match(/^\/api\/saved_views\/(\d+)$/)
     if (thumb && options.thumbnailFailures) {
       if (options.thumbnailFailures.includes(Number(thumb[1]))) {
         if (options.thumbnailDelay) {
@@ -502,6 +503,15 @@ async function mockAPI(page, options = {}) {
       return
     }
     else if (path === '/api/saved_views/') body = { results: options.savedViews || [] }
+    else if (savedView && request.method() === 'PATCH') {
+      const view = options.savedViews?.find(view => view.id === Number(savedView[1]))
+      if (!view || view.owner_id) {
+        await route.fulfill({ status: 404, json: { error: 'no such saved view' } })
+        return
+      }
+      Object.assign(view, request.postDataJSON())
+      body = { id: view.id }
+    }
     else if (path === '/api/trash/' && request.method() === 'DELETE') {
       options.emptyTrashRequests?.push({ count: trashDocuments.length })
       body = { purged: trashDocuments.length }
@@ -1620,6 +1630,108 @@ test('keeps an invalid saved view open with the server error', async ({ page }) 
   await expect(dialog.getByRole('button', { name: 'Save view' })).toBeEnabled()
 })
 
+test('edits saved views in place and keeps drafts after a rejected save', async ({ page }) => {
+  const options = {
+    savedViews: [{ id: 8, name: 'Investments', filter_json: '{"q":"jd:22"}', shared: true }],
+    failPaths: ['/api/saved_views/8'],
+    failureStatus: 409,
+    failureMessage: 'a saved view with that name already exists',
+  }
+  await mockAPI(page, options)
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'Edit Investments', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  await expect(dialog.getByLabel('View name')).toBeFocused()
+  await expect(dialog.getByLabel('Query')).toHaveValue('jd:22')
+  await expect(dialog.getByLabel('Share this view')).toBeChecked()
+  await dialog.getByLabel('View name').fill('Unsaved name')
+  await dialog.getByLabel('Query').fill('discarded')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('link', { name: /Investments/ })).toBeVisible()
+  await page.getByRole('button', { name: 'New view' }).click()
+  await expect(page.getByRole('dialog').getByLabel('View name')).toHaveValue('')
+  await expect(page.getByRole('dialog').getByLabel('Query')).toHaveValue('')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  await page.getByRole('button', { name: 'Edit Investments', exact: true }).click()
+  await expect(dialog.getByLabel('View name')).toHaveValue('Investments')
+  await expect(dialog.getByLabel('Query')).toHaveValue('jd:22')
+  await dialog.getByLabel('View name').fill('Private investments')
+  await dialog.getByLabel('Query').fill('jd:22 -is:trash')
+  await dialog.getByLabel('Share this view').uncheck()
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  await expect(dialog.getByRole('alert')).toHaveText(options.failureMessage)
+  await expect(dialog.getByLabel('View name')).toHaveValue('Private investments')
+  await expect(dialog.getByLabel('Query')).toHaveValue('jd:22 -is:trash')
+  options.failPaths.length = 0
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  await expect(dialog).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Edit Investments', exact: true })).toHaveCount(0)
+  const view = page.getByRole('link', { name: /Private investments/ })
+  await expect(view).not.toContainText('Shared')
+  await view.click()
+  expect(new URLSearchParams(page.url().split('?')[1]).get('q')).toBe('jd:22 -is:trash')
+})
+
+test('editing legacy saved views preserves multi-value scopes and ordering without vocabularies', async ({ page }) => {
+  const filters = {
+    q: 'invoice', tags__id__in: [2, 7], correspondents__id__in: [3, 9],
+    document_type__id: 4, jd_category_id: 6, sensitivity: 'internal', ordering: 'title',
+  }
+  await mockAPI(page, {
+    userRole: 'member', capabilities: [],
+    savedViews: [{ id: 8, name: 'Legacy scope', filter_json: JSON.stringify(filters) }],
+    failPaths: ['/api/tags/', '/api/correspondents/', '/api/document_types/'],
+  })
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'Edit Legacy scope' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  await expect(dialog.getByLabel('Tag', { exact: true })).toHaveValue('2,7')
+  await expect(dialog.getByLabel('Correspondent', { exact: true })).toHaveValue('3,9')
+  await expect(dialog.getByLabel('Filing category')).toHaveValue('6')
+  await expect(dialog.getByLabel('Share this view')).toHaveCount(0)
+  await dialog.getByLabel('View name').fill('Retained scope')
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  const view = page.getByRole('link', { name: /Retained scope/ })
+  await expect(view).toBeVisible()
+  const params = new URLSearchParams((await view.getAttribute('href')).split('?')[1])
+  for (const [key, value] of Object.entries(filters)) {
+    expect(params.get(key === 'jd_category_id' ? 'jd' : key)).toBe(String(value))
+  }
+
+  await page.getByRole('button', { name: 'Edit Retained scope' }).click()
+  await dialog.getByLabel('Filing category').selectOption('')
+  await dialog.getByLabel('Sensitivity').selectOption('restricted')
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  await expect(dialog).toHaveCount(0)
+  await view.click()
+  const updated = new URLSearchParams(page.url().split('?')[1])
+  expect(updated.has('jd')).toBe(false)
+  expect(updated.has('sensitivity')).toBe(false)
+  expect(updated.get('q')).toBe('invoice sensitivity:restricted')
+  expect(updated.get('tags__id__in')).toBe('2,7')
+  expect(updated.get('correspondents__id__in')).toBe('3,9')
+  expect(updated.get('ordering')).toBe('title')
+})
+
+test('renaming a saved view snapshot retains its exact document scope', async ({ page }) => {
+  await mockAPI(page, {
+    savedViews: [{ id: 8, name: 'Research snapshot', filter_json: '{"document_ids":[17,42],"ordering":"title"}' }],
+  })
+  await page.goto('/#/views')
+  await page.getByRole('button', { name: 'Edit Research snapshot' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit view' })
+  await expect(dialog.getByText('Exact research snapshot')).toBeVisible()
+  await expect(dialog.getByLabel('Query')).toHaveCount(0)
+  await dialog.getByLabel('View name').fill('Renewal evidence')
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('link', { name: /Renewal evidence/ }).click()
+  const params = new URLSearchParams(page.url().split('?')[1])
+  expect(params.get('document_ids')).toBe('17,42')
+  expect(params.get('ordering')).toBe('title')
+})
+
 test('loads recent dashboard documents once per navigation', async ({ page }) => {
   let recentRequests = 0
   page.on('request', request => {
@@ -1758,7 +1870,7 @@ test('gates saved-view sharing for members by capability', async ({ page }) => {
   await expect(page.getByRole('dialog').getByLabel('Share this view')).toBeVisible()
 })
 
-test('shows shared views without offering to delete another users view', async ({ page }) => {
+test('shows shared views without offering to change another users view', async ({ page }) => {
   await mockAPI(page, {
     userRole: 'member',
     capabilities: [],
@@ -1783,6 +1895,7 @@ test('shows shared views without offering to delete another users view', async (
   await page.goto('/#/views')
   await expect(page.getByRole('link', { name: /Shared tax review/ })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Delete Shared tax review' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Edit Shared tax review' })).toHaveCount(0)
 })
 
 test('lets admins grant saved-view sharing to members', async ({ page }) => {
