@@ -68,6 +68,6 @@ APPLESCRIPT
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    trap 'show_error "Suchi could not complete this action. Check your local installation permissions and try again."; exit 1' ERR
+    trap 'if (( BASH_SUBSHELL == 0 )); then show_error "Suchi could not complete this action. Check your local installation permissions and try again."; fi; exit 1' ERR
     settings "$@"
 fi

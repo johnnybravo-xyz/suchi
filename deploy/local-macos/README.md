@@ -64,6 +64,8 @@ login startup installs a copy of the same job in `~/Library/LaunchAgents`.
 Stopping Suchi unloads that running job; opening the app loads it again.
 An enabled login preference takes effect at your next login too.
 
+The launcher verifies the registered service definition by file identity, so
+macOS path casing does not falsely identify Suchi as an unrelated job.
 The browser opens only after the job registered from this installation owns
 the exact loopback listener and responds to readiness checks. An unrelated
 server listening on the same port is not mistaken for Suchi.
@@ -129,7 +131,9 @@ bash deploy/local-macos/test-service.sh ./dist/suchi
 ```
 
 The lifecycle test uses temporary directories and mocked `launchctl`, browser,
-and dialog commands. On macOS it additionally runs native `plutil`, `sips`,
+and dialog commands. It also executes the launcher entrypoints with the system
+Bash to verify cold-start, already-stopped, and unexpected-error handling.
+On macOS it additionally runs native `plutil`, `sips`,
 `iconutil`, and compiles every AppleScript dialog. It does not install a real
 service or change your desktop settings.
 

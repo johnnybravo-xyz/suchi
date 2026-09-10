@@ -127,8 +127,9 @@ socket only after initialization and binding the listener. The launcher waits
 for that readiness before opening the browser, so an occupied port cannot be
 mistaken for a successful start. Notification failure is a startup error.
 
-macOS does not use the systemd flag. Its launcher checks the registered plist
-path, obtains the job PID from `launchctl`, and requires that PID to own the
+macOS does not use the systemd flag. Its launcher checks that the registered plist
+is the same file as the installed definition (path casing can differ), obtains
+the job PID from `launchctl`, and requires that PID to own the
 exact loopback listener before accepting `/readyz`. Its on-demand plist lives
 with the program; only login opt-in places a copy in `~/Library/LaunchAgents`.
 This prevents launchd's restart policy from turning manual startup into login

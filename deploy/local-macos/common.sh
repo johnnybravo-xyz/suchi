@@ -43,7 +43,8 @@ check_private_directory() {
 job_pid() {
     local state=$1 expected=$2 path
     path=$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*path = //p' | head -n 1)
-    [[ $path == "$expected" ]] || {
+    # launchd may report different path casing on case-insensitive volumes.
+    [[ $path -ef $expected ]] || {
         fail 'Another launchd job uses page.suchi.local. Resolve that conflict first.'; return 1;
     }
     printf '%s\n' "$state" | awk '$1 == "pid" && $2 == "=" && $3 ~ /^[0-9]+$/ { print $3; exit }'

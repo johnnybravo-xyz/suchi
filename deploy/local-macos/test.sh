@@ -5,6 +5,7 @@ set -euo pipefail
 
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 bash "$scripts/test-checks.sh"
+bash "$scripts/test-entrypoints.sh"
 test_dir=$(mktemp -d)
 # These commands touch only this test-owned directory, never a real login job.
 trap 'rm -rf "$test_dir"' EXIT
@@ -102,6 +103,16 @@ grep -q 'LISTEN_ADDR=127.0.0.1:18765' "$program/page.suchi.local.plist"
 grep -q '<string>/usr/bin/env</string><string>-i</string>' "$program/page.suchi.local.plist"
 grep -q '<key>KeepAlive</key><true/>' "$program/page.suchi.local.plist"
 if grep -q 'bootstrap\|kickstart' "$commands"; then printf 'Installer started Suchi before a launch\n' >&2; exit 1; fi
+
+# Accept another path to the same plist, but never a different file with its contents.
+ln "$program/page.suchi.local.plist" "$test_dir/alias.plist"
+state=$(printf 'path = %s\npid = 12345\n' "$test_dir/alias.plist")
+[[ $(job_pid "$state" "$program/page.suchi.local.plist") == 12345 ]]
+rm "$test_dir/alias.plist"
+cp "$program/page.suchi.local.plist" "$test_dir/alias.plist"
+if job_pid "$state" "$program/page.suchi.local.plist" >/dev/null 2>&1; then
+    printf 'Accepted a different service definition with identical contents\n' >&2; exit 1
+fi
 
 printf 'keep documents and keys\n' > "$archive/keep"
 printf 'admin_email = "private@example.test"\n' > "$config"

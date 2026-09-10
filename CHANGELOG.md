@@ -59,6 +59,9 @@ Notable user-visible changes to Suchi are recorded here.
   and uninstall that preserves the archive.
 - Linux installation dialogs keep prerequisite guidance and controls within
   the window, including when tools are missing or need attention.
+- macOS launchers recognize their own service when launchd reports different
+  folder casing, and no longer show startup errors for an expected absent
+  service under the system Bash.
 - macOS installation no longer collides with its staged executable on
   case-insensitive filesystems.
 

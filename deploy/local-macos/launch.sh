@@ -87,6 +87,8 @@ APPLESCRIPT
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    trap 'show_error "Suchi could not complete startup. Open Suchi Settings or inspect $(dirname "$script_dir")/runtime/server.log."; exit 1' ERR
+    # Bash 3.2 also runs inherited ERR traps inside guarded substitutions.
+    # Let their caller handle the status before showing a startup error.
+    trap 'if (( BASH_SUBSHELL == 0 )); then show_error "Suchi could not complete startup. Open Suchi Settings or inspect $(dirname "$script_dir")/runtime/server.log."; fi; exit 1' ERR
     main "$@"
 fi
