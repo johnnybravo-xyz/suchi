@@ -14,7 +14,7 @@ smoke_dir=$(mktemp -d /tmp/suchi-local-smoke.XXXXXXXX)
 unit="suchi-local-smoke-${smoke_dir##*.}"
 runtime_dir="$XDG_RUNTIME_DIR/$unit"
 port=${PORT:-18769}
-base="http://127.0.0.1:$port"
+base="http://suchi.localhost:$port"
 cleanup() {
   local result=$?
   if (( result != 0 )); then

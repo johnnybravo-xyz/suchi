@@ -24,8 +24,8 @@ open_archive() {
         { printf 'Copy this one-time token, then choose Open Suchi and paste it into the setup form to create your first account.\n\n'; cat -- "$runtime/setup-token"; } |
             zenity --text-info --title='Set up Suchi' --width=620 --height=300 --ok-label='Open Suchi' || return 1
     fi
-    if ! xdg-open "http://127.0.0.1:$port"; then
-        show_error "Could not open your browser. Open http://127.0.0.1:$port manually."
+    if ! xdg-open "http://suchi.localhost:$port"; then
+        show_error "Could not open your browser. Open http://suchi.localhost:$port manually."
         return 1
     fi
 }

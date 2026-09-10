@@ -114,6 +114,11 @@ mail/model credentials from the launching shell. systemd or launchd owns
 restarts and optional login startup; there is no application supervisor or
 additional web frontend.
 
+On Linux, the installer sets `PUBLIC_URL` and the launcher's browser destination
+to `http://suchi.localhost:PORT`. The listener still binds `127.0.0.1`; browser
+loopback-name resolution needs no DNS, hosts-file entry, or proxy. Authentication
+and same-origin checks use the branded address without special exemptions.
+
 `Install.sh` on Linux and `Install.command` on macOS guide prerequisite setup
 and then invoke their command-line installer. The dependency step and CLI use
 the same probes: executable availability, English OCR data, and actual

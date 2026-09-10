@@ -88,6 +88,7 @@ grep -q 'launch.sh" --stop' "$desktop"
 [[ $(stat -c %a "$installed_archive") == 700 && $(stat -c %a "$installed_config") == 600 ]]
 grep -q 'Type=notify' "$unit"
 grep -q 'LISTEN_ADDR=127.0.0.1:18765' "$unit"
+grep -q 'PUBLIC_URL=http://suchi.localhost:18765' "$unit"
 grep -q "NOTIFY_SOCKET=\${NOTIFY_SOCKET}" "$unit"
 grep -q 'ExecStart=/usr/bin/env -i' "$unit"
 if command -v systemd-analyze > /dev/null; then
@@ -114,7 +115,7 @@ grep -q -- '--user start suchi-local.service' "$commands"
 mkdir -p "$XDG_RUNTIME_DIR/suchi-local"
 printf 'one-time-test-token\n' > "$XDG_RUNTIME_DIR/suchi-local/setup-token"
 bash "$installed_program/launch.sh"
-[[ $(< "$browser") == http://127.0.0.1:18765 ]]
+[[ $(< "$browser") == http://suchi.localhost:18765 ]]
 grep -qx 'one-time-test-token' "$dialog"
 if grep '^--' "$dialog" | grep -q 'one-time-test-token'; then printf 'Token leaked into dialog arguments\n' >&2; exit 1; fi
 
@@ -249,7 +250,7 @@ cp "$test_dir/suchi" "$package/suchi"
     question_cancel=0
     gui_main
     grep -qx -- '--user enable suchi-local.service' "$commands"
-    [[ $(< "$browser") == http://127.0.0.1:8000 ]]
+    [[ $(< "$browser") == http://suchi.localhost:8000 ]]
     service_enabled=1
     list_choice=''
     question_cancel=1

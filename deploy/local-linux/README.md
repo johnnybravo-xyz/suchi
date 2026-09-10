@@ -44,6 +44,10 @@ in the [supported formats guide](https://docs.suchi.page/formats).
   setup token: copy it, choose **Open Suchi**, and create your archive account.
   The browser opens only after Suchi is ready; another app occupying its port
   is an error, not a successful startup.
+  Its address is `http://suchi.localhost:8000` (or your chosen port). Current
+  Firefox and Chromium/Chrome resolve this directly to your own computer;
+  no hosts-file or DNS setup is needed. Updating from the numeric address may
+  require signing in again because browsers keep the two addresses separate.
 - Right-click the application shortcut for **Settings** or **Stop Suchi**.
   Settings can open the archive, enable/disable login startup, stop processing,
   or uninstall. Disabling login startup does not stop the current process.

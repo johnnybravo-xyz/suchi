@@ -228,7 +228,7 @@ main() (
         'RuntimeDirectoryMode=0700' \
         'UMask=0077' \
         "WorkingDirectory=$archive" \
-        "ExecStart=/usr/bin/env -i \"HOME=$HOME\" \"PATH=/usr/local/bin:/usr/bin:/bin\" \"NOTIFY_SOCKET=\${NOTIFY_SOCKET}\" \"DATA_DIR=$archive\" \"SUCHI_CONFIG=$config\" \"LISTEN_ADDR=127.0.0.1:$port\" \"PUBLIC_URL=http://127.0.0.1:$port\" \"SUCHI_DEV=0\" \"SUCHI_DEMO_MODE=0\" \"$program/suchi\" serve --systemd \"--setup-token-file=%t/suchi-local/setup-token\"" \
+        "ExecStart=/usr/bin/env -i \"HOME=$HOME\" \"PATH=/usr/local/bin:/usr/bin:/bin\" \"NOTIFY_SOCKET=\${NOTIFY_SOCKET}\" \"DATA_DIR=$archive\" \"SUCHI_CONFIG=$config\" \"LISTEN_ADDR=127.0.0.1:$port\" \"PUBLIC_URL=http://suchi.localhost:$port\" \"SUCHI_DEV=0\" \"SUCHI_DEMO_MODE=0\" \"$program/suchi\" serve --systemd \"--setup-token-file=%t/suchi-local/setup-token\"" \
         'Restart=on-failure' \
         'RestartSec=5s' \
         'TimeoutStartSec=120s' \
