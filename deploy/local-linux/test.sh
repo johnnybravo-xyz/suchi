@@ -7,6 +7,8 @@ test_dir=$(mktemp -d)
 trap 'rm -rf -- "$test_dir"' EXIT
 export XDG_DATA_HOME="$test_dir/data with spaces" XDG_CONFIG_HOME="$test_dir/config" XDG_RUNTIME_DIR="$test_dir/runtime"
 export commands="$test_dir/commands" browser="$test_dir/browser" dialog="$test_dir/dialog"
+export browser_log="$browser" app_launch="$test_dir/app-launch"
+export available_app_browser='' open_choice=default open_cancel=0 app_exit=0
 export start_fails=0 reload_fails=0 service_active=0 foreign_unit=0 foreign_drop_in=0 dialog_cancel=0
 export list_choice='' list_cancel=0 question_cancel=0 service_enabled=0
 export dependency_cancel=0 dependency_recheck=0 dependency_fault="$test_dir/dependency-fault"
@@ -38,7 +40,10 @@ zenity() {
         --text-info) cat >> "$dialog"; [[ $dialog_cancel == 0 ]] ;;
         --list)
             [[ $list_cancel == 0 ]] || return 1
-            if [[ $* == *'--title=Check your computer'* ]]; then
+            if [[ $* == *--radiolist* ]]; then
+                [[ $open_cancel == 0 ]] || return 1
+                printf '%s' "$open_choice"
+            elif [[ $* == *'--title=Check your computer'* ]]; then
                 [[ $dependency_cancel == 0 ]] || return 1
                 if [[ $dependency_recheck == 1 && -f $dependency_fault ]]; then rm -- "$dependency_fault"; fi
             else
@@ -47,8 +52,18 @@ zenity() {
         --question) [[ $question_cancel == 0 ]] ;;
     esac
 }
-xdg-open() { printf '%s\n' "$*" >> "$browser"; }
-export -f systemctl zenity xdg-open
+xdg-open() { printf '%s\n' "$*" >> "$browser_log"; }
+chromium() { printf '%s\n' "$@" >> "$app_launch"; return "$app_exit"; }
+command() {
+    if [[ ${1:-} == -v ]]; then
+        case "${2:-}" in
+            chromium|chromium-browser|google-chrome|google-chrome-stable)
+                [[ $2 == "$available_app_browser" ]] || return 1 ;;
+        esac
+    fi
+    builtin command "$@"
+}
+export -f systemctl zenity xdg-open chromium command
 
 # Package and graphics capability probes need real helpers; these tests exercise
 # installation ownership, generated configuration, updates and launcher behavior.
@@ -98,6 +113,7 @@ if grep -q 'enable\| start ' "$commands"; then printf 'Installation started or e
 
 printf 'archive sentinel\n' > "$installed_archive/keep"
 printf 'admin_email = "local@example.test"\n' > "$installed_config"
+printf 'chromium\n' > "$installed_program/open-with"
 service_active=1
 install() { return 1; }
 if (main "$test_dir/suchi") > /dev/null 2>&1; then printf 'Ignored failed binary staging\n' >&2; exit 1; fi
@@ -107,12 +123,14 @@ if compgen -G "$installed_program/.suchi.*" > /dev/null; then printf 'Left stage
 [[ -x $installed_program/suchi ]]
 main "$test_dir/suchi" --start-at-login > "$test_dir/update-output"
 [[ $(< "$installed_program/port") == 18765 ]]
+[[ $(< "$installed_program/open-with") == chromium ]]
 grep -q 'admin_email' "$installed_config"
 grep -q -- '--user stop suchi-local.service' "$commands"
 grep -q -- '--user enable suchi-local.service' "$commands"
 grep -q -- '--user start suchi-local.service' "$commands"
 
 mkdir -p "$XDG_RUNTIME_DIR/suchi-local"
+printf 'default\n' > "$installed_program/open-with"
 printf 'one-time-test-token\n' > "$XDG_RUNTIME_DIR/suchi-local/setup-token"
 bash "$installed_program/launch.sh"
 [[ $(< "$browser") == http://suchi.localhost:18765 ]]
@@ -129,6 +147,76 @@ dialog_cancel=1
 if bash "$installed_program/launch.sh"; then printf 'Launcher ignored setup-dialog cancellation\n' >&2; exit 1; fi
 [[ ! -e $browser ]]
 dialog_cancel=0
+
+# First choice, remembered app launch, and a settings-only change of preference.
+rm -- "$installed_program/open-with"
+available_app_browser=chromium
+open_choice=chromium
+bash "$installed_program/launch.sh"
+for ((attempt=0; attempt<100; attempt++)); do [[ ! -s $app_launch ]] || break; sleep .02; done
+[[ $(< "$app_launch") == --app=http://suchi.localhost:18765 ]]
+[[ $(< "$installed_program/open-with") == chromium && ! -e $browser ]]
+[[ $(stat -c %a "$installed_program/open-with") == 600 ]]
+: > "$app_launch"
+open_cancel=1
+bash "$installed_program/launch.sh"
+for ((attempt=0; attempt<100; attempt++)); do [[ ! -s $app_launch ]] || break; sleep .02; done
+[[ $(< "$app_launch") == --app=http://suchi.localhost:18765 ]]
+open_cancel=0
+list_choice='Open with'
+open_choice=default
+bash "$installed_program/launch.sh" --settings
+[[ $(< "$installed_program/open-with") == default && ! -e $browser ]]
+
+# A cancelled choice neither launches a browser nor saves a preference.
+rm -- "$installed_program/open-with" "$app_launch"
+open_cancel=1
+if bash "$installed_program/launch.sh"; then printf 'Ignored cancelled browser choice\n' >&2; exit 1; fi
+[[ ! -e $installed_program/open-with && ! -e $browser && ! -e $app_launch ]]
+open_cancel=0
+
+# Removing the selected browser asks again and keeps a normal-tab option.
+printf 'chromium\n' > "$installed_program/open-with"
+available_app_browser=''
+bash "$installed_program/launch.sh"
+[[ $(< "$installed_program/open-with") == default ]]
+[[ $(< "$browser") == http://suchi.localhost:18765 && ! -e $app_launch ]]
+rm -- "$browser"
+
+# Preferences are data, never executable commands; Settings can repair them.
+printf 'touch %s/unsafe-browser-command\n' "$test_dir" > "$installed_program/open-with"
+if bash "$installed_program/launch.sh"; then printf 'Accepted an arbitrary browser command\n' >&2; exit 1; fi
+[[ ! -e $test_dir/unsafe-browser-command && ! -e $browser ]]
+bash "$installed_program/launch.sh" --settings
+[[ $(< "$installed_program/open-with") == default ]]
+rm -- "$installed_program/open-with"
+printf 'keep\n' > "$test_dir/foreign-preference"
+ln -s "$test_dir/foreign-preference" "$installed_program/open-with"
+if bash "$installed_program/launch.sh" --settings; then printf 'Replaced a linked preference\n' >&2; exit 1; fi
+if (main --uninstall) > /dev/null 2>&1; then printf 'Uninstalled through a linked preference\n' >&2; exit 1; fi
+[[ $(< "$test_dir/foreign-preference") == keep && -x $installed_program/suchi ]]
+rm -- "$installed_program/open-with"
+mkdir "$installed_program/open-with"
+if (main --uninstall) > /dev/null 2>&1; then printf 'Uninstalled around a non-file preference\n' >&2; exit 1; fi
+[[ -x $installed_program/suchi && -f $unit ]]
+rmdir "$installed_program/open-with"
+
+# An asynchronous browser failure still reports an actionable native error.
+printf 'chromium\n' > "$installed_program/open-with"
+available_app_browser=chromium
+app_exit=1
+: > "$dialog"
+bash "$installed_program/launch.sh"
+for ((attempt=0; attempt<100; attempt++)); do
+    if grep -q -- '--error' "$dialog"; then break; fi
+    sleep .02
+done
+grep -q -- '--error' "$dialog"
+grep -q 'http://suchi.localhost:18765' "$dialog"
+[[ ! -e $browser ]]
+app_exit=0
+available_app_browser=''
+printf 'default\n' > "$installed_program/open-with"
 
 : > "$commands"
 list_cancel=1

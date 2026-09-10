@@ -50,7 +50,8 @@ in the [supported formats guide](https://docs.suchi.page/formats).
   require signing in again because browsers keep the two addresses separate.
 - Right-click the application shortcut for **Settings** or **Stop Suchi**.
   Settings can open the archive, enable/disable login startup, stop processing,
-  or uninstall. Disabling login startup does not stop the current process.
+  choose how Suchi opens, or uninstall. Disabling login startup does not stop
+  the current process.
   If your desktop does not expose shortcut actions, run
   `~/.local/share/suchi-local/program/launch.sh --settings`.
 - To update, extract the next package and run its `Install.sh`. The existing
@@ -59,6 +60,17 @@ in the [supported formats guide](https://docs.suchi.page/formats).
 - Uninstall asks for confirmation and removes only the program/service/shortcut.
   Your documents, keys and configuration stay on disk. Reinstallation opens
   the same archive.
+
+If Chromium or Google Chrome is installed, the first opening offers a choice:
+your default browser in a normal tab, or an **app window** without the usual
+tabs and address bar. Suchi remembers your choice. Change it later in local
+**Settings → Open with**. Firefox continues to open a normal browser tab.
+If the selected browser is removed, Suchi asks you to choose again.
+
+App windows use that browser's existing profile and its normal download,
+PDF-viewing, and security behavior. Suchi does not install a browser, create a
+separate profile, or change your default browser. Closing the app window does
+not stop the archive's background service.
 
 The default archive is `~/.local/share/suchi-local/archive`; configuration is
 `~/.config/suchi-local/local-install.toml`. `XDG_DATA_HOME` and
@@ -79,8 +91,10 @@ phone access are not remotely reachable from this loopback-only installation.
   removes only the managed application files, preserving archive and config.
 - `launch.sh [--settings | --stop]` owns local controls, waits for systemd
   readiness, presents a pending bootstrap token
-  through Zenity stdin, then opens the browser. Cancelling setup leaves the
-  browser closed.
+  through Zenity stdin, then opens the browser. Cancelling setup or the browser
+  choice leaves the browser closed. `program/open-with` stores only a fixed
+  browser identifier, never a command or browser arguments; updates preserve it
+  and uninstall removes it.
 - `test.sh [BINARY]` exercises install/update/uninstall and launcher behavior
   in temporary directories with mocked commands. An optional built binary
   verifies actual CLI compatibility without starting the server.
@@ -113,7 +127,8 @@ When available,
 
 The optional dialog check needs Zenity, Xvfb and xdotool. It renders the actual
 dialogs with test dependency states and exercises the guide, retry, continue
-and cancellation paths, including window-width limits. It never installs
+and cancellation paths, plus browser selection, saved choices, and keyboard
+navigation, including window-width limits. It never installs
 Suchi or modifies a real service. The native Linux workflow runs this check.
 
 The native smoke requires a working Linux user manager, parsing tools,

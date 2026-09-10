@@ -119,6 +119,14 @@ to `http://suchi.localhost:PORT`. The listener still binds `127.0.0.1`; browser
 loopback-name resolution needs no DNS, hosts-file entry, or proxy. Authentication
 and same-origin checks use the branded address without special exemptions.
 
+The Linux launcher offers a remembered tab/app-window choice when Chromium or
+Chrome is installed. `program/open-with` contains only an allowlisted browser
+identifier, not a shell command. App mode passes a fixed `--app=URL` to that
+browser's existing profile; no embedded runtime, additional profile, browser
+flags weakening security, or web-app changes are involved. Missing browsers
+prompt for a new choice. Local Settings owns this preference; updates preserve
+it and uninstall removes it.
+
 `Install.sh` on Linux and `Install.command` on macOS guide prerequisite setup
 and then invoke their command-line installer. The dependency step and CLI use
 the same probes: executable availability, English OCR data, and actual
@@ -170,7 +178,8 @@ installing a service. `native-local.yml` runs native platform checks and
 `hack/package-local.sh` packages evaluation artifacts; see the
 [release guide](/release-process#local-installation-bundles).
 `deploy/local-linux/test-dialogs.sh` uses real Zenity under an isolated X display
-to check layout bounds and dependency-guide navigation with test reports.
+to check layout bounds, dependency-guide navigation, and remembered browser
+choices with test reports and browser detection.
 Desktop integration, login/reboot behavior, and macOS dialog presentation still
 need acceptance testing; mocks and service-restart tests do not establish them.
 

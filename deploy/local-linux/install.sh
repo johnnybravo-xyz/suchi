@@ -136,8 +136,10 @@ main() (
         [[ -f $program/managed-by-suchi-local && ! -L $program/managed-by-suchi-local ]] || {
             fail "Existing program directory is not managed by this installer: $program"; return 1;
         }
-        for path in suchi install.sh launch.sh suchi-tile.svg port; do
-            [[ ! -L $program/$path ]] || { fail "Refusing symbolic link: $program/$path"; return 1; }
+        for path in suchi install.sh launch.sh suchi-tile.svg port open-with; do
+            [[ ! -L $program/$path && ( ! -e $program/$path || ( -f $program/$path && -O $program/$path ) ) ]] || {
+                fail "Refusing a symlink, non-file, or file not owned by you: $program/$path"; return 1;
+            }
         done
     fi
     systemctl --user show-environment >/dev/null || {
@@ -163,7 +165,7 @@ main() (
         [[ -z $binary && -z $port && $login == 0 ]] || { fail '--uninstall cannot be combined with install options.'; return 1; }
         [[ -f $program/managed-by-suchi-local && -f $unit ]] || { fail 'No managed local installation found.'; return 1; }
         systemctl --user disable --now suchi-local.service || return 1
-        rm -f -- "$unit" "$desktop" "$program/suchi" "$program/install.sh" "$program/launch.sh" "$program/suchi-tile.svg" "$program/port" "$program/managed-by-suchi-local"
+        rm -f -- "$unit" "$desktop" "$program/suchi" "$program/install.sh" "$program/launch.sh" "$program/suchi-tile.svg" "$program/port" "$program/open-with" "$program/managed-by-suchi-local"
         rmdir -- "$program" || printf 'Kept additional files in %s\n' "$program"
         systemctl --user daemon-reload
         printf 'Suchi uninstalled. Your archive, keys and configuration were kept:\n  %s\n  %s\n' "$archive" "$config_dir"

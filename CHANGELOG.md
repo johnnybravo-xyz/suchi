@@ -61,6 +61,8 @@ Notable user-visible changes to Suchi are recorded here.
   the window, including when tools are missing or need attention.
 - The Linux local launcher opens `suchi.localhost` at the installed port while
   keeping the server bound to loopback, without DNS or hosts-file changes.
+- Linux can open Suchi in an installed Chromium or Chrome app window, with a
+  remembered native choice and a normal default-browser tab option.
 - macOS launchers recognize their own service when launchd reports different
   folder casing, and no longer show startup errors for an expected absent
   service under the system Bash.

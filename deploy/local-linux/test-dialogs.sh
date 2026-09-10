@@ -12,7 +12,7 @@ test_dir=$(mktemp -d)
 worker=''
 cleanup() {
     local result=$? dialog_pid=''
-    if ((result != 0)); then tail -n 20 "$test_dir/gui.log" "$test_dir/cancel.log" 2>/dev/null || true; fi
+    if ((result != 0)); then tail -n 20 "$test_dir/gui.log" "$test_dir/cancel.log" "$test_dir/browser.log" 2>/dev/null || true; fi
     [[ ! -f $test_dir/dialog-pid ]] || dialog_pid=$(< "$test_dir/dialog-pid")
     [[ -z $dialog_pid ]] || kill "$dialog_pid" 2>/dev/null || true
     [[ -z $worker ]] || kill "$worker" 2>/dev/null || true
@@ -67,7 +67,7 @@ wait_dialog() {
     ((width > 0 && width <= limit)) || { printf '%s is too wide: %spx (limit %s).\n' "$title" "$width" "$limit" >&2; return 1; }
     previous=$pid
 }
-press() { sleep .3; xdotool key --window "$window" "$@"; }
+press() { sleep .3; xdotool windowfocus --sync "$window"; xdotool key "$@"; }
 
 gui_main > "$test_dir/gui.log" 2>&1 & worker=$!
 wait_dialog 'Check your computer' 900
@@ -93,4 +93,55 @@ wait "$worker"; worker=''
 wait_dialog 'Check your computer' 900
 press Escape
 wait "$worker"; worker=''
-printf 'Native Linux dependency dialogs, navigation, widths and cancellation passed.\n'
+
+# Browser detection is deterministic; only the real choice dialog may run.
+# shellcheck source=deploy/local-linux/launch.sh
+source "$scripts/launch.sh"
+command() {
+    if [[ ${1:-} == -v ]]; then
+        case "${2:-}" in
+            chromium) printf 'chromium\n'; return 0 ;;
+            chromium-browser|google-chrome|google-chrome-stable) return 1 ;;
+        esac
+    fi
+    builtin command "$@"
+}
+chromium() { printf 'Unexpected browser launch\n' >> "$test_dir/unsafe"; return 1; }
+xdg-open() { printf 'Unexpected browser launch\n' >> "$test_dir/unsafe"; return 1; }
+program=$test_dir/program
+mkdir "$program"
+browser_choice "$program" > "$test_dir/browser-choice" 2> "$test_dir/browser.log" & worker=$!
+wait_dialog 'Open Suchi with' 700
+((height <= 430))
+xdotool mousemove --window "$window" "$((width*3/4))" "$((height-50))" click 1
+wait "$worker"; worker=''
+[[ $(< "$test_dir/browser-choice") == default && $(< "$program/open-with") == default ]]
+[[ $(stat -c %a "$program/open-with") == 600 ]]
+
+browser_choice "$program" 1 > "$test_dir/browser-choice" 2>> "$test_dir/browser.log" & worker=$!
+wait_dialog 'Open Suchi with' 700
+# Give the list keyboard focus before using its native radio controls.
+xdotool mousemove --window "$window" 45 "$((height-153))" click 1
+press Down space
+if [[ -n ${SUCHI_DIALOG_SCREENSHOT:-} ]]; then
+    sleep .3
+    command import -window "$window" "$SUCHI_DIALOG_SCREENSHOT"
+fi
+xdotool mousemove --window "$window" "$((width*3/4))" "$((height-50))" click 1
+wait "$worker"; worker=''
+[[ $(< "$test_dir/browser-choice") == chromium && $(< "$program/open-with") == chromium ]]
+[[ $(browser_choice "$program") == chromium && $(< "$test_dir/dialog-pid") == "$previous" ]]
+
+browser_choice "$program" 1 > "$test_dir/browser-choice" 2>> "$test_dir/browser.log" & worker=$!
+wait_dialog 'Open Suchi with' 700
+xdotool mousemove --window "$window" "$((width*3/4))" "$((height-50))" click 1
+wait "$worker"; worker=''
+[[ $(< "$test_dir/browser-choice") == chromium && $(< "$program/open-with") == chromium ]]
+
+mkdir "$test_dir/cancel-program"
+(if browser_choice "$test_dir/cancel-program"; then exit 1; fi) > "$test_dir/browser-choice" 2>> "$test_dir/browser.log" & worker=$!
+wait_dialog 'Open Suchi with' 700
+press Escape
+wait "$worker"; worker=''
+[[ ! -e $test_dir/cancel-program/open-with && ! -e $test_dir/unsafe ]]
+printf 'Native Linux dependency and browser-choice dialogs, keyboard navigation, saved choices, widths and cancellation passed.\n'

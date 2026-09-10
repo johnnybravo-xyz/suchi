@@ -57,6 +57,16 @@ and Chromium/Chrome recognize `.localhost` as this computer without DNS or
 hosts-file setup. If you used an earlier build at `127.0.0.1`, sign in again at
 the new address; your archive is unchanged, but browser sessions are separate.
 
+If Chromium or Google Chrome is already installed, Suchi asks once how you want
+to open it: a tab in your default browser, or an **app window** without the usual
+tabs and address bar. Your choice is remembered; change it in local
+**Settings → Open with**. Firefox uses a normal browser tab. If you remove your
+chosen browser, Suchi asks you to choose again.
+
+An app window uses the installed browser and its existing profile, including
+normal PDF viewing and downloads. No browser is bundled or installed, no
+separate profile is created, and your default browser is not changed.
+
 ## Install on macOS
 
 Open `Install.command` from the extracted folder. **Check your computer** shows
@@ -102,8 +112,8 @@ If your desktop does not expose shortcut actions, run the installed
 
 Local settings let you open the archive, change startup at login, stop Suchi,
 or uninstall. Document preferences remain in the browser's Settings.
-Closing a browser tab does not stop intake or processing. Stopping Suchi pauses
-them until you open it again or it starts at your next login.
+Closing a browser tab or app window does not stop intake or processing.
+Stopping Suchi pauses them until you open it again or it starts at your next login.
 
 While the computer sleeps or is shut down, it cannot process documents or poll
 mail. The next start resumes persisted work and mailbox polling. The Linux
