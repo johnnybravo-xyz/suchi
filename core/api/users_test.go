@@ -108,3 +108,48 @@ func TestPatchSelf_EmptyAndTooLong(t *testing.T) {
 		t.Errorf("121-char name status=%d, want 400", code)
 	}
 }
+
+func doWhoami(t *testing.T, s *Server, p *pluginapi.Principal) (int, UserSelf) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	ctx := context.Background()
+	if p != nil {
+		ctx = auth.WithPrincipal(ctx, p)
+	}
+	r := httptest.NewRequest("GET", "/api/whoami", nil).WithContext(ctx)
+	s.Whoami(rec, r)
+	var out UserSelf
+	if rec.Code == 200 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return rec.Code, out
+}
+
+func TestWhoami_ReturnsOnlyTokenScopes(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+
+	token := memberPrincipal(1)
+	token.Kind = "token"
+	token.Scopes = []string{"documents:read", "documents:write"}
+	code, self := doWhoami(t, s, token)
+	if code != 200 {
+		t.Fatalf("token status=%d, want 200", code)
+	}
+	if len(self.Scopes) != 2 || self.Scopes[0] != "documents:read" || self.Scopes[1] != "documents:write" {
+		t.Fatalf("token scopes=%v, want principal scopes", self.Scopes)
+	}
+
+	session := memberPrincipal(1)
+	session.Scopes = []string{"must:not:leak"}
+	code, self = doWhoami(t, s, session)
+	if code != 200 {
+		t.Fatalf("session status=%d, want 200", code)
+	}
+	if self.Scopes == nil || len(self.Scopes) != 0 {
+		t.Fatalf("session scopes=%v, want []", self.Scopes)
+	}
+}

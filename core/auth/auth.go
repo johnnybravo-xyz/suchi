@@ -12,6 +12,9 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
+// TokenSourceMobilePairing records a successful one-time-code exchange.
+const TokenSourceMobilePairing = "mobile_pairing"
+
 type ctxKey struct{ name string }
 
 var principalKey = ctxKey{"principal"}

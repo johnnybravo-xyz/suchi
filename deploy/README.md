@@ -3,11 +3,14 @@
 Starting points for common self-hosted deployments.
 
 Everything here is a starting point — edit the hostname, TLS paths,
-and storage locations before you paste them into production.
+and storage locations before you paste them into production. Moving image tags
+such as `beta` are evaluation defaults only. Production deployments must use
+the published image digest for the selected release; this also applies to any
+server exposed to the mobile app.
 
 | Directory | What it is |
 | --------- | ---------- |
-| [`compose.yaml`](../compose.yaml) | Minimal single-container Compose deployment. Start here when you want editable mounts, networks, or image pins. |
+| [`compose.yaml`](../compose.yaml) | Minimal single-container Compose deployment. It binds to loopback by default; start here when you want editable mounts, networks, or image pins. |
 | [`systemd/`](systemd/suchi.service) | Unit file for a bare-binary install on a Linux host. Runs suchi as an unprivileged user with the usual defense-in-depth sandboxing. |
 | [`caddy/`](caddy/Caddyfile) | Reverse-proxy snippet for Caddy. Auto-TLS via Let's Encrypt when the site block uses a real hostname. |
 | [`nginx/`](nginx/suchi.conf) | Server block for nginx. Assumes certificates already exist at the paths shown — provision them however you already do. |
@@ -23,6 +26,10 @@ All shapes assume the same three env vars are set on suchi:
   `0.0.0.0:8000` inside a container.
 - `PUBLIC_URL` — the absolute URL users open. Suchi uses it for secure-cookie
   behavior, OIDC callbacks, and generated share links.
+
+Keep a local evaluation port on loopback. A remotely reachable deployment
+needs an HTTPS reverse proxy or Ingress, and its Suchi image must be pinned by
+digest.
 
 Full env-var and config-file reference: [docs/config.mdx](../docs/config.mdx).
 

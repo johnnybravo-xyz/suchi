@@ -34,6 +34,7 @@ type UserSelf struct {
 	AuthNBy       string   `json:"authn_by,omitempty"`
 	AvatarURL     string   `json:"avatar_url,omitempty"`
 	Capabilities  []string `json:"capabilities"`
+	Scopes        []string `json:"scopes"`
 }
 
 // Whoami serves GET /api/whoami. Reads the current user row so
@@ -477,8 +478,9 @@ func revokeSharedViewsFor(ctx context.Context, s *Server, userID int64) error {
 	return nil
 }
 
-// loadSelf reads users.display_name + avatar_sha + capabilities and
-// composes the UserSelf payload. Uses the read pool.
+// loadSelf reads users.display_name + avatar_sha + capabilities and composes
+// the UserSelf payload. Token scopes are request credentials, not user data.
+// Uses the read pool.
 func loadSelf(ctx context.Context, rdb *sql.DB, p *pluginapi.Principal) (UserSelf, error) {
 	var (
 		displayName sql.NullString
@@ -498,6 +500,10 @@ func loadSelf(ctx context.Context, rdb *sql.DB, p *pluginapi.Principal) (UserSel
 		Role:         p.Role,
 		AuthNBy:      p.AuthNBy,
 		Capabilities: []string{},
+		Scopes:       []string{},
+	}
+	if p.Kind == "token" {
+		self.Scopes = append(self.Scopes, p.Scopes...)
 	}
 	if displayName.Valid {
 		self.DisplayName = displayName.String

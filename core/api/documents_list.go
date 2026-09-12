@@ -7,6 +7,7 @@
 //                               `-` prefix. Default `-created_at`.
 //   jd_category_id            — exact match on the JD filing chip.
 //   sensitivity               — one of the SensitivityLevels keys.
+//   split_origin_id          — live QR-split children for an accepted upload.
 //   document_type__id         — exact match.
 //   tags__id__in              — CSV of tag ids; document must carry
 //                               EVERY id (AND semantics).
@@ -28,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
@@ -48,6 +50,8 @@ type DocumentListRow struct {
 	JDAreaName     string `json:"jd_area_name,omitempty"`
 	Sensitivity    string `json:"sensitivity,omitempty"`
 	ThumbSHA       string `json:"thumb_sha,omitempty"` // client renders /api/documents/{id}/thumb when set
+	SplitOriginID  int64  `json:"split_origin_id,omitempty"`
+	SplitIndex     *int64 `json:"split_index,omitempty"`
 	// EncryptionState is "" (never encrypted, or decrypted-at-boot),
 	// "encrypted" (needs a password), or "decrypted". The SPA reads
 	// this to render an inline unlock affordance on the Inbox row —
@@ -114,6 +118,15 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 
 	// Positive text starts from FTS; metadata filters remain additive.
 	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)
+	if v := q.Get("split_origin_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id <= 0 {
+			s.writeError(w, http.StatusBadRequest, "bad_split_origin_id", "split_origin_id must be a positive integer")
+			return
+		}
+		where = append(where, "d.split_origin_id = ?")
+		args = append(args, id)
+	}
 
 	// Visibility: admins bypass; members get owner/ACL visibility. Public demo
 	// visitors see only the seeded corpus, plus their own scratch uploads.
@@ -157,6 +170,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(jc.code, 0), COALESCE(jc.name, ''), COALESCE(ja.name, ''),
 		       COALESCE(d.sensitivity, ''),
 		       COALESCE(d.thumb_sha, ''),
+		       d.split_origin_id, d.split_index,
 		       COALESCE(d.encryption_state, ''),
 		       d.created_at, d.updated_at, d.trashed_at
 		  FROM `+fromSQL+`
@@ -175,19 +189,24 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var (
-			row     DocumentListRow
-			trashed sql.NullInt64
+			row        DocumentListRow
+			trashed    sql.NullInt64
+			splitIndex sql.NullInt64
 		)
 		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.OriginalSize,
 			&row.JDCategoryID, &row.JDCategoryCode, &row.JDCategoryName, &row.JDAreaName,
-			&row.Sensitivity, &row.ThumbSHA, &row.EncryptionState,
-			&row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
+			&row.Sensitivity, &row.ThumbSHA, &row.SplitOriginID, &splitIndex,
+			&row.EncryptionState, &row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
 			s.serverErr(w, "docs.list.scan", err)
 			return
 		}
 		if trashed.Valid {
 			v := trashed.Int64
 			row.TrashedAt = &v
+		}
+		if splitIndex.Valid {
+			v := splitIndex.Int64
+			row.SplitIndex = &v
 		}
 		row.Tags = []string{}
 		out = append(out, row)

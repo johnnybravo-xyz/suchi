@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -124,6 +125,38 @@ func TestUpload_BodyTooLarge(t *testing.T) {
 		t.Errorf("expected empty blob store after 413, got %d shards", len(entries))
 	}
 	_ = errors.New // keep import
+}
+
+func TestUploadNewVersion_BodyTooLarge(t *testing.T) {
+	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	const cap = 1024
+	body, contentType := buildMultipart(t, 2*cap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/documents/"+strconv.FormatInt(previousID, 10)+"/versions/", body)
+	req.Header.Set("Content-Type", contentType)
+	req.SetPathValue("id", strconv.FormatInt(previousID, 10))
+	req.Body = http.MaxBytesReader(rec, req.Body, cap)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), principal))
+
+	s.UploadNewVersion(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("body_too_large")) {
+		t.Errorf("error code missing in body: %s", rec.Body.String())
+	}
+	var documents, jobs int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&documents); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM jobs`).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if documents != 1 || jobs != 0 {
+		t.Fatalf("documents=%d jobs=%d, want predecessor only and no job", documents, jobs)
+	}
 }
 
 // A right-at-the-cap upload succeeds. Guardrails against an

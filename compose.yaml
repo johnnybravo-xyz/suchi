@@ -2,6 +2,8 @@ name: suchi
 
 services:
   suchi:
+    # The moving beta tag is a local/evaluation default. Production operators
+    # must set SUCHI_IMAGE to the selected release's published image digest.
     image: ${SUCHI_IMAGE:-ghcr.io/johnnybravo-xyz/suchi:beta}
     restart: unless-stopped
     read_only: true
@@ -12,9 +14,9 @@ services:
     cap_drop:
       - ALL
     environment:
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:8000}
     ports:
-      - "${SUCHI_PORT:-8000}:8000"
+      - "${SUCHI_BIND_ADDRESS:-127.0.0.1}:${SUCHI_PORT:-8000}:8000"
     extra_hosts:
       - "host.suchi.local:host-gateway"
     volumes:

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -21,20 +20,20 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
-	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 // UploadResponse is what POST /api/documents/ returns on success.
 type UploadResponse struct {
-	ID           int64  `json:"id"`
-	SHA256       string `json:"sha256"`
-	Size         int64  `json:"size"`
-	MIME         string `json:"mime_type"`
-	Title        string `json:"title"`
-	Restored     bool   `json:"restored,omitempty"`     // true when this was an undelete
-	Deduplicated bool   `json:"deduplicated,omitempty"` // existing live document reused
+	ID               int64  `json:"id"`
+	SHA256           string `json:"sha256"`
+	Size             int64  `json:"size"`
+	MIME             string `json:"mime_type"`
+	Title            string `json:"title"`
+	Restored         bool   `json:"restored,omitempty"`     // true when this was an undelete
+	Deduplicated     bool   `json:"deduplicated,omitempty"` // existing live document reused
+	IdempotentReplay bool   `json:"idempotent_replay,omitempty"`
 }
 
 // UploadDocument accepts a multipart upload, streams it into the CAS,
@@ -57,54 +56,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
-
-	file, header, err := r.FormFile("document")
-	if err != nil {
-		// http.MaxBytesReader (wired at boot via BodyLimit) trips
-		// here with a *http.MaxBytesError. Distinguish so the caller
-		// gets the right shape.
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large",
-				fmt.Sprintf("upload exceeded the %d-byte cap (see BODY_LIMIT)", mbe.Limit))
-			return
-		}
-		s.writeError(w, http.StatusBadRequest, "missing_file",
-			`multipart part "document" is required`)
+	upload := s.prepareUpload(w, r, uploadOperationDocument, 0)
+	if upload == nil {
 		return
 	}
-	defer file.Close()
-	sourceKind := ingest.SourceUpload
-	sourceLabel := principal.Display
-	if sourceLabel == "" {
-		sourceLabel = principal.Email
-	}
-	if principal.Kind == "token" {
-		sourceKind = ingest.SourceAPI
-		if sourceLabel == "" {
-			sourceLabel = "API token"
-		}
-	}
-
-	// Stream to CAS. Put() returns the SHA-256 and streamed size.
-	ref, err := s.CAS.Put(file)
-	if err != nil {
-		s.Log.Error("api.upload.cas_put", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "cas_put_failed",
-			"failed to store blob")
-		return
-	}
-
-	// MIME sniff. Reopen the file we just stored — net/http.DetectContentType
-	// reads at most 512 bytes and mime.Type() from filename is unreliable.
-	sniffed, err := s.sniffMIME(ref.SHA256)
-	if err != nil {
-		s.Log.Warn("api.upload.mime_sniff", "err", err.Error(), "sha", ref.SHA256)
-		sniffed = "application/octet-stream"
-	}
-	sniffed = mimeutil.RefineByFilename(sniffed, header.Filename)
-
-	title := deriveTitle(header.Filename)
 
 	// New documents land in inbox; classifiers may reassign them later.
 	inbox, err := jd.InboxCategoryID(r.Context(), s.DB)
@@ -114,16 +69,29 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert-or-resurrect in one transaction. Dedup queries and the
-	// insert share the same tx so a concurrent uploader can't race us
-	// into a duplicate row — the single-writer SQLite discipline
-	// serializes them anyway, but this keeps the invariant explicit.
+	// Insert-or-resurrect in one transaction. Idempotency lookup, dedupe,
+	// source recording, outbox work, and response persistence commit together.
 	var (
 		outID        int64
 		restored     bool
 		deduplicated bool
+		status       int
+		response     UploadResponse
+		replay       *storedUploadResponse
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		stored, found, err := loadStoredUploadResponse(
+			r.Context(), tx, principal.UserID, upload.Idempotency,
+		)
+		if err != nil {
+			return err
+		}
+		if found {
+			replay = &stored
+			outID = stored.DocumentID
+			return nil
+		}
+
 		// A live match reuses the document and records this acquisition.
 		// Scope per owner so household members may independently own the
 		// same bytes.
@@ -131,13 +99,29 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		errAlive := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM documents
 			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
-			principal.UserID, ref.SHA256,
+			principal.UserID, upload.SHA256,
 		).Scan(&aliveID)
 		if errAlive == nil {
 			outID = aliveID
 			deduplicated = true
-			return ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, time.Now().Unix())
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, time.Now().Unix()); err != nil {
+				return err
+			}
+			existingTitle := upload.Title
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT title FROM documents WHERE id = ?`, outID).Scan(&existingTitle); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: existingTitle, Deduplicated: true,
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
+			)
 		}
 		if !errors.Is(errAlive, sql.ErrNoRows) {
 			return errAlive
@@ -150,19 +134,36 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			 WHERE owner_id = ? AND original_blob = ?
 			   AND trashed_at IS NOT NULL AND trashed_at > ?
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			principal.UserID, ref.SHA256, time.Now().Add(-trash.Retention).Unix(),
+			principal.UserID, upload.SHA256, time.Now().Add(-trash.Retention).Unix(),
 		).Scan(&trashedID)
 		if errTrashed == nil {
+			now := time.Now().Unix()
 			if _, err := tx.ExecContext(r.Context(),
 				`UPDATE documents SET trashed_at = NULL, updated_at = ? WHERE id = ?`,
-				time.Now().Unix(), trashedID,
+				now, trashedID,
 			); err != nil {
 				return err
 			}
 			outID = trashedID
 			restored = true
-			return ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-				sourceLabel, header.Filename, time.Now().Unix())
+			if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+				upload.SourceLabel, upload.Filename, now); err != nil {
+				return err
+			}
+			var restoredTitle string
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT title FROM documents WHERE id = ?`, outID).Scan(&restoredTitle); err != nil {
+				return err
+			}
+			status = http.StatusOK
+			response = UploadResponse{
+				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+				MIME: upload.MIME, Title: restoredTitle, Restored: true,
+			}
+			return storeUploadResponse(
+				r.Context(), tx, principal.UserID, upload.Idempotency,
+				upload.SHA256, outID, status, response,
+			)
 		}
 		if !errors.Is(errTrashed, sql.ErrNoRows) {
 			return errTrashed
@@ -170,23 +171,18 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 
 		// Fresh insert.
 		now := time.Now().Unix()
-		// source_mtime carries the source file's filesystem mtime when
-		// the SPA sends it as a form field (browser upload path). It's
-		// the closest thing to a real creation date; NULL when the
-		// caller (e.g. an API script) omits it.
-		var srcMTime sql.NullInt64
-		if raw := r.FormValue("source_mtime"); raw != "" {
-			if ts, perr := strconv.ParseInt(raw, 10, 64); perr == nil && ts > 0 {
-				srcMTime.Int64 = ts
-				srcMTime.Valid = true
-			}
-		}
+		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, added_at, created_at, updated_at, source_mtime
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, principal.UserID, ref.SHA256, ref.Size, title, sniffed, inbox, now, now, now, srcMTime)
+				jd_category_id, added_at, created_at, updated_at, source_mtime,
+				content, content_source, device_content_confidence,
+				device_ocr_language, device_content_received_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, principal.UserID, upload.SHA256, upload.Size, upload.Title, upload.MIME, inbox,
+			now, now, now, dbValues.SourceMTime, dbValues.Content,
+			dbValues.ContentSource, dbValues.DeviceConfidence,
+			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
 		if err != nil {
 			return err
 		}
@@ -195,8 +191,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		outID = id
-		if err := ingest.RecordSource(r.Context(), tx, outID, sourceKind,
-			sourceLabel, header.Filename, now); err != nil {
+		if err := ingest.RecordSource(r.Context(), tx, outID, upload.SourceKind,
+			upload.SourceLabel, upload.Filename, now); err != nil {
 			return err
 		}
 
@@ -204,20 +200,47 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		// the doc row. There is no window where a doc exists but its
 		// work is lost — the whole point of the outbox pattern.
 		payload := postIngestPayload{
-			SHA256:   ref.SHA256,
-			Size:     ref.Size,
-			MIME:     sniffed,
-			Filename: header.Filename, // consumption trigger filter
+			SHA256:   upload.SHA256,
+			Size:     upload.Size,
+			MIME:     upload.MIME,
+			Filename: upload.Filename, // consumption trigger filter
 		}
-		payloadJSON, mErr := json.Marshal(payload)
-		if mErr != nil {
-			return mErr
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return err
 		}
-		return jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON))
+		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON)); err != nil {
+			return err
+		}
+		status = http.StatusCreated
+		response = UploadResponse{
+			ID: outID, SHA256: upload.SHA256, Size: upload.Size,
+			MIME: upload.MIME, Title: upload.Title,
+		}
+		return storeUploadResponse(
+			r.Context(), tx, principal.UserID, upload.Idempotency,
+			upload.SHA256, outID, status, response,
+		)
 	})
+	if errors.Is(err, errIdempotencyConflict) {
+		s.writeError(w, http.StatusConflict, "idempotency_conflict",
+			"Idempotency-Key was already used for a different upload")
+		return
+	}
 	if err != nil {
-		s.Log.Error("api.upload.db", "err", err.Error(), "sha", ref.SHA256)
+		s.Log.Error("api.upload.db", "err", err.Error(), "sha", upload.SHA256)
 		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to write document row")
+		return
+	}
+	if replay != nil {
+		if err := json.Unmarshal([]byte(replay.JSON), &response); err != nil {
+			s.Log.Error("api.upload.idempotency_decode", "err", err.Error(), "id", replay.DocumentID)
+			s.writeError(w, http.StatusInternalServerError, "idempotency_read", "failed to read stored upload response")
+			return
+		}
+		response.IdempotentReplay = true
+		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", replay.DocumentID))
+		s.writeJSON(w, replay.Status, response)
 		return
 	}
 
@@ -234,45 +257,23 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		audit.Log(ctx, s.DB, s.Log, audit.Event{
 			Actor: principal, Action: "document.ingest.deduplicated",
 			ObjectKind: "document", ObjectID: outID,
-			After:     map[string]any{"sha256": ref.SHA256},
+			After:     map[string]any{"sha256": upload.SHA256},
 			RequestID: logx.RequestID(ctx),
 		})
-		existingTitle := title
-		if err := s.DB.Read.QueryRowContext(r.Context(),
-			`SELECT title FROM documents WHERE id = ?`, outID).Scan(&existingTitle); err != nil {
-			s.Log.Warn("api.upload.title_lookup", "err", err.Error(), "id", outID)
-		}
-		w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", outID))
-		s.writeJSON(w, http.StatusOK, UploadResponse{
-			ID: outID, SHA256: ref.SHA256, Size: ref.Size,
-			MIME: sniffed, Title: existingTitle, Deduplicated: true,
+	} else {
+		audit.Log(ctx, s.DB, s.Log, audit.Event{
+			Actor:      principal,
+			Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
+			ObjectKind: "document", ObjectID: outID,
+			After: map[string]any{
+				"sha256": upload.SHA256, "size": upload.Size, "title": response.Title, "mime": upload.MIME,
+			},
+			RequestID: logx.RequestID(ctx),
 		})
-		return
 	}
 
-	audit.Log(ctx, s.DB, s.Log, audit.Event{
-		Actor:      principal,
-		Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
-		ObjectKind: "document", ObjectID: outID,
-		After: map[string]any{
-			"sha256": ref.SHA256, "size": ref.Size, "title": title, "mime": sniffed,
-		},
-		RequestID: logx.RequestID(ctx),
-	})
-
-	status := http.StatusCreated
-	if restored {
-		status = http.StatusOK
-	}
 	w.Header().Set("Location", fmt.Sprintf("/api/documents/%d", outID))
-	s.writeJSON(w, status, UploadResponse{
-		ID:       outID,
-		SHA256:   ref.SHA256,
-		Size:     ref.Size,
-		MIME:     sniffed,
-		Title:    title,
-		Restored: restored,
-	})
+	s.writeJSON(w, status, response)
 }
 
 // SoftDeleteDocument starts the fixed 30-day recovery window. Automatic
@@ -543,12 +544,17 @@ type DocumentDetail struct {
 	OwnerID         int64  `json:"owner_id"`
 	Title           string `json:"title"`
 	Content         string `json:"content"`
-	OriginalBlob    string `json:"original_blob"`
-	OriginalSize    int64  `json:"original_size"`
-	ArchiveBlob     string `json:"archive_blob,omitempty"`
-	ArchiveSize     int64  `json:"archive_size,omitempty"`
-	MIME            string `json:"mime_type"`
-	JDCategoryID    int64  `json:"jd_category_id"`
+	ContentSource   string `json:"content_source"`
+	// Device OCR provenance remains visible after server text supersedes it.
+	DeviceContentConfidence *float64 `json:"device_content_confidence,omitempty"`
+	DeviceOCRLanguage       string   `json:"device_ocr_language,omitempty"`
+	DeviceContentReceivedAt *int64   `json:"device_content_received_at,omitempty"`
+	OriginalBlob            string   `json:"original_blob"`
+	OriginalSize            int64    `json:"original_size"`
+	ArchiveBlob             string   `json:"archive_blob,omitempty"`
+	ArchiveSize             int64    `json:"archive_size,omitempty"`
+	MIME                    string   `json:"mime_type"`
+	JDCategoryID            int64    `json:"jd_category_id"`
 	// Denormalized JD fields — saves every JSON consumer a round-
 	// trip to render a filing chip. The UI already does this join
 	// inline; the JSON surface catches up here. jd_area_code is
@@ -658,11 +664,10 @@ func IsHighSensitivity(s string) bool {
 // visible (with trashed_at set) so mobile clients can render the
 // undelete flow.
 func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
-	principal := auth.FromContext(r.Context())
-	if principal == nil {
-		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+	if !auth.RequireScope(w, r, auth.ScopeDocumentsRead) {
 		return
 	}
+	principal := auth.FromContext(r.Context())
 	id, err := parseIDPath(r)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "invalid id")
@@ -671,6 +676,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, principal, authz.KindDocument, id, authz.PermView) {
 		return
 	}
+	includeContent := r.URL.Query().Get("include_content") != "0"
 
 	var (
 		d           DocumentDetail
@@ -685,28 +691,33 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		jdAreaName  sql.NullString
 	)
 	var (
-		languagesStored string
-		languagesLocked int
-		sourceMTime     sql.NullInt64
+		languagesStored         string
+		languagesLocked         int
+		sourceMTime             sql.NullInt64
+		deviceContentConfidence sql.NullFloat64
+		deviceContentReceivedAt sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT d.id, d.owner_id, d.title, COALESCE(d.content, ''),
+		SELECT d.id, d.owner_id, d.title,
+		       CASE WHEN ? THEN COALESCE(d.content, '') ELSE '' END,
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
 		       d.jd_category_id, d.sensitivity,
 		       d.created_at, COALESCE(d.added_at, d.created_at), d.updated_at, d.trashed_at,
 		       jc.code, jc.name, ja.name,
 		       d.languages, d.languages_locked,
-		       d.source_mtime, COALESCE(d.encryption_state, '')
+		       d.source_mtime, d.content_source, d.device_content_confidence,
+		       d.device_ocr_language, d.device_content_received_at, COALESCE(d.encryption_state, '')
 		FROM documents d
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
 		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
 		WHERE d.id = ?
-	`, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
-		&sourceMTime, &d.EncryptionState)
+		&sourceMTime, &d.ContentSource, &deviceContentConfidence,
+		&d.DeviceOCRLanguage, &deviceContentReceivedAt, &d.EncryptionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
@@ -748,6 +759,14 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if sourceMTime.Valid {
 		v := sourceMTime.Int64
 		d.SourceMTime = &v
+	}
+	if deviceContentConfidence.Valid {
+		v := deviceContentConfidence.Float64
+		d.DeviceContentConfidence = &v
+	}
+	if deviceContentReceivedAt.Valid {
+		v := deviceContentReceivedAt.Int64
+		d.DeviceContentReceivedAt = &v
 	}
 	d.Languages = strings.Join(lang.Parse(languagesStored), ",")
 	d.LanguagesLocked = languagesLocked != 0
@@ -870,56 +889,4 @@ func deriveTitle(filename string) string {
 		return "Untitled"
 	}
 	return base
-}
-
-// sniffMIME reads the first 512 bytes from CAS(sha) and runs
-// net/http.DetectContentType on them. Returns "application/octet-stream"
-// on any error — the caller decides whether that's a soft-fail or a
-// harder one.
-//
-// Refinement step: if the stdlib sniffer returns "application/zip",
-// peek inside the archive to distinguish office documents (docx/xlsx/
-// pptx/odt/ods/odp), EPUB, and other zip-based formats. Without this
-// refinement, docx uploads land as application/zip and skip the
-// anydoc extractor.
-func (s *Server) sniffMIME(sha string) (string, error) {
-	rc, err := s.CAS.Get(sha)
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-	var head [512]byte
-	n, err := io.ReadFull(rc, head[:])
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return "", err
-	}
-	mime := http.DetectContentType(head[:n])
-	if mime != "application/zip" {
-		return mime, nil
-	}
-	// Zip refine: re-open, size the blob, hand to refineZipMIME. Any
-	// failure (unreadable zip, format not one we recognize) falls back
-	// to application/zip — safe non-regression.
-	stat, err := s.CAS.Stat(sha)
-	if err != nil {
-		return mime, nil
-	}
-	rc2, err := s.CAS.Get(sha)
-	if err != nil {
-		return mime, nil
-	}
-	defer rc2.Close()
-	// Today's filesystem CAS returns *os.File which is an io.ReaderAt;
-	// future backends (S3, blob-crypt) might not. Fall through if the
-	// assertion fails — no zip refine possible without random access,
-	// keeps application/zip.
-	ra, ok := rc2.(io.ReaderAt)
-	if !ok {
-		return mime, nil
-	}
-	refined, err := refineZipMIME(ra, stat.Size)
-	if err != nil || refined == "" {
-		return mime, nil
-	}
-	return refined, nil
 }

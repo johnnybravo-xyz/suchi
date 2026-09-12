@@ -1,0 +1,22 @@
+{
+  "count": 2,
+  "results": [
+    {
+      "id": 91,
+      "title": "March electricity bill",
+      "snippet": "March <mark>electricity</mark> bill",
+      "rank": -3.25,
+      "created_at": 1746662400,
+      "mime_type": "application/pdf"
+    },
+    {
+      "id": 92,
+      "title": "Restricted statement",
+      "snippet": "",
+      "rank": -2.75,
+      "created_at": 1746576000,
+      "mime_type": "application/pdf",
+      "sensitivity": "restricted"
+    }
+  ]
+}

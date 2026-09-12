@@ -133,7 +133,7 @@ func TestScratchBrowserEntriesKeepAPIRestrictions(t *testing.T) {
 func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/documents/{id}/decrypt", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	for _, pattern := range []string{"GET /api/documents/", "GET /api/documents/{id}/download", "PATCH /api/documents/{id}", "GET /api/events/", "GET /api/future-secret", "GET /debug/pprof/", "POST /api/tokens/", "POST /api/chat", "POST /api/approvals/definitions"} {
+	for _, pattern := range []string{"GET /api/handshake", "GET /api/documents/", "GET /api/documents/{id}/download", "PATCH /api/documents/{id}", "GET /api/events/", "GET /api/future-secret", "GET /debug/pprof/", "POST /api/tokens/", "POST /api/chat", "POST /api/approvals/definitions"} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	}
 	mux.Handle("GET /metrics", requireOperationalAdmin(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })))
@@ -142,6 +142,7 @@ func TestTokenPolicyRoutingBoundaries(t *testing.T) {
 		name, method, path, scope, role, kind string
 		want                                  int
 	}{
+		{"handshake has no scope", "GET", "/api/handshake", "", "member", "token", 204},
 		{"slashless collection", "GET", "/api/documents", auth.ScopeDocumentsRead, "member", "token", 204},
 		{"HEAD read scope", "HEAD", "/api/documents/", auth.ScopeDocumentsRead, "member", "token", 204},
 		{"HEAD still needs scope", "HEAD", "/api/documents/", auth.ScopeEventsRead, "member", "token", 403},

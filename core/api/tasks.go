@@ -84,6 +84,14 @@ type TasksResponse struct {
 	ApprovalTasks []ApprovalTask `json:"approval_tasks,omitempty"`
 }
 
+type taskFilters struct {
+	State      string
+	Limit      int
+	DocumentID int64
+	KindPrefix string
+	Include    string
+}
+
 // ListTasks serves GET /api/tasks/. Query params:
 //
 //	?state=pending|running|done|dead   (default: pending+running+dead)
@@ -102,15 +110,11 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
-	q := r.URL.Query()
-	limit := 50
-	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 {
-		limit = min(v, 200)
+	filters, err := parseTaskFilters(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_task_filter", err.Error())
+		return
 	}
-	state := q.Get("state")
-	docID, _ := strconv.ParseInt(q.Get("doc_id"), 10, 64)
-	kindPrefix := q.Get("kind")
-	include := q.Get("include") // "", "jobs", "approvals"
 	visibility := ""
 	var visibilityArgs []any
 	if principal.Role != "admin" {
@@ -122,17 +126,20 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		visibility, visibilityArgs = documentVisibilityWhere(principal, groups)
 	}
 
-	counts, err := s.taskCounts(r, visibility, visibilityArgs)
-	if err != nil {
-		s.Log.Error("api.tasks.counts", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read counts")
-		return
+	counts := emptyTaskCounts()
+	if filters.Include != "approvals" {
+		counts, err = s.taskCounts(r, filters, visibility, visibilityArgs)
+		if err != nil {
+			s.Log.Error("api.tasks.counts", "err", err.Error())
+			s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read counts")
+			return
+		}
 	}
 
 	resp := TasksResponse{Counts: counts, Results: []Task{}}
 
-	if include != "approvals" {
-		rows, err := s.taskRows(r, state, docID, kindPrefix, limit, visibility, visibilityArgs)
+	if filters.Include != "approvals" {
+		rows, err := s.taskRows(r, filters, visibility, visibilityArgs)
 		if err != nil {
 			s.Log.Error("api.tasks.query", "err", err.Error())
 			s.writeError(w, http.StatusInternalServerError, "db_read", "failed to read tasks")
@@ -143,8 +150,8 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if include != "jobs" && principal.UserID > 0 {
-		atasks, open, err := s.approvalTasksForUser(r, principal.UserID, principal.Role, limit)
+	if filters.Include != "jobs" && principal.UserID > 0 {
+		atasks, open, err := s.approvalTasksForUser(r, principal.UserID, principal.Role, filters.Limit)
 		if err != nil {
 			s.serverErr(w, "tasks.approvals_query", err)
 			return
@@ -154,6 +161,42 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+func parseTaskFilters(r *http.Request) (taskFilters, error) {
+	q := r.URL.Query()
+	for _, key := range []string{"state", "limit", "doc_id", "kind", "include"} {
+		if len(q[key]) > 1 {
+			return taskFilters{}, fmt.Errorf("%s must occur at most once", key)
+		}
+	}
+
+	filters := taskFilters{Limit: 50, State: q.Get("state"), KindPrefix: q.Get("kind"), Include: q.Get("include")}
+	if filters.State != "" && filters.State != "pending" && filters.State != "running" &&
+		filters.State != "done" && filters.State != "dead" {
+		return taskFilters{}, errors.New("state must be pending, running, done, or dead")
+	}
+	if raw := q.Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return taskFilters{}, errors.New("limit must be a positive integer")
+		}
+		filters.Limit = min(value, 200)
+	}
+	if raw := q.Get("doc_id"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return taskFilters{}, errors.New("doc_id must be a positive integer")
+		}
+		filters.DocumentID = value
+	}
+	if len(filters.KindPrefix) > 128 {
+		return taskFilters{}, errors.New("kind must be at most 128 bytes")
+	}
+	if filters.Include != "" && filters.Include != "jobs" && filters.Include != "approvals" {
+		return taskFilters{}, errors.New("include must be jobs or approvals")
+	}
+	return filters, nil
 }
 
 // RetryDeadJob moves one dead outbox row back to pending. Reusing the row
@@ -253,23 +296,18 @@ func (s *Server) mutateDeadJob(r *http.Request, id int64, dismiss bool) (deadJob
 	return job, err
 }
 
-// taskCounts returns pending/running/done/dead counts for visible jobs.
-func (s *Server) taskCounts(r *http.Request, visibility string, args []any) (map[string]int, error) {
-	from := "FROM jobs j"
-	where := ""
-	if visibility != "" {
-		from += " JOIN documents d ON d.id = j.doc_id"
-		where = " WHERE " + visibility
-	}
+// taskCounts returns per-state counts under the same state, document, kind,
+// and visibility filters as Results. A count never describes jobs the caller
+// did not ask for or cannot see.
+func (s *Server) taskCounts(r *http.Request, filters taskFilters, visibility string, visibilityArgs []any) (map[string]int, error) {
+	from, where, args := taskQuery(filters, visibility, visibilityArgs, false)
 	rows, err := s.DB.Read.QueryContext(r.Context(),
 		"SELECT j.state, COUNT(*) "+from+where+" GROUP BY j.state", args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]int{
-		"pending": 0, "running": 0, "done": 0, "dead": 0,
-	}
+	out := emptyTaskCounts()
 	for rows.Next() {
 		var state string
 		var n int
@@ -281,37 +319,19 @@ func (s *Server) taskCounts(r *http.Request, visibility string, args []any) (map
 	return out, rows.Err()
 }
 
+func emptyTaskCounts() map[string]int {
+	return map[string]int{"pending": 0, "running": 0, "done": 0, "dead": 0}
+}
+
 // taskRows returns the newest `limit` jobs matching the filters. Order
 // is created_at DESC, id DESC so the UI shows the freshest work first.
 //
 // The default filter (empty state) hides state=done because a healthy
 // instance drowns the response in done rows otherwise. Callers who
 // want completed jobs pass ?state=done explicitly.
-func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix string, limit int, visibility string, visibilityArgs []any) ([]Task, error) {
-	args := append([]any{}, visibilityArgs...)
-	from := "FROM jobs j"
-	where := "WHERE 1=1"
-	if visibility != "" {
-		from += " JOIN documents d ON d.id = j.doc_id"
-		where += " AND " + visibility
-	}
-	if state != "" {
-		where += " AND j.state = ?"
-		args = append(args, state)
-	} else {
-		where += " AND j.state != 'done'"
-	}
-	if docID > 0 {
-		where += " AND j.doc_id = ?"
-		args = append(args, docID)
-	}
-	if kindPrefix != "" {
-		// Treat the requested kind as a literal prefix, including LIKE
-		// metacharacters that may appear in integration-defined job names.
-		where += " AND j.kind LIKE ? ESCAPE '\\'"
-		args = append(args, escapeLike(kindPrefix)+"%")
-	}
-	args = append(args, limit)
+func (s *Server) taskRows(r *http.Request, filters taskFilters, visibility string, visibilityArgs []any) ([]Task, error) {
+	from, where, args := taskQuery(filters, visibility, visibilityArgs, true)
+	args = append(args, filters.Limit)
 
 	q := `
 		SELECT j.id, j.kind, j.state, j.attempts, COALESCE(j.doc_id, 0),
@@ -341,6 +361,33 @@ func (s *Server) taskRows(r *http.Request, state string, docID int64, kindPrefix
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+func taskQuery(filters taskFilters, visibility string, visibilityArgs []any, hideDoneByDefault bool) (string, string, []any) {
+	args := append([]any{}, visibilityArgs...)
+	from := "FROM jobs j"
+	where := " WHERE 1=1"
+	if visibility != "" {
+		from += " JOIN documents d ON d.id = j.doc_id"
+		where += " AND " + visibility
+	}
+	if filters.State != "" {
+		where += " AND j.state = ?"
+		args = append(args, filters.State)
+	} else if hideDoneByDefault {
+		where += " AND j.state != 'done'"
+	}
+	if filters.DocumentID > 0 {
+		where += " AND j.doc_id = ?"
+		args = append(args, filters.DocumentID)
+	}
+	if filters.KindPrefix != "" {
+		// Treat the requested kind as a literal prefix, including LIKE
+		// metacharacters that may appear in integration-defined job names.
+		where += " AND j.kind LIKE ? ESCAPE '\\'"
+		args = append(args, escapeLike(filters.KindPrefix)+"%")
+	}
+	return from, where, args
 }
 
 func escapeLike(s string) string {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -54,4 +56,48 @@ func isLocalPublicURL(raw string) bool {
 		return true
 	}
 	return false
+}
+
+// secureDevListenAddr returns the effective TCP listener for dev mode. The
+// normal production default (:8000) is narrowed to IPv4 loopback; wildcard,
+// public, and hostname listeners are refused. A physical device may use one
+// explicit private interface only when SUCHI_DEV_ALLOW_LAN=1 and PUBLIC_URL
+// names that same private literal.
+func secureDevListenAddr(listenAddr, publicURL string, allowLAN bool) (string, error) {
+	listenAddr = strings.TrimSpace(listenAddr)
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("invalid LISTEN_ADDR %q: %w", listenAddr, err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("invalid LISTEN_ADDR port %q", port)
+	}
+
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return net.JoinHostPort("127.0.0.1", port), nil
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return "", fmt.Errorf("dev LISTEN_ADDR host %q must be a loopback or private IP literal", host)
+	}
+	if ip.IsLoopback() {
+		return net.JoinHostPort(ip.String(), port), nil
+	}
+	if !ip.IsPrivate() || ip.IsUnspecified() {
+		return "", fmt.Errorf("dev LISTEN_ADDR host %q is not a private interface", host)
+	}
+	if !allowLAN {
+		return "", fmt.Errorf("private dev listener %q requires SUCHI_DEV_ALLOW_LAN=1", listenAddr)
+	}
+
+	public, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil {
+		return "", fmt.Errorf("invalid PUBLIC_URL: %w", err)
+	}
+	publicIP := net.ParseIP(public.Hostname())
+	if publicIP == nil || !publicIP.Equal(ip) {
+		return "", fmt.Errorf("PUBLIC_URL must use the same private IP literal as LISTEN_ADDR when SUCHI_DEV_ALLOW_LAN=1")
+	}
+	return net.JoinHostPort(ip.String(), port), nil
 }

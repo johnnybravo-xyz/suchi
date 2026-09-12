@@ -92,6 +92,16 @@ For a new upload, `UploadDocument` follows this sequence:
    local archive matching, automations, filing-view and thumbnail refresh, and
    the optional `post-classify` handoff.
 
+Document and version uploads share `core/api/upload_prepare.go` for multipart
+validation, rewind-safe MIME detection, source attribution, CAS storage, and
+idempotency fingerprints. Each handler owns its transaction and authorization.
+Keyed retries persist their response with the document and job in
+`upload_idempotency`; subsequent keyed uploads prune records older than 30
+days. Device OCR is provisional PDF text gated by the configured confidence;
+native PDF text remains authoritative, and empty extraction cannot erase
+accepted device text. Split children retain their immutable upload origin so
+clients can resolve completed parts after the parent is retired.
+
 Mail attachment creation and post-ingest refine missing, generic, or malformed
 MIME labels from the original bytes through `core/mimeutil`. Specific valid
 source types remain intact. An explicit rescan can therefore repair a PDF
@@ -174,6 +184,15 @@ prepared release. Startup validates every version before touching the database
 and rejects duplicate or nonpositive versions with the conflicting names.
 See [Release process](/release-process).
 
+The mobile release adds `0003_mobile_ingest.sql` after the unchanged beta.2
+`0002_document_intelligence.sql`. It contains OCR provenance, split origins,
+the upload-idempotency table and retention index, and one pending mobile pairing
+digest per user. `0004_mobile_tokens.sql` adds the constrained `api_tokens.source`
+column without rewriting credentials. This forward migration preserves archives
+that already applied the mobile preview's 0003; unknown legacy provenance stays
+empty. Upgrade coverage starts from populated beta.2 and mobile-preview archives
+as well as a fresh database.
+
 ## HTTP and security boundaries
 
 `distro/cmd/suchi/serve_middleware.go: buildHTTPHandler` composes request IDs,
@@ -208,6 +227,39 @@ cannot read document content. Document-read access still needs a document ACL.
 Token management requires a browser/OIDC identity: API tokens cannot mint,
 list, or revoke credentials. Admin-token metrics remain a deliberate exception;
 read [HTTP API](/api) before changing compatibility.
+
+First-party clients probe public `GET /api/handshake` before sending credentials.
+`GET /api/whoami` reports the actual token scopes alongside the build identity.
+Password exchange at `/api/token/` creates only an API token; browser login at
+`/api/login` creates only a session. Mobile reads reuse the existing ACL-filtered
+API, with metadata-only detail requests and sensitive search snippets withheld.
+
+`core/api/mobile_pairing.go` connects an existing browser/OIDC session to a new
+mobile device without a password in the QR. Session-only creation replaces a
+five-minute pairing and renders its PNG locally through the existing QR library.
+The link binds the opaque code to configured `PUBLIC_URL`, never forwarded host
+headers. Creation applies the mobile client's HTTPS/local-HTTP boundary:
+HTTP accepts only localhost, loopback and private literal IPs, not the broader
+integration-egress policy's local DNS or link-local addresses. Invalid origins
+fail before replacing a pending code. `mobile_pairings` stores only a SHA-256
+code digest, owner, fallback token name, and expiry; user deletion cascades, and later
+creation prunes expired rows.
+The public handshake advertises `pairing_device_name` support. Exchange accepts
+an optional `device_name` from the phone; a trimmed nonblank value replaces the
+browser label. Names are bounded to 64 Unicode code points with no controls
+before consuming a code, so a validation retry cannot burn the pending pairing.
+No new storage or permission is needed: the existing token name owns this label.
+Public exchange atomically deletes one valid code for an enabled user, commits,
+then calls the existing `TokenIssuer` outside the write transaction with fixed
+document-read/write scopes and the server-selected `mobile_pairing` source.
+Local auth commits that source with the token digest in one insert, so issuance
+cannot create a credential without its connected-app metadata. Manual token
+creation and password exchange pass an empty source. The session-only token
+projection exposes owner/source and active credentials only; existing ownership
+and revocation rules apply. A failed or lost exchange is not replayable. No
+pairing credential is logged or cacheable, and cancellation matches both user
+and digest so stale dialogs cannot revoke a replacement. Endpoint, QR decode,
+race, migration, and assembled origin/token-policy tests cover this boundary.
 
 Browser demo visitors use HttpOnly cookies too. The anonymous cookie is signed
 and stateless; the first write exchanges it for an ordinary digest-backed

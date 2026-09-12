@@ -113,7 +113,7 @@ environment overrides a file-side secret-file path.
 | Env var                           | Default                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATA_DIR`                        | `/data`                  | Root of `blobs/`, `suchi.db` + WAL, `backups/`, `config.toml`, `staging/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `LISTEN_ADDR`                     | `:8000`                  | HTTP listener.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `LISTEN_ADDR`                     | `:8000`                  | HTTP listener. In `SUCHI_DEV=1`, the wildcard default is narrowed to `127.0.0.1:8000`; public/wildcard listeners are refused. Physical-device LAN testing must name one private IP and set `SUCHI_DEV_ALLOW_LAN=1`.                                                                                                                                                                                                                                                                                                                   |
 | `LOG_LEVEL`                       | `info`                   | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `SUCHI_PPROF`                     | (unset)                  | Set to `1` to expose admin-authenticated `/debug/pprof/*` endpoints. Disable after profiling.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `TRUSTED_PROXY_CIDRS`             | (unset)                  | Comma-separated proxy networks allowed to supply `X-Forwarded-For` identities for login, share-link, and demo rate limits. The direct TCP peer must match; suchi then walks the header right-to-left and selects the first untrusted address. Leave unset when connecting directly. Configure the proxy to append or replace this header. |
@@ -122,6 +122,7 @@ environment overrides a file-side secret-file path.
 | `BACKUP_KEEP`                     | `7`                      | Retention — after each snapshot, prune all-but-the-latest N. `0` keeps everything (documented; not the default).                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `AUDIT_RETENTION_DAYS`            | `20`                     | Sliding window over `audit_events`. Rows older than this get pruned on the same tick as the backup snapshot. Range `0–100`; `0` disables (audit log grows forever). Directly bounds the storage growth path the `GET /api/events/` feed sits on.                                                                                                                                                                                                                                                                                |
 | `OCR_LANGUAGES`                   | `eng`                    | Comma-separated Tesseract language codes handed to every OCR call. The matching packs must be installed separately; see [Adding OCR languages](/formats#additional-ocr-languages). Each enabled pack adds processing work and memory use. Detected document languages are stored on `documents.languages`; they do not change this operator setting. Common Indian scripts include `hin`, `kan`, `tam`, `tel`, `ben`, `mar`, `guj`, `pan`, `mal`, and `urd`. |
+| `DEVICE_OCR_MIN_CONFIDENCE`       | `0.65`                   | Finite `[0,1]` threshold for promoting submitted mobile OCR to provisional searchable content. Confidence/language/receipt-time provenance is retained below the threshold, but the submitted text is discarded. Native PDF text remains authoritative; accepted device text avoids duplicate OCR only for image-only PDFs. |
 | `PDF_MAX_CONTENT_BYTES`           | `8M`                     | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit.                                                                                                                                                                                                                                                                                                                                                                         |
 | `ANYDOC_MAX_CONTENT_BYTES`        | `32M`                    | Cap on Markdown extracted from EPUB and office documents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `DJVU_MAX_CONTENT_BYTES`          | `32M`                    | Cap on `djvutxt` output length. Same reasoning as EPUB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -215,7 +216,8 @@ production uses — no dev-only mint helper, nothing new to learn.
 
 | Env var     | Default | Purpose                                                                                                                                |
 | ----------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `SUCHI_DEV` | (unset) | Set to `1` to enable dev-mode. Auto-provisions the fixed `dev@suchi.local` admin at boot; refuses to arm outside the guardrails below. |
+| `SUCHI_DEV`           | (unset) | Set to `1` to enable dev-mode. Auto-provisions the fixed `dev@suchi.local` admin at boot; refuses to arm outside the guardrails below. |
+| `SUCHI_DEV_ALLOW_LAN` | (unset) | Set to `1` only for physical-device testing, together with a `LISTEN_ADDR` naming the same private IP literal as `PUBLIC_URL`.          |
 
 The auto-provisioned admin is fixed: **email `dev@suchi.local`,
 password `devdevdev`**. That's not a placeholder — the plan is that
@@ -235,6 +237,13 @@ level=WARN msg=main.dev.ready
 
 Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
 
+- **Narrows the wildcard listener to loopback** — the normal `:8000` default
+  becomes `127.0.0.1:8000` in dev mode. Explicit wildcard, public-IP, and
+  hostname listeners are refused.
+- **Requires a deliberate LAN opt-in** — physical-device testing uses, for
+  example, `PUBLIC_URL=http://192.168.1.50:8000`,
+  `LISTEN_ADDR=192.168.1.50:8000`, and `SUCHI_DEV_ALLOW_LAN=1`. The two IP
+  literals must match; the server never binds every interface in dev mode.
 - **Refuses non-local `PUBLIC_URL`** — allows `localhost`,
   `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
   `::1`, bare hostnames without dots, and any `*.local` name.
@@ -255,16 +264,22 @@ Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
   making them admin.
 - **Does not resurrect a disabled admin** — a manually quarantined
   admin stays quarantined across dev restarts.
+- **Refuses normal startup while the public dev admin is enabled** — a data
+  directory armed by `SUCHI_DEV=1` cannot later be exposed by starting without
+  dev mode. Disable `dev@suchi.local` first, or use a different data directory;
+  disabling the account also invalidates its existing tokens.
 - **Emits an audit event** (`dev_admin.provision`) on every arm so
   post-hoc "was this row dev-created?" queries are easy.
 
 Multi-account testing: dev-mode only touches the `dev@suchi.local` row.
 Every other users-table row (`alice@ex.com`, `bob@ex.com`) survives
-restarts untouched. Create additional users via
-`POST /api/admin/users/` with the dev admin's token; they persist
-across dev-mode restarts as normal. Second _admin_ rows will block the
-next `SUCHI_DEV=1` boot — the right behaviour; drop the extra admin
-before restarting dev-mode, or launch without `SUCHI_DEV=1`.
+restarts untouched. Create additional users in Settings, or call
+`POST /api/admin/users/` with the dev admin's authenticated session cookie;
+admin routes do not accept API tokens. These users persist across dev-mode
+restarts as normal. Second _admin_ rows will block the next `SUCHI_DEV=1` boot
+— the right behaviour; drop the extra admin before restarting dev mode. A
+normal boot also refuses this data directory until the public
+`dev@suchi.local` account is disabled.
 
 <Warning>
   Dev-mode is a DX shortcut, not a production feature. The refusals above are

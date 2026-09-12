@@ -71,7 +71,20 @@ upload-list refresh state; other shared dependencies use normal chunking.
 The shared password-unlock indicator belongs to this group and reads the
 existing encryption state exposed by document list and detail responses.
 The QR encoder remains a separate on-demand import. My account defers archive configuration and loads
-mailbox code only for members who can manage mailboxes. Keep the shell at or
+mailbox code only for members who can manage mailboxes. The mobile pairing
+prompt loads only after its button is selected; it keeps the single-use secret
+in component memory, clears expired QR/link displays, and cancels an unused
+code on close or route navigation. A session refresh or account replacement
+clears and closes the prompt; generation and clipboard writes check its original
+owner before starting. Late responses cannot populate another account's prompt.
+`AccountSettings.svelte` owns one active-token list and renders the current
+account's `mobile_pairing` credentials in Mobile app through a shared row snippet;
+manual and legacy credentials remain in API tokens. Token reads refresh every
+two seconds only while the prompt is open, immediately on close, and on window
+focus. Reads are bounded, abortable, ordered, and checked against their original
+session; account changes clear the list, and unmount stops polling. Revocation
+reloads the list so an earlier poll cannot restore a disconnected app.
+Keep the shell at or
 below 35 KB gzip and remeasure the actual route dependency set after UI changes.
 
 Current production JavaScript sizes, measured with system `gzip -nc`. Route
@@ -80,27 +93,28 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,665 | 34,709 |
-| Documents / Inbox | 28,792 | 10,519 |
-| Document detail | 35,118 | 12,219 |
-| Upload | 13,112 | 5,964 |
-| Search | 8,894 | 4,284 |
-| Views | 14,629 | 5,290 |
-| Calendar | 16,915 | 6,603 |
-| Trash | 8,327 | 3,922 |
-| Approvals | 18,351 | 6,576 |
-| Automations | 17,940 | 5,955 |
-| My account, without mailbox capability | 13,156 | 4,818 |
-| Archive configuration, including its Settings entry | 107,746 | 35,639 |
-| Setup | 66,511 | 22,155 |
-| Demo | 5,578 | 2,339 |
-| Archive research drawer | 13,763 | 5,282 |
-| **All unique JavaScript chunks** | **390,165** | **138,601** |
+| Shell: navigation, Dashboard, login | 95,977 | 34,805 |
+| Documents / Inbox | 29,450 | 10,876 |
+| Document detail | 38,632 | 13,362 |
+| Upload | 13,631 | 6,234 |
+| Search | 9,413 | 4,575 |
+| Views | 16,510 | 5,909 |
+| Calendar | 16,913 | 6,645 |
+| Trash | 8,846 | 4,175 |
+| Approvals | 18,351 | 6,614 |
+| Automations | 17,940 | 5,989 |
+| My account, without mailbox capability | 15,908 | 5,868 |
+| Mobile pairing prompt, when opened from My account | 8,522 | 4,190 |
+| Archive configuration, including its Settings entry | 110,390 | 36,848 |
+| Setup | 66,406 | 22,246 |
+| Demo | 5,812 | 2,401 |
+| Archive research drawer | 13,763 | 5,298 |
+| **All unique JavaScript chunks** | **403,884** | **144,326** |
 
 The initial shell also transfers 5,219 gzip bytes of CSS. All CSS together is
-22,145 gzip bytes. The complete embedded SPA tree is 483,137 raw bytes. Shared
+22,722 gzip bytes. The complete embedded SPA tree is 498,219 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
-complete build. A mailbox-capable member additionally loads 10,511 gzip bytes
+complete build. A mailbox-capable member additionally loads 10,514 gzip bytes
 of mailbox JavaScript on My account.
 
 Smaller route transfers trade some whole-build compression for not fetching
@@ -108,7 +122,7 @@ unrelated screens. These are transfer-size measurements, not browser memory
 or startup-latency claims.
 
 At the same source and dependency pins, grouping document controls reduces
-unique JavaScript chunks from 24 to 21 and Documents' additional requests from
+unique JavaScript chunks from 26 to 22 and Documents' additional requests from
 five to two. The initial shell remains one request. First visits to Upload,
 Search, and Trash transfer roughly 1–2 KB more compressed controls, then reuse
 that cached chunk. Heavy settings, research, and the QR encoder stay deferred.

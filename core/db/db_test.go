@@ -95,9 +95,10 @@ func TestBeta1UpgradeToBeta2(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Beta.2 has one schema step after the published beta.1 baseline.
-	if len(migs) != 2 || migs[0].Version != 1 || migs[1].Version != 2 {
-		t.Fatalf("migration versions = %v, want [1 2]", migrationVersions(migs))
+	if len(migs) < 2 || migs[0].Version != 1 || migs[1].Version != 2 {
+		t.Fatalf("migration versions = %v, want beta.2 prefix [1 2]", migrationVersions(migs))
 	}
+	migs = migs[:2]
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	t.Run("upgrade", func(t *testing.T) {

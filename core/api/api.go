@@ -129,11 +129,15 @@ type Server struct {
 	// Wired at boot from the local-auth plugin so the session-authed
 	// (cookie / OIDC) caller can mint per-device tokens via
 	// /api/tokens/ without password re-entry. Nil disables the
-	// endpoint (returns 501).
-	TokenIssuer func(ctx context.Context, userID int64, name, scopes string) (string, error)
+	// endpoint (returns 501). Source is server-selected provenance and must
+	// be committed in the same transaction as the token.
+	TokenIssuer func(ctx context.Context, userID int64, name, scopes, source string) (string, error)
 	// Authz is the permission decision layer. New wires ACLAuthorizer;
 	// focused tests may substitute another implementation.
 	Authz authz.Authorizer
+	// deviceOCRMinConfidence gates provisional mobile OCR content. Mobile
+	// provenance is retained regardless of the threshold decision.
+	deviceOCRMinConfidence float64
 	// demo holds the demo-mode config surfaced by GET /api/demo/mode.
 	// Set via SetDemo at boot; zero value means demo is off.
 	demo DemoConfig
@@ -168,12 +172,13 @@ func New(d *db.DB, cas *blob.CAS, retention *trash.Service, log *slog.Logger) (*
 		return nil, errors.New("api.New: DB, CAS, trash, and Log are required")
 	}
 	return &Server{
-		DB:       d,
-		CAS:      cas,
-		Log:      log.With("component", "api"),
-		Authz:    authz.ACLAuthorizer{DB: d},
-		trash:    retention,
-		chatGate: newChatGate(),
+		DB:                     d,
+		CAS:                    cas,
+		Log:                    log.With("component", "api"),
+		deviceOCRMinConfidence: 0.65,
+		Authz:                  authz.ACLAuthorizer{DB: d},
+		trash:                  retention,
+		chatGate:               newChatGate(),
 	}, nil
 }
 
@@ -181,6 +186,13 @@ func New(d *db.DB, cas *blob.CAS, retention *trash.Service, log *slog.Logger) (*
 // when a fresh doc row lands. Returns s for chaining.
 func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 	s.Jobs = disp
+	return s
+}
+
+// WithDeviceOCRMinConfidence sets the minimum accepted device OCR confidence
+// that may become provisional searchable content.
+func (s *Server) WithDeviceOCRMinConfidence(confidence float64) *Server {
+	s.deviceOCRMinConfidence = confidence
 	return s
 }
 
@@ -194,6 +206,12 @@ func (s *Server) WithJobs(disp *jobs.Dispatcher) *Server {
 // serveBlob (sensitivity gate, ETag, sandbox CSP). A grep for those
 // routes finds them there, not in this file.
 func (s *Server) Register(mux *http.ServeMux) {
+	// Public compatibility probe. Clients call this before sending credentials.
+	mux.HandleFunc("GET /api/handshake", s.GetHandshake)
+	mux.HandleFunc("POST /api/mobile/pairing", s.CreateMobilePairing)
+	mux.HandleFunc("DELETE /api/mobile/pairing", s.DeleteMobilePairing)
+	mux.HandleFunc("POST /api/mobile/pairing/exchange", s.ExchangeMobilePairing)
+
 	// Documents.
 	mux.HandleFunc("POST /api/documents/", s.UploadDocument)
 	// Paginated list — every SPA list view + third-party client

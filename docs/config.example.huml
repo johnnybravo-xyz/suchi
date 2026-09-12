@@ -36,6 +36,7 @@ backup_interval: "24h"
 
 ocr_languages: "eng"
 ocr_engine: "auto"
+device_ocr_min_confidence: 0.65
 pdf_max_content_bytes: "8M"
 anydoc_max_content_bytes: "32M"
 djvu_max_content_bytes: "32M"

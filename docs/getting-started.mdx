@@ -5,13 +5,13 @@ description: "Install Suchi and complete the first-run setup."
 
 ## Docker
 
-The standard beta image is the recommended starting point:
+The moving standard beta image is a convenient local evaluation starting point:
 
 ```sh
 docker volume create suchi-data
 docker run -d --name suchi --restart unless-stopped \
   --read-only --tmpfs /tmp --security-opt no-new-privileges --cap-drop ALL \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
   -e PUBLIC_URL=http://127.0.0.1:8000 \
   -v suchi-data:/data \
   ghcr.io/johnnybravo-xyz/suchi:beta
@@ -20,6 +20,11 @@ docker logs suchi 2>&1 | grep token_minted
 
 Open `http://127.0.0.1:8000`, enter the one-time setup token from the log, and
 create the first administrator.
+
+This command accepts connections from the local machine only. The moving
+`beta` tag is for evaluation, not a production pin. A production server,
+including one reached by the mobile app, must use HTTPS and the published image
+digest for the selected release.
 
 The setup wizard then asks what you are organizing:
 
@@ -54,7 +59,9 @@ docker compose logs suchi | grep token_minted
 
 Set `PUBLIC_URL`, `SUCHI_PORT`, or `SUCHI_IMAGE` in `.env` before starting.
 Edit the volume and network definitions when integrating an existing reverse
-proxy or storage layout.
+proxy or storage layout. The default host binding is `127.0.0.1`; set
+`SUCHI_BIND_ADDRESS` deliberately if the proxy is on another host. Set
+`SUCHI_IMAGE` to the selected release's published digest before production.
 
 ## Direct binary
 
@@ -76,12 +83,14 @@ Use one application replica because SQLite has one writer.
 
 ## Image choice
 
-- `beta` is the standard Alpine image. It indexes scanned PDFs with Tesseract
-  and includes the supported office, email, image, and archive extractors.
-- `beta-full` adds OCRmyPDF so scanned PDF downloads can retain a searchable
-  text layer.
+- `beta` is the moving standard Alpine evaluation image. It indexes scanned
+  PDFs with Tesseract and includes the supported office, email, image, and
+  archive extractors.
+- `beta-full` is the moving full evaluation image. It adds OCRmyPDF so scanned
+  PDF downloads can retain a searchable text layer.
 
-The Suchi application is otherwise the same. See [Supported formats](/formats)
+The Suchi application is otherwise the same. Use the published digest for the
+chosen standard or full release in production. See [Supported formats](/formats)
 for exact routing, image sizes, and direct-install dependencies.
 
 ## First checks

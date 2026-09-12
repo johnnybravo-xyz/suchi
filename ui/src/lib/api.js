@@ -86,6 +86,10 @@ function qs(params) {
 }
 
 export const whoami = () => api.get('/api/whoami')
+export const createMobilePairing = (name) =>
+  req('POST', '/api/mobile/pairing', { name }, { signal: AbortSignal.timeout(15000) })
+export const cancelMobilePairing = (code) =>
+  req('DELETE', '/api/mobile/pairing', { code }, { signal: AbortSignal.timeout(10000) })
 export function login(email, password) {
   resetSessionRequests()
   return api.post('/api/login', { email, password })
@@ -210,7 +214,7 @@ export const uploadAvatar = (file) => {
   return req('POST', '/api/users/me/avatar', fd)
 }
 
-export const listTokens = () => api.get('/api/tokens/')
+export const listTokens = (signal) => api.get('/api/tokens/', { signal })
 export const createToken = (b) => api.post('/api/tokens/', b)
 export const deleteToken = (id) => api.del(`/api/tokens/${id}`)
 

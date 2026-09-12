@@ -78,6 +78,9 @@ func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecur
 		db: d, log: log.With("plugin", Name),
 		cookieSecure: cookieSecure, demoMode: demoMode,
 	}
+	if err := p.deleteExpiredSessions(ctx, time.Now()); err != nil {
+		return nil, fmt.Errorf("localauth: prune expired sessions: %w", err)
+	}
 	empty, err := usersEmpty(ctx, d)
 	if err != nil {
 		return nil, err
@@ -88,6 +91,12 @@ func NewWithOptions(ctx context.Context, d *db.DB, log *slog.Logger, cookieSecur
 		}
 	}
 	return p, nil
+}
+
+func (p *Plugin) deleteExpiredSessions(ctx context.Context, now time.Time) error {
+	_, err := p.db.ExecWrite(ctx,
+		"DELETE FROM sessions WHERE expires_at <= ?", now.Unix())
+	return err
 }
 
 func usersEmpty(ctx context.Context, d *db.DB) (bool, error) {
@@ -199,6 +208,26 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	p.log.Warn("localauth.dev_admin.ready",
 		"email", email,
 		"detail", "SUCHI_DEV=1 — admin auto-provisioned; do not use in production")
+	return nil
+}
+
+// RefuseEnabledDevAdmin prevents a data directory armed with the public
+// development credential from being reused by a normal server. Operators can
+// deliberately quarantine the account by disabling it before a non-dev boot;
+// disabled users also cannot authenticate with their previously issued tokens.
+func (p *Plugin) RefuseEnabledDevAdmin(ctx context.Context) error {
+	var disabled bool
+	err := p.db.Read.QueryRowContext(ctx,
+		`SELECT disabled FROM users WHERE email = ?`, DevAdminEmail).Scan(&disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("localauth: inspect development admin: %w", err)
+	}
+	if !disabled {
+		return fmt.Errorf("localauth: enabled public development admin %q remains in this data directory", DevAdminEmail)
+	}
 	return nil
 }
 
@@ -318,7 +347,10 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 	if err != nil {
 		return nil, err
 	}
-	if time.Now().Unix() > expires {
+	if time.Now().Unix() >= expires {
+		// Authentication has already failed; cleanup is best-effort so a
+		// transient write error cannot turn an expired cookie into a 500.
+		_, _ = p.db.ExecWrite(ctx, "DELETE FROM sessions WHERE id = ?", digest(sid))
 		return nil, errors.New("session expired")
 	}
 	principal := &pluginapi.Principal{

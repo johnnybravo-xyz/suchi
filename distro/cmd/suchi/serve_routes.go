@@ -30,7 +30,7 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 		mux.HandleFunc("POST /setup", la.SetupHandler)
 		mux.HandleFunc("POST /bootstrap", la.SetupFormHandler)
 		mux.HandleFunc("POST /api/login", la.LoginHandler)
-		mux.HandleFunc("POST /api/token/", la.LoginHandler)
+		mux.HandleFunc("POST /api/token/", la.TokenHandler)
 	}
 
 	if !cfg.UIDisabled {

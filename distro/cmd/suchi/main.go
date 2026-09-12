@@ -267,6 +267,18 @@ func runServe() int {
 				"remediation", "point PUBLIC_URL at localhost / 127.0.0.1 / 10.0.0.0/8 / 172.16.0.0/12 / 192.168.0.0/16 / *.local")
 			return 1
 		}
+		listenAddr, err := secureDevListenAddr(cfg.ListenAddr, cfg.PublicURL, cfg.DevAllowLAN)
+		if err != nil {
+			log.Error("main.dev.refused",
+				"reason", err.Error(),
+				"listen_addr", cfg.ListenAddr,
+				"remediation", "use loopback, or set LISTEN_ADDR to one private IP plus SUCHI_DEV_ALLOW_LAN=1 for physical-device testing")
+			return 1
+		}
+		if listenAddr != cfg.ListenAddr {
+			log.Warn("main.dev.listener_narrowed", "configured", cfg.ListenAddr, "effective", listenAddr)
+			cfg.ListenAddr = listenAddr
+		}
 		if err := la.EnsureDevAdmin(ctx, localauth.DevAdminEmail, localauth.DevAdminPassword); err != nil {
 			log.Error("main.dev.ensure_admin", "err", err.Error())
 			return 1
@@ -287,6 +299,11 @@ func runServe() int {
 				"source": "SUCHI_DEV",
 			},
 		})
+	} else if err := la.RefuseEnabledDevAdmin(ctx); err != nil {
+		log.Error("main.dev_admin.refused",
+			"reason", err.Error(),
+			"remediation", "disable dev@suchi.local or use a different DATA_DIR before starting without SUCHI_DEV=1")
+		return 1
 	}
 
 	// OIDC must inspect bearer tokens before local cookie/token auth.
@@ -562,6 +579,7 @@ func runServe() int {
 	apiSrv.PublicURL = cfg.PublicURL
 	buildInfo, _ := debug.ReadBuildInfo()
 	apiSrv.BuildVersion, apiSrv.BuildRevision = buildIdentity(buildInfo)
+	apiSrv.WithDeviceOCRMinConfidence(cfg.DeviceOCRMinConfidence)
 	apiSrv.PasswordHasher = localauth.HashPassword
 	apiSrv.PasswordVerifier = localauth.VerifyPassword
 	apiSrv.LLMAEAD = decryptKey

@@ -14,10 +14,15 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Show a password-unlocked indicator in document lists, grids, and detail,
   including documents automatically unlocked with saved passwords.
-
 - Edit tags directly on document detail, including documents with no tags.
 - Edit existing saved views in place, including their name, query, filters, and
   sharing, while preserving legacy filter scopes and exact research snapshots.
+- Pair a mobile device from a signed-in browser using a locally generated QR
+  with a five-minute, single-use code and document-only token scopes.
+- First-party mobile clients can negotiate API compatibility, inspect token
+  scopes, submit timestamped PDF OCR with explicit provenance, retry document
+  and version uploads idempotently, resolve QR-split children, request bounded
+  thumbnails, and fetch metadata without transferring extracted text.
 
 ### Changed
 
@@ -29,8 +34,34 @@ Notable user-visible changes to Suchi are recorded here.
 - Release images reuse the verified AnyDoc binaries built for standalone
   downloads, avoiding a second Rust compilation for each architecture. Local
   Docker builds and standalone packages share the same pinned build recipe.
+- Mobile pairing records the device name confirmed in the app as the connected
+  entry's label. Older clients retain the browser label; invalid names can be
+  corrected without consuming the pairing code.
+- Successful mobile QR-code and pairing-link exchanges now appear in Settings
+  > My account > Mobile app, with connection and last-use dates and Revoke.
+  The list refreshes during pairing and excludes revoked or signed-out devices.
+- A forward migration preserves existing mobile-preview credentials; older
+  tokens remain in API tokens until replaced through pairing.
+- Sized thumbnail requests decode image pixels only when resizing is needed,
+  avoiding unnecessary work for cached and original-size responses.
+- Mobile schema changes ship after the unchanged beta.2 schema. Browser login
+  creates only a session; headless credential exchange uses `/api/token/`
+  without leaving unused browser sessions.
 
-## [0.1.0-beta.2] - 2026-09-08
+### Security
+
+- Pairing creation rejects origins the mobile app cannot use: HTTP requires
+  localhost, loopback or private literal IPs, with an actionable configuration
+  error for named/public HTTP hosts and link-local addresses.
+- Mobile pairing prompts clear and close on session refresh or account changes;
+  stale prompts cannot generate codes or copy the previous account's link.
+- Developer mode binds loopback by default and requires an explicit matching
+  private interface opt-in for physical-device LAN testing. Production startup
+  rejects an enabled account retaining the public development credentials.
+- Version-upload outcomes and version lists check each document's permissions,
+  including duplicate responses and replayed uploads.
+
+## [0.1.0-beta.2] - 2026-09-05
 
 ### Added
 

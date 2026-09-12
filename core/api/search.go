@@ -16,12 +16,13 @@ import (
 // mobile clients already accept from /api/documents/{id} — same field
 // names — with a per-hit `rank` score from FTS5.
 type SearchHit struct {
-	ID        int64   `json:"id"`
-	Title     string  `json:"title"`
-	Snippet   string  `json:"snippet"`
-	Rank      float64 `json:"rank"`
-	CreatedAt int64   `json:"created_at"`
-	MIME      string  `json:"mime_type,omitempty"`
+	ID          int64   `json:"id"`
+	Title       string  `json:"title"`
+	Snippet     string  `json:"snippet"`
+	Rank        float64 `json:"rank"`
+	CreatedAt   int64   `json:"created_at"`
+	MIME        string  `json:"mime_type,omitempty"`
+	Sensitivity string  `json:"sensitivity,omitempty"`
 }
 
 // Ranking constants. BM25F weights favour title matches over body-text
@@ -126,7 +127,7 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	if queryPlan.Match == "" {
 		pageSQL = `
 			SELECT d.id, d.title, '', 0.0, d.created_at,
-			       COALESCE(d.mime_type, '')` +
+			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')` +
 			fromSQL + whereSQL + `
 			ORDER BY d.created_at DESC, d.id DESC
 			LIMIT ? OFFSET ?`
@@ -160,7 +161,7 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var hit SearchHit
 		if err := rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.Rank,
-			&hit.CreatedAt, &hit.MIME); err != nil {
+			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity); err != nil {
 			s.serverErr(w, "search.scan", err)
 			return
 		}
@@ -184,9 +185,10 @@ func searchFTSPageSQL(whereSQL, rankExpr string) string {
 			LIMIT ? OFFSET ?
 		)
 		SELECT d.id, d.title,
-		       COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), ''),
+		       CASE WHEN COALESCE(d.sensitivity, '') IN ('confidential', 'restricted') THEN ''
+		            ELSE COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), '') END,
 		       ranked.match_rank, d.created_at,
-		       COALESCE(d.mime_type, '')
+		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')
 		FROM ranked
 		JOIN documents d ON d.id = ranked.id
 		CROSS JOIN documents_fts
@@ -199,9 +201,10 @@ func searchFTSRawPageSQL(whereSQL string) string {
 	// Plain BM25 is faster in one FTS scan than through a second bounded MATCH.
 	return `
 		SELECT d.id, d.title,
-		       COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), ''),
+		       CASE WHEN COALESCE(d.sensitivity, '') IN ('confidential', 'restricted') THEN ''
+		            ELSE COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), '') END,
 		       bm25(documents_fts, ?, ?) AS match_rank, d.created_at,
-		       COALESCE(d.mime_type, '')
+		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')
 		FROM documents_fts
 		JOIN documents d ON d.id = documents_fts.rowid` + whereSQL + `
 		ORDER BY match_rank, d.id

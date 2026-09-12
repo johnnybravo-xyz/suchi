@@ -196,9 +196,36 @@ for updates.
 Every user has **Settings > My account**:
 
 - **Profile**
+- **Mobile app**, outside demo sessions
 - **API tokens**
 - **Mailboxes**, only for a member with **Manage mailboxes**
 - **Saved decryption passwords**
+
+**Pair mobile app** opens a prompt to name the device and generate a QR code.
+Scan it in the Suchi app and confirm the displayed server address before
+connecting. The code is private, works once, and expires after five minutes.
+A new code replaces the previous one; closing the prompt cancels an unused
+code. Every successful QR-code or pairing-link exchange adds an entry under
+**Mobile app** with its device name, document read/write access, connection date,
+and last-use date. Updated apps fill in the device name during confirmation;
+you can edit it on the phone before connecting. That name replaces the label
+entered in the browser. iOS may supply only “iPhone” or “iPad,” so use a
+recognizable name such as “Ritesh’s iPhone” when needed. Older clients retain the
+browser label. Already connected apps keep their recorded name until paired again.
+The list refreshes while the pairing prompt is open, when
+it closes, and when you return to the browser window. **Revoke** immediately
+disconnects that app; signing out in the app also removes its active entry.
+Generating, cancelling, or attempting an expired code does not add a device.
+
+Each completed pairing creates its own entry, even if device names match.
+Credentials created before this update remain under **API tokens** because
+their pairing origin was not recorded. Revoke and pair them again to show them
+under **Mobile app**. Manual password/API-token connections remain API tokens.
+
+If scanning or clipboard access is unavailable, select and copy the pairing
+link manually, then use **Paste pairing link** in the app. Manual server and
+password/API-token sign-in remains available. Pairing is part of the later
+mobile release, not the beta.2 server release.
 
 Administrators also have **Settings > Archive configuration**. Its overview
 uses these exact groups and sections:

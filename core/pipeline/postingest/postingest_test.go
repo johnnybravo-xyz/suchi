@@ -193,6 +193,127 @@ func TestHandleRoutingContracts(t *testing.T) {
 	}
 }
 
+func TestPDFContentAuthority(t *testing.T) {
+	tests := []struct {
+		name       string
+		pdfText    string
+		wantText   string
+		wantSource string
+	}{
+		{
+			name:       "image-only PDF retains accepted device OCR",
+			wantText:   "accepted private device text",
+			wantSource: "device_ocr",
+		},
+		{
+			name:       "text-native PDF supersedes device OCR",
+			pdfText:    "Authoritative native PDF text with enough nonblank words for extraction.",
+			wantText:   "Authoritative native PDF text",
+			wantSource: "server",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			d, cas := openPostIngestHarness(t)
+			docID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("pdf bytes"))
+			if _, err := d.ExecWrite(ctx, `
+				UPDATE documents
+				SET content = 'accepted private device text',
+				    content_source = 'device_ocr',
+				    device_content_confidence = 0.9,
+				    device_ocr_language = 'en_US',
+				    device_content_received_at = 10
+				WHERE id = ?
+			`, docID); err != nil {
+				t.Fatal(err)
+			}
+
+			binDir := t.TempDir()
+			writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\n/bin/cat in.pdf\n")
+			writeExecutable(t, filepath.Join(binDir, "pdftotext"), "#!/bin/sh\necho '"+tc.pdfText+"'\n")
+			// If the image-only accepted-device path invokes server OCR, these
+			// available-but-failing binaries make the regression observable.
+			writeExecutable(t, filepath.Join(binDir, "pdftoppm"), "#!/bin/sh\nexit 42\n")
+			writeExecutable(t, filepath.Join(binDir, "tesseract"), "#!/bin/sh\nexit 42\n")
+			t.Setenv("PATH", binDir)
+
+			h := New(
+				d,
+				cas,
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithOCREngine(OCREngineTesseract),
+			)
+			if err := h.Handle(ctx, pluginapi.Event{DocID: docID}); err != nil {
+				t.Fatal(err)
+			}
+
+			var (
+				content       string
+				contentSource string
+				confidence    float64
+				language      string
+				receivedAt    int64
+				contentVer    int
+				ocrVer        int
+			)
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT content, content_source, device_content_confidence,
+				       device_ocr_language, device_content_received_at,
+				       pipeline_version_content, pipeline_version_ocr
+				FROM documents WHERE id = ?
+			`, docID).Scan(
+				&content, &contentSource, &confidence, &language, &receivedAt,
+				&contentVer, &ocrVer,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(content, tc.wantText) || contentSource != tc.wantSource {
+				t.Fatalf("content/source = %q/%q, want containing %q/%q",
+					content, contentSource, tc.wantText, tc.wantSource)
+			}
+			if confidence != 0.9 || language != "en_US" || receivedAt != 10 {
+				t.Fatalf("provenance changed: confidence=%v language=%q received=%d",
+					confidence, language, receivedAt)
+			}
+			if contentVer != PipelineVersionContent || ocrVer != PipelineVersionOCR {
+				t.Fatalf("pipeline versions = %d/%d", contentVer, ocrVer)
+			}
+		})
+	}
+}
+
+func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "application/octet-stream", []byte("opaque"))
+	if _, err := d.ExecWrite(ctx, `
+		UPDATE documents
+		SET content = 'accepted private device text', content_source = 'device_ocr'
+		WHERE id = ?
+	`, docID); err != nil {
+		t.Fatal(err)
+	}
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := h.updateDoc(ctx, docID, "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	var content, contentSource string
+	var contentVer, ocrVer int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT content, content_source, pipeline_version_content, pipeline_version_ocr
+		FROM documents WHERE id = ?
+	`, docID).Scan(&content, &contentSource, &contentVer, &ocrVer); err != nil {
+		t.Fatal(err)
+	}
+	if content != "accepted private device text" || contentSource != "device_ocr" {
+		t.Fatalf("content/source = %q/%q", content, contentSource)
+	}
+	if contentVer != PipelineVersionContent || ocrVer != PipelineVersionOCR {
+		t.Fatalf("pipeline versions = %d/%d", contentVer, ocrVer)
+	}
+}
+
 func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
@@ -402,6 +523,19 @@ func TestFanOutSegmentsRetriesBeforeRetiringParent(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
 	parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source pdf"))
+	if _, err := d.ExecWrite(ctx, `
+		UPDATE documents
+		SET source_mtime = 1700000000,
+		    sensitivity = 'restricted',
+		    content = 'combined device text',
+		    content_source = 'device_ocr',
+		    device_content_confidence = 0.9,
+		    device_ocr_language = 'en_US',
+		    device_content_received_at = 1699999999
+		WHERE id = ?
+	`, parentID); err != nil {
+		t.Fatal(err)
+	}
 
 	binDir := t.TempDir()
 	failMarker := filepath.Join(binDir, "failed-once")
@@ -430,21 +564,58 @@ printf 'segment-%%s' "$4"
 	assertSplitState(t, d, parentID, true, 2)
 
 	rows, err := d.Read.QueryContext(ctx, `
-		SELECT title FROM documents WHERE split_parent_id = ? ORDER BY split_index
+		SELECT title, split_origin_id, source_mtime, sensitivity,
+		       COALESCE(content, ''), content_source, device_content_confidence,
+		       device_ocr_language, device_content_received_at
+		FROM documents WHERE split_parent_id = ? ORDER BY split_index
 	`, parentID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
 	wantTitles := []string{"opaque.bin (part 1/2)", "opaque.bin (part 2/2)"}
 	for i := 0; rows.Next(); i++ {
-		var title string
-		if err := rows.Scan(&title); err != nil {
+		var (
+			title         string
+			origin        int64
+			sourceMTime   sql.NullInt64
+			sensitivity   string
+			content       string
+			contentSource string
+			confidence    sql.NullFloat64
+			language      string
+			receivedAt    sql.NullInt64
+		)
+		if err := rows.Scan(&title, &origin, &sourceMTime, &sensitivity,
+			&content, &contentSource, &confidence, &language, &receivedAt); err != nil {
 			t.Fatal(err)
 		}
-		if i >= len(wantTitles) || title != wantTitles[i] {
-			t.Fatalf("child %d title = %q, want %q", i+1, title, wantTitles[i])
+		if i >= len(wantTitles) || title != wantTitles[i] || origin != parentID {
+			t.Fatalf("child %d title/origin = %q/%d, want %q/%d",
+				i+1, title, origin, wantTitles[i], parentID)
 		}
+		if !sourceMTime.Valid || sourceMTime.Int64 != 1700000000 || sensitivity != "restricted" {
+			t.Fatalf("child %d inherited mtime/sensitivity = %v/%q", i+1, sourceMTime, sensitivity)
+		}
+		if content != "" || contentSource != "" || confidence.Valid || language != "" || receivedAt.Valid {
+			t.Fatalf("child %d copied bundle OCR: content=%q source=%q confidence=%v language=%q received=%v",
+				i+1, content, contentSource, confidence, language, receivedAt)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecWrite(ctx, `DELETE FROM documents WHERE id = ?`, parentID); err != nil {
+		t.Fatal(err)
+	}
+	var survivingChildren int
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM documents
+		WHERE split_origin_id = ? AND split_parent_id IS NULL
+	`, parentID).Scan(&survivingChildren); err != nil {
+		t.Fatal(err)
+	}
+	if survivingChildren != 2 {
+		t.Fatalf("children surviving parent deletion = %d, want 2", survivingChildren)
 	}
 }
 

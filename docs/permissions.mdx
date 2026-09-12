@@ -45,6 +45,13 @@ autocomplete endpoints do not hide labels by object ACL.
 
 API token scopes and object permissions are separate gates. A token needs the
 endpoint's scope and the principal must be allowed to access the object.
+Mobile Reader calls require `documents:read` on document lists, search,
+document detail, version lists, thumbnails, and task reads. The scope check
+runs before object ACL and sensitivity checks; it never broadens row visibility.
+Mobile pairing should require both `documents:read` and `documents:write`.
+Upload idempotency keys are scoped to the authenticated user, but they never
+bypass authorization: token scope is checked on every document replay, and a
+version replay also rechecks change permission on its predecessor.
 
 ## Capabilities
 
@@ -110,11 +117,12 @@ PUT    /api/acls/{kind}/{id}
 DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
 ```
 
-Administrators can grant user 5 view and change access to document 17 with:
+ACL routes require an authenticated browser or OIDC session. An administrator
+can grant user 5 view and change access to document 17 with:
 
 ```sh
 curl -X PUT http://localhost:8000/api/acls/document/17 \
-  -H "Authorization: Token $ADMIN_TOKEN" \
+  -H "Cookie: suchi_session=$SUCHI_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"principal_kind":"user","principal_id":5,"perm_bits":3}'
 ```

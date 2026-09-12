@@ -1,0 +1,22 @@
+{
+  "count": 2,
+  "results": [
+    {
+      "id": 31,
+      "code": 31,
+      "name": "Utilities",
+      "description": "Recurring household services",
+      "area_code": 30,
+      "area_name": "Home"
+    },
+    {
+      "id": 49,
+      "code": 49,
+      "name": "Inbox",
+      "description": "Needs filing",
+      "area_code": 40,
+      "area_name": "Reference",
+      "system": true
+    }
+  ]
+}
