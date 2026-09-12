@@ -128,14 +128,13 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "thumb.read", err)
 		return
 	}
-	source, err := png.Decode(bytes.NewReader(sourceBytes))
+	config, err := png.DecodeConfig(bytes.NewReader(sourceBytes))
 	if err != nil {
 		s.serverErr(w, "thumb.decode", err)
 		return
 	}
-	sourceBounds := source.Bounds()
-	sourceWidth := sourceBounds.Dx()
-	sourceHeight := sourceBounds.Dy()
+	sourceWidth := config.Width
+	sourceHeight := config.Height
 	if sourceWidth <= 0 || sourceHeight <= 0 {
 		s.writeError(w, http.StatusInternalServerError, "thumb_decode", "stored thumbnail has invalid dimensions")
 		return
@@ -150,9 +149,14 @@ func (s *Server) GetDocumentThumb(w http.ResponseWriter, r *http.Request) {
 	}
 	output := sourceBytes
 	if actualWidth < sourceWidth {
+		source, err := png.Decode(bytes.NewReader(sourceBytes))
+		if err != nil {
+			s.serverErr(w, "thumb.decode", err)
+			return
+		}
 		targetHeight := max(1, (sourceHeight*actualWidth+sourceWidth/2)/sourceWidth)
 		target := image.NewRGBA(image.Rect(0, 0, actualWidth, targetHeight))
-		xdraw.CatmullRom.Scale(target, target.Bounds(), source, sourceBounds, xdraw.Over, nil)
+		xdraw.CatmullRom.Scale(target, target.Bounds(), source, source.Bounds(), xdraw.Over, nil)
 		var encoded bytes.Buffer
 		if err := png.Encode(&encoded, target); err != nil {
 			s.serverErr(w, "thumb.encode", err)
