@@ -115,7 +115,7 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 
 func TestOIDCAndLocalTokenDispatch(t *testing.T) {
 	p, local, sign := newTestOIDC(t)
-	token, err := local.IssueAPIToken(t.Context(), 1, "integration", auth.ScopeDocumentsRead)
+	token, err := local.IssueAPIToken(t.Context(), 1, "integration", auth.ScopeDocumentsRead, "")
 	if err != nil {
 		t.Fatal(err)
 	}

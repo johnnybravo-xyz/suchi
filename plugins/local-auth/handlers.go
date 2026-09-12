@@ -209,7 +209,7 @@ func (p *Plugin) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := p.issueAPIToken(r.Context(), userID, "login",
-		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite)
+		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, "")
 	if err != nil {
 		http.Error(w, "token failed", http.StatusInternalServerError)
 		return
@@ -433,13 +433,13 @@ func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 // disk. Exported so core/api can wire it in through Server.TokenIssuer
 // and mint tokens for session-authed callers (OIDC or cookie) without
 // this package needing to know about the API surface.
-func (p *Plugin) IssueAPIToken(ctx context.Context, userID int64, name, scopes string) (string, error) {
-	return p.issueAPIToken(ctx, userID, name, scopes)
+func (p *Plugin) IssueAPIToken(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
+	return p.issueAPIToken(ctx, userID, name, scopes, source)
 }
 
 // issueAPIToken creates and returns a fresh API token. The plaintext is
 // returned once here and never persisted — only sha256(token) hits disk.
-func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes string) (string, error) {
+func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -449,9 +449,9 @@ func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes s
 	hashHex := hex.EncodeToString(sum[:])
 	err := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, userID, name, hashHex, scopes, time.Now().Unix())
+			INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at, source)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, userID, name, hashHex, scopes, time.Now().Unix(), source)
 		return err
 	})
 	if err != nil {

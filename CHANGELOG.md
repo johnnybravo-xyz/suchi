@@ -15,6 +15,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Successful mobile QR-code and pairing-link exchanges now appear in Settings
+  > My account > Mobile app, with connection and last-use dates and Revoke.
+  The list refreshes during pairing and excludes revoked or signed-out devices.
+- A forward migration preserves existing mobile-preview credentials; older
+  tokens remain in API tokens until replaced through pairing.
 - Mobile schema changes ship in migration 0003 after the unchanged beta.2
   schema. Browser login creates only a session; headless credential exchange
   uses `/api/token/` without leaving unused browser sessions.

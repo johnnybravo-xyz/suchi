@@ -51,7 +51,7 @@ func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, 3)
+	assertSchemaVersion(t, d, 4)
 	assertBeta2Schema(t, d)
 	var pairingCount int
 	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM mobile_pairings`).Scan(&pairingCount); err != nil || pairingCount != 0 {
@@ -168,6 +168,53 @@ func seedMobileMigrationOwnerAndCategory(t *testing.T, d *db.DB) {
 		INSERT INTO jd_categories(id, area_start, code, name, system)
 		VALUES (1, 40, 49, 'Inbox', 1);
 	`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMobileTokenMigrationPreservesExistingPreviewCredentials(t *testing.T) {
+	d, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "preview.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseline []db.Migration
+	for _, migration := range migs {
+		if migration.Version <= 3 {
+			baseline = append(baseline, migration)
+		}
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := db.Migrate(t.Context(), d, baseline, log); err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaVersion(t, d, 3)
+	seedMobileMigrationOwnerAndCategory(t, d)
+	if _, err := d.ExecWrite(t.Context(), `INSERT INTO api_tokens(user_id,name,token_hash,scopes,created_at,last_used_at)
+		VALUES(1,'Suchi mobile','legacy-hash','documents:read',10,20)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context(), d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaVersion(t, d, 4)
+	var name, hash, scopes, source string
+	var created, used int64
+	if err := d.Read.QueryRow(`SELECT name,token_hash,scopes,created_at,last_used_at,source FROM api_tokens`).
+		Scan(&name, &hash, &scopes, &created, &used, &source); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Suchi mobile" || hash != "legacy-hash" || scopes != "documents:read" || created != 10 || used != 20 || source != "" {
+		t.Fatal("upgrade changed a legacy credential or guessed pairing provenance")
+	}
+	if _, err := d.ExecWrite(t.Context(), `UPDATE api_tokens SET source='invalid'`); err == nil {
+		t.Fatal("invalid token source accepted")
+	}
+	if err := db.Migrate(t.Context(), d, migs, log); err != nil {
 		t.Fatal(err)
 	}
 }

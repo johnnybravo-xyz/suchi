@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy, untrack } from 'svelte'
   import { listTokens, createToken, deleteToken, patchMe, uploadAvatar,
            listDecryptionPasswords, renameDecryptionPassword, deleteDecryptionPassword } from '../lib/api.js'
   import { session, refreshSession } from '../lib/session.svelte.js'
@@ -17,6 +18,18 @@
   let tokenAccess = $state('read')
   let minted = $state('')   // freshly created secret, shown once
   let pairingOpen = $state(false)
+  let tokensLoading = $state(true)
+  let revoking = $state([])
+  let loadController
+  let loadGeneration = 0
+  let loadPending = false
+  let disposed = false
+
+  function isOwnMobileToken(token) {
+    return token.source === 'mobile_pairing' && token.user_id === session.user?.user_id
+  }
+  const mobileTokens = $derived(tokens.filter(isOwnMobileToken))
+  const apiTokens = $derived(tokens.filter(token => !isOwnMobileToken(token)))
 
   let profile = $state({ display_name: session.user?.display_name || '', email: session.user?.email || '' })
   let profileBusy = $state(false)
@@ -39,12 +52,58 @@
     }
   }
 
-  async function load() {
+  async function load({ background = false } = {}) {
+    if (disposed || !session.user || (background && loadPending)) return
+    const user = session.user
+    const generation = ++loadGeneration
+    loadController?.abort()
+    const controller = new AbortController()
+    loadController = controller
+    loadPending = true
+    if (!background) tokensLoading = true
     try {
-      const res = await listTokens()
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)])
+      const res = await listTokens(signal)
+      if (disposed || generation !== loadGeneration || session.user !== user) return
       tokens = res?.results || res || []
-    } catch (ex) { err = ex.message || 'Could not load tokens.' }
+      err = ''
+    } catch (ex) {
+      if (!disposed && generation === loadGeneration && session.user === user && !controller.signal.aborted) {
+        err = ex.message || 'Could not load connected apps and API tokens.'
+      }
+    } finally {
+      if (generation === loadGeneration) {
+        tokensLoading = false
+        loadPending = false
+        loadController = undefined
+      }
+    }
   }
+
+  $effect(() => {
+    const user = session.user
+    tokens = []
+    err = ''
+    tokensLoading = !!user
+    if (user) untrack(() => void load())
+    return () => {
+      loadGeneration++
+      loadController?.abort()
+      loadPending = false
+    }
+  })
+
+  $effect(() => {
+    if (!pairingOpen) return
+    const timer = setInterval(() => void load({ background: true }), 2000)
+    return () => clearInterval(timer)
+  })
+
+  onDestroy(() => {
+    disposed = true
+    loadGeneration++
+    loadController?.abort()
+  })
 
   // ---- decryption-password vault ----
   let vault = $state([])
@@ -94,9 +153,20 @@
   }
 
   async function revoke(t) {
-    if (!confirm(`Revoke “${t.name}”? Anything using it stops working immediately.`)) return
-    try { await deleteToken(t.id); tokens = tokens.filter(x => x.id !== t.id); notify?.('Token revoked') }
-    catch (ex) { notify?.(ex.message || 'Could not revoke') }
+    if (!confirm('Revoke “' + t.name + '”? Anything using it stops working immediately.')) return
+    const user = session.user
+    revoking = [...revoking, t.id]
+    try {
+      await deleteToken(t.id)
+      if (disposed || session.user !== user) return
+      tokens = tokens.filter(x => x.id !== t.id)
+      notify?.(isOwnMobileToken(t) ? 'Mobile app disconnected' : 'Token revoked')
+      void load()
+    } catch (ex) {
+      if (!disposed && session.user === user) notify?.(ex.message || 'Could not revoke')
+    } finally {
+      if (!disposed) revoking = revoking.filter(id => id !== t.id)
+    }
   }
 
   function tokenAccessLabel(scopes) {
@@ -112,9 +182,30 @@
     session.user?.role !== 'admin' && hasCapability(session.user, 'mailboxes')
   )
 
-  load()
   loadVault()
 </script>
+
+<svelte:window onfocus={() => void load({ background: true })} />
+
+{#snippet tokenRows(items, emptyMessage, connected)}
+  {#if items.length}
+    <div class="settings-list token-list">
+      {#each items as t (t.id)}
+        <div class="token-row">
+          <span class="token-name">{t.name}</span>
+          <span class="pill" title={t.scopes}>{tokenAccessLabel(t.scopes)}</span>
+          <span class="row-date">
+            <span>{connected ? 'Connected' : 'Created'} {t.created_at ? fmtDate(t.created_at) : '—'}</span>
+            {#if connected}<span>{t.last_used_at ? 'Last used ' + fmtDate(t.last_used_at) : 'Not used yet'}</span>{/if}
+          </span>
+          <button class="btn sm danger" disabled={revoking.includes(t.id)} onclick={() => revoke(t)}>Revoke</button>
+        </div>
+      {/each}
+    </div>
+  {:else if !tokensLoading && !err}
+    <p class="empty-setting">{emptyMessage}</p>
+  {/if}
+{/snippet}
 
   <section class="settings-section" aria-labelledby="profile-heading">
     <div class="section-heading">
@@ -156,6 +247,12 @@
         </div>
         <button class="btn sm" onclick={() => pairingOpen = true}>Pair mobile app</button>
       </div>
+      {#if err}
+        <div class="err" role="alert">{err} <button class="btn sm" onclick={() => void load()}>Retry</button></div>
+      {:else if tokensLoading && !tokens.length}
+        <p class="empty-setting" role="status">Loading connected apps…</p>
+      {/if}
+      {@render tokenRows(mobileTokens, 'No connected mobile apps. Pair the app to add one here.', true)}
     </section>
   {/if}
 
@@ -201,20 +298,7 @@
       </div>
       <button class="btn primary token-create"><Icon name="plus" size={13} /> Create token</button>
     </form>
-    {#if tokens.length}
-      <div class="settings-list token-list">
-        {#each tokens as t (t.id)}
-          <div class="token-row">
-            <span class="token-name">{t.name}</span>
-            <span class="pill" title={t.scopes}>{tokenAccessLabel(t.scopes)}</span>
-            <span class="row-date">Created {t.created_at ? fmtDate(t.created_at) : '—'}</span>
-            <button class="btn sm danger" onclick={() => revoke(t)}>Revoke</button>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <p class="empty-setting">No API tokens.</p>
-    {/if}
+    {@render tokenRows(apiTokens, 'No API tokens.', false)}
   </section>
 
   {#if mailboxesVisible}
@@ -302,7 +386,7 @@
   .token-row { display:flex;align-items:center;gap:12px;min-width:0;padding:12px 0;border-bottom:1px solid var(--line) }
   .token-row:last-child, .vault-row:last-child { border-bottom:0 }
   .token-name { flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere }
-  .row-date { color:var(--muted);font-size:.78rem;white-space:nowrap }
+  .row-date { display: flex; flex-direction: column; gap: 3px; color:var(--muted);font-size:.78rem;white-space:nowrap }
   .empty-setting { color:var(--muted);font-size:.84rem;margin:0;padding:14px 0;border-top:1px solid var(--line) }
   .vault-row { display:grid;grid-template-columns:minmax(220px,.9fr) minmax(0,1.4fr) auto;gap:18px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line) }
   .vault-label { width:100%;min-width:0;font-weight:600 }

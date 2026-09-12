@@ -213,7 +213,7 @@ export const uploadAvatar = (file) => {
   return req('POST', '/api/users/me/avatar', fd)
 }
 
-export const listTokens = () => api.get('/api/tokens/')
+export const listTokens = (signal) => api.get('/api/tokens/', { signal })
 export const createToken = (b) => api.post('/api/tokens/', b)
 export const deleteToken = (id) => api.del(`/api/tokens/${id}`)
 

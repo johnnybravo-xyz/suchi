@@ -148,10 +148,21 @@ response. The code is atomically consumed for an enabled user before token
 issuance; concurrent scans cannot issue two tokens. Invalid, expired, replaced,
 used, and disabled-account codes all return **400** `pairing_invalid`. If token
 issuance fails or its response is lost, start a new pairing: consumed codes are
-never replayed. The device token can later be revoked through session-only
-token management. Pairing endpoints use `Cache-Control: no-store`, create no
-browser session, and never log the code, link, QR, or token. Creation and exchange
-share the login rate limit, including trailing-slash aliases.
+never replayed. Successful issuance stores `source: "mobile_pairing"` with
+the token in the same transaction; generating or failing to exchange a code
+does not register a connected app. The exchange response is unchanged.
+
+Session-only `GET /api/tokens/` returns active credentials with `id`, `user_id`,
+`name`, `scopes`, `created_at`, optional `last_used_at`, and optional `source`.
+Paired credentials have `source: "mobile_pairing"`; manual and older credentials
+omit it. Members see their own credentials; administrators retain their existing
+all-account view. The list uses `Cache-Control: no-store` and contains no token
+or token hash. `DELETE /api/tokens/{id}` revokes a device; logout-revoked tokens
+are also excluded from the list.
+
+Pairing endpoints use `Cache-Control: no-store`, create no browser session,
+and never log the code, link, QR, or token. Creation and exchange share the
+login rate limit, including trailing-slash aliases.
 
 ### `GET /metrics`
 

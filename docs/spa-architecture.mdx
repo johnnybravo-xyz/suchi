@@ -75,6 +75,13 @@ in component memory, clears expired QR/link displays, and cancels an unused
 code on close or route navigation. A session refresh or account replacement
 clears and closes the prompt; generation and clipboard writes check its original
 owner before starting. Late responses cannot populate another account's prompt.
+`AccountSettings.svelte` owns one active-token list and renders the current
+account's `mobile_pairing` credentials in Mobile app through a shared row snippet;
+manual and legacy credentials remain in API tokens. Token reads refresh every
+two seconds only while the prompt is open, immediately on close, and on window
+focus. Reads are bounded, abortable, ordered, and checked against their original
+session; account changes clear the list, and unmount stops polling. Revocation
+reloads the list so an earlier poll cannot restore a disconnected app.
 Keep the shell at or
 below 35 KB gzip and remeasure the actual route dependency set after UI changes.
 
@@ -84,28 +91,28 @@ shell**, with an otherwise empty cache:
 
 | Entry | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Shell: navigation, Dashboard, login | 95,753 | 34,780 |
-| Documents / Inbox | 27,360 | 10,034 |
-| Document detail | 35,114 | 12,311 |
+| Shell: navigation, Dashboard, login | 95,761 | 34,729 |
+| Documents / Inbox | 27,360 | 10,046 |
+| Document detail | 35,114 | 12,293 |
 | Upload | 13,111 | 5,953 |
-| Search | 8,894 | 4,305 |
+| Search | 8,894 | 4,304 |
 | Views | 14,630 | 5,275 |
-| Calendar | 16,336 | 6,380 |
-| Trash | 8,327 | 3,915 |
-| Approvals | 18,351 | 6,571 |
-| Automations | 17,942 | 5,903 |
-| My account, without mailbox capability | 14,055 | 5,033 |
-| Mobile pairing prompt, when opened from My account | 8,008 | 3,943 |
-| Archive configuration, including its Settings entry | 108,632 | 35,914 |
-| Setup | 66,510 | 22,211 |
-| Demo | 5,583 | 2,341 |
-| Archive research drawer | 13,763 | 5,297 |
-| **All unique JavaScript chunks** | **394,133** | **140,535** |
+| Calendar | 16,336 | 6,411 |
+| Trash | 8,327 | 3,913 |
+| Approvals | 18,351 | 6,594 |
+| Automations | 17,942 | 5,936 |
+| My account, without mailbox capability | 15,911 | 5,797 |
+| Mobile pairing prompt, when opened from My account | 8,008 | 3,941 |
+| Archive configuration, including its Settings entry | 110,488 | 36,622 |
+| Setup | 66,510 | 22,161 |
+| Demo | 5,583 | 2,340 |
+| Archive research drawer | 13,763 | 5,296 |
+| **All unique JavaScript chunks** | **395,997** | **141,286** |
 
 The initial shell also transfers 5,092 gzip bytes of CSS. All CSS together is
-22,434 gzip bytes. The complete embedded SPA tree is 487,500 raw bytes. Shared
+22,437 gzip bytes. The complete embedded SPA tree is 489,409 raw bytes. Shared
 chunks are cached across navigation; do not sum the route rows to estimate the
-complete build. A mailbox-capable member additionally loads 10,493 gzip bytes
+complete build. A mailbox-capable member additionally loads 10,464 gzip bytes
 of mailbox JavaScript on My account.
 
 Smaller route transfers trade some whole-build compression for not fetching

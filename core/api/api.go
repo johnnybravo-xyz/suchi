@@ -129,8 +129,9 @@ type Server struct {
 	// Wired at boot from the local-auth plugin so the session-authed
 	// (cookie / OIDC) caller can mint per-device tokens via
 	// /api/tokens/ without password re-entry. Nil disables the
-	// endpoint (returns 501).
-	TokenIssuer func(ctx context.Context, userID int64, name, scopes string) (string, error)
+	// endpoint (returns 501). Source is server-selected provenance and must
+	// be committed in the same transaction as the token.
+	TokenIssuer func(ctx context.Context, userID int64, name, scopes, source string) (string, error)
 	// Authz is the permission decision layer. New wires ACLAuthorizer;
 	// focused tests may substitute another implementation.
 	Authz authz.Authorizer

@@ -176,8 +176,11 @@ See [Release process](/release-process).
 The mobile release adds `0003_mobile_ingest.sql` after the unchanged beta.2
 `0002_document_intelligence.sql`. It contains OCR provenance, split origins,
 the upload-idempotency table and retention index, and one pending mobile pairing
-digest per user. Upgrade coverage starts from a populated beta.2 archive as
-well as a fresh database.
+digest per user. `0004_mobile_tokens.sql` adds the constrained `api_tokens.source`
+column without rewriting credentials. This forward migration preserves archives
+that already applied the mobile preview's 0003; unknown legacy provenance stays
+empty. Upgrade coverage starts from populated beta.2 and mobile-preview archives
+as well as a fresh database.
 
 ## HTTP and security boundaries
 
@@ -232,7 +235,12 @@ code digest, owner, token name, and expiry; user deletion cascades, and later
 creation prunes expired rows.
 Public exchange atomically deletes one valid code for an enabled user, commits,
 then calls the existing `TokenIssuer` outside the write transaction with fixed
-document-read/write scopes. A failed or lost exchange is not replayable. No
+document-read/write scopes and the server-selected `mobile_pairing` source.
+Local auth commits that source with the token digest in one insert, so issuance
+cannot create a credential without its connected-app metadata. Manual token
+creation and password exchange pass an empty source. The session-only token
+projection exposes owner/source and active credentials only; existing ownership
+and revocation rules apply. A failed or lost exchange is not replayable. No
 pairing credential is logged or cacheable, and cancellation matches both user
 and digest so stale dialogs cannot revoke a replacement. Endpoint, QR decode,
 race, migration, and assembled origin/token-policy tests cover this boundary.

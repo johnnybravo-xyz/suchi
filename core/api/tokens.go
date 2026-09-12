@@ -25,6 +25,8 @@ import (
 // Never carries the plaintext token or the hash; those are secret.
 type APITokenView struct {
 	ID         int64  `json:"id"`
+	UserID     int64  `json:"user_id"`
+	Source     string `json:"source,omitempty"`
 	Name       string `json:"name"`
 	Scopes     string `json:"scopes"`
 	CreatedAt  int64  `json:"created_at"`
@@ -90,7 +92,7 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	scopes := strings.Join(scopeList, ",")
 
-	token, err := s.TokenIssuer(r.Context(), p.UserID, name, scopes)
+	token, err := s.TokenIssuer(r.Context(), p.UserID, name, scopes, "")
 	if err != nil {
 		s.serverErr(w, "tokens.mint", err)
 		return
@@ -113,20 +115,21 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 // Admin sees everyone's — useful when a support ticket says "which
 // token did user X use last week?".
 func (s *Server) ListTokens(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	p := auth.FromContext(r.Context())
 	if p == nil || p.UserID == 0 {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	q := `SELECT id, name, COALESCE(scopes, ''), created_at,
+	q := `SELECT id, user_id, source, name, COALESCE(scopes, ''), created_at,
 	             COALESCE(last_used_at, 0)
-	      FROM api_tokens`
+	      FROM api_tokens WHERE revoked_at IS NULL`
 	args := []any{}
 	if p.Role != "admin" {
-		q += ` WHERE user_id = ?`
+		q += ` AND user_id = ?`
 		args = append(args, p.UserID)
 	}
-	q += ` ORDER BY created_at DESC`
+	q += ` ORDER BY created_at DESC, id DESC`
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
 	if err != nil {
 		s.serverErr(w, "tokens.list", err)
@@ -136,7 +139,7 @@ func (s *Server) ListTokens(w http.ResponseWriter, r *http.Request) {
 	out := []APITokenView{}
 	for rows.Next() {
 		var t APITokenView
-		if err := rows.Scan(&t.ID, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Source, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt); err != nil {
 			s.serverErr(w, "tokens.scan", err)
 			return
 		}

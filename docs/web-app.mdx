@@ -169,8 +169,17 @@ Every user has **Settings > My account**:
 Scan it in the Suchi app and confirm the displayed server address before
 connecting. The code is private, works once, and expires after five minutes.
 A new code replaces the previous one; closing the prompt cancels an unused
-code. The linked device appears under API tokens with document read and write
-access and can be revoked there.
+code. Every successful QR-code or pairing-link exchange adds an entry under
+**Mobile app** with its device name, document read/write access, connection date,
+and last-use date. The list refreshes while the pairing prompt is open, when
+it closes, and when you return to the browser window. **Revoke** immediately
+disconnects that app; signing out in the app also removes its active entry.
+Generating, cancelling, or attempting an expired code does not add a device.
+
+Each completed pairing creates its own entry, even if device names match.
+Credentials created before this update remain under **API tokens** because
+their pairing origin was not recorded. Revoke and pair them again to show them
+under **Mobile app**. Manual password/API-token connections remain API tokens.
 
 If scanning or clipboard access is unavailable, select and copy the pairing
 link manually, then use **Paste pairing link** in the app. Manual server and

@@ -183,7 +183,7 @@ func (s *Server) ExchangeMobilePairing(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotImplemented, "no_issuer", "token issuance is unavailable")
 		return
 	}
-	token, err := s.TokenIssuer(r.Context(), userID, name, mobilePairingScopes)
+	token, err := s.TokenIssuer(r.Context(), userID, name, mobilePairingScopes, auth.TokenSourceMobilePairing)
 	if err != nil {
 		s.Log.Error("api.mobile_pairing.issue", "user_id", userID)
 		s.writeError(w, http.StatusInternalServerError, "internal", "could not issue mobile token; start a new pairing")

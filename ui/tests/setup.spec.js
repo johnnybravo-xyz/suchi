@@ -2045,6 +2045,116 @@ test('names scoped tokens and account vault records', async ({ page }) => {
   await expect(page.locator('#minted')).toHaveValue('new-token-secret')
 })
 
+
+test('connected mobile apps refresh after pairing and remain visible on return', async ({ page }) => {
+  await mockAPI(page)
+  let rows = [{ id: 1, user_id: 1, name: 'Archive script', scopes: 'documents:read', created_at: 1780100000 }]
+  await page.route('**/api/tokens/', route => route.fulfill({ json: { results: rows } }))
+  await page.route('**/api/mobile/pairing', route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 })
+    return route.fulfill({ status: 201, json: {
+      name: 'My phone', code: 'a'.repeat(64), pairing_url: 'suchi://pair?pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300, qr_data_url: 'data:image/png;base64,',
+    } })
+  })
+  await page.goto('/#/settings')
+  const mobile = page.getByRole('region', { name: 'Mobile app', exact: true })
+  const tokens = page.getByRole('region', { name: 'API tokens', exact: true })
+  await expect(mobile.getByText('No connected mobile apps. Pair the app to add one here.')).toBeVisible()
+  await mobile.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Pair mobile app', exact: true })
+  await dialog.getByRole('button', { name: 'Generate QR code' }).click()
+  await expect(dialog.locator('#pairing-link')).toHaveValue('suchi://pair?pending')
+  await expect(mobile.locator('.token-row')).toHaveCount(0)
+  // The phone exchanges the code in a separate client while the browser prompt remains open.
+  rows = [
+    { id: 2, user_id: 1, source: 'mobile_pairing', name: 'My phone', scopes: 'documents:read,documents:write', created_at: 1780100000 },
+    ...rows,
+  ]
+  await expect(mobile.locator('.token-row')).toHaveCount(1, { timeout: 8000 })
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(mobile.getByText('My phone', { exact: true })).toBeVisible()
+  await expect(mobile.getByText('Not used yet', { exact: true })).toBeVisible()
+  await expect(tokens.getByText('Archive script', { exact: true })).toBeVisible()
+  await expect(tokens.getByText('My phone', { exact: true })).toHaveCount(0)
+  await page.evaluate(() => { location.hash = '#/documents' })
+  await expect(mobile).toHaveCount(0)
+  await page.evaluate(() => { location.hash = '#/settings' })
+  await expect(mobile.getByText('My phone', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(mobile.getByText('My phone', { exact: true })).toBeVisible()
+})
+
+test('connected mobile apps show only owned pairing entries and support retry and revoke', async ({ page }) => {
+  await mockAPI(page)
+  const phoneName = 'My iPhone with a long descriptive device name for this archive'
+  let rows = [
+    { id: 2, user_id: 1, source: 'mobile_pairing', name: phoneName, scopes: 'documents:read,documents:write', created_at: 1780100000, last_used_at: 1780200000 },
+    { id: 3, user_id: 2, source: 'mobile_pairing', name: 'Other account phone', scopes: 'documents:read,documents:write', created_at: 1780100000 },
+    { id: 4, user_id: 1, name: 'Suchi mobile', scopes: 'documents:read', created_at: 1780100000 },
+  ]
+  let reads = 0
+  let revokes = 0
+  await page.route('**/api/tokens/', route => ++reads === 1
+    ? route.fulfill({ status: 503, json: { error: 'Connected apps unavailable' } })
+    : route.fulfill({ json: { results: rows } }))
+  await page.route('**/api/tokens/2', route => {
+    if (++revokes === 1) return route.fulfill({ status: 503, json: { error: 'Revoke failed. Try again.' } })
+    rows = rows.filter(row => row.id !== 2)
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/settings')
+  const mobile = page.getByRole('region', { name: 'Mobile app', exact: true })
+  const tokens = page.getByRole('region', { name: 'API tokens', exact: true })
+  await expect(mobile.getByRole('alert')).toContainText('Connected apps unavailable')
+  await expect(mobile.getByText('No connected mobile apps.', { exact: false })).toHaveCount(0)
+  await mobile.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(mobile.getByText(phoneName, { exact: true })).toBeVisible()
+  await expect(mobile.locator('.row-date')).toContainText('Connected')
+  await expect(mobile.locator('.row-date')).toContainText('Last used')
+  await expect(mobile.getByText('Other account phone', { exact: true })).toHaveCount(0)
+  await expect(mobile.getByText('Suchi mobile', { exact: true })).toHaveCount(0)
+  await expect(tokens.getByText('Other account phone', { exact: true })).toBeVisible()
+  await expect(tokens.getByText('Suchi mobile', { exact: true })).toBeVisible()
+  await page.addStyleTag({ content: 'html { font-size: 24px !important; }' })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  page.on('dialog', dialog => dialog.accept())
+  await mobile.getByRole('button', { name: 'Revoke', exact: true }).click()
+  await expect(page.getByText('Revoke failed. Try again.', { exact: true })).toBeVisible()
+  await expect(mobile.getByText(phoneName, { exact: true })).toBeVisible()
+  await mobile.getByRole('button', { name: 'Revoke', exact: true }).click()
+  await expect(mobile.locator('.token-row')).toHaveCount(0)
+  await expect(mobile.getByText('No connected mobile apps. Pair the app to add one here.')).toBeVisible()
+  await page.reload()
+  await expect(mobile.locator('.token-row')).toHaveCount(0)
+})
+
+test('connected mobile apps ignore a late list from the previous account', async ({ page }) => {
+  await mockAPI(page)
+  let identityReads = 0
+  let tokenReads = 0
+  let oldRead
+  await page.route('**/api/whoami', route => ++identityReads === 1 ? route.fallback() : route.fulfill({ json: {
+    user_id: 2, email: 'second@example.test', display_name: 'Second user', role: 'member', capabilities: [], authn_by: 'local',
+  } }))
+  await page.route('**/api/tokens/', route => {
+    if (++tokenReads === 1) { oldRead = route; return }
+    return route.fulfill({ json: { results: [
+      { id: 2, user_id: 2, source: 'mobile_pairing', name: 'Second account phone', scopes: 'documents:read,documents:write', created_at: 1780100000 },
+    ] } })
+  })
+  await page.goto('/#/settings')
+  await expect.poll(() => !!oldRead).toBe(true)
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  const mobile = page.getByRole('region', { name: 'Mobile app', exact: true })
+  await expect(mobile.getByText('Second account phone', { exact: true })).toBeVisible()
+  await oldRead.fulfill({ json: { results: [
+    { id: 1, user_id: 1, source: 'mobile_pairing', name: 'Previous private phone', scopes: 'documents:read,documents:write', created_at: 1780100000 },
+  ] } })
+  await expect(page.getByText('Previous private phone', { exact: true })).toHaveCount(0)
+  await expect(mobile.getByText('Second account phone', { exact: true })).toBeVisible()
+})
+
 for (const clipboard of ['available', 'denied']) {
   test(`pairs mobile with a private expiring QR and ${clipboard} clipboard fallback`, async ({ page }) => {
     await mockAPI(page)
