@@ -1,1 +1,0 @@
-import{Gn as e,Nn as t,jn as n,rr as r,un as i}from"./index-DBfP-fwk.js";import a from"./UploadBox-FCIT2MV1.js";var o=t(`<div class="upload-wrap"><!></div>`);function s(t,s){let c=i(s,`jdCategories`,19,()=>[]);var l=o(),u=e(l);a(u,{get notify(){return s.notify},get jdCategories(){return c()}}),r(l),n(t,l)}export{s as default};

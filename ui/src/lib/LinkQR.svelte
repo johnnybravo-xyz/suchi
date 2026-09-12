@@ -53,5 +53,5 @@
 <style>
   .link-qr { min-width: 0; }
   .qr-result { margin-top: 10px; }
-  svg { display: block; width: 240px; max-width: 100%; height: auto; border-radius: 6px; }
+  svg { display: block; width: 240px; max-width: 100%; height: auto; margin-inline: auto; border-radius: 6px; }
 </style>

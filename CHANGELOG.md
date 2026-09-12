@@ -26,6 +26,7 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Center document and share-link QR codes in their dialogs.
 - Saved-view rows use visible Edit and delete controls instead of a decorative
   eye badge and a hover-only delete action.
 - Clarified which files are needed for a complete archive backup in Settings.
