@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
@@ -154,10 +155,16 @@ func (s *Server) DeleteMobilePairing(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ExchangeMobilePairing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
-		Code string `json:"code"`
+		Code       string `json:"code"`
+		DeviceName string `json:"device_name"`
 	}
 	if err := decodeJSON(r, &body); err != nil || !validMobilePairingCode(body.Code) || s.demo.Enabled {
 		s.writeError(w, http.StatusBadRequest, "pairing_invalid", "pairing code is invalid or expired")
+		return
+	}
+	deviceName := strings.TrimSpace(body.DeviceName)
+	if utf8.RuneCountInString(deviceName) > 64 || strings.ContainsFunc(deviceName, unicode.IsControl) {
+		s.writeError(w, http.StatusBadRequest, "bad_name", "device name must be <= 64 chars without control characters")
 		return
 	}
 	sum := sha256.Sum256([]byte(body.Code))
@@ -182,6 +189,9 @@ func (s *Server) ExchangeMobilePairing(w http.ResponseWriter, r *http.Request) {
 	if s.TokenIssuer == nil {
 		s.writeError(w, http.StatusNotImplemented, "no_issuer", "token issuance is unavailable")
 		return
+	}
+	if deviceName != "" {
+		name = deviceName
 	}
 	token, err := s.TokenIssuer(r.Context(), userID, name, mobilePairingScopes, auth.TokenSourceMobilePairing)
 	if err != nil {

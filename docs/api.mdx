@@ -96,17 +96,20 @@ load-balancer readiness gating.
 Public compatibility probe for first-party clients. Call it before sending
 credentials. The response contains no deployment or user state:
 
-**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0"}`
+**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0","pairing_device_name":true}`
 
 Clients must require `product` to equal `suchi`, require an API version they
 support, and compare `min_app_version` as numeric semantic-version components.
 Redirects are not compatibility responses and must not receive credentials.
+`pairing_device_name: true` advertises support for naming a connection during
+code exchange. Clients omit `device_name` unless this flag is true; older
+servers may reject unknown request fields.
 
 ### `POST /api/mobile/pairing`
 
 Create a five-minute mobile pairing from a browser/OIDC session. API tokens and
 demo identities cannot create or cancel pairings. An optional JSON
-`{"name":"My phone"}` names the resulting device token; omission or blank uses
+`{"name":"My phone"}` supplies a fallback token label; omission or blank uses
 `Suchi mobile`, and names are limited to 64 characters. Each new pairing
 replaces that user's previous unused code.
 
@@ -135,7 +138,14 @@ syntax returns **400** `pairing_invalid`.
 
 ### `POST /api/mobile/pairing/exchange`
 
-Public exchange accepts JSON `{"code":"<64 lowercase hex chars>"}`. The app
+Public exchange accepts JSON
+`{"code":"<64 lowercase hex chars>","device_name":"Ritesh’s iPhone"}`.
+`device_name` is optional: a nonblank name overrides the browser's label,
+while omission or blank retains it. The server trims surrounding whitespace
+and rejects names over 64 Unicode code points or containing control characters
+with **400** `bad_name` before consuming the code. Correcting the name can
+therefore reuse the pending code. The name is stored on the paired API token
+and returned in both the exchange response and connected-app list. The app
 must first validate the scanned link, confirm the server with the user, and
 check `/api/handshake` without credentials or redirects. Production origins
 require HTTPS; physical-device HTTP testing remains an explicit local-development

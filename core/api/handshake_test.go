@@ -23,7 +23,7 @@ func TestGetHandshake(t *testing.T) {
 	if got, want := rec.Header().Get("Content-Type"), "application/json"; got != want {
 		t.Fatalf("Content-Type = %q, want %q", got, want)
 	}
-	const want = "{\"product\":\"suchi\",\"api_version\":1,\"min_app_version\":\"0.1.0\"}\n"
+	const want = "{\"product\":\"suchi\",\"api_version\":1,\"min_app_version\":\"0.1.0\",\"pairing_device_name\":true}\n"
 	if got := rec.Body.String(); got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}

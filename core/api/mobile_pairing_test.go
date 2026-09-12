@@ -353,3 +353,78 @@ func TestMobilePairingRejectsUnusableOriginWithoutReplacingPendingCode(t *testin
 		}
 	}
 }
+
+func TestMobilePairingUsesConnectingDeviceName(t *testing.T) {
+	for _, tc := range []struct{ label, deviceName, want string }{
+		{"phone", "Ritesh’s iPhone", "Ritesh’s iPhone"},
+		{"trimmed Unicode", "  家族の Pixel  ", "家族の Pixel"},
+		{"maximum Unicode length", strings.Repeat("日", 64), strings.Repeat("日", 64)},
+		{"empty fallback", "", "Browser label"},
+		{"blank fallback", "   ", "Browser label"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			s, logs := newMobilePairingServer(t)
+			w := mobilePairingRequest(s, "POST", "/api/mobile/pairing", `{"name":"Browser label"}`, memberPrincipal(1))
+			var pairing mobilePairingResponse
+			if w.Code != 201 {
+				t.Fatalf("create status=%d", w.Code)
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &pairing); err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]string{"code": pairing.Code, "device_name": tc.deviceName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w = mobilePairingRequest(s, "POST", "/api/mobile/pairing/exchange", string(body), nil)
+			if w.Code != 200 {
+				t.Fatalf("exchange status=%d database=%s logs=%s", w.Code, s.DB.Path, logs.String())
+			}
+			var response map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response["name"] != tc.want {
+				t.Fatalf("returned name=%q want=%q", response["name"], tc.want)
+			}
+			w = mobilePairingRequest(s, "GET", "/api/tokens/", "", memberPrincipal(1))
+			var listed struct {
+				Results []APITokenView `json:"results"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 200 || len(listed.Results) != 1 || listed.Results[0].Name != tc.want ||
+				listed.Results[0].Source != auth.TokenSourceMobilePairing || listed.Results[0].UserID != 1 {
+				t.Fatalf("connected app=%+v status=%d", listed, w.Code)
+			}
+		})
+	}
+}
+
+func TestMobilePairingInvalidDeviceNameDoesNotConsumeCode(t *testing.T) {
+	for _, name := range []string{strings.Repeat("x", 65), strings.Repeat("日", 65), "Phone\x00name", "Phone\nname", "Phone\u0085name"} {
+		s, _ := newMobilePairingServer(t)
+		pairing := createMobilePairing(t, s)
+		body, err := json.Marshal(map[string]string{"code": pairing.Code, "device_name": name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := mobilePairingRequest(s, "POST", "/api/mobile/pairing/exchange", string(body), nil)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "bad_name") {
+			t.Fatalf("invalid name status=%d", w.Code)
+		}
+		var count int
+		if err := s.DB.Read.QueryRow("SELECT COUNT(*) FROM api_tokens").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("invalid name registered a token: count=%d err=%v", count, err)
+		}
+		body, err = json.Marshal(map[string]string{"code": pairing.Code, "device_name": "Corrected iPhone"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w = mobilePairingRequest(s, "POST", "/api/mobile/pairing/exchange", string(body), nil)
+		if w.Code != 200 {
+			t.Fatalf("corrected name could not use code: status=%d", w.Code)
+		}
+	}
+}

@@ -15,6 +15,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Mobile pairing records the device name confirmed in the app as the connected
+  entry's label. Older clients retain the browser label; invalid names can be
+  corrected without consuming the pairing code.
 - Successful mobile QR-code and pairing-link exchanges now appear in Settings
   > My account > Mobile app, with connection and last-use dates and Revoke.
   The list refreshes during pairing and excludes revoked or signed-out devices.

@@ -171,7 +171,12 @@ connecting. The code is private, works once, and expires after five minutes.
 A new code replaces the previous one; closing the prompt cancels an unused
 code. Every successful QR-code or pairing-link exchange adds an entry under
 **Mobile app** with its device name, document read/write access, connection date,
-and last-use date. The list refreshes while the pairing prompt is open, when
+and last-use date. Updated apps fill in the device name during confirmation;
+you can edit it on the phone before connecting. That name replaces the label
+entered in the browser. iOS may supply only “iPhone” or “iPad,” so use a
+recognizable name such as “Ritesh’s iPhone” when needed. Older clients retain the
+browser label. Already connected apps keep their recorded name until paired again.
+The list refreshes while the pairing prompt is open, when
 it closes, and when you return to the browser window. **Revoke** immediately
 disconnects that app; signing out in the app also removes its active entry.
 Generating, cancelling, or attempting an expired code does not add a device.

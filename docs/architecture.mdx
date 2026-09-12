@@ -231,8 +231,13 @@ headers. Creation applies the mobile client's HTTPS/local-HTTP boundary:
 HTTP accepts only localhost, loopback and private literal IPs, not the broader
 integration-egress policy's local DNS or link-local addresses. Invalid origins
 fail before replacing a pending code. `mobile_pairings` stores only a SHA-256
-code digest, owner, token name, and expiry; user deletion cascades, and later
+code digest, owner, fallback token name, and expiry; user deletion cascades, and later
 creation prunes expired rows.
+The public handshake advertises `pairing_device_name` support. Exchange accepts
+an optional `device_name` from the phone; a trimmed nonblank value replaces the
+browser label. Names are bounded to 64 Unicode code points with no controls
+before consuming a code, so a validation retry cannot burn the pending pairing.
+No new storage or permission is needed: the existing token name owns this label.
 Public exchange atomically deletes one valid code for an enabled user, commits,
 then calls the existing `TokenIssuer` outside the write transaction with fixed
 document-read/write scopes and the server-selected `mobile_pairing` source.

@@ -197,7 +197,8 @@ func TestMobilePairingRegistersConnectedApps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := json.Marshal(map[string]string{"code": u.Query().Get("code")})
+			deviceName := map[string]string{"QR": "Ritesh’s iPhone", "link": "Family Pixel"}[method]
+			body, err := json.Marshal(map[string]string{"code": u.Query().Get("code"), "device_name": deviceName})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -218,7 +219,7 @@ func TestMobilePairingRegistersConnectedApps(t *testing.T) {
 				t.Fatalf("entries=%d", len(rows))
 			}
 			newest := rows[0]
-			if newest.Source != auth.TokenSourceMobilePairing || newest.UserID != 1 || newest.Name != "My phone" ||
+			if newest.Source != auth.TokenSourceMobilePairing || newest.UserID != 1 || newest.Name != deviceName ||
 				newest.Scopes != "documents:read,documents:write" || newest.CreatedAt == 0 || newest.LastUsedAt != 0 {
 				t.Fatalf("connected app metadata=%+v", newest)
 			}
