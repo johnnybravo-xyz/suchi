@@ -425,7 +425,7 @@ CREATE TABLE audit_events_new (
     system_id INTEGER REFERENCES jd_systems(id)
 ) STRICT;
 INSERT INTO audit_events_new (id, ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id, system_id)
-SELECT id, ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id, CASE WHEN object_kind IN ('document','documents','document_intelligence','tag','correspondent','document_type','storage_path','custom_field','automation','saved_view','email_account','decryption_password','share_link','approval_def','approval_run','approval_task','approval_transition','api_token','mobile_pairing','jd_category','jd_area','taxonomy','job') OR action LIKE 'taxonomy.%' OR action LIKE 'jd.%' OR action LIKE 'approval.%' THEN 1 ELSE NULL END FROM audit_events;
+SELECT id, ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id, CASE WHEN object_kind IN ('ingest','document','documents','document_intelligence','tag','correspondent','document_type','storage_path','custom_field','automation','saved_view','email_account','decryption_password','share_link','approval_def','approval_run','approval_task','approval_transition','api_token','mobile_pairing','jd_category','jd_area','taxonomy','job') OR action LIKE 'taxonomy.%' OR action LIKE 'jd.%' OR action LIKE 'approval.%' THEN 1 ELSE NULL END FROM audit_events;
 DROP TABLE audit_events;
 ALTER TABLE audit_events_new RENAME TO audit_events;
 

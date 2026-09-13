@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Preserve historical skipped filesystem and mail intake events in the original
+  filing system during the beta.2 upgrade.
 - Filesystem views now link to the current blob layout and refresh after
   processing replaces a document's derived archive. Existing stale links are
   repaired on the next render or refile operation.
