@@ -6,7 +6,15 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
-- Make the signed-in account's Active switch read-only.
+- Prevent administrators from disabling their own account or removing the last
+  active administrator. Enforce both safeguards in the API and make the signed-in
+  account's Active switch read-only.
+- Canonicalize administrator capabilities on creation and role changes, including
+  direct API calls. Promotion preserves implicit access; demotion cannot revive
+  hidden member grants.
+- Commit capability revocations with the user change, preventing stale demotions
+  from revoking resources created after a regrant. Cascade failures roll back
+  the account change and all dependent resource updates.
 - Remove ineffective dynamic API imports and missing-Svelte-config build notices.
 - Stack email intake matching fields at full width with equal single-line
   heights and individual resize handles.

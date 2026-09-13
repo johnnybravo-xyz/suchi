@@ -103,6 +103,9 @@ Suchi reads mail only and needs no SMTP configuration.
 The supervisor starts or reloads the mailbox within seconds. Adding, editing,
 disabling, deleting, testing, signing in, or changing mailbox credentials does
 not require a Suchi restart.
+Removing an owner's `mailboxes` capability atomically disables their mailbox rows
+with the user change, then reloads the supervisor after commit. See
+[capability revocation](/permissions#capabilities) for regrant behavior.
 
 Renaming a mailbox also updates its display name on linked document sources.
 The address and folder remain the values observed at ingest. Deleting the

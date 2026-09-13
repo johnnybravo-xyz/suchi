@@ -283,6 +283,16 @@ These gates answer different questions:
   and test the assembled handler, not only the bare API method.
 - **Roles and capabilities:** handlers enforce administration or feature grants,
   including archive chat and intelligence. Scopes do not imply those grants.
+  User administration rejects self-disable and checks that an active administrator
+  remains after role/status updates, rolling back the writer transaction otherwise.
+  Creation and admin updates store no member capability grants on administrators.
+  User updates read role/capabilities in the writer transaction and compute revoke
+  hooks from effective access, so promotion does not quarantine still-authorized
+  resources and demotion cannot revive hidden grants.
+  Local mailbox, share-link and shared-view revocations commit in that same
+  transaction; a cascade failure rolls back the entire transition. Resource logs,
+  audit fan-out and mailbox supervisor reloads run after commit.
+  See [account safeguards](/permissions#account-safeguards).
 - **Object authorization:** `core/authz` first checks actual object existence and
   explicit/token system boundary, then active-user system entry, then existing
   owner/admin/direct/group permission. Admins bypass membership/ACL, not request

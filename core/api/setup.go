@@ -182,6 +182,9 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_capability", err.Error())
 		return
 	}
+	if body.Role == "admin" {
+		caps = nil
+	}
 	capsJSON, err := json.Marshal(caps.SliceStrings())
 	if err != nil {
 		s.serverErr(w, "createuser.marshal_caps", err)

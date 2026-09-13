@@ -271,8 +271,9 @@ Guardrails (all refusals log at `main.dev.refused` and exit non-zero):
   admin stays quarantined across dev restarts.
 - **Refuses normal startup while the public dev admin is enabled** — a data
   directory armed by `SUCHI_DEV=1` cannot later be exposed by starting without
-  dev mode. Disable `dev@suchi.local` first, or use a different data directory;
-  disabling the account also invalidates its existing tokens.
+  dev mode. Disable `dev@suchi.local` from another active administrator's session
+  first, or use a different data directory; disabling the account also invalidates
+  its existing tokens.
 - **Emits an audit event** (`dev_admin.provision`) on every arm so
   post-hoc "was this row dev-created?" queries are easy.
 
@@ -282,7 +283,7 @@ restarts untouched. Create additional users in Settings, or call
 `POST /api/admin/users/` with the dev admin's authenticated session cookie;
 admin routes do not accept API tokens. These users persist across dev-mode
 restarts as normal. Second _admin_ rows will block the next `SUCHI_DEV=1` boot
-— the right behaviour; drop the extra admin before restarting dev mode. A
+— the right behaviour; demote the extra admin to a member before restarting dev mode. A
 normal boot also refuses this data directory until the public
 `dev@suchi.local` account is disabled.
 

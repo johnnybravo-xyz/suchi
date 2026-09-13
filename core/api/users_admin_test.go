@@ -8,14 +8,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
@@ -40,6 +43,7 @@ func seedMember(t *testing.T, s *Server, id int64, capsJSON string) {
 func usersMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
+	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
 	mux.HandleFunc("GET /api/whoami", s.Whoami)
 	return mux
@@ -107,6 +111,474 @@ func TestListUsers_admin_only(t *testing.T) {
 	}
 	if len(m.Capabilities) != 1 || m.Capabilities[0] != "mailboxes" {
 		t.Errorf("uid=2 caps = %v, want [mailboxes]", m.Capabilities)
+	}
+}
+
+func TestPatchUser_cannot_disable_self(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/1",
+		`{"disabled":true,"display_name":"Must not persist","role":"member"}`, adminPrincipal(1))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("self-disable status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var problem struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem.Code != "cannot_disable_self" {
+		t.Fatalf("error code=%q, want cannot_disable_self", problem.Code)
+	}
+
+	rec = doAdmin(t, s, "GET", "/api/admin/users", "", adminPrincipal(1))
+	var listed struct {
+		Results []AdminUser `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(listed.Results) != 1 {
+		t.Fatalf("list after rejection status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	u := listed.Results[0]
+	if u.Disabled || u.Role != "admin" || u.DisplayName != "test" {
+		t.Fatalf("rejected self-disable changed the account: %+v", u)
+	}
+
+	// Self-editing is still allowed when the account remains active.
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/1",
+		`{"disabled":false,"display_name":"Updated admin"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("self-edit status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.Disabled || u.DisplayName != "Updated admin" {
+		t.Fatalf("self-edit response=%+v", u)
+	}
+}
+
+func TestPatchUser_can_disable_another_admin(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedUser(t, d, 2)
+
+	// A second active administrator does not make self-disable permissible.
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/1", `{"disabled":true}`, adminPrincipal(1))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("self-disable with another admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"disabled":true}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable another admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var u AdminUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.ID != 2 || !u.Disabled {
+		t.Fatalf("other admin was not disabled: %+v", u)
+	}
+}
+
+func TestPatchUser_preserves_last_active_admin(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		otherAdmin    bool
+		otherDisabled bool
+		wantStatus    int
+	}{
+		{"sole_admin", false, false, http.StatusConflict},
+		{"disabled_admin_does_not_count", true, true, http.StatusConflict},
+		{"another_active_admin_allows_demotion", true, false, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := openTestDB(t)
+			s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+			seedUser(t, d, 1)
+			seedMember(t, s, 3, "[]")
+			if tc.otherAdmin {
+				seedUser(t, d, 2)
+				if tc.otherDisabled {
+					rec := doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"disabled":true}`, adminPrincipal(1))
+					if rec.Code != http.StatusOK {
+						t.Fatalf("disable other admin status=%d body=%s", rec.Code, rec.Body.String())
+					}
+				}
+			}
+
+			rec := doAdmin(t, s, "PATCH", "/api/admin/users/1",
+				`{"role":"member","display_name":"Demoted admin"}`, adminPrincipal(1))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("demotion status=%d want=%d body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantStatus == http.StatusConflict {
+				var problem struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+					t.Fatal(err)
+				}
+				if problem.Code != "last_active_admin" {
+					t.Fatalf("error code=%q, want last_active_admin", problem.Code)
+				}
+			}
+			var role, name string
+			if err := d.Read.QueryRow(`SELECT role, display_name FROM users WHERE id=1`).Scan(&role, &name); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantStatus == http.StatusConflict {
+				if role != "admin" || name != "test" {
+					t.Fatalf("rejected demotion changed account: role=%q name=%q", role, name)
+				}
+			} else if role != "member" || name != "Demoted admin" {
+				t.Fatalf("allowed demotion not saved: role=%q name=%q", role, name)
+			}
+		})
+	}
+}
+
+func TestPatchUser_last_admin_check_uses_writer_state(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedUser(t, d, 2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := d.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	waits := d.Write.Stats().WaitCount
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doAdmin(t, s, "PATCH", "/api/admin/users/1", `{"role":"member"}`, adminPrincipal(1))
+	}()
+	// Wait for the request to queue behind another administrator's demotion.
+	for d.Write.Stats().WaitCount == waits {
+		select {
+		case rec := <-done:
+			t.Fatalf("demotion bypassed writer: %d %s", rec.Code, rec.Body.String())
+		case <-ctx.Done():
+			t.Fatal("demotion never reached writer")
+		default:
+			runtime.Gosched()
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role='member' WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rec := <-done:
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("queued demotion status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("demotion did not finish after writer release")
+	}
+	var activeAdmins int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM users WHERE role='admin' AND disabled=0`).Scan(&activeAdmins); err != nil {
+		t.Fatal(err)
+	}
+	if activeAdmins != 1 {
+		t.Fatalf("active administrators=%d, want 1", activeAdmins)
+	}
+}
+
+func TestCreateUser_admin_capabilities_do_not_survive_demotion(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		PasswordHasher: func(string) (string, error) { return "unused-test-hash", nil },
+	}
+	seedUser(t, d, 1)
+	rec := doAdmin(t, s, "POST", "/api/admin/users",
+		`{"email":"new-admin@example.test","password":"test-password","role":"admin","capabilities":["share_links"]}`, adminPrincipal(1))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var u AdminUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.Role != "admin" || len(u.Capabilities) != 0 {
+		t.Fatalf("admin retained member grants: %+v", u)
+	}
+	rec = doAdmin(t, s, "PATCH", "/api/admin/users/"+strconv.FormatInt(u.ID, 10),
+		`{"role":"member"}`, adminPrincipal(1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("demote created admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.Role != "member" || len(u.Capabilities) != 0 {
+		t.Fatalf("demotion revived hidden grants: %+v", u)
+	}
+	rec = doAdmin(t, s, "POST", "/api/admin/users",
+		`{"email":"bad-admin@example.test","password":"test-password","role":"admin","capabilities":["unknown"]}`, adminPrincipal(1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("admin creation ignored invalid capability: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchUser_admin_grants_are_implicit(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `["share_links"]`)
+	if _, err := d.Write.Exec(`
+		INSERT INTO share_links(system_id, token, doc_ids_json, created_by, label, view_count, created_at)
+		VALUES (1, ?, '[]', 2, '', 0, 0)`, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(body string, wantCaps, wantLive int) {
+		t.Helper()
+		rec := doAdmin(t, s, "PATCH", "/api/admin/users/2", body, adminPrincipal(1))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch %s: status=%d body=%s", body, rec.Code, rec.Body.String())
+		}
+		var u AdminUser
+		if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+			t.Fatal(err)
+		}
+		if len(u.Capabilities) != wantCaps {
+			t.Fatalf("patch %s: capabilities=%v", body, u.Capabilities)
+		}
+		var live int
+		if err := d.Read.QueryRow(`SELECT count(*) FROM share_links WHERE created_by=2 AND revoked_at IS NULL`).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != wantLive {
+			t.Fatalf("patch %s: live share links=%d, want %d", body, live, wantLive)
+		}
+	}
+	// Promotion drops stored grants without revoking access the admin still has.
+	patch(`{"role":"admin"}`, 0, 1)
+	patch(`{"capabilities":["share_links"]}`, 0, 1)
+	// An explicit member grant may be retained during demotion.
+	patch(`{"role":"member","capabilities":["share_links"]}`, 1, 1)
+	patch(`{"role":"admin"}`, 0, 1)
+	// Old admin rows may still carry hidden grants; demotion must not revive them.
+	if _, err := d.Write.Exec(`UPDATE users SET capabilities='["share_links"]' WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	patch(`{"role":"member"}`, 0, 0)
+}
+
+func TestPatchUser_capabilities_use_writer_role(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedMember(t, s, 2, `[]`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := d.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	waits := d.Write.Stats().WaitCount
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"capabilities":["share_links"]}`, adminPrincipal(1))
+	}()
+	for d.Write.Stats().WaitCount == waits {
+		select {
+		case rec := <-done:
+			t.Fatalf("capability update bypassed writer: %d %s", rec.Code, rec.Body.String())
+		case <-ctx.Done():
+			t.Fatal("capability update never reached writer")
+		default:
+			runtime.Gosched()
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role='admin' WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rec := <-done:
+		if rec.Code != http.StatusOK {
+			t.Fatalf("queued capability update status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var u AdminUser
+		if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+			t.Fatal(err)
+		}
+		if u.Role != "admin" || len(u.Capabilities) != 0 {
+			t.Fatalf("queued update retained grants after promotion: %+v", u)
+		}
+	case <-ctx.Done():
+		t.Fatal("capability update did not finish after writer release")
+	}
+}
+
+func TestPatchUser_demotion_preserves_post_promotion_resources(t *testing.T) {
+	d := openTestDB(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	logReader, logWriter := io.Pipe()
+	defer logReader.Close()
+	defer logWriter.Close()
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(logWriter, nil))}
+	seedUser(t, d, 1)
+	seedUser(t, d, 2)
+	createResources := func(label string) {
+		t.Helper()
+		if _, err := d.Write.ExecContext(ctx, `
+			INSERT INTO share_links(system_id, token, doc_ids_json, created_by, label, view_count, created_at)
+			VALUES (1, ?, '[]', 2, ?, 0, 0)`, strings.Repeat(label, 64), label); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Write.ExecContext(ctx, `
+			INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+			VALUES (1, 2, ?, '{}', 'list', 0, 1, 0, 0)`, label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	createResources("a")
+	startPatch := func(body string) (*httptest.ResponseRecorder, <-chan struct{}) {
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		req := httptest.NewRequest("PATCH", "/api/admin/users/2", strings.NewReader(body)).
+			WithContext(auth.WithPrincipal(ctx, adminPrincipal(1)))
+		req.Header.Set("Content-Type", "application/json")
+		go func() {
+			defer close(done)
+			usersMux(s).ServeHTTP(rec, req)
+		}()
+		t.Cleanup(func() {
+			logReader.Close()
+			cancel()
+			<-done
+		})
+		return rec, done
+	}
+	demotion, demoted := startPatch(`{"role":"member"}`)
+	// Stall the first revocation log. Previously this left other DB hooks
+	// outstanding after the role commit; a restored admin could create resources
+	// that those stale hooks subsequently revoked.
+	logged := make(chan error, 1)
+	go func() {
+		var first [1]byte
+		_, err := logReader.Read(first[:])
+		logged <- err
+	}()
+	select {
+	case err := <-logged:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("demotion did not reach its revocation log")
+	}
+	promotion, promoted := startPatch(`{"role":"admin"}`)
+	select {
+	case <-promoted:
+		if promotion.Code != http.StatusOK {
+			t.Fatalf("promotion: %d %s", promotion.Code, promotion.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("promotion blocked behind a revocation log")
+	}
+	createResources("b")
+	logReader.Close()
+	select {
+	case <-demoted:
+		if demotion.Code != http.StatusOK {
+			t.Fatalf("demotion: %d %s", demotion.Code, demotion.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("demotion did not finish")
+	}
+	var links, views int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM share_links WHERE label='b' AND revoked_at IS NULL`).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRow(`SELECT count(*) FROM saved_views WHERE name='b' AND shared=1`).Scan(&views); err != nil {
+		t.Fatal(err)
+	}
+	if links != 1 || views != 1 {
+		t.Fatalf("stale demotion revoked newly authorized resources: live links=%d shared views=%d", links, views)
+	}
+}
+
+func TestPatchUser_revoke_failure_rolls_back_demotion(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	seedUser(t, d, 2)
+	k, err := crypto.LoadOrCreateKey(filepath.Join(t.TempDir(), ".decrypt-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := emailaccounts.SealPassword(k, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createOriginalEmailAccount(t.Context(), d, emailaccounts.Account{
+		Name: "mailbox", OwnerID: 2, Provider: emailaccounts.ProviderCustom,
+		Host: "h", Port: 993, UseTLS: true, AuthMethod: emailaccounts.AuthPassword,
+		Username: "u", SealedSecret: sealed, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO share_links(system_id, token, doc_ids_json, created_by, label, view_count, created_at)
+		 VALUES (1, 'atomic-revocation', '[]', 2, '', 0, 0)`,
+		`INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+		 VALUES (1, 2, 'shared', '{}', 'list', 0, 1, 0, 0)`,
+		`CREATE TRIGGER fail_revocation BEFORE UPDATE OF revoked_at ON share_links
+		 BEGIN SELECT RAISE(ABORT, 'forced revocation failure'); END`,
+	} {
+		if _, err := d.Write.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := doAdmin(t, s, "PATCH", "/api/admin/users/2", `{"role":"member"}`, adminPrincipal(1))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed cascade status=%d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	var role, caps string
+	if err := d.Read.QueryRow(`SELECT role, capabilities FROM users WHERE id=2`).Scan(&role, &caps); err != nil {
+		t.Fatal(err)
+	}
+	if role != "admin" || caps != "[]" {
+		t.Fatalf("failed cascade changed user: role=%s capabilities=%s", role, caps)
+	}
+	for _, query := range []string{
+		`SELECT count(*) FROM share_links WHERE created_by=2 AND revoked_at IS NULL`,
+		`SELECT count(*) FROM saved_views WHERE owner_id=2 AND shared=1`,
+		`SELECT count(*) FROM email_accounts WHERE owner_id=2 AND enabled=1`,
+	} {
+		var live int
+		if err := d.Read.QueryRow(query).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live != 1 {
+			t.Fatalf("failed cascade changed resources: %s returned %d", query, live)
+		}
+	}
+	var revoked int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.capability_revoked'`).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != 0 {
+		t.Fatalf("rolled-back cascade emitted %d revoke audits", revoked)
 	}
 }
 

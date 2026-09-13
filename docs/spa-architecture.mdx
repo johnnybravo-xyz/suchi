@@ -287,7 +287,9 @@ selections from taking effect if that account is later demoted.
 It uses the existing API and shared capability labels; it adds no data cache,
 router, or authorization layer. User/group scope and filing-system boundaries
 remain unchanged.
-The signed-in user's Active switch reads `session.user.user_id` and is read-only.
+The signed-in user's Active switch reads `session.user.user_id`; the API remains
+authoritative for self-disable, last-active-administrator, and capability
+normalization safeguards.
 
 Verify the shared configuration flows with
 `cd ui && bun run e2e --grep 'separates completed archive administration|refreshes intake owners|failed configuration reads'`.

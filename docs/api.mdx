@@ -319,6 +319,31 @@ screen.
 
 **204 No Content** on success. Logging out is idempotent.
 
+### `PATCH /api/admin/users/{id}`
+
+Administrator session only. Sparse updates accept `display_name`, `role`
+(`admin` or `member`), `disabled`, and `capabilities`; success returns the updated
+user.
+
+Admin creation (`POST /api/admin/users`) and updates canonicalize stored
+`capabilities` to `[]` when the resulting role is `admin`; supplied slugs are
+still validated. Demotion to `member` starts with no capabilities unless the
+request explicitly supplies them, so legacy hidden grants cannot reappear.
+Revocation hooks compare effective access: promotion preserves resources the
+administrator can still use, while demotion revokes access not explicitly retained.
+
+- Disabling the caller's own account returns **403** `cannot_disable_self`,
+  even when another active administrator exists.
+- A role or active-status update that would leave no active administrator returns
+  **409** `last_active_admin`. Disabled administrators do not count.
+
+The active-administrator check and role/capability normalization use the current
+row inside the write transaction. Local mailbox, share-link and shared-view
+revocations run in the same transaction. Rejected patches and failed cascades
+leave the user and resources unchanged; cascade failures return **500**.
+Later promotions or regrants cannot be overtaken by older revocations. Resource
+logs, audit emission and runtime reloads happen after commit.
+
 ### `PATCH /api/users/me`
 
 Update the caller's profile. Body accepts `display_name` only in the

@@ -21,6 +21,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 )
 
+var errLastActiveAdmin = errors.New("at least one active administrator is required")
+
 // UserSelf is returned by GET /api/whoami and PATCH /api/users/me.
 type UserSelf struct {
 	Kind          string   `json:"kind"`
@@ -216,30 +218,8 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-
-	// Load prior row so we can compute a capability diff + emit a
-	// meaningful audit event. Returns 404 if the user is gone.
-	var (
-		priorRole      string
-		priorDisabled  int
-		priorCapsRaw   string
-		priorDisplayNS sql.NullString
-	)
-	err = s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT display_name, role, COALESCE(disabled, 0), COALESCE(capabilities, '[]')
-		 FROM users WHERE id = ?`, uid,
-	).Scan(&priorDisplayNS, &priorRole, &priorDisabled, &priorCapsRaw)
-	if errors.Is(err, sql.ErrNoRows) {
-		s.writeError(w, http.StatusNotFound, "not_found", "user not found")
-		return
-	}
-	if err != nil {
-		s.serverErr(w, "users.patch.load", err)
-		return
-	}
-	priorSet, err := authz.ParseJSON([]byte(priorCapsRaw))
-	if err != nil {
-		s.serverErr(w, "users.patch.parse_prior", err)
+	if uid == p.UserID && body.Disabled != nil && *body.Disabled {
+		s.writeError(w, http.StatusForbidden, "cannot_disable_self", "you cannot disable your own account")
 		return
 	}
 
@@ -263,15 +243,16 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		sets = append(sets, "display_name = ?")
 		args = append(args, name)
 	}
+	var requestedRole string
 	if body.Role != nil {
-		role := strings.TrimSpace(*body.Role)
-		if role != "admin" && role != "member" {
+		requestedRole = strings.TrimSpace(*body.Role)
+		if requestedRole != "admin" && requestedRole != "member" {
 			s.writeError(w, http.StatusBadRequest, "bad_role",
 				`role must be "admin" or "member"`)
 			return
 		}
 		sets = append(sets, "role = ?")
-		args = append(args, role)
+		args = append(args, requestedRole)
 	}
 	if body.Disabled != nil {
 		v := 0
@@ -283,28 +264,19 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		nextSet         authz.Set
-		added, removed  authz.Set
-		capsWereTouched bool
+		requestedCaps  authz.Set
+		added, removed authz.Set
+		revokedCounts  map[authz.Capability]int64
 	)
+	capsWereTouched := body.Capabilities != nil || body.Role != nil
 	if body.Capabilities != nil {
-		nextSet, err = authz.ParseWire(*body.Capabilities)
+		requestedCaps, err = authz.ParseWire(*body.Capabilities)
 		if err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_capability", err.Error())
 			return
 		}
-		encoded, err := json.Marshal(nextSet.SliceStrings())
-		if err != nil {
-			s.serverErr(w, "users.patch.marshal_caps", err)
-			return
-		}
-		sets = append(sets, "capabilities = ?")
-		args = append(args, string(encoded))
-		added, removed = nextSet.Diff(priorSet)
-		capsWereTouched = true
 	}
 
-	args = append(args, uid)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		var allowed bool
 		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, p.UserID).Scan(&allowed); err != nil {
@@ -313,13 +285,87 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		if !allowed {
 			return errSystemUnavailable
 		}
+		var priorRole, priorCapsRaw string
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT role, COALESCE(capabilities, '[]') FROM users WHERE id=?`, uid,
+		).Scan(&priorRole, &priorCapsRaw); err != nil {
+			return err
+		}
+		priorSet, err := authz.ParseJSON([]byte(priorCapsRaw))
+		if err != nil {
+			return err
+		}
+		nextRole := priorRole
+		if body.Role != nil {
+			nextRole = requestedRole
+		}
+		nextSet := priorSet
+		if body.Capabilities != nil {
+			nextSet = requestedCaps
+		}
+		// Admin grants are implicit. Demotion must not revive legacy hidden grants.
+		if nextRole == "admin" || (priorRole == "admin" && body.Capabilities == nil) {
+			nextSet = nil
+		}
+		updateSets, updateArgs := sets, args
+		if capsWereTouched || priorRole == "admin" {
+			encoded, err := json.Marshal(nextSet.SliceStrings())
+			if err != nil {
+				return err
+			}
+			updateSets = append(updateSets, "capabilities = ?")
+			updateArgs = append(updateArgs, string(encoded))
+		}
+		if capsWereTouched {
+			if priorRole != "admin" && nextRole != "admin" {
+				added, removed = nextSet.Diff(priorSet)
+			} else {
+				// Diff effective access, not storage: promotion must not revoke resources.
+				added, removed = authz.NewSet(), authz.NewSet()
+				for cap := range authz.KnownCapabilities {
+					had := priorRole == "admin" || priorSet.Has(cap)
+					has := nextRole == "admin" || nextSet.Has(cap)
+					if has && !had {
+						added.Add(cap)
+					} else if had && !has {
+						removed.Add(cap)
+					}
+				}
+			}
+		}
+		updateArgs = append(updateArgs, uid)
 		res, err := tx.ExecContext(r.Context(),
-			"UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
+			"UPDATE users SET "+strings.Join(updateSets, ", ")+" WHERE id = ?", updateArgs...)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return sql.ErrNoRows
+		}
+		if body.Role != nil || body.Disabled != nil {
+			var hasActiveAdmin bool
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM users WHERE role='admin' AND disabled=0)`).Scan(&hasActiveAdmin); err != nil {
+				return err
+			}
+			if !hasActiveAdmin {
+				return errLastActiveAdmin
+			}
+		}
+		// A later regrant must not overtake revocations from this transition.
+		for cap := range removed {
+			hook, ok := revokeHooks[cap]
+			if !ok {
+				continue
+			}
+			n, err := hook.apply(r.Context(), tx, uid)
+			if err != nil {
+				return err
+			}
+			if revokedCounts == nil {
+				revokedCounts = make(map[authz.Capability]int64, len(revokeHooks))
+			}
+			revokedCounts[cap] = n
 		}
 		if body.Disabled != nil && *body.Disabled {
 			s.oauthFlows.invalidateMember(uid, 0)
@@ -330,6 +376,10 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
 	}
+	if errors.Is(err, errLastActiveAdmin) {
+		s.writeError(w, http.StatusConflict, "last_active_admin", errLastActiveAdmin.Error())
+		return
+	}
 	if err != nil {
 		s.serverErr(w, "users.patch.write", err)
 		return
@@ -337,19 +387,12 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	actor := auth.FromContext(r.Context())
 
-	// Run revoke hooks for every capability that was dropped. A hook
-	// failure is logged but not fatal — the PATCH already committed;
-	// the operator can re-run the same PATCH to retry the cascade.
+	// Report only committed cascades, without holding the writer during logging.
+	for cap, n := range revokedCounts {
+		hook := revokeHooks[cap]
+		s.Log.Info(hook.event, "owner_id", uid, hook.countField, n)
+	}
 	if capsWereTouched {
-		for cap := range removed {
-			hook, ok := revokeHooks[cap]
-			if !ok {
-				continue
-			}
-			if err := hook(r.Context(), s, uid); err != nil {
-				s.Log.Warn("users.patch.revoke_hook", "cap", string(cap), "user_id", uid, "err", err.Error())
-			}
-		}
 		// One audit event per granted / revoked slug. Small payloads
 		// are easier to grep than one blob with a diff.
 		for cap := range added {
@@ -371,7 +414,7 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	if body.Disabled != nil && s.EmailwatchReload != nil {
+	if (body.Disabled != nil || removed.Has(authz.CapMailboxes)) && s.EmailwatchReload != nil {
 		if err := s.EmailwatchReload(r.Context()); err != nil {
 			s.Log.Warn("users.patch.emailwatch_reload", "user_id", uid, "err", err.Error())
 		}
@@ -411,10 +454,9 @@ func (s *Server) readAdminUser(ctx context.Context, id int64) (AdminUser, error)
 	return u, nil
 }
 
-// revokeHooks fire when a capability is removed from a user via
-// PATCH /api/admin/users/{id}. Add an entry here to have a cap unwind
-// its side effects (disable dependent resources, revoke live tokens,
-// etc.) at the moment the admin flips it off.
+// revokeHooks apply local database cascades in the user mutation's transaction.
+// They must not acquire another writer or perform external side effects. Logging,
+// audit fan-out, and runtime reloads happen only after the transaction commits.
 //
 // INVARIANT — revoke is terminal. There is no symmetric grantHooks
 // map by design: when the admin later re-grants the capability, the
@@ -425,68 +467,42 @@ func (s *Server) readAdminUser(ctx context.Context, id int64) (AdminUser, error)
 // and TestPatchUser_regrant_does_not_reenable_mailboxes — do not add a
 // grant hook that clears revoked_at / re-enables rows without first
 // re-litigating that security tradeoff.
-var revokeHooks = map[authz.Capability]func(context.Context, *Server, int64) error{
-	authz.CapMailboxes:  revokeMailboxesFor,
-	authz.CapShareLinks: revokeShareLinksFor,
-	authz.CapShareViews: revokeSharedViewsFor,
-}
-
-// revokeMailboxesFor disables every mailbox owned by userID. Called
-// from the PATCH-user path when CapMailboxes is removed. Idempotent —
-// mailboxes that are already disabled stay so.
-func revokeMailboxesFor(ctx context.Context, s *Server, userID int64) error {
-	n, err := emailaccounts.DisableAllByOwner(ctx, s.DB, userID)
-	if err != nil {
-		return err
-	}
-	s.Log.Info("emailaccounts.capability_revoked", "owner_id", userID, "disabled_count", n)
-	return nil
+var revokeHooks = map[authz.Capability]struct {
+	apply      func(context.Context, *sql.Tx, int64) (int64, error)
+	event      string
+	countField string
+}{
+	authz.CapMailboxes:  {emailaccounts.DisableAllByOwner, "emailaccounts.capability_revoked", "disabled_count"},
+	authz.CapShareLinks: {revokeShareLinksFor, "share_links.capability_revoked", "revoked_count"},
+	authz.CapShareViews: {revokeSharedViewsFor, "saved_views.capability_revoked", "unshared_count"},
 }
 
 // revokeShareLinksFor stamps revoked_at on every still-live share
 // link the user created. Called from the PATCH-user path when
 // CapShareLinks is removed. Mirror of the RevokeShareLink write path
 // (soft revoke, not hard delete) so audit trails stay intact.
-func revokeShareLinksFor(ctx context.Context, s *Server, userID int64) error {
-	var n int64
-	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE share_links SET revoked_at = ?
-			 WHERE created_by = ? AND revoked_at IS NULL`,
-			time.Now().Unix(), userID)
-		if err != nil {
-			return err
-		}
-		n, _ = res.RowsAffected()
-		return nil
-	})
+func revokeShareLinksFor(ctx context.Context, tx *sql.Tx, userID int64) (int64, error) {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE share_links SET revoked_at = ?
+		 WHERE created_by = ? AND revoked_at IS NULL`,
+		time.Now().Unix(), userID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	s.Log.Info("share_links.capability_revoked", "owner_id", userID, "revoked_count", n)
-	return nil
+	return res.RowsAffected()
 }
 
 // revokeSharedViewsFor removes dashboard-wide visibility from every
 // saved view owned by userID. The views remain available to their owner.
-func revokeSharedViewsFor(ctx context.Context, s *Server, userID int64) error {
-	var n int64
-	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE saved_views SET shared = 0, updated_at = ?
-			 WHERE owner_id = ? AND shared = 1`,
-			time.Now().Unix(), userID)
-		if err != nil {
-			return err
-		}
-		n, _ = res.RowsAffected()
-		return nil
-	})
+func revokeSharedViewsFor(ctx context.Context, tx *sql.Tx, userID int64) (int64, error) {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE saved_views SET shared = 0, updated_at = ?
+		 WHERE owner_id = ? AND shared = 1`,
+		time.Now().Unix(), userID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	s.Log.Info("saved_views.capability_revoked", "owner_id", userID, "unshared_count", n)
-	return nil
+	return res.RowsAffected()
 }
 
 // loadSelf reads users.display_name + avatar_sha + capabilities and composes

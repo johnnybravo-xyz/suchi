@@ -90,11 +90,21 @@ Under **Settings > Archive configuration > People and metadata > Users**, you
 cannot disable the account you are signed in with. Its Active switch is read-only.
 To disable that account, sign in as another active administrator.
 
+User updates must leave at least one active administrator. Disabled administrators
+do not count; promote or enable another administrator before demoting the last
+active one. The API enforces this inside the write transaction, including when
+administrators make concurrent changes. Rejected updates leave all fields unchanged.
+
 ## Capabilities
 
 Administrators grant optional capabilities to individual members under
 **Settings > Archive configuration > People and metadata > Users > Additional access**.
 Administrators have every capability implicitly.
+User creation and updates store administrators with an empty member-capability
+list. Promotion preserves their implicit access and does not revoke dependent
+resources. When demoting an administrator, explicitly grant the member
+capabilities they should retain; omitted capabilities do not restore legacy
+hidden grants. Normal revocation cascades apply to the access they lose.
 
 | Capability | Allows a member to |
 | --- | --- |
@@ -121,6 +131,10 @@ Removing a capability also closes the access it granted:
   again permits new links but does not restore revoked links.
 - Removing `share_views` makes the member's shared views private. The saved
   views remain available to their owner.
+
+The database revocations and account change succeed or fail together. A concurrent
+promotion or regrant cannot cause an older revocation to remove resources created
+after access was restored.
 
 ## Groups
 
