@@ -220,8 +220,8 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 			if actor.TokenID != 0 {
 				var bound int64
 				if err := tx.QueryRowContext(ctx, `SELECT system_id FROM api_tokens WHERE id=? AND user_id=?
-					AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`,
-					actor.TokenID, actor.UserID, time.Now().Unix()).Scan(&bound); err != nil {
+					AND revoked_at IS NULL`,
+					actor.TokenID, actor.UserID).Scan(&bound); err != nil {
 					if errors.Is(err, sql.ErrNoRows) {
 						return ErrNotTrashed
 					}

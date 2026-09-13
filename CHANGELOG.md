@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Allow valid scoped API tokens to permanently delete documents and empty Trash,
+  while rechecking credential revocation and membership in the write transaction.
 - Preserve historical skipped filesystem and mail intake events in the original
   filing system during the beta.2 upgrade.
 - Filesystem views now link to the current blob layout and refresh after
