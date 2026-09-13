@@ -37,7 +37,7 @@ func setupDB(t testing.TB) (*db.DB, int64) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	// One admin user so documents.owner_id FK is satisfied.
@@ -60,14 +60,14 @@ func setupDB(t testing.TB) (*db.DB, int64) {
 
 func seedDoc(t testing.TB, ctx context.Context, d *db.DB, ownerID int64, sha string, ocrVer int) int64 {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	var id int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size, title,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title,
 			                      jd_category_id, added_at, created_at, updated_at,
 			                      pipeline_version_ocr, pipeline_version_llm, pipeline_version_content)
-			VALUES (?, ?, 0, ?, ?, 0, 0, 0, ?, 0, 0)`,
+			VALUES (1, ?, ?, 0, ?, ?, 0, 0, 0, ?, 0, 0)`,
 			ownerID, sha, sha, inbox, ocrVer)
 		if err != nil {
 			return err
@@ -83,14 +83,14 @@ func seedDoc(t testing.TB, ctx context.Context, d *db.DB, ownerID int64, sha str
 
 func seedDocs(t testing.TB, ctx context.Context, d *db.DB, ownerID int64, prefix string, count int) []int64 {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	ids := make([]int64, 0, count)
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size, title,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title,
 			                      jd_category_id, added_at, created_at, updated_at,
 			                      pipeline_version_ocr, pipeline_version_llm, pipeline_version_content)
-			VALUES (?, ?, 0, ?, ?, 0, 0, 0, 0, 0, 0)`)
+			VALUES (1, ?, ?, 0, ?, ?, 0, 0, 0, 0, 0, 0)`)
 		if err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func TestOptions_Validate(t *testing.T) {
 		{"garbage", true},
 	}
 	for _, c := range cases {
-		err := (rescan.Options{Stale: c.stale}).Validate()
+		err := (rescan.Options{SystemID: 1, Stale: c.stale}).Validate()
 		if (err != nil) != c.wantErr {
 			t.Errorf("Stale=%q: err=%v wantErr=%v", c.stale, err, c.wantErr)
 		}
@@ -137,7 +137,7 @@ func TestOptions_Validate(t *testing.T) {
 func TestCountStale_UnknownKind(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setupDB(t)
-	if _, err := rescan.CountStale(ctx, d, "not-a-kind", 1); err == nil {
+	if _, err := rescan.CountStale(ctx, d, 1, "not-a-kind", 1); err == nil {
 		t.Fatal("expected error for unknown kind")
 	}
 }
@@ -150,7 +150,7 @@ func TestCountStale_MatchesLagBehindCurrent(t *testing.T) {
 	seedDoc(t, ctx, d, owner, "sha-b", 1)
 	seedDoc(t, ctx, d, owner, "sha-c", 2)
 
-	got, err := rescan.CountStale(ctx, d, "ocr", 2)
+	got, err := rescan.CountStale(ctx, d, 1, "ocr", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestCountStale_MatchesLagBehindCurrent(t *testing.T) {
 		t.Fatalf("CountStale ocr@v2: got %d want 2", got)
 	}
 	// Bumped to v3 — now all three are stale.
-	got, err = rescan.CountStale(ctx, d, "ocr", 3)
+	got, err = rescan.CountStale(ctx, d, 1, "ocr", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestCountProposalStale_LLMExcludesNeverProcessed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := rescan.CountProposalStale(ctx, d, "llm", 2)
+	got, err := rescan.CountProposalStale(ctx, d, 1, "llm", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,14 +203,14 @@ func TestCountProposalStale_ExcludesDocumentsAlreadyNeedingProcessing(t *testing
 		state string
 	}{{queued, "pending"}, {failed, "dead"}} {
 		if _, err := d.Write.ExecContext(ctx, `
-			INSERT INTO jobs(kind, doc_id, state, next_run_at, created_at, updated_at)
-			VALUES ('post-ingest', ?, ?, 0, 0, 0)
+			INSERT INTO jobs(system_id, kind, doc_id, state, next_run_at, created_at, updated_at)
+			VALUES (1, 'post-ingest', ?, ?, 0, 0, 0)
 		`, job.docID, job.state); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	got, err := rescan.CountProposalStale(ctx, d, "ocr", 1)
+	got, err := rescan.CountProposalStale(ctx, d, 1, "ocr", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestCountProposalStale_ExcludesEncryptedDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := rescan.CountProposalStale(ctx, d, "ocr", 1)
+	got, err := rescan.CountProposalStale(ctx, d, 1, "ocr", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestCountProposalStale_ExcludesEncryptedDocuments(t *testing.T) {
 		t.Fatalf("proposal stale count = %d, want only the runnable document", got)
 	}
 	// Explicit stale queries retain their broad diagnostic behavior.
-	got, err = rescan.CountStale(ctx, d, "ocr", 1)
+	got, err = rescan.CountStale(ctx, d, 1, "ocr", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestEnqueue_StaleOCR(t *testing.T) {
 	seedDoc(t, ctx, d, owner, "sha-b", 1)
 	seedDoc(t, ctx, d, owner, "sha-c", 2) // current — should NOT enqueue
 
-	n, err := rescan.Enqueue(ctx, d, rescan.Options{Stale: "ocr", OCRVersion: 2})
+	n, err := rescan.Enqueue(ctx, d, rescan.Options{SystemID: 1, Stale: "ocr", OCRVersion: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,9 +279,7 @@ func TestEnqueue_SampleCap(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		seedDoc(t, ctx, d, owner, "sha-"+string(rune('a'+i)), 0)
 	}
-	n, err := rescan.Enqueue(ctx, d, rescan.Options{
-		Stale: "ocr", OCRVersion: 1, SampleSize: 3,
-	})
+	n, err := rescan.Enqueue(ctx, d, rescan.Options{SystemID: 1, Stale: "ocr", OCRVersion: 1, SampleSize: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,9 +305,7 @@ func TestSelect_SampleUsesBoundedReservoir(t *testing.T) {
 	}
 
 	const sampleSize = 37
-	got, err := rescan.Select(ctx, d, rescan.Options{
-		Stale: "ocr", OCRVersion: 1, SampleSize: sampleSize,
-	})
+	got, err := rescan.Select(ctx, d, rescan.Options{SystemID: 1, Stale: "ocr", OCRVersion: 1, SampleSize: sampleSize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +345,7 @@ func TestSelect_SampleAtOrAboveMatchesReturnsAll(t *testing.T) {
 	ids := seedDocs(t, ctx, d, owner, "small", 3)
 
 	for _, sampleSize := range []int{3, 1_000_000} {
-		got, err := rescan.Select(ctx, d, rescan.Options{SampleSize: sampleSize})
+		got, err := rescan.Select(ctx, d, rescan.Options{SystemID: 1, SampleSize: sampleSize})
 		if err != nil {
 			t.Fatalf("sample %d: %v", sampleSize, err)
 		}
@@ -380,7 +376,7 @@ func BenchmarkSelect_SampleLargeCorpus(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				got, err := rescan.Select(ctx, d, rescan.Options{SampleSize: tc.sampleSize})
+				got, err := rescan.Select(ctx, d, rescan.Options{SystemID: 1, SampleSize: tc.sampleSize})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -402,9 +398,7 @@ func TestEnqueue_MinimumPipelineVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := rescan.Enqueue(ctx, d, rescan.Options{
-		Stale: "llm", LLMVersion: 2, MinimumVersion: 1,
-	})
+	n, err := rescan.Enqueue(ctx, d, rescan.Options{SystemID: 1, Stale: "llm", LLMVersion: 2, MinimumVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,12 +419,76 @@ func TestEnqueue_NoMatches(t *testing.T) {
 	ctx := context.Background()
 	d, owner := setupDB(t)
 	seedDoc(t, ctx, d, owner, "sha-a", 5) // ahead of the passed version
-	n, err := rescan.Enqueue(ctx, d, rescan.Options{Stale: "ocr", OCRVersion: 5})
+	n, err := rescan.Enqueue(ctx, d, rescan.Options{SystemID: 1, Stale: "ocr", OCRVersion: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
 		t.Fatalf("no-op case: got %d jobs, want 0", n)
+	}
+}
+
+func TestRescanSelectionAndWriterRemainSystemBound(t *testing.T) {
+	ctx := context.Background()
+	d, owner := setupDB(t)
+	first := seedDoc(t, ctx, d, owner, "first-stale", 0)
+	if _, err := d.Write.ExecContext(ctx, `
+		UPDATE jd_systems SET code='S01' WHERE id=1;
+		INSERT INTO jd_systems(id,code,name,taxonomy,created_at,updated_at) VALUES (2,'S02','Second','jd',0,0);
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES (2,40,49,'System',0);
+		INSERT INTO jd_categories(id,system_id,area_start,code,name,system) VALUES (900,2,40,49,'Inbox',1);
+		INSERT INTO documents(id,system_id,owner_id,original_blob,original_size,title,jd_category_id,pipeline_version_ocr,created_at,updated_at)
+		VALUES (900,2,?,'second-current',1,'Second',900,2,0,0);
+	`, owner); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		systemID int64
+		want     int
+	}{{1, 1}, {2, 0}} {
+		got, err := rescan.CountProposalStale(ctx, d, tc.systemID, "ocr", 2)
+		if err != nil || got != tc.want {
+			t.Fatalf("system=%d count=%d err=%v", tc.systemID, got, err)
+		}
+	}
+	for _, systemID := range []int64{0, -1} {
+		if _, err := rescan.Select(ctx, d, rescan.Options{SystemID: systemID}); err == nil {
+			t.Fatalf("accepted system %d", systemID)
+		}
+	}
+	rollback := fmt.Errorf("intentional rollback")
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		count, err := rescan.EnqueueInTx(ctx, tx, rescan.Options{SystemID: 1, IDs: []int64{first, 900}})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			t.Fatalf("cross-system selection count=%d", count)
+		}
+		return rollback
+	})
+	if err != rollback {
+		t.Fatalf("rollback error=%v", err)
+	}
+	var count int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind='post-ingest'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("rolled-back rescan left queued jobs")
+	}
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := rescan.EnqueueInTx(ctx, tx, rescan.Options{SystemID: 2, IDs: []int64{first, 900}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var systemID, docID int64
+	if err := d.Read.QueryRow(`SELECT system_id,doc_id FROM jobs WHERE kind='post-ingest'`).Scan(&systemID, &docID); err != nil {
+		t.Fatal(err)
+	}
+	if systemID != 2 || docID != 900 {
+		t.Fatalf("enqueued system=%d doc=%d", systemID, docID)
 	}
 }
 
@@ -446,7 +504,7 @@ func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
 
 	h := rescan.NewHandler(d, rescan.Versions{OCR: 1})
 	result, err := h.Handle(ctx,
-		approvals.Run{Vars: map[string]any{"kind": "ocr"}},
+		approvals.Run{SystemID: 1, Vars: map[string]any{"kind": "ocr"}},
 		approvals.State{}, "")
 	if err != nil {
 		t.Fatal(err)

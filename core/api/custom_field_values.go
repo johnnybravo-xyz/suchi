@@ -14,6 +14,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -79,15 +80,26 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Confirm doc still exists (authz passed above; a race trashed
-		// doc gets us "not found" cleanly).
-		var owner int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
-			docID).Scan(&owner); err != nil {
+		if ok, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
 			return err
+		} else if !ok {
+			return errForbidden
 		}
-		if err := handler.Write(r.Context(), tx, docID, fieldID, typed); err != nil {
+		if dataType == "documentlink" {
+			targetID := typed.(int64)
+			if targetID != 0 {
+				// Resolve the target intrinsically; preserve the token ceiling.
+				targetContext := context.WithValue(r.Context(), systemContextKey{}, int64(0))
+				if ok, err := s.authorized(targetContext, tx, p, authz.KindDocument, targetID, authz.PermView); err != nil {
+					return err
+				} else if !ok {
+					return errForbidden
+				}
+			}
+			if err := customfield.WriteDocumentLinkInTx(r.Context(), tx, docID, fieldID, targetID, true); err != nil {
+				return err
+			}
+		} else if err := handler.Write(r.Context(), tx, docID, fieldID, typed); err != nil {
 			return err
 		}
 		return view.EnqueueMove(r.Context(), tx, docID)
@@ -97,7 +109,7 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
 	case errors.Is(err, errForbidden):
-		s.writeError(w, http.StatusForbidden, "forbidden", "not your document")
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
 	case err != nil:
 		s.Log.Error("api.customfield.set", "err", err.Error())
@@ -105,7 +117,8 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.custom_field.set",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document.custom_field.set",
 		ObjectKind: "document", ObjectID: docID,
 		After: map[string]any{"field_id": fieldID, "data_type": dataType},
 	})
@@ -137,12 +150,10 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Existence check for the clean 404 on trashed docs.
-		var owner int64
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
-			docID).Scan(&owner); err != nil {
+		if ok, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
 			return err
+		} else if !ok {
+			return errForbidden
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`DELETE FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`,
@@ -155,7 +166,7 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, sql.ErrNoRows):
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 	case errors.Is(err, errForbidden):
-		s.writeError(w, http.StatusForbidden, "forbidden", "not your document")
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 	case err != nil:
 		s.Log.Error("api.customfield.delete", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
@@ -175,7 +186,7 @@ func (s *Server) resolveField(r *http.Request, ref string) (int64, string, json.
 	)
 	if n, err := strconv.ParseInt(ref, 10, 64); err == nil {
 		row := s.DB.Read.QueryRowContext(r.Context(),
-			`SELECT id, data_type, extra_data FROM custom_fields WHERE id = ?`, n)
+			`SELECT id, data_type, extra_data FROM custom_fields WHERE system_id = ? AND id = ?`, selectedSystemID(r.Context()), n)
 		if err := row.Scan(&id, &dataType, &extra); err != nil {
 			return 0, "", nil, err
 		}
@@ -183,8 +194,8 @@ func (s *Server) resolveField(r *http.Request, ref string) (int64, string, json.
 	}
 	// Name form.
 	row := s.DB.Read.QueryRowContext(r.Context(),
-		`SELECT id, data_type, extra_data FROM custom_fields WHERE name = ?`,
-		strings.TrimSpace(ref))
+		`SELECT id, data_type, extra_data FROM custom_fields WHERE system_id = ? AND name = ?`,
+		selectedSystemID(r.Context()), strings.TrimSpace(ref))
 	if err := row.Scan(&id, &dataType, &extra); err != nil {
 		return 0, "", nil, err
 	}

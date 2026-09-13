@@ -16,7 +16,7 @@ import (
 func seedEmailPreviewDoc(t *testing.T, s *Server, content string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	if err := jd.EnsureTree(ctx, s.DB, s.Log, jd.ModeFlat); err != nil {
+	if err := jd.EnsureTree(ctx, s.DB, s.Log, jd.ModeFlat, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Write.ExecContext(ctx, `
@@ -27,13 +27,13 @@ func seedEmailPreviewDoc(t *testing.T, s *Server, content string) int64 {
 	}
 	var inboxID int64
 	if err := s.DB.Read.QueryRowContext(ctx,
-		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&inboxID); err != nil {
+		`SELECT id FROM jd_categories WHERE system_id=1 AND system = 1 LIMIT 1`).Scan(&inboxID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := s.DB.Write.ExecContext(ctx, `
-		INSERT INTO documents(owner_id, original_blob, original_size, title,
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title,
 		                      jd_category_id, content, mime_type, created_at, updated_at)
-		VALUES (1, 'email-sha', 123, 'Distribution advice', ?, ?, 'message/rfc822', 0, 0)
+		VALUES (1, 1, 'email-sha', 123, 'Distribution advice', ?, ?, 'message/rfc822', 0, 0)
 	`, inboxID, content)
 	if err != nil {
 		t.Fatal(err)

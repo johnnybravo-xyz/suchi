@@ -2,241 +2,251 @@ package presetfile
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 	huml "github.com/huml-lang/go-huml"
-	"gopkg.in/yaml.v3"
 )
 
-// SerFormat is one of the accepted serializations.
 type SerFormat string
 
 const (
-	FormatHuML SerFormat = "huml"
-	FormatTOML SerFormat = "toml"
-	FormatYAML SerFormat = "yaml"
+	FormatHuML  SerFormat = "huml"
+	FormatTOML  SerFormat = "toml"
+	MaxFileSize           = 1 << 20
 )
 
-// DetectFormat sniffs which serialization `data` is written in when
-// the caller doesn't know (paste path). It looks for the earliest
-// unambiguous marker: `%HUML` directive → HuML; `format =` → TOML;
-// `format:` → YAML/HuML (defaults YAML for compat, since spec says
-// HuML uses `%HUML` when embedded and both share `format:` syntax at
-// the top level). Extension-driven callers should pass the format
-// explicitly instead of relying on sniff — the sniff is a fallback.
-func DetectFormat(data []byte) SerFormat {
-	scan := bytes.TrimLeft(data, " \t\r\n")
-	// %HUML directive is the definitive HuML marker.
-	if bytes.HasPrefix(scan, []byte("%HUML")) {
-		return FormatHuML
-	}
-	// Look for a definitive marker across the first non-empty non-comment
-	// lines. `::` = HuML vector marker. `= ` at top-level with no `:`
-	// on the same line = TOML scalar. First hit wins.
-	lines := bytes.Split(scan, []byte("\n"))
-	const maxScanLines = 20
-	scanned := 0
-	for _, ln := range lines {
-		l := bytes.TrimSpace(ln)
-		if len(l) == 0 || l[0] == '#' {
-			continue
-		}
-		if bytes.Contains(l, []byte("::")) {
-			return FormatHuML
-		}
-		if bytes.Contains(l, []byte("=")) && !bytes.Contains(l, []byte(":")) {
-			return FormatTOML
-		}
-		scanned++
-		if scanned >= maxScanLines {
-			break
-		}
-	}
-	// Fallback: treat as YAML (accepts a superset of many trivial
-	// documents; strict decode still catches invalid ones).
-	return FormatYAML
-}
-
-// Parse decodes `data` into a *PresetFile using the given serialization
-// (or auto-detect if format == ""), then runs Validate.
-//
-// Returns (parsed, nil) on success, (nil, Errors) on any parse or
-// validation failure. The two error kinds are combined into one Errors
-// slice so callers surface them together — the presets-repo CI shows
-// every problem in one CI run.
+// Parse validates author input before expanding flat categories or generating Inbox.
+// An omitted serialization means HuML; content is never sniffed.
 func Parse(data []byte, format SerFormat) (*PresetFile, error) {
 	if len(data) == 0 {
 		return nil, Errors{noPos("empty document")}
 	}
-	f := format
-	if f == "" {
-		f = DetectFormat(data)
+	if len(data) > MaxFileSize {
+		return nil, Errors{noPos("document exceeds %d bytes", MaxFileSize)}
 	}
-	var (
-		pf   PresetFile
-		errs Errors
-	)
-	switch f {
-	case FormatHuML:
-		if err := huml.Unmarshal(data, &pf); err != nil {
-			errs = append(errs, humlError(err))
+	if !utf8.Valid(data) {
+		return nil, Errors{noPos("document must be valid UTF-8")}
+	}
+	var raw map[string]any
+	switch format {
+	case "", FormatHuML:
+		if err := huml.Unmarshal(data, &raw); err != nil {
+			return nil, Errors{syntaxError("huml", err)}
 		}
 	case FormatTOML:
-		md, err := toml.Decode(string(data), &pf)
-		if err != nil {
-			errs = append(errs, tomlError(err))
-		} else if u := md.Undecoded(); len(u) > 0 {
-			for _, k := range u {
-				errs = append(errs, noPos("unknown field %q", k))
-			}
-		}
-	case FormatYAML:
-		dec := yaml.NewDecoder(bytes.NewReader(data))
-		dec.KnownFields(true)
-		if err := dec.Decode(&pf); err != nil {
-			errs = append(errs, yamlError(err))
+		if _, err := toml.Decode(string(data), &raw); err != nil {
+			return nil, Errors{syntaxError("toml", err)}
 		}
 	default:
-		return nil, Errors{noPos("unsupported format %q", string(f))}
+		return nil, Errors{noPos("unsupported serialization %q; use huml or toml", format)}
 	}
-	if len(errs) > 0 {
-		return nil, errs
+	// Format dispatch precedes v1 shape diagnostics, including unknown keys.
+	if raw["format"] != Format {
+		return nil, Errors{noPos("format must be %q, got %v", Format, raw["format"])}
+	}
+	var pf PresetFile
+	if err := decodeRaw(reflect.ValueOf(&pf).Elem(), raw, ""); err != nil {
+		return nil, Errors{noPos("%s", err)}
+	}
+	if value, present := raw["system"]; present && value == "" {
+		return nil, Errors{noPos("system: must be nonempty when supplied")}
 	}
 	if pf.Flat {
-		expandFlat(&pf)
+		if _, ok := raw["areas"]; ok {
+			return nil, Errors{noPos("areas: forbidden when flat is true")}
+		}
+		// Zero is a missing-code sentinel only for in-memory input, not an explicit raw code.
+		if list, ok := raw["categories"]; ok {
+			v := reflect.ValueOf(list)
+			for i := 0; i < v.Len(); i++ {
+				m := v.Index(i).Interface().(map[string]any)
+				if _, present := m["code"]; present && pf.Categories[i].Code != 11+i {
+					return nil, Errors{noPos("categories[%d].code: must be %d", i, 11+i)}
+				}
+			}
+		}
+	} else if _, ok := raw["categories"]; ok {
+		return nil, Errors{noPos("categories: forbidden unless flat is true")}
 	}
-	if verrs := Validate(&pf); len(verrs) > 0 {
-		return nil, verrs
+	if es := Validate(&pf); len(es) > 0 {
+		return nil, es
 	}
+	if pf.Flat {
+		cats := append([]Category(nil), pf.Categories...)
+		for i := range cats {
+			cats[i].Code = 11 + i
+		}
+		pf.Areas = []Area{{Code: 10, Name: pf.Name, Categories: cats}}
+		pf.Categories = nil
+	}
+	pf.Areas = append(pf.Areas, Area{Code: 40, Name: "System", Categories: []Category{{Code: 49, Name: "Inbox"}}})
+	pf.Inbox = 49
 	return &pf, nil
 }
 
-// expandFlat implements spec §2.1: flat mode replaces `areas` with a
-// single `categories:` list. Synthesize area 10 (name = preset Name)
-// wrapping those categories, plus a System area at 40 carrying a 49
-// inbox. If the caller already provided Areas, we trust them and
-// only inject the System area / inbox when missing.
-func expandFlat(pf *PresetFile) {
-	if len(pf.Areas) == 0 && len(pf.Categories) > 0 {
-		// Renumber categories 11..n inside area 10 so codes are
-		// spec-compliant (decade-nested + globally unique). The input
-		// codes are advisory in flat mode.
-		cats := make([]Category, 0, len(pf.Categories))
-		next := 11
-		for _, c := range pf.Categories {
-			c.Code = next
-			cats = append(cats, c)
-			next++
-			if next > 19 {
-				break // JD decade cap; anything past 19 gets dropped
-			}
-		}
-		pf.Areas = []Area{{
-			Code: 10, Name: pf.Name, Categories: cats,
-		}}
-		pf.Categories = nil
+// decodeRaw uses the public schema's tags but never performs scalar coercion.
+// Both parsers reject duplicate dictionary keys, including nested inline maps.
+func decodeRaw(dst reflect.Value, src any, path string) error {
+	if src == nil {
+		return fmt.Errorf("%s: null is not supported", path)
 	}
-	// Ensure the System area + inbox exist regardless of how Areas
-	// got populated.
-	haveSystem := false
-	haveInbox := false
-	for _, a := range pf.Areas {
-		if a.Code == 40 {
-			haveSystem = true
-			for _, c := range a.Categories {
-				if c.Code == 49 {
-					haveInbox = true
+	if dst.Kind() == reflect.Pointer {
+		dst.Set(reflect.New(dst.Type().Elem()))
+		return decodeRaw(dst.Elem(), src, path)
+	}
+	switch dst.Kind() {
+	case reflect.Struct:
+		m, ok := src.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s: expected object", path)
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			field := -1
+			for i := 0; i < dst.NumField(); i++ {
+				if strings.Split(dst.Type().Field(i).Tag.Get("json"), ",")[0] == k && k != "-" {
+					field = i
 					break
 				}
 			}
-			break
-		}
-	}
-	if !haveSystem {
-		pf.Areas = append(pf.Areas, Area{
-			Code: 40, Name: "System",
-			Categories: []Category{{Code: 49, Name: "Inbox"}},
-		})
-		haveInbox = true
-	} else if !haveInbox {
-		for i := range pf.Areas {
-			if pf.Areas[i].Code == 40 {
-				pf.Areas[i].Categories = append(pf.Areas[i].Categories,
-					Category{Code: 49, Name: "Inbox"})
-				break
+			p := k
+			if path != "" {
+				p = path + "." + k
+			}
+			if field < 0 {
+				return fmt.Errorf("%s: unknown field", p)
+			}
+			if err := decodeRaw(dst.Field(field), m[k], p); err != nil {
+				return err
 			}
 		}
+	case reflect.Slice:
+		v := reflect.ValueOf(src)
+		if v.Kind() != reflect.Slice {
+			return fmt.Errorf("%s: expected list", path)
+		}
+		dst.Set(reflect.MakeSlice(dst.Type(), v.Len(), v.Len()))
+		for i := 0; i < v.Len(); i++ {
+			if err := decodeRaw(dst.Index(i), v.Index(i).Interface(), fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		m, ok := src.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s: expected object", path)
+		}
+		dst.Set(reflect.ValueOf(m))
+	case reflect.String:
+		v, ok := src.(string)
+		if !ok {
+			return fmt.Errorf("%s: expected string", path)
+		}
+		dst.SetString(v)
+	case reflect.Bool:
+		v, ok := src.(bool)
+		if !ok {
+			return fmt.Errorf("%s: expected boolean", path)
+		}
+		dst.SetBool(v)
+	case reflect.Int:
+		v, ok := src.(int64)
+		if !ok || dst.OverflowInt(v) {
+			return fmt.Errorf("%s: expected integer", path)
+		}
+		dst.SetInt(v)
+	default:
+		return fmt.Errorf("%s: unsupported value", path)
 	}
-	if pf.Inbox == 0 {
-		pf.Inbox = 49
-	}
+	return nil
 }
 
-// ParseFromExt is a convenience: pick the SerFormat from a filename
-// extension. Unknown extension → FormatYAML (widest accept + strict
-// decode).
 func ParseFromExt(data []byte, ext string) (*PresetFile, error) {
 	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
 	case "huml":
 		return Parse(data, FormatHuML)
 	case "toml":
 		return Parse(data, FormatTOML)
-	case "yaml", "yml":
-		return Parse(data, FormatYAML)
 	default:
-		return Parse(data, "")
+		return nil, Errors{noPos("unsupported extension %q; use .huml or .toml", ext)}
 	}
 }
 
-// humlError converts a raw parser error into PositionedError. go-huml
-// error messages typically embed line numbers as `line N`; a small
-// regex extracts them when present.
-func humlError(err error) PositionedError {
-	msg := err.Error()
-	if line := extractLine(msg, "line "); line > 0 {
-		return at(line, "huml: %s", msg)
-	}
-	return noPos("huml: %s", msg)
-}
-
-func tomlError(err error) PositionedError {
-	// BurntSushi/toml embeds `(N, M)` position tuples in some errors.
-	msg := err.Error()
-	if line := extractLine(msg, "("); line > 0 {
-		return at(line, "toml: %s", msg)
-	}
-	return noPos("toml: %s", msg)
-}
-
-func yamlError(err error) PositionedError {
-	// yaml.v3 messages carry `line N:` prefixes.
-	msg := err.Error()
-	if line := extractLine(msg, "line "); line > 0 {
-		return at(line, "yaml: %s", msg)
-	}
-	return noPos("yaml: %s", msg)
-}
-
-// extractLine best-effort pulls the first integer after `marker` from
-// the message. Returns 0 when not found.
-func extractLine(msg, marker string) int {
-	i := strings.Index(msg, marker)
-	if i < 0 {
-		return 0
-	}
-	rest := msg[i+len(marker):]
-	end := 0
-	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
-		end++
-	}
-	if end == 0 {
-		return 0
-	}
-	n, err := strconv.Atoi(rest[:end])
+// Marshal reverses normalization, serializes the raw authoring shape, and
+// revalidates the exact bytes. It never silently drops legacy reserved content.
+func Marshal(pf *PresetFile, format SerFormat) ([]byte, error) {
+	raw, err := rawFromNormalized(pf)
 	if err != nil {
-		return 0
+		return nil, err
 	}
-	return n
+	// A map keeps areas explicitly empty for blank trees, but absent for flat ones.
+	m := map[string]any{"format": raw.Format, "id": raw.ID, "version": raw.Version, "name": raw.Name, "market": raw.Market, "language": raw.Language, "story": raw.Story}
+	if raw.System != "" {
+		m["system"] = raw.System
+	}
+	if raw.Maintainer != "" {
+		m["maintainer"] = raw.Maintainer
+	}
+	if raw.License != "" {
+		m["license"] = raw.License
+	}
+	if raw.Flat {
+		m["flat"] = true
+		m["categories"] = raw.Categories
+	} else {
+		m["areas"] = raw.Areas
+	}
+	if raw.Seeds != nil {
+		m["seeds"] = raw.Seeds
+	}
+	var data []byte
+	switch format {
+	case "", FormatHuML:
+		data, err = huml.Marshal(m)
+	case FormatTOML:
+		var b bytes.Buffer
+		err = toml.NewEncoder(&b).Encode(m)
+		data = b.Bytes()
+	default:
+		return nil, Errors{noPos("unsupported serialization %q; use huml or toml", format)}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := Parse(data, format); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func syntaxError(format string, err error) PositionedError {
+	var tomlErr toml.ParseError
+	if errors.As(err, &tomlErr) {
+		return atPos(tomlErr.Position.Line, tomlErr.Position.Col, "%s: %s", format, tomlErr.Message)
+	}
+	msg := err.Error()
+	for _, marker := range []string{"line ", "("} {
+		if i := strings.Index(msg, marker); i >= 0 {
+			rest := msg[i+len(marker):]
+			end := 0
+			for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+				end++
+			}
+			if n, e := strconv.Atoi(rest[:end]); e == nil {
+				return at(n, "%s: %s", format, msg)
+			}
+		}
+	}
+	return noPos("%s: %s", format, msg)
 }

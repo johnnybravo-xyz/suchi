@@ -45,10 +45,10 @@ func approveSpec(assignee string) approvals.Spec {
 func startAndAdvance(t *testing.T, e *approvals.Engine, assignee string) error {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := e.Register(ctx, approveSpec(assignee), "test-flow", admin()); err != nil {
+	if _, err := e.Register(ctx, 1, approveSpec(assignee), "test-flow", admin()); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	runID, err := e.Start(ctx, "test-flow", 0, nil, admin())
+	runID, err := e.Start(ctx, 1, "test-flow", 0, nil, admin())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -150,10 +150,10 @@ func TestResolver_SkippedOnNonTaskAdvance(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	if _, err := e.Register(ctx, spec, "no-task-flow", admin()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "no-task-flow", admin()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, "no-task-flow", 0, nil, admin())
+	runID, err := e.Start(ctx, 1, "no-task-flow", 0, nil, admin())
 	if err != nil {
 		t.Fatal(err)
 	}

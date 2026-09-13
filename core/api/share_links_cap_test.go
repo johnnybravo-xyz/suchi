@@ -148,8 +148,8 @@ func TestPublicShareUsesCurrentCreatorName(t *testing.T) {
 	}
 	token := strings.Repeat("a", 64)
 	if _, err := d.Write.Exec(`
-		INSERT INTO share_links(token, doc_ids_json, created_by, password_hash, created_at)
-		VALUES (?, '[42]', 1, 'test-hash', 0)
+		INSERT INTO share_links(system_id, token, doc_ids_json, created_by, password_hash, created_at)
+		VALUES (1, ?, '[42]', 1, 'test-hash', 0)
 	`, token); err != nil {
 		t.Fatal(err)
 	}

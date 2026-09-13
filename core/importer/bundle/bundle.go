@@ -14,6 +14,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 )
 
@@ -26,6 +27,7 @@ import (
 type Options struct {
 	// BundleRoot is the path to the exporter output dir. Required.
 	BundleRoot string
+	SystemID   int64
 
 	// OwnerEmail resolves to a users row; imported documents land under
 	// that user. Required unless DryRun is set.
@@ -58,6 +60,9 @@ type Options struct {
 // call this before Run — Run will call it too, but returning the error
 // earlier gives better error messages next to the flag definitions.
 func (opts Options) Validate() error {
+	if opts.SystemID <= 0 {
+		return errors.New("SystemID is required")
+	}
 	if opts.BundleRoot == "" {
 		return errors.New("BundleRoot is required")
 	}
@@ -139,10 +144,17 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 			opts.OwnerEmail).Scan(&ownerID); err != nil {
 			return nil, fmt.Errorf("resolve owner %q: %w", opts.OwnerEmail, err)
 		}
+		allowed, err := systems.CanEnter(ctx, d.Read, ownerID, opts.SystemID)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, errors.New("bundle: owner cannot enter system")
+		}
 	}
 
 	// Inbox pointer for uncategorized imports.
-	inboxCat, err := jd.InboxCategoryID(ctx, d)
+	inboxCat, err := jd.InboxCategoryID(ctx, d, opts.SystemID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve inbox category: %w", err)
 	}
@@ -179,7 +191,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 
 	// JD code → suchi jd_categories.id, for --map-jd category lookup.
 	// Loaded once here so the per-doc resolve does not re-query.
-	codeToCat, err := loadJDCodeMap(ctx, d)
+	codeToCat, err := loadJDCodeMap(ctx, d, opts.SystemID)
 	if err != nil {
 		return nil, fmt.Errorf("load jd code map: %w", err)
 	}
@@ -191,7 +203,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode tag pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertTag(ctx, d, opts.DryRun, f)
+		id, err := upsertTag(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +217,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode correspondent pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertCorrespondent(ctx, d, opts.DryRun, f)
+		id, err := upsertCorrespondent(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +231,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode document_type pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertDocumentType(ctx, d, opts.DryRun, f)
+		id, err := upsertDocumentType(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +245,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode storage_path pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertStoragePath(ctx, d, opts.DryRun, f)
+		id, err := upsertStoragePath(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +259,7 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 		if err := json.Unmarshal(o.Fields, &f); err != nil {
 			return nil, fmt.Errorf("decode custom_field pk=%d: %w", o.PK, err)
 		}
-		id, err := upsertCustomField(ctx, d, opts.DryRun, f)
+		id, err := upsertCustomField(ctx, d, opts.SystemID, opts.DryRun, f)
 		if err != nil {
 			return nil, err
 		}
@@ -338,10 +350,10 @@ func Run(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, opts Op
 
 	// ---------- workflows + saved views ----------
 
-	if _, err := ImportWorkflows(ctx, d, log, objs, opts.DryRun, tagMap, corMap, dtMap, spMap, cfMap, mrep); err != nil {
+	if _, err := ImportWorkflows(ctx, d, opts.SystemID, log, objs, opts.DryRun, tagMap, corMap, dtMap, spMap, cfMap, mrep); err != nil {
 		return nil, fmt.Errorf("import workflows: %w", err)
 	}
-	if _, err := ImportSavedViews(ctx, d, log, objs, opts.DryRun, ownerID, tagMap, corMap, dtMap, mrep); err != nil {
+	if _, err := ImportSavedViews(ctx, d, opts.SystemID, log, objs, opts.DryRun, ownerID, tagMap, corMap, dtMap, mrep); err != nil {
 		return nil, fmt.Errorf("import saved views: %w", err)
 	}
 
@@ -398,9 +410,18 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 	// Idempotency: if this imported doc has already been imported, skip.
 	if !opts.DryRun {
 		var have int
-		err := d.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM documents WHERE legacy_id = ?`,
-			in.LegacyID).Scan(&have)
+		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			allowed, err := systems.CanEnter(ctx, tx, in.OwnerID, opts.SystemID)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return errors.New("bundle: owner cannot enter system")
+			}
+			return tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM documents WHERE system_id = ? AND legacy_id = ?`,
+				opts.SystemID, in.LegacyID).Scan(&have)
+		})
 		if err != nil {
 			return docResult{}, err
 		}
@@ -469,6 +490,13 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 	// Single transaction: doc row + tag junctions + custom-field values + notes.
 	notesWritten := 0
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+		allowed, err := systems.CanEnter(ctx, tx, in.OwnerID, opts.SystemID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errors.New("bundle: owner cannot enter system")
+		}
 		created := ParseTime(in.Fields.Created)
 		added := ParseTime(in.Fields.Added)
 		updated := ParseTime(in.Fields.Modified)
@@ -521,13 +549,13 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents (
-				owner_id, original_blob, original_size, archive_blob, archive_size,
+				system_id, owner_id, original_blob, original_size, archive_blob, archive_size,
 				title, content, mime_type, correspondent_id, document_type_id, storage_path_id,
 				jd_category_id, legacy_id, archive_serial_number,
 				added_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-			in.OwnerID, origRef.SHA256, origRef.Size, archiveBlob, archiveSize,
+			opts.SystemID, in.OwnerID, origRef.SHA256, origRef.Size, archiveBlob, archiveSize,
 			in.Fields.Title, content, mime, correspondentID, documentTypeID, storagePathID,
 			in.InboxCat, in.LegacyID, asn,
 			added, created, updated,
@@ -645,7 +673,7 @@ func writeCustomFieldValue(ctx context.Context, tx *sql.Tx, docID, fieldID int64
 
 // ---------- reference-table upserts ----------
 
-func upsertTag(ctx context.Context, d *db.DB, dry bool, f TagFields) (int64, error) {
+func upsertTag(ctx context.Context, d *db.DB, systemID int64, dry bool, f TagFields) (int64, error) {
 	if dry {
 		return 0, nil
 	}
@@ -653,9 +681,9 @@ func upsertTag(ctx context.Context, d *db.DB, dry bool, f TagFields) (int64, err
 	var id int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tags(name, slug, color, matching_algorithm, match, is_insensitive, is_inbox_tag, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET
+			INSERT INTO tags(system_id, name, slug, color, matching_algorithm, match, is_insensitive, is_inbox_tag, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(system_id, name) DO UPDATE SET
 				slug = excluded.slug,
 				color = excluded.color,
 				matching_algorithm = excluded.matching_algorithm,
@@ -663,16 +691,16 @@ func upsertTag(ctx context.Context, d *db.DB, dry bool, f TagFields) (int64, err
 				is_insensitive = excluded.is_insensitive,
 				is_inbox_tag = excluded.is_inbox_tag,
 				updated_at = excluded.updated_at
-		`, f.Name, defaultSlug(f.Slug, f.Name), defaultString(f.Color, "#a6cee3"),
+		`, systemID, f.Name, defaultSlug(f.Slug, f.Name), defaultString(f.Color, "#a6cee3"),
 			f.MatchAlg, f.Match, boolInt(f.Insensitive), boolInt(f.IsInboxTag), now, now); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE name = ?`, f.Name).Scan(&id)
+		return tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
 	})
 	return id, err
 }
 
-func upsertCorrespondent(ctx context.Context, d *db.DB, dry bool, f CorrespondentFields) (int64, error) {
+func upsertCorrespondent(ctx context.Context, d *db.DB, systemID int64, dry bool, f CorrespondentFields) (int64, error) {
 	if dry {
 		return 0, nil
 	}
@@ -680,67 +708,67 @@ func upsertCorrespondent(ctx context.Context, d *db.DB, dry bool, f Corresponden
 	var id int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO correspondents(name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET
-				slug = excluded.slug,
-				matching_algorithm = excluded.matching_algorithm,
-				match = excluded.match,
-				is_insensitive = excluded.is_insensitive,
-				updated_at = excluded.updated_at
-		`, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
-			return err
-		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM correspondents WHERE name = ?`, f.Name).Scan(&id)
-	})
-	return id, err
-}
-
-func upsertDocumentType(ctx context.Context, d *db.DB, dry bool, f DocumentTypeFields) (int64, error) {
-	if dry {
-		return 0, nil
-	}
-	now := time.Now().Unix()
-	var id int64
-	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO document_types(name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET
-				slug = excluded.slug,
-				matching_algorithm = excluded.matching_algorithm,
-				match = excluded.match,
-				is_insensitive = excluded.is_insensitive,
-				updated_at = excluded.updated_at
-		`, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
-			return err
-		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM document_types WHERE name = ?`, f.Name).Scan(&id)
-	})
-	return id, err
-}
-
-func upsertStoragePath(ctx context.Context, d *db.DB, dry bool, f StoragePathFields) (int64, error) {
-	if dry {
-		return 0, nil
-	}
-	now := time.Now().Unix()
-	var id int64
-	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO storage_paths(name, slug, path, matching_algorithm, match, is_insensitive, created_at, updated_at)
+			INSERT INTO correspondents(system_id, name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET
+			ON CONFLICT(system_id, name) DO UPDATE SET
+				slug = excluded.slug,
+				matching_algorithm = excluded.matching_algorithm,
+				match = excluded.match,
+				is_insensitive = excluded.is_insensitive,
+				updated_at = excluded.updated_at
+		`, systemID, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT id FROM correspondents WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
+	})
+	return id, err
+}
+
+func upsertDocumentType(ctx context.Context, d *db.DB, systemID int64, dry bool, f DocumentTypeFields) (int64, error) {
+	if dry {
+		return 0, nil
+	}
+	now := time.Now().Unix()
+	var id int64
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO document_types(system_id, name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(system_id, name) DO UPDATE SET
+				slug = excluded.slug,
+				matching_algorithm = excluded.matching_algorithm,
+				match = excluded.match,
+				is_insensitive = excluded.is_insensitive,
+				updated_at = excluded.updated_at
+		`, systemID, f.Name, defaultSlug(f.Slug, f.Name), f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT id FROM document_types WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
+	})
+	return id, err
+}
+
+func upsertStoragePath(ctx context.Context, d *db.DB, systemID int64, dry bool, f StoragePathFields) (int64, error) {
+	if dry {
+		return 0, nil
+	}
+	now := time.Now().Unix()
+	var id int64
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO storage_paths(system_id, name, slug, path, matching_algorithm, match, is_insensitive, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(system_id, name) DO UPDATE SET
 				slug = excluded.slug,
 				path = excluded.path,
 				matching_algorithm = excluded.matching_algorithm,
 				match = excluded.match,
 				is_insensitive = excluded.is_insensitive,
 				updated_at = excluded.updated_at
-		`, f.Name, defaultSlug(f.Slug, f.Name), f.Path, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
+		`, systemID, f.Name, defaultSlug(f.Slug, f.Name), f.Path, f.MatchAlg, f.Match, boolInt(f.Insensitive), now, now); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM storage_paths WHERE name = ?`, f.Name).Scan(&id)
+		return tx.QueryRowContext(ctx, `SELECT id FROM storage_paths WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
 	})
 	return id, err
 }
@@ -773,7 +801,7 @@ var bundleCFDataTypeString = map[string]string{
 	"select":       "select",
 }
 
-func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFields) (int64, error) {
+func upsertCustomField(ctx context.Context, d *db.DB, systemID int64, dry bool, f CustomFieldFields) (int64, error) {
 	if dry {
 		return 0, nil
 	}
@@ -799,16 +827,16 @@ func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFie
 	var id int64
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO custom_fields(name, data_type, extra_data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO UPDATE SET
+			INSERT INTO custom_fields(system_id, name, data_type, extra_data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(system_id, name) DO UPDATE SET
 				data_type = excluded.data_type,
 				extra_data = excluded.extra_data,
 				updated_at = excluded.updated_at
-		`, f.Name, dt, extra, now, now); err != nil {
+		`, systemID, f.Name, dt, extra, now, now); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM custom_fields WHERE name = ?`, f.Name).Scan(&id)
+		return tx.QueryRowContext(ctx, `SELECT id FROM custom_fields WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
 	})
 	return id, err
 }
@@ -816,8 +844,8 @@ func upsertCustomField(ctx context.Context, d *db.DB, dry bool, f CustomFieldFie
 // loadJDCodeMap returns a map from JD code (jd_categories.code) → row id.
 // Called once at import start; --map-jd resolves rule categories through
 // this map instead of round-tripping the DB per document.
-func loadJDCodeMap(ctx context.Context, d *db.DB) (map[int]int64, error) {
-	rows, err := d.Read.QueryContext(ctx, `SELECT code, id FROM jd_categories`)
+func loadJDCodeMap(ctx context.Context, d *db.DB, systemID int64) (map[int]int64, error) {
+	rows, err := d.Read.QueryContext(ctx, `SELECT code, id FROM jd_categories WHERE system_id = ?`, systemID)
 	if err != nil {
 		return nil, err
 	}

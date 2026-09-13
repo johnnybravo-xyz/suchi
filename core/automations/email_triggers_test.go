@@ -109,14 +109,12 @@ func TestEmailFilterMatcher(t *testing.T) {
 			docID := seedDoc(t, ctx, d, "any", "")
 
 			store := automations.New(d)
-			_, err := store.Create(ctx, automations.Automation{
-				Name:     tc.name,
+			_, err := store.Create(ctx, 1, automations.Automation{Name: tc.name,
 				Enabled:  true,
 				Triggers: []automations.Trigger{tc.trigger},
 				Actions: []automations.Action{
 					{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tag)}}},
-				},
-			})
+				}})
 			if err != nil {
 				t.Fatalf("create: %v", err)
 			}
@@ -148,8 +146,7 @@ func TestEmailFilterPersistence(t *testing.T) {
 	seedUser(t, ctx, d)
 
 	store := automations.New(d)
-	created, err := store.Create(ctx, automations.Automation{
-		Name:    "persist round-trip",
+	created, err := store.Create(ctx, 1, automations.Automation{Name: "persist round-trip",
 		Enabled: true,
 		Triggers: []automations.Trigger{{
 			Type:                     automations.TriggerConsumption,
@@ -160,12 +157,11 @@ func TestEmailFilterPersistence(t *testing.T) {
 		}},
 		Actions: []automations.Action{
 			{Kind: "assign_title", Params: map[string]any{"template": "x"}},
-		},
-	})
+		}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	got, err := store.Get(ctx, created.ID)
+	got, err := store.Get(ctx, 1, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,14 +192,12 @@ func TestDiscardAction(t *testing.T) {
 	docID := seedDoc(t, ctx, d, "spam.pdf", "unwanted")
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "drop spam",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "drop spam",
 		Enabled: true,
 		Triggers: []automations.Trigger{
 			{Type: automations.TriggerConsumption, FilterFilename: "spam*"},
 		},
-		Actions: []automations.Action{{Kind: "discard"}},
-	})
+		Actions: []automations.Action{{Kind: "discard"}}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -232,14 +226,12 @@ func TestDiscardIdempotent(t *testing.T) {
 	docID := seedDoc(t, ctx, d, "junk", "")
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "drop all",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "drop all",
 		Enabled: true,
 		Triggers: []automations.Trigger{
 			{Type: automations.TriggerDocumentAdded},
 		},
-		Actions: []automations.Action{{Kind: "discard"}},
-	})
+		Actions: []automations.Action{{Kind: "discard"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

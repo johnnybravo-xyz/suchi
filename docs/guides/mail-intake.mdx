@@ -7,8 +7,12 @@ Suchi can poll multiple IMAP mailboxes. Each message is stored as an EML
 document, attachments become child documents, and normal extraction, filing,
 and automation behavior follows.
 
-Each mailbox has its own owner, credentials, folder, poll interval, filters,
-cursor, and health state. A failing mailbox does not stop other pollers.
+Each mailbox belongs to an immutable filing system and has its own owner,
+credentials, folder, poll interval, filters, cursor and health state. A failing mailbox does not stop other
+pollers. Select the destination system before adding an account; the owner must be
+active and able to enter it. Messages and attachment children, including files-only
+intake, inherit that system. Duplicate matching is owner-and-system scoped.
+Membership remains an additional gate to the existing owner/admin mailbox rules.
 
 ## Provider setup
 
@@ -129,8 +133,8 @@ with the batch count and cursor. Accepted documents appear as they are imported;
 they do not wait for the entire history to finish.
 
 If a message fails, the cursor does not advance past it. Deduplication uses
-`Message-ID` per owner, including messages that also arrive through a watched
-folder or mbsync.
+`Message-ID` per system and owner, including messages that also arrive through a
+watched folder or mbsync in that same system. Another system gets a distinct document.
 
 **Test connection** checks connectivity and authentication, not folder search or
 message downloads. A successful test does not clear a sync failure or update the

@@ -10,7 +10,6 @@ package automations
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,40 +40,25 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 	// visibility-scoped similar query — the automation runs "as the
 	// document's owner", not the ingest producer.
 	var (
-		ownerID                                  int64
+		ownerID, systemID                        int64
 		inboxCategoryID                          int64
 		jdCategoryID, correspondentID, docTypeID sql.NullInt64
 	)
 	if err := tx.QueryRowContext(ctx, `
-		SELECT owner_id, jd_category_id, correspondent_id, document_type_id
+		SELECT owner_id, system_id, jd_category_id, correspondent_id, document_type_id
 		  FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, docID).Scan(&ownerID, &jdCategoryID, &correspondentID, &docTypeID); err != nil {
+	`, docID).Scan(&ownerID, &systemID, &jdCategoryID, &correspondentID, &docTypeID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // doc trashed between enqueue and now — no-op
 		}
 		return fmt.Errorf("archive classifier: load doc: %w", err)
 	}
 
-	// Ignore already-present-inbox jd_category, since fresh uploads
-	// land there at insert time. Treat "in inbox" as "field not yet
-	// set" so heuristics can propose a real category. Inbox ID lives
-	// under settings.jd_inbox_category_id (not a column on
-	// jd_categories) — see core/jd/tree.go.
-	if jdCategoryID.Valid {
-		var inboxRaw sql.NullString
-		err := tx.QueryRowContext(ctx,
-			`SELECT value_json FROM settings WHERE key = 'jd_inbox_category_id' LIMIT 1`).Scan(&inboxRaw)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("archive classifier: load inbox category: %w", err)
-		}
-		if inboxRaw.Valid {
-			if err := json.Unmarshal([]byte(inboxRaw.String), &inboxCategoryID); err != nil {
-				return fmt.Errorf("archive classifier: decode inbox category: %w", err)
-			}
-			if inboxCategoryID != 0 && jdCategoryID.Int64 == inboxCategoryID {
-				jdCategoryID = sql.NullInt64{}
-			}
-		}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(inbox_category_id, 0) FROM jd_systems WHERE id = ?`, systemID).Scan(&inboxCategoryID); err != nil {
+		return err
+	}
+	if jdCategoryID.Valid && jdCategoryID.Int64 == inboxCategoryID {
+		jdCategoryID = sql.NullInt64{}
 	}
 
 	// Existing tag ids so we skip proposing anything the doc already
@@ -133,7 +117,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 		scoreByID[n.ID] = n.Score
 	}
 
-	metadata, err := loadNeighbourMetadata(ctx, d, ids)
+	metadata, err := loadNeighbourMetadata(ctx, d, systemID, ids)
 	if err != nil {
 		return fmt.Errorf("archive classifier: load neighbour metadata: %w", err)
 	}
@@ -211,7 +195,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			continue
 		}
 		supporters := scalarSupporters[field][winnerID]
-		label, err := lookupLabel(ctx, tx, field, winnerID)
+		label, err := lookupLabel(ctx, tx, systemID, field, winnerID)
 		if err != nil {
 			return fmt.Errorf("archive classifier: label %s: %w", field, err)
 		}
@@ -224,6 +208,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 				continue
 			}
 			audit.LogInTx(ctx, tx, log, audit.Event{
+				SystemID:   systemID,
 				Actor:      nil, // system actor
 				Action:     "heuristics.autoapply",
 				ObjectKind: "document",
@@ -263,7 +248,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 			if confidence < cfg.ReviewThreshold {
 				continue
 			}
-			label, err := lookupLabel(ctx, tx, "tag", tagID)
+			label, err := lookupLabel(ctx, tx, systemID, "tag", tagID)
 			if err != nil {
 				return fmt.Errorf("archive classifier: label tag: %w", err)
 			}
@@ -275,6 +260,7 @@ func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logge
 					return fmt.Errorf("archive classifier: auto-apply tag %d: %w", tagID, err)
 				}
 				audit.LogInTx(ctx, tx, log, audit.Event{
+					SystemID:   systemID,
 					Actor:      nil,
 					Action:     "heuristics.autoapply",
 					ObjectKind: "document",
@@ -315,7 +301,7 @@ type neighbourMD struct {
 	TagIDs          []int64
 }
 
-func loadNeighbourMetadata(ctx context.Context, d *db.DB, ids []int64) (map[int64]neighbourMD, error) {
+func loadNeighbourMetadata(ctx context.Context, d *db.DB, systemID int64, ids []int64) (map[int64]neighbourMD, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -323,8 +309,9 @@ func loadNeighbourMetadata(ctx context.Context, d *db.DB, ids []int64) (map[int6
 
 	// Scalars in one query.
 	placeholders, args := placeholderList(ids)
+	args = append(args, systemID)
 	q := "SELECT id, COALESCE(jd_category_id,0), COALESCE(correspondent_id,0), COALESCE(document_type_id,0) " +
-		"FROM documents WHERE id IN (" + placeholders + ")"
+		"FROM documents WHERE id IN (" + placeholders + ") AND system_id = ?"
 	rows, err := d.Read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -345,7 +332,7 @@ func loadNeighbourMetadata(ctx context.Context, d *db.DB, ids []int64) (map[int6
 	rows.Close()
 
 	// Tags in one query.
-	tq := "SELECT document_id, tag_id FROM document_tags WHERE document_id IN (" + placeholders + ")"
+	tq := "SELECT document_id, tag_id FROM document_tags WHERE document_id IN (" + placeholders + ") AND EXISTS (SELECT 1 FROM documents WHERE id = document_id AND system_id = ?)"
 	trows, err := d.Read.QueryContext(ctx, tq, args...)
 	if err != nil {
 		return out, err
@@ -427,7 +414,7 @@ func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID, 
 	return n == 1, err
 }
 
-func lookupLabel(ctx context.Context, tx *sql.Tx, field string, id int64) (string, error) {
+func lookupLabel(ctx context.Context, tx *sql.Tx, systemID int64, field string, id int64) (string, error) {
 	var table, col string
 	switch field {
 	case "jd_category":
@@ -443,6 +430,6 @@ func lookupLabel(ctx context.Context, tx *sql.Tx, field string, id int64) (strin
 	}
 	var s string
 	err := tx.QueryRowContext(ctx,
-		"SELECT "+col+" FROM "+table+" WHERE id = ?", id).Scan(&s)
+		"SELECT "+col+" FROM "+table+" WHERE system_id = ? AND id = ?", systemID, id).Scan(&s)
 	return s, err
 }

@@ -10,17 +10,22 @@ import (
 	"os"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // VerifyOptions carries flags to Verify. Zero value not runnable.
 type VerifyOptions struct {
 	// BundleRoot is the path to the exporter output dir. Required.
 	BundleRoot string
+	SystemID   int64
 }
 
 // Validate enforces required-field invariants. Called by Verify; can
 // be called by CLI parsers to fail early.
 func (o VerifyOptions) Validate() error {
+	if o.SystemID <= 0 {
+		return errors.New("SystemID is required")
+	}
 	if o.BundleRoot == "" {
 		return errors.New("BundleRoot is required")
 	}
@@ -60,6 +65,9 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
+	if _, err := systems.Get(ctx, d.Read, opts.SystemID); err != nil {
+		return nil, fmt.Errorf("resolve system: %w", err)
+	}
 	log = log.With("component", "import.bundle.verify", "bundle", opts.BundleRoot)
 
 	objs, err := LoadManifests(opts.BundleRoot)
@@ -86,8 +94,8 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 			suchiSize  int64
 		)
 		err := d.Read.QueryRowContext(ctx, `
-			SELECT title, original_size FROM documents WHERE legacy_id = ?
-		`, o.PK).Scan(&suchiTitle, &suchiSize)
+			SELECT title, original_size FROM documents WHERE system_id = ? AND legacy_id = ?
+		`, opts.SystemID, o.PK).Scan(&suchiTitle, &suchiSize)
 		if errors.Is(err, sql.ErrNoRows) {
 			// Not found → this doc would be imported.
 			rep.New = append(rep.New, o.PK)
@@ -112,8 +120,8 @@ func Verify(ctx context.Context, d *db.DB, log *slog.Logger, opts VerifyOptions)
 	// Orphans: suchi docs with a legacy_id that's not in this bundle.
 	rows, err := d.Read.QueryContext(ctx, `
 		SELECT legacy_id FROM documents
-		WHERE legacy_id IS NOT NULL AND trashed_at IS NULL
-	`)
+		WHERE system_id = ? AND legacy_id IS NOT NULL AND trashed_at IS NULL
+	`, opts.SystemID)
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,8 @@ type VersionView struct {
 
 type uploadVersionResponse struct {
 	ID                int64  `json:"id"`
+	SystemCode        string `json:"system_code,omitempty"`
+	JDAddress         string `json:"jd_address,omitempty"`
 	PreviousVersionID int64  `json:"previous_version_id"`
 	SHA256            string `json:"sha256"`
 	Size              int64  `json:"size"`
@@ -85,11 +87,11 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject an already-trashed predecessor before consuming the upload body.
 	// Its metadata is deliberately loaded again under the write lock below.
-	var predecessorExists int
+	var systemID int64
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT 1
+		SELECT system_id
 		FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, prevID).Scan(&predecessorExists)
+	`, prevID).Scan(&systemID)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "predecessor document not found")
 		return
@@ -98,7 +100,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
 	}
-	upload := s.prepareUpload(w, r, uploadOperationVersion, prevID)
+	upload := s.prepareUpload(w, r, systemID, uploadOperationVersion, prevID)
 	if upload == nil {
 		return
 	}
@@ -125,7 +127,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		allowed, err := s.authorized(
-			r.Context(), p, authz.KindDocument, id, authz.PermView,
+			r.Context(), tx, p, authz.KindDocument, id, authz.PermView,
 		)
 		if err != nil {
 			return err
@@ -150,7 +152,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		allowed, err := s.authorized(
-			r.Context(), p, authz.KindDocument, prevID, authz.PermChange,
+			r.Context(), tx, p, authz.KindDocument, prevID, authz.PermChange,
 		)
 		if err != nil {
 			return err
@@ -202,6 +204,10 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 				response.PreviousVersionID = prevID
 				response.SHA256 = upload.SHA256
 				response.IdempotentReplay = true
+				response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, newID)
+				if err != nil {
+					return err
+				}
 				recoveredReplay = true
 				return storeUploadResponse(
 					r.Context(), tx, p.UserID, upload.Idempotency,
@@ -215,12 +221,12 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 
 		err = tx.QueryRowContext(r.Context(), `
 			SELECT id FROM documents
-			WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
+			WHERE system_id = ? AND owner_id = ? AND original_blob = ? AND trashed_at IS NULL
 			ORDER BY id LIMIT 1
-		`, prevOwner, upload.SHA256).Scan(&duplicateLiveID)
+		`, systemID, prevOwner, upload.SHA256).Scan(&duplicateLiveID)
 		if err == nil {
 			visible, authErr := s.authorized(
-				r.Context(), p, authz.KindDocument, duplicateLiveID, authz.PermView,
+				r.Context(), tx, p, authz.KindDocument, duplicateLiveID, authz.PermView,
 			)
 			if authErr != nil {
 				return authErr
@@ -238,13 +244,13 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
 				previous_version_id, source_mtime, content, content_source,
 				device_content_confidence, device_ocr_language,
 				device_content_received_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -284,12 +290,16 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payload)); err != nil {
+		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, systemID, string(payload)); err != nil {
 			return err
 		}
 		response = uploadVersionResponse{
 			ID: newID, PreviousVersionID: prevID, SHA256: upload.SHA256,
 			Size: upload.Size, MIME: upload.MIME, Title: title,
+		}
+		response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, newID)
+		if err != nil {
+			return err
 		}
 		return storeUploadResponse(
 			r.Context(), tx, p.UserID, upload.Idempotency,
@@ -297,7 +307,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		)
 	})
 	if errors.Is(err, errVersionPermissionChanged) {
-		s.writeError(w, http.StatusForbidden, "forbidden", "permission denied")
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
 		return
 	}
 	if errors.Is(err, errVersionPredecessorChanged) {
@@ -350,7 +360,8 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := logx.WithDocID(r.Context(), newID)
 	audit.Log(ctx, s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.version.create",
+		SystemID: systemID,
+		Actor:    p, Action: "document.version.create",
 		ObjectKind: "document", ObjectID: newID,
 		After: map[string]any{
 			"previous_version_id": prevID,
@@ -390,12 +401,7 @@ func (s *Server) ListVersions(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "versions.load_groups", err)
 		return
 	}
-	authzPrincipal := authz.Principal{
-		UserID: principal.UserID,
-		Role:   principal.Role,
-		Kind:   principal.Kind,
-		Groups: groups,
-	}
+	authzPrincipal := systemPrincipal(r.Context(), principal, groups)
 	// Walk back to the root: while previous_version_id is not null,
 	// jump. Cap the loop to avoid pathological cycles that shouldn't
 	// exist but let's not trust the schema alone.

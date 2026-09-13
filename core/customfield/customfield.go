@@ -409,21 +409,7 @@ var handlerDocumentLink = &Handler{
 		return coerceInt64(raw)
 	},
 	Write: func(ctx context.Context, tx *sql.Tx, docID, fieldID int64, typed any) error {
-		target := typed.(int64)
-		if target == 0 {
-			return deleteRow(ctx, tx, docID, fieldID)
-		}
-		// FK-style check: target must exist and be alive.
-		var exists int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM documents WHERE id = ? AND trashed_at IS NULL`, target).Scan(&exists)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("documentlink: doc %d not found or trashed", target)
-		}
-		if err != nil {
-			return err
-		}
-		return writeInt(ctx, tx, docID, fieldID, target)
+		return WriteDocumentLinkInTx(ctx, tx, docID, fieldID, typed.(int64), false)
 	},
 	Render: func(row ValueRow) string {
 		if !row.Int.Valid {
@@ -431,6 +417,29 @@ var handlerDocumentLink = &Handler{
 		}
 		return "#" + strconv.FormatInt(row.Int.Int64, 10)
 	},
+}
+
+// WriteDocumentLinkInTx allows a cross-system link only after the caller has
+// authorized both documents in this same writer transaction.
+func WriteDocumentLinkInTx(ctx context.Context, tx *sql.Tx, docID, fieldID, targetID int64, allowCrossSystem bool) error {
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT d.system_id FROM documents d JOIN custom_fields f ON f.system_id = d.system_id
+		WHERE d.id = ? AND d.trashed_at IS NULL AND f.id = ? AND f.data_type = 'documentlink'
+	`, docID, fieldID).Scan(&systemID); err != nil {
+		return err
+	}
+	if targetID == 0 {
+		return deleteRow(ctx, tx, docID, fieldID)
+	}
+	var targetSystem int64
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ? AND trashed_at IS NULL`, targetID).Scan(&targetSystem); err != nil {
+		return err
+	}
+	if targetSystem != systemID && !allowCrossSystem {
+		return errors.New("documentlink: target belongs to another system")
+	}
+	return writeInt(ctx, tx, docID, fieldID, targetID)
 }
 
 // ---------- coerce helpers ----------

@@ -31,6 +31,7 @@ package paths
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -39,6 +40,16 @@ const (
 	maxTemplateBytes = 16 << 10
 	maxRenderedBytes = 64 << 10
 )
+
+// IndexDirectory is exclusively owned by the archive filing-index projection.
+const IndexDirectory = "00-09 System index"
+
+// IsIndexPath also recognizes cleaned paths and case-insensitive filesystems.
+func IsIndexPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	first, _, _ := strings.Cut(clean, "/")
+	return strings.EqualFold(first, IndexDirectory)
+}
 
 // Context is what a template renders against. Every field is optional
 // but the sane defaults (empty string, zero) let templates run without
@@ -62,6 +73,9 @@ type Context struct {
 	JDAreaName      string
 	JDCategoryCode  int
 	JDCategoryName  string
+	JDSystemCode    string
+	JDSystemName    string
+	JDAddress       string
 }
 
 // Render substitutes the documented {{ variable }} placeholders in tpl.
@@ -162,6 +176,9 @@ func templateValues(c Context) map[string]string {
 		"jd.area.name":       c.JDAreaName,
 		"jd.category.code":   strconv.Itoa(c.JDCategoryCode),
 		"jd.category.name":   c.JDCategoryName,
+		"jd.system.code":     c.JDSystemCode,
+		"jd.system.name":     c.JDSystemName,
+		"jd.address":         c.JDAddress,
 	}
 }
 

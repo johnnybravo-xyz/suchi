@@ -19,6 +19,12 @@ runtime dependency graph and executable code visible at build time.
 Business services, database helpers, and format-specific contracts remain in
 `core` rather than expanding `plugin-api`.
 
+Preserve filing ownership through these values: `Event.SystemID` and
+`AuditEvent.SystemID` identify system/document work; zero is reserved for genuinely
+instance-wide work. A documentless index refresh or approval proposal is still
+system-owned. `Principal.TokenSystemID` is the authenticated token's binding, not
+the browser's selected context; session principals leave it zero.
+
 ## Subscriber contract
 
 ```go
@@ -37,6 +43,12 @@ Do network and subprocess work outside a database transaction. Open one short
 write transaction only after the external result is available. State needed
 after restart belongs in the database or event payload, not a package-level
 cache.
+
+Enqueue through `jobs.Enqueue(ctx, tx, kind, docID, systemID, payload)`: the explicit
+system must match any document. Zero persists as NULL only for global work.
+The outbox inserts jobs without deduplicating them. Resolve metadata and background
+actions within the event/document system, rechecking current referenced records
+in the writer; a job is not an authenticated cross-system document-link grant.
 
 Minimal shape:
 
@@ -89,6 +101,18 @@ An authenticator should resolve the external identity to a Suchi user and
 return only the principal fields needed by authorization and audit. Put roles,
 group membership, and object policy in the authorization layer rather than in
 provider-specific token parsing.
+
+Token authenticators must set `TokenSystemID`; an external token that leaves it
+zero is restricted to original system 1, never all systems. Local tokens also
+carry `TokenID` so mutations can recheck revocation, actor and binding inside the
+single writer. Authentication does not grant membership or document permission;
+even administrator tokens cannot escape their bound system or an explicit target.
+
+Local issuance uses the caller-owned transaction contract
+`IssueAPIToken(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error)`.
+The API's `TokenIssuer` seam has the same signature. Keep pairing consumption,
+current membership checks and issuance in that transaction so failure rolls back
+consumption and membership removal cannot be bypassed by a later re-admission.
 
 Register more specific authenticators before general local session and token
 handling. See `plugins/oidc` and `plugins/local-auth` for shipped examples.

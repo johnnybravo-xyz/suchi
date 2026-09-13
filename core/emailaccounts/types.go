@@ -202,6 +202,7 @@ const (
 // cursor, not server read state, controls incremental polling.
 type Account struct {
 	ID              int64        `json:"id"`
+	SystemID        int64        `json:"system_id"`
 	Name            string       `json:"name"`
 	OwnerID         int64        `json:"owner_id"`
 	Provider        Provider     `json:"provider"`

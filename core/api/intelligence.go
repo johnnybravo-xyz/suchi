@@ -78,6 +78,9 @@ func (s *Server) intelligencePrincipal(w http.ResponseWriter, r *http.Request, w
 	if p == nil {
 		return nil
 	}
+	if _, ok := s.requireSystem(w, r, p); !ok {
+		return nil
+	}
 	if isDemoCorpusKind(p.Kind) {
 		if write {
 			s.writeError(w, http.StatusForbidden, "public_demo_denied", "public demo dates are read-only")
@@ -218,16 +221,13 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		args = append(args, sortTo)
 	}
 	where, args = appendDocumentScopePredicates(where, args, scope)
-	if p.Role != "admin" || isDemoCorpusKind(p.Kind) {
-		groups, err := s.principalGroups(r.Context(), p.UserID)
-		if err != nil {
-			s.serverErr(w, "intelligence.load_groups", err)
-			return
-		}
-		visibility, visibilityArgs := documentVisibilityWhere(p, groups)
-		where = append(where, visibility)
-		args = append(args, visibilityArgs...)
+	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), p)
+	if err != nil {
+		s.serverErr(w, "intelligence.visibility", err)
+		return
 	}
+	where = append(where, visibility)
+	args = append(args, visibilityArgs...)
 	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)
 	whereSQL := strings.Join(where, " AND ")
 	fromSQL := `document_intelligence di
@@ -323,7 +323,7 @@ func (s *Server) ExtractIntelligence(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	results := make([]intelligenceMutationResult, len(ids))
-	decisions, err := s.documentPermissionDecisions(r.Context(), p, ids, authz.PermChange)
+	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, ids, authz.PermChange)
 	if err != nil {
 		s.serverErr(w, "intelligence.extract.authorize", err)
 		return
@@ -337,7 +337,37 @@ func (s *Server) ExtractIntelligence(w http.ResponseWriter, r *http.Request) {
 		}
 		authorized = append(authorized, id)
 	}
-	enqueued, err := rescan.Enqueue(r.Context(), s.DB, rescan.Options{IDs: authorized})
+	systemID := selectedSystemID(r.Context())
+	var enqueued int
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapArchiveIntelligence) {
+				return errSystemUnavailable
+			}
+		}
+		decisions, err := s.documentPermissionDecisions(r.Context(), tx, current, authorized, authz.PermChange)
+		if err != nil {
+			return err
+		}
+		for _, id := range authorized {
+			if !decisions[id] {
+				return errSystemUnavailable
+			}
+		}
+		if len(authorized) == 0 {
+			return nil
+		}
+		enqueued, err = rescan.EnqueueInTx(r.Context(), tx, rescan.Options{SystemID: systemID, IDs: authorized})
+		return err
+	})
 	if err != nil {
 		s.serverErr(w, "intelligence.extract", err)
 		return
@@ -347,7 +377,8 @@ func (s *Server) ExtractIntelligence(w http.ResponseWriter, r *http.Request) {
 	}
 	markMutationResults(results, authorized)
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document_intelligence.extract", ObjectKind: "documents",
+		SystemID: systemID,
+		Actor:    p, Action: "document_intelligence.extract", ObjectKind: "documents",
 		After: map[string]any{"types": body.Types, "requested": len(ids), "enqueued": enqueued},
 	})
 	s.writeJSON(w, http.StatusAccepted, intelligenceMutationResponse{
@@ -377,7 +408,7 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_decision", "decision must be accepted or rejected")
 		return
 	}
-	states, err := s.loadIntelligenceStates(r.Context(), ids)
+	states, err := s.loadIntelligenceStates(r.Context(), p, ids)
 	if err != nil {
 		s.serverErr(w, "intelligence.resolve.load", err)
 		return
@@ -388,7 +419,7 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 			pendingDocuments = append(pendingDocuments, state.documentID)
 		}
 	}
-	decisions, err := s.documentPermissionDecisions(r.Context(), p, pendingDocuments, authz.PermChange)
+	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, pendingDocuments, authz.PermChange)
 	if err != nil {
 		s.serverErr(w, "intelligence.resolve.authorize", err)
 		return
@@ -420,6 +451,28 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 			args = append(args, id)
 		}
 		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			current, err := s.currentWriterPrincipal(r.Context(), tx, p, selectedSystemID(r.Context()))
+			if err != nil {
+				return err
+			}
+			if current.Role != "admin" {
+				caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+				if err != nil {
+					return err
+				}
+				if !caps.Has(authz.CapArchiveIntelligence) {
+					return errSystemUnavailable
+				}
+			}
+			decisions, err := s.documentPermissionDecisions(r.Context(), tx, current, pendingDocuments, authz.PermChange)
+			if err != nil {
+				return err
+			}
+			for _, id := range authorized {
+				if !decisions[states[id].documentID] {
+					return errSystemUnavailable
+				}
+			}
 			// RETURNING makes the response reflect which reviewer won the race.
 			rows, err := tx.QueryContext(r.Context(), `
 				UPDATE document_intelligence
@@ -450,7 +503,8 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document_intelligence.resolve", ObjectKind: "document_intelligence",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document_intelligence.resolve", ObjectKind: "document_intelligence",
 		After: map[string]any{"decision": body.Decision, "requested": len(ids), "applied": len(transitioned)},
 	})
 	s.writeJSON(w, http.StatusOK, intelligenceMutationResponse{
@@ -463,14 +517,20 @@ type intelligenceState struct {
 	status     string
 }
 
-func (s *Server) loadIntelligenceStates(ctx context.Context, ids []int64) (map[int64]intelligenceState, error) {
+func (s *Server) loadIntelligenceStates(ctx context.Context, p *pluginapi.Principal, ids []int64) (map[int64]intelligenceState, error) {
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
+	visibility, visibilityArgs, err := s.collectionVisibility(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, visibilityArgs...)
 	rows, err := s.DB.Read.QueryContext(ctx, `
-		SELECT id, document_id, status FROM document_intelligence
-		WHERE id IN (`+placeholders(len(ids))+`)`, args...)
+		SELECT di.id, di.document_id, di.status FROM document_intelligence di
+		JOIN documents d ON d.id=di.document_id
+		WHERE di.id IN (`+placeholders(len(ids))+`) AND d.trashed_at IS NULL AND `+visibility, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -503,11 +563,9 @@ func intelligenceCountForPrincipal(ctx context.Context, s *Server, p *pluginapi.
 	groups []int64, status string) (int64, error) {
 	where := []string{"di.status = ?", "d.trashed_at IS NULL"}
 	args := []any{status}
-	if p.Role != "admin" {
-		visibility, visibilityArgs := documentVisibilityWhere(p, groups)
-		where = append(where, visibility)
-		args = append(args, visibilityArgs...)
-	}
+	visibility, visibilityArgs := documentVisibilityWhere(ctx, p, groups)
+	where = append(where, visibility)
+	args = append(args, visibilityArgs...)
 	var count int64
 	err := s.DB.Read.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM document_intelligence di

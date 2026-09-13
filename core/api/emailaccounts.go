@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 )
 
@@ -48,10 +50,35 @@ const (
 type oauthFlowEntry struct {
 	clientID  string
 	ownerID   int64
+	systemID  int64
 	expiresAt time.Time
 	completed *oauth.CompletedFlow
 	err       error
 	active    bool
+}
+
+// The browser handoff is distinct from at-rest credentials. Its authenticated
+// payload binds the issuing user and cabinet without changing mailbox storage.
+type oauthCreationHandoff struct {
+	ActorID        int64                                  `json:"actor_id"`
+	SystemID       int64                                  `json:"system_id"`
+	Credential     emailaccounts.MicrosoftOAuthCredential `json:"credential"`
+	Username       string                                 `json:"username"`
+	OAuthAccountID string                                 `json:"oauth_account_id"`
+}
+
+func (s *Server) sealOAuthHandoff(actorID, systemID int64, clientID string, completed *oauth.CompletedFlow) (string, error) {
+	body, err := json.Marshal(oauthCreationHandoff{ActorID: actorID, SystemID: systemID,
+		Credential: emailaccounts.MicrosoftOAuthCredential{ClientID: clientID, CacheJSON: completed.CacheJSON},
+		Username:   completed.PreferredUsername, OAuthAccountID: completed.HomeAccountID})
+	if err != nil {
+		return "", err
+	}
+	sealed, err := s.EmailwatchAEAD.Seal(body)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
 var (
@@ -95,11 +122,11 @@ func (s *oauthFlowStore) put(handle string, entry oauthFlowEntry, now time.Time)
 	return true
 }
 
-func (s *oauthFlowStore) begin(handle string, now time.Time) (oauthFlowEntry, error) {
+func (s *oauthFlowStore) begin(handle string, now time.Time, ownerID, systemID int64) (oauthFlowEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[handle]
-	if !ok {
+	if !ok || entry.ownerID != ownerID || entry.systemID != systemID {
 		return oauthFlowEntry{}, errOAuthFlowMissing
 	}
 	if !entry.expiresAt.After(now) {
@@ -144,6 +171,17 @@ func (s *oauthFlowStore) delete(handle string) {
 	s.mu.Unlock()
 }
 
+// Called while holding the database writer; flow creation uses the same order.
+func (s *oauthFlowStore) invalidateMember(userID, systemID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for handle, entry := range s.entries {
+		if entry.ownerID == userID && (systemID == 0 || entry.systemID == systemID) {
+			delete(s.entries, handle)
+		}
+	}
+}
+
 // emailAccountInput is the wire shape for POST + PATCH bodies. Every
 // mutable field is optional; the plaintext Password is server-sealed on
 // write and never echoed back.
@@ -161,10 +199,7 @@ type emailAccountInput struct {
 	Username        *string `json:"username,omitempty"`
 	Password        *string `json:"password,omitempty"`
 	OAuthAccountID  *string `json:"oauth_account_id,omitempty"`
-	// SealedSecretB64 carries a pre-sealed MSAL token cache from an
-	// /oauth/complete call that ran without an account_id: the SPA
-	// holds the bytes for one create request and passes them here so
-	// xoauth2 rows can be constructed in a single POST.
+	// Only a server-sealed actor/system handoff is accepted, never at-rest bytes.
 	SealedSecretB64 *string                     `json:"sealed_secret_b64,omitempty"`
 	IntakePolicy    *emailaccounts.IntakePolicy `json:"intake_policy,omitempty"`
 	// SyncSince is the unix-seconds initial-sync horizon. On create,
@@ -190,14 +225,18 @@ func (s *Server) ListEmailAccounts(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var (
 		rows []emailaccounts.Account
 		err  error
 	)
 	if isAdmin {
-		rows, err = emailaccounts.List(r.Context(), s.DB)
+		rows, err = emailaccounts.List(r.Context(), s.DB, systemID)
 	} else {
-		rows, err = emailaccounts.ListByOwner(r.Context(), s.DB, p.UserID)
+		rows, err = emailaccounts.ListByOwner(r.Context(), s.DB, systemID, p.UserID)
 	}
 	if err != nil {
 		s.serverErr(w, "email_accounts.list", err)
@@ -231,6 +270,9 @@ func (s *Server) GetEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
+		return
+	}
 	acc, err := emailaccounts.Get(r.Context(), s.DB, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
@@ -254,13 +296,17 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var in emailAccountInput
 	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
 
-	acc := emailaccounts.Account{}
+	acc := emailaccounts.Account{SystemID: systemID}
 	if in.Name != nil {
 		acc.Name = strings.TrimSpace(*in.Name)
 	}
@@ -356,9 +402,8 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		acc.AuthMethod = emailaccounts.AuthMethod(p.AuthMethod)
 	}
 
-	// xoauth2 needs a pre-sealed MSAL cache from /oauth/complete;
-	// password mode seals the plaintext here. Either path lands
-	// SealedSecret before Create so the NOT NULL column is satisfied.
+	// OAuth create accepts the authenticated actor/system handoff returned by
+	// completion, then stores the ordinary at-rest Microsoft credential.
 	if acc.AuthMethod == emailaccounts.AuthXOAuth2 {
 		if in.Password != nil && *in.Password != "" {
 			s.writeError(w, http.StatusBadRequest, "oauth_required",
@@ -367,31 +412,34 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.SealedSecretB64 == nil || *in.SealedSecretB64 == "" {
 			s.writeError(w, http.StatusBadRequest, "oauth_required",
-				"xoauth2 accounts must be created with sealed_secret_b64 from /oauth/complete")
-			return
-		}
-		if acc.OAuthAccountID == "" {
-			s.writeError(w, http.StatusBadRequest, "oauth_required",
-				"Microsoft sign-in did not return an account identifier")
+				"xoauth2 accounts require sealed_secret_b64 from /oauth/complete")
 			return
 		}
 		if s.EmailwatchAEAD == nil {
-			s.writeError(w, http.StatusServiceUnavailable, "no_aead",
-				"server AEAD key not configured")
+			s.writeError(w, http.StatusServiceUnavailable, "no_aead", "server AEAD key not configured")
 			return
 		}
 		sealed, err := base64.StdEncoding.DecodeString(*in.SealedSecretB64)
 		if err != nil {
-			s.writeError(w, http.StatusBadRequest, "bad_sealed_secret",
-				"sealed_secret_b64 is not valid base64")
+			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential", "invalid OAuth handoff")
 			return
 		}
-		if _, err := emailaccounts.OpenMicrosoftOAuthCredential(s.EmailwatchAEAD, sealed); err != nil {
-			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential",
-				"OAuth credential was not issued by this server")
+		payload, err := s.EmailwatchAEAD.Open(sealed)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential", "invalid OAuth handoff")
 			return
 		}
-		acc.SealedSecret = sealed
+		var handoff oauthCreationHandoff
+		if err := json.Unmarshal(payload, &handoff); err != nil || handoff.ActorID != p.UserID || handoff.SystemID != systemID {
+			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential", "OAuth handoff belongs to another user or system")
+			return
+		}
+		acc.SealedSecret, err = emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD, handoff.Credential)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_oauth_credential", "invalid OAuth handoff")
+			return
+		}
+		acc.Username, acc.OAuthAccountID = handoff.Username, handoff.OAuthAccountID
 	} else {
 		if in.SealedSecretB64 != nil || in.OAuthAccountID != nil {
 			s.writeError(w, http.StatusBadRequest, "unsupported_oauth",
@@ -421,7 +469,19 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := emailaccounts.Create(r.Context(), s.DB, acc)
+	var created *emailaccounts.Account
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
+		var err error
+		created, err = emailaccounts.Create(r.Context(), tx, acc, p)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusNotFound, "not_found", "mailbox owner or system unavailable")
+		return
+	}
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "emailaccounts:") {
 			s.writeError(w, http.StatusBadRequest, "validation", err.Error())
@@ -432,6 +492,7 @@ func (s *Server) CreateEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   systemID,
 		Actor:      auth.FromContext(r.Context()),
 		Action:     "email_account.create",
 		ObjectKind: "email_account",
@@ -451,6 +512,9 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := s.pathID(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
 		return
 	}
 	var in emailAccountInput
@@ -551,7 +615,12 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	updated, err := emailaccounts.Patch(r.Context(), s.DB, id, patch)
+	var updated *emailaccounts.Account
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var err error
+		updated, err = emailaccounts.Patch(r.Context(), tx, id, patch, p)
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
@@ -570,6 +639,7 @@ func (s *Server) PatchEmailAccount(w http.ResponseWriter, r *http.Request) {
 		after["password_updated"] = true
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   before.SystemID,
 		Actor:      auth.FromContext(r.Context()),
 		Action:     "email_account.update",
 		ObjectKind: "email_account",
@@ -592,6 +662,9 @@ func (s *Server) DeleteEmailAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
+		return
+	}
 	before, err := emailaccounts.Get(r.Context(), s.DB, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
@@ -605,11 +678,16 @@ func (s *Server) DeleteEmailAccount(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 		return
 	}
-	if err := emailaccounts.Delete(r.Context(), s.DB, id); err != nil {
+	if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error { return emailaccounts.Delete(r.Context(), tx, id, p) }); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+			return
+		}
 		s.serverErr(w, "email_accounts.delete", err)
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   before.SystemID,
 		Actor:      auth.FromContext(r.Context()),
 		Action:     "email_account.delete",
 		ObjectKind: "email_account",
@@ -635,6 +713,9 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := s.pathID(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
 		return
 	}
 	acc, err := emailaccounts.Get(r.Context(), s.DB, id)
@@ -700,8 +781,10 @@ func (s *Server) TestEmailAccount(w http.ResponseWriter, r *http.Request) {
 			sealed, sealErr := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
 				emailaccounts.MicrosoftOAuthCredential{ClientID: credential.ClientID, CacheJSON: refreshed.CacheJSON})
 			if sealErr == nil {
-				_, _ = emailaccounts.Patch(r.Context(), s.DB, acc.ID,
-					emailaccounts.AccountPatch{SealedSecret: &sealed})
+				_ = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+					_, err := emailaccounts.Patch(r.Context(), tx, acc.ID, emailaccounts.AccountPatch{SealedSecret: &sealed}, p)
+					return err
+				})
 			}
 		}
 		token := refreshed.AccessToken
@@ -742,6 +825,9 @@ func (s *Server) PreviewEmailAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := s.pathID(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
 		return
 	}
 	acc, err := emailaccounts.Get(r.Context(), s.DB, id)
@@ -806,6 +892,10 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 	if p == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var body struct {
 		Provider string `json:"provider"`
 	}
@@ -835,10 +925,32 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	entry := oauthFlowEntry{clientID: clientID, ownerID: p.UserID, expiresAt: now.Add(oauthFlowTTL)}
-	if !s.oauthFlows.put(handle, entry, now) {
-		s.writeError(w, http.StatusTooManyRequests, "too_many_flows",
-			"too many Microsoft sign-ins are already pending")
+	entry := oauthFlowEntry{clientID: clientID, ownerID: p.UserID, systemID: systemID, expiresAt: now.Add(oauthFlowTTL)}
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapMailboxes) {
+				return errSystemUnavailable
+			}
+		}
+		if !s.oauthFlows.put(handle, entry, now) {
+			return errOAuthFlowActive
+		}
+		return nil
+	})
+	if errors.Is(err, errOAuthFlowActive) {
+		s.writeError(w, http.StatusTooManyRequests, "too_many_flows", "too many Microsoft sign-ins are already pending")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "email_accounts.oauth.entry", err)
 		return
 	}
 	flow, err := client.DeviceCodeStart(r.Context())
@@ -850,7 +962,12 @@ func (s *Server) StartEmailAccountOAuth(w http.ResponseWriter, r *http.Request) 
 	if flow.ExpiresAt.Before(entry.expiresAt) {
 		entry.expiresAt = flow.ExpiresAt
 	}
-	s.oauthFlows.put(handle, entry, now)
+	s.oauthFlows.mu.Lock()
+	if current, exists := s.oauthFlows.entries[handle]; exists {
+		current.expiresAt = entry.expiresAt
+		s.oauthFlows.entries[handle] = current
+	}
+	s.oauthFlows.mu.Unlock()
 	go func() {
 		ctx, cancel := context.WithDeadline(context.Background(), entry.expiresAt)
 		defer cancel()
@@ -880,6 +997,21 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
+	var systemID, accountID int64
+	if body.AccountID != nil {
+		accountID = *body.AccountID
+		var ok bool
+		systemID, ok = s.requireNamespaceObject(w, r, p, "email_accounts", accountID)
+		if !ok {
+			return
+		}
+	} else {
+		var ok bool
+		systemID, ok = s.requireSystem(w, r, p)
+		if !ok {
+			return
+		}
+	}
 	// Existing-row completion is restricted to Microsoft mailboxes and
 	// remains ownership-scoped for members.
 	if body.AccountID != nil {
@@ -908,7 +1040,7 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	entry, err := s.oauthFlows.begin(body.FlowHandle, time.Now())
+	entry, err := s.oauthFlows.begin(body.FlowHandle, time.Now(), p.UserID, systemID)
 	if errors.Is(err, errOAuthFlowMissing) {
 		s.writeError(w, http.StatusNotFound, "flow_gone",
 			"flow_handle unknown or already consumed")
@@ -957,14 +1089,14 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 			"server AEAD key not configured")
 		return
 	}
-	sealed, err := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
-		emailaccounts.MicrosoftOAuthCredential{ClientID: entry.clientID, CacheJSON: completed.CacheJSON})
-	if err != nil {
-		s.serverErr(w, "email_accounts.oauth.seal", err)
-		return
-	}
 
 	if body.AccountID != nil {
+		sealed, err := emailaccounts.SealMicrosoftOAuthCredential(s.EmailwatchAEAD,
+			emailaccounts.MicrosoftOAuthCredential{ClientID: entry.clientID, CacheJSON: completed.CacheJSON})
+		if err != nil {
+			s.serverErr(w, "email_accounts.oauth.seal", err)
+			return
+		}
 		am := emailaccounts.AuthXOAuth2
 		oid := completed.HomeAccountID
 		user := completed.PreferredUsername
@@ -976,7 +1108,28 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 			Username:       &user,
 			Enabled:        &on,
 		}
-		updated, err := emailaccounts.Patch(r.Context(), s.DB, *body.AccountID, patch)
+		var updated *emailaccounts.Account
+		err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+				return err
+			}
+			s.oauthFlows.mu.Lock()
+			_, exists := s.oauthFlows.entries[body.FlowHandle]
+			s.oauthFlows.mu.Unlock()
+			if !exists {
+				return errSystemUnavailable
+			}
+			var provider string
+			if err := tx.QueryRowContext(r.Context(), "SELECT provider FROM email_accounts WHERE id = ? AND system_id = ?", accountID, systemID).Scan(&provider); err != nil {
+				return err
+			}
+			if provider != string(emailaccounts.ProviderMicrosoft) {
+				return sql.ErrNoRows
+			}
+			var err error
+			updated, err = emailaccounts.Patch(r.Context(), tx, accountID, patch, p)
+			return err
+		})
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
 			return
@@ -987,6 +1140,7 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		}
 		s.oauthFlows.delete(body.FlowHandle)
 		audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+			SystemID:   systemID,
 			Actor:      auth.FromContext(r.Context()),
 			Action:     "email_account.oauth_complete",
 			ObjectKind: "email_account",
@@ -1007,14 +1161,43 @@ func (s *Server) CompleteEmailAccountOAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// No account_id: return the sealed bytes so a follow-up POST create
-	// can consume them. Wire is JSON so we base64 the bytes.
+	handoff, err := s.sealOAuthHandoff(p.UserID, systemID, entry.clientID, completed)
+	if err != nil {
+		s.serverErr(w, "email_accounts.oauth.handoff", err)
+		return
+	}
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapMailboxes) {
+				return errSystemUnavailable
+			}
+		}
+		s.oauthFlows.mu.Lock()
+		_, exists := s.oauthFlows.entries[body.FlowHandle]
+		s.oauthFlows.mu.Unlock()
+		if !exists {
+			return errSystemUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		s.serverErr(w, "email_accounts.oauth.pending", err)
+		return
+	}
 	s.oauthFlows.delete(body.FlowHandle)
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                true,
 		"username":          completed.PreferredUsername,
 		"oauth_account_id":  completed.HomeAccountID,
-		"sealed_secret_b64": base64.StdEncoding.EncodeToString(sealed),
+		"sealed_secret_b64": handoff,
 	})
 }
 
@@ -1030,6 +1213,9 @@ func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request)
 	}
 	id, ok := s.pathID(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.requireNamespaceObject(w, r, p, "email_accounts", id); !ok {
 		return
 	}
 	before, err := emailaccounts.Get(r.Context(), s.DB, id)
@@ -1064,12 +1250,22 @@ func (s *Server) RevokeEmailAccountOAuth(w http.ResponseWriter, r *http.Request)
 		AuthMethod:     &am,
 		Enabled:        &off,
 	}
-	updated, err := emailaccounts.Patch(r.Context(), s.DB, id, patch)
+	var updated *emailaccounts.Account
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var err error
+		updated, err = emailaccounts.Patch(r.Context(), tx, id, patch, p)
+		return err
+	})
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeError(w, http.StatusNotFound, "not_found", "email account not found")
+			return
+		}
 		s.serverErr(w, "email_accounts.oauth.revoke", err)
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   before.SystemID,
 		Actor:      auth.FromContext(r.Context()),
 		Action:     "email_account.oauth_revoke",
 		ObjectKind: "email_account",
@@ -1093,6 +1289,7 @@ func accountAuditView(a *emailaccounts.Account) map[string]any {
 	}
 	return map[string]any{
 		"id":                a.ID,
+		"system_id":         a.SystemID,
 		"name":              a.Name,
 		"owner_id":          a.OwnerID,
 		"provider":          string(a.Provider),
@@ -1136,13 +1333,14 @@ func (s *Server) validateOwnerID(ctx context.Context, uid int64) error {
 	if uid <= 0 {
 		return errors.New("owner_id required")
 	}
-	var got int64
-	err := s.DB.Read.QueryRowContext(ctx,
-		`SELECT id FROM users WHERE id = ?`, uid).Scan(&got)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("owner_id %d not found", uid)
+	allowed, err := systems.CanEnter(ctx, s.DB.Read, uid, collectionSystemID(ctx, auth.FromContext(ctx)))
+	if err != nil {
+		return err
 	}
-	return err
+	if !allowed {
+		return errors.New("owner unavailable in this system")
+	}
+	return nil
 }
 
 // reloadEmailwatch is a no-op when the reloader wasn't wired (tests,

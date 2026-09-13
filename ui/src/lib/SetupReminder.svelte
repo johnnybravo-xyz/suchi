@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
   let { placement = 'side', onClose, onContinue } = $props()
@@ -17,5 +18,5 @@
       <Icon name="x" size={13} />
     </button>
   </div>
-  <a role="button" class="btn primary sm" href="#/setup" onclick={onContinue}>Continue setup</a>
+  <a role="button" class="btn primary sm" href={filingHref("#/setup")} onclick={onContinue}>Continue setup</a>
 </aside>

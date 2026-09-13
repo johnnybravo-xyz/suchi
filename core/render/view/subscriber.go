@@ -17,10 +17,13 @@ import (
 // EnqueueMove is the helper mutator sites call inside their own tx.
 // One-liner replacement for "hard-wire a Renderer everywhere" — the
 // mutator just says "this doc's metadata changed" and the dispatcher
-// picks it up post-commit. Safe to call multiple times per tx; the
-// dispatcher deduplicates on doc_id + kind under 'pending'.
+// picks it up post-commit. Each call appends a durable job.
 func EnqueueMove(ctx context.Context, tx *sql.Tx, docID int64) error {
-	return jobs.Enqueue(ctx, tx, Kind, docID, "{}")
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, "SELECT system_id FROM documents WHERE id = ?", docID).Scan(&systemID); err != nil {
+		return err
+	}
+	return jobs.Enqueue(ctx, tx, Kind, docID, systemID, "{}")
 }
 
 // Kind is the job kind mutators enqueue when they change any metadata

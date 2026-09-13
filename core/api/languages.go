@@ -40,18 +40,16 @@ func (s *Server) ListLanguages(w http.ResponseWriter, r *http.Request) {
 	if principal == nil {
 		return
 	}
-	where := "d.trashed_at IS NULL AND d.languages != ''"
-	var args []any
-	if principal.Role != "admin" {
-		groups, err := s.principalGroups(r.Context(), principal.UserID)
-		if err != nil {
-			s.serverErr(w, "api.languages.load_groups", err)
-			return
-		}
-		visibility, visibilityArgs := documentVisibilityWhere(principal, groups)
-		where += " AND " + visibility
-		args = append(args, visibilityArgs...)
+	if _, ok := s.requireSystem(w, r, principal); !ok {
+		return
 	}
+	where := "d.trashed_at IS NULL AND d.languages != ''"
+	visibility, args, err := s.collectionVisibility(r.Context(), principal)
+	if err != nil {
+		s.serverErr(w, "api.languages.visibility", err)
+		return
+	}
+	where += " AND " + visibility
 	rows, err := s.DB.Read.QueryContext(r.Context(),
 		"SELECT d.languages FROM documents d WHERE "+where, args...)
 	if err != nil {

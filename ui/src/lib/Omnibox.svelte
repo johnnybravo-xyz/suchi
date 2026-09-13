@@ -1,12 +1,16 @@
 <script>
   // Combined command palette and query entry point.
   import { go } from './router.svelte.js'
+  import { resolveAddress } from './api.js'
+  import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
   let { pages = [], commands = [], canAsk = false, onAsk } = $props()
   let q = $state('')
   let open = $state(false)
   let idx = $state(-1)
+  let error = $state('')
+  let queryVersion = 0
   let box, input
 
   function matches(label) {
@@ -24,18 +28,31 @@
   ])
   const total = $derived(items.length)
 
-  function activate(i) {
+  async function activate(i) {
     if (i >= 0 && items[i]) {
       const it = items[i]
       if (it.kind === 'cmd') it.run?.()
       else if (it.href) go(it.href)
     } else if (q.trim()) {
-      go(`#/search?q=${encodeURIComponent(q.trim())}`)
+      const value = q.trim()
+      if (/^[A-Z][0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$/.test(value)) {
+        const version = ++queryVersion
+        const scope = captureScope()
+        try {
+          const document = await resolveAddress(value)
+          if (!scopeCurrent(scope) || version !== queryVersion) return
+          go(`#/doc/${value.split('.')[2]}?system=${document.system_code}`)
+        } catch (ex) {
+          if (scopeCurrent(scope) && version === queryVersion) error = ex.message || 'Address unavailable'
+          return
+        }
+      } else go(`#/search?q=${encodeURIComponent(value)}`)
     }
     close()
   }
   function close() {
-    open = false; idx = -1; q = ''; input?.blur()
+    queryVersion++
+    open = false; idx = -1; q = ''; error = ''; input?.blur()
   }
   function restoreFocusWithoutMenu() {
     input?.focus()
@@ -75,7 +92,7 @@
   <input bind:this={input} bind:value={q} type="search" placeholder="Search or run a command"
          maxlength="2000"
          autocomplete="off" spellcheck="false" aria-label="Search or run a command"
-         onfocus={() => (open = true)} oninput={() => { open = true; idx = -1 }}
+         onfocus={() => (open = true)} oninput={() => { open = true; idx = -1; error = ''; queryVersion++ }}
          onkeydown={onKey} />
 
   {#if canAsk}
@@ -87,6 +104,7 @@
 
   {#if open}
     <div class="omni-drop" role="listbox">
+      {#if error}<p class="err" role="alert">{error}</p>{/if}
       {#if commandHits.length}
         <div class="omni-lbl">Commands</div>
         {#each commandHits as c, i}

@@ -49,7 +49,8 @@ export function calendarDateFile(event, appURL, now = new Date()) {
   documentURL.username = ''
   documentURL.password = ''
   documentURL.search = ''
-  documentURL.hash = `/doc/${event.document_id}`
+  const system = new URLSearchParams(documentURL.hash.split('?')[1] || '').get('system')
+  documentURL.hash = `/doc/${event.document_id}${system ? `?system=${encodeURIComponent(system)}` : ''}`
   const title = event.document_title || `Document #${event.document_id}`
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
   const lines = [

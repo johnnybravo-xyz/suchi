@@ -16,6 +16,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // Store is the DB façade. Constructed once at boot.
@@ -26,13 +27,23 @@ type Store struct {
 func New(d *db.DB) *Store { return &Store{DB: d} }
 
 // List returns every automation with its triggers and actions inlined.
-func (s *Store) List(ctx context.Context) ([]Automation, error) {
-	rows, err := s.DB.Read.QueryContext(ctx, `
+func (s *Store) List(ctx context.Context, systemID int64) ([]Automation, error) {
+	tx, err := s.DB.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	return ListTx(ctx, tx, systemID)
+}
+
+// ListTx reads rules and their children from the caller's consistent snapshot.
+func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, error) {
+	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, order_index, enabled, COALESCE(preset_slug, ''),
 		       created_at, updated_at
-		FROM automations
+		FROM automations WHERE system_id = ?
 		ORDER BY order_index, id
-	`)
+	`, systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -57,13 +68,13 @@ func (s *Store) List(ctx context.Context) ([]Automation, error) {
 	// Fetch triggers + actions once per automation. Small N; a JOIN would
 	// duplicate rows and complicate scanning for no wins.
 	for i := range out {
-		trs, err := s.listTriggers(ctx, out[i].ID)
+		trs, err := listTriggers(ctx, tx, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
 		out[i].Triggers = trs
 
-		acts, err := s.listActions(ctx, out[i].ID)
+		acts, err := listActions(ctx, tx, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -73,31 +84,35 @@ func (s *Store) List(ctx context.Context) ([]Automation, error) {
 }
 
 // Get returns one automation by ID or sql.ErrNoRows.
-func (s *Store) Get(ctx context.Context, id int64) (*Automation, error) {
+func (s *Store) Get(ctx context.Context, systemID, id int64) (*Automation, error) {
 	var a Automation
 	var enabled int
 	err := s.DB.Read.QueryRowContext(ctx, `
 		SELECT id, name, order_index, enabled, COALESCE(preset_slug, ''),
 		       created_at, updated_at
-		FROM automations WHERE id = ?
-	`, id).Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled,
+		FROM automations WHERE system_id = ? AND id = ?
+	`, systemID, id).Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled,
 		&a.PresetSlug,
 		&a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	a.Enabled = enabled == 1
-	if a.Triggers, err = s.listTriggers(ctx, id); err != nil {
+	if a.Triggers, err = listTriggers(ctx, s.DB.Read, id); err != nil {
 		return nil, err
 	}
-	if a.Actions, err = s.listActions(ctx, id); err != nil {
+	if a.Actions, err = listActions(ctx, s.DB.Read, id); err != nil {
 		return nil, err
 	}
 	return &a, nil
 }
 
-func (s *Store) listTriggers(ctx context.Context, atmID int64) ([]Trigger, error) {
-	rows, err := s.DB.Read.QueryContext(ctx, `
+type rowQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listTriggers(ctx context.Context, q rowQuery, atmID int64) ([]Trigger, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT id, type,
 		       COALESCE(filter_path, ''), COALESCE(filter_filename, ''),
 		       COALESCE(filter_mailrule_id, 0),
@@ -139,8 +154,8 @@ func (s *Store) listTriggers(ctx context.Context, atmID int64) ([]Trigger, error
 	return out, rows.Err()
 }
 
-func (s *Store) listActions(ctx context.Context, atmID int64) ([]Action, error) {
-	rows, err := s.DB.Read.QueryContext(ctx, `
+func listActions(ctx context.Context, q rowQuery, atmID int64) ([]Action, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT id, order_index, kind, params_json
 		FROM automation_actions WHERE automation_id = ? ORDER BY order_index, id
 	`, atmID)
@@ -175,44 +190,53 @@ func (s *Store) listActions(ctx context.Context, atmID int64) ([]Action, error) 
 // (any owner, any enabled state) — see findMatching. Returns
 // *ErrDuplicateRule; the API surface maps it to 409 duplicate_rule so
 // the SPA can steer the operator to the existing row.
-func (s *Store) Create(ctx context.Context, a Automation) (*Automation, error) {
-	if a.Name == "" {
-		return nil, errors.New("automations: name required")
-	}
-	if err := validateTriggers(a.Triggers); err != nil {
-		return nil, err
-	}
-	if err := s.validateActions(ctx, a.Actions); err != nil {
-		return nil, err
-	}
-	if match, err := s.findMatching(ctx, &a, 0); err != nil {
-		return nil, err
-	} else if match != nil {
-		return nil, match
-	}
-	now := time.Now().Unix()
-	var newID int64
+func (s *Store) Create(ctx context.Context, systemID int64, a Automation) (*Automation, error) {
+	var id int64
 	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, a.Name, a.OrderIndex, boolInt(a.Enabled), now, now)
-		if err != nil {
-			return err
-		}
-		newID, err = res.LastInsertId()
-		if err != nil {
-			return err
-		}
-		if err := writeTriggers(ctx, tx, newID, a.Triggers, now); err != nil {
-			return err
-		}
-		return writeActions(ctx, tx, newID, a.Actions, now)
+		var err error
+		id, err = s.CreateInTx(ctx, tx, systemID, a)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, newID)
+	return s.Get(ctx, systemID, id)
+}
+
+func (s *Store) CreateInTx(ctx context.Context, tx *sql.Tx, systemID int64, a Automation) (int64, error) {
+	if a.Name == "" {
+		return 0, errors.New("automations: name required")
+	}
+	if err := ValidateTriggers(a.Triggers); err != nil {
+		return 0, err
+	}
+	if err := s.validateActions(ctx, systemID, a.Actions); err != nil {
+		return 0, err
+	}
+	if match, err := s.findMatching(ctx, systemID, &a, 0); err != nil {
+		return 0, err
+	} else if match != nil {
+		return 0, match
+	}
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx, `
+			INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, systemID, a.Name, a.OrderIndex, boolInt(a.Enabled), now, now)
+	if err != nil {
+		return 0, err
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := writeTriggers(ctx, tx, newID, a.Triggers, now); err != nil {
+		return 0, err
+	}
+	if err := writeActions(ctx, tx, newID, a.Actions, now); err != nil {
+		return 0, err
+	}
+	return newID, nil
 }
 
 // Update applies a sparse patch — only the non-nil fields of `p` are
@@ -231,33 +255,46 @@ func (s *Store) Create(ctx context.Context, a Automation) (*Automation, error) {
 // Refuses when the post-patch shape would content-match a different
 // row (see findMatching); returns *ErrDuplicateRule which the API
 // surface maps to 409.
-func (s *Store) Update(ctx context.Context, id int64, p AutomationPatch) (*Automation, error) {
-	if p.Name != nil && *p.Name == "" {
-		return nil, errors.New("automations: name cannot be empty")
-	}
-	orig, err := s.Get(ctx, id)
+func (s *Store) Update(ctx context.Context, systemID, id int64, p AutomationPatch) (*Automation, error) {
+	var resultID int64
+	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		resultID, err = s.UpdateInTx(ctx, tx, systemID, id, p)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
+	return s.Get(ctx, systemID, resultID)
+}
+
+func (s *Store) UpdateInTx(ctx context.Context, tx *sql.Tx, systemID, id int64, p AutomationPatch) (int64, error) {
+	if p.Name != nil && *p.Name == "" {
+		return 0, errors.New("automations: name cannot be empty")
+	}
+	orig, err := s.Get(ctx, systemID, id)
+	if err != nil {
+		return 0, err
+	}
 	post := applyPatch(orig, p)
-	if err := validateTriggers(post.Triggers); err != nil {
-		return nil, err
+	if err := ValidateTriggers(post.Triggers); err != nil {
+		return 0, err
 	}
-	if err := s.validateActions(ctx, post.Actions); err != nil {
-		return nil, err
+	if err := s.validateActions(ctx, systemID, post.Actions); err != nil {
+		return 0, err
 	}
-	if match, err := s.findMatching(ctx, post, id); err != nil {
-		return nil, err
+	if match, err := s.findMatching(ctx, systemID, post, id); err != nil {
+		return 0, err
 	} else if match != nil {
-		return nil, match
+		return 0, match
 	}
 	if shouldForkPreset(orig, p) {
-		return s.forkPresetRow(ctx, orig, post)
+		return s.forkPresetRow(ctx, tx, systemID, orig, post)
 	}
-	if err := s.applyFieldUpdate(ctx, id, p); err != nil {
-		return nil, err
+	if err := s.applyFieldUpdate(ctx, tx, id, p); err != nil {
+		return 0, err
 	}
-	return s.Get(ctx, id)
+	return id, nil
 }
 
 // shouldForkPreset returns true when a patch on a preset-owned row
@@ -297,32 +334,30 @@ func applyPatch(orig *Automation, p AutomationPatch) *Automation {
 // applyFieldUpdate runs the SQL for an in-place patch on a single
 // automation row. Handles the sparse-field UPDATE plus the wholesale
 // child-row replacement for Triggers / Actions.
-func (s *Store) applyFieldUpdate(ctx context.Context, id int64, p AutomationPatch) error {
+func (s *Store) applyFieldUpdate(ctx context.Context, tx *sql.Tx, id int64, p AutomationPatch) error {
 	now := time.Now().Unix()
-	return s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if err := patchFields(ctx, tx, id, p, now); err != nil {
+	if err := patchFields(ctx, tx, id, p, now); err != nil {
+		return err
+	}
+	if p.Triggers != nil {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM automation_triggers WHERE automation_id = ?`, id); err != nil {
 			return err
 		}
-		if p.Triggers != nil {
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM automation_triggers WHERE automation_id = ?`, id); err != nil {
-				return err
-			}
-			if err := writeTriggers(ctx, tx, id, *p.Triggers, now); err != nil {
-				return err
-			}
+		if err := writeTriggers(ctx, tx, id, *p.Triggers, now); err != nil {
+			return err
 		}
-		if p.Actions != nil {
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM automation_actions WHERE automation_id = ?`, id); err != nil {
-				return err
-			}
-			if err := writeActions(ctx, tx, id, *p.Actions, now); err != nil {
-				return err
-			}
+	}
+	if p.Actions != nil {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM automation_actions WHERE automation_id = ?`, id); err != nil {
+			return err
 		}
-		return nil
-	})
+		if err := writeActions(ctx, tx, id, *p.Actions, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // patchFields runs the sparse UPDATE against automations. Composed
@@ -357,7 +392,7 @@ func patchFields(ctx context.Context, tx *sql.Tx, id int64, p AutomationPatch, n
 // forkPresetRow inserts a fresh user-owned copy carrying the
 // post-patch shape and soft-disables the preset original in the same
 // tx. Precondition: shouldForkPreset(orig, patch) returned true.
-func (s *Store) forkPresetRow(ctx context.Context, orig, post *Automation) (*Automation, error) {
+func (s *Store) forkPresetRow(ctx context.Context, tx *sql.Tx, systemID int64, orig, post *Automation) (int64, error) {
 	// Preserve the operator's rename if they set one; otherwise mark
 	// the fork with " (edited)" so it's visibly distinct from the
 	// preset original in the SPA list.
@@ -366,37 +401,30 @@ func (s *Store) forkPresetRow(ctx context.Context, orig, post *Automation) (*Aut
 		forkName = orig.Name + " (edited)"
 	}
 	now := time.Now().Unix()
-	var newID int64
-	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(name, order_index, enabled, preset_slug,
+	res, err := tx.ExecContext(ctx, `
+			INSERT INTO automations(system_id, name, order_index, enabled, preset_slug,
 			                        created_at, updated_at)
-			VALUES (?, ?, ?, NULL, ?, ?)
-		`, forkName, post.OrderIndex, boolInt(post.Enabled), now, now)
-		if err != nil {
-			return err
-		}
-		newID, err = res.LastInsertId()
-		if err != nil {
-			return err
-		}
-		if err := writeTriggers(ctx, tx, newID, post.Triggers, now); err != nil {
-			return err
-		}
-		if err := writeActions(ctx, tx, newID, post.Actions, now); err != nil {
-			return err
-		}
-		// Soft-disable the preset original — the operator's edit
-		// replaces it functionally, but the seeded row survives so
-		// re-picking the preset later doesn't dupe-insert.
-		_, err = tx.ExecContext(ctx,
-			`UPDATE automations SET enabled = 0, updated_at = ? WHERE id = ?`, now, orig.ID)
-		return err
-	})
+			VALUES (?, ?, ?, ?, NULL, ?, ?)
+		`, systemID, forkName, post.OrderIndex, boolInt(post.Enabled), now, now)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	return s.Get(ctx, newID)
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := writeTriggers(ctx, tx, newID, post.Triggers, now); err != nil {
+		return 0, err
+	}
+	if err := writeActions(ctx, tx, newID, post.Actions, now); err != nil {
+		return 0, err
+	}
+	// Soft-disable the preset original — the operator's edit
+	// replaces it functionally, but the seeded row survives so
+	// re-picking the preset later doesn't dupe-insert.
+	_, err = tx.ExecContext(ctx,
+		`UPDATE automations SET enabled = 0, updated_at = ? WHERE id = ?`, now, orig.ID)
+	return newID, err
 }
 
 // findMatching scans existing automations for one whose triggers +
@@ -404,12 +432,12 @@ func (s *Store) forkPresetRow(ctx context.Context, orig, post *Automation) (*Aut
 // no match. excludeID skips the self-match case: when Update is
 // checking whether a's post-patch shape collides with a DIFFERENT
 // row, pass a's own id so a in-place update isn't blocked.
-func (s *Store) findMatching(ctx context.Context, a *Automation, excludeID int64) (*ErrDuplicateRule, error) {
+func (s *Store) findMatching(ctx context.Context, systemID int64, a *Automation, excludeID int64) (*ErrDuplicateRule, error) {
 	targetSig, err := signatureOf(a)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.List(ctx)
+	rows, err := s.List(ctx, systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -439,37 +467,39 @@ func (s *Store) findMatching(ctx context.Context, a *Automation, excludeID int64
 //     doesn't dupe-insert; the operator sees it as "disabled" in the
 //     list and can toggle it back on later.
 //   - User-owned rows drop the row (and children via cascade FK).
-func (s *Store) Delete(ctx context.Context, id int64) error {
-	orig, err := s.Get(ctx, id)
+func (s *Store) Delete(ctx context.Context, systemID, id int64) error {
+	return s.DB.WriteTx(ctx, func(tx *sql.Tx) error { return s.DeleteInTx(ctx, tx, systemID, id) })
+}
+
+func (s *Store) DeleteInTx(ctx context.Context, tx *sql.Tx, systemID, id int64) error {
+	orig, err := s.Get(ctx, systemID, id)
 	if err != nil {
 		return err
 	}
 	if orig.PresetSlug != "" {
 		disabled := false
-		return s.applyFieldUpdate(ctx, id, AutomationPatch{Enabled: &disabled})
+		return s.applyFieldUpdate(ctx, tx, id, AutomationPatch{Enabled: &disabled})
 	}
-	return s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM automations WHERE id = ?`, id)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return sql.ErrNoRows
-		}
-		return nil
-	})
+	res, err := tx.ExecContext(ctx, `DELETE FROM automations WHERE system_id = ? AND id = ?`, systemID, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ByTrigger returns enabled automations whose triggers include the given
 // type, ordered for evaluation. Used by the postingest hook.
-func (s *Store) ByTrigger(ctx context.Context, t TriggerType) ([]Automation, error) {
+func (s *Store) ByTrigger(ctx context.Context, systemID int64, t TriggerType) ([]Automation, error) {
 	rows, err := s.DB.Read.QueryContext(ctx, `
 		SELECT DISTINCT a.id
 		FROM automations a
 		JOIN automation_triggers t ON t.automation_id = a.id
-		WHERE a.enabled = 1 AND t.type = ?
+		WHERE a.system_id = ? AND a.enabled = 1 AND t.type = ?
 		ORDER BY a.order_index, a.id
-	`, string(t))
+	`, systemID, string(t))
 	if err != nil {
 		return nil, err
 	}
@@ -488,7 +518,7 @@ func (s *Store) ByTrigger(ctx context.Context, t TriggerType) ([]Automation, err
 	}
 	out := make([]Automation, 0, len(ids))
 	for _, id := range ids {
-		a, err := s.Get(ctx, id)
+		a, err := s.Get(ctx, systemID, id)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +528,21 @@ func (s *Store) ByTrigger(ctx context.Context, t TriggerType) ([]Automation, err
 }
 
 func writeTriggers(ctx context.Context, tx *sql.Tx, atmID int64, trs []Trigger, now int64) error {
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM automations WHERE id = ?`, atmID).Scan(&systemID); err != nil {
+		return err
+	}
 	for _, t := range trs {
+		for _, ref := range []struct {
+			table string
+			id    int64
+		}{{"tags", t.FilterTagID}, {"correspondents", t.FilterCorrID}, {"document_types", t.FilterDocTypeID}} {
+			if ref.id != 0 {
+				if err := validateReferences(ctx, tx, systemID, ref.table, []int64{ref.id}); err != nil {
+					return err
+				}
+			}
+		}
 		t.Type = normalizedTriggerType(t)
 		var hasAtt any
 		if t.FilterEmailHasAttachment != nil {
@@ -536,7 +580,7 @@ func writeTriggers(ctx context.Context, tx *sql.Tx, atmID int64, trs []Trigger, 
 	return nil
 }
 
-func validateTriggers(triggers []Trigger) error {
+func ValidateTriggers(triggers []Trigger) error {
 	for i, trigger := range triggers {
 		kind := normalizedTriggerType(trigger)
 		if TriggerToCode(kind) == 0 {
@@ -580,7 +624,14 @@ func normalizedTriggerType(trigger Trigger) TriggerType {
 }
 
 func writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts []Action, now int64) error {
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM automations WHERE id = ?`, atmID).Scan(&systemID); err != nil {
+		return err
+	}
 	for i, a := range acts {
+		if err := validateAction(ctx, tx, systemID, a); err != nil {
+			return err
+		}
 		if a.Kind == "" {
 			return fmt.Errorf("automations: action kind required")
 		}
@@ -606,16 +657,16 @@ func writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts []Action, n
 	return nil
 }
 
-func (s *Store) validateActions(ctx context.Context, actions []Action) error {
+func (s *Store) validateActions(ctx context.Context, systemID int64, actions []Action) error {
 	for i, action := range actions {
-		if err := validateAction(ctx, s.DB.Read, action); err != nil {
+		if err := validateAction(ctx, s.DB.Read, systemID, action); err != nil {
 			return fmt.Errorf("automations: action %d (%q): %w", i+1, action.Kind, err)
 		}
 	}
 	return nil
 }
 
-func validateAction(ctx context.Context, d *sql.DB, action Action) error {
+func validateAction(ctx context.Context, d systems.Queryer, systemID int64, action Action) error {
 	params := action.Params
 	if params == nil {
 		params = map[string]any{}
@@ -632,17 +683,17 @@ func validateAction(ctx context.Context, d *sql.DB, action Action) error {
 		if err != nil {
 			return err
 		}
-		return validateReferences(ctx, d, "tags", ids)
+		return validateReferences(ctx, d, systemID, "tags", ids)
 	case "assign_correspondent":
-		return validateActionReference(ctx, d, params, "correspondent_id", "correspondents")
+		return validateActionReference(ctx, d, systemID, params, "correspondent_id", "correspondents")
 	case "assign_document_type":
-		return validateActionReference(ctx, d, params, "document_type_id", "document_types")
+		return validateActionReference(ctx, d, systemID, params, "document_type_id", "document_types")
 	case "assign_jd_category":
-		return validateActionReference(ctx, d, params, "jd_category_id", "jd_categories")
+		return validateActionReference(ctx, d, systemID, params, "jd_category_id", "jd_categories")
 	case "assign_storage_path":
-		return validateActionReference(ctx, d, params, "storage_path_id", "storage_paths")
+		return validateActionReference(ctx, d, systemID, params, "storage_path_id", "storage_paths")
 	case "assign_owner":
-		return validateActionReference(ctx, d, params, "owner_id", "users")
+		return validateActionReference(ctx, d, systemID, params, "owner_id", "users")
 	case "assign_custom_field":
 		value, ok := params["value"]
 		if !ok || value == nil {
@@ -654,15 +705,19 @@ func validateAction(ctx context.Context, d *sql.DB, action Action) error {
 		}
 		var dataType, extra string
 		if err := d.QueryRowContext(ctx,
-			`SELECT data_type, extra_data FROM custom_fields WHERE id = ?`, fieldID).
+			`SELECT data_type, extra_data FROM custom_fields WHERE system_id = ? AND id = ?`, systemID, fieldID).
 			Scan(&dataType, &extra); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("unknown custom_fields id %d", fieldID)
 			}
 			return err
 		}
-		if _, err := customfield.Lookup(dataType).Validate(json.RawMessage(extra), value); err != nil {
+		typed, err := customfield.Lookup(dataType).Validate(json.RawMessage(extra), value)
+		if err != nil {
 			return fmt.Errorf("value: %w", err)
+		}
+		if dataType == "documentlink" && typed.(int64) != 0 {
+			return validateReferences(ctx, d, systemID, "documents", []int64{typed.(int64)})
 		}
 		return nil
 	case "remove_correspondents":
@@ -674,9 +729,9 @@ func validateAction(ctx context.Context, d *sql.DB, action Action) error {
 		if err != nil {
 			return fmt.Errorf("correspondent_ids: %w", err)
 		}
-		return validateReferences(ctx, d, "correspondents", ids)
+		return validateReferences(ctx, d, systemID, "correspondents", ids)
 	case "remove_custom_field":
-		return validateActionReference(ctx, d, params, "field_id", "custom_fields")
+		return validateActionReference(ctx, d, systemID, params, "field_id", "custom_fields")
 	case "remove_document_type", "remove_storage_path", "discard":
 		return nil
 	case "":
@@ -687,18 +742,32 @@ func validateAction(ctx context.Context, d *sql.DB, action Action) error {
 	return nil
 }
 
-func validateActionReference(ctx context.Context, d *sql.DB, params map[string]any, key, table string) error {
+func validateActionReference(ctx context.Context, d systems.Queryer, systemID int64, params map[string]any, key, table string) error {
 	id, err := requiredActionID(params, key)
 	if err != nil {
 		return err
 	}
-	return validateReferences(ctx, d, table, []int64{id})
+	return validateReferences(ctx, d, systemID, table, []int64{id})
 }
 
-func validateReferences(ctx context.Context, d *sql.DB, table string, ids []int64) error {
+func validateReferences(ctx context.Context, d systems.Queryer, systemID int64, table string, ids []int64) error {
 	for _, id := range ids {
+		if table == "users" {
+			ok, err := systems.CanEnter(ctx, d, id, systemID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("owner cannot enter system")
+			}
+			continue
+		}
 		var exists int
-		if err := d.QueryRowContext(ctx, "SELECT 1 FROM "+table+" WHERE id = ?", id).Scan(&exists); err != nil {
+		query := "SELECT 1 FROM " + table + " WHERE system_id = ? AND id = ?"
+		if table == "documents" {
+			query += " AND trashed_at IS NULL"
+		}
+		if err := d.QueryRowContext(ctx, query, systemID, id).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("unknown %s id %d", table, id)
 			}

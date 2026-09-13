@@ -41,6 +41,9 @@ archives. The API and storage layout are stabilising but not frozen.
 - EPUB, Office, OpenDocument, RTF, CSV, DjVu, HEIC/HEIF, EML, and Outlook MSG.
 - Full-text search, Johnny.Decimal filing, custom fields, saved views, and
   rendered filesystem views.
+- Import-introduced filing systems with permanent codes, direct membership plus
+  document ACLs, and `SYS.AC.documentID` addresses using existing global IDs.
+  Unprefixed archives keep their existing UI and paths until first prefixed Apply.
 - Browser uploads, watched folders, IMAP intake, portable import/export, and
   versioned documents.
 - Automations, human approval workflows, selective rescans, and optional
@@ -149,6 +152,8 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 - [Configuration](docs/config.mdx)
 - [CLI reference](docs/cli.mdx)
 - [HTTP API](docs/api.mdx)
+- [Filing systems and taxonomy imports](docs/jd.mdx)
+- [Normative Suchi JD/taxonomy v1 specification and reference examples](https://git.johnnybravo.xyz/ritesh/suchi-taxonomy-examples/src/branch/main/SPEC.md)
 - [Supported file types](docs/formats.mdx)
 - [Deployment templates](deploy/README.md)
 - [Backup and restore](docs/backup-restore.mdx)
@@ -157,6 +162,10 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 
 Works with [Johnny.Decimal](https://johnnydecimal.com), a trademark of
 Coruscade Pty Ltd. Suchi is independent and not endorsed by them.
+The reference examples are CC0, unreviewed and not compliance advice. Filing systems
+share one server, SQLite/FTS and CAS; server administrators and host/backup operators
+remain trusted. A code prefix is not separate infrastructure or a legal-independence
+guarantee. See [Permissions](docs/permissions.mdx) for the application boundary.
 
 ## License
 

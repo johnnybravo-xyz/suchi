@@ -30,7 +30,7 @@ $PRE_CONSUME_SCRIPT <input_path>
 
 | Var            | Meaning                                                                                 |
 | -------------- | --------------------------------------------------------------------------------------- |
-| `DOC_ID`       | Numeric document id in the SQLite `documents` table.                                    |
+| `DOC_ID`       | Installation-global numeric document ID; not a category-local number or filing address. |
 | `FILENAME`     | Original upload or watched-file basename, when the producer supplied one.              |
 | `MIME_TYPE`    | Server-sniffed MIME (e.g. `application/pdf`).                                           |
 | `OWNER_EMAIL`  | Document owner's email.                                                                 |
@@ -58,8 +58,11 @@ retry handling. Malformed stdout metadata is logged and ignored.
 }
 ```
 
-Unknown tags are auto-created. Unknown custom-field names are logged
-and skipped — create the field first via SQL / the admin surface.
+Tags are resolved or created in the document's filing system. Custom-field names
+resolve only there; unknown names are logged and skipped, so create the definition
+in that system first through the admin surface. The envelope cannot select a
+system or transfer the document. Actorless document-link fields may refer only
+to live documents in the same system.
 
 **Limits (all configurable via environment, defaults shown):**
 
@@ -122,6 +125,8 @@ exit 0
   timeout, bounded output, process-group kill on timeout.
 - The sandbox does not isolate network access. Deny container or host egress
   when the script must be offline; expose intentional services explicitly.
+- This is an instance-wide operator hook, not a per-system security sandbox.
+  Its operating-system access can span all systems; the operator remains trusted.
 
 ## Why not just use plugins?
 

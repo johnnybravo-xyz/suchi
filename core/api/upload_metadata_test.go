@@ -313,13 +313,6 @@ func newUploadMetadataServer(t *testing.T) (*Server, *db.DB, *pluginapi.Principa
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	seedUploadCategory(t, d)
-	if _, err := d.Write.ExecContext(context.Background(), `
-		UPDATE jd_categories SET system = 1 WHERE id = 1;
-		INSERT INTO settings(key, value_json, updated_at)
-		VALUES ('jd_inbox_category_id', '1', 0);
-	`); err != nil {
-		t.Fatal(err)
-	}
 	cas, err := blob.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

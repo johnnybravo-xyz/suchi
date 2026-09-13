@@ -68,6 +68,7 @@ func TestModelSafe(t *testing.T) {
 
 func TestSetupIntent_PersistsRecommendation(t *testing.T) {
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/intent",
@@ -78,8 +79,12 @@ func TestSetupIntent_PersistsRecommendation(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"recommended_preset":"freelance"`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if err := settings.Set(req.Context(), d, settings.KeyPreset, "solo"); err != nil {
-		t.Fatal(err)
+	presetReq := httptest.NewRequest(http.MethodPost, "/api/admin/setup/preset", strings.NewReader(`{"preset_id":"solo"}`))
+	presetReq = presetReq.WithContext(auth.WithPrincipal(presetReq.Context(), admin))
+	presetRec := httptest.NewRecorder()
+	s.ApplyPreset(presetRec, presetReq)
+	if presetRec.Code != http.StatusOK {
+		t.Fatalf("preset status=%d body=%s", presetRec.Code, presetRec.Body.String())
 	}
 
 	stateReq := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
@@ -111,6 +116,7 @@ func TestSetupIntent_RejectsUnknownValue(t *testing.T) {
 
 func TestSetupComplete_RequiresFilingTreeChoice(t *testing.T) {
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
 	complete := func() *httptest.ResponseRecorder {
@@ -125,8 +131,12 @@ func TestSetupComplete_RequiresFilingTreeChoice(t *testing.T) {
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"filing_tree_required"`) {
 		t.Fatalf("without choice status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if err := settings.Set(context.Background(), d, settings.KeyPreset, "blank"); err != nil {
-		t.Fatal(err)
+	presetReq := httptest.NewRequest(http.MethodPost, "/api/admin/setup/preset", strings.NewReader(`{"preset_id":"blank","confirm_blank":true}`))
+	presetReq = presetReq.WithContext(auth.WithPrincipal(presetReq.Context(), admin))
+	presetRec := httptest.NewRecorder()
+	s.ApplyPreset(presetRec, presetReq)
+	if presetRec.Code != http.StatusOK {
+		t.Fatalf("preset status=%d body=%s", presetRec.Code, presetRec.Body.String())
 	}
 	rec = complete()
 	if rec.Code != http.StatusNoContent {

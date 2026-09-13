@@ -61,12 +61,18 @@ func (s *Server) ListSavedViews(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	includeShared := r.URL.Query().Get("include") == "shared" || isDemoCorpusKind(p.Kind)
 	where := "owner_id = ?"
 	args := []any{p.UserID}
 	if includeShared {
 		where = "(owner_id = ? OR shared = 1)"
 	}
+	where = "system_id = ? AND (" + where + ")"
+	args = append([]any{systemID}, args...)
 
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
@@ -127,6 +133,10 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var in SavedViewUpsert
 	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -161,7 +171,7 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	// switch to search, not persist state.
 	var count int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM saved_views WHERE owner_id = ?", p.UserID).Scan(&count); err != nil {
+		"SELECT COUNT(*) FROM saved_views WHERE system_id = ? AND owner_id = ?", systemID, p.UserID).Scan(&count); err != nil {
 		s.serverErr(w, "saved_views.count", err)
 		return
 	}
@@ -189,10 +199,23 @@ func (s *Server) CreateSavedView(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if shared == 1 && current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapShareViews) {
+				return errSystemUnavailable
+			}
+		}
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, p.UserID, name, filterJSON, display, position, shared, now, now)
+			INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, p.UserID, name, filterJSON, display, position, shared, now, now)
 		if err != nil {
 			return err
 		}
@@ -221,6 +244,10 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	systemID, ok := s.requireNamespaceObject(w, r, p, "saved_views", id)
+	if !ok {
 		return
 	}
 	var in SavedViewUpsert
@@ -283,6 +310,19 @@ func (s *Server) UpdateSavedView(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id, p.UserID)
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if in.Shared != nil && *in.Shared && current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapShareViews) {
+				return errSystemUnavailable
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE saved_views SET "+strings.Join(sets, ", ")+
 				" WHERE id = ? AND owner_id = ?", args...)
@@ -326,7 +366,14 @@ func (s *Server) DeleteSavedView(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, p, "saved_views", id)
+	if !ok {
+		return
+	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(r.Context(),
 			`DELETE FROM saved_views WHERE id = ? AND owner_id = ?`, id, p.UserID)
 		if err != nil {

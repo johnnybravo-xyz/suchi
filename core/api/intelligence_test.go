@@ -354,7 +354,7 @@ func TestIntelligenceResolveIsPerDocumentAuthorized(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Applied != 1 || !response.Results[0].OK || response.Results[1].Code != "forbidden" {
+	if response.Applied != 1 || !response.Results[0].OK || response.Results[1].Code != "not_found" {
 		t.Fatalf("response=%+v", response)
 	}
 	var visibleStatus, hiddenStatus string
@@ -382,7 +382,12 @@ func TestIntelligenceResolveReportsOnlyItsOwnTransition(t *testing.T) {
 	candidateID := seedDateIntelligence(t, s, 52, "pending", "2026-11-01")
 
 	// Simulate another reviewer committing after the handler's pre-read.
+	otherReviewerCommitted := false
 	s.Authz = authorizerFunc(func(ctx context.Context, _ authz.Principal, _ authz.Kind, _ int64, _ authz.Perm) error {
+		if otherReviewerCommitted {
+			return nil
+		}
+		otherReviewerCommitted = true
 		_, err := s.DB.ExecWrite(ctx, `
 			UPDATE document_intelligence SET status = 'accepted' WHERE id = ?`, candidateID)
 		return err
@@ -440,8 +445,8 @@ func TestIntelligenceSavedViewAppliesCompleteLegacyScope(t *testing.T) {
 	seedDateIntelligence(t, s, 70, "accepted", "2026-09-30")
 	seedDateIntelligence(t, s, 71, "accepted", "2026-09-30")
 	result, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-		VALUES (1, 'Quarterly tax review', '{"q":"invoice","sensitivity":"confidential"}', 'list', 0, 0, 0, 0)
+		INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+		VALUES (1, 1, 'Quarterly tax review', '{"q":"invoice","sensitivity":"confidential"}', 'list', 0, 0, 0, 0)
 	`)
 	if err != nil {
 		t.Fatal(err)

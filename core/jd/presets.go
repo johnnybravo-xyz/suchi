@@ -18,15 +18,16 @@ package jd
 
 import (
 	"context"
-	"database/sql"
+	"crypto/sha256"
 	"embed"
-	"errors"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 //go:embed presets/*.toml
@@ -50,11 +51,6 @@ type Preset struct {
 	Tree        Tree
 	Blank       bool
 }
-
-// ErrDocumentsExist means the caller tried to swap in a fresh tree
-// while documents were still filed under non-inbox categories. Move
-// the docs first (or trash them) before applying.
-var ErrDocumentsExist = errors.New("jd: cannot replace tree while documents are filed under non-inbox categories")
 
 // cachedPresets is filled once at first Presets() call. Parsing five
 // small TOML files is cheap; caching keeps subsequent calls
@@ -144,15 +140,12 @@ func bridge(pf *presetfile.PresetFile) Preset {
 	}
 }
 
-// ApplyPresetOpts carries the tunables the setup wizard exposes when
-// applying a preset. Zero value = strict (no refile) + include the
-// preset's starter seeds; those are the safe defaults for a fresh
-// install.
+// ApplyPresetOpts selects an existing system and the authenticated actor.
+// ActorID zero is reserved for trusted local CLI use. Starter seeds are
+// included unless explicitly skipped.
 type ApplyPresetOpts struct {
-	// AllowRefile lifts the "docs must be in the inbox" precondition.
-	// Docs filed outside the inbox get parked on the new inbox; the
-	// caller is expected to run a refile sweep afterwards.
-	AllowRefile bool
+	SystemID int64
+	ActorID  int64
 	// SkipSeeds drops the preset's starter keyword and explicit
 	// automations. Off by default so first-time operators get the
 	// "batteries included" experience; the wizard exposes a toggle
@@ -160,99 +153,25 @@ type ApplyPresetOpts struct {
 	SkipSeeds bool
 }
 
-// ApplyPreset replaces the current JD tree with the preset identified
-// by id. Behavior is entirely controlled by opts — pass the zero value
-// for the safe default (refuse if docs are filed outside the inbox,
-// include the preset's starter seeds). Wrapped in one write tx so a
-// partial failure leaves the previous tree intact.
+// ApplyPreset uses the same validated, additive application as file imports.
+// Choosing another built-in never resets filing or resurrects disabled rules.
 func ApplyPreset(ctx context.Context, d *db.DB, log *slog.Logger, id string, opts ApplyPresetOpts) error {
 	pf, err := loadPresetFile(id)
 	if err != nil {
 		return fmt.Errorf("unknown preset %q: %w", id, err)
 	}
-	log = log.With("component", "preset", "preset", id,
-		"refile", opts.AllowRefile, "skip_seeds", opts.SkipSeeds)
-	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		// Defer foreign-key checks to commit time. The tx below parks
-		// docs onto the current inbox, deletes the whole tree, plants
-		// the new tree, then repoints docs at the new inbox. Between
-		// the delete and the re-insert, documents.jd_category_id
-		// dangles — SQLite would fail with FOREIGN KEY constraint 787
-		// on the DELETE without this pragma. Deferring is
-		// transaction-scoped (resets after COMMIT/ROLLBACK) so the
-		// serialised writer's next tx is unaffected.
-		if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-			return fmt.Errorf("defer foreign keys: %w", err)
-		}
-
-		if !opts.AllowRefile {
-			var stray int
-			if err := tx.QueryRowContext(ctx, `
-				SELECT COUNT(*) FROM documents d
-				JOIN jd_categories c ON c.id = d.jd_category_id
-				WHERE d.trashed_at IS NULL AND c.system = 0
-			`).Scan(&stray); err != nil {
-				return fmt.Errorf("count non-inbox docs: %w", err)
-			}
-			if stray > 0 {
-				return fmt.Errorf("%w: %d document(s) filed", ErrDocumentsExist, stray)
-			}
-		}
-
-		// Park every doc on the existing system category so the FK stays
-		// intact while we swap tables. Trashed rows still carry the same
-		// category FK and must remain restorable after a preset change.
-		// Under refile mode this also collapses classified docs to inbox.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE documents SET jd_category_id = (
-				SELECT id FROM jd_categories WHERE system = 1 LIMIT 1
-			)
-		`); err != nil {
-			return fmt.Errorf("park docs: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM jd_categories`); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM jd_areas`); err != nil {
-			return err
-		}
-
-		// The importer plants the new tree and, unless SkipSeeds is set,
-		// preset-owned automations, clearing prior preset seeds first. User-owned CoW
-		// copies (preset_slug NULL) survive.
-		res, err := importer.ApplyReplace(ctx, tx, log, pf, importer.Options{
-			SkipSeeds: opts.SkipSeeds,
-		})
-		if err != nil {
-			return err
-		}
-		// The taxonomy-mode setting isn't part of the preset file —
-		// keep the ModeJD write here (mirrors the pre-importer path).
-		if err := writeTaxonomyMode(ctx, tx, ModeJD); err != nil {
-			return err
-		}
-
-		// Repoint every parked doc, including trash, at the new inbox.
-		var newInbox int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInbox); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE documents SET jd_category_id = ?
-		`, newInbox); err != nil {
-			return err
-		}
-		log.Info("preset.applied",
-			"areas", res.AreasSeeded, "categories", res.CategoriesSeeded,
-			"filing_keywords", res.KeywordsSeeded, "automations", res.AutomationsSeeded)
-		return nil
+	raw, err := presetFS.ReadFile("presets/" + id + ".toml")
+	if err != nil {
+		return err
+	}
+	target, err := systems.Get(ctx, d.Read, opts.SystemID)
+	if err != nil {
+		return err
+	}
+	hash := sha256.Sum256(raw)
+	_, err = importer.ImportForDB(ctx, d, log, pf, importer.Options{
+		SkipSeeds: opts.SkipSeeds, ContentSHA256: hex.EncodeToString(hash[:]),
+		TargetSystem: target.Code, ActorID: opts.ActorID,
 	})
-}
-
-// writeTaxonomyMode is the single-caller helper that persists
-// settings.taxonomy after a preset apply. Duplicating the tiny SQL
-// keeps the importer package free of a settings dependency.
-func writeTaxonomyMode(ctx context.Context, tx *sql.Tx, mode TaxonomyMode) error {
-	return writeSetting(ctx, tx, SettingTaxonomy, string(mode), 0)
+	return err
 }

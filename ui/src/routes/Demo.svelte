@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import { documentListHash } from '../lib/documentFilters.js'
 
@@ -65,7 +66,7 @@
           <h3>Narrow the archive without building a filter form</h3>
           <p>Combine correspondent and tag filters. Suggestions understand the same language in Search, Documents, Views, and MCP.</p>
           <code>{northstarQuery}</code>
-          <a class="btn primary tour-action" href={`#/search?q=${encodeURIComponent(northstarQuery)}`}>
+          <a class="btn primary tour-action" href={filingHref(`#/search?q=${encodeURIComponent(northstarQuery)}`)}>
             Run the guided query <Icon name="chev" size={13} />
           </a>
           <small>Notice the three related documents and the active filter tokens.</small>
@@ -79,7 +80,7 @@
           <span class="step-kicker">Document dates</span>
           <h3>Find deadlines without opening every document</h3>
           <p>See the Northstar renewal, quote expiry, and contract dates together—even across months and years. Open any entry to check its source.</p>
-          <a class="btn primary tour-action" href="#/calendar">
+          <a class="btn primary tour-action" href={filingHref("#/calendar")}>
             Browse document dates <Icon name="chev" size={13} />
           </a>
           <small>Read-only, curated examples. No live model is used in the public demo.</small>
@@ -97,7 +98,7 @@
     </div>
     <div class="grid">
       {#each cards as card}
-        <a class="card" href={cardHref(card)}>
+        <a class="card" href={filingHref(cardHref(card))}>
           <span class="card-icon"><Icon name={card.icon} size={17} /></span>
           <div class="body">
             <b>{card.title}</b>

@@ -72,22 +72,20 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 	var corID int64
 	var canonicalName string
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Confirm doc still exists (authorize passed already but we
-		// need to fail cleanly if a race trashed the doc between then
-		// and here).
-		var owner int64
-		row := tx.QueryRowContext(r.Context(),
-			`SELECT owner_id FROM documents WHERE id = ? AND trashed_at IS NULL`,
-			docID)
-		if err := row.Scan(&owner); err != nil {
+		if allowed, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
+		var systemID int64
+		if err := tx.QueryRowContext(r.Context(), `SELECT system_id FROM documents WHERE id=? AND trashed_at IS NULL`, docID).Scan(&systemID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return errNotFound
 			}
 			return err
 		}
-
 		now := time.Now().Unix()
-		corID, err = taxonomy.UpsertByName(r.Context(), tx, taxonomy.TableCorrespondents,
+		corID, err = taxonomy.UpsertByName(r.Context(), tx, systemID, taxonomy.TableCorrespondents,
 			req.Name, now)
 		if err != nil {
 			return err
@@ -123,16 +121,13 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errNotFound):
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
-	case errors.Is(err, errForbidden):
-		s.writeError(w, http.StatusForbidden, "forbidden", "not this document's owner")
-		return
 	case err != nil:
-		s.Log.Error("api.correspondents.add", "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		s.serverErr(w, "correspondents.add", err)
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.correspondent.add",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document.correspondent.add",
 		ObjectKind: "document", ObjectID: docID,
 		After: map[string]any{"correspondent_id": corID, "role": req.Role},
 	})
@@ -221,6 +216,11 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 	}
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if allowed, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
 		res, err := tx.ExecContext(r.Context(), `
 			DELETE FROM document_correspondents
 			WHERE document_id = ? AND correspondent_id = ? AND role = ?
@@ -235,7 +235,7 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 		return view.EnqueueMove(r.Context(), tx, docID)
 	})
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		s.serverErr(w, "correspondents.remove", err)
 		return
 	}
 	if affected == 0 {
@@ -243,7 +243,8 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.correspondent.remove",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document.correspondent.remove",
 		ObjectKind: "document", ObjectID: docID,
 		Before: map[string]any{"correspondent_id": cid, "role": role},
 	})

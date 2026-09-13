@@ -61,6 +61,8 @@ var tokenRouteScopes = map[string]string{
 	"GET /api/approvals/definitions/{slug}":   auth.ScopeDocumentsRead,
 	"GET /api/approvals/runs/{id}":            auth.ScopeDocumentsRead,
 	"GET /api/jd/categories/":                 auth.ScopeDocumentsRead,
+	"GET /api/jd/systems":                     auth.ScopeDocumentsRead,
+	"GET /api/jd/resolve":                     auth.ScopeDocumentsRead,
 	"GET /api/stats/":                         auth.ScopeDocumentsRead,
 
 	// Document mutations. Global administration, account/profile management,

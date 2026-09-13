@@ -42,6 +42,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/gc"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
@@ -154,22 +155,24 @@ func runDoctor(args []string) int {
 	}
 	fmt.Println()
 
-	// Taxonomy provenance — what preset file the archive was last
-	// imported from. Empty triple = never imported (built-in preset
-	// applied via the wizard, or fresh install with the starter
-	// tree).
+	// Last imported file is provenance, not a claim about the merged archive.
 	fmt.Println("== taxonomy ==")
-	tpid, tpver, tpsha, terr := importer.ReadImportProvenance(ctx, d)
+	ids, terr := filingSystemIDs(ctx, d.Read)
 	if terr != nil {
-		fmt.Printf("  ✗ read provenance: %v\n", terr)
-	} else if tpid == "" {
-		fmt.Println("  · no imported taxonomy file (built-in preset or first-boot tree)")
-	} else {
-		short := tpsha
-		if len(short) > 12 {
-			short = short[:12]
+		fmt.Printf("  read systems: %v\n", terr)
+	}
+	for _, systemID := range ids {
+		system, err := systems.Get(ctx, d.Read, systemID)
+		if err != nil {
+			fmt.Printf("  read system: %v\n", err)
+			continue
 		}
-		fmt.Printf("  ✓ preset %s@v%d (sha256 %s…)\n", tpid, tpver, short)
+		tpid, tpver, tpsha, err := importer.ReadImportProvenance(ctx, d, systemID)
+		if err != nil {
+			fmt.Printf("  read provenance: %v\n", err)
+			continue
+		}
+		fmt.Printf("  %s %s: last imported file %s, content revision %d (sha256 %s)\n", system.Code, system.Name, tpid, tpver, tpsha)
 	}
 	fmt.Println()
 

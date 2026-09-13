@@ -36,6 +36,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/i18n"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 //go:embed templates/*.html
@@ -448,6 +449,27 @@ func (s *Server) authorizeBlob(w http.ResponseWriter, r *http.Request) (int64, b
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return 0, false
 	}
+	var systemID int64
+	if codes, present := r.URL.Query()["system"]; present {
+		if len(codes) != 1 || !systems.ValidCode(codes[0]) {
+			http.NotFound(w, r)
+			return 0, false
+		}
+		system, err := systems.ByCode(r.Context(), s.DB.Read, codes[0])
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return 0, false
+		}
+		if err != nil {
+			s.serverError(w, r, err)
+			return 0, false
+		}
+		systemID = system.ID
+	}
+	tokenSystemID := principal.TokenSystemID
+	if principal.Kind == "token" && tokenSystemID == 0 {
+		tokenSystemID = systems.DefaultID
+	}
 	var groups []int64
 	if principal.UserID != 0 {
 		groups, err = authz.LoadGroups(r.Context(), s.DB, principal.UserID)
@@ -457,17 +479,19 @@ func (s *Server) authorizeBlob(w http.ResponseWriter, r *http.Request) (int64, b
 		}
 	}
 	err = s.Authz.Can(r.Context(), authz.Principal{
-		UserID: principal.UserID,
-		Role:   principal.Role,
-		Kind:   principal.Kind,
-		Groups: groups,
+		UserID:        principal.UserID,
+		Role:          principal.Role,
+		Kind:          principal.Kind,
+		Groups:        groups,
+		SystemID:      systemID,
+		TokenSystemID: tokenSystemID,
 	}, authz.KindDocument, id, authz.PermView)
 	if err == nil {
 		return id, true
 	}
 	var denied *authz.ErrDenied
 	if errors.As(err, &denied) {
-		http.Error(w, "permission denied", http.StatusForbidden)
+		http.NotFound(w, r)
 		return 0, false
 	}
 	s.serverError(w, r, err)

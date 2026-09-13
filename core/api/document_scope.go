@@ -189,8 +189,8 @@ func (s *Server) loadSavedViewScope(ctx context.Context, principal *pluginapi.Pr
 	var filterJSON string
 	err := s.DB.Read.QueryRowContext(ctx, `
 		SELECT filter_json FROM saved_views
-		WHERE id = ? AND (owner_id = ? OR shared = 1)
-	`, viewID, principal.UserID).Scan(&filterJSON)
+		WHERE id = ? AND system_id = ? AND (owner_id = ? OR shared = 1)
+	`, viewID, collectionSystemID(ctx, principal), principal.UserID).Scan(&filterJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return documentScope{}, errNotFound

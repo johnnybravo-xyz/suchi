@@ -115,15 +115,20 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_task_filter", err.Error())
 		return
 	}
-	visibility := ""
-	var visibilityArgs []any
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
+		return
+	}
+	visibility := "j.system_id = ?"
+	visibilityArgs := []any{systemID}
 	if principal.Role != "admin" {
-		groups, err := s.principalGroups(r.Context(), principal.UserID)
+		docWhere, docArgs, err := s.collectionVisibility(r.Context(), principal)
 		if err != nil {
-			s.serverErr(w, "tasks.load_groups", err)
+			s.serverErr(w, "tasks.visibility", err)
 			return
 		}
-		visibility, visibilityArgs = documentVisibilityWhere(principal, groups)
+		visibility += " AND (" + docWhere + ")"
+		visibilityArgs = append(visibilityArgs, docArgs...)
 	}
 
 	counts := emptyTaskCounts()
@@ -211,8 +216,11 @@ func (s *Server) RetryDeadJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.requireNamespaceObject(w, r, principal, "jobs", id); !ok {
+		return
+	}
 	job, err := s.mutateDeadJob(r, id, false)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errSystemUnavailable) {
 		s.writeError(w, http.StatusNotFound, "not_found", "dead job not found")
 		return
 	}
@@ -221,7 +229,8 @@ func (s *Server) RetryDeadJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: principal, Action: "job.retry", ObjectKind: "job", ObjectID: id,
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    principal, Action: "job.retry", ObjectKind: "job", ObjectID: id,
 		After: map[string]any{"kind": job.kind, "doc_id": job.docID},
 	})
 	if s.Jobs != nil {
@@ -242,8 +251,11 @@ func (s *Server) DismissDeadJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.requireNamespaceObject(w, r, principal, "jobs", id); !ok {
+		return
+	}
 	job, err := s.mutateDeadJob(r, id, true)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errSystemUnavailable) {
 		s.writeError(w, http.StatusNotFound, "not_found", "dead job not found")
 		return
 	}
@@ -252,7 +264,8 @@ func (s *Server) DismissDeadJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: principal, Action: "job.dismiss", ObjectKind: "job", ObjectID: id,
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    principal, Action: "job.dismiss", ObjectKind: "job", ObjectID: id,
 		Before: map[string]any{"kind": job.kind, "doc_id": job.docID},
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
@@ -275,9 +288,17 @@ func (s *Server) deadJobID(w http.ResponseWriter, r *http.Request) (int64, bool)
 func (s *Server) mutateDeadJob(r *http.Request, id int64, dismiss bool) (deadJob, error) {
 	var job deadJob
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		systemID := collectionSystemID(r.Context(), auth.FromContext(r.Context()))
+		current, err := s.currentWriterPrincipal(r.Context(), tx, auth.FromContext(r.Context()), systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return sql.ErrNoRows
+		}
 		if err := tx.QueryRowContext(r.Context(), `
-			SELECT kind, COALESCE(doc_id, 0) FROM jobs WHERE id = ? AND state = 'dead'
-		`, id).Scan(&job.kind, &job.docID); err != nil {
+			SELECT kind, COALESCE(doc_id, 0) FROM jobs WHERE id = ? AND system_id = ? AND state = 'dead'
+		`, id, systemID).Scan(&job.kind, &job.docID); err != nil {
 			return err
 		}
 		if dismiss {
@@ -285,7 +306,7 @@ func (s *Server) mutateDeadJob(r *http.Request, id int64, dismiss bool) (deadJob
 			return err
 		}
 		now := time.Now().Unix()
-		_, err := tx.ExecContext(r.Context(), `
+		_, err = tx.ExecContext(r.Context(), `
 			UPDATE jobs
 			   SET state = 'pending', attempts = 0, next_run_at = ?,
 			       last_error = NULL, updated_at = ?
@@ -368,7 +389,7 @@ func taskQuery(filters taskFilters, visibility string, visibilityArgs []any, hid
 	from := "FROM jobs j"
 	where := " WHERE 1=1"
 	if visibility != "" {
-		from += " JOIN documents d ON d.id = j.doc_id"
+		from += " LEFT JOIN documents d ON d.id = j.doc_id"
 		where += " AND " + visibility
 	}
 	if filters.State != "" {
@@ -435,7 +456,7 @@ func (s *Server) proposalStillNeeded(ctx context.Context, vars map[string]any, c
 			return needed, nil
 		}
 	}
-	needed, err := rescan.ProposalStillNeeded(ctx, s.DB, vars)
+	needed, err := rescan.ProposalStillNeeded(ctx, s.DB, collectionSystemID(ctx, auth.FromContext(ctx)), vars)
 	if err != nil {
 		return false, err
 	}
@@ -495,6 +516,12 @@ func materializeApprovalTasks(rows *sql.Rows) ([]ApprovalTask, error) {
 func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string, limit int) ([]ApprovalTask, int, error) {
 	ctx := r.Context()
 	assigneeSQL, assigneeArgs := approvalAssigneeSQL(userID, role)
+	accessSQL, accessArgs, err := s.approvalAccessSQL(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	assigneeSQL += " AND (" + accessSQL + ")"
+	assigneeArgs = append(assigneeArgs, accessArgs...)
 	query := `
 		SELECT t.id, t.run_id, r.def_id, COALESCE(r.doc_id, 0), def.slug,
 		       t.state_key, t.assignee, t.prompt,
@@ -594,6 +621,12 @@ func (s *Server) countVisibleApprovalTasksCached(ctx context.Context, userID int
 		return 0, nil
 	}
 	assigneeSQL, assigneeArgs := approvalAssigneeSQL(userID, role)
+	accessSQL, accessArgs, err := s.approvalAccessSQL(ctx)
+	if err != nil {
+		return 0, err
+	}
+	assigneeSQL += " AND (" + accessSQL + ")"
+	assigneeArgs = append(assigneeArgs, accessArgs...)
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",")
 	args := append([]any{}, assigneeArgs...)
 	for _, status := range statuses {
@@ -602,7 +635,7 @@ func (s *Server) countVisibleApprovalTasksCached(ctx context.Context, userID int
 
 	var count int
 	ordinaryArgs := append(append([]any{}, args...), rescan.ProposalSlug)
-	err := s.DB.Read.QueryRowContext(ctx, `
+	err = s.DB.Read.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM approval_tasks t
 		JOIN approval_runs r ON r.id = t.run_id
@@ -654,6 +687,11 @@ func (s *Server) countVisibleApprovalTasksCached(ctx context.Context, userID int
 func (s *Server) approvalTaskVisibilityByID(ctx context.Context, taskID int64) (visible, terminal bool, err error) {
 	var status, slug, varsRaw string
 	var structurallyActionable int
+	accessSQL, accessArgs, err := s.approvalAccessSQL(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	accessArgs = append([]any{taskID}, accessArgs...)
 	err = s.DB.Read.QueryRowContext(ctx, `
 		SELECT t.status, def.slug, COALESCE(r.vars_json, '{}'),
 		       CASE WHEN r.state = 'running'
@@ -663,7 +701,7 @@ func (s *Server) approvalTaskVisibilityByID(ctx context.Context, taskID int64) (
 		JOIN approval_runs r ON r.id = t.run_id
 		JOIN approval_defs def ON def.id = r.def_id
 		LEFT JOIN documents doc ON doc.id = r.doc_id
-		WHERE t.id = ?`, taskID).Scan(&status, &slug, &varsRaw, &structurallyActionable)
+		WHERE t.id = ? AND (`+accessSQL+`)`, accessArgs...).Scan(&status, &slug, &varsRaw, &structurallyActionable)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -688,4 +726,25 @@ func (s *Server) approvalTaskVisibilityByID(ctx context.Context, taskID int64) (
 		return false, false, fmt.Errorf("check rescan approval task: %w", err)
 	}
 	return needed, false, nil
+}
+
+// Apply namespace entry and document ACLs before task pagination or counts.
+func (s *Server) approvalAccessSQL(ctx context.Context) (string, []any, error) {
+	p := auth.FromContext(ctx)
+	if p == nil {
+		return "0", nil, nil
+	}
+	visibility, args, err := s.collectionVisibility(ctx, p)
+	if err != nil {
+		return "", nil, err
+	}
+	visibility = strings.ReplaceAll(visibility, "d.", "doc.")
+	systemID := collectionSystemID(ctx, p)
+	clause := `r.system_id = ? AND EXISTS (
+		SELECT 1 FROM users u WHERE u.id = ? AND u.disabled = 0 AND
+		(u.role = 'admin' OR EXISTS (SELECT 1 FROM jd_system_members m WHERE m.user_id = u.id AND m.system_id = r.system_id)))
+		AND (? = 0 OR r.system_id = ?) AND (r.doc_id IS NULL OR (` + visibility + `))`
+	out := []any{systemID, p.UserID, tokenSystemID(p), tokenSystemID(p)}
+	out = append(out, args...)
+	return clause, out, nil
 }

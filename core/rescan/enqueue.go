@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
@@ -43,6 +44,7 @@ const runnableDocumentWhere = `COALESCE(d.encryption_state, '') != 'encrypted'`
 // Every filter field is optional; the empty Options selects every
 // live doc (rare — usually paired with at least one filter).
 type Options struct {
+	SystemID int64
 	// Selection filters — combined with AND.
 	Stale         string        // "ocr" | "llm" | "content" | ""
 	IDs           []int64       // explicit id list; empty = no filter
@@ -95,6 +97,9 @@ type ProposalTarget struct {
 // separate step so callers can print a nice usage message before
 // Enqueue would otherwise no-op silently.
 func (o Options) Validate() error {
+	if o.SystemID <= 0 {
+		return fmt.Errorf("rescan: system required")
+	}
 	switch o.Stale {
 	case "", "ocr", "llm", "content":
 		return nil
@@ -106,11 +111,15 @@ func (o Options) Validate() error {
 // Shared with the CLI so its preview + estimate see the same set
 // Enqueue is about to write.
 func Select(ctx context.Context, d *db.DB, opts Options) ([]Row, error) {
+	return selectRows(ctx, d.Read, opts)
+}
+
+func selectRows(ctx context.Context, q systems.Queryer, opts Options) ([]Row, error) {
 	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
 	where, args := buildFilters(opts)
-	rows, err := d.Read.QueryContext(ctx, `
+	rows, err := q.QueryContext(ctx, `
 		SELECT d.id, COALESCE(d.original_blob, ''), COALESCE(d.original_size, 0),
 		       COALESCE(d.mime_type, ''),
 		       CASE WHEN COALESCE(d.content, '') = '' THEN 0 ELSE 1 END
@@ -181,20 +190,7 @@ func Enqueue(ctx context.Context, d *db.DB, opts Options) (int, error) {
 		}
 		batch := picks[i:end]
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			for _, r := range batch {
-				payload, err := json.Marshal(map[string]any{
-					"sha256":    r.SHA256,
-					"size":      r.Size,
-					"mime_type": r.MIME,
-				})
-				if err != nil {
-					return err
-				}
-				if err := jobs.Enqueue(ctx, tx, PostIngestKind, r.ID, string(payload)); err != nil {
-					return err
-				}
-			}
-			return nil
+			return enqueueRows(ctx, tx, opts.SystemID, batch)
 		}); err != nil {
 			return enqueued, fmt.Errorf("enqueue batch %d: %w", i/batchSize, err)
 		}
@@ -203,12 +199,36 @@ func Enqueue(ctx context.Context, d *db.DB, opts Options) (int, error) {
 	return enqueued, nil
 }
 
-// buildFilters composes the WHERE fragment. Every filter is
-// optional; empty Options gives an empty fragment (the caller has
-// already restricted via `trashed_at IS NULL`).
+// EnqueueInTx keeps authorization, selection and outbox writes in one writer turn.
+func EnqueueInTx(ctx context.Context, tx *sql.Tx, opts Options) (int, error) {
+	picks, err := selectRows(ctx, tx, opts)
+	if err != nil {
+		return 0, err
+	}
+	if err := enqueueRows(ctx, tx, opts.SystemID, picks); err != nil {
+		return 0, err
+	}
+	return len(picks), nil
+}
+
+func enqueueRows(ctx context.Context, tx *sql.Tx, systemID int64, picks []Row) error {
+	for _, row := range picks {
+		payload, err := json.Marshal(map[string]any{"sha256": row.SHA256, "size": row.Size, "mime_type": row.MIME})
+		if err != nil {
+			return err
+		}
+		if err := jobs.Enqueue(ctx, tx, PostIngestKind, row.ID, systemID, string(payload)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildFilters always selects one system and adds the optional document filters.
 func buildFilters(opts Options) (string, []any) {
 	var b strings.Builder
-	var args []any
+	b.WriteString(" AND d.system_id = ?")
+	args := []any{opts.SystemID}
 
 	if col, cur, ok := staleColumn(opts); ok {
 		b.WriteString(" AND d." + col + " < ?")
@@ -283,25 +303,25 @@ func staleColumn(opts Options) (string, int, bool) {
 // CountStale returns how many live docs' pipeline_version_<kind> is
 // behind the given current version. Used by the boot-time detector
 // in detect.go — the tasks-inbox proposal only surfaces when > 0.
-func CountStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
-	return countStale(ctx, d, kind, current, 0, false)
+func CountStale(ctx context.Context, d *db.DB, systemID int64, kind string, current int) (int, error) {
+	return countStale(ctx, d, systemID, kind, current, 0, false)
 }
 
 // CountProposalStale counts results eligible for an automatic upgrade
 // proposal. Documents already represented by an unfinished post-ingest job
 // are new or already need attention, not candidates for a second prompt.
 // LLM version 0 means no successful classifier run, not an older result.
-func CountProposalStale(ctx context.Context, d *db.DB, kind string, current int) (int, error) {
+func CountProposalStale(ctx context.Context, d *db.DB, systemID int64, kind string, current int) (int, error) {
 	minimum := 0
 	if kind == "llm" {
 		minimum = 1
 	}
-	return countStale(ctx, d, kind, current, minimum, true)
+	return countStale(ctx, d, systemID, kind, current, minimum, true)
 }
 
 // ProposalTargets returns a deterministic, bounded preview using the exact
 // eligibility predicate used by CountProposalStale.
-func ProposalTargets(ctx context.Context, d *db.DB, kind string, current, limit int) ([]ProposalTarget, error) {
+func ProposalTargets(ctx context.Context, d *db.DB, systemID int64, kind string, current, limit int) ([]ProposalTarget, error) {
 	if limit <= 0 {
 		return []ProposalTarget{}, nil
 	}
@@ -309,7 +329,7 @@ func ProposalTargets(ctx context.Context, d *db.DB, kind string, current, limit 
 	if kind == "llm" {
 		minimum = 1
 	}
-	where, args, err := proposalWhere(kind, current, minimum)
+	where, args, err := proposalWhere(systemID, kind, current, minimum)
 	if err != nil {
 		return nil, err
 	}
@@ -335,9 +355,9 @@ func ProposalTargets(ctx context.Context, d *db.DB, kind string, current, limit 
 	return targets, rows.Err()
 }
 
-func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int, proposal bool) (int, error) {
+func countStale(ctx context.Context, d *db.DB, systemID int64, kind string, current, minimum int, proposal bool) (int, error) {
 	if proposal {
-		where, args, err := proposalWhere(kind, current, minimum)
+		where, args, err := proposalWhere(systemID, kind, current, minimum)
 		if err != nil {
 			return 0, err
 		}
@@ -350,8 +370,8 @@ func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int
 	if !ok {
 		return 0, fmt.Errorf("rescan: unknown kind %q", kind)
 	}
-	query := `SELECT COUNT(*) FROM documents d WHERE d.trashed_at IS NULL AND d.` + col + ` < ?`
-	args := []any{current}
+	query := `SELECT COUNT(*) FROM documents d WHERE d.system_id = ? AND d.trashed_at IS NULL AND d.` + col + ` < ?`
+	args := []any{systemID, current}
 	if minimum > 0 {
 		query += ` AND d.` + col + ` >= ?`
 		args = append(args, minimum)
@@ -361,13 +381,13 @@ func countStale(ctx context.Context, d *db.DB, kind string, current, minimum int
 	return n, err
 }
 
-func proposalWhere(kind string, current, minimum int) (string, []any, error) {
+func proposalWhere(systemID int64, kind string, current, minimum int) (string, []any, error) {
 	col, _, ok := staleColumn(Options{Stale: kind})
 	if !ok {
 		return "", nil, fmt.Errorf("rescan: unknown kind %q", kind)
 	}
-	where := `d.trashed_at IS NULL AND d.` + col + ` < ?`
-	args := []any{current}
+	where := `d.system_id = ? AND d.trashed_at IS NULL AND d.` + col + ` < ?`
+	args := []any{systemID, current}
 	if minimum > 0 {
 		where += ` AND d.` + col + ` >= ?`
 		args = append(args, minimum)

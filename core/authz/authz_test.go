@@ -27,7 +27,7 @@ func TestACLAuthorizerUserGrant(t *testing.T) {
 	docID := seedDoc(t, ctx, d, alice, "alice's doc")
 
 	store := authz.NewStore(d)
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind:    string(authz.KindDocument),
 		ObjectID:      docID,
 		PrincipalKind: "user",
@@ -57,7 +57,7 @@ func TestACLAuthorizerUserGrant(t *testing.T) {
 		t.Errorf("bob should NOT change (only view granted)")
 	}
 	// Revoke — bob loses view.
-	if err := store.Revoke(ctx, string(authz.KindDocument), docID, "user", bob); err != nil {
+	if err := revokeInTransaction(ctx, store, string(authz.KindDocument), docID, "user", bob); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Can(ctx, authz.Principal{UserID: bob, Role: "member"},
@@ -110,7 +110,7 @@ func TestACLAuthorizerGroupGrant(t *testing.T) {
 	if err := store.AddMember(ctx, g.ID, bob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind:    string(authz.KindDocument),
 		ObjectID:      docID,
 		PrincipalKind: "group",
@@ -163,7 +163,7 @@ func TestACLAuthorizerOverlappingGroupGrantsUseBitwiseUnion(t *testing.T) {
 		if err := store.AddMember(ctx, group.ID, bob); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Grant(ctx, alice, authz.Grant{
+		if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 			ObjectKind: string(authz.KindDocument), ObjectID: docID,
 			PrincipalKind: "group", PrincipalID: group.ID, PermBits: int(authz.PermView),
 		}); err != nil {
@@ -200,7 +200,7 @@ func TestACLAuthorizerCanDocumentsMatchesIndividualDecisions(t *testing.T) {
 	if err := store.AddMember(ctx, group.ID, bob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind: string(authz.KindDocument), ObjectID: directDoc,
 		PrincipalKind: "user", PrincipalID: bob,
 		PermBits: int(authz.PermView | authz.PermChange),
@@ -247,7 +247,7 @@ func TestACLAuthorizerCanDocumentsMatchesIndividualDecisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !adminDecisions[bobDoc] || !adminDecisions[missingID] {
+	if !adminDecisions[bobDoc] || adminDecisions[missingID] {
 		t.Fatalf("admin decisions=%v", adminDecisions)
 	}
 
@@ -269,7 +269,7 @@ func TestACLAuthorizerCanDocumentsHandlesFiveHundredIDs(t *testing.T) {
 	d := setup(t, ctx)
 	alice := seedUser(t, ctx, d, "alice-large-batch@x", "member")
 	bob := seedUser(t, ctx, d, "bob-large-batch@x", "member")
-	inbox, err := jd.InboxCategoryID(ctx, d)
+	inbox, err := jd.InboxCategoryID(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,9 +283,9 @@ func TestACLAuthorizerCanDocumentsHandlesFiveHundredIDs(t *testing.T) {
 				owner = bob
 			}
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO documents(owner_id, original_blob, original_size, title,
+				INSERT INTO documents(system_id, owner_id, original_blob, original_size, title,
 				                      jd_category_id, added_at, created_at, updated_at)
-				VALUES (?, ?, 0, ?, ?, 0, 0, 0)
+				VALUES (1, ?, ?, 0, ?, ?, 0, 0, 0)
 			`, owner, fmt.Sprintf("batch-sha-%d", i), fmt.Sprintf("batch %d", i), inbox)
 			if err != nil {
 				return err
@@ -343,7 +343,7 @@ func TestDocumentVisibilityRequiresViewPermission(t *testing.T) {
 	`, docID, bob, int(authz.PermChange), alice); err != nil {
 		t.Fatal(err)
 	}
-	where, args := authz.DocVisibilityWhere(bob, nil)
+	where, args := authz.DocVisibilityWhere(authz.Principal{UserID: bob, Role: "member"}, 1)
 	var count int
 	if err := d.Read.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM documents d WHERE "+where, args...).Scan(&count); err != nil {
@@ -364,20 +364,20 @@ func TestGrantValidationAndManagement(t *testing.T) {
 	store := authz.NewStore(d)
 
 	for _, bits := range []int{0, int(authz.PermChange), 5, 8} {
-		if _, err := store.Grant(ctx, alice, authz.Grant{
+		if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 			ObjectKind: string(authz.KindDocument), ObjectID: docID,
 			PrincipalKind: "user", PrincipalID: bob, PermBits: bits,
 		}); !errors.Is(err, authz.ErrInvalidPermission) {
 			t.Errorf("bits=%d error=%v, want ErrInvalidPermission", bits, err)
 		}
 	}
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind: string(authz.KindDocument), ObjectID: docID + 999,
 		PrincipalKind: "user", PrincipalID: bob, PermBits: int(authz.PermView),
 	}); !errors.Is(err, authz.ErrObjectNotFound) {
 		t.Fatalf("missing object error=%v", err)
 	}
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind: string(authz.KindDocument), ObjectID: docID,
 		PrincipalKind: "user", PrincipalID: bob + 999, PermBits: int(authz.PermView),
 	}); !errors.Is(err, authz.ErrPrincipalNotFound) {
@@ -414,7 +414,7 @@ func TestDeleteGroupWithGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Grant(ctx, alice, authz.Grant{
+	if _, err := grantInTransaction(ctx, store, alice, authz.Grant{
 		ObjectKind: string(authz.KindDocument), ObjectID: docID,
 		PrincipalKind: "group", PrincipalID: g.ID, PermBits: int(authz.PermView),
 	}); err != nil {
@@ -423,7 +423,7 @@ func TestDeleteGroupWithGrants(t *testing.T) {
 	if err := store.DeleteGroup(ctx, g.ID); err == nil {
 		t.Errorf("group delete should refuse while grants exist")
 	}
-	if err := store.Revoke(ctx, string(authz.KindDocument), docID, "group", g.ID); err != nil {
+	if err := revokeInTransaction(ctx, store, string(authz.KindDocument), docID, "group", g.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteGroup(ctx, g.ID); err != nil {
@@ -449,7 +449,7 @@ func setup(t *testing.T, ctx context.Context) *db.DB {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	return d
@@ -475,13 +475,13 @@ func seedUser(t *testing.T, ctx context.Context, d *db.DB, email, role string) i
 
 func seedDoc(t *testing.T, ctx context.Context, d *db.DB, ownerID int64, title string) int64 {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	var id int64
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size, title,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title,
 			                      jd_category_id, added_at, created_at, updated_at)
-			VALUES (?, ?, 0, ?, ?, 0, 0, 0)`,
+			VALUES (1, ?, ?, 0, ?, ?, 0, 0, 0)`,
 			ownerID, "sha_"+title, title, inbox)
 		if err != nil {
 			return err
@@ -492,4 +492,20 @@ func seedDoc(t *testing.T, ctx context.Context, d *db.DB, ownerID int64, title s
 		t.Fatal(err)
 	}
 	return id
+}
+
+func grantInTransaction(ctx context.Context, store *authz.Store, actorID int64, grant authz.Grant) (*authz.Grant, error) {
+	var result *authz.Grant
+	err := store.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = store.Grant(ctx, tx, actorID, grant)
+		return err
+	})
+	return result, err
+}
+
+func revokeInTransaction(ctx context.Context, store *authz.Store, kind string, id int64, principalKind string, principalID int64) error {
+	return store.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		return store.Revoke(ctx, tx, kind, id, principalKind, principalID)
+	})
 }

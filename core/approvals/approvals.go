@@ -126,23 +126,23 @@ var ErrEngineNotConfigured = errors.New("approvals: default engine not configure
 
 // Register persists a new version of a Spec under slug. Returns the
 // new def_id. Only admins should call this (enforced at the API layer).
-func Register(ctx context.Context, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
+func Register(ctx context.Context, systemID int64, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
 	e := Default()
 	if e == nil {
 		return 0, ErrEngineNotConfigured
 	}
-	return e.Register(ctx, spec, slug, actor)
+	return e.Register(ctx, systemID, spec, slug, actor)
 }
 
 // Start kicks off a new run against docID using the active def for
 // slug. Returns the new run_id and enqueues a approval:advance job so
 // the first state runs after commit.
-func Start(ctx context.Context, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+func Start(ctx context.Context, systemID int64, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
 	e := Default()
 	if e == nil {
 		return 0, ErrEngineNotConfigured
 	}
-	return e.Start(ctx, slug, docID, vars, actor)
+	return e.Start(ctx, systemID, slug, docID, vars, actor)
 }
 
 // Advance is the approval:advance job consumer entrypoint. Loads the

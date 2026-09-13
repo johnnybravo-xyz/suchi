@@ -54,21 +54,44 @@ func ProposeDocumentChangeInTx(ctx context.Context, tx *sql.Tx, docID int64, cha
 	if err := validateDocumentChange(change); err != nil {
 		return err
 	}
-	var ownerID int64
-	if err := tx.QueryRowContext(ctx, `SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&ownerID); err != nil {
+	var ownerID, systemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT owner_id, system_id FROM documents WHERE id = ? AND trashed_at IS NULL`, docID).Scan(&ownerID, &systemID); err != nil {
 		return fmt.Errorf("document change: load owner: %w", err)
 	}
+	if change.Field != "title" {
+		var table string
+		switch change.Field {
+		case "jd_category":
+			table = "jd_categories"
+		case "correspondent":
+			table = "correspondents"
+		case "document_type":
+			table = "document_types"
+		case "tag":
+			table = "tags"
+		}
+		var exists int
+		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM "+table+" WHERE system_id = ? AND id = ?", systemID, change.ValueID).Scan(&exists); err != nil {
+			return err
+		}
+	}
+	for _, evidenceID := range change.BasedOn {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM documents WHERE system_id = ? AND id = ? AND trashed_at IS NULL`, systemID, evidenceID).Scan(&exists); err != nil {
+			return err
+		}
+	}
 
-	d, err := activeDefBySlug(ctx, tx, DocumentChangeSlug)
+	d, err := activeDefBySlug(ctx, tx, systemID, DocumentChangeSlug)
 	if errors.Is(err, ErrNoDef) {
 		raw, encodeErr := EncodeSpec(DocumentChangeSpec())
 		if encodeErr != nil {
 			return encodeErr
 		}
-		if _, _, err = insertDef(ctx, tx, DocumentChangeSlug, raw, 0); err != nil {
+		if _, _, err = insertDef(ctx, tx, systemID, DocumentChangeSlug, raw, 0); err != nil {
 			return fmt.Errorf("document change: seed definition: %w", err)
 		}
-		d, err = activeDefBySlug(ctx, tx, DocumentChangeSlug)
+		d, err = activeDefBySlug(ctx, tx, systemID, DocumentChangeSlug)
 	}
 	if err != nil {
 		return err
@@ -96,7 +119,7 @@ func ProposeDocumentChangeInTx(ctx context.Context, tx *sql.Tx, docID int64, cha
 		"value": change.Value, "label": change.Label, "confidence": change.Confidence,
 		"based_on": change.BasedOn, "source": change.Source,
 	}
-	_, err = startInTx(ctx, tx, DocumentChangeSlug, docID, vars, nil)
+	_, err = startInTx(ctx, tx, systemID, DocumentChangeSlug, docID, vars, nil)
 	return err
 }
 
@@ -168,7 +191,7 @@ func applyDocumentChange(ctx context.Context, tx *sql.Tx, log *slog.Logger, run 
 		result, err = tx.ExecContext(ctx, `
 			UPDATE documents SET jd_category_id = ?, updated_at = ?
 			WHERE id = ? AND (jd_category_id IS NULL OR jd_category_id = (
-				SELECT CAST(value_json AS INTEGER) FROM settings WHERE key = 'jd_inbox_category_id'
+				SELECT inbox_category_id FROM jd_systems WHERE id = documents.system_id
 			))`, change.ValueID, now, docID)
 	case "correspondent":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET correspondent_id = ?, updated_at = ? WHERE id = ? AND correspondent_id IS NULL`, change.ValueID, now, docID)
@@ -187,7 +210,8 @@ func applyDocumentChange(ctx context.Context, tx *sql.Tx, log *slog.Logger, run 
 	}
 	changed, _ := result.RowsAffected()
 	audit.LogInTx(ctx, tx, log, audit.Event{
-		Actor: actorForRun(ctx, tx, run.ID), Action: "document.suggestion_apply",
+		SystemID: run.SystemID,
+		Actor:    actorForRun(ctx, tx, run.ID), Action: "document.suggestion_apply",
 		ObjectKind: "document", ObjectID: docID,
 		After: map[string]any{"field": change.Field, "value_id": change.ValueID, "value": change.Value,
 			"label": change.Label, "confidence": change.Confidence, "source": change.Source, "changed": changed > 0},

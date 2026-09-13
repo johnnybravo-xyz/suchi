@@ -43,15 +43,17 @@ func runRescan(args []string) int {
 		onlyNoOCR     = fs.Bool("only-no-ocr", false, "restrict to docs with empty content (never OCR'd or OCR silently failed)")
 		sample        = fs.Int("sample", 0, "randomize + cap to N docs from the matching set (for testing)")
 
-		dryRun   = fs.Bool("dry-run", false, "print the affected count + a sample of IDs, then stop — no enqueues")
-		estimate = fs.Bool("estimate", false, "in addition to the count, print rough wall-clock + LLM-cost estimates")
-		yes      = fs.Bool("yes", false, fmt.Sprintf("skip the confirmation prompt when the affected count exceeds %d", rescanConfirmThreshold))
+		dryRun     = fs.Bool("dry-run", false, "print the affected count + a sample of IDs, then stop — no enqueues")
+		estimate   = fs.Bool("estimate", false, "in addition to the count, print rough wall-clock + LLM-cost estimates")
+		yes        = fs.Bool("yes", false, fmt.Sprintf("skip the confirmation prompt when the affected count exceeds %d", rescanConfirmThreshold))
+		systemCode = fs.String("system", "", "system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	opts := rescan.Options{
+		SystemID:       1,
 		Stale:          *stale,
 		JDCategory:     *jdCategory,
 		Tag:            *tag,
@@ -97,6 +99,12 @@ func runRescan(args []string) int {
 		return 1
 	}
 
+	system, err := resolveCommandSystem(ctx, d, *systemCode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "system: %v\n", err)
+		return 1
+	}
+	opts.SystemID = system.ID
 	picks, err := rescan.Select(ctx, d, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "select: %v\n", err)

@@ -54,7 +54,7 @@ func clearRuntimeConfigEnv(t *testing.T) {
 	for _, key := range []string{
 		"LLM_ENDPOINT_URL", "LLM_MODEL", "LLM_API_KEY", "LLM_API_KEY_FILE",
 		"LLM_EGRESS_ACK", "LLM_CONFIDENCE_THRESHOLD",
-		"INGEST_FS_DIR", "INGEST_FS_OWNER_EMAIL",
+		"INGEST_FS_DIR", "INGEST_FS_OWNER_EMAIL", "INGEST_FS_SYSTEM",
 		"BACKUP_INTERVAL", "OCR_LANGUAGES",
 	} {
 		value, present := os.LookupEnv(key)
@@ -158,7 +158,7 @@ func TestDelete(t *testing.T) {
 
 func TestSetupState_Empty(t *testing.T) {
 	d := setupDB(t)
-	s, err := settings.LoadSetupState(context.Background(), d)
+	s, err := settings.LoadSetupState(context.Background(), d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestSetupState_StartsWithFirstAdmin(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	s, err := settings.LoadSetupState(ctx, d)
+	s, err := settings.LoadSetupState(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +198,13 @@ func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
 	ctx := context.Background()
 	if err := settings.SetMany(ctx, d, map[string]any{
 		settings.KeySetupIntent: "household",
-		settings.KeyPreset:      "household",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := settings.LoadSetupState(ctx, d)
+	if _, err := d.Write.ExecContext(ctx, `UPDATE jd_systems SET preset_id = 'household' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	s, err := settings.LoadSetupState(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,10 +219,10 @@ func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
 func TestSetupState_ImportedTaxonomyCountsAsChoice(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
-	if err := settings.Set(ctx, d, "taxonomy_preset_id", "custom-archive"); err != nil {
+	if _, err := d.Write.ExecContext(ctx, `UPDATE jd_systems SET preset_id = 'custom-archive' WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
-	s, err := settings.LoadSetupState(ctx, d)
+	s, err := settings.LoadSetupState(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +237,7 @@ func TestMarkCompleteUpdatesSetupState(t *testing.T) {
 	if err := settings.MarkSetupComplete(ctx, d); err != nil {
 		t.Fatal(err)
 	}
-	state, err := settings.LoadSetupState(ctx, d)
+	state, err := settings.LoadSetupState(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

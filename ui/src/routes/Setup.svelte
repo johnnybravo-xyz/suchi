@@ -8,6 +8,7 @@
   let current = $state('archive')
   let filingTreeChosen = $state(false)
   let busy = $state(false)
+  let importBusy = $state(false)
   let err = $state('')
 
   const currentIndex = $derived(SETUP_STEPS.findIndex((step) => step.name === current))
@@ -33,12 +34,12 @@
   <aside class="wiz-steps" aria-label="Setup steps">
     <div class="side-head" style="padding-left:0">Setup</div>
     {#each SETUP_STEPS as step}
-      <button class="wiz-step" class:on={current === step.name} onclick={() => (current = step.name)}>
+      <button class="wiz-step" class:on={current === step.name} disabled={busy || importBusy} onclick={() => (current = step.name)}>
         <span class="dot" class:accent={current === step.name}></span>
         <span class="grow">{step.label}</span>
       </button>
     {/each}
-    <button class="btn primary finish" onclick={finish} disabled={busy || !filingTreeChosen}
+    <button class="btn primary finish" onclick={finish} disabled={busy || importBusy || !filingTreeChosen}
             title={filingTreeChosen ? '' : 'Choose a filing tree first'}>Finish setup</button>
     <p class="finish-copy">Choose a filing tree to finish setup. Every other step is optional and can be revisited later.</p>
   </aside>
@@ -51,6 +52,7 @@
       setup
       onAdvance={advance}
       {onTaxonomyChanged}
+      bind:importBusy
       onFilingTreeChosen={(chosen) => { if (chosen) filingTreeChosen = true }}
     />
   </div>

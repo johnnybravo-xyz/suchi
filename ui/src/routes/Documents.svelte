@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
   import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
@@ -442,7 +443,7 @@
       <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
     </span>
     <button class="btn sm" onclick={load} title="Refresh" aria-label="Refresh documents"><Icon name="refresh" size={13} /></button>
-    <a class="btn sm" href="#/trash" title="Trash" aria-label="Open trash"><Icon name="trash" size={13} /></a>
+    <a class="btn sm" href={filingHref("#/trash")} title="Trash" aria-label="Open trash"><Icon name="trash" size={13} /></a>
     <select class="input" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
       <option value="-created_at">Newest first</option>
       <option value="created_at">Oldest first</option>
@@ -465,20 +466,20 @@
     {#if isInbox}
       <b>Inbox zero.</b><span>Everything is filed. New low-confidence documents will wait here.</span>
     {:else}
-      <b>No documents match.</b><span>Clear a filter, or <a href="#/upload">upload the first one</a>.</span>
+      <b>No documents match.</b><span>Clear a filter, or <a href={filingHref("#/upload")}>upload the first one</a>.</span>
     {/if}
   </div>
 {:else}
   {#if view === 'grid' && !isInbox}
     <div class="dgrid">
       {#each docs as d, i (d.id)}
-        <a class="card gcard" href={`#/doc/${d.id}`} class:selected={sel.has(d.id)}>
+        <a class="card gcard" href={filingHref(`#/doc/${d.id}`)} class:selected={sel.has(d.id)}>
           <span class="gthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
           <span class="gmeta">
             <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
                    onclick={(e) => e.stopPropagation()}
                    onchange={(e) => toggleSel(i, e)} aria-label="Select" />
-            {#if d.jd_category_code}<span class="chip">{d.jd_category_code}</span>{/if}
+            {#if d.jd_address || d.jd_category_code}<span class="chip">{d.jd_address || d.jd_category_code}</span>{/if}
             <span class="title">{d.title || `Document #${d.id}`}</span>
             <DocumentUnlockStatus state={d.encryption_state} />
           </span>
@@ -489,14 +490,14 @@
   {:else}
   <div class="index">
     {#each docs as d, i (d.id)}
-      <a class="irow hoverable" href={`#/doc/${d.id}`} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
+      <a class="irow hoverable" href={filingHref(`#/doc/${d.id}`)} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
         <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
                onclick={(e) => e.stopPropagation()}
                onchange={(e) => toggleSel(i, e)}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />
         <span class="rthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.rthumb').classList.add('none')} /></span>
         <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
-        {#if d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_category_code}</span>{/if}
+        {#if d.jd_address || d.jd_category_code}<span class="chip" title={`${d.jd_category_name} · ${d.jd_area_name}`}>{d.jd_address || d.jd_category_code}</span>{/if}
         <span class="title grow">{d.title || `Document #${d.id}`}</span>
         <DocumentUnlockStatus state={d.encryption_state} />
         {#if d.tags?.length}
@@ -556,7 +557,7 @@
         </button>
         {#each pageNumbers as number, index (number)}
           {#if index > 0 && number > pageNumbers[index - 1] + 1}<span class="page-gap" aria-hidden="true">…</span>{/if}
-          <a class="btn sm page-number" class:primary={number === page} href={pageHash(number)}
+          <a class="btn sm page-number" class:primary={number === page} href={filingHref(pageHash(number))}
              aria-label={`Page ${number}`} aria-current={number === page ? 'page' : undefined}>{number}</a>
         {/each}
         <button class="btn sm page-direction" disabled={page >= pages} onclick={() => go(pageHash(page + 1))} aria-label="Next page">

@@ -27,6 +27,8 @@ These are ownership boundaries, not interchangeable layers or a directory invent
 | Durable state and work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture and processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
 | Filing, review, and retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; their HTTP projections live in `core/api/` |
+| Portable filing configuration | `core/jd/presetfile` raw HuML/TOML contract and normalization; `core/jd/importer` shared preview/apply; `core/taxonomy` consistent export |
+| Filing-index projection | `core/render/index` composes tree-only export with an atomic filesystem writer; `core/render/view` owns document paths |
 
 Keep behavior in its existing domain owner. `plugin-api/` is the small shared
 vocabulary for authenticators, job subscribers, and audit sinks, not a service
@@ -82,8 +84,9 @@ For a new upload, `UploadDocument` follows this sequence:
 1. Require write scope and enforce the HTTP body limit. Sniff the content;
    the supplied MIME type is not authoritative.
 2. Stream the original into CAS before opening the database write transaction.
-3. In one transaction, resolve owner/hash deduplication or insert the document,
-   record acquisition provenance, and enqueue `post-ingest` for a new document.
+3. In one transaction, recheck actor/target authority, resolve system/owner/hash
+   deduplication or insert the document, record acquisition provenance, and enqueue
+   system-owned `post-ingest` work for a new document.
 4. After commit, nudge the dispatcher and emit the audit event. A lost nudge
    cannot lose the persisted job. Re-uploading an existing live document records
    its source without adding another extraction job.
@@ -129,9 +132,9 @@ mailbox bookkeeping; a failed batch stops the cycle without losing earlier
 progress. Connection tests do not clear polling failures. See
 [Mail intake](/guides/mail-intake) for history, rules and health semantics.
 
-`document_sources` describes acquisition, not document identity. The same owner
-and original hash can have several sources; one CAS object can be referenced by
-different documents. Mailbox history retains its observed name/folder even if
+`document_sources` describes acquisition, not document identity. The same system,
+owner and original hash can have several sources; one CAS object can be referenced
+by different documents, including documents in different systems. Mailbox history retains its observed name/folder even if
 the configured account is deleted. Split children and email attachments inherit
 sources; a version records its own upload. Sources, version chains, and document
 relationships are not substitutes for one another.
@@ -143,6 +146,26 @@ the same SQLite file with WAL, foreign keys, a busy timeout, and bounded memory
 mapping. Use `WriteTx` for mutations and pass its `*sql.Tx` into helpers that
 participate in that transaction. Re-entering the write pool from inside a
 transaction waits on the connection already held by the caller.
+
+`core/jd/systems` is the leaf owner for system identity, membership, target
+resolution and address syntax; it is not a tenant framework. Original system 1
+is hidden until the first prefixed taxonomy import atomically names it or
+preserves it under a distinct code while creating the import destination.
+Codes are immutable; names and tree/provenance belong to the system. See [JD](/jd).
+
+Documents retain installation-global AUTOINCREMENT IDs and immutable system
+ownership. Categories, metadata, saved views, automations, mailboxes, passwords,
+shares and approval definitions/runs are system-owned. Composite constraints and
+targeted guards reject foreign-system relationships. Authenticated custom-field
+document links are the deliberate exception: change-source and view-target checks
+cover both systems; unreadable targets are redacted. Actorless writes stay local.
+
+SQLite, FTS and CAS remain shared. Duplicate document identity is system-and-owner
+scoped, while equal bytes can share a CAS hash. User-global upload idempotency keys
+bind their fingerprint to the target system; stored receipts are not authorization
+exemptions. Users, groups, roles/capabilities, sessions, builtin catalog, server/OCR/
+LLM configuration and full backups remain instance-wide. Host and backup operators
+and instance admins remain trusted; SYS is not separate infrastructure or keys.
 
 Keep network calls, subprocesses, and long file processing outside write
 transactions. Enqueue required asynchronous work with the state change that
@@ -173,25 +196,59 @@ copy of the shard layout. Even when a filing path has not changed, a render job
 refreshes missing or stale links to the currently selected archive/original
 blob. Existing stale links are repaired on their next render/refile operation;
 startup does not walk and rewrite the entire projection.
+`core/render/index` separately refreshes each system's generated index at startup
+and after tree mutations: `<SYS>/00-09 System index/00.00 archive.huml` after
+introduction, the former root path before it.
+It builds a current tree-only `core/taxonomy` snapshot, serializes through
+`presetfile.Marshal`, then writes, flushes and closes a unique same-directory
+temporary file before atomic replacement. Symlinked parents/targets and
+unexpected files are refused; failed refreshes keep the last complete file.
+The index creates no area/category/document/blob row, and the whole namespace
+is reserved from document templates. View must not import taxonomy back:
+taxonomy already depends on view.
+
+JD and runtime-flat default filenames use created date, added date, then `undated`,
+title and the full `SYS.AC.documentID` suffix after introduction. View resolves
+system/mode per document and enforces a code-only root outside explicit templates.
+Display-name edits do not move roots. Index snapshot/publication and view journal/
+publication each serialize through their owner's mutex. Initial render and moves
+journal before publishing; recovery converges on the current system destination,
+cleaning only verified document CAS links. Only system 1 removes the proved-managed
+legacy root index after its named replacement succeeds. Unknown files stay untouched.
+A recorded pre-introduction template link can occupy a future named index path.
+New-destination validation must refuse that namespace, while old-link relocation
+may remove only the journaled link verified against this document's CAS target
+through the pinned parent. This lets index jobs retry after safe relocation without
+deleting an unknown file or deadlocking recovery. Superseded journal destinations
+are never republished merely because they were once valid.
+Render-only refile changes projections without OCR, classifier or filing reruns.
 Back up the complete data directory with writers stopped or an atomic whole-
 directory snapshot, including the keys that decrypt sealed credentials. A
 database-only snapshot is not a complete archive backup.
 
-Migrations are embedded and ordered. Fold unreleased schema changes into the
-current release migration; never rewrite a migration already published in a
-release. Features targeting a later release use the next migration after the
-prepared release. Startup validates every version before touching the database
+Migrations are embedded and ordered. Never rewrite a migration already published
+in a release. Keep the existing 0003 and 0004 files unchanged during this taxonomy
+cutover; do not consolidate them. Startup validates every version before touching the database
 and rejects duplicate or nonpositive versions with the conflicting names.
 See [Release process](/release-process).
 
-The mobile release adds `0003_mobile_ingest.sql` after the unchanged beta.2
-`0002_document_intelligence.sql`. It contains OCR provenance, split origins,
-the upload-idempotency table and retention index, and one pending mobile pairing
-digest per user. `0004_mobile_tokens.sql` adds the constrained `api_tokens.source`
-column without rewriting credentials. This forward migration preserves archives
-that already applied the mobile preview's 0003; unknown legacy provenance stays
-empty. Upgrade coverage starts from populated beta.2 and mobile-preview archives
-as well as a fresh database.
+Beta.2 at `0002_document_intelligence.sql` is the published upgrade baseline.
+The unpublished mobile migrations remain separate and unchanged:
+`0003_mobile_ingest.sql` contains OCR provenance, split origins, upload idempotency
+and pending mobile pairings; `0004_mobile_tokens.sql` adds `api_tokens.source`.
+Normal ordered upgrade is **0002 → 0003 → 0004 → 0005**. Taxonomy 0005 requires
+the mobile schema additions from both predecessors; it does not run on bare 0002.
+Intermediate unpublished states are useful upgrade-test fixtures, not additional
+published compatibility baselines.
+Existing credentials retain their hashes; unknown pairing provenance stays empty.
+
+The taxonomy migration's explicit rebuild marker uses the existing runner's
+dedicated connection: disable FK enforcement before BEGIN, rebuild with retained
+IDs, check foreign keys before commit, then restore enforcement or discard the
+connection. Hidden-default memberships and existing token bindings migrate to
+system 1 without new credentials. Verify populated beta.2 upgrades through
+0003/0004/0005 and fresh initialization; retain useful populated intermediate-state
+coverage. Integrated evidence remains a separate gate.
 
 ## HTTP and security boundaries
 
@@ -213,9 +270,11 @@ These gates answer different questions:
   and test the assembled handler, not only the bare API method.
 - **Roles and capabilities:** handlers enforce administration or feature grants,
   including archive chat and intelligence. Scopes do not imply those grants.
-- **Object authorization:** `core/authz` combines ownership, administrator
-  access, direct grants, and group grants. Lists, counts, search, and similarity
-  constrain visibility in SQL before pagination, not by filtering returned rows.
+- **Object authorization:** `core/authz` first checks actual object existence and
+  explicit/token system boundary, then active-user system entry, then existing
+  owner/admin/direct/group permission. Admins bypass membership/ACL, not request
+  or token boundaries. Lists, counts, search and similarity constrain system and
+  visibility in SQL before pagination.
 - **Browser origin:** cookie-session mutations reject sibling-origin
   `same-site` and `cross-site` Fetch Metadata requests. Same-origin and
   headerless compatibility requests remain supported; explicit token/bearer
@@ -227,6 +286,15 @@ cannot read document content. Document-read access still needs a document ACL.
 Token management requires a browser/OIDC identity: API tokens cannot mint,
 list, or revoke credentials. Admin-token metrics remain a deliberate exception;
 read [HTTP API](/api) before changing compatibility.
+
+Session collections use `?system=S01`, otherwise original system 1; a token's
+binding is its default and ceiling. Unqualified numeric objects resolve their
+actual system. There is no server-wide last-selected archive or accessible-system
+fallback. Unknown/inaccessible/mismatched targets use indistinguishable 404-style
+errors. The browser may explicitly select an accessible initial system in its route.
+Writer-held authorization refreshes account/role, membership and local token
+existence/binding before mutation or receipt replay. Membership removal revokes
+shares/tokens/pairings atomically; removal and re-addition never revive credentials.
 
 First-party clients probe public `GET /api/handshake` before sending credentials.
 `GET /api/whoami` reports the actual token scopes alongside the build identity.
@@ -242,23 +310,26 @@ headers. Creation applies the mobile client's HTTPS/local-HTTP boundary:
 HTTP accepts only localhost, loopback and private literal IPs, not the broader
 integration-egress policy's local DNS or link-local addresses. Invalid origins
 fail before replacing a pending code. `mobile_pairings` stores only a SHA-256
-code digest, owner, fallback token name, and expiry; user deletion cascades, and later
-creation prunes expired rows.
+code digest, owner, system binding, fallback token name, and expiry; user
+deletion cascades, and later creation prunes expired rows.
 The public handshake advertises `pairing_device_name` support. Exchange accepts
 an optional `device_name` from the phone; a trimmed nonblank value replaces the
 browser label. Names are bounded to 64 Unicode code points with no controls
 before consuming a code, so a validation retry cannot burn the pending pairing.
 No new storage or permission is needed: the existing token name owns this label.
-Public exchange atomically deletes one valid code for an enabled user, commits,
-then calls the existing `TokenIssuer` outside the write transaction with fixed
-document-read/write scopes and the server-selected `mobile_pairing` source.
-Local auth commits that source with the token digest in one insert, so issuance
-cannot create a credential without its connected-app metadata. Manual token
-creation and password exchange pass an empty source. The session-only token
-projection exposes owner/source and active credentials only; existing ownership
-and revocation rules apply. A failed or lost exchange is not replayable. No
-pairing credential is logged or cacheable, and cancellation matches both user
-and digest so stale dialogs cannot revoke a replacement. Endpoint, QR decode,
+Public exchange consumes one valid code, checks the enabled user's current
+system entry, and calls `TokenIssuer` in the same writer transaction. Local auth
+inserts the system-bound digest with fixed document-read/write scopes and the
+server-selected `mobile_pairing` source, so issuance cannot commit a credential
+without its connected-app metadata. Manual token creation and password exchange
+pass an empty source.
+The session-only token projection exposes owner/source and active credentials
+only; existing ownership
+and revocation rules apply. Issuance failure rolls back code consumption, allowing
+retry while the pairing remains valid; successful issuance with a lost response
+requires a new pairing. No pairing credential is logged or cacheable, and
+cancellation matches user, system and digest so stale dialogs cannot revoke a
+replacement. Endpoint, QR decode,
 race, migration, and assembled origin/token-policy tests cover this boundary.
 
 Browser demo visitors use HttpOnly cookies too. The anonymous cookie is signed
@@ -307,6 +378,22 @@ Automations are the deterministic trigger/condition/action engine; approvals
 are the state-machine engine for human decisions. Do not introduce a second
 workflow engine for a new intake source or integration.
 
+`core/jd/presetfile` owns strict offline bounded HuML/TOML input. Validate raw
+author structure before flat expansion or generated System/49; `Marshal`
+reverses only validated generated rows and revalidates raw output. No YAML
+fallback, runtime catalog, unsupported-field passthrough or separate UI schema.
+`core/jd/importer` owns shared built-in/custom/CLI preview and application:
+bind source bytes, destination/first-import choice, memberships, options/remaps and
+relevant target state in `state_hash`; recheck active API administrator and plan in
+the write transaction, resolve target-local symbols, preserve local/disabled rules,
+then commit introduction/creation, tree, provenance and required jobs together.
+Unrelated systems' edits do not stale the plan. Only safe initial setup replaces
+bootstrap; later imports merge. Refile remains explicitly separate.
+`core/taxonomy` builds consistent snapshot exports (`archive`, revision 1);
+tree-only export omits keywords/starters, while seeded export rejects
+unrepresentable/disabled behavior and retains named rule identity and order.
+Last-import provenance is not installed-pack state or whole-archive attribution.
+
 `core/jd/importer` seeds literal word/phrase patterns for preset keywords;
 migration `0002` repairs existing generated preset rules without changing
 user-owned copies or document categories. There is no runtime compatibility
@@ -340,8 +427,8 @@ history or general metadata-provenance ledger. See [LLM classifier](/llm-classif
 ## Durable work and optional integrations
 
 `core/jobs/jobs.go` owns claims, retries, and dead letters. Current job kinds
-are `post-ingest`, `post-classify`, `render`, `approval:advance`, and
-`approval:timeout-sweep`. The dispatcher drains ready work in serial batches;
+are `post-ingest`, `post-classify`, `render`, `taxonomy_index`, `approval:advance`,
+and `approval:timeout-sweep`. The dispatcher drains ready work in serial batches;
 polling is only the idle fallback. A job can run again after failure or a
 crash, including when its side effect succeeded but completion was not recorded.
 
@@ -350,6 +437,15 @@ beside their owner. Register before `Run`; the registry is not dynamically
 synchronized. Unknown kinds and terminal errors become `dead`; other failures
 retry with bounded attempts/backoff. Pipeline versions in the processing
 owners let rescan target stale results.
+
+`taxonomy_index` is system-owned and documentless, with payload `{"system_id":N}`.
+Tree mutations enqueue it transactionally; startup enqueues one per system.
+Jobs and audit events carry the system for namespace/document work, including work
+outliving a document; genuinely instance-wide work uses NULL system ownership.
+Its subscriber reads current committed state when executing rather than an
+old captured payload. No automation toggle/tag/provider dependency, extra
+scheduler or broker is needed. Import success reports queued projection work,
+not physical index completion; ordinary retry/dead-job handling owns failures.
 
 Local parsing remains useful without the optional classifier. Remote model
 endpoints require explicit egress acknowledgement, and redirects are rejected.

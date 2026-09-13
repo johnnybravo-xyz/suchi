@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
   import { listDocuments, listSavedViews } from '../lib/api.js'
   import { documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
@@ -83,24 +84,24 @@
 </script>
 
 <div class="metrics">
-  <a class="metric card" href="#/documents">
+  <a class="metric card" href={filingHref("#/documents")}>
     <span class="m-label"><Icon name="docs" size={14} /> Total documents</span>
     <span class="m-value">{total ?? '—'}</span>
     <span class="m-sub">{st?.ingested_7d ? `${st.ingested_7d} added in the last 7 days` : 'across the whole archive'}</span>
   </a>
-  <a class="metric card" href="#/inbox" class:attn={inboxCount > 0}>
+  <a class="metric card" href={filingHref("#/inbox")} class:attn={inboxCount > 0}>
     <span class="m-label"><Icon name="inbox" size={14} /> Inbox</span>
     <span class="m-value">{inboxCategory ? inboxCount : '—'}</span>
     <span class="m-sub">{inboxCategory
       ? (inboxCount > 0 ? 'waiting to be filed' : 'everything is filed')
       : (taxonomyLoaded ? (taxonomyError || 'inbox unavailable') : 'loading archive structure')}</span>
   </a>
-  <a class="metric card" href="#/tasks" class:attn={pending > 0}>
+  <a class="metric card" href={filingHref("#/tasks")} class:attn={pending > 0}>
     <span class="m-label"><Icon name="tasks" size={14} /> Approvals</span>
     <span class="m-value">{st ? pending : '—'}</span>
     <span class="m-sub">{st ? (pending > 0 ? 'waiting on you' : 'none pending') : (statsError || 'loading archive status')}</span>
   </a>
-  <a class="metric card" href="#/tasks" class:bad={dead > 0}>
+  <a class="metric card" href={filingHref("#/tasks")} class:bad={dead > 0}>
     <span class="m-label"><Icon name="zap" size={14} /> Failed jobs</span>
     <span class="m-value">{st ? dead : '—'}</span>
     <span class="m-sub">{st ? (dead > 0 ? 'dead-lettered — needs attention' : 'pipeline healthy') : (statsError || 'loading archive status')}</span>
@@ -111,7 +112,7 @@
   <div>
     <div class="dash-head">
       <h3>Recently added</h3>
-      <a class="btn sm" href="#/documents">All documents</a>
+      <a class="btn sm" href={filingHref("#/documents")}>All documents</a>
     </div>
     {#if recent === undefined}
       <div class="index" aria-label="Loading recent documents">
@@ -124,9 +125,9 @@
     {:else if recent.length}
       <div class="index">
         {#each recent as d (d.id)}
-          <a class="irow" href={`#/doc/${d.id}`}>
+          <a class="irow" href={filingHref(`#/doc/${d.id}`)}>
             <span class="dot {sensDot(d.sensitivity)}" class:accent={!d.sensitivity}></span>
-            {#if d.jd_category_code}<span class="chip" title={d.jd_category_name}>{d.jd_category_code}</span>{/if}
+            {#if d.jd_address || d.jd_category_code}<span class="chip" title={d.jd_category_name}>{d.jd_address || d.jd_category_code}</span>{/if}
             <span class="title grow">{d.title || `Document #${d.id}`}</span>
             <span class="sub">{fmtDate(d.created_at)}</span>
           </a>
@@ -136,7 +137,7 @@
       <div class="empty" style="padding:36px 20px">
         <Icon name="docs" size={44} />
         <b>Nothing here yet.</b>
-        <span><a href="#/upload">Upload the first document</a>, point a watched folder at it, or forward an email.</span>
+        <span><a href={filingHref("#/upload")}>Upload the first document</a>, point a watched folder at it, or forward an email.</span>
       </div>
     {/if}
   </div>
@@ -144,7 +145,7 @@
   <div>
     <div class="dash-head">
       <h3>Views</h3>
-      <a class="btn sm" href="#/views?new=1"><Icon name="plus" size={13} /> New view</a>
+      <a class="btn sm" href={filingHref("#/views?new=1")}><Icon name="plus" size={13} /> New view</a>
     </div>
     {#if viewsLoading}
       <div class="card" style="color:var(--muted);font-size:.86rem">Loading views…</div>
@@ -155,14 +156,14 @@
     {:else if views.length}
       <div class="views">
         {#each views as v (v.id)}
-          <a class="card view" href={documentListHash(v.filters)}>
+          <a class="card view" href={filingHref(documentListHash(v.filters))}>
             <span class="m-label">{v.name}</span>
             <span class="m-value" style="font-size:1.6rem">{v.count ?? '…'}</span>
             <span class="m-sub mono" style="font-size:.68rem">{filterSummary(v.filters)}</span>
           </a>
         {/each}
       </div>
-      {#if viewTotal > views.length}<a class="sub" href="#/views">View all {viewTotal} saved views</a>{/if}
+      {#if viewTotal > views.length}<a class="sub" href={filingHref("#/views")}>View all {viewTotal} saved views</a>{/if}
     {:else}
       <div class="card" style="color:var(--muted);font-size:.86rem">
         No saved views yet.

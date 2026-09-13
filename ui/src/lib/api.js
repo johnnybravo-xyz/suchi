@@ -1,3 +1,5 @@
+import { systems, captureScope, scopeCurrent, scopedURL, isScopedAPI, unavailableSystem } from './systems.svelte.js'
+
 // All browser credentials are HttpOnly cookies, including demo sessions.
 let sessionRevision = 0
 let demoUpgrade
@@ -15,6 +17,9 @@ class ApiError extends Error {
 
 async function req(method, path, body, opts = {}) {
   const revision = sessionRevision
+  const scope = captureScope()
+  const scoped = isScopedAPI(path)
+  if (scoped && !opts.intrinsic) path = scopedURL(path, opts.system ?? scope.code)
   const headers = { ...(opts.headers || {}) }
   let payload = body
   if (body !== undefined && !(body instanceof FormData)) {
@@ -23,6 +28,10 @@ async function req(method, path, body, opts = {}) {
   }
   const r = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal: opts.signal })
   const data = await r.json().catch(() => null)
+  if (revision !== sessionRevision || (!opts.keepScope && !scopeCurrent(scope))) {
+    throw new DOMException('The account or filing system changed', 'AbortError')
+  }
+  if (data?.code === 'system_unavailable' && scoped && scopeCurrent(scope)) unavailableSystem()
   // At most one retry, and never after the caller's account changes.
   if (r.status === 403 && data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
       revision === sessionRevision) {
@@ -67,12 +76,14 @@ export function logout() {
 
 const pendingGets = new Map()
 function singleFlightGet(path) {
-  const current = pendingGets.get(path)
+  path = isScopedAPI(path) ? scopedURL(path) : path
+  const key = `${systems.generation}:${path}`
+  const current = pendingGets.get(key)
   if (current) return current
   const pending = api.get(path).finally(() => {
-    if (pendingGets.get(path) === pending) pendingGets.delete(path)
+    if (pendingGets.get(key) === pending) pendingGets.delete(key)
   })
-  pendingGets.set(path, pending)
+  pendingGets.set(key, pending)
   return pending
 }
 
@@ -86,10 +97,16 @@ function qs(params) {
 }
 
 export const whoami = () => api.get('/api/whoami')
-export const createMobilePairing = (name) =>
-  req('POST', '/api/mobile/pairing', { name }, { signal: AbortSignal.timeout(15000) })
-export const cancelMobilePairing = (code) =>
-  req('DELETE', '/api/mobile/pairing', { code }, { signal: AbortSignal.timeout(10000) })
+export const listSystems = () => api.get('/api/jd/systems')
+export const getDocumentIntrinsic = (id) => req('GET', `/api/documents/${id}`, undefined, { intrinsic: true })
+export const resolveAddress = (address) => api.get(`/api/jd/resolve${qs({ address })}`)
+export const systemMembers = (code) => api.get(`/api/admin/jd/systems/${code}/members`)
+export const putSystemMembers = (code, user_ids) => api.put(`/api/admin/jd/systems/${code}/members`, { user_ids })
+export const renameSystem = (code, name) => api.patch(`/api/admin/jd/systems/${code}`, { name })
+export const createMobilePairing = (name, system = systems.code) =>
+  req('POST', '/api/mobile/pairing', { name }, { system, keepScope: true, signal: AbortSignal.timeout(15000) })
+export const cancelMobilePairing = (code, system = systems.code) =>
+  req('DELETE', '/api/mobile/pairing', { code }, { system, keepScope: true, signal: AbortSignal.timeout(10000) })
 export function login(email, password) {
   resetSessionRequests()
   return api.post('/api/login', { email, password })
@@ -112,12 +129,19 @@ export const extractIntelligence = (body) => api.post('/api/intelligence/extract
 export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve', body)
 
 // suchi-taxonomy/v1 admin import/export.
-export const importTaxonomy = (b) => api.post('/api/admin/taxonomy/import', b)
-export async function exportTaxonomy(format = 'huml') {
-  const r = await fetch(`/api/admin/taxonomy/export?format=${encodeURIComponent(format)}`,
+export const importTaxonomy = (b, signal) => req('POST', '/api/admin/taxonomy/import', b, { signal })
+export async function exportTaxonomy(format = 'huml', skipSeeds = false) {
+  const scope = captureScope()
+  const r = await fetch(scopedURL(`/api/admin/taxonomy/export${qs({ format, skip_seeds: skipSeeds })}`),
     { credentials: 'same-origin' })
-  if (!r.ok) throw new ApiError(r.status, 'export_failed', `export failed (${r.status})`)
-  return r.text()
+  if (!r.ok) {
+    const data = await r.json().catch(() => null)
+    throw new ApiError(r.status, data?.code || 'export_failed',
+      data?.message || data?.detail || data?.error || `Export failed (${r.status})`, data)
+  }
+  const text = await r.text()
+  if (!scopeCurrent(scope)) throw new DOMException('The filing system changed', 'AbortError')
+  return text
 }
 
 export const listJDCategories = (params) => singleFlightGet(`/api/jd/categories/${qs({ page_size: 500, ...params })}`)
@@ -196,7 +220,7 @@ export const completeEmailOAuth = (flow_handle, { account_id, signal } = {}) =>
   req('POST', '/api/email-accounts/oauth/complete',
     account_id ? { flow_handle, account_id } : { flow_handle }, { signal })
 export const revokeEmailOAuth = (id) => api.post(`/api/email-accounts/${id}/oauth/revoke`)
-export const thumbPath = (id, reveal) => `/api/documents/${id}/thumb${reveal ? '?reveal=1' : ''}`
+export const thumbPath = (id, reveal) => scopedURL(`/api/documents/${id}/thumb${reveal ? '?reveal=1' : ''}`)
 export const automationsSchema = () => api.get('/api/automations/schema')
 export const listPresets = () => api.get('/api/presets/')
 
@@ -218,14 +242,14 @@ export const listTokens = (signal) => api.get('/api/tokens/', { signal })
 export const createToken = (b) => api.post('/api/tokens/', b)
 export const deleteToken = (id) => api.del(`/api/tokens/${id}`)
 
-export const previewPath = (id, reveal) => `/preview/${id}${reveal ? '?reveal=1' : ''}`
-export const downloadPath = (id) => `/download/${id}`
+export const previewPath = (id, reveal) => scopedURL(`/preview/${id}${reveal ? '?reveal=1' : ''}`)
+export const downloadPath = (id) => scopedURL(`/download/${id}`)
 
 // ---- setup wizard (admin) ----
 export const setupComplete = () => api.post('/api/admin/setup/complete')
 export const saveSetupIntent = (intent) => api.post('/api/admin/setup/intent', { intent })
 export const adminCreateUser = (b) => api.post('/api/admin/users', b)
-export const adminListUsers = () => api.get('/api/admin/users')
+export const adminListUsers = (params) => api.get(`/api/admin/users${qs(params)}`)
 export const adminPatchUser = (id, b) => api.patch(`/api/admin/users/${id}`, b)
 export const applyPreset = (b) => api.post('/api/admin/setup/preset', b)
 export const getLLMSettings = () => api.get('/api/admin/settings/llm')
@@ -238,12 +262,12 @@ export const savePreferences = (b) => api.post('/api/admin/settings/preferences'
 export const getIngestSettings = () => api.get('/api/admin/settings/ingest')
 export const saveIngestSettings = (b) => api.post('/api/admin/settings/ingest', b)
 
-export function uploadDocument(file) {
+export function uploadDocument(file, system = systems.code) {
   const fd = new FormData()
   fd.append('document', file)
   // Preserve source mtime separately from ingestion time.
   if (file?.lastModified) {
     fd.append('source_mtime', String(Math.floor(file.lastModified / 1000)))
   }
-  return req('POST', '/api/documents/', fd)
+  return req('POST', '/api/documents/', fd, { system, keepScope: true })
 }

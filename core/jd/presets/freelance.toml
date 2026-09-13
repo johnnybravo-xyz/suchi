@@ -3,7 +3,8 @@ id = "freelance"
 version = 1
 name = "Freelance / consultant"
 license = "CC0-1.0"
-inbox = 49
+market = "global"
+language = "en"
 story = "Client-driven project work: per-client folders, project files, invoices out, self-employment taxes."
 
 [[areas]]
@@ -67,14 +68,6 @@ name = "Finance"
   code = 33
   name = "Self-employment tax"
   keywords = ["schedule c", "self-employment tax", "itr", "form 16", "form 26as"]
-
-[[areas]]
-code = 40
-name = "System"
-
-  [[areas.categories]]
-  code = 49
-  name = "Inbox"
 
 [[areas]]
 code = 50

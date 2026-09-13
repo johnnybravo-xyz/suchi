@@ -29,6 +29,7 @@ func (f *failingSubscriber) Handle(_ context.Context, _ pluginapi.Event) error {
 
 func TestRunJob_ErrTerminalGoesStraightToDead(t *testing.T) {
 	d := openDB(t)
+	seedJobDocuments(t, d, 42)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	disp := New(d, log)
 	disp.Register(&failingSubscriber{
@@ -38,7 +39,7 @@ func TestRunJob_ErrTerminalGoesStraightToDead(t *testing.T) {
 
 	ctx := context.Background()
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return Enqueue(ctx, tx, "test-terminal", 42, `{}`)
+		return Enqueue(ctx, tx, "test-terminal", 42, 1, `{}`)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +73,7 @@ func TestRunJob_ErrTerminalGoesStraightToDead(t *testing.T) {
 // Sanity check that the short-circuit is scoped to ErrTerminal only.
 func TestRunJob_RetryableErrorTakesNormalPath(t *testing.T) {
 	d := openDB(t)
+	seedJobDocuments(t, d, 43)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	disp := New(d, log)
 	disp.Register(&failingSubscriber{
@@ -81,7 +83,7 @@ func TestRunJob_RetryableErrorTakesNormalPath(t *testing.T) {
 
 	ctx := context.Background()
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return Enqueue(ctx, tx, "test-retryable", 43, `{}`)
+		return Enqueue(ctx, tx, "test-retryable", 43, 1, `{}`)
 	}); err != nil {
 		t.Fatal(err)
 	}

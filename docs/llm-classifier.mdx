@@ -9,6 +9,12 @@ correspondent, tags, Johnny.Decimal category, confidence, and language.
 The same configured transport also powers read-only, source-grounded archive
 questions for authorized users.
 
+Provider/model/OCR and classification controls are instance-wide. Each document's
+offered categories, local neighbors, metadata creation, rules and approval
+suggestions stay inside its filing system; equal labels in another system are
+not candidates. Model output cannot transfer a document or grant system access.
+Archive research additionally checks the requesting user's membership and ACLs.
+
 It uses the OpenAI-compatible chat-completions API and supports local servers
 such as Ollama or llama.cpp and compatible hosted providers. The plugin is
 compiled into Suchi and can be enabled or reconfigured from the web interface.

@@ -10,11 +10,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
-// resolveActionParams walks the symbolic params of one seed action and
-// returns a fresh map with the instance-specific ids substituted.
-// Unknown params pass through untouched — the automations engine will
-// reject them at apply time if the action kind requires them.
-func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action, catByCode map[int]int64, cm codeMap) (map[string]any, error) {
+// resolveActionParams translates the validated portable action subset through
+// the existing named-taxonomy owners and this import's explicit category map.
+func resolveActionParams(ctx context.Context, tx *sql.Tx, systemID int64, act presetfile.Action, catByCode map[int]int64, cm codeMap) (map[string]any, error) {
 	out := map[string]any{}
 	for k, v := range act.Params {
 		out[k] = v
@@ -38,7 +36,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 
 	// tag / tags names → tag_ids.
 	if name, ok := stringField(out, "tag"); ok {
-		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, time.Now().Unix())
+		id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableTags, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +46,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 	if names, ok := stringSliceField(out, "tags"); ok {
 		ids := make([]int64, 0, len(names))
 		for _, n := range names {
-			id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, n, time.Now().Unix())
+			id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableTags, n, time.Now().Unix())
 			if err != nil {
 				return nil, err
 			}
@@ -60,7 +58,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 
 	// document_type name → document_type_id.
 	if name, ok := stringField(out, "document_type"); ok {
-		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableDocumentTypes, name, time.Now().Unix())
+		id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableDocumentTypes, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +68,7 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 
 	// correspondent name → correspondent_id.
 	if name, ok := stringField(out, "correspondent"); ok {
-		id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, time.Now().Unix())
+		id, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents, name, time.Now().Unix())
 		if err != nil {
 			return nil, err
 		}
@@ -81,9 +79,8 @@ func resolveActionParams(ctx context.Context, tx *sql.Tx, act presetfile.Action,
 	return out, nil
 }
 
-// intField / stringField / stringSliceField extract typed values from
-// the generic `map[string]any` a TOML/YAML/HuML decode drops on us.
-// Values are permissive: an int stored as int64/float64 both count.
+// Typed extraction follows the strict parser; malformed values are never
+// rounded or partially copied.
 func intField(m map[string]any, k string) (int, bool) {
 	v, ok := m[k]
 	if !ok {
@@ -93,8 +90,6 @@ func intField(m map[string]any, k string) (int, bool) {
 	case int:
 		return x, true
 	case int64:
-		return int(x), true
-	case float64:
 		return int(x), true
 	}
 	return 0, false
@@ -120,9 +115,11 @@ func stringSliceField(m map[string]any, k string) ([]string, bool) {
 	case []any:
 		out := make([]string, 0, len(x))
 		for _, it := range x {
-			if s, ok := it.(string); ok {
-				out = append(out, s)
+			s, ok := it.(string)
+			if !ok {
+				return nil, false
 			}
+			out = append(out, s)
 		}
 		return out, true
 	}

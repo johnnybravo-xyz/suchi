@@ -17,6 +17,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
@@ -27,6 +28,8 @@ import (
 // UploadResponse is what POST /api/documents/ returns on success.
 type UploadResponse struct {
 	ID               int64  `json:"id"`
+	SystemCode       string `json:"system_code,omitempty"`
+	JDAddress        string `json:"jd_address,omitempty"`
 	SHA256           string `json:"sha256"`
 	Size             int64  `json:"size"`
 	MIME             string `json:"mime_type"`
@@ -56,13 +59,17 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
-	upload := s.prepareUpload(w, r, uploadOperationDocument, 0)
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
+		return
+	}
+	upload := s.prepareUpload(w, r, systemID, uploadOperationDocument, 0)
 	if upload == nil {
 		return
 	}
 
 	// New documents land in inbox; classifiers may reassign them later.
-	inbox, err := jd.InboxCategoryID(r.Context(), s.DB)
+	inbox, err := jd.InboxCategoryID(r.Context(), s.DB, systemID)
 	if err != nil {
 		s.Log.Error("api.upload.inbox", "err", err.Error())
 		s.writeError(w, http.StatusInternalServerError, "inbox_lookup", "inbox category unavailable")
@@ -80,6 +87,11 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		replay       *storedUploadResponse
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		principal = current
 		stored, found, err := loadStoredUploadResponse(
 			r.Context(), tx, principal.UserID, upload.Idempotency,
 		)
@@ -87,6 +99,20 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if found {
+			var storedSystem int64
+			err := tx.QueryRowContext(r.Context(), "SELECT system_id FROM documents WHERE id = ?", stored.DocumentID).Scan(&storedSystem)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil {
+				allowed, err := s.authorized(r.Context(), tx, principal, authz.KindDocument, stored.DocumentID, authz.PermView)
+				if err != nil {
+					return err
+				}
+				if storedSystem != systemID || !allowed {
+					return errSystemUnavailable
+				}
+			}
 			replay = &stored
 			outID = stored.DocumentID
 			return nil
@@ -98,8 +124,8 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		var aliveID int64
 		errAlive := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM documents
-			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
-			principal.UserID, upload.SHA256,
+			 WHERE system_id = ? AND owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
+			systemID, principal.UserID, upload.SHA256,
 		).Scan(&aliveID)
 		if errAlive == nil {
 			outID = aliveID
@@ -118,6 +144,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
 				MIME: upload.MIME, Title: existingTitle, Deduplicated: true,
 			}
+			response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, outID)
+			if err != nil {
+				return err
+			}
 			return storeUploadResponse(
 				r.Context(), tx, principal.UserID, upload.Idempotency,
 				upload.SHA256, outID, status, response,
@@ -131,10 +161,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		var trashedID int64
 		errTrashed := tx.QueryRowContext(r.Context(),
 			`SELECT id FROM documents
-			 WHERE owner_id = ? AND original_blob = ?
+			 WHERE system_id = ? AND owner_id = ? AND original_blob = ?
 			   AND trashed_at IS NOT NULL AND trashed_at > ?
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			principal.UserID, upload.SHA256, time.Now().Add(-trash.Retention).Unix(),
+			systemID, principal.UserID, upload.SHA256, time.Now().Add(-trash.Retention).Unix(),
 		).Scan(&trashedID)
 		if errTrashed == nil {
 			now := time.Now().Unix()
@@ -160,6 +190,10 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 				ID: outID, SHA256: upload.SHA256, Size: upload.Size,
 				MIME: upload.MIME, Title: restoredTitle, Restored: true,
 			}
+			response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, outID)
+			if err != nil {
+				return err
+			}
 			return storeUploadResponse(
 				r.Context(), tx, principal.UserID, upload.Idempotency,
 				upload.SHA256, outID, status, response,
@@ -174,12 +208,12 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		dbValues := upload.Metadata.databaseValues(s.deviceOCRMinConfidence, now)
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at, source_mtime,
 				content, content_source, device_content_confidence,
 				device_ocr_language, device_content_received_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, principal.UserID, upload.SHA256, upload.Size, upload.Title, upload.MIME, inbox,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, principal.UserID, upload.SHA256, upload.Size, upload.Title, upload.MIME, inbox,
 			now, now, now, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
@@ -209,7 +243,7 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, string(payloadJSON)); err != nil {
+		if err := jobs.Enqueue(r.Context(), tx, postingest.Kind, id, systemID, string(payloadJSON)); err != nil {
 			return err
 		}
 		status = http.StatusCreated
@@ -217,11 +251,19 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 			ID: outID, SHA256: upload.SHA256, Size: upload.Size,
 			MIME: upload.MIME, Title: upload.Title,
 		}
+		response.SystemCode, response.JDAddress, err = documentAddress(r.Context(), tx, outID)
+		if err != nil {
+			return err
+		}
 		return storeUploadResponse(
 			r.Context(), tx, principal.UserID, upload.Idempotency,
 			upload.SHA256, outID, status, response,
 		)
 	})
+	if errors.Is(err, errSystemUnavailable) {
+		s.writeError(w, http.StatusNotFound, "system_unavailable", "system unavailable")
+		return
+	}
 	if errors.Is(err, errIdempotencyConflict) {
 		s.writeError(w, http.StatusConflict, "idempotency_conflict",
 			"Idempotency-Key was already used for a different upload")
@@ -255,13 +297,15 @@ func (s *Server) UploadDocument(w http.ResponseWriter, r *http.Request) {
 
 	if deduplicated {
 		audit.Log(ctx, s.DB, s.Log, audit.Event{
-			Actor: principal, Action: "document.ingest.deduplicated",
+			SystemID: systemID,
+			Actor:    principal, Action: "document.ingest.deduplicated",
 			ObjectKind: "document", ObjectID: outID,
 			After:     map[string]any{"sha256": upload.SHA256},
 			RequestID: logx.RequestID(ctx),
 		})
 	} else {
 		audit.Log(ctx, s.DB, s.Log, audit.Event{
+			SystemID:   systemID,
 			Actor:      principal,
 			Action:     map[bool]string{true: "document.restore", false: "document.create"}[restored],
 			ObjectKind: "document", ObjectID: outID,
@@ -295,6 +339,11 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if allowed, err := s.authorized(r.Context(), tx, principal, authz.KindDocument, id, authz.PermDelete); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
 		res, err := tx.ExecContext(r.Context(),
 			`UPDATE documents SET trashed_at = ?, updated_at = ?
 			 WHERE id = ? AND trashed_at IS NULL`,
@@ -306,8 +355,7 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		s.Log.Error("api.softdelete.db", "err", err.Error(), "doc_id", id)
-		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to trash")
+		s.serverErr(w, "softdelete.db", err)
 		return
 	}
 	if affected == 0 {
@@ -315,7 +363,8 @@ func (s *Server) SoftDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: principal, Action: "document.trash",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    principal, Action: "document.trash",
 		ObjectKind: "document", ObjectID: id,
 		RequestID: logx.RequestID(r.Context()),
 	})
@@ -341,6 +390,11 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 	cutoff := now.Add(-trash.Retention).Unix()
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if allowed, err := s.authorized(r.Context(), tx, principal, authz.KindDocument, id, authz.PermChange); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
 		res, err := tx.ExecContext(r.Context(),
 			`UPDATE documents SET trashed_at = NULL, updated_at = ?
 			 WHERE id = ? AND trashed_at IS NOT NULL AND trashed_at > ?`,
@@ -352,8 +406,7 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		s.Log.Error("api.restore.db", "err", err.Error(), "doc_id", id)
-		s.writeError(w, http.StatusInternalServerError, "db_write", "failed to restore")
+		s.serverErr(w, "restore.db", err)
 		return
 	}
 	if affected == 0 {
@@ -370,7 +423,8 @@ func (s *Server) RestoreDocument(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: principal, Action: "document.restore",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    principal, Action: "document.restore",
 		ObjectKind: "document", ObjectID: id,
 		RequestID: logx.RequestID(r.Context()),
 	})
@@ -497,6 +551,25 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		allowed, err := s.authorized(r.Context(), tx, principal, authz.KindDocument, id, authz.PermChange)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errNotFound
+		}
+		if in.JDCategoryID != nil {
+			var one int
+			err := tx.QueryRowContext(r.Context(), `SELECT 1 FROM jd_categories c
+				JOIN documents d ON d.system_id = c.system_id WHERE c.id = ? AND d.id = ?`,
+				*in.JDCategoryID, id).Scan(&one)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errBadParams
+			}
+			if err != nil {
+				return err
+			}
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE documents SET "+strings.Join(sets, ", ")+
 				" WHERE id = ?", args...)
@@ -513,6 +586,10 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errBadParams) {
+			s.writeError(w, http.StatusBadRequest, "bad_category", "category is unavailable in this system")
+			return
+		}
 		if errors.Is(err, errNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 			return
@@ -521,7 +598,8 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: principal, Action: "document.update",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    principal, Action: "document.update",
 		ObjectKind: "document", ObjectID: id,
 		Before: before, After: after,
 		RequestID: logx.RequestID(r.Context()),
@@ -541,6 +619,8 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 type DocumentDetail struct {
 	EncryptionState string `json:"encryption_state,omitempty"`
 	ID              int64  `json:"id"`
+	SystemCode      string `json:"system_code,omitempty"`
+	JDAddress       string `json:"jd_address,omitempty"`
 	OwnerID         int64  `json:"owner_id"`
 	Title           string `json:"title"`
 	Content         string `json:"content"`
@@ -698,7 +778,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		deviceContentReceivedAt sql.NullInt64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT d.id, d.owner_id, d.title,
+		SELECT d.id, d.owner_id, d.title, js.code,
 		       CASE WHEN ? THEN COALESCE(d.content, '') ELSE '' END,
 		       d.original_blob, d.original_size,
 		       d.archive_blob, d.archive_size, d.mime_type,
@@ -709,10 +789,11 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 		       d.source_mtime, d.content_source, d.device_content_confidence,
 		       d.device_ocr_language, d.device_content_received_at, COALESCE(d.encryption_state, '')
 		FROM documents d
+		JOIN jd_systems js ON js.id = d.system_id
 		LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
-		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
+		LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
 		WHERE d.id = ?
-	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &content, &d.OriginalBlob, &d.OriginalSize,
+	`, includeContent, id).Scan(&d.ID, &d.OwnerID, &d.Title, &d.SystemCode, &content, &d.OriginalBlob, &d.OriginalSize,
 		&archBlob, &archSize, &mimeNull,
 		&d.JDCategoryID, &sensitivity, &d.CreatedAt, &d.AddedAt, &d.UpdatedAt, &trashed,
 		&jdCode, &jdName, &jdAreaName, &languagesStored, &languagesLocked,
@@ -741,6 +822,7 @@ func (s *Server) GetDocument(w http.ResponseWriter, r *http.Request) {
 	if jdCode.Valid {
 		d.JDCategoryCode = jdCode.Int64
 	}
+	d.JDAddress = systems.Address(d.SystemCode, int(d.JDCategoryCode), d.ID)
 	if jdName.Valid {
 		d.JDCategoryName = jdName.String
 	}

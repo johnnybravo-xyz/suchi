@@ -3,7 +3,8 @@ id = "solo"
 version = 1
 name = "Personal filing"
 license = "CC0-1.0"
-inbox = 49
+market = "global"
+language = "en"
 story = "One person's admin: ID, taxes, health, receipts. Compact 4-area tree."
 
 [[areas]]
@@ -74,14 +75,6 @@ name = "Health"
   code = 33
   name = "Bills & claims"
   keywords = ["hospital bill", "medical claim", "reimbursement"]
-
-[[areas]]
-code = 40
-name = "System"
-
-  [[areas.categories]]
-  code = 49
-  name = "Inbox"
 
 [seeds]
 

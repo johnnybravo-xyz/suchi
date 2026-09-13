@@ -23,6 +23,7 @@ package refile
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -46,13 +47,17 @@ type Stats struct {
 // passes; the flags let a caller narrow to just one when they only
 // changed automations or templates.
 type Options struct {
-	SkipAutomations bool // don't re-run document-added automations
-	SkipRender      bool // don't enqueue render/move jobs
+	SystemID        int64
+	ActorID         int64 // zero is the trusted local CLI; nonzero must remain an active admin
+	SkipAutomations bool  // don't re-run document-added automations
+	SkipRender      bool  // don't enqueue render/move jobs
 	// Optional owner filter: when non-zero, only refile docs owned by
 	// this user. Useful for "one household member wants to reflow
 	// their own tree" without touching everyone else.
 	OwnerID int64
 }
+
+var ErrActorUnavailable = errors.New("refile: active administrator required")
 
 // All walks every live document and applies the requested passes.
 // Returns statistics on what happened; errors are logged and counted,
@@ -67,10 +72,8 @@ type Options struct {
 //     new upload rides the normal postingest chain (automations then render)
 //     which already reads the current preset + current template, so
 //     new docs file themselves under the new tree without help.
-//   - Two concurrent refiles are safe: the render subscriber
-//     deduplicates on (doc_id, kind, state='pending'), so a doc
-//     never gets its symlink swapped twice. Automation actions are
-//     idempotent per document.
+//   - Concurrent refiles enqueue ordinary durable jobs; renderer serialization
+//     protects filesystem publication. Automation actions are idempotent.
 //   - Refile applies automations; it does NOT undo prior actions.
 //     If you deleted an automation that previously added tag X, tag X
 //     stays on every doc it touched. The classifier is additive
@@ -79,10 +82,13 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 	log = log.With("component", "refile")
 	started := time.Now()
 	var s Stats
+	if opts.SystemID <= 0 {
+		return s, fmt.Errorf("refile: system required")
+	}
 
 	// Load the doc ids up front so a long-running sweep doesn't hold a
 	// read cursor across the write transactions each doc triggers.
-	ids, err := loadDocIDs(ctx, d, opts.OwnerID)
+	ids, err := loadDocIDs(ctx, d, opts.SystemID, opts.OwnerID)
 	if err != nil {
 		return s, fmt.Errorf("refile: load doc ids: %w", err)
 	}
@@ -96,8 +102,11 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 			return s, err
 		}
 		if !opts.SkipAutomations {
-			applied, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, id)
+			applied, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, id, opts.ActorID)
 			if err != nil {
+				if opts.ActorID != 0 {
+					return s, err
+				}
 				log.Warn("refile.automations.err", "doc_id", id, "err", err.Error())
 				s.Errors++
 			} else {
@@ -108,8 +117,20 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 			// Enqueue in its own write tx — the render subscriber
 			// reads the doc's fresh metadata post-commit.
 			if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+				if opts.ActorID != 0 {
+					var allowed bool
+					if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, opts.ActorID).Scan(&allowed); err != nil {
+						return err
+					}
+					if !allowed {
+						return ErrActorUnavailable
+					}
+				}
 				return view.EnqueueMove(ctx, tx, id)
 			}); err != nil {
+				if errors.Is(err, ErrActorUnavailable) {
+					return s, err
+				}
 				log.Warn("refile.enqueue.err", "doc_id", id, "err", err.Error())
 				s.Errors++
 			} else {
@@ -124,9 +145,9 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 	return s, nil
 }
 
-func loadDocIDs(ctx context.Context, d *db.DB, ownerID int64) ([]int64, error) {
-	q := `SELECT id FROM documents WHERE trashed_at IS NULL`
-	args := []any{}
+func loadDocIDs(ctx context.Context, d *db.DB, systemID, ownerID int64) ([]int64, error) {
+	q := `SELECT id FROM documents WHERE trashed_at IS NULL AND system_id=?`
+	args := []any{systemID}
 	if ownerID > 0 {
 		q += ` AND owner_id = ?`
 		args = append(args, ownerID)

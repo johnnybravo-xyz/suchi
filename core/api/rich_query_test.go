@@ -46,15 +46,15 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 	t.Helper()
 	inbox := seedStatsJDInbox(t, s.DB)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (20, 29, 'Finance', 1);
-		INSERT INTO jd_categories(id, area_start, code, name) VALUES (6, 20, 22, 'Investments');
-		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES
-			(7, 'tax', 'tax', 0, 0),
-			(8, 'archived', 'archived', 0, 0);
-		INSERT INTO correspondents(id, name, slug, created_at, updated_at)
-			VALUES (9, 'Bagmane Prime', 'bagmane-prime', 0, 0);
-		INSERT INTO document_types(id, name, slug, created_at, updated_at)
-			VALUES (10, 'statement', 'statement', 0, 0)`); err != nil {
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 20, 29, 'Finance', 1);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name) VALUES (1, 6, 20, 22, 'Investments');
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES
+			(1, 7, 'tax', 'tax', 0, 0),
+			(1, 8, 'archived', 'archived', 0, 0);
+		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at)
+			VALUES (1, 9, 'Bagmane Prime', 'bagmane-prime', 0, 0);
+		INSERT INTO document_types(system_id, id, name, slug, created_at, updated_at)
+			VALUES (1, 10, 'statement', 'statement', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -303,7 +303,7 @@ func TestRichQueryValuesStayParameterized(t *testing.T) {
 	matchingID, _ := seedRichQueryData(t, s)
 	value := `tax') OR 1=1 --`
 	if _, err := s.DB.Write.ExecContext(context.Background(),
-		`INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES (11, ?, 'injection-value', 0, 0)`,
+		`INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES (1, 11, ?, 'injection-value', 0, 0)`,
 		value); err != nil {
 		t.Fatal(err)
 	}

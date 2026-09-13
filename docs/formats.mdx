@@ -598,6 +598,11 @@ metadata via a sibling `<name>.json` (or `<path>.json`) file. The
 sidecar shape below is the wire contract — additive fields don't need
 a version bump; a required-field change bumps `suchi_sidecar`.
 
+The producer captures one filing system before intake. Filesystem watch uses
+`INGEST_FS_SYSTEM` (omitted means original system 1); mail uses its account's
+system. Sidecars/document content cannot create or route to another system.
+Version, split and attachment documents inherit their source system.
+
 ```json
 {
   "suchi_sidecar": 1,
@@ -624,6 +629,8 @@ a version bump; a required-field change bumps `suchi_sidecar`.
 | `correspondents[]` | array             | Multi-party form. Each entry is `{name, role}`; role is `sender \| recipient \| cc \| other` (`sender` when omitted). Applied via `document_correspondents`. |
 | `tags[]`           | array             | Tag slugs. Auto-created on ingest.                                                                                                                           |
 | `jd_category`      | int               | JD code (e.g. `31` = "Utilities" under area 30–39). Falls through to inbox when unresolved.                                                                  |
+| `jd_system` | string, optional | Source/expected system code. When supplied, must match the configured intake target; never routes or creates a system. |
+| `jd_address` | string, optional | Informational source location. Does not request a document ID or override current filing. |
 | `notes`            | string            | Free-form; stored on the document row.                                                                                                                       |
 | `custom_fields`    | object            | Map of custom-field name → value. Field must exist (`/api/custom_fields/`); type coercion follows the field's declared type.                                 |
 
@@ -639,6 +646,10 @@ which fs-watch applies. Per-document custom-field values and notes are not
 exported. `sensitivity`, `mime_type`, and `sha256` may appear for provenance,
 but the current sidecar parser ignores them; MIME and SHA-256 are recomputed
 from the file and sensitivity is not restored.
+Native takeout manifest version `"2"` identifies one selected system and includes
+these optional source fields while sidecar format remains 1. Reingestion can allocate
+new installation-global IDs; source addresses are not immutable aliases. Full
+DB/blob/key backup, not a sidecar, preserves membership and document relationships.
 
 ## Docker image matrix
 

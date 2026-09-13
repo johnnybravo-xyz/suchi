@@ -11,7 +11,7 @@
 // through MigrationReport and record a followup feature name so the
 // post-import review surfaces the exact gaps.
 //
-// Idempotency: automations.name is UNIQUE; ON CONFLICT DO NOTHING makes
+// Idempotency: automations names are unique within a system; ON CONFLICT DO NOTHING makes
 // re-runs no-ops for names already present. There is no legacy_id column
 // on automations (they are user-authored, not doc-shaped), so a re-run
 // after a name change would insert a duplicate — deliberate: the source
@@ -161,6 +161,7 @@ type suchiTrigger struct {
 func ImportWorkflows(
 	ctx context.Context,
 	d *db.DB,
+	systemID int64,
 	log *slog.Logger,
 	objs []Object,
 	dry bool,
@@ -207,7 +208,7 @@ func ImportWorkflows(
 			return considered, fmt.Errorf("decode workflow pk=%d: %w", o.PK, err)
 		}
 		considered++
-		if err := importOneWorkflow(ctx, d, log, dry, wf, triggers, actions,
+		if err := importOneWorkflow(ctx, d, systemID, log, dry, wf, triggers, actions,
 			tagMap, corMap, dtMap, spMap, cfMap, report); err != nil {
 			return considered, err
 		}
@@ -221,6 +222,7 @@ func ImportWorkflows(
 func importOneWorkflow(
 	ctx context.Context,
 	d *db.DB,
+	systemID int64,
 	log *slog.Logger,
 	dry bool,
 	wf WorkflowFields,
@@ -338,7 +340,7 @@ func importOneWorkflow(
 
 	// Write.
 	if !dry {
-		if err := writeWorkflow(ctx, d, wf, suchiTriggers, suchiActions); err != nil {
+		if err := writeWorkflow(ctx, d, systemID, wf, suchiTriggers, suchiActions); err != nil {
 			return fmt.Errorf("write workflow %q: %w", wf.Name, err)
 		}
 	}
@@ -546,10 +548,11 @@ func mapAction(
 }
 
 // writeWorkflow inserts the automations row + child triggers + child actions
-// in one transaction. ON CONFLICT(name) DO NOTHING makes re-runs safe.
+// in one transaction. ON CONFLICT(system_id, name) DO NOTHING makes re-runs safe.
 func writeWorkflow(
 	ctx context.Context,
 	d *db.DB,
+	systemID int64,
 	wf WorkflowFields,
 	triggers []suchiTrigger,
 	actions []mappedAction,
@@ -557,10 +560,10 @@ func writeWorkflow(
 	now := time.Now().Unix()
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(name) DO NOTHING
-		`, wf.Name, wf.Order, boolInt(wf.Enabled), now, now)
+			INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(system_id, name) DO NOTHING
+		`, systemID, wf.Name, wf.Order, boolInt(wf.Enabled), now, now)
 		if err != nil {
 			return fmt.Errorf("insert automation: %w", err)
 		}

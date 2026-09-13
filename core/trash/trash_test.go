@@ -59,10 +59,10 @@ func seedBaseRows(t *testing.T, database *db.DB) {
 		VALUES (1, 'owner@example.test', 'Owner', 'admin', 0, 0),
 		       (2, 'member@example.test', 'Member', 'member', 0, 0),
 		       (3, 'avatar@example.test', 'Avatar owner', 'member', 0, 0);
-		INSERT INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'Test', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'Test', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1);
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -82,9 +82,9 @@ func seedDocument(t *testing.T, database *db.DB, id, ownerID int64, hash string,
 	t.Helper()
 	_, err := database.Write.ExecContext(context.Background(), `
 		INSERT INTO documents(
-			id, owner_id, original_blob, original_size, title, jd_category_id,
+			system_id, id, owner_id, original_blob, original_size, title, jd_category_id,
 			created_at, updated_at, trashed_at
-		) VALUES (?, ?, ?, 1, ?, 1, 1, 1, ?)
+		) VALUES (1, ?, ?, ?, 1, ?, 1, 1, 1, ?)
 	`, id, ownerID, hash, "document", trashedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -151,22 +151,22 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 	if _, err := database.Write.ExecContext(context.Background(), `
 		UPDATE documents SET archive_blob = ?, decrypted_blob = ?, thumb_sha = ? WHERE id = 10;
 		INSERT INTO notes(id, document_id, note, created_at) VALUES (1, 10, 'private note', 1);
-		INSERT INTO approval_defs(id, slug, version, spec_json, created_by, created_at)
-		VALUES (1, 'purge-test', 1, '{}', 1, 1);
-		INSERT INTO approval_runs(id, def_id, doc_id, state, current_state, vars_json, state_entered_at, started_by, started_at)
-		VALUES (1, 1, 10, 'running', 'review', '{}', 1, 1, 1);
+		INSERT INTO approval_defs(system_id, id, slug, version, spec_json, created_by, created_at)
+		VALUES (1, 1, 'purge-test', 1, '{}', 1, 1);
+		INSERT INTO approval_runs(system_id, id, def_id, doc_id, state, current_state, vars_json, state_entered_at, started_by, started_at)
+		VALUES (1, 1, 1, 10, 'running', 'review', '{}', 1, 1, 1);
 		INSERT INTO approval_tasks(id, run_id, state_key, assignee, prompt, choices_json, status, created_at)
 		VALUES (1, 1, 'review', 'user:1', 'Review', '[]', 'open', 1);
-		INSERT INTO jobs(id, kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-		VALUES (1, 'test', 10, '{}', 'pending', 1, 1, 1);
+		INSERT INTO jobs(system_id, id, kind, doc_id, payload, state, next_run_at, created_at, updated_at)
+		VALUES (1, 1, 'test', 10, '{}', 'pending', 1, 1, 1);
 		INSERT INTO object_acls(id, object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by)
 		VALUES (1, 'document', 10, 'user', 2, 4, 1, 1);
-		INSERT INTO decryption_passwords(id, owner_id, ciphertext, created_at, last_used_doc_id)
-		VALUES (1, 1, X'01', 1, 10);
-		INSERT INTO share_links(id, token, doc_ids_json, created_by, label, created_at)
-		VALUES (1, 'purge-link', '[10,11]', 1, 'shared docs', 1);
-		INSERT INTO audit_events(id, ts, actor_kind, actor_id, action, object_kind, object_id, after_json)
-		VALUES (1, 1, 'user', 1, 'document.update', 'document', 10, '{"title":"private"}');
+		INSERT INTO decryption_passwords(system_id, id, owner_id, ciphertext, created_at, last_used_doc_id)
+		VALUES (1, 1, 1, X'01', 1, 10);
+		INSERT INTO share_links(system_id, id, token, doc_ids_json, created_by, label, created_at)
+		VALUES (1, 1, 'purge-link', '[10,11]', 1, 'shared docs', 1);
+		INSERT INTO audit_events(system_id, id, ts, actor_kind, actor_id, action, object_kind, object_id, after_json)
+		VALUES (1, 1, 1, 'user', 1, 'document.update', 'document', 10, '{"title":"private"}');
 	`, archiveHash, decryptedHash, avatarHash); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 	}
 
 	actor := &pluginapi.Principal{Kind: "user", UserID: 1}
-	report, err := service.PurgeOne(context.Background(), 10, actor, "request-1")
+	report, err := service.PurgeOne(context.Background(), 1, 10, actor, "request-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 		t.Fatalf("unexpected purge audit: action=%q kind=%q actor=%d before=%v after=%s request=%q",
 			action, actorKind, actorID, beforeJSON, afterJSON, requestID)
 	}
-	if _, err := service.PurgeOne(context.Background(), 11, actor, "request-2"); !errors.Is(err, ErrNotTrashed) {
+	if _, err := service.PurgeOne(context.Background(), 1, 11, actor, "request-2"); !errors.Is(err, ErrNotTrashed) {
 		t.Fatalf("live document purge error=%v, want ErrNotTrashed", err)
 	}
 }

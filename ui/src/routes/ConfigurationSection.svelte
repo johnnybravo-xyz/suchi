@@ -1,4 +1,6 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { systems } from '../lib/systems.svelte.js'
   import { untrack } from 'svelte'
   import { setupState, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
@@ -7,11 +9,12 @@
            listPresets } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
+  import TaxonomyImport from '../lib/TaxonomyImport.svelte'
   import { USER_CAPABILITIES } from '../lib/capabilities.js'
 
   let {
     section = 'archive', notify, setup = false, onAdvance,
-    onTaxonomyChanged, onFilingTreeChosen,
+    onTaxonomyChanged, onFilingTreeChosen, importBusy = $bindable(false),
   } = $props()
 
   const INTENTS = [
@@ -79,6 +82,7 @@
   let intent = $state('')
   let filingTreeChosen = $state(false)
   let showAllPresets = $state(false)
+  let importOpen = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
     egress_ack: false, confidence_threshold: 0.7, date_auto_apply: true,
@@ -91,7 +95,7 @@
   let llmTestResult = $state(null)
   let llmTestError = $state('')
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
-  let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '' })
+  let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '', fs_watch_system: '' })
 
   async function loadPresets() {
     try {
@@ -103,7 +107,7 @@
 
   async function loadSetup() {
     const state = await setupState()
-    intent = state?.intent || ''
+    intent = state?.intent || intent
     filingTreeChosen = !!state?.filing_tree_chosen
     onFilingTreeChosen?.(filingTreeChosen)
     const selected = state?.current_preset || state?.recommended_preset
@@ -147,6 +151,12 @@
     return result
   }
 
+  async function importedTree() {
+    filingTreeChosen = true
+    onFilingTreeChosen?.(true)
+    await Promise.all([loadSetup(), onTaxonomyChanged?.()])
+  }
+
   async function loadLLM() {
     const st = await getLLMSettings()
     llmStatus = st
@@ -174,6 +184,7 @@
     const current = await getIngestSettings()
     ingest.fs_watch_dir = current?.fs_watch_dir || ''
     ingest.fs_watch_owner_email = current?.fs_watch_owner_email || ''
+    ingest.fs_watch_system = current?.fs_watch_system || ''
     seedSourceOwner()
   }
   const loadFunctions = {
@@ -354,14 +365,14 @@
         <p class="wiz-p">Pick the closest fit. Suchi will recommend a ready-made filing tree, and every option remains editable.</p>
         <div class="intent-grid">
           {#each INTENTS as option (option.id)}
-            <button class="intent-choice" class:on={intent === option.id} onclick={() => chooseIntent(option)}>
+            <button class="intent-choice" class:on={intent === option.id} disabled={busy || importBusy} onclick={() => chooseIntent(option)}>
               <b>{option.label}</b><span class="sub">{option.description}</span>
             </button>
           {/each}
         </div>
       {:else}
         <h3>Filing tree</h3>
-        <p class="wiz-p">Replace the filing structure used across this archive. Existing categories remain until you apply a new tree.</p>
+        <p class="wiz-p">Add a filing tree to this archive. Later imports merge without overwriting existing categories or local rule choices.</p>
       {/if}
 
       {#if !setup || intent}
@@ -369,7 +380,7 @@
           <h3 class="section-heading">Choose a filing tree
             {#if !filingTreeChosen}<span class="pill warn" style="margin-left:8px">Required to finish setup</span>{/if}
           </h3>
-          <p class="wiz-p">Start with the recommendation or compare every ready-made tree. You can switch later.</p>
+          <p class="wiz-p">Start with a ready-made tree or import your own file. Later imports add to your current tree.</p>
           {#if recommendedPreset && !showAllPresets}
             <div class="toolbar" style="margin:0 0 12px">
               <span class="pill ok">Recommended for {INTENTS.find(x => x.id === intent)?.label}</span>
@@ -377,6 +388,13 @@
             </div>
           {/if}
         {/if}
+        <div class="toolbar">
+          <button class="btn sm" disabled={busy || importBusy} onclick={() => { importOpen = !importOpen }}>{importOpen ? 'Back to presets' : 'Import a file'}</button>
+        </div>
+        {#if importOpen}
+          <TaxonomyImport {notify} bind:busy={importBusy} onApplied={importedTree} />
+        {:else}
+        <fieldset disabled={busy} style="border:0;padding:0;margin:0;min-width:0">
         <div class="preset-grid">
           {#each visiblePresets as p (p.id)}
             <label class="preset" class:on={preset.preset_id === p.id}>
@@ -405,6 +423,8 @@
             <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveIntent, 'Archive direction saved')}>Keep the current tree</button>
           {/if}
         </div>
+        </fieldset>
+        {/if}
       {:else}
         <div class="toolbar"><button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button></div>
       {/if}
@@ -454,6 +474,15 @@
             <option value={u.email}>{u.display_name || u.email} · {u.email}</option>
           {/each}
         </select></div>
+      {#if systems.introduced}
+        <div class="field"><label for="i-system">Watched folder filing system</label>
+          <select id="i-system" class="input" bind:value={ingest.fs_watch_system}>
+            <option value="">Original archive (default)</option>
+            {#each systems.results as system (system.code)}<option value={system.code}>{system.code} · {system.name}</option>{/each}
+          </select>
+          <p class="sub">This is the server-wide watched-folder destination, not the system currently displayed. Its owner must be able to enter it.</p>
+        </div>
+      {/if}
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !ingest.fs_watch_dir || !ingest.fs_watch_owner_email}
                 onclick={() => saveAnd(() => saveIngestSettings(ingest), 'Watched folder saved')}>Save folder</button>
@@ -614,14 +643,14 @@
                   )}>Save model and options</button>
         </div>
       </section>
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rules above, and answers authorized research questions on demand. To process older documents, select them in <a href="#/documents">Documents</a> and use Rescan or Extract dates.</p>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rules above, and answers authorized research questions on demand. To process older documents, select them in <a href={filingHref("#/documents")}>Documents</a> and use Rescan or Extract dates.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>
       <p class="wiz-p">Your preset can install starter filing automations. Preset-owned automations show their filing-tree owner; editing one forks a user-owned copy, so re-picking the preset never overwrites your edits.</p>
       <p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
       <div class="toolbar">
-        <a role="button" class="btn primary sm" href="#/automations">Open automations</a>
+        <a role="button" class="btn primary sm" href={filingHref("#/automations")}>Open automations</a>
         {#if setup}
           <button class="btn sm" onclick={() => onAdvance?.()}>Done</button>
           <button class="btn sm" onclick={() => onAdvance?.()}>Skip</button>

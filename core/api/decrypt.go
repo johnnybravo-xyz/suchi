@@ -24,8 +24,10 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/qpdf"
@@ -71,14 +73,22 @@ func (s *Server) ListPendingDecryption(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	if _, ok := s.requireSystem(w, r, p); !ok {
+		return
+	}
+	visibility, args, err := s.collectionVisibility(r.Context(), p)
+	if err != nil {
+		s.serverErr(w, "decrypt.visibility", err)
+		return
+	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, title, original_blob, original_size, created_at,
 		       COALESCE(mime_type, '')
-		FROM documents
+		FROM documents d
 		WHERE encryption_state = 'encrypted' AND trashed_at IS NULL
-		  AND (owner_id = ? OR ? = 'admin')
+		  AND `+visibility+`
 		ORDER BY created_at DESC, id DESC
-	`, p.UserID, p.Role)
+	`, args...)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "db_read", err.Error())
 		return
@@ -125,6 +135,9 @@ func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	if !s.authorize(w, r, p, authz.KindDocument, docID, authz.PermChange) {
+		return
+	}
 	var req DecryptRequest
 	if err := decodeJSON(r, &req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
@@ -157,12 +170,12 @@ func (s *Server) DecryptDocument(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "bad_password", "password did not decrypt the document")
 			return
 		}
-		s.Log.Error("api.decrypt", "doc_id", docID, "err", err.Error())
-		s.writeError(w, http.StatusInternalServerError, "decrypt_failed", err.Error())
+		s.serverErr(w, "decrypt.failed", err)
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.decrypt",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document.decrypt",
 		ObjectKind: "document", ObjectID: docID,
 		After: map[string]any{"remembered": req.Remember},
 	})
@@ -194,6 +207,9 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	if _, ok := s.requireSystem(w, r, p); !ok {
+		return
+	}
 	if s.decrypt.Key == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "decrypt_disabled",
 			"decrypt subsystem not initialized")
@@ -250,7 +266,8 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "document.decrypt.batch",
+		SystemID: selectedSystemID(r.Context()),
+		Actor:    p, Action: "document.decrypt.batch",
 		ObjectKind: "documents",
 		After:      map[string]any{"doc_count": len(req.DocIDs), "remembered": req.Remember && anySuccess},
 	})
@@ -261,14 +278,11 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 
 var errBadPassword = errors.New("bad password")
 
-// loadEncryptedDoc fetches the owner + original blob + title for a
-// doc that must be alive AND in encryption_state='encrypted' AND
-// owned by the caller (or the caller is admin). Returns ok=false
-// when any of those invariants fail — the caller returns 404
-// uniformly to avoid a probe oracle. Title is surfaced so the
-// decrypt handlers can auto-label a remembered password with a
-// self-describing string.
+// loadEncryptedDoc returns live encrypted documents the caller may change.
 func (s *Server) loadEncryptedDoc(r *http.Request, docID int64, p *pluginapi.Principal) (int64, string, string, bool, error) {
+	if allowed, err := s.authorized(r.Context(), nil, p, authz.KindDocument, docID, authz.PermChange); err != nil || !allowed {
+		return 0, "", "", false, err
+	}
 	var (
 		owner   int64
 		blobSHA string
@@ -287,9 +301,6 @@ func (s *Server) loadEncryptedDoc(r *http.Request, docID int64, p *pluginapi.Pri
 		return 0, "", "", false, err
 	}
 	if !state.Valid || state.String != "encrypted" {
-		return 0, "", "", false, nil
-	}
-	if p.Role != "admin" && owner != p.UserID {
 		return 0, "", "", false, nil
 	}
 	return owner, blobSHA, title, true, nil
@@ -325,6 +336,20 @@ func (s *Server) attemptDecrypt(r *http.Request, docID, ownerID int64, blobSHA s
 		return err
 	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if allowed, err := s.authorized(r.Context(), tx, auth.FromContext(r.Context()), authz.KindDocument, docID, authz.PermChange); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
+		var systemID int64
+		if err := tx.QueryRowContext(r.Context(), `SELECT system_id,owner_id FROM documents
+			WHERE id=? AND original_blob=? AND trashed_at IS NULL AND encryption_state='encrypted'`,
+			docID, blobSHA).Scan(&systemID, &ownerID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errSystemUnavailable
+			}
+			return err
+		}
 		if _, err := tx.ExecContext(r.Context(), `
 			UPDATE documents
 			SET encryption_state = 'decrypted',
@@ -338,7 +363,7 @@ func (s *Server) attemptDecrypt(r *http.Request, docID, ownerID int64, blobSHA s
 			"size":      ref.Size,
 			"mime_type": "application/pdf",
 		})
-		return jobs.Enqueue(r.Context(), tx, postingest.Kind, docID, string(payload))
+		return jobs.Enqueue(r.Context(), tx, postingest.Kind, docID, systemID, string(payload))
 	})
 	if err != nil {
 		return err
@@ -376,22 +401,30 @@ func (s *Server) ListDecryptionPasswords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := auth.FromContext(r.Context())
-	// LEFT JOIN documents so a deleted-doc row still surfaces the id
-	// with an empty title — the SPA renders "(no longer available)"
-	// rather than throwing the entry off the list entirely.
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
+	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), p)
+	if err != nil {
+		s.serverErr(w, "decrypt.vault_visibility", err)
+		return
+	}
+	// Hide the last-used document identity when its current ACL is unavailable.
 	base := `SELECT dp.id, dp.owner_id, COALESCE(dp.label, ''),
 	                dp.created_at, COALESCE(dp.last_used_at, 0),
-	                COALESCE(dp.last_used_doc_id, 0),
+	                COALESCE(d.id, 0),
 	                COALESCE(d.title, '')
 	         FROM decryption_passwords AS dp
 	         LEFT JOIN documents AS d ON d.id = dp.last_used_doc_id
-	                                 AND d.trashed_at IS NULL`
-	q := base + ` WHERE dp.owner_id = ?
+	                                 AND d.trashed_at IS NULL AND d.system_id=dp.system_id
+	                                 AND ` + visibility
+	q := base + ` WHERE dp.system_id=? AND dp.owner_id=?
 	              ORDER BY COALESCE(dp.last_used_at, dp.created_at) DESC, dp.id DESC`
-	args := []any{p.UserID}
+	args := append(visibilityArgs, systemID, p.UserID)
 	if p.Role == "admin" && r.URL.Query().Get("all") == "1" {
-		q = base + ` ORDER BY COALESCE(dp.last_used_at, dp.created_at) DESC, dp.id DESC`
-		args = nil
+		q = base + ` WHERE dp.system_id=? ORDER BY COALESCE(dp.last_used_at, dp.created_at) DESC, dp.id DESC`
+		args = append(visibilityArgs, systemID)
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
 	if err != nil {
@@ -428,6 +461,10 @@ func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, p, "decryption_passwords", id)
+	if !ok {
+		return
+	}
 	var req struct {
 		Label *string `json:"label"`
 	}
@@ -445,9 +482,13 @@ func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request
 	}
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
 		q := `UPDATE decryption_passwords SET label = ? WHERE id = ? AND owner_id = ?`
 		args := []any{labelArg, id, p.UserID}
-		if p.Role == "admin" {
+		if current.Role == "admin" {
 			q = `UPDATE decryption_passwords SET label = ? WHERE id = ?`
 			args = []any{labelArg, id}
 		}
@@ -459,7 +500,7 @@ func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request
 		return err
 	})
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		s.serverErr(w, "decrypt.vault_rename", err)
 		return
 	}
 	if affected == 0 {
@@ -467,7 +508,8 @@ func (s *Server) RenameDecryptionPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "decryption_password.rename",
+		SystemID: systemID,
+		Actor:    p, Action: "decryption_password.rename",
 		ObjectKind: "decryption_password", ObjectID: id,
 	})
 	w.WriteHeader(http.StatusNoContent)
@@ -486,11 +528,19 @@ func (s *Server) DeleteDecryptionPassword(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, p, "decryption_passwords", id)
+	if !ok {
+		return
+	}
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
 		q := `DELETE FROM decryption_passwords WHERE id = ? AND owner_id = ?`
 		args := []any{id, p.UserID}
-		if p.Role == "admin" {
+		if current.Role == "admin" {
 			q = `DELETE FROM decryption_passwords WHERE id = ?`
 			args = []any{id}
 		}
@@ -502,7 +552,7 @@ func (s *Server) DeleteDecryptionPassword(w http.ResponseWriter, r *http.Request
 		return err
 	})
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
+		s.serverErr(w, "decrypt.vault_delete", err)
 		return
 	}
 	if affected == 0 {
@@ -510,7 +560,8 @@ func (s *Server) DeleteDecryptionPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "decryption_password.delete",
+		SystemID: systemID,
+		Actor:    p, Action: "decryption_password.delete",
 		ObjectKind: "decryption_password", ObjectID: id,
 	})
 	w.WriteHeader(http.StatusNoContent)
@@ -527,15 +578,24 @@ func (s *Server) rememberPassword(r *http.Request, ownerID int64, plaintext, lab
 		return err
 	}
 	now := time.Now().Unix()
+	systemID := selectedSystemID(r.Context())
 	return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, auth.FromContext(r.Context()), systemID); err != nil {
+			return err
+		}
+		if allowed, err := systems.CanEnter(r.Context(), tx, ownerID, systemID); err != nil {
+			return err
+		} else if !allowed {
+			return errSystemUnavailable
+		}
 		var labelArg any
 		if label != "" {
 			labelArg = label
 		}
 		_, err := tx.ExecContext(r.Context(), `
-			INSERT INTO decryption_passwords(owner_id, ciphertext, label, created_at, last_used_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, ownerID, sealed, labelArg, now, now)
+			INSERT INTO decryption_passwords(system_id, owner_id, ciphertext, label, created_at, last_used_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, systemID, ownerID, sealed, labelArg, now, now)
 		return err
 	})
 }

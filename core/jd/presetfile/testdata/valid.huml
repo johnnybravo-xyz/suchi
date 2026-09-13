@@ -1,0 +1,40 @@
+format: "suchi-taxonomy/v1"
+id: "uk-landlord"
+version: 1
+name: "UK landlord"
+market: "uk"
+language: "en"
+maintainer: "@johnnybravo"
+license: "CC0-1.0"
+flat: false
+story: "Three tenancies, nine renewal dates, files itself under numbers an inspector can follow."
+areas::
+  - ::
+    code: 10
+    name: "Properties"
+    categories::
+      - ::
+        code: 11
+        name: "Tenancy agreements"
+        description: "ASTs and renewals."
+        keywords:: "tenancy", "AST", "renewal"
+      - ::
+        code: 12
+        name: "Deposits"
+        keywords:: "deposit", "DPS", "TDS"
+      - ::
+        code: 13
+        name: "Safety certificates"
+        keywords:: "gas safety", "CP12", "EICR", "EPC"
+seeds::
+  automations::
+    - ::
+      name: "File gas certificates"
+      trigger::
+        type: 2
+        filter_content_matching: "gas safety"
+      actions::
+        - ::
+          kind: "assign_document_type"
+          params::
+            document_type: "certificate"

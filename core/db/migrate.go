@@ -3,13 +3,16 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Migration is one forward step. Down migrations are intentionally NOT
@@ -17,9 +20,10 @@ import (
 // SQL replay. Keeping this one-way removes an entire category of "the
 // down migration was wrong" bugs.
 type Migration struct {
-	Version int
-	Name    string
-	SQL     string
+	Version       int
+	Name          string
+	SQL           string
+	RebuildTables bool
 }
 
 // Migrate applies every migration with Version > current PRAGMA user_version,
@@ -63,6 +67,9 @@ func Migrate(ctx context.Context, d *DB, migs []Migration, log *slog.Logger) err
 }
 
 func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
+	if m.RebuildTables {
+		return applyRebuild(ctx, db, m)
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -76,6 +83,72 @@ func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
 	// an int extracted from the filename we own.
 	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(m.Version)); err != nil {
 		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// Rebuild migrations hold the sole writer connection while enforcement is
+// disabled. Child tables continue to refer to the original parent names;
+// the migration copies into new tables, drops originals, then renames.
+func applyRebuild(ctx context.Context, db *sql.DB, m Migration) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	defer func() {
+		// Cancellation of the migration must not prevent restoring pool state.
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, restoreErr := conn.ExecContext(cleanup, "PRAGMA foreign_keys = ON")
+		if restoreErr == nil {
+			var enabled int
+			restoreErr = conn.QueryRowContext(cleanup, "PRAGMA foreign_keys").Scan(&enabled)
+			if restoreErr == nil && enabled != 1 {
+				restoreErr = errors.New("foreign key enforcement remained disabled")
+			}
+		}
+		if restoreErr != nil {
+			// Raw's ErrBadConn discards the physical connection instead of
+			// returning a potentially unsafe connection to the write pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			err = errors.Join(err, fmt.Errorf("restore migration connection: %w", restoreErr))
+		}
+	}()
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "ROLLBACK; BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, m.SQL); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	if rows.Next() {
+		var table, parent string
+		var rowID sql.NullInt64
+		var constraint int
+		scanErr := rows.Scan(&table, &rowID, &parent, &constraint)
+		_ = rows.Close()
+		if scanErr != nil {
+			return scanErr
+		}
+		return fmt.Errorf("foreign key violation: table=%s row=%v parent=%s constraint=%d", table, rowID, parent, constraint)
+	}
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(m.Version)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -110,7 +183,9 @@ func LoadMigrations(efs embed.FS, dir string) ([]Migration, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Migration{Version: v, Name: parts[1], SQL: string(b)})
+		firstLine, _, _ := strings.Cut(string(b), "\n")
+		out = append(out, Migration{Version: v, Name: parts[1], SQL: string(b),
+			RebuildTables: strings.TrimSuffix(firstLine, "\r") == "-- suchi: rebuild-tables"})
 	}
 	return out, nil
 }

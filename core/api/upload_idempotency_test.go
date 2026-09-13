@@ -73,19 +73,19 @@ func TestUploadFingerprintCanonicalizationAndBoundaries(t *testing.T) {
 			Content: "private text", Confidence: 0.8, Language: "en_US",
 		},
 	}
-	fingerprint := buildUploadFingerprint(uploadOperationDocument, 0, "sha", "dir/scan.pdf", base)
-	if len(fingerprint) != 64 {
-		t.Fatalf("fingerprint length=%d", len(fingerprint))
+	fingerprint := buildUploadFingerprint(1, uploadOperationDocument, 0, "sha", "dir/scan.pdf", base)
+	if fingerprint == buildUploadFingerprint(2, uploadOperationDocument, 0, "sha", "scan.pdf", base) {
+		t.Fatal("different systems produced the same upload fingerprint")
 	}
-	if fingerprint != buildUploadFingerprint(uploadOperationDocument, 0, "sha", "scan.pdf", base) {
+	if fingerprint != buildUploadFingerprint(1, uploadOperationDocument, 0, "sha", "scan.pdf", base) {
 		t.Fatal("equivalent filename basenames produced different fingerprints")
 	}
 	negativeZero := base
 	negativeZero.Device = &deviceContentMetadata{Content: "private text", Confidence: math.Copysign(0, -1), Language: "en_US"}
 	positiveZero := base
 	positiveZero.Device = &deviceContentMetadata{Content: "private text", Confidence: 0, Language: "en_US"}
-	if buildUploadFingerprint(uploadOperationDocument, 0, "sha", "scan.pdf", negativeZero) !=
-		buildUploadFingerprint(uploadOperationDocument, 0, "sha", "scan.pdf", positiveZero) {
+	if buildUploadFingerprint(1, uploadOperationDocument, 0, "sha", "scan.pdf", negativeZero) !=
+		buildUploadFingerprint(1, uploadOperationDocument, 0, "sha", "scan.pdf", positiveZero) {
 		t.Fatal("negative zero confidence was not canonicalized")
 	}
 
@@ -109,7 +109,7 @@ func TestUploadFingerprintCanonicalizationAndBoundaries(t *testing.T) {
 	}
 	for _, tc := range different {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := buildUploadFingerprint(tc.operation, tc.predecessor, tc.sha, tc.filename, tc.metadata); got == fingerprint {
+			if got := buildUploadFingerprint(1, tc.operation, tc.predecessor, tc.sha, tc.filename, tc.metadata); got == fingerprint {
 				t.Fatal("distinct request produced the same fingerprint")
 			}
 		})
@@ -241,7 +241,8 @@ func TestUploadDocumentReplayRechecksTokenScope(t *testing.T) {
 }
 
 func TestUploadNewVersionIdempotentReplay(t *testing.T) {
-	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
+	principal := grantVersionEditor(t, d, previousID)
 	first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
 	replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
 	if first.Code != http.StatusCreated || replay.Code != http.StatusCreated {
@@ -261,7 +262,8 @@ func TestUploadNewVersionIdempotentReplay(t *testing.T) {
 }
 
 func TestUploadNewVersionRecoversReplayAfterResponseExpires(t *testing.T) {
-	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	s, d, _, _, previousID := newVersionUploadServer(t, "previous-sha")
+	principal := grantVersionEditor(t, d, previousID)
 	first := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
@@ -356,8 +358,8 @@ func TestUploadNewVersionReplayRechecksACL(t *testing.T) {
 				t.Fatal(err)
 			}
 			replay := uploadVersionWithKey(t, s, principal, previousID, testIdempotencyKey, "revision.pdf", testPDFBytes(), nil)
-			if replay.Code != http.StatusForbidden ||
-				!strings.Contains(replay.Body.String(), `"code":"forbidden"`) {
+			if replay.Code != http.StatusNotFound ||
+				!strings.Contains(replay.Body.String(), `"code":"not_found"`) {
 				t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
 			}
 			var body map[string]any
@@ -382,8 +384,8 @@ func TestUploadNewVersionRechecksPredecessorInsideWriteTransaction(t *testing.T)
 		{
 			name:       "ACL revoked while reading body",
 			mutation:   `DELETE FROM object_acls WHERE object_kind = 'document' AND object_id = ? AND principal_kind = 'user' AND principal_id = 2`,
-			wantStatus: http.StatusForbidden,
-			wantCode:   "forbidden",
+			wantStatus: http.StatusNotFound,
+			wantCode:   "not_found",
 		},
 		{
 			name:       "predecessor trashed while reading body",
@@ -417,6 +419,13 @@ func TestUploadNewVersionRechecksPredecessorInsideWriteTransaction(t *testing.T)
 			if !body.mutated || rec.Code != tc.wantStatus ||
 				!strings.Contains(rec.Body.String(), `"code":"`+tc.wantCode+`"`) {
 				t.Fatalf("mutated=%v status=%d body=%s", body.mutated, rec.Code, rec.Body.String())
+			}
+			var response map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response) != 2 || rec.Header().Get("Location") != "" {
+				t.Fatalf("inaccessible predecessor metadata leaked: headers=%v body=%v", rec.Header(), response)
 			}
 			assertUploadSideEffectCounts(t, d, 1, 0, 0, 0)
 		})
@@ -507,6 +516,11 @@ func TestUploadNewVersionRejectsLiveDuplicateBlob(t *testing.T) {
 			if !tc.delegated && response.ExistingID != existingID {
 				t.Fatalf("response=%+v, want existing id %d", response, existingID)
 			}
+			documents := 2
+			if tc.existingKind == "predecessor" {
+				documents = 1
+			}
+			assertUploadSideEffectCounts(t, d, documents, 0, 0, 0)
 		})
 	}
 }
@@ -584,6 +598,11 @@ func (r *mutateOnFirstRead) Read(p []byte) (int, error) {
 func grantVersionEditor(t *testing.T, d *db.DB, documentID int64) *pluginapi.Principal {
 	t.Helper()
 	seedUser(t, d, 2)
+	// Writer authorization reloads the persisted role; this editor must not
+	// inherit seedUser's administrator bypass.
+	if _, err := d.ExecWrite(context.Background(), `UPDATE users SET role = 'member' WHERE id = 2`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.ExecWrite(context.Background(), `
 		INSERT INTO object_acls(
 			object_kind, object_id, principal_kind, principal_id,

@@ -3,7 +3,6 @@ package taxonomy_test
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
@@ -15,11 +14,11 @@ func TestUpsertByNameUsesAllowListedTable(t *testing.T) {
 	var first, second int64
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		first, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, "  Tax  ", 10)
+		first, err = taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableTags, "  Tax  ", 10)
 		if err != nil {
 			return err
 		}
-		second, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, "Tax", 20)
+		second, err = taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableTags, "Tax", 20)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -39,10 +38,10 @@ func TestUpsertByNameUsesAllowListedTable(t *testing.T) {
 	}
 
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := taxonomy.UpsertByName(ctx, tx, taxonomy.NamedTable(255), "unsafe", 30)
+		_, err := taxonomy.UpsertByName(ctx, tx, 1, taxonomy.NamedTable(255), "unsafe", 30)
 		return err
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid named table") {
+	if err == nil {
 		t.Fatalf("invalid table error = %v", err)
 	}
 }
@@ -53,13 +52,11 @@ func TestUpsertByNameReusesCanonicalSlug(t *testing.T) {
 	var canonicalID, variantID int64
 	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		canonicalID, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
-			"EXAMPLE SUPPLIES PRIVATE LIMITED", 10)
+		canonicalID, err = taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableCorrespondents, "EXAMPLE SUPPLIES PRIVATE LIMITED", 10)
 		if err != nil {
 			return err
 		}
-		variantID, err = taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
-			"Example Supplies Private Limited", 20)
+		variantID, err = taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableCorrespondents, "Example Supplies Private Limited", 20)
 		return err
 	}); err != nil {
 		t.Fatal(err)

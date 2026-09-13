@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createQueryAssistant } from './queryAssist.js'
+// The transport tests do not need Svelte reactivity; compiled browser tests
+// exercise request cancellation across account/system generations.
+globalThis.$state = value => value
+const { createQueryAssistant } = await import('./queryAssist.js')
+delete globalThis.$state
 
 async function waitFor(predicate) {
   for (let attempt = 0; attempt < 40; attempt++) {

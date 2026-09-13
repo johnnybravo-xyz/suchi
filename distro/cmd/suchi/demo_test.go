@@ -70,7 +70,7 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 	ctx := t.Context()
 	d := newDemoTestDB(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -123,7 +123,7 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 			if err := d.Read.QueryRowContext(ctx, `
 				SELECT (SELECT COUNT(*) FROM documents),
 				       (SELECT COUNT(*) FROM document_tags),
-				       (SELECT COUNT(*) FROM jobs),
+				       (SELECT COUNT(*) FROM jobs WHERE doc_id IS NOT NULL),
 				       (SELECT COUNT(*) FROM document_tags dt
 				        JOIN documents d ON d.id = dt.document_id JOIN tags t ON t.id = dt.tag_id
 				        WHERE lower(d.title) != t.name),

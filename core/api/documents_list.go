@@ -20,8 +20,8 @@
 //   trashed                   — "1" / "true" to show only trashed
 //                               docs; anything else = live only.
 //
-// Non-admin callers get the shared document-visibility fragment spliced onto
-// every path. Admins bypass; public-demo visitors are corpus-scoped.
+// Every caller is constrained to its selected system and document permissions.
+// The unnamed default demo archive retains its corpus exception.
 
 package api
 
@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // DocumentListRow is the projection each result carries. Slimmer
@@ -41,6 +42,8 @@ import (
 // response. Detail hydration happens on the /{id} route.
 type DocumentListRow struct {
 	ID             int64  `json:"id"`
+	SystemCode     string `json:"system_code,omitempty"`
+	JDAddress      string `json:"jd_address,omitempty"`
 	Title          string `json:"title"`
 	MIME           string `json:"mime_type,omitempty"`
 	OriginalSize   int64  `json:"original_size,omitempty"`
@@ -84,6 +87,9 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	if _, ok := s.requireSystem(w, r, p); !ok {
+		return
+	}
 	q := r.URL.Query()
 
 	where := []string{}
@@ -128,18 +134,13 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 	}
 
-	// Visibility: admins bypass; members get owner/ACL visibility. Public demo
-	// visitors see only the seeded corpus, plus their own scratch uploads.
-	if p != nil && p.Role != "admin" {
-		groups, err := s.principalGroups(r.Context(), p.UserID)
-		if err != nil {
-			s.serverErr(w, "docs.list.load_groups", err)
-			return
-		}
-		frag, vargs := documentVisibilityWhere(p, groups)
-		where = append(where, frag)
-		args = append(args, vargs...)
+	frag, vargs, err := s.collectionVisibility(r.Context(), p)
+	if err != nil {
+		s.serverErr(w, "docs.list.visibility", err)
+		return
 	}
+	where = append(where, frag)
+	args = append(args, vargs...)
 
 	whereSQL := strings.Join(where, " AND ")
 
@@ -164,7 +165,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	rowArgs = append(rowArgs, pp.PageSize, pp.Offset())
 
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
-		SELECT d.id, d.title,
+		SELECT d.id, d.title, js.code,
 		       COALESCE(d.mime_type, ''), d.original_size,
 		       COALESCE(d.jd_category_id, 0),
 		       COALESCE(jc.code, 0), COALESCE(jc.name, ''), COALESCE(ja.name, ''),
@@ -174,8 +175,9 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(d.encryption_state, ''),
 		       d.created_at, d.updated_at, d.trashed_at
 		  FROM `+fromSQL+`
+		  JOIN jd_systems js ON js.id = d.system_id
 		  LEFT JOIN jd_categories jc ON jc.id = d.jd_category_id
-		  LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start
+		  LEFT JOIN jd_areas      ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
 		 WHERE `+whereSQL+`
 		 ORDER BY `+orderBy+`
 		 LIMIT ? OFFSET ?`, rowArgs...)
@@ -193,7 +195,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 			trashed    sql.NullInt64
 			splitIndex sql.NullInt64
 		)
-		if err := rows.Scan(&row.ID, &row.Title, &row.MIME, &row.OriginalSize,
+		if err := rows.Scan(&row.ID, &row.Title, &row.SystemCode, &row.MIME, &row.OriginalSize,
 			&row.JDCategoryID, &row.JDCategoryCode, &row.JDCategoryName, &row.JDAreaName,
 			&row.Sensitivity, &row.ThumbSHA, &row.SplitOriginID, &splitIndex,
 			&row.EncryptionState, &row.CreatedAt, &row.UpdatedAt, &trashed); err != nil {
@@ -208,6 +210,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 			v := splitIndex.Int64
 			row.SplitIndex = &v
 		}
+		row.JDAddress = systems.Address(row.SystemCode, int(row.JDCategoryCode), row.ID)
 		row.Tags = []string{}
 		out = append(out, row)
 		ids = append(ids, row.ID)

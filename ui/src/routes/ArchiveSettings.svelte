@@ -1,10 +1,13 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { setupState, adminListUsers, getIngestSettings, getLLMSettings,
            getPreferences, listEmailAccounts, listAutomations } from '../lib/api.js'
   import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
   import ConfigurationSection from './ConfigurationSection.svelte'
   import PeopleSettings from './PeopleSettings.svelte'
+  import { systems } from '../lib/systems.svelte.js'
+  import SystemSettings from '../lib/SystemSettings.svelte'
 
   let { notify, initialSection = '', onTaxonomyChanged, setupSnapshot = null } = $props()
 
@@ -73,22 +76,25 @@
 
 <section class="archive-settings" aria-label="Archive configuration">
   <aside class="archive-rail" aria-label="Archive settings sections">
-    <a class:on={current === 'overview'} href="#/settings?tab=archive">Overview</a>
+    <a class:on={current === 'overview'} href={filingHref("#/settings?tab=archive")}>Overview</a>
     {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
       <span>{group.label}</span>
       {#each group.items as item (item.name)}
-        <a class:on={current === item.name} href={item.href}>{item.label}</a>
+        <a class:on={current === item.name} href={filingHref(item.href)}>{item.label}</a>
       {/each}
     {/each}
   </aside>
 
   <div class="archive-content">
+    {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'archive')}
+      <SystemSettings {notify} />
+    {/if}
     {#if current === 'overview'}
       <header class="archive-intro">
         <div>
           <span class="eyebrow">Archive</span>
           <h2>Configure how your archive works</h2>
-          <p>Manage filing, intake, classification, and resilience separately from your personal account.</p>
+          <p>Filing trees, metadata, mailboxes and automations target {systems.code || 'this archive'}. Users, server intake, OCR, models and backups remain instance-wide settings.</p>
         </div>
         <span class="admin-pill"><Icon name="shield" size={13} /> Administrators</span>
       </header>
@@ -102,7 +108,7 @@
             </header>
             {#each group.items as item (item.name)}
               {@const itemStatus = statuses[item.name]}
-              <a class="configuration-row" href={item.href}>
+              <a class="configuration-row" href={filingHref(item.href)}>
                 <span class="configuration-icon"><Icon name={item.icon} size={15} /></span>
                 <span class="configuration-copy">
                   <b>{item.label}</b>
@@ -118,11 +124,11 @@
       <p class="archive-note">Changes here apply to the archive, not only to your account.</p>
     {:else if currentItem}
       <header class="section-intro">
-        <a href="#/settings?tab=archive"><Icon name="left" size={13} /> Archive overview</a>
+        <a href={filingHref("#/settings?tab=archive")}><Icon name="left" size={13} /> Archive overview</a>
         <span>{currentItem.description}</span>
       </header>
       {#if current === 'users'}
-        <div class="people-settings"><PeopleSettings {notify} /></div>
+        <div class="people-settings"><PeopleSettings {notify} {onTaxonomyChanged} /></div>
       {:else if current === 'automations'}
         <div class="card handoff-card">
           <span class="handoff-icon"><Icon name="zap" size={20} /></span>
@@ -130,7 +136,7 @@
             <h3>Build and manage filing rules</h3>
             <p>Automations have a dedicated workspace for ordering rules, editing triggers, and reviewing built-in preset behavior.</p>
           </span>
-          <a role="button" class="btn primary handoff-action" href="#/automations">Open automations <Icon name="chev" size={13} /></a>
+          <a role="button" class="btn primary handoff-action" href={filingHref("#/automations")}>Open automations <Icon name="chev" size={13} /></a>
         </div>
       {:else}
         <div class="card section-card">

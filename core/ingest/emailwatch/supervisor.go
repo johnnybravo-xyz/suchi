@@ -197,6 +197,8 @@ func (s *Supervisor) stopAll() {
 // a benign restart in that case — fine).
 func fingerprint(a *emailaccounts.Account) string {
 	var b strings.Builder
+	b.WriteString(strconv.FormatInt(a.SystemID, 10))
+	b.WriteByte('\x1f')
 	b.WriteString(strconv.FormatInt(a.OwnerID, 10))
 	b.WriteByte('\x1f')
 	b.WriteString(string(a.Provider))

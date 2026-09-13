@@ -12,6 +12,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -70,6 +71,7 @@ type RuntimePreferencesStatus struct {
 type FSWatchSettingsStatus struct {
 	Dir        string `json:"fs_watch_dir"`
 	OwnerEmail string `json:"fs_watch_owner_email"`
+	System     string `json:"fs_watch_system"`
 }
 
 type ChatCompletionMessage struct {
@@ -125,13 +127,10 @@ type Server struct {
 	RuntimePreferencesReloader func(context.Context) error
 	FSWatchSettingsReader      func(context.Context) (FSWatchSettingsStatus, error)
 	FSWatchReloader            func(context.Context) error
-	// TokenIssuer mints a fresh API token for an authenticated user.
-	// Wired at boot from the local-auth plugin so the session-authed
-	// (cookie / OIDC) caller can mint per-device tokens via
-	// /api/tokens/ without password re-entry. Nil disables the
-	// endpoint (returns 501). Source is server-selected provenance and must
-	// be committed in the same transaction as the token.
-	TokenIssuer func(ctx context.Context, userID int64, name, scopes, source string) (string, error)
+	// TokenIssuer inserts a system-bound token in the caller's write transaction.
+	// Pairing consumption and issuance therefore commit or roll back together.
+	// Nil disables issuance; source is server-selected provenance.
+	TokenIssuer func(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error)
 	// Authz is the permission decision layer. New wires ACLAuthorizer;
 	// focused tests may substitute another implementation.
 	Authz authz.Authorizer
@@ -327,7 +326,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/documents/{id}/custom_fields/{field}", s.DeleteCustomField)
 
 	// Taxonomy import + export — admin-only. Accepts / emits
-	// `suchi-taxonomy/v1` files (HuML / TOML / YAML).
+	// `suchi-taxonomy/v1` files (HuML / TOML).
 	mux.HandleFunc("POST /api/admin/taxonomy/import", s.ImportTaxonomy)
 	mux.HandleFunc("GET /api/admin/taxonomy/export", s.ExportTaxonomy)
 
@@ -388,6 +387,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// enumerate categories and resolve jd_category_id → label
 	// without a second round-trip. Creation is a preset swap.
 	mux.HandleFunc("GET /api/jd/categories/", s.ListJDCategories)
+	mux.HandleFunc("GET /api/jd/systems", s.ListSystems)
+	mux.HandleFunc("GET /api/jd/resolve", s.ResolveJDAddress)
+	mux.HandleFunc("GET /api/admin/jd/systems/{code}/members", s.GetSystemMembers)
+	mux.HandleFunc("PUT /api/admin/jd/systems/{code}/members", s.PutSystemMembers)
+	mux.HandleFunc("PATCH /api/admin/jd/systems/{code}", s.PatchSystem)
 	mux.HandleFunc("GET /api/presets/", s.ListPresets)
 
 	// Activity feed. Cursor over audit_events; the SPA and external

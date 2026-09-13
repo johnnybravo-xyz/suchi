@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // Group is one row in the `groups` table.
@@ -256,7 +257,7 @@ func (s *Store) RemoveMember(ctx context.Context, groupID, userID int64) error {
 // (object_kind, object_id, principal_kind, principal_id) tuple —
 // re-granting a different bitmask overrides the previous one rather
 // than accumulating (that would surprise operators).
-func (s *Store) Grant(ctx context.Context, actorUserID int64, g Grant) (*Grant, error) {
+func (s *Store) Grant(ctx context.Context, tx *sql.Tx, actorUserID int64, g Grant) (*Grant, error) {
 	if g.ObjectKind == "" || g.ObjectID == 0 || g.PrincipalKind == "" || g.PrincipalID == 0 {
 		return nil, errors.New("authz: object + principal required for grant")
 	}
@@ -271,33 +272,40 @@ func (s *Store) Grant(ctx context.Context, actorUserID int64, g Grant) (*Grant, 
 		return nil, ErrPrincipalNotFound
 	}
 	now := time.Now().Unix()
-	err := s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if exists, err := objectExists(ctx, tx, kind, g.ObjectID); err != nil {
-			return err
-		} else if !exists {
-			return ErrObjectNotFound
-		}
-		principalTable := "users"
-		if g.PrincipalKind == "group" {
-			principalTable = "groups"
-		}
-		if exists, err := rowExists(ctx, tx, principalTable, g.PrincipalID); err != nil {
-			return err
-		} else if !exists {
-			return ErrPrincipalNotFound
-		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(object_kind, object_id, principal_kind, principal_id) DO UPDATE SET
-				perm_bits = excluded.perm_bits
-		`, g.ObjectKind, g.ObjectID, g.PrincipalKind, g.PrincipalID, g.PermBits, now, actorUserID)
-		return err
-	})
+	systemID, err := ObjectSystemID(ctx, tx, kind, g.ObjectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrObjectNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	return s.getGrant(ctx, g.ObjectKind, g.ObjectID, g.PrincipalKind, g.PrincipalID)
+	principalTable := "users"
+	if g.PrincipalKind == "group" {
+		principalTable = "groups"
+	} else {
+		allowed, err := systems.CanEnter(ctx, tx, g.PrincipalID, systemID)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, ErrPrincipalNotFound
+		}
+	}
+	if exists, err := rowExists(ctx, tx, principalTable, g.PrincipalID); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, ErrPrincipalNotFound
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(object_kind, object_id, principal_kind, principal_id) DO UPDATE SET
+			perm_bits = excluded.perm_bits
+	`, g.ObjectKind, g.ObjectID, g.PrincipalKind, g.PrincipalID, g.PermBits, now, actorUserID)
+	if err != nil {
+		return nil, err
+	}
+	return s.getGrant(ctx, tx, g.ObjectKind, g.ObjectID, g.PrincipalKind, g.PrincipalID)
 }
 
 // ValidatePermBits accepts the three access levels exposed by the UI.
@@ -315,11 +323,20 @@ func ValidatePermBits(bits int) error {
 // Granted permissions never confer delegation rights: only admins and the
 // object's natural owner may manage access.
 func (s *Store) CanManage(ctx context.Context, actor Principal, kind Kind, objectID int64) (bool, error) {
-	exists, err := objectExists(ctx, s.DB.Read, kind, objectID)
+	return s.canManage(ctx, s.DB.Read, actor, kind, objectID)
+}
+
+// CanManageInTx checks delegation rights in the same snapshot as the grant write.
+func (s *Store) CanManageInTx(ctx context.Context, tx *sql.Tx, actor Principal, kind Kind, objectID int64) (bool, error) {
+	return s.canManage(ctx, tx, actor, kind, objectID)
+}
+
+func (s *Store) canManage(ctx context.Context, q queryRower, actor Principal, kind Kind, objectID int64) (bool, error) {
+	allowed, err := objectBoundary(ctx, q, actor, kind, objectID)
 	if err != nil {
 		return false, err
 	}
-	if !exists {
+	if !allowed {
 		return false, ErrObjectNotFound
 	}
 	if actor.Role == "admin" {
@@ -330,7 +347,7 @@ func (s *Store) CanManage(ctx context.Context, actor Principal, kind Kind, objec
 		return false, nil
 	}
 	var ownerID int64
-	if err := s.DB.Read.QueryRowContext(ctx,
+	if err := q.QueryRowContext(ctx,
 		"SELECT "+col+" FROM "+table+" WHERE id = ?", objectID).Scan(&ownerID); err != nil {
 		return false, err
 	}
@@ -367,7 +384,7 @@ func (s *Store) ListPrincipals(ctx context.Context) ([]PrincipalOption, error) {
 
 // Revoke deletes the ACL row matching the tuple. No-op if it wasn't
 // there.
-func (s *Store) Revoke(ctx context.Context, objectKind string, objectID int64,
+func (s *Store) Revoke(ctx context.Context, tx *sql.Tx, objectKind string, objectID int64,
 	principalKind string, principalID int64) error {
 	kind := Kind(objectKind)
 	if _, ok := objectTableFor(kind); !ok || objectID <= 0 {
@@ -376,28 +393,26 @@ func (s *Store) Revoke(ctx context.Context, objectKind string, objectID int64,
 	if principalKind != "user" && principalKind != "group" || principalID <= 0 {
 		return ErrPrincipalNotFound
 	}
-	return s.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if exists, err := objectExists(ctx, tx, kind, objectID); err != nil {
-			return err
-		} else if !exists {
-			return ErrObjectNotFound
-		}
-		principalTable := "users"
-		if principalKind == "group" {
-			principalTable = "groups"
-		}
-		if exists, err := rowExists(ctx, tx, principalTable, principalID); err != nil {
-			return err
-		} else if !exists {
-			return ErrPrincipalNotFound
-		}
-		_, err := tx.ExecContext(ctx, `
-			DELETE FROM object_acls
-			WHERE object_kind = ? AND object_id = ?
-			  AND principal_kind = ? AND principal_id = ?
-		`, objectKind, objectID, principalKind, principalID)
+	if exists, err := objectExists(ctx, tx, kind, objectID); err != nil {
 		return err
-	})
+	} else if !exists {
+		return ErrObjectNotFound
+	}
+	principalTable := "users"
+	if principalKind == "group" {
+		principalTable = "groups"
+	}
+	if exists, err := rowExists(ctx, tx, principalTable, principalID); err != nil {
+		return err
+	} else if !exists {
+		return ErrPrincipalNotFound
+	}
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM object_acls
+		WHERE object_kind = ? AND object_id = ?
+		  AND principal_kind = ? AND principal_id = ?
+	`, objectKind, objectID, principalKind, principalID)
+	return err
 }
 
 // ListGrants returns every grant on a single object. Used to render
@@ -430,10 +445,10 @@ func (s *Store) ListGrants(ctx context.Context, objectKind string, objectID int6
 	return out, rows.Err()
 }
 
-func (s *Store) getGrant(ctx context.Context, objectKind string, objectID int64,
+func (s *Store) getGrant(ctx context.Context, q queryRower, objectKind string, objectID int64,
 	principalKind string, principalID int64) (*Grant, error) {
 	var g Grant
-	err := s.DB.Read.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT id, object_kind, object_id, principal_kind, principal_id,
 		       perm_bits, created_at, COALESCE(created_by, 0)
 		FROM object_acls

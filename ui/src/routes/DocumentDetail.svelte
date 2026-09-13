@@ -1,4 +1,6 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
   import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listTags, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
@@ -45,7 +47,7 @@
   let recoveryBusy = $state(false)
   let loadVersion = 0
   let disposed = false
-  onDestroy(() => { disposed = true })
+  onDestroy(() => { disposed = true; loadVersion++ })
 
   const ACCESS_LEVELS = [
     ['1', 'View'],
@@ -405,13 +407,25 @@
     finally { recoveryBusy = false }
   }
 
+  async function copyAddress() {
+    const scope = captureScope()
+    const address = doc?.jd_address
+    if (!address) return
+    const copied = await copyText(address)
+    if (!disposed && scopeCurrent(scope)) notify?.(copied ? 'Filing address copied' : 'Select the filing address and copy it manually.')
+  }
   $effect(() => { id; revealed = false; accessOpen = false; load() })
 </script>
 
 <div class="toolbar">
-  <a class="btn sm" href={trashed ? '#/trash' : '#/documents'}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
+  <a class="btn sm" href={filingHref(trashed ? '#/trash' : '#/documents')}><Icon name="left" size={13} /> {trashed ? 'Back to Trash' : 'All documents'}</a>
   <span class="spacer"></span>
   {#if doc}
+    {#if doc.jd_address}
+      <input class="input mono" style="max-width:210px" aria-label="Filing address" readonly value={doc.jd_address}
+        onclick={event => event.currentTarget.select()} />
+      <button class="btn sm" onclick={copyAddress}>Copy address</button>
+    {/if}
     {#if highSensitivity}
       <!-- Persistent Reveal/Hide toggle. The in-panel Reveal button
            (inside the preview) still works — this one gives a symmetric
@@ -637,7 +651,7 @@
           <h3>Versions</h3>
           <div class="index" style="border:0">
             {#each versions as v}
-              <a class="irow" href={`#/doc/${v.id}`} style="padding:8px 4px">
+              <a class="irow" href={filingHref(`#/doc/${v.id}`)} style="padding:8px 4px">
                 <span class="dot" class:accent={String(v.id) === String(id)}></span>
                 <span class="title grow">#{v.id} {v.title || ''}</span>
                 <span class="sub">{fmtDate(v.created_at)}</span>
@@ -661,7 +675,7 @@
           {#if similar.results?.length}
             <div class="index" style="border:0">
               {#each similar.results.slice(0, 6) as sd (sd.id)}
-                <a class="irow" href={`#/doc/${sd.id}`} style="padding:8px 4px">
+                <a class="irow" href={filingHref(`#/doc/${sd.id}`)} style="padding:8px 4px">
                   <span class="dot"></span>
                   <span class="title grow">{sd.title || `Document #${sd.id}`}</span>
                   <span class="sub">{fmtDate(sd.created_at)}</span>

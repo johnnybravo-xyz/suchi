@@ -41,15 +41,6 @@ func TestUploadDuplicateRecordsDistinctSources(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	seedUploadCategory(t, d)
-	if _, err := d.Write.Exec(`UPDATE jd_categories SET system = 1 WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Write.Exec(`
-		INSERT INTO settings(key, value_json, updated_at)
-		VALUES ('jd_inbox_category_id', '1', 0)
-	`); err != nil {
-		t.Fatal(err)
-	}
 	cas, err := blob.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -117,14 +108,14 @@ func TestDocumentSourceUsesCurrentMailboxNameAndKeepsFallback(t *testing.T) {
 	seedUploadCategory(t, d)
 	if _, err := d.Write.ExecContext(context.Background(), `
 		INSERT INTO documents(
-			id, owner_id, original_blob, original_size, title,
+			system_id, id, owner_id, original_blob, original_size, title,
 			jd_category_id, created_at, updated_at
-		) VALUES (1, 1, 'mail-sha', 1, 'Mail document', 1, 0, 0);
+		) VALUES (1, 1, 1, 'mail-sha', 1, 'Mail document', 1, 0, 0);
 		INSERT INTO email_accounts(
-			id, name, owner_id, provider, host, port, folder,
+			system_id, id, name, owner_id, provider, host, port, folder,
 			auth_method, username, sealed_secret, created_at, updated_at
 		) VALUES (
-			1, 'Old mailbox name', 1, 'custom', 'imap.example.com', 993,
+			1, 1, 'Old mailbox name', 1, 'custom', 'imap.example.com', 993,
 			'INBOX', 'password', 'owner@example.com', X'00', 0, 0
 		);
 		INSERT INTO document_sources(
@@ -177,8 +168,8 @@ func TestDocumentDetailEncryptionState(t *testing.T) {
 	seedUser(t, d, 1)
 	seedUploadCategory(t, d)
 	if _, err := d.Write.Exec(`INSERT INTO documents
-		(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
-		VALUES (1, 1, 'original', 1, 'Statement', 1, 0, 0)`); err != nil {
+		(system_id, id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (1, 1, 1, 'original', 1, 'Statement', 1, 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{DB: d, Authz: authz.ACLAuthorizer{DB: d}, Log: slog.Default()}

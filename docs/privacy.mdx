@@ -16,7 +16,7 @@ Outbound traffic occurs only when an operator configures or uses an integration:
 | OIDC | Discovery, authorization, and token requests to the configured issuer |
 | IMAP intake | Mailbox credentials or OAuth tokens and mailbox reads |
 | Microsoft mailbox sign-in | Device-code and token requests to Microsoft |
-| Hosted model assistance | Extracted text and bounded classification context; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
+| Hosted model assistance | Extracted text and bounded classification context from the document's filing system; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
 | Operator pre-consume script | Whatever the operator's executable chooses to send |
 
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
@@ -56,6 +56,13 @@ Suchi does not provide application-level encryption for original blobs or
 SQLite content in v0.1. Use encrypted storage and encrypted off-host backups
 when the host or backup medium is outside your trust boundary.
 
+Filing systems provide [application access boundaries](/permissions), not separate
+SQLite/FTS databases, CAS stores or encryption keys. Users/groups and model/OCR/server
+configuration remain shared. Instance administrators and host/backup operators are
+trusted across systems; a prefix is neither physical isolation nor a compliance claim.
+Equal bytes may share an immutable CAS object even when their document rows belong
+to different systems.
+
 ## Logs and audit data
 
 Application logs use identifiers, sizes, states, and hashes rather than OCR or
@@ -81,7 +88,9 @@ or archive text.
 
 Archive research is read-only and transient. Suchi stores no conversation
 rows, and the browser retains at most the 20 newest transcript turns while the
-application is mounted. The server retrieves only non-trashed documents the caller may view.
+application is mounted. The server retrieves only non-trashed documents in the
+captured filing system that the caller may enter and view. Switching systems
+destroys the browser conversation and invalidates late responses.
 When sensitive consent is off, only unset, Public, and Internal documents are
 eligible; unknown sensitivity values fail closed. Confidential and Restricted
 documents require the per-conversation option. **Clear**, scope or provider
@@ -122,8 +131,11 @@ on disk until the operator runs offline garbage collection with all archive
 writers stopped. Database snapshots and external backups may retain deleted
 data until their separate backup lifecycle expires.
 
-Share links are random, revocable bearer tokens. Revoking a link stops future
-access but cannot retract a file a recipient already downloaded.
+Share links are random, revocable bearer tokens containing documents from one
+system. Public requests recheck that the creator is active, can still enter that
+system and can still share each live document. Removing membership revokes that
+user's system shares, API tokens and pending mobile pairings; re-admission does
+not revive them. Revocation stops future access but cannot retract downloaded bytes.
 
 ## Operator checklist
 

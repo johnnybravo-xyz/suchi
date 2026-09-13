@@ -74,6 +74,10 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 
 	var body BulkEditRequest
 	if err := decodeJSON(r, &body); err != nil {
@@ -102,7 +106,7 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	if body.Method == "trash" || body.Method == "delete" {
 		requiredPerm = authz.PermDelete
 	}
-	decisions, err := s.documentPermissionDecisions(r.Context(), p, body.Documents, requiredPerm)
+	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, body.Documents, requiredPerm)
 	if err != nil {
 		s.serverErr(w, "bulk_edit.authorize", err)
 		return
@@ -122,7 +126,22 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	// Mark each id ok=true after the tx commits — a per-id error
 	// inside the tx aborts the whole batch by design; partial writes
 	// would leave the archive in an unrecoverable half-state.
-	err = s.applyBulkEdit(r, body.Method, body.Parameters, authorized)
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		decisions, err := s.documentPermissionDecisions(r.Context(), tx, current, authorized, requiredPerm)
+		if err != nil {
+			return err
+		}
+		for _, id := range authorized {
+			if !decisions[id] {
+				return errSystemUnavailable
+			}
+		}
+		return s.applyBulkEdit(r, tx, systemID, body.Method, body.Parameters, authorized)
+	})
 	if err != nil {
 		if errors.Is(err, errBadMethod) {
 			s.writeError(w, http.StatusBadRequest, "bad_method",
@@ -149,7 +168,7 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "documents.bulk_edit", ObjectKind: "documents",
+		Actor: p, SystemID: systemID, Action: "documents.bulk_edit", ObjectKind: "documents",
 		After: map[string]any{
 			"method":  body.Method,
 			"total":   len(body.Documents),
@@ -168,165 +187,108 @@ var (
 	errBadParams = errors.New("bulk_edit: bad parameters")
 )
 
-// applyBulkEdit dispatches on method and runs a single WriteTx. Adds
-// a new method → one case here + one row in the docs. Params are
-// pulled from the request map with type assertions; missing/wrong
-// types return errBadParams with a targeted message.
-func (s *Server) applyBulkEdit(r *http.Request, method string, params map[string]any, ids []int64) error {
+// applyBulkEdit mutates only the IDs authorized by the caller's writer transaction.
+func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, method string, params map[string]any, ids []int64) error {
 	if len(ids) == 0 {
-		// Every id was ACL-refused; commit is a no-op.
 		return nil
 	}
 	now := time.Now().Unix()
 	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
-	args := make([]any, 0, len(ids)+4)
-
+	args := make([]any, 0, len(ids)+2)
 	switch method {
-	case "set_correspondent":
-		v, err := paramInt64(params, "correspondent_id")
+	case "set_correspondent", "set_document_type", "set_storage_path", "set_jd_category":
+		var column, table string
+		switch method {
+		case "set_correspondent":
+			column, table = "correspondent_id", "correspondents"
+		case "set_document_type":
+			column, table = "document_type_id", "document_types"
+		case "set_storage_path":
+			column, table = "storage_path_id", "storage_paths"
+		case "set_jd_category":
+			column, table = "jd_category_id", "jd_categories"
+		}
+		value, err := paramInt64(params, column)
 		if err != nil {
 			return err
 		}
-		args = append(args, v, now)
+		var target any
+		if value != 0 {
+			var exists bool
+			if err := tx.QueryRowContext(r.Context(), "SELECT EXISTS (SELECT 1 FROM "+table+" WHERE id=? AND system_id=?)", value, systemID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("%w: %s is unavailable in this filing system", errBadParams, column)
+			}
+			target = value
+		} else if method == "set_jd_category" {
+			return fmt.Errorf("%w: a filing category is required", errBadParams)
+		}
+		args = append(args, target, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET correspondent_id = ?, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
-	case "set_document_type":
-		v, err := paramInt64(params, "document_type_id")
-		if err != nil {
-			return err
-		}
-		args = append(args, v, now)
-		for _, id := range ids {
-			args = append(args, id)
-		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET document_type_id = ?, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
-	case "set_storage_path":
-		v, err := paramInt64(params, "storage_path_id")
-		if err != nil {
-			return err
-		}
-		args = append(args, v, now)
-		for _, id := range ids {
-			args = append(args, id)
-		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET storage_path_id = ?, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
-	case "set_jd_category":
-		v, err := paramInt64(params, "jd_category_id")
-		if err != nil {
-			return err
-		}
-		args = append(args, v, now)
-		for _, id := range ids {
-			args = append(args, id)
-		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET jd_category_id = ?, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
+		_, err = tx.ExecContext(r.Context(), "UPDATE documents SET "+column+"=?, updated_at=? WHERE id IN ("+placeholders+")", args...)
+		return err
 	case "set_sensitivity":
-		v, ok := params["sensitivity"].(string)
-		if !ok {
-			return fmt.Errorf("%w: sensitivity must be a string", errBadParams)
+		value, ok := params["sensitivity"].(string)
+		if !ok || !SensitivityLevels[value] {
+			return fmt.Errorf("%w: sensitivity must be one of the allowed levels", errBadParams)
 		}
-		if !SensitivityLevels[v] {
-			return fmt.Errorf("%w: sensitivity %q not one of the allowed levels", errBadParams, v)
+		var target any
+		if value != "" {
+			target = value
 		}
-		var val any
-		if v == "" {
-			val = sql.NullString{}
-		} else {
-			val = v
-		}
-		args = append(args, val, now)
+		args = append(args, target, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET sensitivity = ?, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
-	case "add_tag":
-		v, err := paramInt64(params, "tag_id")
+		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET sensitivity=?, updated_at=? WHERE id IN ("+placeholders+")", args...)
+		return err
+	case "add_tag", "remove_tag":
+		value, err := paramInt64(params, "tag_id")
 		if err != nil {
 			return err
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRowContext(r.Context(), "SELECT EXISTS (SELECT 1 FROM tags WHERE id=? AND system_id=?)", value, systemID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: tag is unavailable in this filing system", errBadParams)
+		}
+		if method == "add_tag" {
 			for _, id := range ids {
-				if _, err := tx.ExecContext(r.Context(),
-					`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
-					 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
-					id, v); err != nil {
+				if _, err := tx.ExecContext(r.Context(), `INSERT INTO document_tags(document_id,tag_id) VALUES (?,?)
+					ON CONFLICT(document_id,tag_id) DO UPDATE SET classifier_owned=0`, id, value); err != nil {
 					return err
 				}
 			}
 			return nil
-		})
-	case "remove_tag":
-		v, err := paramInt64(params, "tag_id")
-		if err != nil {
-			return err
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			args := []any{v}
-			for _, id := range ids {
-				args = append(args, id)
-			}
-			_, err := tx.ExecContext(r.Context(),
-				"DELETE FROM document_tags WHERE tag_id = ? AND document_id IN ("+placeholders+")",
-				args...)
-			return err
-		})
+		args = append(args, value)
+		for _, id := range ids {
+			args = append(args, id)
+		}
+		_, err = tx.ExecContext(r.Context(), "DELETE FROM document_tags WHERE tag_id=? AND document_id IN ("+placeholders+")", args...)
+		return err
 	case "trash", "delete":
 		args = append(args, now, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET trashed_at = ?, updated_at = ? WHERE id IN ("+placeholders+") AND trashed_at IS NULL",
-				args...)
-			return err
-		})
+		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=?, updated_at=? WHERE id IN ("+placeholders+") AND trashed_at IS NULL", args...)
+		return err
 	case "restore":
 		args = append(args, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		return s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(r.Context(),
-				"UPDATE documents SET trashed_at = NULL, updated_at = ? WHERE id IN ("+placeholders+")",
-				args...)
-			return err
-		})
+		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=NULL, updated_at=? WHERE id IN ("+placeholders+")", args...)
+		return err
 	case "rescan_enqueue":
-		// Re-run the content-extraction pipeline on the selected docs.
-		// Shares the outbox path with the CLI (`suchi rescan`) and the
-		// approvals-engine handler — one enqueue path, one place to
-		// evolve the job payload. Filter pins to the authorized id list;
-		// trashed_at IS NULL is applied inside Select so trashed picks
-		// silently drop.
-		_, err := rescan.Enqueue(r.Context(), s.DB, rescan.Options{IDs: ids})
+		_, err := rescan.EnqueueInTx(r.Context(), tx, rescan.Options{SystemID: systemID, IDs: ids})
 		return err
 	}
 	return errBadMethod

@@ -38,6 +38,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -78,10 +79,14 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM share_links WHERE created_by = ?",
-		p.UserID).Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM share_links WHERE created_by = ? AND system_id = ?",
+		p.UserID, systemID).Scan(&total); err != nil {
 		s.serverErr(w, "share_links.count", err)
 		return
 	}
@@ -91,10 +96,10 @@ func (s *Server) ListShareLinks(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(expires_at, 0), (password_hash IS NOT NULL),
 		       view_count, created_at, COALESCE(revoked_at, 0)
 		FROM share_links
-		WHERE created_by = ?
+		WHERE created_by = ? AND system_id = ?
 		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?
-	`, p.UserID, pp.PageSize, pp.Offset())
+	`, p.UserID, systemID, pp.PageSize, pp.Offset())
 	if err != nil {
 		s.serverErr(w, "share_links.list", err)
 		return
@@ -141,6 +146,10 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var in ShareLinkCreate
 	if err := decodeJSON(r, &in); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -166,7 +175,7 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// Owner check: every doc must be one the caller can actually
 	// share. Admins can share any live doc.
-	if err := s.assertShareable(r, p, in.DocIDs); err != nil {
+	if err := s.assertShareable(r, s.DB.Read, p, systemID, in.DocIDs); err != nil {
 		if errors.Is(err, errNotFound) {
 			s.writeError(w, http.StatusNotFound, "not_found",
 				"one or more doc_ids don't exist or aren't yours")
@@ -205,12 +214,28 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	var id int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
+			if err != nil {
+				return err
+			}
+			if !caps.Has(authz.CapShareLinks) {
+				return errSystemUnavailable
+			}
+		}
+		if err := s.assertShareable(r, tx, current, systemID, in.DocIDs); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO share_links(token, doc_ids_json, created_by,
+			INSERT INTO share_links(system_id, token, doc_ids_json, created_by,
 			                        expires_at, password_hash, label,
 			                        view_count, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-		`, token, string(docIDsJSON), p.UserID,
+			VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+		`, systemID, token, string(docIDsJSON), p.UserID,
 			expiresAt, pwHash, in.Label, now)
 		if err != nil {
 			return err
@@ -219,11 +244,16 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, errNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "one or more documents are unavailable")
+			return
+		}
 		s.serverErr(w, "share_links.create", err)
 		return
 	}
 	// Audit — creation is worth remembering; every view isn't.
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   systemID,
 		Actor:      p,
 		Action:     "share_link.create",
 		ObjectKind: "share_link",
@@ -252,7 +282,14 @@ func (s *Server) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, p, "share_links", id)
+	if !ok {
+		return
+	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(r.Context(), `
 			UPDATE share_links SET revoked_at = ?
 			WHERE id = ? AND created_by = ? AND revoked_at IS NULL
@@ -290,6 +327,7 @@ func (s *Server) RevokeShareLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   systemID,
 		Actor:      p,
 		Action:     "share_link.revoke",
 		ObjectKind: "share_link",
@@ -379,7 +417,7 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "bad_password", "wrong password")
 		return
 	}
-	docs, err := s.loadShareDocs(r, link.docIDs)
+	docs, err := s.loadShareDocs(r, link)
 	if err != nil {
 		s.serverErr(w, "share_links.load_docs", err)
 		return
@@ -692,8 +730,8 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 	err = s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT original_blob, decrypted_blob, decrypted_size,
 		       title, COALESCE(mime_type, ''), original_size
-		FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, docID).Scan(&origBlob, &decBlob, &decSize, &title, &mime, &origSize)
+		FROM documents WHERE id = ? AND trashed_at IS NULL AND system_id = ? AND (? OR owner_id = ?)
+	`, docID, link.systemID, link.creatorAdmin, link.createdBy).Scan(&origBlob, &decBlob, &decSize, &title, &mime, &origSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "no such document")
 		return
@@ -745,13 +783,16 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 // ---------- internals ----------
 
 type shareLinkLoaded struct {
-	id        int64
-	label     string
-	sharedBy  string
-	docIDs    []int64
-	pwHash    sql.NullString
-	expiresAt sql.NullInt64
-	revokedAt sql.NullInt64
+	id           int64
+	systemID     int64
+	createdBy    int64
+	creatorAdmin bool
+	label        string
+	sharedBy     string
+	docIDs       []int64
+	pwHash       sql.NullString
+	expiresAt    sql.NullInt64
+	revokedAt    sql.NullInt64
 }
 
 var errShareNeedsPassword = errors.New("share_needs_password")
@@ -766,12 +807,14 @@ func (s *Server) loadShareByToken(r *http.Request, token string) (*shareLinkLoad
 	var docIDsJSON string
 	err := s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT sl.id, sl.label, COALESCE(NULLIF(TRIM(u.display_name), ''), ''), sl.doc_ids_json,
-		       sl.password_hash, sl.expires_at, sl.revoked_at
+		       sl.password_hash, sl.expires_at, sl.revoked_at, sl.system_id, sl.created_by, u.role='admin'
 		FROM share_links sl
 		JOIN users u ON u.id = sl.created_by
-		WHERE sl.token = ?
+		WHERE sl.token = ? AND u.disabled = 0 AND (u.role='admin' OR EXISTS (
+			SELECT 1 FROM jd_system_members m WHERE m.system_id=sl.system_id AND m.user_id=u.id
+		))
 	`, token).Scan(&l.id, &l.label, &l.sharedBy, &docIDsJSON,
-		&l.pwHash, &l.expiresAt, &l.revokedAt)
+		&l.pwHash, &l.expiresAt, &l.revokedAt, &l.systemID, &l.createdBy, &l.creatorAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errNotFound
 	}
@@ -781,7 +824,7 @@ func (s *Server) loadShareByToken(r *http.Request, token string) (*shareLinkLoad
 	if l.revokedAt.Valid && l.revokedAt.Int64 > 0 {
 		return nil, errNotFound
 	}
-	if l.expiresAt.Valid && l.expiresAt.Int64 < time.Now().Unix() {
+	if l.expiresAt.Valid && l.expiresAt.Int64 <= time.Now().Unix() {
 		return nil, errNotFound
 	}
 	if err := json.Unmarshal([]byte(docIDsJSON), &l.docIDs); err != nil {
@@ -859,7 +902,7 @@ func validShareUnlockToken(l *shareLinkLoaded, token, value string, now int64) b
 		return false
 	}
 	expiresAt, err := strconv.ParseInt(expires, 10, 64)
-	if err != nil || expiresAt < now {
+	if err != nil || expiresAt <= now {
 		return false
 	}
 	got, err := hex.DecodeString(signature)
@@ -878,7 +921,8 @@ type shareDocMeta struct {
 	Size  int64
 }
 
-func (s *Server) loadShareDocs(r *http.Request, ids []int64) ([]shareDocMeta, error) {
+func (s *Server) loadShareDocs(r *http.Request, link *shareLinkLoaded) ([]shareDocMeta, error) {
+	ids := link.docIDs
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -888,10 +932,11 @@ func (s *Server) loadShareDocs(r *http.Request, ids []int64) ([]shareDocMeta, er
 	for i, id := range ids {
 		args[i] = id
 	}
+	args = append(args, link.systemID, link.creatorAdmin, link.createdBy)
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, title, COALESCE(mime_type, ''), original_size
 		FROM documents
-		WHERE id IN (`+placeholders+`) AND trashed_at IS NULL
+		WHERE id IN (`+placeholders+`) AND trashed_at IS NULL AND system_id=? AND (? OR owner_id=?)
 		ORDER BY id
 	`, args...)
 	if err != nil {
@@ -919,8 +964,7 @@ func (s *Server) bumpShareViewCount(r *http.Request, id int64) error {
 
 // assertShareable returns errNotFound if any of the doc_ids don't
 // exist, are trashed, or don't belong to the caller (unless admin).
-func (s *Server) assertShareable(r *http.Request, p *pluginapiPrincipalStub, ids []int64) error {
-	// Small stub — p is the auth.FromContext principal.
+func (s *Server) assertShareable(r *http.Request, q systems.Queryer, p *pluginapi.Principal, systemID int64, ids []int64) error {
 	if len(ids) == 0 {
 		return errNotFound
 	}
@@ -930,15 +974,16 @@ func (s *Server) assertShareable(r *http.Request, p *pluginapiPrincipalStub, ids
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	q := `SELECT COUNT(*) FROM documents
+	query := `SELECT COUNT(*) FROM documents
 	      WHERE id IN (` + placeholders + `)
-	        AND trashed_at IS NULL`
+	        AND trashed_at IS NULL AND system_id=?`
+	args = append(args, systemID)
 	if p.Role != "admin" {
-		q += " AND owner_id = ?"
+		query += " AND owner_id = ?"
 		args = append(args, p.UserID)
 	}
 	var n int
-	if err := s.DB.Read.QueryRowContext(r.Context(), q, args...).Scan(&n); err != nil {
+	if err := q.QueryRowContext(r.Context(), query, args...).Scan(&n); err != nil {
 		return err
 	}
 	if n != len(ids) {
@@ -946,10 +991,6 @@ func (s *Server) assertShareable(r *http.Request, p *pluginapiPrincipalStub, ids
 	}
 	return nil
 }
-
-// pluginapiPrincipalStub is a type alias so assertShareable's signature
-// doesn't need to spell the full pluginapi.Principal repeatedly.
-type pluginapiPrincipalStub = pluginapi.Principal
 
 // newShareToken returns 32 random bytes hex-encoded (64 chars).
 func newShareToken() (string, error) {

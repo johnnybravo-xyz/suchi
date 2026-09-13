@@ -90,6 +90,11 @@ documents but cannot read another visitor's uploads or mutate shared
 configuration and taxonomy. The seeded corpus remains read-only and visible to
 every visitor.
 
+These demo exceptions apply only to the unnamed original system 1. Demo seeding
+uses that internal default explicitly; anonymous and scratch principals cannot
+enter a named system, even if a document grant exists. Do not introduce prefixed
+taxonomies into a public showcase to broaden demo access.
+
 Calendar's read exception is limited to accepted, curated `demo-corpus` date
 facts. Source-document visibility, trash exclusion, and token read scopes still
 apply before counts and pagination. Pending/rejected facts, date extraction and

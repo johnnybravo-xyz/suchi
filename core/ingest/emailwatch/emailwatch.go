@@ -47,6 +47,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/pipeconfig"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
@@ -245,6 +246,13 @@ func New(ctx context.Context, account *emailaccounts.Account, cfg Config, d *db.
 		log.Warn("emailwatch.disabled",
 			"reason", "owner not found or query failed",
 			"account_id", account.ID, "owner_id", account.OwnerID, "err", err.Error())
+		return nil, nil
+	}
+	allowed, err := systems.CanEnter(ctx, d.Read, account.OwnerID, account.SystemID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, nil
 	}
 
@@ -464,7 +472,8 @@ func (w *Watcher) fetchBatch(ctx context.Context, c *imapclient.Client, uids []u
 				w.log.Warn("emailwatch.message_skipped",
 					"uid", m.Uid, "reason", "raw_message_too_large", "err", err.Error())
 				audit.Log(ctx, w.db, w.log, audit.Event{
-					Action: "document.ingest.skipped", ObjectKind: "ingest",
+					SystemID: w.account.SystemID,
+					Action:   "document.ingest.skipped", ObjectKind: "ingest",
 					After: map[string]any{
 						"reason":        "oversized_email",
 						"account_id":    w.account.ID,
@@ -769,7 +778,10 @@ func (w *Watcher) connect(ctx context.Context) (*imapclient.Client, error) {
 				_ = c.Logout()
 				return nil, fmt.Errorf("emailwatch: seal rotated cache: %w", sealErr)
 			}
-			if _, patchErr := emailaccounts.Patch(ctx, w.db, w.account.ID, emailaccounts.AccountPatch{SealedSecret: &sealed}); patchErr != nil {
+			if patchErr := w.db.WriteTx(ctx, func(tx *sql.Tx) error {
+				_, err := emailaccounts.Patch(ctx, tx, w.account.ID, emailaccounts.AccountPatch{SealedSecret: &sealed}, nil)
+				return err
+			}); patchErr != nil {
 				// Persistence failure isn't fatal for this poll cycle
 				// — MSAL will re-rotate on the next AcquireTokenSilent
 				// — but log it.
@@ -846,40 +858,9 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		return outcomeIgnored, nil
 	}
 
-	// Dedup: message-ID + owner scope. Same ID under a different
-	// owner is fine (household member forwarded it, etc.).
-	if msgID != "" {
-		var existing int64
-		err := w.db.Read.QueryRowContext(ctx, `
-			SELECT id FROM documents
-			WHERE owner_id = ? AND email_message_id = ?
-			LIMIT 1
-		`, w.account.OwnerID, msgID).Scan(&existing)
-		if err == nil {
-			w.log.Debug("emailwatch.dedup", "msg_id", msgID, "existing", existing)
-			return outcomeDeduplicated, w.recordMailboxSource(ctx, existing)
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return outcomeSkipped, err
-		}
-	}
-
 	ref, err := w.cas.Put(bytes.NewReader(raw))
 	if err != nil {
 		return outcomeSkipped, fmt.Errorf("cas put: %w", err)
-	}
-
-	// Owner-scoped alive-blob dedup — the same .eml bytes might already
-	// be in the archive from a prior fs-watch drop. Skip if so.
-	var existingID int64
-	err = w.db.Read.QueryRowContext(ctx, `
-		SELECT id FROM documents
-		WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL
-	`, w.account.OwnerID, ref.SHA256).Scan(&existingID)
-	if err == nil {
-		w.log.Debug("emailwatch.blob_dedup", "existing", existingID, "sha", ref.SHA256)
-		return outcomeDeduplicated, w.recordMailboxSource(ctx, existingID)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return outcomeSkipped, err
 	}
 
 	title := ""
@@ -896,7 +877,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		title = "email"
 	}
 
-	inbox, err := jd.InboxCategoryID(ctx, w.db)
+	inbox, err := jd.InboxCategoryID(ctx, w.db, w.account.SystemID)
 	if err != nil {
 		return outcomeSkipped, fmt.Errorf("inbox category: %w", err)
 	}
@@ -907,15 +888,45 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 		return outcomeSkipped, fmt.Errorf("marshal post-ingest payload: %w", err)
 	}
 
+	outcome := outcomeImported
 	if err := w.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		allowed, err := systems.CanEnter(ctx, tx, w.account.OwnerID, w.account.SystemID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errors.New("emailwatch: owner cannot enter system")
+		}
+		var accountOK bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id = ? AND system_id = ? AND owner_id = ? AND enabled = 1)`,
+			w.account.ID, w.account.SystemID, w.account.OwnerID).Scan(&accountOK); err != nil {
+			return err
+		}
+		if !accountOK {
+			return errors.New("emailwatch: account unavailable")
+		}
+		var existingID int64
+		err = tx.QueryRowContext(ctx, `
+			SELECT id FROM documents WHERE system_id = ? AND owner_id = ?
+			  AND ((? != '' AND email_message_id = ?) OR (original_blob = ? AND trashed_at IS NULL))
+			ORDER BY id LIMIT 1
+		`, w.account.SystemID, w.account.OwnerID, msgID, msgID, ref.SHA256).Scan(&existingID)
+		if err == nil {
+			outcome = outcomeDeduplicated
+			return ingestmeta.RecordMailboxSource(ctx, tx, existingID, w.account.ID,
+				w.account.Name, w.mailboxSourceDetail(), time.Now().Unix())
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
 				email_message_id
-			) VALUES (?, ?, ?, ?, 'message/rfc822', ?, ?, ?, ?, ?)
-		`, w.account.OwnerID, ref.SHA256, ref.Size, title,
+			) VALUES (?, ?, ?, ?, ?, 'message/rfc822', ?, ?, ?, ?, ?)
+		`, w.account.SystemID, w.account.OwnerID, ref.SHA256, ref.Size, title,
 			inbox, now, created, now,
 			nullOrString(msgID))
 		if err != nil {
@@ -929,7 +940,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 			w.account.Name, w.mailboxSourceDetail(), now); err != nil {
 			return err
 		}
-		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
+		return jobs.Enqueue(ctx, tx, postingest.Kind, docID, w.account.SystemID, string(payload))
 	}); err != nil {
 		return outcomeSkipped, fmt.Errorf("db write: %w", err)
 	}
@@ -938,7 +949,7 @@ func (w *Watcher) importOne(ctx context.Context, raw []byte, msgID string, m *im
 	if w.disp != nil {
 		w.disp.Nudge()
 	}
-	return outcomeImported, nil
+	return outcome, nil
 }
 
 func (w *Watcher) mailboxSourceDetail() string {
@@ -946,13 +957,6 @@ func (w *Watcher) mailboxSourceDetail() string {
 		return w.account.Folder
 	}
 	return w.account.Username + " / " + w.account.Folder
-}
-
-func (w *Watcher) recordMailboxSource(ctx context.Context, docID int64) error {
-	return w.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return ingestmeta.RecordMailboxSource(ctx, tx, docID, w.account.ID,
-			w.account.Name, w.mailboxSourceDetail(), time.Now().Unix())
-	})
 }
 
 // nullOrString returns nil when s is empty (so INSERT stores NULL

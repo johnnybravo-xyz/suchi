@@ -28,14 +28,15 @@ import (
 func newEventsServer(t *testing.T) *Server {
 	t.Helper()
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	return &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 }
 
 func seedAuditEvent(t *testing.T, d *db.DB, ts int64, action, objKind string, objID int64) int64 {
 	t.Helper()
 	res, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO audit_events(ts, actor_kind, action, object_kind, object_id)
-		VALUES (?, 'system', ?, ?, ?)
+		INSERT INTO audit_events(system_id, ts, actor_kind, action, object_kind, object_id)
+		VALUES (1, ?, 'system', ?, ?, ?)
 	`, ts, action, objKind, objID)
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +51,8 @@ func seedAuditEvent(t *testing.T, d *db.DB, ts int64, action, objKind string, ob
 func seedUserAuditEvent(t *testing.T, d *db.DB, ts, userID int64, action, objKind string, objID int64) int64 {
 	t.Helper()
 	res, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO audit_events(ts, actor_kind, actor_id, action, object_kind, object_id)
-		VALUES (?, 'user', ?, ?, ?, ?)
+		INSERT INTO audit_events(system_id, ts, actor_kind, actor_id, action, object_kind, object_id)
+		VALUES (1, ?, 'user', ?, ?, ?, ?)
 	`, ts, userID, action, objKind, objID)
 	if err != nil {
 		t.Fatal(err)
@@ -71,20 +72,20 @@ func seedEventsDoc(t *testing.T, d *db.DB, ownerID int64, title, sha string) int
 	seedUser(t, d, ownerID)
 	ctx := context.Background()
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'Test', 0)
+		INSERT OR IGNORE INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'Test', 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1)
+		INSERT OR IGNORE INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
-		VALUES (?, ?, 0, ?, 1, 0, 0)
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (1, ?, ?, 0, ?, 1, 0, 0)
 	`, ownerID, sha, title)
 	if err != nil {
 		t.Fatal(err)

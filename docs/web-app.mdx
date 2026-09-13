@@ -6,6 +6,27 @@ description: "Navigation, setup, settings, saved views, permissions, and documen
 The web app opens on the working archive, not a product landing page. The
 sidebar, top bar, and settings labels below match the v0.1 interface exactly.
 
+## Current filing system
+
+Before the [first prefixed taxonomy import](/jd), the original archive is hidden:
+there is no system selector or enable toggle. First import can name this archive
+or preserve it under another code and create the incoming system separately.
+Preview explains the destination, retained documents and initial access; Apply
+introduces the layer atomically and selects the import result.
+
+After introduction the header identifies the current code/name. One accessible
+system gets a label; more than one gets a switcher. An initial unqualified collection
+route explicitly chooses the accessible original, otherwise the first accessible
+code, before loading data. An explicitly unavailable system never falls back.
+With no memberships, Suchi asks an administrator to grant access and offers account/
+sign-out controls rather than showing another archive.
+
+Switching clears documents, tree, counts, selections, revealed content and research;
+late responses cannot refill the new screen. Upload batches keep their starting
+destination even if navigation continues, and their receipts do not populate the
+new system. Switching invalidates import previews, share/pairing dialogs and pending
+OAuth state. System selection is a browser route context, not server authority.
+
 ## Main navigation
 
 Documents and Inbox show an open-padlock icon for password-unlocked documents,
@@ -80,7 +101,7 @@ as a healthy pipeline.
 
 **Recently added** shows the six newest visible documents. **Views** shows up
 to four saved views and their live counts. If shared views exist, at least one
-is included in those four so archive-wide shortcuts are not hidden by a user's
+is included in those four so current-system shared shortcuts are not hidden by a user's
 private views. Its action is **New view**, and its empty state is **No saved
 views yet.** A read failure is shown as an error with **Retry**, not as an empty
 archive.
@@ -91,6 +112,7 @@ Document-list links use the following hash parameters:
 
 | Filter | Browser parameter | Example |
 | --- | --- | --- |
+| Filing system | `system` | `#/documents?system=S01` |
 | Text | `q` | `#/documents?q=paris` |
 | Filing category database ID | `jd` | `#/documents?jd=6` |
 | Tag | `tags__id__in` | `#/documents?tags__id__in=4` |
@@ -102,6 +124,11 @@ Document-list links use the following hash parameters:
 | Added on or after (Unix seconds) | `created_at__gte` | `#/documents?created_at__gte=1788220800` |
 | Added on or before (Unix seconds, inclusive) | `created_at__lte` | `#/documents?created_at__lte=1790812799` |
 
+After introduction, combine `system=CODE` with collection filters and scoped
+document links. Reload/back/forward retain it. An old numeric document link without
+a system resolves the actual authorized object first, then updates route/header.
+Whole full-address inputs such as `S01.13.147` use the address resolver; a stale
+address is not a historical alias or broad text-search fallback.
 `jd_category_id` is the API and saved-view field. It is translated to `jd`
 when the app creates a browser link and is not a supported browser parameter.
 Documents and Inbox keep the current page in the URL. Opening a document and
@@ -142,8 +169,8 @@ their document links under **Affected documents**.
 ## Trash
 
 Select a document in Trash to open its normal document URL in read-only mode.
-Owners and administrators can preview and download the file, read its metadata
-and extracted text, restore it within 30 days, or confirm permanent deletion.
+Within the document's enterable system, owners and administrators can preview and
+download the file, read metadata/text, restore within 30 days or confirm deletion.
 Sensitive previews and extracted text still require **Reveal**. Public share
 links cannot serve trashed documents.
 
@@ -176,7 +203,7 @@ normalized rich query; unchanged older flat filters are preserved when editing.
 See [Query language: Saved Views](/query-language#saved-views).
 
 Members with **Share saved views**, and all administrators, also see **Share
-this view**. A shared view appears in every user's Views list and dashboard.
+this view**. A shared view appears for users of its system, with document ACLs still applied.
 Only its owner can edit or delete it. Removing **Share saved views** from an owner
 makes their shared views private without deleting them.
 
@@ -216,6 +243,9 @@ The list refreshes while the pairing prompt is open, when
 it closes, and when you return to the browser window. **Revoke** immediately
 disconnects that app; signing out in the app also removes its active entry.
 Generating, cancelling, or attempting an expired code does not add a device.
+Pairing captures the current system; token rows identify that binding after
+introduction. A device needs a new pairing to change systems. Removing membership
+revokes its system credentials and shares; adding it back does not revive them.
 
 Each completed pairing creates its own entry, even if device names match.
 Credentials created before this update remain under **API tokens** because
@@ -241,10 +271,20 @@ uses these exact groups and sections:
 **Taxonomy**. **Automations** hands off to the main Automations screen so the
 rule editor has one home.
 
+After introduction the **Filing system · CODE** panel manages the current system's
+nonblank display name (at most 80 characters) and direct membership. Codes are read-only and permanent.
+Admins have implicit access, displayed read-only; the membership editor preserves
+the complete explicit set, including people outside the current directory page.
+New systems initially admit admins only. Membership and document ACLs are separate.
+
+Filing tree, metadata, automations, views, mailbox/password records and membership
+use the current system. Users/groups, global capabilities, account profile, server,
+OCR/LLM and backup configuration remain instance-wide even when shown nearby.
+
 In **Classification**, **Use similar documents for automatic filing and
 suggestions** controls local archive matching.
 
-Administrators manage every mailbox under **Email intake** and choose its
+Administrators manage the current system's mailboxes under **Email intake** and choose each
 owner. A member with **Manage mailboxes** manages only their own rows under
 **My account > Mailboxes**. This separation is deliberate; there is no second
 administrator mailbox editor under My account.
@@ -268,6 +308,19 @@ The setup steps are:
 Choosing a filing tree is the only required step. **Finish setup** remains
 disabled until that choice is made; every other step is optional and remains
 available later under **Archive configuration**.
+
+**Filing tree** offers **Import a file** beside built-in preset cards, using the
+same import component as Settings. Choose HuML/TOML or paste content, select
+whether to include starter rules, and preview before Apply. The preview separates
+your named tree from Suchi-generated System/49 and explains the 00.00 filing
+index, actual additions, preserved/disabled rules and collision skip/remap choices.
+Blank files need explicit confirmation. A stale preview keeps input and asks for
+another preview; success refreshes setup state and the filing sidebar.
+
+Later imports and preset applications merge rather than reset existing filing.
+Validation proves supported structure, not domain correctness or trustworthy
+automation. Settings offers seeded and explicit tree-only exports; neither is
+a complete backup. See [Filing trees](/jd).
 
 For the first 48 hours after the first administrator is created, an incomplete
 archive shows **Choose your filing tree** near the top of the sidebar and on

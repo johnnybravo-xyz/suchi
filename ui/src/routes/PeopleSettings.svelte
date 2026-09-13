@@ -1,4 +1,5 @@
 <script>
+  import { captureScope } from '../lib/systems.svelte.js'
   import { adminCreateUser, adminListUsers, adminPatchUser,
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
@@ -8,7 +9,7 @@
   import Icon from '../lib/Icon.svelte'
   import { USER_CAPABILITIES } from '../lib/capabilities.js'
 
-  let { notify } = $props()
+  let { notify, onTaxonomyChanged } = $props()
   let tab = $state('users')
 
   // ---------- users ----------
@@ -180,16 +181,25 @@
   ]
   let taxon = $state('tags')
   let taxImpOpen = $state(false)
-  async function doExport(format) {
+  let taxImportBusy = $state(false)
+  let exportBusy = $state(false)
+  let exportFormat = $state('huml')
+  async function importedTaxonomy() {
+    await Promise.all([loadTaxa(), onTaxonomyChanged?.()])
+  }
+  async function doExport(skipSeeds) {
+    if (exportBusy || taxImportBusy) return
+    exportBusy = true
     try {
-      const text = await exportTaxonomy(format)
+      const text = await exportTaxonomy(exportFormat, skipSeeds)
       const a = document.createElement('a')
       a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
-      a.download = `taxonomy.${format}`
+      a.download = `${captureScope().code ? `${captureScope().code}.taxonomy` : `archive${skipSeeds ? '-tree' : ''}`}.${exportFormat}`
       a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
-      notify?.(`Exported taxonomy.${format}`)
+      notify?.(`Exported ${a.download}`)
     } catch (ex) { notify?.(ex.message || 'Export failed') }
+    finally { exportBusy = false }
   }
   let taxRows = $state([])
   let taxRowsLoaded = $state(false)
@@ -254,10 +264,10 @@
 </script>
 
 <span class="seg people-tabs">
-  <button class:on={tab === 'users'} onclick={() => (tab = 'users')}>Users</button>
-  <button class:on={tab === 'groups'} onclick={() => (tab = 'groups')}>Groups</button>
-  <button class:on={tab === 'fields'} onclick={() => (tab = 'fields')}>Custom fields</button>
-  <button class:on={tab === 'taxonomy'} onclick={() => (tab = 'taxonomy')}>Taxonomy</button>
+  <button class:on={tab === 'users'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'users')}>Users</button>
+  <button class:on={tab === 'groups'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'groups')}>Groups</button>
+  <button class:on={tab === 'fields'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'fields')}>Custom fields</button>
+  <button class:on={tab === 'taxonomy'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'taxonomy')}>Taxonomy</button>
 </span>
 
 {#if tab === 'users'}
@@ -421,17 +431,25 @@
   <div class="content-narrow" style="margin:0">
     <div class="toolbar">
       <span class="seg">
-        {#each TAXA as t}<button class:on={taxon === t.kind} onclick={() => (taxon = t.kind)}>{t.label}</button>{/each}
+        {#each TAXA as t}<button class:on={taxon === t.kind} disabled={taxImportBusy || exportBusy} onclick={() => (taxon = t.kind)}>{t.label}</button>{/each}
       </span>
       <span class="spacer"></span>
-      <button class="btn sm" onclick={() => (taxImpOpen = true)}><Icon name="upload" size={13} /> Import</button>
-      <button class="btn sm" onclick={() => doExport('huml')} title="suchi-taxonomy/v1, HuML">Export</button>
-      <select class="input" style="max-width:86px;padding:5px 8px;font-size:.76rem"
-              onchange={(e) => { if (e.target.value) { doExport(e.target.value); e.target.value = '' } }}
-              aria-label="Export as">
-        <option value="">as…</option><option value="huml">huml</option><option value="toml">toml</option>
-      </select>
+      <button class="btn sm" disabled={exportBusy || taxImportBusy} onclick={() => { taxImpOpen = !taxImpOpen }} aria-expanded={taxImpOpen}><Icon name="upload" size={13} /> {taxImpOpen ? 'Close import' : 'Import a file'}</button>
+      <label>Export serialization
+        <select class="input" bind:value={exportFormat} disabled={exportBusy || taxImportBusy}>
+          <option value="huml">HuML</option><option value="toml">TOML</option>
+        </select>
+      </label>
+      <button class="btn sm" disabled={exportBusy || taxImportBusy} onclick={() => doExport(false)}>Export with starter rules</button>
+      <button class="btn sm" disabled={exportBusy || taxImportBusy} onclick={() => doExport(true)}>Export tree only</button>
     </div>
+    <p class="sub">Exports are current filing-tree snapshots, not complete archive backups. The starter-rule export includes supported preset-owned rules only. User-owned automations and forks, permissions, and review history require a full backup. Tree-only export explicitly omits keywords and starter rules; it is not a fallback for a failed starter-rule export.</p>
+    {#if taxImpOpen}
+      <fieldset disabled={exportBusy} style="border:0;padding:0;margin:0;min-width:0">
+      <TaxonomyImport {notify} bind:busy={taxImportBusy} onApplied={importedTaxonomy} />
+      </fieldset>
+    {/if}
+    <fieldset disabled={taxImportBusy || exportBusy} style="border:0;padding:0;margin:0;min-width:0">
     <form class="toolbar" onsubmit={addTaxon}>
       <input class="input" style="flex:1;max-width:300px" placeholder={`New ${TAXA.find(t => t.kind === taxon).label.toLowerCase().replace(/s$/, '')} name`} bind:value={ntName} />
       <button class="btn primary sm"><Icon name="plus" size={13} /> Create</button>
@@ -455,6 +473,7 @@
       {/each}
     </div>
     {/if}
+    </fieldset>
   </div>
 
 {/if}
@@ -474,22 +493,3 @@
   }
 </style>
 
-<svelte:window onkeydown={(e) => { if (taxImpOpen && e.key === 'Escape') taxImpOpen = false }} />
-
-{#if taxImpOpen}
-  <div class="modal-veil"
-       onclick={() => (taxImpOpen = false)}
-       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); taxImpOpen = false } }}
-       role="button" tabindex="-1" aria-label="Close import dialog">
-    <div class="modal" style="width:min(640px,94vw)"
-         onclick={(e) => e.stopPropagation()}
-         onkeydown={(e) => e.stopPropagation()}
-         role="dialog" aria-modal="true" aria-label="Import taxonomy" tabindex="-1">
-      <div class="modal-head">
-        <h3>Import a taxonomy</h3>
-        <button class="btn sm" onclick={() => (taxImpOpen = false)} title="Close" aria-label="Close taxonomy import"><Icon name="x" size={13} /></button>
-      </div>
-      <TaxonomyImport {notify} onApplied={() => { taxImpOpen = false; loadTaxa() }} />
-    </div>
-  </div>
-{/if}

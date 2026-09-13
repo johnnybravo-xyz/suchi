@@ -35,7 +35,7 @@ func (t NamedTable) sqlName() (string, error) {
 // UpsertByName returns the id of name, creating the reference row when needed.
 // An existing exact name takes precedence; otherwise a row with the same
 // generated slug is reused without replacing its canonical name or slug.
-func UpsertByName(ctx context.Context, tx *sql.Tx, table NamedTable, name string, now int64) (int64, error) {
+func UpsertByName(ctx context.Context, tx *sql.Tx, systemID int64, table NamedTable, name string, now int64) (int64, error) {
 	tableName, err := table.sqlName()
 	if err != nil {
 		return 0, err
@@ -46,10 +46,10 @@ func UpsertByName(ctx context.Context, tx *sql.Tx, table NamedTable, name string
 	}
 	canonicalSlug := slug.Make(name)
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s(name, slug, created_at, updated_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO %s(system_id, name, slug, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT DO NOTHING
-	`, tableName), name, canonicalSlug, now, now); err != nil {
+	`, tableName), systemID, name, canonicalSlug, now, now); err != nil {
 		return 0, err
 	}
 	var id int64
@@ -57,10 +57,10 @@ func UpsertByName(ctx context.Context, tx *sql.Tx, table NamedTable, name string
 		fmt.Sprintf(`
 			SELECT id
 			FROM %s
-			WHERE name = ? OR slug = ?
+			WHERE system_id = ? AND (name = ? OR slug = ?)
 			ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, id
 			LIMIT 1
-		`, tableName), name, canonicalSlug, name,
+		`, tableName), systemID, name, canonicalSlug, name,
 	).Scan(&id); err != nil {
 		return 0, err
 	}

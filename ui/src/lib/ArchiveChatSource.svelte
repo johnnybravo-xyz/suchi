@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from './systems.svelte.js'
   import { sensitivityLabel, sensDot } from './format.js'
   import Icon from './Icon.svelte'
 
@@ -12,7 +13,7 @@
 </script>
 
 <a class="source-card" class:cited
-   href={`#/doc/${item.source.id}`} onclick={(event) => onOpen?.(event)}
+   href={filingHref(`#/doc/${item.source.id}`)} onclick={(event) => onOpen?.(event)}
    aria-label={`Open source ${item.number}: ${item.source.title || `Document #${item.source.id}`}`}>
   <span class="source-number">[{item.number}]</span>
   <span class="source-copy">

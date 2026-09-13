@@ -2,11 +2,13 @@
   import Icon from './Icon.svelte'
   import LinkQR from './LinkQR.svelte'
   import { copyText } from './clipboard.js'
+  import { captureScope, scopedHash } from './systems.svelte.js'
 
   let { id, onClose } = $props()
   let dialog
   let copied = $state('')
-  const url = $derived(new URL(`/app/#/doc/${id}`, location.origin).href)
+  const scope = captureScope()
+  const url = $derived(new URL(`/app/${scopedHash(`#/doc/${id}`, scope.code)}`, location.origin).href)
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
 
   $effect(() => {

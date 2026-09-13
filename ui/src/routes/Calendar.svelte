@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
   import { listIntelligence, listSavedViews } from '../lib/api.js'
   import { DATE_ROLES, intelligenceRoleLabel, intelligenceDateValue, formatArchiveDate, formatIntelligenceDate, groupCalendarEvents } from '../lib/intelligence.js'
@@ -181,12 +182,12 @@
   {#if allDates}
     <div class="calendar-scope">
       <p>{documentIDs ? `Dates from ${documentCount} selected document${documentCount === 1 ? '' : 's'}` : 'Demo document dates'} · All months and years</p>
-      <a class="btn sm" href={demo ? `#/calendar?month=${isoDate(month).slice(0, 7)}` : '#/calendar'}>Open full calendar</a>
+      <a class="btn sm" href={filingHref(demo ? `#/calendar?month=${isoDate(month).slice(0, 7)}` : '#/calendar')}>Open full calendar</a>
     </div>
   {:else if selectedDay}
     <div class="calendar-scope">
       <p>{formatArchiveDate(selectedDay, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
-      <a class="btn sm" href={calendarHref({ date: '' })}>Back to {monthLabel}</a>
+      <a class="btn sm" href={filingHref(calendarHref({ date: '' }))}>Back to {monthLabel}</a>
     </div>
   {:else}
   <div class="calendar-nav">
@@ -211,16 +212,16 @@
         {#each calendarDays as day (day.iso)}
           {@const dayEvents = eventMap.get(day.iso) || []}
           <div class="day" class:outside={!day.current} class:has-events={dayEvents.length > 0}>
-            <a class="day-number" href={calendarHref({ date: day.iso })} aria-label={`Open agenda for ${formatArchiveDate(day.iso)}`}>{day.date.getDate()}</a>
+            <a class="day-number" href={filingHref(calendarHref({ date: day.iso }))} aria-label={`Open agenda for ${formatArchiveDate(day.iso)}`}>{day.date.getDate()}</a>
             <div class="day-events">
               {#each dayEvents.slice(0, 3) as event (event.id)}
-                <a href={`#/doc/${event.document_id}`} title={`${intelligenceRoleLabel(event.role)} · ${event.document_title}`}>
+                <a href={filingHref(`#/doc/${event.document_id}`)} title={`${intelligenceRoleLabel(event.role)} · ${event.document_title}`}>
                   <span class={`role-dot role-${event.role}`}></span>
                   <span class="day-event-title">{event.document_title || `Document #${event.document_id}`}</span>
                   <small class="date-origin">{dateOriginLabel(event)}</small>
                 </a>
               {/each}
-              {#if dayEvents.length > 3}<a class="day-more" href={calendarHref({ date: day.iso })}>+{dayEvents.length - 3} more</a>{/if}
+              {#if dayEvents.length > 3}<a class="day-more" href={filingHref(calendarHref({ date: day.iso }))}>+{dayEvents.length - 3} more</a>{/if}
             </div>
           </div>
         {/each}
@@ -274,7 +275,7 @@
                   </details>
                   {/if}
                 </div>
-                <a class="agenda-document" href={`#/doc/${event.document_id}`}><b>{event.document_title || `Document #${event.document_id}`}</b><Icon name="chev" size={13} /></a>
+                <a class="agenda-document" href={filingHref(`#/doc/${event.document_id}`)}><b>{event.document_title || `Document #${event.document_id}`}</b><Icon name="chev" size={13} /></a>
                 <span>“{event.evidence_text}”</span>
                 <small>{formatIntelligenceDate(event, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</small>
                 {#if canExportCalendarDate(event)}

@@ -31,9 +31,16 @@ User-visible changes update the `[Unreleased]` section of
 in the same pull request. Write for operators and call out required migration
 steps directly.
 
-A release may add at most one numbered database migration. Fold all schema
-changes for an unreleased version into that migration; never rewrite it after
-the release is published.
+A release normally adds at most one numbered database migration; never rewrite a
+published migration. For this taxonomy cutover, beta.2 at schema 0002 is the published
+upgrade baseline. Keep the existing unpublished `0003_mobile_ingest.sql` and
+`0004_mobile_tokens.sql` separate and unchanged; do not fold them together.
+Taxonomy remains in `0005_taxonomy_systems.sql` and expects the mobile additions:
+the ordered upgrade is **0002 → 0003 → 0004 → 0005**, never 0005 on bare 0002.
+No separate published compatibility promise is made for intermediate mobile schemas,
+but useful intermediate-state upgrade coverage remains. Verify populated beta.2
+upgrades and fresh initialization. See [Architecture](/architecture#storage-and-transaction-invariants)
+for the current layout and rebuild path.
 
 Suchi follows SemVer:
 

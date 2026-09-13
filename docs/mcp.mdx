@@ -6,6 +6,10 @@ description: "Expose a scoped subset of Suchi's API to MCP-capable clients."
 `suchi mcp` runs a thin Model Context Protocol adapter over the existing HTTP
 API. Tool calls use an ordinary Suchi token, object permissions, and audit
 path; the MCP process does not bypass application authorization.
+The token binds one filing system as its default and ceiling. Ordinary unqualified
+MCP calls therefore stay there, including search, tasks and shares; membership
+and document ACLs still apply. A different system needs a new bound token.
+Removing membership revokes the credential and re-adding it does not revive it.
 
 ## Configure a local client
 
@@ -95,9 +99,10 @@ Requires `documents:write` for API-token callers.
 
 ### `create_share_link`
 
-Creates a link for 1 to 200 visible documents through `POST /api/share_links/`.
-Requires `documents:write` for API-token callers and the share-links capability
-for non-admin users.
+Creates a link for 1 to 200 live documents in the token's bound system through
+`POST /api/share_links/`. The creator must own each document or be an administrator,
+in addition to system entry. Requires `documents:write` for API-token callers and
+the share-links capability for non-admin users; mere view permission is insufficient.
 
 - `doc_ids`: required document ID array
 - `label`: optional label

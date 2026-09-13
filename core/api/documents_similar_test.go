@@ -42,9 +42,9 @@ func seedSimilarDoc(t *testing.T, s *Server, ownerID int64, title, content strin
 	seedUser(t, s.DB, ownerID)
 	inbox := seedStatsJDInbox(t, s.DB)
 	res, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, content,
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, content,
 		                     jd_category_id, mime_type, created_at, updated_at)
-		VALUES (?, ?, 0, ?, ?, ?, 'application/pdf', 0, 0)
+		VALUES (1, ?, ?, 0, ?, ?, ?, 'application/pdf', 0, 0)
 	`, ownerID, "sha_"+title, title, content, inbox)
 	if err != nil {
 		t.Fatal(err)

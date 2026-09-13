@@ -1,6 +1,7 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { search, listLanguages } from '../lib/api.js'
+  import { search, listLanguages, resolveAddress } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { fmtDate } from '../lib/format.js'
   import Icon from '../lib/Icon.svelte'
@@ -64,6 +65,11 @@
     activeController = controller
     loading = true; searched = true
     try {
+      if (/^[A-Z][0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$/.test(query)) {
+        const document = await resolveAddress(query)
+        if (version === runVersion) go(`#/doc/${query.split('.')[2]}?system=${document.system_code}`)
+        return
+      }
       const params = { page: requestPage, page_size: 25 }
       if (requestLang) params.lang = requestLang
       onScopeChange?.({
@@ -96,7 +102,7 @@
     if (lang) params.set('lang', lang)
     const query = params.toString()
     const hash = `#/search${query ? `?${query}` : ''}`
-    if (location.hash === hash) run()
+    if (location.hash === filingHref(hash)) run()
     else go(hash)
   }
 
@@ -164,10 +170,11 @@
     <p class="sub" style="color:var(--muted);margin:0 0 10px">{count} result{count === 1 ? '' : 's'}</p>
     <div class="index">
       {#each hits as h (h.id)}
-        <a class="irow" href={`#/doc/${h.id}`} style="align-items:flex-start">
+        <a class="irow" href={filingHref(`#/doc/${h.id}`)} style="align-items:flex-start">
           <span class="dot accent" style="margin-top:7px"></span>
           <span class="grow">
             <span class="title" style="display:block">{h.title || `Document #${h.id}`}</span>
+            {#if h.jd_address}<span class="chip">{h.jd_address}</span>{/if}
             {#if h.snippet}<span class="sub" style="white-space:normal">{@html safeSnippet(h.snippet)}</span>{/if}
           </span>
           <span class="sub">{fmtDate(h.created_at)}</span>

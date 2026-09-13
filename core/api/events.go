@@ -40,14 +40,12 @@ package api
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
-	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // EventRow is one entry in the /api/events/ result set.
@@ -96,6 +94,10 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	// p is guaranteed non-nil here — RequireScope returns 401
 	// otherwise.
 
@@ -163,24 +165,37 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Pull limit*2 candidate rows so the visibility filter can drop
-	// some without emptying the response. Cap at 400 to keep the
-	// read bounded.
-	sqlLimit := limit * 2
-	if sqlLimit > 400 {
-		sqlLimit = 400
-	}
+	// Filter system, document ACLs and task access before selecting the cursor.
+	// Foreign events cannot consume a page or move its latest_id.
+	docWhere, docArgs := documentVisibilityWhere(r.Context(), p, groups)
+	visibility := `e.system_id = ? AND (
+		(e.object_kind = 'document' AND EXISTS (
+			SELECT 1 FROM documents d WHERE d.id = e.object_id AND ` + docWhere + `))
+		OR (e.object_kind = 'approval_task' AND EXISTS (
+			SELECT 1 FROM approval_tasks t JOIN approval_runs ar ON ar.id = t.run_id
+			WHERE t.id = e.object_id AND ar.system_id = e.system_id
+			AND (? OR t.assignee IN (?, ?))
+			AND (ar.doc_id IS NULL OR EXISTS (
+				SELECT 1 FROM documents d WHERE d.id = ar.doc_id AND ` + docWhere + `))))
+		OR (e.object_kind NOT IN ('document', 'approval_task') AND
+			(? OR (e.actor_kind = 'user' AND e.actor_id = ?) OR (e.actor_kind = 'token' AND e.actor_id = ?)))
+	)`
+	visibilityArgs := append([]any{systemID}, docArgs...)
+	visibilityArgs = append(visibilityArgs, isAdmin, fmt.Sprintf("user:%d", p.UserID), "role:"+p.Role)
+	visibilityArgs = append(visibilityArgs, docArgs...)
+	visibilityArgs = append(visibilityArgs, isAdmin, p.UserID, p.TokenID)
 	order := "id"
 	if sinceID == 0 {
 		order = "id DESC"
 	}
 	q := `SELECT id, ts, actor_kind, actor_id, action, object_kind, object_id
-	      FROM audit_events
-	      WHERE id > ? ` + whereKind + `
+	      FROM audit_events e
+	      WHERE id > ? ` + whereKind + ` AND (` + visibility + `)
 	      ORDER BY ` + order + `
 	      LIMIT ?`
 	args := append([]any{sinceID}, kindArgs...)
-	args = append(args, sqlLimit)
+	args = append(args, visibilityArgs...)
+	args = append(args, limit)
 
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
 	if err != nil {
@@ -226,16 +241,6 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 		if rr.id > latestID {
 			latestID = rr.id
 		}
-		if !isAdmin {
-			visible, err := s.eventVisible(r.Context(), p, groups, rr)
-			if err != nil {
-				s.serverErr(w, "events.visibility", err)
-				return
-			}
-			if !visible {
-				continue
-			}
-		}
 		row := EventRow{
 			ID:        rr.id,
 			Kind:      rr.action,
@@ -259,65 +264,6 @@ func (s *Server) ListEvents(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, EventsResponse{
 		Results: out, LatestID: latestID,
 	})
-}
-
-func (s *Server) eventVisible(ctx context.Context, p *pluginapi.Principal, groups []int64, rr eventAuditRow) (bool, error) {
-	switch rr.objectKind {
-	case "document":
-		if !rr.objectID.Valid {
-			return false, nil
-		}
-		return s.visibleDoc(ctx, p, groups, rr.objectID.Int64)
-	case "approval_task":
-		if !rr.objectID.Valid {
-			return false, nil
-		}
-		return s.visibleApprovalTask(ctx, p, rr.objectID.Int64)
-	}
-	if !rr.actorID.Valid {
-		return false, nil
-	}
-	switch rr.actorKind {
-	case "user":
-		return p.UserID > 0 && rr.actorID.Int64 == p.UserID, nil
-	case "token":
-		return p.TokenID > 0 && rr.actorID.Int64 == p.TokenID, nil
-	default:
-		return false, nil
-	}
-}
-
-// visibleDoc runs the document-visibility WHERE against one specific
-// document id. Sub-millisecond at homelab scale — SQLite's read pool
-// serves it from the WAL cache in almost every case.
-func (s *Server) visibleDoc(ctx context.Context, p *pluginapi.Principal, groups []int64, docID int64) (bool, error) {
-	frag, args := documentVisibilityWhere(p, groups)
-	q := "SELECT 1 FROM documents d WHERE d.id = ? AND " + frag + " LIMIT 1"
-	call := append([]any{docID}, args...)
-	var one int
-	err := s.DB.Read.QueryRowContext(ctx, q, call...).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-func (s *Server) visibleApprovalTask(ctx context.Context, p *pluginapi.Principal, taskID int64) (bool, error) {
-	if p.UserID == 0 {
-		return false, nil
-	}
-	userAssignee := fmt.Sprintf("user:%d", p.UserID)
-	roleAssignee := "role:" + p.Role
-	var one int
-	err := s.DB.Read.QueryRowContext(ctx, `
-		SELECT 1 FROM approval_tasks
-		WHERE id = ? AND assignee IN (?, ?)
-		LIMIT 1
-	`, taskID, userAssignee, roleAssignee).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 // loadDocTitles batches a single SELECT over documents for every

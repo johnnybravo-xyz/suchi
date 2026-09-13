@@ -12,6 +12,11 @@ Prefer the built-in [Mail intake](/guides/mail-intake) poller unless you need a
 local Maildir mirror, already operate mbsync, or want mailbox credentials kept
 outside Suchi.
 
+This producer uses the watcher's captured `INGEST_FS_SYSTEM` destination (omission:
+original system 1), not mailbox addresses or sidecars as a router. Introduce the
+target via taxonomy import first and ensure the watcher owner can enter it.
+Messages and attachment children inherit that system; see [Configuration](/config).
+
 ## Configure and start
 
 ```sh

@@ -35,11 +35,11 @@ func newMobilePairingServer(t *testing.T) (*Server, *bytes.Buffer) {
 	var logs bytes.Buffer
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(&logs, nil)), PublicURL: "https://Archive.Example:443/"}
 	var nextToken atomic.Int64
-	s.TokenIssuer = func(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
+	s.TokenIssuer = func(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error) {
 		token := fmt.Sprintf("%064x", nextToken.Add(1))
 		sum := sha256.Sum256([]byte(token))
-		_, err := d.ExecWrite(ctx, `INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at, source) VALUES (?, ?, ?, ?, ?, ?)`,
-			userID, name, hex.EncodeToString(sum[:]), scopes, time.Now().Unix(), source)
+		_, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(system_id, user_id, name, token_hash, scopes, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			systemID, userID, name, hex.EncodeToString(sum[:]), scopes, time.Now().Unix(), source)
 		return token, err
 	}
 	return s, &logs
@@ -208,10 +208,9 @@ func TestMobilePairingConcurrentExchangeIssuesExactlyOneToken(t *testing.T) {
 	pairing := createMobilePairing(t, s)
 	var issued atomic.Int32
 	issuer := s.TokenIssuer
-	s.TokenIssuer = func(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
+	s.TokenIssuer = func(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error) {
 		issued.Add(1)
-		// A real write here also catches TokenIssuer invoked inside the consume transaction.
-		return issuer(ctx, userID, name, scopes, source)
+		return issuer(ctx, tx, userID, systemID, name, scopes, source)
 	}
 	var wg sync.WaitGroup
 	statuses := make(chan int, 12)
@@ -236,21 +235,27 @@ func TestMobilePairingConcurrentExchangeIssuesExactlyOneToken(t *testing.T) {
 	}
 }
 
-func TestMobilePairingIssuanceFailureBurnsCodeAndDoesNotLogSecrets(t *testing.T) {
+func TestMobilePairingIssuanceFailureRollsBackAndDoesNotLogSecrets(t *testing.T) {
 	s, logs := newMobilePairingServer(t)
 	pairing := createMobilePairing(t, s)
-	s.TokenIssuer = func(context.Context, int64, string, string, string) (string, error) {
+	issuer := s.TokenIssuer
+	s.TokenIssuer = func(context.Context, *sql.Tx, int64, int64, string, string, string) (string, error) {
 		return "", errors.New("credential failure " + pairing.Code)
 	}
 	w := mobilePairingRequest(s, "POST", "/api/mobile/pairing/exchange", `{"code":"`+pairing.Code+`"}`, nil)
 	if w.Code != 500 || strings.Contains(logs.String(), pairing.Code) || strings.Contains(w.Body.String(), pairing.Code) {
 		t.Fatal("issuance failure must stay secret and return 500")
 	}
-	assertMobilePairingInvalid(t, s, pairing.Code)
 	var count int
 	if err := s.DB.Read.QueryRow("SELECT COUNT(*) FROM api_tokens").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed exchange registered a token: count=%d err=%v", count, err)
 	}
+	s.TokenIssuer = issuer
+	w = mobilePairingRequest(s, "POST", "/api/mobile/pairing/exchange", `{"code":"`+pairing.Code+`"}`, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("failed issuance consumed code: status=%d body=%s", w.Code, w.Body.String())
+	}
+	assertMobilePairingInvalid(t, s, pairing.Code)
 }
 
 func TestMobilePairingSessionAndInputValidation(t *testing.T) {
@@ -283,8 +288,8 @@ func TestMobilePairingSessionAndInputValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = mobilePairingRequest(s, "POST", "/api/mobile/pairing", `{}`, memberPrincipal(1))
-	if w.Code != 401 {
-		t.Fatalf("disabled session status=%d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("disabled principal retained system entry: status=%d", w.Code)
 	}
 }
 

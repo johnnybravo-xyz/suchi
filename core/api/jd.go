@@ -61,6 +61,7 @@ type JDCategory struct {
 	AreaCode    int64  `json:"area_code"`
 	AreaName    string `json:"area_name"`
 	System      bool   `json:"system,omitempty"`
+	SystemCode  string `json:"system_code,omitempty"`
 }
 
 // ListJDCategories — GET /api/jd/categories/.
@@ -74,13 +75,18 @@ type JDCategory struct {
 // shared vocabulary; grants on the taxonomy layer would cover write
 // operations if we ever add them.
 func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 
 	var (
-		where []string
-		args  []any
+		where = []string{"jc.system_id = ?"}
+		args  = []any{systemID}
 	)
 
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
@@ -124,9 +130,10 @@ func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT jc.id, jc.code, jc.name, COALESCE(jc.description, ''),
-		       ja.code_start, ja.name, jc.system
+		       ja.code_start, ja.name, jc.system, js.code
 		FROM jd_categories jc
-		JOIN jd_areas ja ON ja.code_start = jc.area_start
+		JOIN jd_areas ja ON ja.code_start = jc.area_start AND ja.system_id = jc.system_id
+		JOIN jd_systems js ON js.id = jc.system_id
 	`+whereSQL+`
 		ORDER BY jc.code
 		LIMIT ? OFFSET ?
@@ -145,7 +152,7 @@ func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
 			system int
 		)
 		if err := rows.Scan(&c.ID, &c.Code, &c.Name, &desc,
-			&c.AreaCode, &c.AreaName, &system); err != nil {
+			&c.AreaCode, &c.AreaName, &system, &c.SystemCode); err != nil {
 			s.serverErr(w, "jd.scan", err)
 			return
 		}

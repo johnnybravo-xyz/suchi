@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from './systems.svelte.js'
   import { onDestroy } from 'svelte'
   import { askArchive } from './api.js'
   import Icon from './Icon.svelte'
@@ -317,7 +318,7 @@
                 {#each answerParts(turn.answer) as part}
                   {#if part.citation}
                     {@const citedSource = turn.sources[part.citation - 1]}
-                    <a class="inline-citation" href={`#/doc/${citedSource.id}`} onclick={closeForNavigation}
+                    <a class="inline-citation" href={filingHref(`#/doc/${citedSource.id}`)} onclick={closeForNavigation}
                        aria-label={`Open cited document ${part.citation}: ${citedSource.title || `Document #${citedSource.id}`}`}>{part.text}</a>
                   {:else}{part.text}{/if}
                 {/each}
@@ -335,16 +336,16 @@
           {#if turn.sources.length}
             {@const groups = sourceGroups(turn)}
             <div class="research-actions" aria-label="Research actions">
-              <a class="research-action" href={`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`} onclick={closeForNavigation}>
+              <a class="research-action" href={filingHref(`#/views?new=1&ids=${turn.sources.map(source => source.id).join(',')}`)} onclick={closeForNavigation}>
                 <Icon name="eye" size={14} /><span><b>Save retrieved documents as a view</b><small>{turn.sources.length} document{turn.sources.length === 1 ? '' : 's'}</small></span>
               </a>
               {#if canReviewIntelligence}
                 {#if pendingDateCount(turn) > 0}
-                  <a class="research-action" href="#/tasks" onclick={closeForNavigation}>
+                  <a class="research-action" href={filingHref("#/tasks")} onclick={closeForNavigation}>
                     <Icon name="tasks" size={14} /><span><b>Review {pendingDateCount(turn)} date{pendingDateCount(turn) === 1 ? '' : 's'}</b><small>Validate candidates in Approvals</small></span>
                   </a>
                 {:else if acceptedDateCount(turn) > 0}
-                  <a class="research-action" href={`#/calendar?document_ids=${sourceIDQuery(turn)}`} onclick={closeForNavigation}>
+                  <a class="research-action" href={filingHref(`#/calendar?document_ids=${sourceIDQuery(turn)}`)} onclick={closeForNavigation}>
                     <Icon name="calendar" size={14} /><span><b>Open {acceptedDateCount(turn)} calendar date{acceptedDateCount(turn) === 1 ? '' : 's'}</b><small>All dates from retrieved documents</small></span>
                   </a>
                 {/if}

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -115,7 +116,12 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 
 func TestOIDCAndLocalTokenDispatch(t *testing.T) {
 	p, local, sign := newTestOIDC(t)
-	token, err := local.IssueAPIToken(t.Context(), 1, "integration", auth.ScopeDocumentsRead, "")
+	var token string
+	err := p.db.WriteTx(t.Context(), func(tx *sql.Tx) error {
+		var err error
+		token, err = local.IssueAPIToken(t.Context(), tx, 1, 1, "integration", auth.ScopeDocumentsRead, "")
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

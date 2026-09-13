@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // SearchHit is one row in a search response. Preserves the pattern
@@ -17,6 +18,8 @@ import (
 // names — with a per-hit `rank` score from FTS5.
 type SearchHit struct {
 	ID          int64   `json:"id"`
+	SystemCode  string  `json:"system_code,omitempty"`
+	JDAddress   string  `json:"jd_address,omitempty"`
 	Title       string  `json:"title"`
 	Snippet     string  `json:"snippet"`
 	Rank        float64 `json:"rank"`
@@ -42,6 +45,9 @@ const (
 	recencyHalfLifeS  = 30 * 24 * 3600 // 30 days in seconds
 )
 
+const searchAddressJoins = ` LEFT JOIN jd_systems sys ON sys.id=d.system_id
+	LEFT JOIN jd_categories category ON category.id=d.jd_category_id AND category.system_id=d.system_id`
+
 // Search — GET /api/search/?q=<terms>&page=<n>&page_size=<n>&recency=off.
 // Empty q returns an empty envelope (no error).
 //
@@ -55,6 +61,9 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := auth.FromContext(r.Context())
+	if _, ok := s.requireSystem(w, r, principal); !ok {
+		return
+	}
 	language, err := normalizedScopeLanguage(r.URL.Query().Get("lang"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_lang", "lang must be a 2 or 3 letter language code")
@@ -101,16 +110,13 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "search.parse_filters", err)
 		return
 	}
-	if principal.Role != "admin" {
-		groups, err := s.principalGroups(r.Context(), principal.UserID)
-		if err != nil {
-			s.serverErr(w, "search.load_groups", err)
-			return
-		}
-		visibility, visibilityArgs := documentVisibilityWhere(principal, groups)
-		extra += " AND " + visibility
-		extraArgs = append(extraArgs, visibilityArgs...)
+	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), principal)
+	if err != nil {
+		s.serverErr(w, "search.visibility", err)
+		return
 	}
+	extra += " AND " + visibility
+	extraArgs = append(extraArgs, visibilityArgs...)
 	whereSQL := " WHERE " + strings.Join(where, " AND ") + extra
 	countArgs := append([]any{}, args...)
 	countArgs = append(countArgs, extraArgs...)
@@ -127,8 +133,8 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	if queryPlan.Match == "" {
 		pageSQL = `
 			SELECT d.id, d.title, '', 0.0, d.created_at,
-			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')` +
-			fromSQL + whereSQL + `
+			       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code, COALESCE(category.code,0)` +
+			fromSQL + searchAddressJoins + whereSQL + `
 			ORDER BY d.created_at DESC, d.id DESC
 			LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, args...)
@@ -160,11 +166,13 @@ func (s *Server) Search(w http.ResponseWriter, r *http.Request) {
 	out := make([]SearchHit, 0, p.PageSize)
 	for rows.Next() {
 		var hit SearchHit
+		var categoryCode int
 		if err := rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.Rank,
-			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity); err != nil {
+			&hit.CreatedAt, &hit.MIME, &hit.Sensitivity, &hit.SystemCode, &categoryCode); err != nil {
 			s.serverErr(w, "search.scan", err)
 			return
 		}
+		hit.JDAddress = systems.Address(hit.SystemCode, categoryCode, hit.ID)
 		out = append(out, hit)
 	}
 	if err := rows.Err(); err != nil {
@@ -188,9 +196,9 @@ func searchFTSPageSQL(whereSQL, rankExpr string) string {
 		       CASE WHEN COALESCE(d.sensitivity, '') IN ('confidential', 'restricted') THEN ''
 		            ELSE COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), '') END,
 		       ranked.match_rank, d.created_at,
-		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')
+		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code, COALESCE(category.code,0)
 		FROM ranked
-		JOIN documents d ON d.id = ranked.id
+		JOIN documents d ON d.id = ranked.id` + searchAddressJoins + `
 		CROSS JOIN documents_fts
 		WHERE documents_fts.rowid = ranked.id
 		  AND documents_fts MATCH ?
@@ -204,9 +212,9 @@ func searchFTSRawPageSQL(whereSQL string) string {
 		       CASE WHEN COALESCE(d.sensitivity, '') IN ('confidential', 'restricted') THEN ''
 		            ELSE COALESCE(snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20), '') END,
 		       bm25(documents_fts, ?, ?) AS match_rank, d.created_at,
-		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, '')
+		       COALESCE(d.mime_type, ''), COALESCE(d.sensitivity, ''), sys.code, COALESCE(category.code,0)
 		FROM documents_fts
-		JOIN documents d ON d.id = documents_fts.rowid` + whereSQL + `
+		JOIN documents d ON d.id = documents_fts.rowid` + searchAddressJoins + whereSQL + `
 		ORDER BY match_rank, d.id
 		LIMIT ? OFFSET ?`
 }
@@ -231,7 +239,11 @@ type AutocompleteSuggestion struct {
 // `?kind` narrows to one facet ("tag", "correspondent", "document_type").
 // Empty q returns [] without hitting the DB.
 func (s *Server) Autocomplete(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
+		return
+	}
+	if _, ok := s.requireSystem(w, r, principal); !ok {
 		return
 	}
 	raw := r.URL.Query().Get("q")
@@ -291,8 +303,8 @@ func (s *Server) autoQueryOne(r *http.Request, table, col, kind, needle string, 
 		return nil
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(),
-		`SELECT id, `+col+` FROM `+table+` WHERE `+col+` LIKE ? ESCAPE '\' ORDER BY `+col+` LIMIT ?`,
-		needle, limit)
+		`SELECT id, `+col+` FROM `+table+` WHERE system_id = ? AND `+col+` LIKE ? ESCAPE '\' ORDER BY `+col+` LIMIT ?`,
+		collectionSystemID(r.Context(), auth.FromContext(r.Context())), needle, limit)
 	if err != nil {
 		s.Log.Warn("api.autocomplete.query", "table", table, "err", err.Error())
 		return nil

@@ -109,3 +109,55 @@ func TestMigrateOrdersVersionsWithoutChangingInput(t *testing.T) {
 		t.Fatalf("applied migrations = %q, want first,second,third", order)
 	}
 }
+
+func TestRebuildMigrationRollsBackAndRestoresForeignKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"foreign key violation", `
+			CREATE TABLE parent_new(id INTEGER PRIMARY KEY);
+			INSERT INTO parent_new VALUES(2);
+			DROP TABLE parent;
+			ALTER TABLE parent_new RENAME TO parent;
+		`},
+		{"SQL failure", `
+			CREATE TABLE parent_new(id INTEGER PRIMARY KEY);
+			DROP TABLE parent;
+			INSERT INTO missing_table VALUES(1);
+		`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "rebuild.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			initial := db.Migration{Version: 1, Name: "parents", SQL: `
+				CREATE TABLE parent(id INTEGER PRIMARY KEY);
+				CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES parent(id));
+				INSERT INTO parent VALUES(1);
+				INSERT INTO child VALUES(7,1);
+			`}
+			if err := db.Migrate(t.Context(), d, []db.Migration{initial}, log); err != nil {
+				t.Fatal(err)
+			}
+			migs := []db.Migration{initial, {Version: 2, Name: "rebuild", SQL: tc.sql, RebuildTables: true}}
+			if err := db.Migrate(t.Context(), d, migs, log); err == nil {
+				t.Fatal("invalid rebuild committed")
+			}
+			assertSchemaVersion(t, d, 1)
+			assertMigrationScalar(t, d, `SELECT id FROM parent`, 1)
+			assertMigrationScalar(t, d, `SELECT parent_id FROM child WHERE id=7`, 1)
+			var enabled int
+			if err := d.Write.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&enabled); err != nil || enabled != 1 {
+				t.Fatalf("writer enforcement=%d err=%v", enabled, err)
+			}
+			if _, err := d.ExecWrite(t.Context(), `INSERT INTO child VALUES(8,999)`); err == nil {
+				t.Fatal("failed rebuild returned a writer with foreign keys disabled")
+			}
+			execMigrationFixture(t, d, `INSERT INTO parent VALUES(2); INSERT INTO child VALUES(8,2)`)
+		})
+	}
+}

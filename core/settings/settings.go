@@ -36,13 +36,12 @@ const (
 	KeyArchiveAuto      = "classification.archive_auto_threshold"
 	KeyArchiveReview    = "classification.archive_review_threshold"
 
-	KeyPreset = "preset"
-
 	KeyBackupIntervalHours = "backup.interval_hours"
 	KeyOCRLanguages        = "ocr.languages" // JSON array of ISO codes
 
 	KeyFSWatchDir        = "ingest.fs_watch_dir"
 	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
+	KeyFSWatchSystem     = "ingest.fs_watch_system"
 )
 
 type ResearchContextMode string
@@ -157,8 +156,8 @@ type SetupState struct {
 	FilingTreeChosen  bool   `json:"filing_tree_chosen"`
 }
 
-// LoadSetupState reads the wizard's state. Missing keys → zero-value.
-func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
+// LoadSetupState reads global onboarding progress and the selected system's tree.
+func LoadSetupState(ctx context.Context, database *db.DB, systemID int64) (*SetupState, error) {
 	s := &SetupState{}
 	var startedAt sql.NullInt64
 	if err := database.Read.QueryRowContext(ctx,
@@ -178,10 +177,10 @@ func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 	if err := Get(ctx, database, KeySetupIntent, &s.Intent); err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	if err := Get(ctx, database, KeyPreset, &s.CurrentPreset); err != nil && !errors.Is(err, ErrNotFound) {
+	if err := database.Read.QueryRowContext(ctx, `SELECT COALESCE(preset_id, '') FROM jd_systems WHERE id = ?`, systemID).Scan(&s.CurrentPreset); err != nil {
 		return nil, err
 	}
-	chosen, err := FilingTreeChosen(ctx, database)
+	chosen, err := FilingTreeChosen(ctx, database, systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +189,13 @@ func LoadSetupState(ctx context.Context, database *db.DB) (*SetupState, error) {
 }
 
 // FilingTreeChosen reports whether an operator has explicitly selected or
-// built a filing tree. The protected Inbox-only bootstrap does not count.
-func FilingTreeChosen(ctx context.Context, database *db.DB) (bool, error) {
+// built a tree in this system. The protected Inbox-only bootstrap does not count.
+func FilingTreeChosen(ctx context.Context, database *db.DB, systemID int64) (bool, error) {
 	var chosen bool
 	if err := database.Read.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM jd_categories WHERE system = 0)
-		    OR EXISTS(SELECT 1 FROM settings WHERE key IN (?, 'taxonomy_preset_id'))
-	`, KeyPreset).Scan(&chosen); err != nil {
+		SELECT EXISTS(SELECT 1 FROM jd_categories WHERE system_id = ? AND system = 0)
+		    OR EXISTS(SELECT 1 FROM jd_systems WHERE id = ? AND preset_id IS NOT NULL)
+	`, systemID, systemID).Scan(&chosen); err != nil {
 		return false, fmt.Errorf("read filing-tree choice: %w", err)
 	}
 	return chosen, nil
@@ -386,6 +385,7 @@ func envSet(keys ...string) bool {
 type FSWatchConfig struct {
 	Dir        string
 	OwnerEmail string
+	System     string
 }
 
 // ResolveFSWatchConfig fills fields not pinned by boot configuration from the
@@ -402,6 +402,12 @@ func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig
 	if !envSet("INGEST_FS_OWNER_EMAIL") {
 		if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
 			out.OwnerEmail = s
+		}
+	}
+	s = ""
+	if !envSet("INGEST_FS_SYSTEM") {
+		if err := Get(ctx, database, KeyFSWatchSystem, &s); err == nil {
+			out.System = s
 		}
 	}
 	return out

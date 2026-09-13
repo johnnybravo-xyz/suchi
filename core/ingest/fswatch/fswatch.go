@@ -53,6 +53,7 @@ import (
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/sidecar"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/mimeutil"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
@@ -73,6 +74,9 @@ type Config struct {
 	// the egress-surface-style boot log).
 	OwnerEmail string
 
+	// System selects an existing filing system by code; empty means original system 1.
+	System string
+
 	// KeepOnSuccess leaves ingested files in place after processing.
 	// Default (false) deletes them. Errors always go to errors/.
 	KeepOnSuccess bool
@@ -89,12 +93,13 @@ type Config struct {
 
 // Watcher wires the fsnotify loop to the ingest transaction.
 type Watcher struct {
-	cfg     Config
-	db      *db.DB
-	cas     *blob.CAS
-	log     *slog.Logger
-	disp    *jobs.Dispatcher
-	ownerID int64
+	cfg      Config
+	db       *db.DB
+	cas      *blob.CAS
+	log      *slog.Logger
+	disp     *jobs.Dispatcher
+	ownerID  int64
+	systemID int64
 }
 
 // New validates cfg + resolves the owner. Returns nil, nil when
@@ -127,14 +132,29 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 	if err != nil {
 		return nil, fmt.Errorf("fswatch: resolve owner %q: %w", cfg.OwnerEmail, err)
 	}
+	target, err := systems.Get(ctx, d.Read, systems.DefaultID)
+	if cfg.System != "" {
+		target, err = systems.ByCode(ctx, d.Read, cfg.System)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fswatch: resolve system: %w", err)
+	}
+	allowed, err := systems.CanEnter(ctx, d.Read, ownerID, target.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, errors.New("fswatch: owner cannot enter system")
+	}
 
 	return &Watcher{
-		cfg:     cfg,
-		db:      d,
-		cas:     cas,
-		log:     log.With("component", "fswatch", "dir", cfg.Dir, "owner", cfg.OwnerEmail),
-		disp:    disp,
-		ownerID: ownerID,
+		cfg:      cfg,
+		db:       d,
+		cas:      cas,
+		log:      log.With("component", "fswatch", "dir", cfg.Dir, "owner", cfg.OwnerEmail),
+		disp:     disp,
+		ownerID:  ownerID,
+		systemID: target.ID,
 	}, nil
 }
 
@@ -244,7 +264,8 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 		// walked past. Audit the skip so /api/events/ can render
 		// "Skipped huge.pdf (size 800MiB > cap 500MiB)".
 		audit.Log(ctx, w.db, w.log, audit.Event{
-			Action: "document.ingest.skipped", ObjectKind: "ingest",
+			SystemID: w.systemID,
+			Action:   "document.ingest.skipped", ObjectKind: "ingest",
 			After: map[string]any{
 				"reason":   "oversized_file",
 				"filename": filepath.Base(path),
@@ -286,7 +307,8 @@ func (w *Watcher) handleFile(ctx context.Context, path string) {
 		// Use the same dedup event as API uploads so every ingest path
 		// reports that it reused an existing document.
 		audit.Log(ctx, w.db, w.log, audit.Event{
-			Action: "document.ingest.deduplicated", ObjectKind: "document", ObjectID: docID,
+			SystemID: w.systemID,
+			Action:   "document.ingest.deduplicated", ObjectKind: "document", ObjectID: docID,
 			After: map[string]any{"source": "fswatch", "filename": filepath.Base(path)},
 		})
 	} else {
@@ -337,7 +359,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 
 	title := deriveTitle(path, side)
 
-	inbox, err := jd.InboxCategoryID(ctx, w.db)
+	inbox, err := jd.InboxCategoryID(ctx, w.db, w.systemID)
 	if err != nil {
 		return 0, false, fmt.Errorf("resolve inbox: %w", err)
 	}
@@ -349,7 +371,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 	if side != nil && side.JDCategory != 0 {
 		var id int64
 		err := w.db.Read.QueryRowContext(ctx,
-			`SELECT id FROM jd_categories WHERE code = ?`, side.JDCategory).Scan(&id)
+			`SELECT id FROM jd_categories WHERE system_id = ? AND code = ?`, w.systemID, side.JDCategory).Scan(&id)
 		if err == nil {
 			catID = id
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -366,12 +388,28 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 	var docID int64
 	var deduped bool
 	err = w.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		allowed, err := systems.CanEnter(ctx, tx, w.ownerID, w.systemID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errors.New("fswatch: owner cannot enter system")
+		}
+		if side != nil && side.JDSystem != "" {
+			target, err := systems.Get(ctx, tx, w.systemID)
+			if err != nil {
+				return err
+			}
+			if side.JDSystem != target.Code {
+				return errors.New("fswatch: sidecar jd_system does not match configured system")
+			}
+		}
 		// Alive dedup is owner-scoped, matching the ingestion deduplication behavior.
 		var aliveID int64
 		errAlive := tx.QueryRowContext(ctx,
 			`SELECT id FROM documents
-			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
-			w.ownerID, ref.SHA256,
+			 WHERE system_id = ? AND owner_id = ? AND original_blob = ? AND trashed_at IS NULL`,
+			w.systemID, w.ownerID, ref.SHA256,
 		).Scan(&aliveID)
 		if errAlive == nil {
 			docID = aliveID
@@ -388,9 +426,9 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		var trashedID int64
 		errTrashed := tx.QueryRowContext(ctx,
 			`SELECT id FROM documents
-			 WHERE owner_id = ? AND original_blob = ? AND trashed_at IS NOT NULL
+			 WHERE system_id = ? AND owner_id = ? AND original_blob = ? AND trashed_at IS NOT NULL
 			 ORDER BY trashed_at DESC LIMIT 1`,
-			w.ownerID, ref.SHA256,
+			w.systemID, w.ownerID, ref.SHA256,
 		).Scan(&trashedID)
 		if errTrashed == nil {
 			if _, err := tx.ExecContext(ctx,
@@ -426,10 +464,10 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at, source_mtime
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, w.ownerID, ref.SHA256, ref.Size, title, mime, catID, now, created, now, srcMTime)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, w.systemID, w.ownerID, ref.SHA256, ref.Size, title, mime, catID, now, created, now, srcMTime)
 		if err != nil {
 			return err
 		}
@@ -445,7 +483,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 
 		// Apply sidecar metadata (correspondent, tags, notes).
 		if side != nil {
-			if err := applySidecar(ctx, tx, docID, side, w.ownerID); err != nil {
+			if err := applySidecar(ctx, tx, docID, side, w.ownerID, w.systemID); err != nil {
 				return err
 			}
 		}
@@ -460,7 +498,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 			"source_path": path,
 			"filename":    filepath.Base(path),
 		})
-		return jobs.Enqueue(ctx, tx, postingest.Kind, id, string(payload))
+		return jobs.Enqueue(ctx, tx, postingest.Kind, id, w.systemID, string(payload))
 	})
 	return docID, deduped, err
 }
@@ -468,7 +506,7 @@ func (w *Watcher) ingest(ctx context.Context, path string, side *sidecar.V1) (in
 // applySidecar upserts correspondent/tags/notes for a freshly-created
 // doc row. Idempotent on the correspondent + tag names (upsert-by-name
 // matches the importer's contract).
-func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID int64) error {
+func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, ownerID, systemID int64) error {
 	now := time.Now().Unix()
 
 	// Correspondents. Multi-party (roles) form takes precedence when
@@ -488,7 +526,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 		if role == "" {
 			role = "sender"
 		}
-		corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+		corID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents,
 			name, now)
 		if err != nil {
 			return fmt.Errorf("upsert correspondent: %w", err)
@@ -516,7 +554,7 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 		if name == "" {
 			continue
 		}
-		tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+		tagID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableTags, name, now)
 		if err != nil {
 			return fmt.Errorf("upsert tag %q: %w", name, err)
 		}

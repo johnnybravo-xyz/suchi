@@ -25,6 +25,7 @@ type AuditEvent struct {
 	// (extend as needed).
 	ObjectKind string `json:"object_kind,omitempty"`
 	ObjectID   int64  `json:"object_id,omitempty"`
+	SystemID   int64  `json:"system_id,omitempty"`
 	// Before / After capture pre + post state for writes. Reads use
 	// After only. Values are whatever the caller finds meaningful —
 	// SHA-256, name changes, tag delta, etc.

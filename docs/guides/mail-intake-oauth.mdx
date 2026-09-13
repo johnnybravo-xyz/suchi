@@ -26,6 +26,16 @@ accounts and work or school accounts. Ordinary users only need to click
 If the code expires, start sign-in again. The browser may be on a different
 device from the Suchi server.
 
+Select the filing system before starting. Suchi binds the flow to the authenticated
+actor and starting system; completing it against another system or foreign account
+fails. Switching systems discards the browser's pending flow/handoff state.
+
+For API integrations, new-account completion returns `sealed_secret_b64`: an
+authenticated server-sealed creation handoff bound to `{actor_id,system_id,credential}`.
+Create accepts it only for the same actor/target with current membership, then stores
+the ordinary at-rest Microsoft credential. It is **not** arbitrary at-rest ciphertext
+that can be copied from another mailbox or flow. The at-rest format below is unchanged.
+
 ## Stored credential
 
 Suchi stores a versioned, AEAD-sealed credential envelope containing the

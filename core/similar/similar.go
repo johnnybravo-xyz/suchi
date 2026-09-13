@@ -11,6 +11,7 @@ package similar
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 	"strings"
 	"unicode"
@@ -48,13 +49,15 @@ const MaxContentBytes = 4096
 // applies it; archive classification uses all returned neighbours.
 const MinScore = 0.001
 
-// Principal is the caller's identity used for the visibility splice.
-// Nil = anonymous. Role="admin" bypasses the WHERE fragment.
+// Principal is the caller's identity used for source and candidate visibility.
+// Nil is trusted background work, still constrained to the source's system.
 type Principal struct {
-	UserID int64
-	Role   string
-	Kind   string
-	Groups []int64
+	UserID        int64
+	Role          string
+	Kind          string
+	Groups        []int64
+	SystemID      int64
+	TokenSystemID int64
 }
 
 // TopDocs runs the full "similar to doc id" pipeline. Returns
@@ -63,15 +66,28 @@ type Principal struct {
 // tokens to compare on.
 func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Principal) ([]Doc, error) {
 	var (
-		title   sql.NullString
-		content sql.NullString
+		title    sql.NullString
+		content  sql.NullString
+		systemID int64
 	)
 	err := database.Read.QueryRowContext(ctx,
-		`SELECT title, substr(COALESCE(content, ''), 1, ?)
+		`SELECT title, substr(COALESCE(content, ''), 1, ?), system_id
 		   FROM documents WHERE id = ? AND trashed_at IS NULL`,
-		MaxContentBytes, id).Scan(&title, &content)
+		MaxContentBytes, id).Scan(&title, &content, &systemID)
 	if err != nil {
 		return nil, err
+	}
+	var principal authz.Principal
+	if p != nil {
+		principal = authz.Principal{UserID: p.UserID, Role: p.Role, Kind: p.Kind, Groups: p.Groups,
+			SystemID: p.SystemID, TokenSystemID: p.TokenSystemID}
+		if err := (authz.ACLAuthorizer{DB: database}).Can(ctx, principal, authz.KindDocument, id, authz.PermView); err != nil {
+			var denied *authz.ErrDenied
+			if errors.As(err, &denied) {
+				return nil, sql.ErrNoRows
+			}
+			return nil, err
+		}
 	}
 
 	tokens := TopTokens(title.String+" "+content.String, MaxTokens)
@@ -87,16 +103,10 @@ func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Princ
 	}
 	match := strings.Join(quoted, " OR ")
 
-	visibility := ""
-	visArgs := []any{}
-	if p != nil && p.Role != "admin" {
-		var frag string
-		var args []any
-		if p.Kind == authz.KindDemoAnon || p.Kind == authz.KindDemoScratch {
-			frag, args = authz.DemoCorpusVisibilityWhere(p.UserID)
-		} else {
-			frag, args = authz.DocVisibilityWhere(p.UserID, p.Groups)
-		}
+	visibility := " AND d.system_id = ?"
+	visArgs := []any{systemID}
+	if p != nil {
+		frag, args := authz.DocVisibilityWhere(principal, systemID)
 		visibility = " AND " + frag
 		visArgs = args
 	}

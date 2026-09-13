@@ -82,7 +82,7 @@ func capCall(t *testing.T, s *Server, method, path, body string, p *pluginapi.Pr
 func createMailboxFor(t *testing.T, s *Server, ownerID int64, name string) *emailaccounts.Account {
 	t.Helper()
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "p")
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: name, OwnerID: ownerID, Provider: emailaccounts.ProviderCustom,
 		Host: "h", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,

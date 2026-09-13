@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -44,13 +46,15 @@ type Service struct {
 }
 
 type candidate struct {
-	id      int64
-	ownerID int64
+	id       int64
+	ownerID  int64
+	systemID int64
 }
 
 type purgeFilter struct {
-	idsJSON string
-	cutoff  *int64
+	systemID int64
+	idsJSON  string
+	cutoff   *int64
 }
 
 // New constructs a permanent-delete service. renderRoot must already exist.
@@ -75,38 +79,12 @@ func New(database *db.DB, renderRoot string, log *slog.Logger) (*Service, error)
 	}, nil
 }
 
-// TrashedIDs returns all trashed document IDs in the requested owner scope.
-// A nil ownerID selects the archive-wide admin scope.
-func (s *Service) TrashedIDs(ctx context.Context, ownerID *int64) ([]int64, error) {
-	query := `SELECT id FROM documents WHERE trashed_at IS NOT NULL`
-	var args []any
-	if ownerID != nil {
-		query += ` AND owner_id = ?`
-		args = append(args, *ownerID)
-	}
-	query += ` ORDER BY id`
-	rows, err := s.db.Read.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 // PurgeOne permanently deletes one already-trashed document.
-func (s *Service) PurgeOne(ctx context.Context, id int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+func (s *Service) PurgeOne(ctx context.Context, systemID, id int64, actor *pluginapi.Principal, requestID string) (Report, error) {
 	if id <= 0 {
 		return Report{}, ErrNotTrashed
 	}
-	report, err := s.PurgeIDs(ctx, []int64{id}, actor, requestID)
+	report, err := s.PurgeIDs(ctx, systemID, []int64{id}, actor, requestID)
 	if err == nil && report.Purged == 0 {
 		return Report{}, ErrNotTrashed
 	}
@@ -115,7 +93,10 @@ func (s *Service) PurgeOne(ctx context.Context, id int64, actor *pluginapi.Princ
 
 // PurgeIDs permanently deletes the requested documents only when they are in Trash.
 // Missing and restored IDs are skipped.
-func (s *Service) PurgeIDs(ctx context.Context, ids []int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+func (s *Service) PurgeIDs(ctx context.Context, systemID int64, ids []int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+	if systemID <= 0 || actor == nil {
+		return Report{}, ErrNotTrashed
+	}
 	if len(ids) == 0 {
 		return Report{}, nil
 	}
@@ -135,7 +116,7 @@ func (s *Service) PurgeIDs(ctx context.Context, ids []int64, actor *pluginapi.Pr
 	if err != nil {
 		return Report{}, err
 	}
-	return s.purge(ctx, purgeFilter{idsJSON: string(rawIDs)}, actor, requestID)
+	return s.purge(ctx, purgeFilter{systemID: systemID, idsJSON: string(rawIDs)}, actor, requestID)
 }
 
 // PurgeExpired permanently deletes every document whose 30-day recovery window
@@ -182,9 +163,13 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		rendered   []string
 	)
 	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		query := `SELECT id, owner_id
+		query := `SELECT id, owner_id, system_id
 			FROM documents WHERE trashed_at IS NOT NULL`
 		var args []any
+		if filter.systemID != 0 {
+			query += ` AND system_id=?`
+			args = append(args, filter.systemID)
+		}
 		if filter.idsJSON != "" {
 			query += ` AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
 			args = append(args, filter.idsJSON)
@@ -201,7 +186,7 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		}
 		for rows.Next() {
 			var c candidate
-			if err := rows.Scan(&c.id, &c.ownerID); err != nil {
+			if err := rows.Scan(&c.id, &c.ownerID, &c.systemID); err != nil {
 				_ = rows.Close()
 				return err
 			}
@@ -220,6 +205,48 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		candidateIDs := make([]int64, len(candidates))
 		for i, c := range candidates {
 			candidateIDs[i] = c.id
+		}
+		if actor != nil {
+			principal := authz.Principal{UserID: actor.UserID, Kind: actor.Kind, SystemID: filter.systemID, TokenSystemID: actor.TokenSystemID}
+			if principal.TokenSystemID == 0 && (actor.Kind == "token" || actor.TokenID != 0) {
+				principal.TokenSystemID = systems.DefaultID
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id=? AND disabled=0`, actor.UserID).Scan(&principal.Role); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNotTrashed
+				}
+				return err
+			}
+			if actor.TokenID != 0 {
+				var bound int64
+				if err := tx.QueryRowContext(ctx, `SELECT system_id FROM api_tokens WHERE id=? AND user_id=?
+					AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`,
+					actor.TokenID, actor.UserID, time.Now().Unix()).Scan(&bound); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return ErrNotTrashed
+					}
+					return err
+				}
+				if bound != principal.TokenSystemID {
+					return ErrNotTrashed
+				}
+			}
+			if principal.Role != "admin" {
+				var err error
+				principal.Groups, err = authz.LoadGroupsInTx(ctx, tx, actor.UserID)
+				if err != nil {
+					return err
+				}
+			}
+			decisions, err := (authz.ACLAuthorizer{DB: s.db}).CanDocumentsInTx(ctx, tx, principal, candidateIDs, authz.PermDelete)
+			if err != nil {
+				return err
+			}
+			for _, id := range candidateIDs {
+				if !decisions[id] {
+					return ErrNotTrashed
+				}
+			}
 		}
 		rawCandidateIDs, err := json.Marshal(candidateIDs)
 		if err != nil {
@@ -302,7 +329,8 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 	report := Report{Purged: len(candidates)}
 	for _, c := range candidates {
 		audit.Log(ctx, s.db, s.log, audit.Event{
-			Actor: actor, Action: "document.purge", ObjectKind: "document", ObjectID: c.id,
+			SystemID: c.systemID,
+			Actor:    actor, Action: "document.purge", ObjectKind: "document", ObjectID: c.id,
 			After: map[string]any{"owner_id": c.ownerID}, RequestID: requestID,
 		})
 	}

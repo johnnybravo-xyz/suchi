@@ -3,11 +3,9 @@ package approvals
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
-	"github.com/johnnybravo-xyz/suchi/core/jobs"
 )
 
 // SweepInterval is how often the sweeper re-enqueues itself. 30s is a
@@ -55,14 +53,7 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 		}
 		settledCount = len(settled)
 		for _, id := range due {
-			payload, err := json.Marshal(map[string]any{
-				"run_id":  id,
-				"trigger": "timeout",
-			})
-			if err != nil {
-				return err
-			}
-			if err := jobs.Enqueue(ctx, tx, "approval:advance", 0, string(payload)); err != nil {
+			if err := enqueueAdvanceWithTrigger(ctx, tx, id, "timeout"); err != nil {
 				return err
 			}
 			// Clear deadline so the next sweep pass doesn't fire again
@@ -100,6 +91,7 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 			}
 			audit.LogInTx(ctx, tx, e.log, audit.Event{
 				Action: "document.suggestion_" + reason, ObjectKind: "document", ObjectID: item.docID,
+				SystemID: item.systemID,
 				After: map[string]any{
 					"run_id": item.runID, "field": item.field, "label": item.label,
 				},
@@ -117,13 +109,13 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 }
 
 type settledDocumentChange struct {
-	taskID, runID, docID int64
-	field, label, choice string
+	taskID, runID, docID, systemID int64
+	field, label, choice           string
 }
 
 func settledDocumentChanges(ctx context.Context, tx *sql.Tx) ([]settledDocumentChange, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT t.id, r.id, r.doc_id,
+		SELECT t.id, r.id, r.doc_id, r.system_id,
 		       COALESCE(json_extract(r.vars_json, '$.field'), ''),
 		       COALESCE(json_extract(r.vars_json, '$.label'), ''),
 		       CASE WHEN json_extract(r.vars_json, '$.field') = 'jd_category'
@@ -139,7 +131,7 @@ func settledDocumentChanges(ctx context.Context, tx *sql.Tx) ([]settledDocumentC
 		    (json_extract(r.vars_json, '$.field') = 'jd_category'
 		      AND (doc.jd_category_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
 		        OR (doc.jd_category_id IS NOT NULL AND doc.jd_category_id != COALESCE((
-		          SELECT CAST(value_json AS INTEGER) FROM settings WHERE key = 'jd_inbox_category_id'
+		          SELECT inbox_category_id FROM jd_systems WHERE id = doc.system_id
 		        ), 0))))
 		    OR (json_extract(r.vars_json, '$.field') = 'correspondent'
 		      AND doc.correspondent_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
@@ -161,7 +153,7 @@ func settledDocumentChanges(ctx context.Context, tx *sql.Tx) ([]settledDocumentC
 	var out []settledDocumentChange
 	for rows.Next() {
 		var item settledDocumentChange
-		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.field, &item.label, &item.choice); err != nil {
+		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.systemID, &item.field, &item.label, &item.choice); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -186,8 +178,8 @@ func (e *Engine) rescheduleSweep(ctx context.Context) error {
 		}
 		next := time.Now().Add(SweepInterval).Unix()
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO jobs(kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-			VALUES ('approval:timeout-sweep', NULL, '{}', 'pending', ?, ?, ?)
+			INSERT INTO jobs(system_id, kind, doc_id, payload, state, next_run_at, created_at, updated_at)
+			VALUES (NULL, 'approval:timeout-sweep', NULL, '{}', 'pending', ?, ?, ?)
 		`, next, time.Now().Unix(), time.Now().Unix())
 		return err
 	})

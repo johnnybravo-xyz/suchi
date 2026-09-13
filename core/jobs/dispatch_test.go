@@ -31,16 +31,21 @@ func TestRunDrainsReadyJobsBeforeWaiting(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			d := openDB(t)
+			docIDs := []int64{99}
+			for id := 1; id <= test.expected; id++ {
+				docIDs = append(docIDs, int64(id))
+			}
+			seedJobDocuments(t, d, docIDs...)
 			ctx := t.Context()
 			if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 				for id := 1; id <= test.initial; id++ {
-					if err := Enqueue(ctx, tx, "test-dispatch", int64(id), "{}"); err != nil {
+					if err := Enqueue(ctx, tx, "test-dispatch", int64(id), 1, "{}"); err != nil {
 						return err
 					}
 				}
 				_, err := tx.ExecContext(ctx, `
-					INSERT INTO jobs(kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-					VALUES ('test-dispatch', 99, '{}', 'pending', unixepoch() + 3600, 0, 0)`)
+					INSERT INTO jobs(kind, doc_id, system_id, payload, state, next_run_at, created_at, updated_at)
+					VALUES ('test-dispatch', 99, 1, '{}', 'pending', unixepoch() + 3600, 0, 0)`)
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -51,7 +56,7 @@ func TestRunDrainsReadyJobsBeforeWaiting(t *testing.T) {
 			disp.Register(dispatchSubscriber{handle: func(ctx context.Context, event pluginapi.Event) error {
 				if test.initial == 1 && event.DocID < int64(test.expected) {
 					if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-						return Enqueue(ctx, tx, "test-dispatch", event.DocID+1, "{}")
+						return Enqueue(ctx, tx, "test-dispatch", event.DocID+1, 1, "{}")
 					}); err != nil {
 						return err
 					}

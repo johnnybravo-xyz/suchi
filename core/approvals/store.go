@@ -13,6 +13,7 @@ import (
 // callers can distinguish absent from zero.
 type Run struct {
 	ID             int64
+	SystemID       int64
 	DefID          int64
 	DocID          *int64
 	Status         string // running|done|failed|cancelled
@@ -56,6 +57,7 @@ type Transition struct {
 // def is an internal row shape for approval_defs.
 type def struct {
 	ID       int64
+	SystemID int64
 	Slug     string
 	Version  int
 	SpecJSON string
@@ -67,18 +69,18 @@ type def struct {
 // insertDef persists a Spec at the next version for slug. Bumps prior
 // active versions to inactive so only one is "current" at a time. All
 // in one tx.
-func insertDef(ctx context.Context, tx *sql.Tx, slug, specJSON string, createdBy int64) (int64, int, error) {
+func insertDef(ctx context.Context, tx *sql.Tx, systemID int64, slug, specJSON string, createdBy int64) (int64, int, error) {
 	var nextVersion int
 	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(version), 0) + 1 FROM approval_defs WHERE slug = ?
-	`, slug).Scan(&nextVersion)
+		SELECT COALESCE(MAX(version), 0) + 1 FROM approval_defs WHERE system_id = ? AND slug = ?
+	`, systemID, slug).Scan(&nextVersion)
 	if err != nil {
 		return 0, 0, err
 	}
 	// Deactivate prior versions so idx_approval_defs_active narrows to one.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE approval_defs SET active = 0 WHERE slug = ? AND active = 1
-	`, slug); err != nil {
+		UPDATE approval_defs SET active = 0 WHERE system_id = ? AND slug = ? AND active = 1
+	`, systemID, slug); err != nil {
 		return 0, 0, err
 	}
 	now := time.Now().Unix()
@@ -87,9 +89,9 @@ func insertDef(ctx context.Context, tx *sql.Tx, slug, specJSON string, createdBy
 		createdByCol = createdBy
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
-		VALUES (?, ?, ?, 1, ?, ?)
-	`, slug, nextVersion, specJSON, now, createdByCol)
+		INSERT INTO approval_defs(system_id, slug, version, spec_json, active, created_at, created_by)
+		VALUES (?, ?, ?, ?, 1, ?, ?)
+	`, systemID, slug, nextVersion, specJSON, now, createdByCol)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -99,15 +101,15 @@ func insertDef(ctx context.Context, tx *sql.Tx, slug, specJSON string, createdBy
 
 // activeDefBySlug loads the current active def row for slug. Returns
 // ErrNoDef when none.
-func activeDefBySlug(ctx context.Context, d rowQuerier, slug string) (def, error) {
+func activeDefBySlug(ctx context.Context, d rowQuerier, systemID int64, slug string) (def, error) {
 	var r def
 	err := d.QueryRowContext(ctx, `
-		SELECT id, slug, version, spec_json, active
+		SELECT id, system_id, slug, version, spec_json, active
 		FROM approval_defs
-		WHERE slug = ? AND active = 1
+		WHERE system_id = ? AND slug = ? AND active = 1
 		ORDER BY version DESC
 		LIMIT 1
-	`, slug).Scan(&r.ID, &r.Slug, &r.Version, &r.SpecJSON, &r.Active)
+	`, systemID, slug).Scan(&r.ID, &r.SystemID, &r.Slug, &r.Version, &r.SpecJSON, &r.Active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return def{}, ErrNoDef
 	}
@@ -119,9 +121,9 @@ func activeDefBySlug(ctx context.Context, d rowQuerier, slug string) (def, error
 func defByID(ctx context.Context, d rowQuerier, id int64) (def, error) {
 	var r def
 	err := d.QueryRowContext(ctx, `
-		SELECT id, slug, version, spec_json, active
+		SELECT id, system_id, slug, version, spec_json, active
 		FROM approval_defs WHERE id = ?
-	`, id).Scan(&r.ID, &r.Slug, &r.Version, &r.SpecJSON, &r.Active)
+	`, id).Scan(&r.ID, &r.SystemID, &r.Slug, &r.Version, &r.SpecJSON, &r.Active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return def{}, ErrNoDef
 	}
@@ -132,7 +134,7 @@ func defByID(ctx context.Context, d rowQuerier, id int64) (def, error) {
 
 // insertRun creates a running row at the spec's start state. deadline
 // is optional — nil column when no timeout on the start state.
-func insertRun(ctx context.Context, tx *sql.Tx, defID int64, docID *int64, start string, vars map[string]any, deadline *int64, startedBy int64) (int64, error) {
+func insertRun(ctx context.Context, tx *sql.Tx, systemID, defID int64, docID *int64, start string, vars map[string]any, deadline *int64, startedBy int64) (int64, error) {
 	varsJSON, err := marshalMap(vars)
 	if err != nil {
 		return 0, err
@@ -148,10 +150,10 @@ func insertRun(ctx context.Context, tx *sql.Tx, defID int64, docID *int64, start
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO approval_runs(
-			def_id, doc_id, state, current_state, vars_json,
+			system_id, def_id, doc_id, state, current_state, vars_json,
 			state_entered_at, deadline_at, started_by, started_at
-		) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
-	`, defID, nullInt64(docID), start, varsJSON, now, nullInt64(deadline), startedByCol, now)
+		) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)
+	`, systemID, defID, nullInt64(docID), start, varsJSON, now, nullInt64(deadline), startedByCol, now)
 	if err != nil {
 		return 0, err
 	}
@@ -169,10 +171,10 @@ func loadRun(ctx context.Context, d rowQuerier, id int64) (Run, error) {
 		varsJSON  string
 	)
 	err := d.QueryRowContext(ctx, `
-		SELECT id, def_id, doc_id, state, current_state, vars_json,
+		SELECT id, system_id, def_id, doc_id, state, current_state, vars_json,
 		       state_entered_at, deadline_at, started_by, started_at, ended_at
 		FROM approval_runs WHERE id = ?
-	`, id).Scan(&r.ID, &r.DefID, &docID, &r.Status, &r.CurrentState, &varsJSON,
+	`, id).Scan(&r.ID, &r.SystemID, &r.DefID, &docID, &r.Status, &r.CurrentState, &varsJSON,
 		&r.StateEnteredAt, &deadline, &startedBy, &r.StartedAt, &endedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Run{}, ErrNoRun

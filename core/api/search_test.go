@@ -123,6 +123,7 @@ func TestSearchMalformedQueryReturnsBadRequest(t *testing.T) {
 		DB:  openTestDB(t),
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	}
+	seedUser(t, s.DB, 1)
 	secrets := []string{
 		"privateocrphrase", "secretfilenamepdf",
 		"bearertokenvalue", "documentcontentvalue",
@@ -210,6 +211,7 @@ func TestSearchRequiresDocumentsReadScope(t *testing.T) {
 		DB:  openTestDB(t),
 		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
+	seedUser(t, s.DB, 1)
 	request := func(scopes []string) *httptest.ResponseRecorder {
 		t.Helper()
 		principal := &pluginapi.Principal{Kind: "token", UserID: 1, Role: "admin", Scopes: scopes}
@@ -235,6 +237,7 @@ func TestSearchValidatesLanguageFilter(t *testing.T) {
 		DB:  openTestDB(t),
 		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
+	seedUser(t, s.DB, 1)
 	request := func(rawURL string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, rawURL, nil)
@@ -267,6 +270,7 @@ func TestSearchFacetIDLimits(t *testing.T) {
 		DB:  openTestDB(t),
 		Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
+	seedUser(t, s.DB, 1)
 	request := func(field, raw string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet,

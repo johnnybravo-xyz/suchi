@@ -17,6 +17,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/refile"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
@@ -53,10 +55,15 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 
 // SetupState returns the wizard's progress.
 func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
 		return
 	}
-	st, err := settings.LoadSetupState(r.Context(), s.DB)
+	systemID, ok := s.requireSystem(w, r, actor)
+	if !ok {
+		return
+	}
+	st, err := settings.LoadSetupState(r.Context(), s.DB, systemID)
 	if err != nil {
 		s.serverErr(w, "setup.state", err)
 		return
@@ -96,10 +103,15 @@ func (s *Server) SaveSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 // SetupComplete stamps the wizard-finished timestamp.
 func (s *Server) SetupComplete(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
 		return
 	}
-	chosen, err := settings.FilingTreeChosen(r.Context(), s.DB)
+	systemID, ok := s.requireSystem(w, r, actor)
+	if !ok {
+		return
+	}
+	chosen, err := settings.FilingTreeChosen(r.Context(), s.DB, systemID)
 	if err != nil {
 		s.serverErr(w, "setup.complete", err)
 		return
@@ -218,7 +230,12 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 // A Suchi Preset is a preset following Suchi's Johnny.Decimal taxonomy —
 // the starter tree plus its seeded automations.
 func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	// IncludeSeeds is a pointer so we can distinguish "field omitted"
@@ -227,10 +244,8 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PresetID     string `json:"preset_id"`
 		ConfirmBlank bool   `json:"confirm_blank"`
-		// Refile=true accepts existing docs filed outside the inbox —
-		// they get parked on the new inbox and a refile sweep is
-		// triggered afterwards (re-run automations and enqueue re-render).
-		// Selling point: "you can always come back to change this."
+		// Refile runs the existing explicit sweep after a successful additive
+		// import. It does not authorize replacing or discarding the old tree.
 		Refile       bool  `json:"refile"`
 		IncludeSeeds *bool `json:"include_seeds,omitempty"`
 	}
@@ -250,13 +265,20 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := jd.ApplyPresetOpts{
-		AllowRefile: body.Refile,
-		SkipSeeds:   body.IncludeSeeds != nil && !*body.IncludeSeeds,
+		SystemID:  systemID,
+		ActorID:   principal.UserID,
+		SkipSeeds: body.IncludeSeeds != nil && !*body.IncludeSeeds,
 	}
 	if err := jd.ApplyPreset(r.Context(), s.DB, s.Log, body.PresetID, opts); err != nil {
-		if errors.Is(err, jd.ErrDocumentsExist) {
-			s.writeError(w, http.StatusConflict, "documents_filed",
-				err.Error()+` (re-post with "refile": true to accept the refile)`)
+		var collisions *importer.UnresolvedCollisionsError
+		if errors.As(err, &collisions) {
+			s.writeJSON(w, http.StatusConflict, map[string]any{
+				"code": "collisions", "error": err.Error(), "collisions": collisions.Items,
+			})
+			return
+		}
+		if errors.Is(err, importer.ErrStalePreview) {
+			s.writeError(w, http.StatusConflict, "stale_preview", err.Error())
 			return
 		}
 		s.serverErr(w, "preset.apply", err)
@@ -266,7 +288,7 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		// Kick off the sweep synchronously so operators see the counters
 		// in the response. Long-running installs can hit the dedicated
 		// /api/admin/refile endpoint instead for the background flavor.
-		stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{})
+		stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{SystemID: systemID, ActorID: principal.UserID})
 		if err != nil {
 			s.Log.Warn("preset.refile.err", "err", err.Error())
 		}
@@ -275,12 +297,10 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = stats // captured in the log; response stays minimal for now
 	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeyPreset, body.PresetID); err != nil {
-		// Non-fatal: the tree is applied; the preset-name record is a
-		// nicety for the wizard's recap page.
-		s.Log.Warn("preset.record", "err", err.Error())
+	if s.Jobs != nil {
+		s.Jobs.Nudge()
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"preset_id": body.PresetID})
+	s.writeJSON(w, http.StatusOK, map[string]any{"preset_id": body.PresetID, "index_refresh_pending": true})
 }
 
 // ---------- LLM settings ----------
@@ -702,7 +722,15 @@ func (s *Server) GetIngestSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := settings.ResolveFSWatchConfig(r.Context(), s.DB, settings.FSWatchConfig{})
-	s.writeJSON(w, http.StatusOK, FSWatchSettingsStatus{Dir: cfg.Dir, OwnerEmail: cfg.OwnerEmail})
+	sys, err := systems.Get(r.Context(), s.DB.Read, systems.DefaultID)
+	if cfg.System != "" {
+		sys, err = systems.ByCode(r.Context(), s.DB.Read, cfg.System)
+	}
+	if err != nil {
+		s.serverErr(w, "settings.fswatch.system", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, FSWatchSettingsStatus{Dir: cfg.Dir, OwnerEmail: cfg.OwnerEmail, System: sys.Code})
 }
 
 // SaveIngestSettings persists fs-watch dir + owner and replaces the running
@@ -714,6 +742,7 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		FSWatchDir        string `json:"fs_watch_dir"`
 		FSWatchOwnerEmail string `json:"fs_watch_owner_email"`
+		FSWatchSystem     string `json:"fs_watch_system"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -735,6 +764,18 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 			"fs_watch_dir and fs_watch_owner_email are both required")
 		return
 	}
+	sys, err := systems.Get(r.Context(), s.DB.Read, systems.DefaultID)
+	if body.FSWatchSystem != "" {
+		sys, err = systems.ByCode(r.Context(), s.DB.Read, body.FSWatchSystem)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		s.writeError(w, http.StatusBadRequest, "bad_system", "filing system is unavailable")
+		return
+	}
+	if err != nil {
+		s.serverErr(w, "settings.fswatch.system", err)
+		return
+	}
 	if body.FSWatchOwnerEmail != "" {
 		var ownerID int64
 		err := s.DB.Read.QueryRowContext(r.Context(),
@@ -747,6 +788,15 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 			s.serverErr(w, "settings.fswatch.owner", err)
 			return
 		}
+		allowed, err := systems.CanEnter(r.Context(), s.DB.Read, ownerID, sys.ID)
+		if err != nil {
+			s.serverErr(w, "settings.fswatch.owner_system", err)
+			return
+		}
+		if !allowed {
+			s.writeError(w, http.StatusBadRequest, "owner_unavailable", "fs-watch owner cannot enter the filing system")
+			return
+		}
 	}
 	previous := settings.FSWatchConfig{}
 	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchDir, &previous.Dir); err != nil && !errors.Is(err, settings.ErrNotFound) {
@@ -757,9 +807,14 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "settings.fswatch.previous_owner", err)
 		return
 	}
+	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchSystem, &previous.System); err != nil && !errors.Is(err, settings.ErrNotFound) {
+		s.serverErr(w, "settings.fswatch.previous_system", err)
+		return
+	}
 	if err := settings.SetMany(r.Context(), s.DB, map[string]any{
 		settings.KeyFSWatchDir:        body.FSWatchDir,
 		settings.KeyFSWatchOwnerEmail: body.FSWatchOwnerEmail,
+		settings.KeyFSWatchSystem:     sys.Code,
 	}); err != nil {
 		s.serverErr(w, "settings.fswatch", err)
 		return
@@ -769,6 +824,7 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 			rollbackErr := settings.SetMany(r.Context(), s.DB, map[string]any{
 				settings.KeyFSWatchDir:        previous.Dir,
 				settings.KeyFSWatchOwnerEmail: previous.OwnerEmail,
+				settings.KeyFSWatchSystem:     previous.System,
 			})
 			if rollbackErr != nil {
 				s.Log.Error("api.settings.fswatch.rollback", "err", rollbackErr.Error())
@@ -803,6 +859,10 @@ func decodeJSON(r *http.Request, into any) error {
 }
 
 func (s *Server) serverErr(w http.ResponseWriter, tag string, err error) {
+	if errors.Is(err, errSystemUnavailable) {
+		s.writeError(w, http.StatusNotFound, "not_found", "system unavailable")
+		return
+	}
 	s.Log.Error("api."+tag, "err", err.Error())
 	s.writeJSON(w, http.StatusInternalServerError,
 		errBody{Code: "internal", Error: "server error"})

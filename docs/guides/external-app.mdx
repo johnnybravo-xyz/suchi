@@ -10,6 +10,14 @@ tools all use the same pattern.
 This guide walks a fresh integration through the token dance:
 generate/fetch → attach → verify → rotate → revoke.
 
+Select a filing system before creating credentials. UI token creation captures
+that system; API creation/password exchange can use `?system=S02`, with omission
+targeting original system 1. The resulting token's binding is its default and
+ceiling, so existing unqualified client calls stay in S02. A conflicting explicit
+system is unavailable, even for an admin token. Scope, active membership and
+document permissions remain additional gates. Use a new token to change systems;
+membership removal revokes old credentials and re-admission never revives them.
+
 ## Prerequisites
 
 - A running suchi instance.

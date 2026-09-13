@@ -134,6 +134,9 @@ scan_split_dpi = 150
 # [ingest_fs]
 # dir         = "/data/staging"
 # owner_email = "you@example.com"
+# system      = "S02" # existing code; omit for original system 1
+# The owner must be able to enter this system. Sidecars cannot select another.
+# Introduce systems by taxonomy import, not by this boot configuration.
 
 # --------------------------------------------------------------------
 # Email ingest (IMAP polling) — shared boot options

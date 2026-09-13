@@ -31,19 +31,19 @@ func openSourceDB(t *testing.T) *db.DB {
 	_, err = d.Write.ExecContext(ctx, `
 		INSERT INTO users(id, email, display_name, role, created_at, updated_at)
 		VALUES (1, 'owner@example.com', 'Owner', 'admin', 0, 0);
-		INSERT INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'System', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1);
-		INSERT INTO documents(id, owner_id, original_blob, original_size, title,
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'System', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1);
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title,
 		                      jd_category_id, created_at, updated_at)
-		VALUES (1, 1, 'sha-1', 1, 'one', 1, 0, 0),
-		       (2, 1, 'sha-2', 1, 'two', 1, 0, 0);
+		VALUES (1, 1, 1, 'sha-1', 1, 'one', 1, 0, 0),
+		       (1, 2, 1, 'sha-2', 1, 'two', 1, 0, 0);
 		INSERT INTO email_accounts(
-			id, name, owner_id, provider, host, port, folder,
+			system_id, id, name, owner_id, provider, host, port, folder,
 			auth_method, username, sealed_secret, created_at, updated_at
 		) VALUES (
-			1, 'Personal Outlook', 1, 'microsoft', 'outlook.office365.com',
+			1, 1, 'Personal Outlook', 1, 'microsoft', 'outlook.office365.com',
 			993, 'INBOX', 'oauth', 'ritesh@example.com', X'00', 0, 0
 		);
 	`)

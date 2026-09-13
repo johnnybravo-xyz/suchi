@@ -756,6 +756,7 @@ func (h *Handler) splitChildExists(ctx context.Context, parentID int64, index in
 // its split children.
 type splitParent struct {
 	OwnerID      int64
+	SystemID     int64
 	Title        string
 	MIME         string
 	JDCategoryID int64
@@ -771,10 +772,10 @@ func (h *Handler) loadParentForSplit(ctx context.Context, docID int64) (*splitPa
 		contentSource string
 	)
 	err := h.db.Read.QueryRowContext(ctx, `
-		SELECT owner_id, title, COALESCE(mime_type, ''), jd_category_id,
+		SELECT system_id, owner_id, title, COALESCE(mime_type, ''), jd_category_id,
 		       source_mtime, COALESCE(sensitivity, ''), content_source
 		FROM documents WHERE id = ?
-	`, docID).Scan(&p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID,
+	`, docID).Scan(&p.SystemID, &p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID,
 		&p.SourceMTime, &p.Sensitivity, &contentSource)
 	if err != nil {
 		return nil, err
@@ -815,12 +816,12 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
 				split_parent_id, split_origin_id, split_index,
 				source_mtime, sensitivity
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, parent.SystemID, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
 			parent.JDCategoryID, now, now, now,
 			parentID, parentID, index, parent.SourceMTime, parent.Sensitivity)
 		if err != nil {
@@ -836,7 +837,7 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: parent.MIME,
 		})
-		if err := jobs.Enqueue(ctx, tx, Kind, childID, string(payload)); err != nil {
+		if err := jobs.Enqueue(ctx, tx, Kind, childID, parent.SystemID, string(payload)); err != nil {
 			return err
 		}
 		log.Info("post-ingest.scan_split.child_created",
@@ -874,13 +875,17 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 		return nil
 	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var systemID int64
+		if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+			return err
+		}
 		now := time.Now().Unix()
 		for _, name := range tags {
 			name = strings.TrimSpace(name)
 			if name == "" {
 				continue
 			}
-			tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+			tagID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableTags, name, now)
 			if err != nil {
 				return err
 			}
@@ -902,7 +907,7 @@ func (h *Handler) applyPreConsumeMetadata(ctx context.Context, docID int64, tags
 				extra    string
 			)
 			err := tx.QueryRowContext(ctx,
-				`SELECT id, data_type, extra_data FROM custom_fields WHERE name = ?`, name).Scan(&fieldID, &dataType, &extra)
+				`SELECT id, data_type, extra_data FROM custom_fields WHERE system_id = ? AND name = ?`, systemID, name).Scan(&fieldID, &dataType, &extra)
 			if err != nil {
 				h.log.Warn("post-ingest.preconsume.unknown_field", "name", name)
 				continue
@@ -957,9 +962,10 @@ func (h *Handler) handleEmail(ctx context.Context, log *slog.Logger, parentID in
 			WHERE email_message_id = ?
 			  AND id != ?
 			  AND owner_id = (SELECT owner_id FROM documents WHERE id = ?)
+			  AND system_id = (SELECT system_id FROM documents WHERE id = ?)
 			  AND trashed_at IS NULL
 			LIMIT 1
-		`, parsed.MessageID, parentID, parentID).Scan(&existing)
+		`, parsed.MessageID, parentID, parentID, parentID).Scan(&existing)
 		if err == nil {
 			log.Info("post-ingest.email.dedup",
 				"parent_id", parentID, "existing", existing,
@@ -1110,8 +1116,12 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 		return nil
 	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var systemID int64
+		if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+			return err
+		}
 		now := time.Now().Unix()
-		corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, now)
+		corID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents, name, now)
 		if err != nil {
 			return err
 		}
@@ -1172,14 +1182,18 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		parentRef = parentID
 	}
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var systemID int64
+		if err := tx.QueryRowContext(ctx, `SELECT system_id, owner_id, jd_category_id FROM documents WHERE id = ?`, parentID).Scan(&systemID, &ownerID, &jdCategoryID); err != nil {
+			return err
+		}
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(
-				owner_id, original_blob, original_size, title, mime_type,
+				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
 				email_parent_id, source_mtime
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, ownerID, ref.SHA256, ref.Size, title, mime,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, ownerID, ref.SHA256, ref.Size, title, mime,
 			jdCategoryID, now, now, now, parentRef, sourceMtime)
 		if err != nil {
 			return err
@@ -1218,7 +1232,7 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
 		})
-		if err := jobs.Enqueue(ctx, tx, Kind, childID, string(payload)); err != nil {
+		if err := jobs.Enqueue(ctx, tx, Kind, childID, systemID, string(payload)); err != nil {
 			return err
 		}
 		log.Info("post-ingest.email.attachment_created",
@@ -1299,9 +1313,9 @@ func (h *Handler) gatherDecryptCandidates(ctx context.Context, log *slog.Logger,
 		}
 		rows, err := h.db.Read.QueryContext(ctx, `
 			SELECT id, ciphertext FROM decryption_passwords
-			WHERE owner_id = ?
+			WHERE owner_id = ? AND system_id = (SELECT system_id FROM documents WHERE id = ?)
 			ORDER BY last_used_at DESC NULLS LAST, id
-		`, ownerID)
+		`, ownerID, docID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("query learned: %w", err)
 		}
@@ -1515,6 +1529,10 @@ func (h *Handler) runOCR(ctx context.Context, log *slog.Logger, pdfBytes []byte,
 // LLM classify handoff. Extracted so both entry paths share exactly
 // one implementation.
 func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID int64) error {
+	var systemID int64
+	if err := h.db.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+		return err
+	}
 	// Language detection — runs before the LLM classifier so the
 	// stamped code can hint the prompt. No-op when the chain is
 	// empty (default v1 build) or when the doc's languages are
@@ -1554,7 +1572,7 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// would die as a "no subscriber for kind" dead-letter.
 	if h.classifyEnabled != nil && h.classifyEnabled() {
 		if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-			return jobs.Enqueue(ctx, tx, PostClassifyKind, docID, "{}")
+			return jobs.Enqueue(ctx, tx, PostClassifyKind, docID, systemID, "{}")
 		}); err != nil {
 			log.Warn("post-ingest.enqueue_classify", "err", err.Error())
 		}
@@ -1570,7 +1588,8 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	_ = h.db.Read.QueryRowContext(ctx,
 		`SELECT title FROM documents WHERE id = ?`, docID).Scan(&title)
 	audit.Log(ctx, h.db, log, audit.Event{
-		Action: "document.ingested", ObjectKind: "document", ObjectID: docID,
+		SystemID: systemID,
+		Action:   "document.ingested", ObjectKind: "document", ObjectID: docID,
 		After: map[string]any{"title": title.String},
 	})
 	return nil
