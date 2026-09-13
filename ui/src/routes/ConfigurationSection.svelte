@@ -1,8 +1,7 @@
 <script>
-  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
-  import { systems } from '../lib/systems.svelte.js'
+  import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { untrack } from 'svelte'
-  import { setupState, saveSetupIntent, adminCreateUser, adminListUsers, applyPreset,
+  import { setupState, saveSetupIntent, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
            saveResearchContextMode,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
@@ -10,7 +9,7 @@
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
-  import { USER_CAPABILITIES } from '../lib/capabilities.js'
+  import UserCreateForm from '../lib/UserCreateForm.svelte'
 
   let {
     section = 'archive', notify, setup = false, onAdvance,
@@ -71,13 +70,7 @@
   let err = $state('')
 
   // step-local form state
-  let user = $state({ email: '', password: '', display_name: '', role: 'member', capabilities: [] })
   let mailUsers = $state([])
-  function toggleCap(slug) {
-    user.capabilities = user.capabilities.includes(slug)
-      ? user.capabilities.filter(s => s !== slug)
-      : [...user.capabilities, slug]
-  }
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
   let intent = $state('')
   let filingTreeChosen = $state(false)
@@ -121,15 +114,15 @@
     seedSourceOwner()
   }
 
+  async function userCreated() {
+    try { await loadUsers() } catch {}
+    if (setup) onAdvance?.()
+  }
+
   function seedSourceOwner() {
     if (!ingest.fs_watch_owner_email) {
       ingest.fs_watch_owner_email = mailUsers.find(u => !u.disabled)?.email || ''
     }
-  }
-  async function createSetupUser() {
-    const result = await adminCreateUser(user)
-    try { await loadUsers() } catch {}
-    return result
   }
 
   function chooseIntent(option) {
@@ -138,7 +131,7 @@
     if (option.preset) preset.preset_id = option.preset
   }
 
-  async function saveIntent() {
+  function saveIntent() {
     return saveSetupIntent(intent)
   }
 
@@ -196,7 +189,6 @@
   }
   const requiredLoadKeys = $derived(({
     archive: ['setup'],
-    users: ['users'],
     sources: ['users', 'ingest'],
     mail: ['users'],
     llm: ['llm'],
@@ -217,15 +209,10 @@
 
   $effect(() => {
     const selected = section
+    const keys = requiredLoadKeys
     untrack(() => {
-      if (selected === 'archive') {
-        loadOnce('setup', loadSetup)
-        loadOnce('presets', loadPresets)
-      }
-      if (selected === 'users' || selected === 'sources' || selected === 'mail') loadOnce('users', loadUsers)
-      if (selected === 'sources') loadOnce('ingest', loadIngest)
-      if (selected === 'llm') loadOnce('llm', loadLLM)
-      if (selected === 'preferences') loadOnce('preferences', loadPreferences)
+      for (const key of keys) loadOnce(key, loadFunctions[key])
+      if (selected === 'archive') loadOnce('presets', loadPresets)
     })
   })
 
@@ -433,32 +420,8 @@
 
     {:else if section === 'users'}
       <h3>Add another person</h3>
-      <p class="wiz-p">You already have the admin account you signed in with. Add family members or teammates here; each gets their own documents and their own inbox.</p>
-      <div class="field"><label for="u-email">Email</label><input id="u-email" class="input" type="email" bind:value={user.email} /></div>
-      <div class="field"><label for="u-name">Display name</label><input id="u-name" class="input" bind:value={user.display_name} /></div>
-      <div class="field"><label for="u-pw">Password</label><input id="u-pw" class="input" type="password" bind:value={user.password} autocomplete="new-password" /></div>
-      <div class="field"><label for="u-role">Role</label>
-        <select id="u-role" class="input" bind:value={user.role}>
-          <option value="member">Member</option><option value="admin">Admin</option>
-        </select>
-      </div>
-      {#if user.role === 'member'}
-        <div class="field">
-          <span class="input-label">Capabilities</span>
-          {#each USER_CAPABILITIES as c (c.key)}
-            <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin-top:4px">
-              <input type="checkbox" checked={user.capabilities.includes(c.key)}
-                     onchange={() => toggleCap(c.key)} />
-              {c.setupLabel}
-            </label>
-          {/each}
-        </div>
-      {/if}
-      <div class="toolbar">
-        <button class="btn primary sm" disabled={busy || !user.email || !user.password}
-                onclick={() => saveAnd(createSetupUser, 'User created')}>Create user</button>
-        {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Just me for now</button>{/if}
-      </div>
+      <p class="wiz-p">Your admin account is ready. Add a family member or teammate, or continue on your own. You can manage users and groups later in Archive configuration.</p>
+      <UserCreateForm {notify} onCreated={userCreated} onSkip={setup ? onAdvance : undefined} />
 
     {:else if section === 'sources'}
       <h3>Watched folder</h3>

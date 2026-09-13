@@ -1,8 +1,7 @@
 <script>
-  import { scopedHash as filingHref } from './systems.svelte.js'
+  import { captureScope, scopeCurrent, scopedHash as filingHref } from './systems.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { session } from './session.svelte.js'
-  import { captureScope, scopeCurrent } from './systems.svelte.js'
   import { uploadDocument, getDocument, patchDocument, listTasks } from './api.js'
   import { SENSITIVITY_OPTIONS, fmtBytes } from './format.js'
   import { markUploaded } from './upload_bus.svelte.js'

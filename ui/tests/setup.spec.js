@@ -502,7 +502,7 @@ test('taxonomy settings offers explicit starter and tree-only exports without si
   })
   await page.goto('/#/settings?tab=archive&section=users')
   await page.getByRole('button', { name: 'Taxonomy', exact: true }).click()
-  await page.getByLabel('Export serialization').selectOption('toml')
+  await page.getByRole('combobox', { name: 'File format', exact: true }).selectOption('toml')
   await page.getByRole('button', { name: 'Export with starter rules' }).click()
   await expect(page.getByText('Disabled starter cannot be exported. Use tree-only export.', { exact: true })).toBeVisible()
   expect(exports).toEqual([{ format: 'toml', skip_seeds: 'false' }])
@@ -1140,8 +1140,9 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users$/)
   await expect(configuration.getByRole('button', { name: 'Users', exact: true })).toBeVisible()
   await expect(configuration.getByRole('button', { name: 'Groups', exact: true })).toBeVisible()
-  await expect(configuration.getByRole('button', { name: 'Custom fields', exact: true })).toBeVisible()
-  await expect(configuration.getByRole('button', { name: 'Taxonomy', exact: true })).toBeVisible()
+  await expect(configuration.getByRole('button', { name: 'Metadata', exact: true })).toBeVisible()
+  await configuration.getByRole('button', { name: 'Taxonomy', exact: true }).click()
+  await expect(configuration.getByRole('combobox', { name: 'File format', exact: true })).toBeVisible()
   await configuration.getByRole('link', { name: 'Archive overview' }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
   const automations = configuration.getByRole('link', { name: /Automations/ }).last()
@@ -1388,6 +1389,30 @@ test('mounts only the selected settings surface', async ({ page }) => {
   await expect(page.getByText(/No groups yet/)).toBeVisible()
   expect(requestedPaths).not.toContain('/api/custom_fields/')
   expect(requestedPaths).not.toContain('/api/tags/')
+})
+
+test('refreshes intake owners after user creation from a revisited People step', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  const users = [{ id: 1, email: 'admin@example.test', display_name: 'Admin', role: 'admin' }]
+  await page.route('**/api/admin/users', async route => {
+    if (route.request().method() === 'POST') {
+      users.push({ ...route.request().postDataJSON(), id: 2 })
+      return route.fulfill({ json: { id: 2 } })
+    }
+    return route.fulfill({ json: { results: users } })
+  })
+  await page.goto('/#/setup')
+  await page.getByRole('button', { name: 'Watched folder', exact: true }).click()
+  const owner = page.getByRole('combobox', { name: 'Documents from it belong to', exact: true })
+  await expect(owner).toHaveValue('admin@example.test')
+  await page.getByRole('button', { name: 'People', exact: true }).click()
+  const form = page.getByRole('form', { name: 'Create a user', exact: true })
+  await form.getByLabel('Email', { exact: true }).fill('morgan@example.test')
+  await form.getByLabel('Display name', { exact: true }).fill('Morgan')
+  await form.getByLabel('Password', { exact: true }).fill('safe-test-password')
+  await form.getByRole('button', { name: 'Create user', exact: true }).click()
+  await expect(owner.locator('option[value="morgan@example.test"]')).toHaveCount(1)
+  await expect(owner).toHaveValue('admin@example.test')
 })
 
 test('keeps failed configuration reads out of editable forms', async ({ page }) => {
@@ -2256,17 +2281,71 @@ test('shows shared views without offering to change another users view', async (
   await expect(page.getByRole('button', { name: 'Edit Shared tax review' })).toHaveCount(0)
 })
 
-test('lets admins grant saved-view sharing to members', async ({ page }) => {
+test('lets admins grant saved-view sharing to members without showing failed grants', async ({ page }) => {
   await mockAPI(page, {
     setupCompletedAt: Math.floor(Date.now() / 1000),
     filingTreeChosen: true,
   })
+  let rejectGrant = true
+  await page.route('**/api/admin/users/2', route => route.fulfill(rejectGrant
+    ? { status: 403, json: { error: 'Capability change denied' } }
+    : { json: { ok: true } }))
   await page.goto('/#/settings?tab=archive&section=users')
-
-  await expect(page.getByRole('switch', {
-    name: 'Share saved views capability for member@example.test',
-  })).toBeVisible()
+  const member = page.locator('.user-entry').filter({ hasText: 'member@example.test' })
+  await member.locator('summary').click()
+  const sharing = member.getByRole('switch', { name: 'Share saved views capability for member@example.test' })
+  await expect(sharing).toBeVisible()
+  await expect(sharing).not.toBeChecked()
+  await sharing.click()
+  await expect(page.getByText('Capability change denied', { exact: true })).toBeVisible()
+  await expect(sharing).not.toBeChecked()
+  rejectGrant = false
+  await sharing.click()
+  await expect(sharing).toBeChecked()
 })
+
+test('prevents self-disable while allowing other users to be disabled and enabled', async ({ page }) => {
+  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+  const changes = []
+  await page.route('**/api/admin/users/*', route => {
+    changes.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() })
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/settings?tab=archive&section=users')
+  const self = page.getByRole('switch', { name: 'User admin@example.test active', exact: true })
+  const member = page.getByRole('switch', { name: 'User member@example.test active', exact: true })
+  await expect(self).toBeChecked()
+  await expect(self).toBeDisabled()
+  await member.click()
+  await expect(member).not.toBeChecked()
+  await expect(self).toBeChecked()
+  await member.click()
+  await expect(member).toBeChecked()
+  expect(changes).toEqual([
+    { path: '/api/admin/users/2', body: { disabled: true } },
+    { path: '/api/admin/users/2', body: { disabled: false } },
+  ])
+})
+
+test('does not store hidden member grants when creating an administrator', async ({ page }) => {
+  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+  await page.goto('/#/settings?tab=archive&section=users')
+  const form = page.getByRole('form', { name: 'Create a user', exact: true })
+  await form.getByLabel('Email', { exact: true }).fill('new-admin@example.test')
+  await form.getByLabel('Display name', { exact: true }).fill('New admin')
+  await form.getByLabel('Password', { exact: true }).fill('safe-test-password')
+  await form.locator('summary').click()
+  const sharing = form.getByRole('checkbox', { name: /^Share saved views/ })
+  await sharing.check()
+  await expect(sharing).toBeChecked()
+  await form.getByRole('combobox', { name: 'Role', exact: true }).selectOption('admin')
+  await expect(sharing).toHaveCount(0)
+  const creation = page.waitForRequest(request =>
+    request.method() === 'POST' && new URL(request.url()).pathname === '/api/admin/users')
+  await form.getByRole('button', { name: 'Create user', exact: true }).click()
+  expect((await creation).postDataJSON()).toMatchObject({ role: 'admin', capabilities: [] })
+})
+
 
 test('offers Microsoft sign-in without exposing registration controls', async ({ page }) => {
   await mockAPI(page, { filingTreeChosen: true })

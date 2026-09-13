@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Make the signed-in account's Active switch read-only.
+- Remove ineffective dynamic API imports and missing-Svelte-config build notices.
 - Stack email intake matching fields at full width with equal single-line
   heights and individual resize handles.
 - Require a saved filing-tree choice before continuing setup. Remove its skip
@@ -61,6 +63,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Simplify People and metadata into Users, Groups, Metadata, and Taxonomy.
+  Replace nested taxonomy tabs with one metadata-type selector, including custom
+  fields. Separate filing-tree file actions and backup guidance from metadata
+  editing, align form actions, and share user creation between Settings and setup.
+  Derive setup steps from the Archive configuration section inventory and share
+  configuration loading decisions. Join Archive navigation and content in one
+  continuous frame, with a scrollable section rail on smaller screens.
 - Center document and share-link QR codes in their dialogs.
 - Clarify that per-document custom-field values have no read API/UI yet, and that
   automatic document-ID nonreuse starts with the taxonomy upgrade; surviving

@@ -84,10 +84,16 @@ Upload idempotency keys are user-global and their fingerprints bind the target
 system: reusing a key in another system conflicts. Every replay rechecks authority;
 a version replay also requires change permission on its predecessor.
 
+## Account safeguards
+
+Under **Settings > Archive configuration > People and metadata > Users**, you
+cannot disable the account you are signed in with. Its Active switch is read-only.
+To disable that account, sign in as another active administrator.
+
 ## Capabilities
 
 Administrators grant optional capabilities to individual members under
-**Settings > Archive configuration > People and metadata > Users**.
+**Settings > Archive configuration > People and metadata > Users > Additional access**.
 Administrators have every capability implicitly.
 
 | Capability | Allows a member to |

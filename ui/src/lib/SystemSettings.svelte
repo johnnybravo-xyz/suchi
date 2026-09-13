@@ -1,6 +1,7 @@
 <script>
   import { onDestroy } from 'svelte'
-  import { systems, captureScope, scopeCurrent, refreshSystems } from './systems.svelte.js'
+  import { systems, captureScope, scopeCurrent } from './systems.svelte.js'
+  import { refreshSystems } from './system-routing.js'
   import { systemMembers, putSystemMembers, renameSystem, adminListUsers } from './api.js'
 
   let { notify } = $props()

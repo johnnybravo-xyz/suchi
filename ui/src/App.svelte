@@ -1,9 +1,9 @@
 <script>
-  import { scopedHash as filingHref } from './lib/systems.svelte.js'
+  import { systems, resetSystems, selectSystem, captureScope, scopeCurrent, scopedHash as filingHref } from './lib/systems.svelte.js'
   import { untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
-  import { systems, resetSystems, refreshSystems, enterRoute, selectSystem, captureScope, scopeCurrent } from './lib/systems.svelte.js'
+  import { refreshSystems, enterRoute } from './lib/system-routing.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'

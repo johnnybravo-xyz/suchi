@@ -159,7 +159,7 @@ one with its × button. Each change saves immediately; **Done** closes the
 editor. Untagged documents show **No tags** with the same Edit control.
 Failed changes leave the current tags intact and show an error. Trashed
 documents remain read-only. Administrators can create new tags in
-**Settings > Archive configuration > People and metadata**.
+**Settings > Archive configuration > People and metadata > Metadata**.
 
 ## Approvals
 
@@ -268,9 +268,20 @@ uses these exact groups and sections:
 | **Processing** | **Classification**, **Automations** |
 | **Maintenance** | **OCR and backups** |
 
-**People and metadata** contains **Users**, **Groups**, **Custom fields**, and
-**Taxonomy**. **Automations** hands off to the main Automations screen so the
-rule editor has one home.
+**People and metadata** has four views: **Users**, **Groups**, **Metadata**, and
+**Taxonomy**. In **Metadata**, use **Metadata type** to choose tags,
+correspondents, document types, storage paths, or custom fields. Each editor
+separates creation from the existing entries. Optional user capabilities are
+under **Additional access**; Groups expands members beside the group being edited.
+Creating an admin does not save hidden member capabilities from Additional access.
+
+**Taxonomy** handles filing-tree files, not individual metadata entries.
+Import previews changes before Apply. Export offers HuML or TOML, with supported
+starter rules or tree only. **What is included?** explains the limits; neither
+export replaces a full archive backup.
+
+**Automations** hands off to the main Automations screen so the rule editor has
+one home. Setup's **People** step uses the same user-creation form as Settings.
 
 After introduction the **Filing system · CODE** panel manages the current system's
 nonblank display name (at most 80 characters) and direct membership. Codes are read-only and permanent.

@@ -1,13 +1,3 @@
-export const SETUP_STEPS = [
-  { name: 'archive', label: 'Filing tree' },
-  { name: 'users', label: 'People' },
-  { name: 'sources', label: 'Watched folder' },
-  { name: 'mail', label: 'Email intake' },
-  { name: 'llm', label: 'Classification' },
-  { name: 'automations', label: 'Automations' },
-  { name: 'preferences', label: 'OCR and backups' },
-]
-
 export const ARCHIVE_SETTINGS_GROUPS = [
   {
     name: 'structure',
@@ -21,7 +11,8 @@ export const ARCHIVE_SETTINGS_GROUPS = [
       },
       {
         name: 'users', label: 'People and metadata', icon: 'shield',
-        description: 'Manage users, groups, custom fields, and taxonomy.',
+        setupLabel: 'People',
+        description: 'Manage people, document metadata, and filing-tree files.',
         href: '#/settings?tab=archive&section=users',
       },
     ],
@@ -75,3 +66,6 @@ export const ARCHIVE_SETTINGS_GROUPS = [
 ]
 
 export const ARCHIVE_SETTINGS_ITEMS = ARCHIVE_SETTINGS_GROUPS.flatMap((group) => group.items)
+export const SETUP_STEPS = ARCHIVE_SETTINGS_ITEMS.map(({ name, label, setupLabel }) => ({
+  name, label: setupLabel || label,
+}))

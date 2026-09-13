@@ -17,6 +17,7 @@ ui/src/
   App.svelte                  application shell and navigation
   app.css                     global tokens and component styles
   lib/api.js                  fetch, errors, and named API operations
+  lib/system-routing.js       filing-system loading and route entry
   lib/configuration.js        setup and archive-setting labels
   lib/capabilities.js         member capability labels and checks
   lib/documentFilters.js      saved-view to browser-route translation
@@ -157,6 +158,11 @@ the generation and full URL, never only an unqualified endpoint. Blob/export
 helpers capture the same destination. A `system_unavailable` response clears the
 active surface rather than presenting another cabinet. These browser guards
 prevent stale display; the server remains responsible for authorization.
+`system-routing.js` owns catalog refresh and route entry, using the existing API
+helpers and their error handling. Dependencies are one-way:
+`system-routing.js` → `api.js` → `systems.svelte.js`. The state module has no API
+dependency; synchronous scope helpers stay there so transport and routing share
+the same account/system generation checks without a circular import.
 
 `SystemSettings.svelte` is visible to administrators only after introduction.
 It edits the current system's display name and complete explicit membership set.
@@ -257,6 +263,34 @@ the accessible list, selects the returned system, and invalidates the unnamed or
 previous request generation. Blank confirmation and full/tree-only export stay
 in this shared flow. Taxonomy administration remains session-admin web, not mobile
 token access.
+
+`lib/configuration.js` owns one section inventory. Setup steps derive their order,
+keys, and labels from it, with only a shorter People label. `Setup.svelte` owns
+step navigation/completion; `ArchiveSettings.svelte` owns the status overview and
+section navigation, not configuration writes. Its sidebar and content share one
+frame; narrow screens use a horizontally scrollable section rail.
+
+`ConfigurationSection.svelte` owns the same form state, validation, required reads,
+and writes for filing trees, watched folders, classification, and OCR/backups in
+both surfaces. Required load keys drive both loading and error/retry gates.
+Email editing delegates to `EmailAccounts.svelte`; filing-tree file previews and
+application delegate to `TaxonomyImport.svelte`. Both automation entry points
+link to `Automations.svelte` rather than maintaining another editor.
+
+`PeopleSettings.svelte` keeps Users, Groups, Metadata, and Taxonomy in one
+settings owner. Metadata uses a labeled type selector, including custom fields,
+instead of nested tabs. File operations remain separate from metadata CRUD.
+`UserCreateForm.svelte` owns user creation for both Settings and setup: labeled
+fields, optional capability disclosure, validation/error state, and a form footer.
+The shared form submits no member capabilities for an admin, preventing hidden
+selections from taking effect if that account is later demoted.
+It uses the existing API and shared capability labels; it adds no data cache,
+router, or authorization layer. User/group scope and filing-system boundaries
+remain unchanged.
+The signed-in user's Active switch reads `session.user.user_id` and is read-only.
+
+Verify the shared configuration flows with
+`cd ui && bun run e2e --grep 'separates completed archive administration|refreshes intake owners|failed configuration reads'`.
 
 ## Interface wording
 

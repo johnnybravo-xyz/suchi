@@ -1,7 +1,8 @@
 <script>
   import { onDestroy } from 'svelte'
   import { importTaxonomy } from './api.js'
-  import { systems, captureScope, scopeCurrent, refreshSystems, selectSystem } from './systems.svelte.js'
+  import { systems, captureScope, scopeCurrent, selectSystem } from './systems.svelte.js'
+  import { refreshSystems } from './system-routing.js'
   import ConfirmDialog from './ConfirmDialog.svelte'
 
   let { notify, onApplied, busy = $bindable(false) } = $props()
@@ -144,7 +145,7 @@
             oninput={() => { fileName = ''; invalidate(true) }} placeholder="Paste a suchi-taxonomy/v1 file"></textarea>
   {#if reading}<p class="sub" role="status">Reading file…</p>{/if}
   <label class="wiz-check"><input type="checkbox" checked={!skipSeeds} disabled={busy}
-    onchange={(event) => { skipSeeds = !event.currentTarget.checked; invalidate() }} /> Include starter rules</label>
+    onchange={(event) => { skipSeeds = !event.currentTarget.checked; invalidate() }} /> Include starter rules from this file</label>
   <p class="sub">Validation checks supported structure, not domain correctness or whether starter automations are trustworthy. Review the tree and rules before applying.</p>
   {#if firstDestination && !diff?.applied}
     <fieldset disabled={busy} style="margin:12px 0;padding:12px;border:1px solid var(--line)">
@@ -249,6 +250,7 @@
   .taximp { min-width: 0; }
   .taximp h4 { margin: 12px 0 8px; }
   .taximp p, .taximp li { overflow-wrap: anywhere; }
+  .taximp .sub { color: color-mix(in srgb, var(--ink) 75%, var(--muted)); font-size: .78rem; line-height: 1.5; }
   .taximp input[type=file] { width: 1px; height: 1px; position: absolute; opacity: 0; }
   .taximp label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
   .serialization { display: flex; align-items: center; gap: 8px; }

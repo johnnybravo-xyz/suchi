@@ -9,7 +9,7 @@ const serverProxy = Object.fromEntries(
 // Dev: run `make run` (suchi on :8000) alongside `make ui-dev`;
 // every /api|/preview|/download|/login call proxies to the Go binary.
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte({ configFile: false })],
   base: './',                       // embeddable at any path
   server: { proxy: serverProxy },
   // Preview serves its generated /assets locally while retaining backend routes.
