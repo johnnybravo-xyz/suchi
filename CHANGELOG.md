@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Remember published blob targets in the render journal so archive changes plus
+  refiling recover across restarts. Same-path refresh preserves unrelated files
+  and symlinks; unprovable pre-upgrade links are retained and reported.
 - Bind taxonomy previews to trimmed metadata references and reject colliding
   generated and explicit starter names before application.
 - Allow valid scoped API tokens to permanently delete documents and empty Trash,

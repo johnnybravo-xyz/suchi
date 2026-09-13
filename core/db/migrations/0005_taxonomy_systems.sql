@@ -898,3 +898,7 @@ CREATE TRIGGER documents_fts_au AFTER UPDATE OF title, content ON documents BEGI
     INSERT INTO documents_fts(rowid, title, content)
     VALUES (new.id, new.title, coalesce(new.content, ''));
 END;
+
+-- Empty hashes retain unknown ownership for pre-upgrade journal entries.
+ALTER TABLE render_moves ADD COLUMN prev_blob TEXT NOT NULL DEFAULT '';
+ALTER TABLE render_moves ADD COLUMN new_blob TEXT NOT NULL DEFAULT '';

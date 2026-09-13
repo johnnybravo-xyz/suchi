@@ -89,6 +89,17 @@ func (r *Renderer) Move(ctx context.Context, docID int64) error {
 	return err
 }
 
+type projection struct {
+	path string
+	blob string
+}
+
+type pendingMove struct {
+	id       int64
+	previous projection
+	next     projection
+}
+
 func (r *Renderer) project(ctx context.Context, docID int64) (string, error) {
 	if err := r.reconcileDocument(ctx, docID); err != nil {
 		return "", err
@@ -97,21 +108,23 @@ func (r *Renderer) project(ctx context.Context, docID int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	prev, err := r.lastAppliedPath(ctx, docID)
+	current := projection{path: rendered, blob: filepath.Base(src)}
+	previous, err := r.lastAppliedProjection(ctx, docID)
 	if err != nil {
 		return "", err
 	}
-	if prev == rendered {
-		return rendered, r.replaceSymlink(src, rendered)
+	if previous == current {
+		return rendered, r.publishDocumentLink(ctx, docID, current.path, src)
 	}
-	id, err := r.recordPending(ctx, docID, prev, rendered)
+	move, err := r.recordPending(ctx, docID, previous, current)
 	if err != nil {
 		return "", err
 	}
-	if err := r.finishPending(ctx, id, docID, prev, rendered); err != nil {
+	if err := r.finishPending(ctx, docID, []pendingMove{move}); err != nil {
 		return "", err
 	}
-	return r.lastAppliedPath(ctx, docID)
+	applied, err := r.lastAppliedProjection(ctx, docID)
+	return applied.path, err
 }
 
 // Reconcile publishes the current target, not a possibly superseded journal
@@ -145,76 +158,72 @@ func (r *Renderer) Reconcile(ctx context.Context) error {
 }
 
 func (r *Renderer) reconcileDocument(ctx context.Context, docID int64) error {
-	rows, err := r.db.Read.QueryContext(ctx, `SELECT id, prev_path, new_path FROM render_moves WHERE document_id=? AND state='pending' ORDER BY id`, docID)
+	rows, err := r.db.Read.QueryContext(ctx, `
+		SELECT id, prev_path, prev_blob, new_path, new_blob
+		FROM render_moves WHERE document_id=? AND state='pending' ORDER BY id`, docID)
 	if err != nil {
 		return err
 	}
-	type pending struct {
-		id         int64
-		prev, next string
-	}
-	var moves []pending
+	var moves []pendingMove
 	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.id, &p.prev, &p.next); err != nil {
+		var move pendingMove
+		if err := rows.Scan(&move.id, &move.previous.path, &move.previous.blob, &move.next.path, &move.next.blob); err != nil {
 			rows.Close()
 			return err
 		}
-		moves = append(moves, p)
+		moves = append(moves, move)
 	}
 	err = rows.Err()
 	rows.Close()
-	if err != nil {
+	if err != nil || len(moves) == 0 {
 		return err
 	}
-	for _, p := range moves {
-		if err := r.finishPending(ctx, p.id, docID, p.prev, p.next); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.finishPending(ctx, docID, moves)
 }
 
-func (r *Renderer) finishPending(ctx context.Context, id, docID int64, prev, journaled string) error {
-	current, src, err := r.resolveTarget(ctx, docID)
+func (r *Renderer) finishPending(ctx context.Context, docID int64, moves []pendingMove) error {
+	rendered, src, err := r.resolveTarget(ctx, docID)
 	if err != nil {
 		return err
+	}
+	current := projection{path: rendered, blob: filepath.Base(src)}
+	latest := moves[len(moves)-1]
+	if latest.next != current {
+		// A superseded attempt may already be visible on disk. Retain its path
+		// and blob until cleanup, and journal the new target before publication.
+		move, err := r.recordPending(ctx, docID, latest.next, current)
+		if err != nil {
+			return err
+		}
+		moves = append(moves, move)
 	}
 	if r.beforePublish != nil {
 		r.beforePublish()
 	}
-	// Clean a superseded destination, then journal its replacement before
-	// publication. A crash at any boundary still leaves every owned link tracked.
-	if journaled != current {
-		if err := r.removeDocumentLink(ctx, docID, journaled); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `UPDATE render_moves SET new_path=? WHERE id=?`, current, id)
-			return err
-		}); err != nil {
-			return err
-		}
-	}
-	dir, target, err := r.documentParent(current, true)
-	if err != nil {
+	if err := r.publishDocumentLink(ctx, docID, current.path, src); err != nil {
 		return err
 	}
-	defer dir.Close()
-	if err := r.proveDocumentLink(ctx, docID, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := replaceSymlink(dir, src, target); err != nil {
-		return err
-	}
-	if prev != "" && prev != current {
-		if err := r.removeDocumentLink(ctx, docID, prev); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+	removed := make(map[string]bool)
+	for _, move := range moves {
+		for _, old := range []projection{move.previous, move.next} {
+			if old.path == "" || old.path == current.path || removed[old.path] {
+				continue
+			}
+			if err := r.removeDocumentLink(ctx, docID, old.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			removed[old.path] = true
 		}
 	}
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE render_moves SET new_path=?, state='applied', applied_at=? WHERE id=?`, current, time.Now().Unix(), id)
-		return err
+		for _, move := range moves {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE render_moves SET new_path=?, new_blob=?, state='applied', applied_at=?
+				WHERE id=?`, current.path, current.blob, time.Now().Unix(), move.id); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -256,36 +265,36 @@ func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, stri
 	return rendered, src, nil
 }
 
-// lastAppliedPath returns the most-recent applied new_path for a doc,
-// or "" when no baseline exists yet.
-func (r *Renderer) lastAppliedPath(ctx context.Context, docID int64) (string, error) {
-	var p string
+// lastAppliedProjection returns the most-recent completed path and blob.
+// Legacy rows have no recorded blob; ownership must then be proved against
+// the document's retained original/current archive before replacing a link.
+func (r *Renderer) lastAppliedProjection(ctx context.Context, docID int64) (projection, error) {
+	var p projection
 	err := r.db.Read.QueryRowContext(ctx, `
-		SELECT new_path FROM render_moves
+		SELECT new_path, new_blob FROM render_moves
 		WHERE document_id = ? AND state = 'applied'
 		ORDER BY applied_at DESC, id DESC LIMIT 1
-	`, docID).Scan(&p)
+	`, docID).Scan(&p.path, &p.blob)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return projection{}, nil
 	}
 	return p, err
 }
 
-func (r *Renderer) recordPending(ctx context.Context, docID int64, prev, newP string) (int64, error) {
-	now := time.Now().Unix()
-	var id int64
+func (r *Renderer) recordPending(ctx context.Context, docID int64, previous, next projection) (pendingMove, error) {
+	move := pendingMove{previous: previous, next: next}
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO render_moves(document_id, prev_path, new_path, state, created_at)
-			VALUES (?, ?, ?, 'pending', ?)
-		`, docID, prev, newP, now)
+			INSERT INTO render_moves(document_id, prev_path, prev_blob, new_path, new_blob, state, created_at)
+			VALUES (?, ?, ?, ?, ?, 'pending', ?)
+		`, docID, previous.path, previous.blob, next.path, next.blob, time.Now().Unix())
 		if err != nil {
 			return err
 		}
-		id, err = res.LastInsertId()
+		move.id, err = res.LastInsertId()
 		return err
 	})
-	return id, err
+	return move, err
 }
 
 // underRoot rejects target paths that don't sit under renderDir. Guards
@@ -501,9 +510,8 @@ func (r *Renderer) docTags(ctx context.Context, docID int64) ([]string, error) {
 	return out, rows.Err()
 }
 
-// replaceSymlink atomically points target at src, replacing any prior
-// symlink or regular file at target. Uses the standard tmp+rename
-// dance to avoid a window where target doesn't exist.
+// replaceSymlink atomically refreshes a symlink after its caller proves ownership.
+// Recheck the entry type before the temporary-link/rename operation.
 func replaceSymlink(dir *os.Root, src, target string) error {
 	if fi, err := dir.Lstat(target); err == nil {
 		if fi.Mode()&os.ModeSymlink == 0 {
@@ -520,12 +528,15 @@ func replaceSymlink(dir *os.Root, src, target string) error {
 	return dir.Rename(tmp, target)
 }
 
-func (r *Renderer) replaceSymlink(src, relative string) error {
+func (r *Renderer) publishDocumentLink(ctx context.Context, docID int64, relative, src string) error {
 	dir, target, err := r.documentParent(relative, true)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
+	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return replaceSymlink(dir, src, target)
 }
 
@@ -535,13 +546,13 @@ func (r *Renderer) removeDocumentLink(ctx context.Context, docID int64, relative
 		return err
 	}
 	defer dir.Close()
-	if err := r.proveDocumentLink(ctx, docID, dir, target); err != nil {
+	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil {
 		return err
 	}
 	return dir.Remove(target)
 }
 
-func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, dir *os.Root, target string) error {
+func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative string, dir *os.Root, target string) error {
 	info, err := dir.Lstat(target)
 	if err != nil {
 		return err
@@ -553,13 +564,21 @@ func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, dir *os.R
 	if err != nil {
 		return err
 	}
-	var original string
-	var archive sql.NullString
-	if err := r.db.Read.QueryRowContext(ctx, `SELECT original_blob, archive_blob FROM documents WHERE id=?`, docID).Scan(&original, &archive); err != nil {
+	rows, err := r.db.Read.QueryContext(ctx, `
+		SELECT original_blob FROM documents WHERE id=?
+		UNION SELECT archive_blob FROM documents WHERE id=? AND archive_blob IS NOT NULL
+		UNION SELECT new_blob FROM render_moves WHERE document_id=? AND new_path=? AND new_blob<>''
+		UNION SELECT prev_blob FROM render_moves WHERE document_id=? AND prev_path=? AND prev_blob<>''`,
+		docID, docID, docID, relative, docID, relative)
+	if err != nil {
 		return err
 	}
-	proven := false
-	for _, hash := range []string{original, archive.String} {
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return err
+		}
 		if hash == "" {
 			continue
 		}
@@ -567,15 +586,25 @@ func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, dir *os.R
 		if err != nil {
 			return err
 		}
-		if link == src {
-			proven = true
-			break
+		if link == src || oldCASLink(link, hash) {
+			return nil
 		}
 	}
-	if !proven {
-		return fmt.Errorf("view: refusing foreign symlink %q", target)
+	if err := rows.Err(); err != nil {
+		return err
 	}
-	return nil
+	return fmt.Errorf("view: refusing foreign symlink %q", target)
+}
+
+// Whole-directory restores can retain an absolute link into the old data root.
+// Require the complete canonical CAS layout and a hash already owned by this
+// document/path; a matching filename alone is not ownership evidence.
+func oldCASLink(link, hash string) bool {
+	if !filepath.IsAbs(link) || filepath.Clean(link) != link {
+		return false
+	}
+	suffix := filepath.Join("blobs", "sha256", hash[:2], hash[2:4], hash[4:6], hash)
+	return strings.HasSuffix(link, string(filepath.Separator)+suffix)
 }
 
 // Open each real parent through a pinned os.Root, so a concurrent symlink swap

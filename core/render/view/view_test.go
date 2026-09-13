@@ -86,7 +86,7 @@ func TestRenderAndMovePreserveBlobContents(t *testing.T) {
 			t.Fatal(err)
 		}
 		if stale {
-			if err := os.Symlink(filepath.Join(renderDir, "old-cas-layout"), filepath.Join(renderDir, movedPath)); err != nil {
+			if err := os.Symlink(filepath.Join(t.TempDir(), "old-data", "blobs", "sha256", archive.SHA256[:2], archive.SHA256[2:4], archive.SHA256[4:6], archive.SHA256), filepath.Join(renderDir, movedPath)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -103,8 +103,8 @@ func TestRenderAndMovePreserveBlobContents(t *testing.T) {
 		`SELECT COUNT(*) FROM render_moves WHERE document_id = 1`).Scan(&moves); err != nil {
 		t.Fatal(err)
 	}
-	if moves != 2 {
-		t.Fatalf("move records = %d; want initial render and path change only", moves)
+	if moves != 3 {
+		t.Fatalf("move records = %d; want initial render, archive change and path change", moves)
 	}
 	for hash, want := range map[string]string{
 		original.SHA256: "original receipt", archive.SHA256: "searchable receipt",

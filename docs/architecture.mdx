@@ -216,9 +216,13 @@ JD and runtime-flat default filenames use created date, added date, then `undate
 title and the full `SYS.AC.documentID` suffix after introduction. View resolves
 system/mode per document and enforces a code-only root outside explicit templates.
 Display-name edits do not move roots. Index snapshot/publication and view journal/
-publication each serialize through their owner's mutex. Initial render and moves
-journal before publishing; recovery converges on the current system destination,
-cleaning only verified document CAS links. Only system 1 removes the proved-managed
+publication each serialize through their owner's mutex. Initial renders, moves
+and same-path blob replacements journal the previous and intended path/blob pairs
+before publishing. Superseded attempts retain their ownership evidence until the
+current link is published and old paths are cleaned; completion is transactional.
+Recovery converges on the current system destination, cleaning only verified
+links to the document's retained blobs or the journaled blobs for that path.
+Same-path refresh also proves ownership before replacing a symlink. Only system 1 removes the proved-managed
 legacy root index after its named replacement succeeds. Unknown files stay untouched.
 A recorded pre-introduction template link can occupy a future named index path.
 New-destination validation must refuse that namespace, while old-link relocation
@@ -226,6 +230,10 @@ may remove only the journaled link verified against this document's CAS target
 through the pinned parent. This lets index jobs retry after safe relocation without
 deleting an unknown file or deadlocking recovery. Superseded journal destinations
 are never republished merely because they were once valid.
+Pre-upgrade journal rows have unknown blob hashes. A link to a historical archive
+that is no longer referenced cannot be attributed safely; recovery leaves it in
+place and reports the error. Restored absolute links with a known hash and the
+complete canonical CAS layout can be refreshed after a data-directory move.
 Render-only refile changes projections without OCR, classifier or filing reruns.
 Back up the complete data directory with writers stopped or an atomic whole-
 directory snapshot, including the keys that decrypt sealed credentials. A
