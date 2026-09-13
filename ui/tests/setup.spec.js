@@ -311,8 +311,11 @@ test('taxonomy import previews a named tree and refreshes setup and sidebar afte
   await expect(importer.getByText('00–09 System index', { exact: true })).toBeVisible()
   await expect(importer.getByText('49 Inbox', { exact: true })).toBeVisible()
   await expect(importer.getByText('Local starter — disabled (stays disabled)', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeDisabled()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeEnabled()
   await expect(page.getByRole('button', { name: 'Finish setup' })).toBeEnabled()
   await expect(importer.getByRole('status')).toContainText('Filing-index refresh queued')
   expect(requests[0]).toMatchObject({ content: taxonomyContent, format: 'toml', apply: false, skip_seeds: false, remaps: {} })
@@ -1403,6 +1406,7 @@ test('keeps failed configuration reads out of editable forms', async ({ page }) 
 
 test('distinguishes mailbox and saved-view failures from empty data', async ({ page }) => {
   await mockAPI(page, {
+    filingTreeChosen: true,
     failPaths: ['/api/email-accounts', '/api/saved_views/'],
     failureMessage: 'archive data unavailable',
   })
@@ -1450,6 +1454,8 @@ test('guides intent, filing tree, and LLM mode', async ({ page }) => {
   await page.goto('/#/setup')
 
   await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Classification', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: /Personal/ }).click()
   await expect(page.getByText('Recommended for Personal')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Import a file' })).toBeVisible()
@@ -1458,6 +1464,9 @@ test('guides intent, filing tree, and LLM mode', async ({ page }) => {
   await page.getByRole('button', { name: 'Compare all filing trees' }).click()
   await expect(filingTrees.getByText('Household', { exact: true })).toBeVisible()
 
+  await expect(page.getByRole('button', { name: 'Classification', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: 'Apply filing tree' }).click()
+  await expect(page.getByRole('heading', { name: 'Add another person' })).toBeVisible()
   await page.getByRole('button', { name: 'Classification' }).click()
   await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
   await expect(page.locator('#l-confidence')).toHaveAttribute('min', '0.5')
@@ -1466,6 +1475,64 @@ test('guides intent, filing tree, and LLM mode', async ({ page }) => {
   await page.getByRole('button', { name: 'Hosted endpoint' }).click()
   await page.locator('#l-url').fill('https://llm.example.test/v1')
   await expect(page.getByText(/I acknowledge document text will leave this machine/)).toBeVisible()
+})
+
+test('requires a confirmed and successfully applied Blank choice before advancing setup', async ({ page }) => {
+  const options = {
+    failPaths: ['/api/admin/setup/preset'],
+    failureMessage: 'Could not apply the filing tree.',
+  }
+  await mockAPI(page, options)
+  await page.goto('/#/setup')
+
+  const laterSteps = page.getByRole('complementary', { name: 'Setup steps' })
+    .getByRole('button').filter({ hasNotText: /Filing tree|Finish setup/ })
+  await expect(laterSteps).toHaveCount(6)
+  for (const step of await laterSteps.all()) await expect(step).toBeDisabled()
+  const finish = page.getByRole('button', { name: 'Finish setup' })
+  await expect(finish).toBeDisabled()
+  await page.getByRole('button', { name: /Choose myself/ }).click()
+  await page.locator('.preset-grid').getByText('Blank', { exact: true }).click()
+  const apply = page.getByRole('button', { name: 'Apply filing tree' })
+  await expect(apply).toBeDisabled()
+  await page.getByLabel('I understand documents will pile up in the inbox until I build categories.').check()
+  await apply.click()
+  await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
+  await expect(finish).toBeDisabled()
+  for (const step of await laterSteps.all()) await expect(step).toBeDisabled()
+
+  options.failPaths.length = 0
+  await apply.click()
+  await expect(page.getByRole('heading', { name: 'Add another person' })).toBeVisible()
+  await expect(finish).toBeEnabled()
+  for (const step of await laterSteps.all()) await expect(step).toBeEnabled()
+  await page.getByRole('button', { name: 'Just me for now' }).click()
+  await expect(page.getByRole('button', { name: 'Uploads only' })).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
+  await expect(finish).toBeEnabled()
+  for (const step of await laterSteps.all()) await expect(step).toBeEnabled()
+})
+
+test('retries filing-tree setup loading without offering a skip', async ({ page }) => {
+  const options = {
+    failPaths: ['/api/admin/setup/state'],
+    failureMessage: 'Filing-tree settings unavailable.',
+  }
+  await mockAPI(page, options)
+  await page.goto('/#/setup')
+  await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeDisabled()
+
+  options.failPaths.length = 0
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
 })
 
 test('keeps the filing index neutral until a preset is applied', async ({ page }) => {
@@ -2202,7 +2269,7 @@ test('lets admins grant saved-view sharing to members', async ({ page }) => {
 })
 
 test('offers Microsoft sign-in without exposing registration controls', async ({ page }) => {
-  await mockAPI(page)
+  await mockAPI(page, { filingTreeChosen: true })
   await page.goto('/#/setup')
 
   await page.getByRole('button', { name: 'Email intake' }).click()

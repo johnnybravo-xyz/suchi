@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Require a saved filing-tree choice before continuing setup. Remove its skip
+  action, including on loading errors, and keep later steps optional.
 - Permanent deletion preserves unrelated files and symlinks at rendered paths.
   Cleanup snapshots document and journal blob ownership before deleting records,
   removes only verified CAS links, and reports rejected artifacts.

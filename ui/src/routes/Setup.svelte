@@ -14,6 +14,7 @@
   const currentIndex = $derived(SETUP_STEPS.findIndex((step) => step.name === current))
 
   function advance() {
+    if (!filingTreeChosen) return
     if (currentIndex < SETUP_STEPS.length - 1) current = SETUP_STEPS[currentIndex + 1].name
   }
 
@@ -34,14 +35,17 @@
   <aside class="wiz-steps" aria-label="Setup steps">
     <div class="side-head" style="padding-left:0">Setup</div>
     {#each SETUP_STEPS as step}
-      <button class="wiz-step" class:on={current === step.name} disabled={busy || importBusy} onclick={() => (current = step.name)}>
+      <button class="wiz-step" class:on={current === step.name}
+              disabled={busy || importBusy || (step.name !== 'archive' && !filingTreeChosen)}
+              title={step.name !== 'archive' && !filingTreeChosen ? 'Choose a filing tree first' : ''}
+              onclick={() => (current = step.name)}>
         <span class="dot" class:accent={current === step.name}></span>
         <span class="grow">{step.label}</span>
       </button>
     {/each}
     <button class="btn primary finish" onclick={finish} disabled={busy || importBusy || !filingTreeChosen}
             title={filingTreeChosen ? '' : 'Choose a filing tree first'}>Finish setup</button>
-    <p class="finish-copy">Choose a filing tree to finish setup. Every other step is optional and can be revisited later.</p>
+    <p class="finish-copy">Choose a filing tree to continue. Every other step is optional and can be revisited later.</p>
   </aside>
 
   <div class="card wiz-body">
@@ -62,7 +66,8 @@
   .wizard { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; align-items: start; max-width: 920px; }
   .wiz-steps { display: flex; flex-direction: column; gap: 2px; }
   .wiz-step { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); font-size: .88rem; text-align: left; }
-  .wiz-step:hover { background: var(--surface-2); color: var(--ink); }
+  .wiz-step:disabled { opacity: .5; cursor: default; }
+  .wiz-step:enabled:hover { background: var(--surface-2); color: var(--ink); }
   .wiz-step.on { background: var(--tint); color: var(--ink); font-weight: 600; }
   .wiz-step .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--line-strong); }
   .wiz-step .dot.accent { background: var(--accent); }

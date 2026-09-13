@@ -347,7 +347,7 @@
       <div class="err">{activeLoadFailure.message}</div>
       <div class="toolbar">
         <button class="btn sm" onclick={() => retryLoad(activeLoadFailure.key)}>Retry</button>
-        {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button>{/if}
+        {#if setup && section !== 'archive'}<button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button>{/if}
       </div>
     </div>
   {:else if activeLoading}
@@ -362,7 +362,7 @@
     {#if section === 'archive'}
       {#if setup}
         <h3>What are you organizing?</h3>
-        <p class="wiz-p">Pick the closest fit. Suchi will recommend a ready-made filing tree, and every option remains editable.</p>
+        <p class="wiz-p">Pick the closest fit, then apply a filing tree to continue. Suchi will recommend one, and every option remains editable.</p>
         <div class="intent-grid">
           {#each INTENTS as option (option.id)}
             <button class="intent-choice" class:on={intent === option.id} disabled={busy || importBusy} onclick={() => chooseIntent(option)}>
@@ -378,7 +378,7 @@
       {#if !setup || intent}
         {#if setup}
           <h3 class="section-heading">Choose a filing tree
-            {#if !filingTreeChosen}<span class="pill warn" style="margin-left:8px">Required to finish setup</span>{/if}
+            {#if !filingTreeChosen}<span class="pill warn" style="margin-left:8px">Required to continue</span>{/if}
           </h3>
           <p class="wiz-p">Start with a ready-made tree or import your own file. Later imports add to your current tree.</p>
           {#if recommendedPreset && !showAllPresets}
@@ -425,8 +425,6 @@
         </div>
         </fieldset>
         {/if}
-      {:else}
-        <div class="toolbar"><button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button></div>
       {/if}
       <p class="migration-note">
         Moving an existing archive? Large export bundles are safer through the CLI.
