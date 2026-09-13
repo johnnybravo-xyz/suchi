@@ -1,3 +1,5 @@
+import { scopedHash } from './systems.svelte.js'
+
 // Hash router: #/documents, #/doc/42, #/search?q=tax …
 // Hash-based so the SPA works embedded at any path behind any proxy.
 function parse() {
@@ -12,6 +14,7 @@ export const route = $state(parse())
 window.addEventListener('hashchange', () => Object.assign(route, parse()))
 
 export function go(hash, { replace = false } = {}) {
+  hash = scopedHash(hash)
   if (replace) {
     history.replaceState(null, '', hash)
     Object.assign(route, parse())

@@ -11,11 +11,14 @@ type Principal struct {
 	Kind    string
 	UserID  int64
 	TokenID int64
-	Email   string
-	Display string
-	Role    string
-	Scopes  []string
-	AuthNBy string
+	// TokenSystemID binds a token to one filing system. Session identities leave
+	// it zero; an external token without a binding is limited to original system 1.
+	TokenSystemID int64
+	Email         string
+	Display       string
+	Role          string
+	Scopes        []string
+	AuthNBy       string
 }
 
 // Authenticator is one link in the auth chain. The chain runs in

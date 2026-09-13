@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { setupState } from '../lib/api.js'
   import { session } from '../lib/session.svelte.js'
   import AccountSettings from './AccountSettings.svelte'
@@ -22,6 +23,10 @@
     catch (ex) { setupError = ex.message || 'Could not load setup state.' }
   }
 
+  async function taxonomyChanged() {
+    await Promise.all([loadSetup(), onTaxonomyChanged?.()])
+  }
+
   if (isAdmin) loadSetup()
 
   const setupNeedsAttention = $derived(
@@ -33,8 +38,8 @@
 <div class="content-narrow settings-page">
   {#if isAdmin}
     <nav class="settings-tabs" aria-label="Settings areas">
-      <a class:on={!archiveSelected} href="#/settings">My account</a>
-      <a class:on={archiveSelected} href="#/settings?tab=archive">Archive configuration</a>
+      <a class:on={!archiveSelected} href={filingHref("#/settings")}>My account</a>
+      <a class:on={archiveSelected} href={filingHref("#/settings?tab=archive")}>Archive configuration</a>
     </nav>
   {/if}
 
@@ -44,7 +49,7 @@
         <b>Setup is incomplete</b>
         <span>Choose a filing tree to finish the guided archive setup.</span>
       </div>
-      <a role="button" class="btn sm primary" href="#/setup" onclick={onSetupEngaged}>Continue setup</a>
+      <a role="button" class="btn sm primary" href={filingHref("#/setup")} onclick={onSetupEngaged}>Continue setup</a>
     </section>
   {/if}
 
@@ -60,7 +65,7 @@
         <div class="skel" style="width:76%"></div>
       </div>
     {:else if !setupNeedsAttention}
-      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged, setupSnapshot: setup }} />
+      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged, setupSnapshot: setup }} />
     {/if}
   {:else}
     <AccountSettings {notify} />

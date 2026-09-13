@@ -27,6 +27,7 @@ import (
 )
 
 func TestMobilePairingAssembledGuards(t *testing.T) {
+	d := newDemoTestDB(t)
 	for _, tc := range []struct {
 		name, method, path, kind, site string
 		want                           int
@@ -48,7 +49,7 @@ func TestMobilePairingAssembledGuards(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			log := slog.New(slog.NewJSONHandler(&logs, nil))
-			s := &api.Server{Log: log}
+			s := &api.Server{DB: d, Log: log}
 			mux := http.NewServeMux()
 			s.Register(mux)
 			h := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), log)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) *pluginapi.Principal {
@@ -40,13 +42,28 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request,
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return false
 	}
-	ok, err := s.authorized(r.Context(), principal, kind, id, want)
+	if !s.bindRequestSystem(w, r, principal) {
+		return false
+	}
+	ok, err := s.authorized(r.Context(), nil, principal, kind, id, want)
 	if err != nil {
 		s.serverErr(w, "authz.can", err)
 		return false
 	}
 	if !ok {
-		s.writeError(w, http.StatusForbidden, "forbidden", "permission denied")
+		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+	}
+	if ok && selectedSystemID(r.Context()) == 0 {
+		systemID, err := authz.ObjectSystemID(r.Context(), s.DB.Read, kind, id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				s.writeError(w, http.StatusNotFound, "not_found", "object not found")
+			} else {
+				s.serverErr(w, "authz.system", err)
+			}
+			return false
+		}
+		*r = *r.WithContext(context.WithValue(r.Context(), systemContextKey{}, systemID))
 	}
 	return ok
 }
@@ -54,26 +71,55 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request,
 // authorized is the response-free form of authorize. Mutation handlers use it
 // after opening their write transaction so the permission decision and write
 // observe one stable database state.
-func (s *Server) authorized(ctx context.Context, principal *pluginapi.Principal,
+func (s *Server) authorized(ctx context.Context, tx *sql.Tx, principal *pluginapi.Principal,
 	kind authz.Kind, id int64, want authz.Perm) (bool, error) {
 
 	if principal == nil {
 		return false, nil
 	}
-	var groups []int64
-	if principal.Role != "admin" {
-		var err error
-		groups, err = s.principalGroups(ctx, principal.UserID)
+	if tx != nil {
+		systemID, err := authz.ObjectSystemID(ctx, tx, kind, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		principal, err = s.currentWriterPrincipal(ctx, tx, principal, systemID)
+		if errors.Is(err, errSystemUnavailable) {
+			return false, nil
+		}
 		if err != nil {
 			return false, err
 		}
 	}
-	err := s.Authz.Can(ctx, authz.Principal{
-		UserID: principal.UserID,
-		Role:   principal.Role,
-		Kind:   principal.Kind,
-		Groups: groups,
-	}, kind, id, want)
+	var groups []int64
+	if principal.Role != "admin" {
+		var err error
+		if tx != nil {
+			groups, err = authz.LoadGroupsInTx(ctx, tx, principal.UserID)
+		} else {
+			groups, err = s.principalGroups(ctx, principal.UserID)
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	actor := systemPrincipal(ctx, principal, groups)
+	var err error
+	if tx == nil {
+		err = s.Authz.Can(ctx, actor, kind, id, want)
+	} else {
+		// Exact types preserve additional policy supplied by authorizer wrappers.
+		switch authorizer := s.Authz.(type) {
+		case authz.ACLAuthorizer:
+			err = authorizer.CanInTx(ctx, tx, actor, kind, id, want)
+		case *authz.ACLAuthorizer:
+			err = authorizer.CanInTx(ctx, tx, actor, kind, id, want)
+		default:
+			err = s.Authz.Can(ctx, actor, kind, id, want)
+		}
+	}
 	if err == nil {
 		return true, nil
 	}
@@ -88,15 +134,25 @@ func (s *Server) principalGroups(ctx context.Context, userID int64) ([]int64, er
 	return authz.LoadGroups(ctx, s.DB, userID)
 }
 
-func documentVisibilityWhere(p *pluginapi.Principal, groups []int64) (string, []any) {
-	if isDemoCorpusKind(p.Kind) {
-		return authz.DemoCorpusVisibilityWhere(p.UserID)
+func documentVisibilityWhere(ctx context.Context, p *pluginapi.Principal, groups []int64) (string, []any) {
+	return authz.DocVisibilityWhere(systemPrincipal(ctx, p, groups), collectionSystemID(ctx, p))
+}
+
+func (s *Server) collectionVisibility(ctx context.Context, p *pluginapi.Principal) (string, []any, error) {
+	var groups []int64
+	if p.Role != "admin" {
+		var err error
+		groups, err = s.principalGroups(ctx, p.UserID)
+		if err != nil {
+			return "", nil, err
+		}
 	}
-	return authz.DocVisibilityWhere(p.UserID, groups)
+	where, args := documentVisibilityWhere(ctx, p, groups)
+	return where, args, nil
 }
 
 // documentPermissionDecisions resolves a bulk request with one group lookup.
-func (s *Server) documentPermissionDecisions(ctx context.Context, p *pluginapi.Principal,
+func (s *Server) documentPermissionDecisions(ctx context.Context, tx *sql.Tx, p *pluginapi.Principal,
 	ids []int64, want authz.Perm) (map[int64]bool, error) {
 	decisions := make(map[int64]bool, len(ids))
 	if len(ids) == 0 {
@@ -108,21 +164,25 @@ func (s *Server) documentPermissionDecisions(ctx context.Context, p *pluginapi.P
 	var groups []int64
 	var err error
 	if p.Role != "admin" {
-		groups, err = s.principalGroups(ctx, p.UserID)
+		if tx != nil {
+			groups, err = authz.LoadGroupsInTx(ctx, tx, p.UserID)
+		} else {
+			groups, err = s.principalGroups(ctx, p.UserID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load principal groups: %w", err)
 		}
 	}
-	principal := authz.Principal{
-		UserID: p.UserID,
-		Role:   p.Role,
-		Kind:   p.Kind,
-		Groups: groups,
-	}
+	principal := systemPrincipal(ctx, p, groups)
 	// Exact types only: wrappers may override Can with additional policy.
 	switch authorizer := s.Authz.(type) {
 	case authz.ACLAuthorizer:
-		batch, err := authorizer.CanDocuments(ctx, principal, ids, want)
+		var batch map[int64]bool
+		if tx != nil {
+			batch, err = authorizer.CanDocumentsInTx(ctx, tx, principal, ids, want)
+		} else {
+			batch, err = authorizer.CanDocuments(ctx, principal, ids, want)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("authorize documents: %w", err)
 		}
@@ -131,7 +191,12 @@ func (s *Server) documentPermissionDecisions(ctx context.Context, p *pluginapi.P
 		if authorizer == nil {
 			return nil, errors.New("document authorizer is required")
 		}
-		batch, err := authorizer.CanDocuments(ctx, principal, ids, want)
+		var batch map[int64]bool
+		if tx != nil {
+			batch, err = authorizer.CanDocumentsInTx(ctx, tx, principal, ids, want)
+		} else {
+			batch, err = authorizer.CanDocuments(ctx, principal, ids, want)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("authorize documents: %w", err)
 		}
@@ -180,8 +245,16 @@ func (s *Server) requireCapability(w http.ResponseWriter, r *http.Request, cap a
 }
 
 func (s *Server) userCapabilities(ctx context.Context, userID int64) (authz.Set, error) {
+	return loadUserCapabilities(ctx, s.DB.Read, userID)
+}
+
+func (s *Server) userCapabilitiesInTx(ctx context.Context, tx *sql.Tx, userID int64) (authz.Set, error) {
+	return loadUserCapabilities(ctx, tx, userID)
+}
+
+func loadUserCapabilities(ctx context.Context, q systems.Queryer, userID int64) (authz.Set, error) {
 	var raw string
-	err := s.DB.Read.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		"SELECT COALESCE(capabilities, '[]') FROM users WHERE id = ?", userID,
 	).Scan(&raw)
 	if err != nil {

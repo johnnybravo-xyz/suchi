@@ -1,6 +1,8 @@
 <script>
+  import { scopedHash as filingHref } from './systems.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { session } from './session.svelte.js'
+  import { captureScope, scopeCurrent } from './systems.svelte.js'
   import { uploadDocument, getDocument, patchDocument, listTasks } from './api.js'
   import { SENSITIVITY_OPTIONS, fmtBytes } from './format.js'
   import { markUploaded } from './upload_bus.svelte.js'
@@ -13,6 +15,7 @@
   let surface
   let fileInput
   let mounted = true
+  const scope = captureScope()
   const timers = new Map()
 
   onMount(() => { if (initialFiles.length) send([...initialFiles]) })
@@ -23,7 +26,7 @@
     timers.clear()
   })
 
-  function current(user) { return mounted && session.user === user }
+  function current(user) { return mounted && session.user === user && scopeCurrent(scope) }
 
   function pause() {
     return new Promise(resolve => {
@@ -63,23 +66,25 @@
 
   async function send(files) {
     const user = session.user
+    const target = scope.code
     const counts = { uploaded: 0, restored: 0, duplicate: 0, failed: 0 }
     for (const file of files) {
       if (session.user !== user) return
       const entry = $state({ name: file.name, size: file.size, status: 'uploading', doc: null, processing: 'checking', checking: false, paused: false })
       if (mounted) queue = [entry, ...queue]
       try {
-        const result = await uploadDocument(file)
+        const result = await uploadDocument(file, target)
         if (session.user !== user) return
-        markUploaded()
-        if (!mounted) continue
+        markUploaded(scope)
+        if (!current(user)) continue
+        entry.address = result?.jd_address
         entry.id = result?.id
         entry.status = result?.restored ? 'restored' : result?.deduplicated ? 'duplicate' : 'uploaded'
         counts[entry.status]++
         hydrate(entry, user)
       } catch (ex) {
         if (session.user !== user) return
-        if (!mounted) continue
+        if (!current(user)) continue
         counts.failed++
         entry.status = 'error'
         entry.msg = ex.status === 413 ? 'Larger than the server allows' : ex.message || 'Upload failed'
@@ -200,6 +205,7 @@
           </div>
           {#if entry.id}
             <div class="up-detail">
+              {#if entry.doc?.jd_address || entry.address}<span class="chip">{entry.doc?.jd_address || entry.address}</span>{/if}
               {#if entry.doc?.title && entry.doc.title !== entry.name}<span class="receipt-message">“{entry.doc.title}”</span>{/if}
               {#each entry.doc?.tags?.slice(0, 3) || [] as tag}<span class="pill">{tag}</span>{/each}
               {#if entry.doc?.correspondents?.length}<span class="sub">from {entry.doc.correspondents.map(c => c.name || c).join(', ')}</span>{/if}
@@ -216,7 +222,7 @@
                 <option value="">sensitivity…</option>
                 {#each SENSITIVITY_OPTIONS as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
               </select>
-              <a class="btn sm" href={`#/doc/${entry.id}`}>Open</a>
+              <a class="btn sm" href={filingHref(`#/doc/${entry.id}`)}>Open</a>
             </div>
           {/if}
         </div>

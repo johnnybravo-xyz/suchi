@@ -36,9 +36,10 @@ The setup wizard then asks what you are organizing:
 | Small business | Small business |
 | Choose myself | Full preset catalog |
 
-Intent and filing-tree selection share one setup step. The recommendation
-changes the default, not the available features: you can compare every filing
-tree, skip its starter automations, and change the tree later.
+Intent and filing-tree selection share one setup step. Compare every built-in
+tree or choose **Import a file** for HuML/TOML, preview the named tree and actual
+rule effects, and choose whether to include starters. Later imports merge
+additively rather than reset existing filing. See [Filing trees](/jd).
 
 Until a filing tree is chosen, Suchi keeps only its protected System/Inbox
 baseline and does not show a filing Index. Filing tree is the only required
@@ -47,6 +48,16 @@ Dashboard reminds that administrator to finish setup until they open or close
 the reminder, choose a tree, or finish the wizard. Every setup control remains
 available later under **Settings > Archive configuration**. See [Web app](/web-app)
 for the exact labels and lifecycle.
+
+## More than one filing archive
+
+Start normally; no system setup or toggle is required. A taxonomy file with
+`system = "S01"` introduces systems through normal Preview/Apply. The first import
+can name the original archive (retaining IDs and permissions), or preserve it under
+a different code and create S01 separately. Later new systems initially admit only
+admins; grant direct members and then document permissions. Unprefixed files remain
+valid but cannot remove an introduced layer. Read [Filing systems](/jd) before
+importing entity-specific templates; shared admins/host/backups remain trusted.
 
 ## Docker Compose
 

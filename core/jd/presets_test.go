@@ -1,11 +1,7 @@
 package jd_test
 
-// Regression test for the "server error" the setup wizard threw when
-// applying a preset with refile=true against an archive that had docs
-// filed OUTSIDE the inbox. The preset-apply tx parks docs onto the
-// current inbox and then deletes every jd_category row — including the
-// one those docs are now pointing at — before planting the new tree.
-// Without deferred FK checks SQLite fails with constraint 787.
+// Built-ins share the additive importer: applying or reapplying a preset must
+// preserve both live and recoverable filing, not reset documents to Inbox.
 
 import (
 	"context"
@@ -38,10 +34,7 @@ func openTestDB(t *testing.T) *db.DB {
 	return d
 }
 
-// Seeds a preset, files a doc under a non-inbox category, then applies
-// another preset with AllowRefile=true. Regression: this used to fail
-// with SQLITE_CONSTRAINT_FOREIGNKEY 787.
-func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
+func TestApplyPresetPreservesFiledAndTrashedDocuments(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -55,7 +48,7 @@ func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
 	}
 
 	// Apply solo — plants the tree.
-	if err := jd.ApplyPreset(ctx, d, log, "solo", jd.ApplyPresetOpts{}); err != nil {
+	if err := jd.ApplyPreset(ctx, d, log, "solo", jd.ApplyPresetOpts{SystemID: 1}); err != nil {
 		t.Fatalf("initial preset apply: %v", err)
 	}
 
@@ -70,43 +63,33 @@ func TestApplyPreset_RefileFromNonInboxCategory(t *testing.T) {
 	// visible in the wizard, but its category FK must survive replacement.
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO documents(
-			owner_id, title, original_blob, original_size,
+			system_id, owner_id, title, original_blob, original_size,
 			jd_category_id, created_at, added_at, updated_at
-		) VALUES (1, 'test.md', 'sha-x', 1, ?, 0, 0, 0);
+		) VALUES (1, 1, 'test.md', 'sha-x', 1, ?, 0, 0, 0);
 		INSERT INTO documents(
-			owner_id, title, original_blob, original_size,
+			system_id, owner_id, title, original_blob, original_size,
 			jd_category_id, created_at, added_at, updated_at, trashed_at
-		) VALUES (1, 'trashed.md', 'sha-trash', 1, ?, 0, 0, 0, 1)
+		) VALUES (1, 1, 'trashed.md', 'sha-trash', 1, ?, 0, 0, 0, 1)
 	`, nonInboxID, nonInboxID); err != nil {
 		t.Fatal(err)
 	}
 
-	// Without refile — expect ErrDocumentsExist (the wizard's first
-	// error path).
-	err := jd.ApplyPreset(ctx, d, log, "household", jd.ApplyPresetOpts{})
-	if err == nil {
-		t.Fatal("without refile, expected ErrDocumentsExist")
+	// A conflicting built-in must not silently replace existing categories.
+	if err := jd.ApplyPreset(ctx, d, log, "household", jd.ApplyPresetOpts{SystemID: 1}); err == nil {
+		t.Fatal("conflicting built-in silently replaced the current tree")
 	}
-
-	// With refile — this used to crash with FK 787. Must succeed and
-	// leave the doc parked on the NEW inbox.
-	if err := jd.ApplyPreset(ctx, d, log, "household",
-		jd.ApplyPresetOpts{AllowRefile: true}); err != nil {
-		t.Fatalf("refile apply: %v", err)
-	}
-
-	var newInboxID int64
-	if err := d.Read.QueryRowContext(ctx,
-		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&newInboxID); err != nil {
+	// Reapplying the same preset is safe without parking or renumbering docs.
+	if err := jd.ApplyPreset(ctx, d, log, "solo", jd.ApplyPresetOpts{SystemID: 1}); err != nil {
 		t.Fatal(err)
 	}
+
 	var parked int
 	if err := d.Read.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM documents WHERE jd_category_id = ?`, newInboxID).Scan(&parked); err != nil {
+		`SELECT COUNT(*) FROM documents WHERE jd_category_id = ?`, nonInboxID).Scan(&parked); err != nil {
 		t.Fatal(err)
 	}
 	if parked != 2 {
-		t.Errorf("docs on new inbox = %d, want 2", parked)
+		t.Errorf("documents retaining their category = %d, want 2", parked)
 	}
 }
 
@@ -116,20 +99,20 @@ func TestApplyEveryPresetFromInboxOnlyBootstrap(t *testing.T) {
 			d := openTestDB(t)
 			ctx := context.Background()
 			log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+			if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := d.Write.ExecContext(ctx, `
 				INSERT INTO users(id, email, display_name, role, created_at, updated_at)
 				VALUES (1, 'u@t.local', 't', 'admin', 0, 0);
-				INSERT INTO documents(owner_id, title, original_blob, original_size,
+				INSERT INTO documents(system_id, owner_id, title, original_blob, original_size,
 				                      jd_category_id, created_at, added_at, updated_at)
-				VALUES (1, 'waiting.pdf', 'sha-bootstrap', 1,
+				VALUES (1, 1, 'waiting.pdf', 'sha-bootstrap', 1,
 				        (SELECT id FROM jd_categories WHERE system = 1), 0, 0, 0)
 			`); err != nil {
 				t.Fatal(err)
 			}
-			if err := jd.ApplyPreset(ctx, d, log, preset.ID, jd.ApplyPresetOpts{}); err != nil {
+			if err := jd.ApplyPreset(ctx, d, log, preset.ID, jd.ApplyPresetOpts{SystemID: 1}); err != nil {
 				t.Fatalf("apply from bootstrap: %v", err)
 			}
 			var onInbox int

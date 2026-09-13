@@ -20,9 +20,16 @@ syntax lives in [Query language](/query-language).
 | Archive research | Natural-question terms plus reauthorized context | BM25 evidence retrieval, no recency | Give one model a small authorized evidence set. |
 | MCP `search_documents` | Ranked Search API | Same as ranked Search | Give an agent the same scoped search semantics. |
 
-All surfaces apply document visibility inside their database query. Admin bypass,
-owner access, user/group ACLs, and public-demo corpus isolation use the same
-authorization fragments.
+All surfaces restrict candidates to the selected system, require entry, and apply
+document visibility inside their database query. Admins bypass membership/ACLs,
+never explicit request/token systems. Name/code completion, counts, snippets,
+scores and pagination cannot return foreign-system rows. Public-demo exceptions
+apply only to the unnamed original demo archive. See [Permissions](/permissions).
+
+Whole canonical addresses such as `S01.13.147` in Search/Omnibox use
+`/api/jd/resolve`; stale locations fail, not alias to a new category or fall back
+to broad text search. `jd:13` remains a category filter within the current system.
+The final address component is an existing installation-global document ID.
 
 ## FTS5 index
 
@@ -37,6 +44,11 @@ CREATE VIRTUAL TABLE documents_fts USING fts5 (
   tokenize='porter unicode61 remove_diacritics 2'
 );
 ```
+
+The index and its corpus statistics remain physically shared: system filtering
+does not promise separate FTS databases or independent rank statistics. Authorized
+results are constrained before hydration; this is application isolation, not
+physical search/storage separation.
 
 - `title` is document metadata.
 - `content` is extracted text from PDF, OCR, email, office-document, barcode, and

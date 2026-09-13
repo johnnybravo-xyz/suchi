@@ -14,7 +14,9 @@ import (
 )
 
 func TestMobileReaderEndpointsRequireDocumentReadScope(t *testing.T) {
-	s := &Server{Log: slog.Default()}
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	s := &Server{DB: d, Log: slog.Default()}
 	cases := []struct {
 		name          string
 		path          string

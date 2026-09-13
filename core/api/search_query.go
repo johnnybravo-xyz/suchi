@@ -4,18 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/searchquery"
 )
 
 type apiQueryResolver struct {
-	queryer sqlQueryer
+	queryer  sqlQueryer
+	systemID int64
 }
 
 func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]searchquery.Candidate, error) {
@@ -26,21 +26,21 @@ func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]
 		query = `
 			SELECT id, CAST(code AS TEXT) || ' ' || name
 			FROM jd_categories
-			WHERE CAST(code AS TEXT) = ?
+			WHERE system_id = ? AND (CAST(code AS TEXT) = ?
 			   OR lower(name) = lower(?)
-			   OR lower(CAST(code AS TEXT) || ' ' || name) = lower(?)
+			   OR lower(CAST(code AS TEXT) || ' ' || name) = lower(?))
 			ORDER BY code
 			LIMIT 8`
-		args = []any{value, value, value}
+		args = []any{r.systemID, value, value, value}
 	case "tag":
-		query = `SELECT id, name FROM tags WHERE lower(name) = lower(?) ORDER BY name LIMIT 8`
-		args = []any{value}
+		query = `SELECT id, name FROM tags WHERE system_id = ? AND lower(name) = lower(?) ORDER BY name LIMIT 8`
+		args = []any{r.systemID, value}
 	case "from":
-		query = `SELECT id, name FROM correspondents WHERE lower(name) = lower(?) ORDER BY name LIMIT 8`
-		args = []any{value}
+		query = `SELECT id, name FROM correspondents WHERE system_id = ? AND lower(name) = lower(?) ORDER BY name LIMIT 8`
+		args = []any{r.systemID, value}
 	case "type":
-		query = `SELECT id, name FROM document_types WHERE lower(name) = lower(?) ORDER BY name LIMIT 8`
-		args = []any{value}
+		query = `SELECT id, name FROM document_types WHERE system_id = ? AND lower(name) = lower(?) ORDER BY name LIMIT 8`
+		args = []any{r.systemID, value}
 	default:
 		return nil, fmt.Errorf("resolve unsupported search filter %q", filter)
 	}
@@ -69,13 +69,9 @@ func (r apiQueryResolver) Resolve(ctx context.Context, filter, value string) ([]
 }
 
 func (r apiQueryResolver) InboxCategoryID(ctx context.Context) (int64, error) {
-	var raw string
-	if err := r.queryer.QueryRowContext(ctx,
-		`SELECT value_json FROM settings WHERE key = ?`, jd.SettingInboxCategoryID).Scan(&raw); err != nil {
-		return 0, fmt.Errorf("resolve inbox query: %w", err)
-	}
 	var id int64
-	if err := json.Unmarshal([]byte(raw), &id); err != nil {
+	if err := r.queryer.QueryRowContext(ctx,
+		`SELECT COALESCE(inbox_category_id, 0) FROM jd_systems WHERE id = ?`, r.systemID).Scan(&id); err != nil {
 		return 0, fmt.Errorf("resolve inbox query: %w", err)
 	}
 	return id, nil
@@ -91,7 +87,7 @@ func (s *Server) compileQueryWith(ctx context.Context, q sqlQueryer, raw string)
 	if err != nil {
 		return searchquery.Plan{}, err
 	}
-	resolved, err := searchquery.Resolve(ctx, parsed, apiQueryResolver{queryer: q})
+	resolved, err := searchquery.Resolve(ctx, parsed, apiQueryResolver{queryer: q, systemID: collectionSystemID(ctx, auth.FromContext(ctx))})
 	if err != nil {
 		return searchquery.Plan{}, err
 	}
@@ -211,25 +207,26 @@ func (s *Server) queryCompletions(ctx context.Context, raw string, limit int) ([
 		query = `
 			SELECT id, CAST(code AS TEXT) || ' ' || name, CAST(code AS TEXT)
 			FROM jd_categories
-			WHERE lower(name) LIKE lower(?) ESCAPE '\'
+			WHERE system_id = ? AND (lower(name) LIKE lower(?) ESCAPE '\'
 			   OR CAST(code AS TEXT) LIKE ? ESCAPE '\'
-			   OR lower(CAST(code AS TEXT) || ' ' || name) LIKE lower(?) ESCAPE '\'
+			   OR lower(CAST(code AS TEXT) || ' ' || name) LIKE lower(?) ESCAPE '\')
 			ORDER BY code
 			LIMIT ?`
 	case "tag":
-		query = `SELECT id, name, name FROM tags WHERE lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
+		query = `SELECT id, name, name FROM tags WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	case "from":
-		query = `SELECT id, name, name FROM correspondents WHERE lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
+		query = `SELECT id, name, name FROM correspondents WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	case "type":
-		query = `SELECT id, name, name FROM document_types WHERE lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
+		query = `SELECT id, name, name FROM document_types WHERE system_id = ? AND lower(name) LIKE lower(?) ESCAPE '\' ORDER BY name LIMIT ?`
 	default:
 		return []AutocompleteSuggestion{}, true, nil
 	}
 
 	needle := escapeLike(completion.Prefix) + "%"
-	args := []any{needle, limit}
+	systemID := collectionSystemID(ctx, auth.FromContext(ctx))
+	args := []any{systemID, needle, limit}
 	if completion.Filter == "jd" {
-		args = []any{needle, needle, needle, limit}
+		args = []any{systemID, needle, needle, needle, limit}
 	}
 	rows, err := s.DB.Read.QueryContext(ctx, query, args...)
 	if err != nil {

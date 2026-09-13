@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 const (
@@ -31,10 +34,9 @@ func ValidatePollInterval(minutes int) error {
 	return nil
 }
 
-// List returns every mail account, ordered by id. Cheap at expected
-// scale (single-digit rows per instance); no pagination.
-func List(ctx context.Context, database *db.DB) ([]Account, error) {
-	return listWhere(ctx, database, "", nil)
+// List returns accounts in one system, ordered by id.
+func List(ctx context.Context, database *db.DB, systemID int64) ([]Account, error) {
+	return listWhere(ctx, database, "WHERE system_id = ?", []any{systemID})
 }
 
 // ListEnabled returns enabled rows owned by active users, ordered by id. This
@@ -45,14 +47,16 @@ func ListEnabled(ctx context.Context, database *db.DB) ([]Account, error) {
 		  AND EXISTS (
 			SELECT 1 FROM users
 			WHERE users.id = email_accounts.owner_id AND users.disabled = 0
+			  AND (users.role = 'admin' OR EXISTS (
+			      SELECT 1 FROM jd_system_members m WHERE m.user_id = users.id AND m.system_id = email_accounts.system_id))
 		  )`, nil)
 }
 
 // ListByOwner returns every mailbox row for ownerID, ordered by id.
 // Feeds the per-member mailbox surface (sidebar + list page) after
 // the mailboxes capability is granted.
-func ListByOwner(ctx context.Context, database *db.DB, ownerID int64) ([]Account, error) {
-	return listWhere(ctx, database, "WHERE owner_id = ?", []any{ownerID})
+func ListByOwner(ctx context.Context, database *db.DB, systemID, ownerID int64) ([]Account, error) {
+	return listWhere(ctx, database, "WHERE system_id = ? AND owner_id = ?", []any{systemID, ownerID})
 }
 
 // DisableAllByOwner flips enabled=0 on every mailbox owned by
@@ -78,7 +82,7 @@ func DisableAllByOwner(ctx context.Context, database *db.DB, ownerID int64) (int
 
 func listWhere(ctx context.Context, database *db.DB, where string, args []any) ([]Account, error) {
 	q := `
-		SELECT id, name, owner_id, provider, host, port, use_tls,
+		SELECT id, system_id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), intake_policy,
@@ -106,7 +110,7 @@ func listWhere(ctx context.Context, database *db.DB, where string, args []any) (
 // Get returns one row or sql.ErrNoRows.
 func Get(ctx context.Context, database *db.DB, id int64) (*Account, error) {
 	row := database.Read.QueryRowContext(ctx, `
-		SELECT id, name, owner_id, provider, host, port, use_tls,
+		SELECT id, system_id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), intake_policy,
@@ -133,7 +137,7 @@ func scanAccount(s scanner) (Account, error) {
 	var lastUID, uidValidity int64
 	var syncSince sql.NullInt64
 	var intakePolicy string
-	if err := s.Scan(&a.ID, &a.Name, &a.OwnerID, &a.Provider, &a.Host, &a.Port, &useTLS,
+	if err := s.Scan(&a.ID, &a.SystemID, &a.Name, &a.OwnerID, &a.Provider, &a.Host, &a.Port, &useTLS,
 		&a.TLSCAFile, &a.Folder, &a.ProcessedFolder,
 		&a.PollIntervalMin, &a.AuthMethod, &a.Username, &a.SealedSecret,
 		&a.OAuthAccountID, &intakePolicy,
@@ -163,7 +167,7 @@ func scanAccount(s scanner) (Account, error) {
 // Create inserts a new account. Fields required by NOT NULL columns
 // are validated here so the caller gets a friendly error, not a
 // SQLite constraint failure.
-func Create(ctx context.Context, database *db.DB, a Account) (*Account, error) {
+func Create(ctx context.Context, tx *sql.Tx, a Account, actor *pluginapi.Principal) (*Account, error) {
 	if a.Folder == "" {
 		a.Folder = "INBOX"
 	}
@@ -183,37 +187,46 @@ func Create(ctx context.Context, database *db.DB, a Account) (*Account, error) {
 		return nil, err
 	}
 	now := time.Now().Unix()
-	var id int64
-	err = database.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO email_accounts(
-				name, owner_id, provider, host, port, use_tls, tls_ca_file,
-				folder, processed_folder, poll_interval_min, auth_method,
-				username, sealed_secret, oauth_account_id, intake_policy,
-				sync_since, enabled, mark_seen, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			a.Name, a.OwnerID, string(a.Provider), a.Host, a.Port, boolInt(a.UseTLS),
-			nullIfEmpty(a.TLSCAFile),
-			a.Folder, nullIfEmpty(a.ProcessedFolder), a.PollIntervalMin,
-			string(a.AuthMethod), a.Username, a.SealedSecret,
-			nullIfEmpty(a.OAuthAccountID), policyJSON,
-			nullIfZeroI64(a.SyncSince),
-			boolInt(a.Enabled), boolInt(a.MarkSeen),
-			now, now)
-		if err != nil {
-			return err
-		}
-		id, err = res.LastInsertId()
-		return err
-	})
+	if err := checkMutation(ctx, tx, actor, a.SystemID, a.OwnerID); err != nil {
+		return nil, err
+	}
+	allowed, err := systems.CanEnter(ctx, tx, a.OwnerID, a.SystemID)
 	if err != nil {
 		return nil, err
 	}
-	return Get(ctx, database, id)
+	if !allowed {
+		return nil, sql.ErrNoRows
+	}
+	res, err := tx.ExecContext(ctx, `
+			INSERT INTO email_accounts(
+				system_id, name, owner_id, provider, host, port, use_tls, tls_ca_file,
+				folder, processed_folder, poll_interval_min, auth_method,
+				username, sealed_secret, oauth_account_id, intake_policy,
+				sync_since, enabled, mark_seen, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.SystemID, a.Name, a.OwnerID, string(a.Provider), a.Host, a.Port, boolInt(a.UseTLS),
+		nullIfEmpty(a.TLSCAFile),
+		a.Folder, nullIfEmpty(a.ProcessedFolder), a.PollIntervalMin,
+		string(a.AuthMethod), a.Username, a.SealedSecret,
+		nullIfEmpty(a.OAuthAccountID), policyJSON,
+		nullIfZeroI64(a.SyncSince),
+		boolInt(a.Enabled), boolInt(a.MarkSeen),
+		now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	created, err := getInTx(ctx, tx, id)
+	return &created, err
 }
 
 func validateNew(a Account) error {
 	switch {
+	case a.SystemID <= 0:
+		return errors.New("emailaccounts: system_id required")
 	case strings.TrimSpace(a.Name) == "":
 		return errors.New("emailaccounts: name required")
 	case a.OwnerID == 0:
@@ -247,7 +260,7 @@ func validateNew(a Account) error {
 }
 
 // Patch applies a sparse update. sql.ErrNoRows if id is gone.
-func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Account, error) {
+func Patch(ctx context.Context, tx *sql.Tx, id int64, p AccountPatch, actor *pluginapi.Principal) (*Account, error) {
 	if p.IntakePolicy != nil {
 		normalized, err := NormalizeIntakePolicy(*p.IntakePolicy)
 		if err != nil {
@@ -329,42 +342,63 @@ func Patch(ctx context.Context, database *db.DB, id int64, p AccountPatch) (*Acc
 		add("mark_seen", boolInt(*p.MarkSeen))
 	}
 	args = append(args, id)
-	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
-		current, err := getInTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		caFile := current.TLSCAFile
-		if p.TLSCAFile != nil {
-			caFile = *p.TLSCAFile
-		}
-		enabled := current.Enabled
-		if p.Enabled != nil {
-			enabled = *p.Enabled
-		}
-		if p.TLSCAFile != nil || enabled {
-			if _, err := LoadTLSRootCAs(caFile); err != nil {
-				return err
-			}
-		}
-		if cursorSourceChanged(current, p) {
-			sets = append(sets, "last_uid_seen = 0", "uidvalidity_seen = 0")
-		}
-		res, err := tx.ExecContext(ctx,
-			"UPDATE email_accounts SET "+strings.Join(sets, ", ")+" WHERE id = ?",
-			args...)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return sql.ErrNoRows
-		}
-		return nil
-	})
+	current, err := getInTx(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	return Get(ctx, database, id)
+	if err := checkMutation(ctx, tx, actor, current.SystemID, current.OwnerID); err != nil {
+		return nil, err
+	}
+	ownerID := current.OwnerID
+	if p.OwnerID != nil {
+		ownerID = *p.OwnerID
+	}
+	if ownerID != current.OwnerID {
+		if err := checkMutation(ctx, tx, actor, current.SystemID, ownerID); err != nil {
+			return nil, err
+		}
+	}
+	allowed, err := systems.CanEnter(ctx, tx, ownerID, current.SystemID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, sql.ErrNoRows
+	}
+	if actor != nil && p.TLSCAFile != nil {
+		var role string
+		if err := tx.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", actor.UserID).Scan(&role); err != nil {
+			return nil, err
+		}
+		if role != "admin" {
+			return nil, sql.ErrNoRows
+		}
+	}
+	caFile := current.TLSCAFile
+	if p.TLSCAFile != nil {
+		caFile = *p.TLSCAFile
+	}
+	enabled := current.Enabled
+	if p.Enabled != nil {
+		enabled = *p.Enabled
+	}
+	if p.TLSCAFile != nil || enabled {
+		if _, err := LoadTLSRootCAs(caFile); err != nil {
+			return nil, err
+		}
+	}
+	if cursorSourceChanged(current, p) {
+		sets = append(sets, "last_uid_seen = 0", "uidvalidity_seen = 0")
+	}
+	res, err := tx.ExecContext(ctx, "UPDATE email_accounts SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	updated, err := getInTx(ctx, tx, id)
+	return &updated, err
 }
 
 func validatePatch(p AccountPatch) error {
@@ -432,7 +466,7 @@ func valueOrEmpty(value *string) string {
 
 func getInTx(ctx context.Context, tx *sql.Tx, id int64) (Account, error) {
 	return scanAccount(tx.QueryRowContext(ctx, `
-		SELECT id, name, owner_id, provider, host, port, use_tls,
+		SELECT id, system_id, name, owner_id, provider, host, port, use_tls,
 		       COALESCE(tls_ca_file, ''), folder, COALESCE(processed_folder, ''),
 		       poll_interval_min, auth_method, username, sealed_secret,
 		       COALESCE(oauth_account_id, ''), intake_policy,
@@ -465,17 +499,22 @@ func cursorSourceChanged(a Account, p AccountPatch) bool {
 }
 
 // Delete removes one row. sql.ErrNoRows if id is gone.
-func Delete(ctx context.Context, database *db.DB, id int64) error {
-	return database.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM email_accounts WHERE id = ?`, id)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return sql.ErrNoRows
-		}
-		return nil
-	})
+func Delete(ctx context.Context, tx *sql.Tx, id int64, actor *pluginapi.Principal) error {
+	current, err := getInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := checkMutation(ctx, tx, actor, current.SystemID, current.OwnerID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM email_accounts WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // UpdateUIDCursor advances the poll-loop's high-water mark after a
@@ -543,4 +582,48 @@ func nullIfZeroI64(p *int64) any {
 		return nil
 	}
 	return *p
+}
+
+// Trusted pollers pass nil; interactive mutations re-read authority in the same
+// transaction as the account write so revocation cannot race the commit.
+func checkMutation(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, systemID, ownerID int64) error {
+	if actor == nil {
+		return nil
+	}
+	bound := actor.TokenSystemID
+	if bound == 0 && (actor.TokenID != 0 || actor.Kind == "token") {
+		bound = systems.DefaultID
+	}
+	if bound != 0 && bound != systemID {
+		return sql.ErrNoRows
+	}
+	allowed, err := systems.CanEnter(ctx, tx, actor.UserID, systemID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return sql.ErrNoRows
+	}
+	if actor.TokenID != 0 {
+		var one int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM api_tokens WHERE id = ? AND user_id = ? AND system_id = ? AND revoked_at IS NULL`,
+			actor.TokenID, actor.UserID, systemID).Scan(&one); err != nil {
+			return err
+		}
+	}
+	var role, raw string
+	if err := tx.QueryRowContext(ctx, `SELECT role, capabilities FROM users WHERE id = ? AND disabled = 0`, actor.UserID).Scan(&role, &raw); err != nil {
+		return err
+	}
+	if role == "admin" {
+		return nil
+	}
+	caps, err := authz.ParseJSON([]byte(raw))
+	if err != nil {
+		return err
+	}
+	if actor.UserID != ownerID || !caps.Has(authz.CapMailboxes) {
+		return sql.ErrNoRows
+	}
+	return nil
 }

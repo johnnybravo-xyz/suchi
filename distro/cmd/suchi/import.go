@@ -31,6 +31,7 @@ func runImport(args []string) int {
 		autoJD     = fs.Bool("auto-jd", false, "apply the built-in JD heuristics (deterministic keyword matches against the starter tree). Off by default — inbox is the safe fallback.")
 		verify     = fs.Bool("verify", false, "dry-diff the bundle against the live DB — no writes. Prints new/match/differ/orphan counts.")
 		reportPath = fs.String("report", "./import-report.md", "write a FULL/PARTIAL/FAILED markdown report of the migration to this path")
+		systemCode = fs.String("system", "", "target system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -39,7 +40,7 @@ func runImport(args []string) int {
 	// because verify never writes and never resolves JD categories. It
 	// answers "what would change" against current DB state.
 	if *verify {
-		return runImportVerify(*from)
+		return runImportVerify(*from, *systemCode)
 	}
 
 	mapping, err := bundle.LoadMapping(*mapJD)
@@ -49,6 +50,7 @@ func runImport(args []string) int {
 	}
 	mrep := bundle.NewMigrationReport(*from, "")
 	opts := bundle.Options{
+		SystemID:   1,
 		BundleRoot: *from,
 		OwnerEmail: *ownerEmail,
 		DryRun:     *dryRun,
@@ -96,7 +98,13 @@ func runImport(args []string) int {
 		log.Error("import.migrate", "err", err.Error())
 		return 1
 	}
-	mode, err := jd.Mode(ctx, d)
+	system, err := resolveCommandSystem(ctx, d, *systemCode)
+	if err != nil {
+		log.Error("import.system", "err", err)
+		return 1
+	}
+	opts.SystemID = system.ID
+	mode, err := jd.Mode(ctx, d, system.ID)
 	if err != nil {
 		log.Error("import.jd.mode", "err", err.Error())
 		return 1
@@ -163,15 +171,15 @@ Import complete (dry_run=%v).
 // lands in the same Inbox-only baseline as normal server boot.
 func ensureImportTree(ctx context.Context, d *db.DB, log *slog.Logger, mode jd.TaxonomyMode, opts bundle.Options) error {
 	if opts.AutoJD || opts.MapJD != nil {
-		return jd.EnsureTree(ctx, d, log, mode)
+		return jd.EnsureTree(ctx, d, log, mode, opts.SystemID)
 	}
-	return jd.EnsureBootstrapTree(ctx, d, log, mode)
+	return jd.EnsureBootstrapTree(ctx, d, log, mode, opts.SystemID)
 }
 
 // runImportVerify is the --verify entry point. Reads-only: parses the
 // bundle, diffs against the live DB, prints a partition. Never opens a
 // write transaction and never resolves owner-email.
-func runImportVerify(bundleRoot string) int {
+func runImportVerify(bundleRoot, systemCode string) int {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
@@ -188,7 +196,12 @@ func runImportVerify(bundleRoot string) int {
 	}
 	defer d.Close()
 
-	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{BundleRoot: bundleRoot})
+	system, err := resolveCommandSystem(ctx, d, systemCode)
+	if err != nil {
+		log.Error("verify.system", "err", err)
+		return 1
+	}
+	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{BundleRoot: bundleRoot, SystemID: system.ID})
 	if err != nil {
 		log.Error("verify.bundle", "err", err.Error())
 		return 1

@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
 // TestRenderJDDefault exercises the JD-first storage-path template
 // suchi ships as the default. Regression: this exact rendering is
 // what maps a starter-tree doc onto a browsable folder layout.
 func TestRenderJDDefault(t *testing.T) {
-	tpl := `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
+	tpl := view.DefaultTemplateJD
 
 	ctx := paths.Context{
 		Title:           "ITR 1 A Sharma",
@@ -24,16 +25,14 @@ func TestRenderJDDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	want := "20-29 Money/22 Tax/2026/ITR 1 A Sharma__142.pdf"
+	want := "20-29 Money/22 Tax/2026/2026-03-02 ITR 1 A Sharma__142.pdf"
 	if got != want {
 		t.Errorf("render mismatch\n got %q\nwant %q", got, want)
 	}
 }
 
-// TestRenderFlatClassic exercises the flat-mode default template
-// shape. Byte-equal regression against the shape imported archives
-// use — a migrating operator's folder layout must survive.
-func TestRenderFlatClassic(t *testing.T) {
+// Explicit imported templates retain their existing undated filename shape.
+func TestRenderExplicitFlatTemplate(t *testing.T) {
 	tpl := `{{ correspondent }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
 	ctx := paths.Context{
 		Title:         "Electricity bill Mar 2026",
@@ -48,6 +47,17 @@ func TestRenderFlatClassic(t *testing.T) {
 	want := "BESCOM/2026/Electricity bill Mar 2026__1.pdf"
 	if got != want {
 		t.Errorf("classic render mismatch\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestReservedIndexNamespace(t *testing.T) {
+	for _, path := range []string{"00-09 System index/file.pdf", "./00-09 System index/file.pdf", "other/../00-09 System index/file.pdf", "00-09 SYSTEM INDEX/file.pdf"} {
+		if !paths.IsIndexPath(path) {
+			t.Fatalf("index namespace not recognized: %q", path)
+		}
+	}
+	if paths.IsIndexPath("10-19 Records/11 Identity/file.pdf") {
+		t.Fatal("ordinary path reserved")
 	}
 }
 

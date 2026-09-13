@@ -240,7 +240,7 @@ func TestSpecEncodeDecodeRoundtrip(t *testing.T) {
 
 func TestEngineRegister_RejectsInvalidSpec(t *testing.T) {
 	e := newEngine(t)
-	_, err := e.Register(context.Background(), approvals.Spec{Start: "ghost"}, "bad", adminPrincipal())
+	_, err := e.Register(context.Background(), 1, approvals.Spec{Start: "ghost"}, "bad", adminPrincipal())
 	if err == nil {
 		t.Fatal("expected validate to reject bad spec")
 	}
@@ -256,7 +256,7 @@ func TestEngineRegister_RejectsUnknownHandler(t *testing.T) {
 			"b": {Kind: "end"},
 		},
 	}
-	_, err := e.Register(context.Background(), spec, "bad-kind", adminPrincipal())
+	_, err := e.Register(context.Background(), 1, spec, "bad-kind", adminPrincipal())
 	if err == nil {
 		t.Fatal("expected unknown-handler rejection")
 	}
@@ -272,11 +272,11 @@ func TestEngineRegister_VersionsBumpPerSlug(t *testing.T) {
 			"b": {Kind: "end"},
 		},
 	}
-	id1, err := e.Register(ctx, spec, "invoice", adminPrincipal())
+	id1, err := e.Register(ctx, 1, spec, "invoice", adminPrincipal())
 	if err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	id2, err := e.Register(ctx, spec, "invoice", adminPrincipal())
+	id2, err := e.Register(ctx, 1, spec, "invoice", adminPrincipal())
 	if err != nil {
 		t.Fatalf("second register: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestEngineRegister_VersionsBumpPerSlug(t *testing.T) {
 
 func TestEngineStart_NoDef(t *testing.T) {
 	e := newEngine(t)
-	_, err := e.Start(context.Background(), "nope", 0, nil, adminPrincipal())
+	_, err := e.Start(context.Background(), 1, "nope", 0, nil, adminPrincipal())
 	if err == nil {
 		t.Fatal("expected ErrNoDef")
 	}
@@ -312,10 +312,10 @@ func TestEngineStart_CreatesRun(t *testing.T) {
 			"done": {Kind: "end"},
 		},
 	}
-	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "sample", adminPrincipal()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	runID, err := e.Start(ctx, 1, "sample", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -352,10 +352,10 @@ func TestEngineResolve_RejectsBadChoice(t *testing.T) {
 			"done": {Kind: "end"},
 		},
 	}
-	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "sample", adminPrincipal()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	runID, err := e.Start(ctx, 1, "sample", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestDefault_UnsetErrors(t *testing.T) {
 	// Ensure any prior test that ran SetDefault is cleared. Package
 	// singleton is deliberate — see approvals.SetDefault docstring.
 	approvals.SetDefault(nil)
-	_, err := approvals.Start(context.Background(), "x", 0, nil, adminPrincipal())
+	_, err := approvals.Start(context.Background(), 1, "x", 0, nil, adminPrincipal())
 	if err != approvals.ErrEngineNotConfigured {
 		t.Fatalf("want ErrEngineNotConfigured, got %v", err)
 	}
@@ -425,10 +425,10 @@ func TestEngineResolve_HappyPath(t *testing.T) {
 			"denied": {Kind: "end"},
 		},
 	}
-	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "sample", adminPrincipal()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	runID, err := e.Start(ctx, 1, "sample", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,10 +495,10 @@ func TestEngineTimeoutSweep(t *testing.T) {
 			"expired": {Kind: "end"},
 		},
 	}
-	if _, err := e.Register(ctx, spec, "sample", adminPrincipal()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "sample", adminPrincipal()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, "sample", 0, nil, adminPrincipal())
+	runID, err := e.Start(ctx, 1, "sample", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,5 +548,125 @@ func TestEngineTimeoutSweep(t *testing.T) {
 	}
 	if run.Status != "done" {
 		t.Errorf("run.Status = %q, want done", run.Status)
+	}
+}
+
+func TestTaskAssignmentCannotReviveRemovedCredential(t *testing.T) {
+	ctx := context.Background()
+	e := newEngine(t)
+	d := e.DB()
+	if _, err := d.Write.ExecContext(ctx, `
+		INSERT INTO users(id, email, display_name, role, created_at, updated_at) VALUES (2, 'member@example.com', 'Member', 'member', 0, 0);
+		UPDATE jd_systems SET code = 'S01' WHERE id = 1;
+		INSERT INTO api_tokens(id, user_id, system_id, name, token_hash, scopes, created_at) VALUES (20, 2, 1, 'Device', 'device-hash', 'documents:write', 0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	spec := approvals.Spec{Start: "review", States: map[string]approvals.State{
+		"review": {Kind: "approve", Assignee: "user:2", Prompt: "Review", Choices: []string{"approve"}, On: map[string]string{"approve": "done"}},
+		"done":   {Kind: "end"},
+	}}
+	if _, err := e.Register(ctx, 1, spec, "membership", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := e.Start(ctx, 1, "membership", 0, nil, adminPrincipal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, runID, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, tasks, err := e.GetRun(ctx, runID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%v err=%v", tasks, err)
+	}
+	token := &pluginapi.Principal{Kind: "token", UserID: 2, Role: "member", TokenID: 20, TokenSystemID: 1}
+	if _, err := d.Write.ExecContext(ctx, `DELETE FROM jd_system_members WHERE system_id = 1 AND user_id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "approve", token); err != approvals.ErrForbidden {
+		t.Fatalf("removed token: %v", err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "approve", &pluginapi.Principal{Kind: "user", UserID: 2, Role: "member"}); err != approvals.ErrForbidden {
+		t.Fatalf("assignment bypassed membership: %v", err)
+	}
+	if _, err := d.Write.ExecContext(ctx, `INSERT INTO jd_system_members(system_id,user_id,created_at) VALUES (1,2,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Resolve(ctx, tasks[0].ID, "approve", token); err != approvals.ErrForbidden {
+		t.Fatalf("re-admission revived credential: %v", err)
+	}
+	var status string
+	if err := d.Read.QueryRowContext(ctx, `SELECT status FROM approval_tasks WHERE id = ?`, tasks[0].ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "open" {
+		t.Fatalf("rejected resolution changed task: %s", status)
+	}
+}
+
+func TestDefinitionsAndDocumentlessRunsAreSystemOwned(t *testing.T) {
+	ctx := context.Background()
+	e := newEngine(t)
+	d := e.DB()
+	if _, err := d.Write.Exec(`UPDATE jd_systems SET code='S01' WHERE id=1; INSERT INTO jd_systems(id,code,name,taxonomy,created_at,updated_at) VALUES (2,'S02','Second','jd',0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	spec := approvals.Spec{Start: "done", States: map[string]approvals.State{"done": {Kind: "end"}}}
+	for _, systemID := range []int64{1, 2} {
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error { return approvals.EnsureDefInTx(ctx, tx, systemID, "same", spec, nil) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.EnsureDef(ctx, systemID, "same", spec, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.Register(ctx, 1, spec, "same", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	var firstVersion, secondVersion int
+	if err := d.Read.QueryRow(`SELECT version FROM approval_defs WHERE system_id=1 AND slug='same' AND active=1`).Scan(&firstVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRow(`SELECT version FROM approval_defs WHERE system_id=2 AND slug='same' AND active=1`).Scan(&secondVersion); err != nil {
+		t.Fatal(err)
+	}
+	if firstVersion != 2 || secondVersion != 1 {
+		t.Fatalf("versions first=%d second=%d", firstVersion, secondVersion)
+	}
+	runID, err := e.Start(ctx, 2, "same", 0, nil, adminPrincipal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runSystem, jobSystem int64
+	if err := d.Read.QueryRow(`SELECT r.system_id,j.system_id FROM approval_runs r JOIN jobs j ON CAST(json_extract(j.payload,'$.run_id') AS INTEGER)=r.id WHERE r.id=? AND j.kind='approval:advance'`, runID).Scan(&runSystem, &jobSystem); err != nil {
+		t.Fatal(err)
+	}
+	if runSystem != 2 || jobSystem != 2 {
+		t.Fatalf("documentless ownership run=%d job=%d", runSystem, jobSystem)
+	}
+	token := adminPrincipal()
+	token.Kind = "token"
+	token.TokenSystemID = 1
+	if _, err := e.Start(ctx, 2, "same", 0, nil, token); err != approvals.ErrForbidden {
+		t.Fatalf("admin token crossed system: %v", err)
+	}
+	if _, err := e.Register(ctx, 2, spec, "foreign", token); err != approvals.ErrForbidden {
+		t.Fatalf("admin token registered foreign definition: %v", err)
+	}
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := approvals.EnsureDefInTx(ctx, tx, 2, "rolled-back", spec, nil); err != nil {
+			return err
+		}
+		return approvals.ErrForbidden
+	}); err != approvals.ErrForbidden {
+		t.Fatalf("rollback: %v", err)
+	}
+	var count int
+	if err := d.Read.QueryRow(`SELECT COUNT(*) FROM approval_defs WHERE slug='rolled-back'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("transactional seeding escaped rollback")
 	}
 }

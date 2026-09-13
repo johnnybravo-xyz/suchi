@@ -72,6 +72,10 @@ func main() {
 		os.Exit(2)
 	}
 	command := os.Args[1]
+	// File validation is offline and must work even with broken server config.
+	if command == "taxonomy" && len(os.Args) > 2 && os.Args[2] == "validate" {
+		os.Exit(runTaxonomyValidate(os.Args[3:]))
+	}
 	if command != "version" && command != "help" && command != "-h" && command != "--help" {
 		var err error
 		loadedConfigFile, err = config.LoadFile()
@@ -223,15 +227,22 @@ func runServe() int {
 		return 1
 	}
 
-	// Establish taxonomy invariants before any ingest path starts.
-	mode, err := jd.Mode(ctx, d)
+	// Repair every system independently before starting intake.
+	systemIDs, err := filingSystemIDs(ctx, d.Read)
 	if err != nil {
-		log.Error("main.jd.mode", "err", err.Error())
+		log.Error("main.systems", "err", err)
 		return 1
 	}
-	if err := jd.EnsureBootstrapTree(ctx, d, log, mode); err != nil {
-		log.Error("main.jd.ensure", "err", err.Error())
-		return 1
+	for _, systemID := range systemIDs {
+		mode, err := jd.Mode(ctx, d, systemID)
+		if err != nil {
+			log.Error("main.jd.mode", "err", err)
+			return 1
+		}
+		if err := jd.EnsureBootstrapTree(ctx, d, log, mode, systemID); err != nil {
+			log.Error("main.jd.ensure", "err", err)
+			return 1
+		}
 	}
 
 	// Missing optional tools degrade formats without blocking startup.
@@ -347,12 +358,7 @@ func runServe() int {
 		return 1
 	}
 
-	// Render paths depend on the active taxonomy mode.
-	mode2 := "jd"
-	if mode == "flat" {
-		mode2 = "flat"
-	}
-	renderer, err := view.New(d, cas, cfg.DataDir+"/rendered", mode2, log)
+	renderer, err := view.New(d, cas, cfg.DataDir+"/rendered", log)
 	if err != nil {
 		log.Error("main.view.new", "err", err.Error())
 		return 1
@@ -476,6 +482,10 @@ func runServe() int {
 	))
 	disp.Register(llmclassifier.NewHandler(llm, d, log))
 	disp.Register(view.NewHandler(renderer))
+	if err := configureTaxonomyIndex(ctx, d, disp, log, cfg.DataDir+"/rendered"); err != nil {
+		log.Error("taxonomy.index.startup", "err", err)
+		return 1
+	}
 	// The API uses the same approvals engine as the outbox subscriber.
 	apvEngine := approvals.New(d, log)
 	approvals.SetDefault(apvEngine)
@@ -490,13 +500,15 @@ func runServe() int {
 	}
 	apvEngine.RegisterHandler(rescan.NewHandler(d, pipelineVersions))
 	apvEngine.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: apvEngine, Log: log})
-	if err := apvEngine.EnsureDef(ctx, approvals.DocumentChangeSlug, approvals.DocumentChangeSpec(), nil); err != nil {
-		log.Warn("main.document_change.seed", "err", err.Error())
-	}
-	if err := apvEngine.EnsureDef(ctx, rescan.ProposalSlug, rescan.ProposalSpec(), nil); err != nil {
-		log.Warn("main.rescan.seed", "err", err.Error())
-	} else if err := rescan.EnsureProposals(ctx, d, apvEngine, pipelineVersions); err != nil {
-		log.Warn("main.rescan.detect", "err", err.Error())
+	for _, systemID := range systemIDs {
+		if err := apvEngine.EnsureDef(ctx, systemID, approvals.DocumentChangeSlug, approvals.DocumentChangeSpec(), nil); err != nil {
+			log.Warn("main.document_change.seed", "system_id", systemID, "err", err)
+		}
+		if err := apvEngine.EnsureDef(ctx, systemID, rescan.ProposalSlug, rescan.ProposalSpec(), nil); err != nil {
+			log.Warn("main.rescan.seed", "system_id", systemID, "err", err)
+		} else if err := rescan.EnsureProposals(ctx, d, systemID, apvEngine, pipelineVersions); err != nil {
+			log.Warn("main.rescan.detect", "system_id", systemID, "err", err)
+		}
 	}
 	// Recover crashed jobs before dispatch.
 	if _, err := disp.ReclaimOrphaned(ctx); err != nil {
@@ -517,11 +529,12 @@ func runServe() int {
 	envFSWatch := settings.FSWatchConfig{
 		Dir:        cfg.IngestFSDir,
 		OwnerEmail: cfg.IngestFSOwnerEmail,
+		System:     cfg.IngestFSSystem,
 	}
 	resolveFSWatcher := func(rctx context.Context) fswatch.Config {
 		fresh := settings.ResolveFSWatchConfig(rctx, d, envFSWatch)
 		return fswatch.Config{
-			Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail,
+			Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail, System: fresh.System,
 			MaxBytes: cfg.BodyLimit,
 		}
 	}
@@ -614,7 +627,14 @@ func runServe() int {
 	}
 	apiSrv.FSWatchSettingsReader = func(rctx context.Context) (api.FSWatchSettingsStatus, error) {
 		fresh := settings.ResolveFSWatchConfig(rctx, d, envFSWatch)
-		return api.FSWatchSettingsStatus{Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail}, nil
+		if fresh.System == "" {
+			system, err := resolveCommandSystem(rctx, d, "")
+			if err != nil {
+				return api.FSWatchSettingsStatus{}, err
+			}
+			fresh.System = system.Code
+		}
+		return api.FSWatchSettingsStatus{Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail, System: fresh.System}, nil
 	}
 	apiSrv.FSWatchReloader = func(rctx context.Context) error {
 		return fsSupervisor.Reload(rctx, resolveFSWatcher(rctx))

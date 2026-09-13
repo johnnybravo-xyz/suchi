@@ -96,7 +96,7 @@ func runDemo(args []string) int {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		fmt.Fprintf(os.Stderr, "jd tree: %v\n", err)
 		return 1
 	}
@@ -229,7 +229,7 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 		var jdCatID int64
 		if f.JDCategory > 0 {
 			err := d.Read.QueryRowContext(ctx,
-				`SELECT id FROM jd_categories WHERE code = ?`, f.JDCategory).
+				`SELECT id FROM jd_categories WHERE system_id=1 AND code = ?`, f.JDCategory).
 				Scan(&jdCatID)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return false, fmt.Errorf("look up JD category %d: %w", f.JDCategory, err)
@@ -237,10 +237,10 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 		}
 		if jdCatID == 0 {
 			err := d.Read.QueryRowContext(ctx,
-				`SELECT id FROM jd_categories WHERE code = 10`).Scan(&jdCatID)
+				`SELECT id FROM jd_categories WHERE system_id=1 AND code = 10`).Scan(&jdCatID)
 			if errors.Is(err, sql.ErrNoRows) {
 				err = d.Read.QueryRowContext(ctx,
-					`SELECT id FROM jd_categories ORDER BY id LIMIT 1`).Scan(&jdCatID)
+					`SELECT id FROM jd_categories WHERE system_id=1 ORDER BY id LIMIT 1`).Scan(&jdCatID)
 			}
 			if err != nil {
 				return false, fmt.Errorf("look up fallback JD category: %w", err)
@@ -264,11 +264,11 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			var docID int64
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO documents(
-					owner_id, original_blob, original_size, title, mime_type,
+					system_id, owner_id, original_blob, original_size, title, mime_type,
 					jd_category_id, correspondent_id, document_type_id,
 					sensitivity, languages,
 					added_at, created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
 				jdCatID, corrID, dtID,
@@ -320,7 +320,7 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			if err != nil {
 				return err
 			}
-			return jobs.Enqueue(ctx, tx, postingest.Kind, docID, string(payload))
+			return jobs.Enqueue(ctx, tx, postingest.Kind, docID, 1, string(payload))
 		})
 		return created, err
 	}
@@ -331,7 +331,7 @@ func upsertCorrespondent(ctx context.Context, tx *sql.Tx, name string, now int64
 	if name == "" {
 		return sql.NullInt64{}, nil
 	}
-	id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents, name, now)
+	id, err := taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableCorrespondents, name, now)
 	if err != nil {
 		return sql.NullInt64{}, err
 	}
@@ -343,7 +343,7 @@ func upsertDocumentType(ctx context.Context, tx *sql.Tx, name string, now int64)
 	if name == "" {
 		return sql.NullInt64{}, nil
 	}
-	id, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableDocumentTypes, name, now)
+	id, err := taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableDocumentTypes, name, now)
 	if err != nil {
 		return sql.NullInt64{}, err
 	}
@@ -355,7 +355,7 @@ func upsertTag(ctx context.Context, tx *sql.Tx, name string, now int64) (int64, 
 	if name == "" {
 		return 0, nil
 	}
-	return taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+	return taxonomy.UpsertByName(ctx, tx, 1, taxonomy.TableTags, name, now)
 }
 
 // titleFromFilename turns "bescom_january.pdf" → "Bescom January". Not
@@ -397,9 +397,9 @@ func makeSavedViewIngest(d *db.DB, ownerID, now int64) func(context.Context, dem
 		var created bool
 		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(owner_id, name) DO NOTHING
+				INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+				VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(system_id, owner_id, name) DO NOTHING
 			`, ownerID, view.Name, string(view.FilterJSON), display, view.Position, shared, now, now)
 			if err != nil {
 				return err
@@ -417,7 +417,7 @@ func makeAutomationIngest(d *db.DB, now int64) func(context.Context, int, preset
 		created := false
 		err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 			var existing int64
-			err := tx.QueryRowContext(ctx, `SELECT id FROM automations WHERE name = ?`, seed.Name).Scan(&existing)
+			err := tx.QueryRowContext(ctx, `SELECT id FROM automations WHERE system_id=1 AND name = ?`, seed.Name).Scan(&existing)
 			switch {
 			case err == nil:
 				return nil
@@ -426,8 +426,8 @@ func makeAutomationIngest(d *db.DB, now int64) func(context.Context, int, preset
 			}
 
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-				VALUES (?, ?, 1, ?, ?)
+				INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
+				VALUES (1, ?, ?, 1, ?, ?)
 			`, seed.Name, order, now, now)
 			if err != nil {
 				return err
@@ -528,7 +528,7 @@ func resolveDemoActionParams(ctx context.Context, tx *sql.Tx, params map[string]
 	}
 	if code, ok := numericInt(out["jd_category_code"]); ok {
 		var id int64
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE code = ?`, code).Scan(&id); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE system_id=1 AND code = ?`, code).Scan(&id); err != nil {
 			return nil, fmt.Errorf("jd category code %d: %w", code, err)
 		}
 		delete(out, "jd_category_code")

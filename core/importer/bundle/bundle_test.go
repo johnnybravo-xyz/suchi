@@ -1,12 +1,15 @@
 package bundle_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -29,6 +32,7 @@ func TestImportEndToEnd(t *testing.T) {
 
 	// First run: full import.
 	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		SystemID:   1,
 		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
@@ -64,7 +68,7 @@ func TestImportEndToEnd(t *testing.T) {
 	if haveLegacy != 1 {
 		t.Errorf("legacy_id row count = %d, want 1", haveLegacy)
 	}
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	if inCat != inbox {
 		t.Errorf("imported doc landed in category %d, want inbox %d", inCat, inbox)
 	}
@@ -82,6 +86,7 @@ func TestImportEndToEnd(t *testing.T) {
 
 	// Second run: everything must be skipped by legacy_id.
 	rep2, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		SystemID:   1,
 		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 	})
@@ -242,7 +247,7 @@ func setupTarget(t *testing.T, ctx context.Context, dataDir string) (*db.DB, *bl
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	must(t, err)
 	must(t, db.Migrate(ctx, d, migs, log))
-	must(t, jd.EnsureTree(ctx, d, log, jd.ModeJD))
+	must(t, jd.EnsureTree(ctx, d, log, jd.ModeJD, 1))
 
 	// Seed admin.
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -258,4 +263,95 @@ func setupTarget(t *testing.T, ctx context.Context, dataDir string) (*db.DB, *bl
 	must(t, err)
 
 	return d, cas, log, "admin@example.com"
+}
+
+func TestBundleResumeAndVerifyStayInTargetSystem(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	root := buildFakeBundle(t, dir)
+	d, cas, log, owner := setupTarget(t, ctx, filepath.Join(dir, "data"))
+	_, err := d.Write.ExecContext(ctx, `
+		UPDATE jd_systems SET code = 'S01' WHERE id = 1;
+		INSERT INTO jd_systems(id, code, name, taxonomy, created_at, updated_at) VALUES (2, 'S02', 'Second', 'jd', 0, 0);
+	`)
+	must(t, err)
+	must(t, jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 2))
+	opts := bundle.Options{SystemID: 1, BundleRoot: root, OwnerEmail: owner}
+	_, err = bundle.Run(ctx, d, cas, log, opts)
+	must(t, err)
+	before, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{SystemID: 2, BundleRoot: root})
+	must(t, err)
+	if len(before.New) != 2 || len(before.Match) != 0 || len(before.Orphan) != 0 {
+		t.Fatalf("foreign legacy IDs affected verification: %+v", before)
+	}
+	opts.SystemID = 2
+	report, err := bundle.Run(ctx, d, cas, log, opts)
+	must(t, err)
+	if report.Documents != 2 || report.DocumentsSkipped != 0 {
+		t.Fatalf("foreign legacy IDs affected import: %+v", report)
+	}
+	var sameBlobs, isolatedMetadata int
+	err = d.Read.QueryRowContext(ctx, `
+		SELECT SUM(a.original_blob = b.original_blob), SUM(a.correspondent_id != b.correspondent_id)
+		FROM documents a JOIN documents b ON b.legacy_id = a.legacy_id AND b.system_id = 2
+		WHERE a.system_id = 1
+	`).Scan(&sameBlobs, &isolatedMetadata)
+	must(t, err)
+	if sameBlobs != 2 || isolatedMetadata != 1 {
+		t.Fatalf("CAS/metadata isolation: shared=%d independent=%d", sameBlobs, isolatedMetadata)
+	}
+	report, err = bundle.Run(ctx, d, cas, log, opts)
+	must(t, err)
+	if report.DocumentsSkipped != 2 || report.Documents != 0 {
+		t.Fatalf("same-system resume failed: %+v", report)
+	}
+	// The same legacy identity may diverge independently after import. Verify
+	// includes every owner in the selected system, never a foreign match/orphan.
+	_, err = d.Write.ExecContext(ctx, `
+		INSERT INTO users(id, email, display_name, role, created_at, updated_at)
+		VALUES (2, 'second@example.test', 'Second owner', 'admin', 0, 0);
+		UPDATE documents SET title = 'Locally edited S01' WHERE system_id = 1 AND legacy_id = 100;
+		UPDATE documents SET legacy_id = 777 WHERE system_id = 1 AND legacy_id = 101;
+		UPDATE documents SET owner_id = 2 WHERE system_id = 2 AND legacy_id = 101;
+	`)
+	must(t, err)
+	first, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{SystemID: 1, BundleRoot: root})
+	must(t, err)
+	if !slices.Equal(first.New, []int64{101}) || !slices.Equal(first.Orphan, []int64{777}) ||
+		len(first.Match) != 0 || len(first.Differ) != 1 || first.Differ[0].LegacyID != 100 ||
+		!slices.Equal(first.Differ[0].Fields, []string{"title"}) {
+		t.Fatalf("S01 verification lost local differences: %+v", first)
+	}
+	second, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{SystemID: 2, BundleRoot: root})
+	must(t, err)
+	if !slices.Equal(second.Match, []int64{100, 101}) || len(second.New) != 0 || len(second.Differ) != 0 || len(second.Orphan) != 0 {
+		t.Fatalf("S02 verification mixed systems or omitted another owner: %+v", second)
+	}
+	report, err = bundle.Run(ctx, d, cas, log, opts)
+	must(t, err)
+	if report.Documents != 0 || report.DocumentsSkipped != 2 {
+		t.Fatalf("resume failed for existing identity owned by another user: %+v", report)
+	}
+	var retainedOwner int64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT owner_id FROM documents WHERE system_id = 2 AND legacy_id = 101`).Scan(&retainedOwner))
+	if retainedOwner != 2 {
+		t.Fatalf("resume reassigned an existing document: owner=%d", retainedOwner)
+	}
+	var firstTitle, originalHash, archiveHash string
+	must(t, d.Read.QueryRowContext(ctx, `
+		SELECT title, original_blob, archive_blob FROM documents WHERE system_id = 1 AND legacy_id = 100
+	`).Scan(&firstTitle, &originalHash, &archiveHash))
+	if firstTitle != "Locally edited S01" || originalHash == archiveHash {
+		t.Fatal("foreign resume changed the original document or conflated original and OCR archive")
+	}
+	source, err := os.ReadFile(filepath.Join(root, "originals", "doc-100.pdf"))
+	must(t, err)
+	stored, err := cas.Get(originalHash)
+	must(t, err)
+	original, err := io.ReadAll(stored)
+	must(t, err)
+	must(t, stored.Close())
+	if !bytes.Equal(original, source) {
+		t.Fatal("bundle resume modified immutable original CAS bytes")
+	}
 }

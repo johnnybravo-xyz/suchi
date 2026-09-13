@@ -1,8 +1,7 @@
 # suchi Johnny.Decimal starter tree.
 #
-# Deliberately boring. First boot loads this so a new install has a
-# working tree on first ingest. Import another tree with
-# `suchi taxonomy import`, or use flat mode.
+# Used by explicit classified imports and demo seeding. Normal server boot
+# uses the neutral System/Inbox tree until a filing choice is made.
 #
 # The 40-49 System area is reserved. Its 49 Inbox category is
 # system=true — the UI/API refuse to delete it because low-confidence
@@ -43,8 +42,6 @@ areas:
   - start: 40
     end:   49
     name:  System
-    description: Templates, archive notes, and the inbox.
+    description: Unclassified documents.
     categories:
-      - { code: 41, name: Templates }
-      - { code: 42, name: Archive notes }
       - { code: 49, name: Inbox, system: true }

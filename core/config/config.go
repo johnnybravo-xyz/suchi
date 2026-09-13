@@ -77,6 +77,7 @@ type Config struct {
 	// set — matches the design principle "opt-in, never surprise".
 	IngestFSDir        string
 	IngestFSOwnerEmail string
+	IngestFSSystem     string
 
 	// LLM classifier (opt-in). Empty endpoint = disabled.
 	// Non-local endpoint requires LLMEgressAck=true; the classifier
@@ -192,6 +193,7 @@ func Load() (*Config, error) {
 		DevAllowLAN:                      env("SUCHI_DEV_ALLOW_LAN", "") == "1",
 		IngestFSDir:                      env("INGEST_FS_DIR", ""),
 		IngestFSOwnerEmail:               env("INGEST_FS_OWNER_EMAIL", ""),
+		IngestFSSystem:                   env("INGEST_FS_SYSTEM", ""),
 		LLMEndpointURL:                   env("LLM_ENDPOINT_URL", ""),
 		LLMModel:                         env("LLM_MODEL", ""),
 		LLMEgressAck:                     env("LLM_EGRESS_ACK", "") == "true",

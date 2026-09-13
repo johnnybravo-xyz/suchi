@@ -7,7 +7,6 @@ language = "en"
 maintainer = "@johnnybravo"
 license = "CC0-1.0"
 flat = false
-inbox = 49
 story = "Three tenancies, nine renewal dates, files itself under numbers an inspector can follow."
 
 [[areas]]
@@ -29,20 +28,7 @@ name = "Properties"
   code = 13
   name = "Safety certificates"
   keywords = ["gas safety", "CP12", "EICR", "EPC"]
-  review_after_days = 365
 
-[[areas]]
-code = 40
-name = "System"
-
-  [[areas.categories]]
-  code = 49
-  name = "Inbox"
-
-[seeds]
-tags = ["urgent", "renewal-due"]
-document_types = ["certificate", "invoice"]
-correspondents = []
 
 [[seeds.automations]]
 name = "File gas certificates"

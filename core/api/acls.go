@@ -81,18 +81,34 @@ func (s *Server) PutGrant(w http.ResponseWriter, r *http.Request) {
 	if !s.requireGrantManager(w, r, store, p, kind, id) {
 		return
 	}
-	g, err := store.Grant(r.Context(), p.UserID, authz.Grant{
-		ObjectKind:    string(kind),
-		ObjectID:      id,
-		PrincipalKind: body.PrincipalKind,
-		PrincipalID:   body.PrincipalID,
-		PermBits:      body.PermBits,
+	var g *authz.Grant
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		systemID, err := authz.ObjectSystemID(r.Context(), tx, kind, id)
+		if err != nil {
+			return err
+		}
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		allowed, err := store.CanManageInTx(r.Context(), tx, systemPrincipal(r.Context(), current, nil), kind, id)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errSystemUnavailable
+		}
+		g, err = store.Grant(r.Context(), tx, current.UserID, authz.Grant{
+			ObjectKind: string(kind), ObjectID: id,
+			PrincipalKind: body.PrincipalKind, PrincipalID: body.PrincipalID, PermBits: body.PermBits,
+		})
+		return err
 	})
 	if errors.Is(err, authz.ErrPrincipalNotFound) {
 		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal does not exist")
 		return
 	}
-	if errors.Is(err, authz.ErrObjectNotFound) {
+	if errors.Is(err, authz.ErrObjectNotFound) || errors.Is(err, errSystemUnavailable) || errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
 		return
 	}
@@ -127,10 +143,28 @@ func (s *Server) DeleteGrant(w http.ResponseWriter, r *http.Request) {
 	if !s.requireGrantManager(w, r, store, p, kind, id) {
 		return
 	}
-	if err := store.Revoke(r.Context(), string(kind), id, pk, pid); errors.Is(err, authz.ErrPrincipalNotFound) {
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		systemID, err := authz.ObjectSystemID(r.Context(), tx, kind, id)
+		if err != nil {
+			return err
+		}
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		allowed, err := store.CanManageInTx(r.Context(), tx, systemPrincipal(r.Context(), current, nil), kind, id)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errSystemUnavailable
+		}
+		return store.Revoke(r.Context(), tx, string(kind), id, pk, pid)
+	})
+	if errors.Is(err, authz.ErrPrincipalNotFound) {
 		s.writeError(w, http.StatusBadRequest, "bad_principal", "principal does not exist")
 		return
-	} else if errors.Is(err, authz.ErrObjectNotFound) {
+	} else if errors.Is(err, authz.ErrObjectNotFound) || errors.Is(err, errSystemUnavailable) || errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
 		return
 	} else if err != nil {
@@ -142,11 +176,10 @@ func (s *Server) DeleteGrant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) requireGrantManager(w http.ResponseWriter, r *http.Request, store *authz.Store,
 	p *pluginapi.Principal, kind authz.Kind, id int64) bool {
-	allowed, err := store.CanManage(r.Context(), authz.Principal{
-		UserID: p.UserID,
-		Role:   p.Role,
-		Kind:   p.Kind,
-	}, kind, id)
+	if !s.bindRequestSystem(w, r, p) {
+		return false
+	}
+	allowed, err := store.CanManage(r.Context(), systemPrincipal(r.Context(), p, nil), kind, id)
 	if errors.Is(err, authz.ErrObjectNotFound) || errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "object not found")
 		return false

@@ -34,11 +34,11 @@ func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
 		INSERT INTO users(id, email, display_name, role, created_at, updated_at)
 		VALUES (1, 'admin@example.test', 'Admin', 'admin', 0, 0);
 		INSERT INTO email_accounts(
-			name, owner_id, provider, host, port, use_tls, folder,
+			system_id, name, owner_id, provider, host, port, use_tls, folder,
 			poll_interval_min, auth_method, username, sealed_secret,
 			intake_policy, enabled, created_at, updated_at
 		) VALUES (
-			'Bills', 1, 'custom', 'mail.example.test', 993, 1, 'INBOX',
+			1, 'Bills', 1, 'custom', 'mail.example.test', 993, 1, 'INBOX',
 			10, 'password', 'private-user', X'01',
 			'{"rules":[{"selection":"files","content":"files_only"}]}', 1, 0, 0
 		);

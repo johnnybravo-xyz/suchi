@@ -10,13 +10,31 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // Register persists a Spec at a new version for slug. Runs Validate()
 // first, then insertDef in one tx.
-func (e *Engine) Register(ctx context.Context, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
+func (e *Engine) Register(ctx context.Context, systemID int64, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
+	var id int64
+	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		id, err = e.RegisterInTx(ctx, tx, systemID, spec, slug, actor)
+		return err
+	})
+	return id, err
+}
+
+func (e *Engine) RegisterInTx(ctx context.Context, tx *sql.Tx, systemID int64, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
+	current, err := currentActor(ctx, tx, actor, systemID)
+	if err != nil {
+		return 0, err
+	}
+	if current != nil && current.UserID != 0 && current.Role != "admin" {
+		return 0, ErrForbidden
+	}
 	if err := spec.Validate(); err != nil {
 		return 0, err
 	}
@@ -35,25 +53,17 @@ func (e *Engine) Register(ctx context.Context, spec Spec, slug string, actor *pl
 	if actor != nil {
 		createdBy = actor.UserID
 	}
-	var id int64
-	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		newID, _, err := insertDef(ctx, tx, slug, raw, createdBy)
-		if err != nil {
-			return err
-		}
-		id = newID
-		return nil
-	})
+	id, _, err := insertDef(ctx, tx, systemID, slug, raw, createdBy)
 	return id, err
 }
 
 // Start kicks off a run for the current active def of slug, targeting
 // docID. Returns the new run_id. Enqueues a approval:advance job in
 // the same tx so the first state fires right after commit.
-func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+func (e *Engine) Start(ctx context.Context, systemID int64, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
 	var runID int64
 	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		id, err := e.StartInTx(ctx, tx, slug, docID, vars, actor)
+		id, err := e.StartInTx(ctx, tx, systemID, slug, docID, vars, actor)
 		runID = id
 		return err
 	})
@@ -68,12 +78,15 @@ func (e *Engine) Start(ctx context.Context, slug string, docID int64, vars map[s
 
 // StartInTx starts a run and enqueues its first advance as part of an
 // existing write transaction.
-func (e *Engine) StartInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
-	return startInTx(ctx, tx, slug, docID, vars, actor)
+func (e *Engine) StartInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+	return startInTx(ctx, tx, systemID, slug, docID, vars, actor)
 }
 
-func startInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
-	d, err := activeDefBySlug(ctx, tx, slug)
+func startInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string, docID int64, vars map[string]any, actor *pluginapi.Principal) (int64, error) {
+	if _, err := currentActor(ctx, tx, actor, systemID); err != nil {
+		return 0, err
+	}
+	d, err := activeDefBySlug(ctx, tx, systemID, slug)
 	if err != nil {
 		return 0, err
 	}
@@ -91,7 +104,7 @@ func startInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars m
 	}
 	if docID > 0 && specUsesDocumentOwner(spec) {
 		var ownerID int64
-		if err := tx.QueryRowContext(ctx, `SELECT owner_id FROM documents WHERE id = ?`, docID).Scan(&ownerID); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT owner_id FROM documents WHERE id = ? AND system_id = ?`, docID, systemID).Scan(&ownerID); err != nil {
 			return 0, fmt.Errorf("approvals.start: load document owner: %w", err)
 		}
 		vars["owner_id"] = ownerID
@@ -109,7 +122,7 @@ func startInTx(ctx context.Context, tx *sql.Tx, slug string, docID int64, vars m
 		v := time.Now().Add(time.Duration(startState.TimeoutSec) * time.Second).Unix()
 		deadline = &v
 	}
-	runID, err := insertRun(ctx, tx, d.ID, docPtr, spec.Start, vars, deadline, startedBy)
+	runID, err := insertRun(ctx, tx, systemID, d.ID, docPtr, spec.Start, vars, deadline, startedBy)
 	if err != nil {
 		return 0, err
 	}
@@ -235,7 +248,8 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 		// self-deadlock). doc_id is copied out of the run so the
 		// event summary can reference the doc the task is about.
 		audit.Log(ctx, e.db, e.log, audit.Event{
-			Action: "approval.task_created", ObjectKind: "approval_task", ObjectID: taskID,
+			SystemID: run.SystemID,
+			Action:   "approval.task_created", ObjectKind: "approval_task", ObjectID: taskID,
 			After: map[string]any{
 				"run_id":   runID,
 				"assignee": res.Task.Assignee,
@@ -309,7 +323,19 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 // Resolve marks a task done and enqueues approval:advance so the run
 // advances. Actor must be the assignee or an admin — caller enforces.
 func (e *Engine) Resolve(ctx context.Context, taskID int64, choice string, actor *pluginapi.Principal) error {
-	t, err := loadTask(ctx, e.db.Read, taskID)
+	return e.db.WriteTx(ctx, func(tx *sql.Tx) error { return e.ResolveInTx(ctx, tx, taskID, choice, actor) })
+}
+
+func (e *Engine) ResolveInTx(ctx context.Context, tx *sql.Tx, taskID int64, choice string, actor *pluginapi.Principal) error {
+	t, err := loadTask(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	run, err := loadRun(ctx, tx, t.RunID)
+	if err != nil {
+		return err
+	}
+	actor, err = currentActor(ctx, tx, actor, run.SystemID)
 	if err != nil {
 		return err
 	}
@@ -337,33 +363,34 @@ func (e *Engine) Resolve(ctx context.Context, taskID int64, choice string, actor
 		}
 	}
 	actorTag := principalTag(actor)
-	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		if err := ensureTaskRunActionable(ctx, tx, taskID); err != nil {
-			return err
-		}
-		if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
-			return err
-		}
-		// Enqueue advance with trigger=<choice> — the handler picks it up.
-		return enqueueAdvanceWithTrigger(ctx, tx, t.RunID, choice)
-	})
-	if err != nil {
+	if err := ensureTaskRunActionable(ctx, tx, taskID); err != nil {
 		return err
 	}
-	if e.log != nil {
-		e.log.Info("approvals.resolve", "task_id", taskID, "run_id", t.RunID,
-			"choice", choice, "actor", actorTag)
+	if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
+		return err
 	}
-	return nil
+	// Enqueue advance with trigger=<choice> — the handler picks it up.
+	return enqueueAdvanceWithTrigger(ctx, tx, t.RunID, choice)
 }
 
 // Cancel stops a running run. Writes a transition {from=current,
 // to=current, trigger='cancel'} for the audit trail, expires tasks,
 // finalizes with status='cancelled'.
 func (e *Engine) Cancel(ctx context.Context, runID int64, reason string, actor *pluginapi.Principal) error {
-	run, err := loadRun(ctx, e.db.Read, runID)
+	return e.db.WriteTx(ctx, func(tx *sql.Tx) error { return e.CancelInTx(ctx, tx, runID, reason, actor) })
+}
+
+func (e *Engine) CancelInTx(ctx context.Context, tx *sql.Tx, runID int64, reason string, actor *pluginapi.Principal) error {
+	run, err := loadRun(ctx, tx, runID)
 	if err != nil {
 		return err
+	}
+	actor, err = currentActor(ctx, tx, actor, run.SystemID)
+	if err != nil {
+		return err
+	}
+	if actor != nil && actor.UserID != 0 && actor.Role != "admin" {
+		return ErrForbidden
 	}
 	if run.Status != "running" {
 		return ErrRunTerminal
@@ -373,16 +400,47 @@ func (e *Engine) Cancel(ctx context.Context, runID int64, reason string, actor *
 	}
 	actorTag := principalTag(actor)
 	payload := map[string]any{"reason": reason}
-	return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		if err := insertTransition(ctx, tx, runID,
-			run.CurrentState, run.CurrentState, "cancel", &actorTag, payload); err != nil {
-			return err
+	if err := insertTransition(ctx, tx, runID,
+		run.CurrentState, run.CurrentState, "cancel", &actorTag, payload); err != nil {
+		return err
+	}
+	if err := expireOpenTasksForRun(ctx, tx, runID); err != nil {
+		return err
+	}
+	return finalizeRun(ctx, tx, runID, "cancelled")
+}
+
+func currentActor(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, systemID int64) (*pluginapi.Principal, error) {
+	if actor == nil || (actor.UserID == 0 && actor.Kind == "system") {
+		return actor, nil
+	}
+	current := *actor
+	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ? AND disabled = 0`, actor.UserID).Scan(&current.Role); err != nil {
+		return nil, ErrForbidden
+	}
+	bound := actor.TokenSystemID
+	if actor.Kind == "token" || actor.TokenID != 0 {
+		if bound == 0 {
+			bound = systems.DefaultID
 		}
-		if err := expireOpenTasksForRun(ctx, tx, runID); err != nil {
-			return err
+		if actor.TokenID != 0 {
+			var stored int64
+			if err := tx.QueryRowContext(ctx, `SELECT system_id FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, actor.TokenID, actor.UserID).Scan(&stored); err != nil || stored != bound {
+				return nil, ErrForbidden
+			}
 		}
-		return finalizeRun(ctx, tx, runID, "cancelled")
-	})
+	}
+	if bound != 0 && bound != systemID {
+		return nil, ErrForbidden
+	}
+	ok, err := systems.CanEnter(ctx, tx, actor.UserID, systemID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrForbidden
+	}
+	return &current, nil
 }
 
 // GetRun returns a run and its open tasks.
@@ -417,7 +475,11 @@ func enqueueAdvanceWithTrigger(ctx context.Context, tx *sql.Tx, runID int64, tri
 	if err != nil {
 		return err
 	}
-	return jobs.Enqueue(ctx, tx, "approval:advance", 0, string(b))
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM approval_runs WHERE id = ?`, runID).Scan(&systemID); err != nil {
+		return err
+	}
+	return jobs.Enqueue(ctx, tx, "approval:advance", 0, systemID, string(b))
 }
 
 // mergeVars returns a fresh map that is base + overrides. Overrides

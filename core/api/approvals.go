@@ -70,7 +70,30 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
-	id, err := approvals.Register(r.Context(), spec, body.Slug, actor)
+	systemID, ok := s.requireSystem(w, r, actor)
+	if !ok {
+		return
+	}
+	var id int64
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, actor, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errForbidden
+		}
+		id, err = approvals.Default().RegisterInTx(r.Context(), tx, systemID, spec, body.Slug, current)
+		return err
+	})
+	if errors.Is(err, errSystemUnavailable) {
+		s.writeError(w, http.StatusNotFound, "system_unavailable", "system unavailable")
+		return
+	}
+	if errors.Is(err, errForbidden) {
+		s.writeError(w, http.StatusForbidden, "forbidden", "admin role required")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, approvals.ErrUnknownHandler) {
 			s.writeError(w, http.StatusBadRequest, "unknown_handler", err.Error())
@@ -93,6 +116,10 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 	if s.requireAuth(w, r) == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, auth.FromContext(r.Context()))
+	if !ok {
+		return
+	}
 	slug := strings.ToLower(r.PathValue("slug"))
 	if !slugPattern.MatchString(slug) {
 		s.writeError(w, http.StatusBadRequest, "bad_slug", "bad slug")
@@ -106,9 +133,9 @@ func (s *Server) ApprovalGetDef(w http.ResponseWriter, r *http.Request) {
 	err := s.DB.Read.QueryRowContext(r.Context(), `
 		SELECT id, version, spec_json
 		FROM approval_defs
-		WHERE slug = ? AND active = 1
+		WHERE system_id = ? AND slug = ? AND active = 1
 		ORDER BY version DESC LIMIT 1
-	`, slug).Scan(&id, &version, &specJSON)
+	`, systemID, slug).Scan(&id, &version, &specJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "no_def", "no active approval flow for slug")
 		return
@@ -138,6 +165,10 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
+	if actor == nil {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
 	if approvals.Default() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
@@ -168,7 +199,40 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 	if body.DocID > 0 && !s.authorize(w, r, actor, authz.KindDocument, body.DocID, authz.PermChange) {
 		return
 	}
-	runID, err := approvals.Start(r.Context(), slug, body.DocID, body.Vars, actor)
+	systemID := selectedSystemID(r.Context())
+	if body.DocID == 0 {
+		var ok bool
+		systemID, ok = s.requireSystem(w, r, actor)
+		if !ok {
+			return
+		}
+	}
+	var runID int64
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, actor, systemID)
+		if err != nil {
+			return err
+		}
+		if body.DocID == 0 {
+			if current.Role != "admin" {
+				return errForbidden
+			}
+		} else if ok, err := s.authorized(r.Context(), tx, current, authz.KindDocument, body.DocID, authz.PermChange); err != nil {
+			return err
+		} else if !ok {
+			return errForbidden
+		}
+		runID, err = approvals.Default().StartInTx(r.Context(), tx, systemID, slug, body.DocID, body.Vars, current)
+		return err
+	})
+	if errors.Is(err, errSystemUnavailable) {
+		s.writeError(w, http.StatusNotFound, "system_unavailable", "system unavailable")
+		return
+	}
+	if errors.Is(err, errForbidden) {
+		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, approvals.ErrNoDef) {
 			s.writeError(w, http.StatusNotFound, "no_def", err.Error())
@@ -200,6 +264,9 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r.PathValue("id"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be a positive integer")
+		return
+	}
+	if _, ok := s.requireNamespaceObject(w, r, auth.FromContext(r.Context()), "approval_runs", id); !ok {
 		return
 	}
 	run, tasks, err := approvals.GetRun(r.Context(), id)
@@ -274,6 +341,15 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "missing_choice", "choice is required")
 		return
 	}
+	var runID int64
+	if err := s.DB.Read.QueryRowContext(r.Context(), `SELECT run_id FROM approval_tasks WHERE id = ?`, taskID).Scan(&runID); err != nil {
+		s.writeError(w, http.StatusNotFound, "not_found", "task not found")
+		return
+	}
+	systemID, ok := s.requireNamespaceObject(w, r, actor, "approval_runs", runID)
+	if !ok {
+		return
+	}
 	visible, terminal, err := s.approvalTaskVisibilityByID(r.Context(), taskID)
 	if err != nil {
 		s.serverErr(w, "approval.resolve.visibility", err)
@@ -283,8 +359,28 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "no_task", "task not found")
 		return
 	}
-	if err := approvals.Resolve(r.Context(), taskID, body.Choice, actor); err != nil {
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, actor, systemID)
+		if err != nil {
+			return err
+		}
+		var docID sql.NullInt64
+		if err := tx.QueryRowContext(r.Context(), `SELECT doc_id FROM approval_runs WHERE id = ? AND system_id = ?`, runID, systemID).Scan(&docID); err != nil {
+			return err
+		}
+		if docID.Valid {
+			if ok, err := s.authorized(r.Context(), tx, current, authz.KindDocument, docID.Int64, authz.PermView); err != nil {
+				return err
+			} else if !ok {
+				return errForbidden
+			}
+		}
+		return approvals.Default().ResolveInTx(r.Context(), tx, taskID, body.Choice, current)
+	})
+	if err != nil {
 		switch {
+		case errors.Is(err, errSystemUnavailable) || errors.Is(err, errForbidden):
+			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
 		case errors.Is(err, approvals.ErrNoTask) || errors.Is(err, approvals.ErrTaskUnavailable):
 			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
 		case errors.Is(err, approvals.ErrTaskResolved):
@@ -339,8 +435,26 @@ func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
-	if err := approvals.Cancel(r.Context(), id, body.Reason, actor); err != nil {
+	systemID, ok := s.requireNamespaceObject(w, r, actor, "approval_runs", id)
+	if !ok {
+		return
+	}
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, actor, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errForbidden
+		}
+		return approvals.Default().CancelInTx(r.Context(), tx, id, body.Reason, current)
+	})
+	if err != nil {
 		switch {
+		case errors.Is(err, errSystemUnavailable):
+			s.writeError(w, http.StatusNotFound, "system_unavailable", "system unavailable")
+		case errors.Is(err, errForbidden):
+			s.writeError(w, http.StatusForbidden, "forbidden", "admin role required")
 		case errors.Is(err, approvals.ErrNoRun):
 			s.writeError(w, http.StatusNotFound, "no_run", "run not found")
 		case errors.Is(err, approvals.ErrRunTerminal):

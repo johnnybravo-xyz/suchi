@@ -3,6 +3,7 @@
   import { createMobilePairing, cancelMobilePairing } from './api.js'
   import { copyText } from './clipboard.js'
   import { session } from './session.svelte.js'
+  import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
 
   let { onClose, notify } = $props()
@@ -14,47 +15,49 @@
   let copyMessage = $state('')
   let now = $state(Date.now())
   const user = session.user
+  const scope = captureScope()
   let disposed = false
   const remaining = $derived(Math.max(0, Math.ceil((pairing?.expires_at || 0) - now / 1000)))
 
   async function cancelCode(code) {
     if (!code || session.user !== user) return
-    try { await cancelMobilePairing(code) }
+    try { await cancelMobilePairing(code, scope.code) }
     catch {
-      if (session.user === user) notify?.('Could not cancel the pairing code. It will expire within five minutes.')
+      if (session.user === user && scopeCurrent(scope)) notify?.('Could not cancel the pairing code. It will expire within five minutes.')
     }
   }
 
   async function generate(event) {
     event.preventDefault()
-    if (disposed || session.user !== user || busy || !deviceName.trim()) return
+    if (disposed || session.user !== user || !scopeCurrent(scope) || busy || !deviceName.trim()) return
     busy = true
     error = ''
     copyMessage = ''
     try {
-      const result = await createMobilePairing(deviceName.trim())
-      if (disposed || session.user !== user) {
+      const result = await createMobilePairing(deviceName.trim(), scope.code)
+      if (disposed || session.user !== user || !scopeCurrent(scope)) {
         await cancelCode(result?.code)
         return
       }
       pairing = result
       now = Date.now()
     } catch (ex) {
-      if (!disposed && session.user === user) error = ex.message || 'Could not create a pairing code. Try again.'
+      if (!disposed && session.user === user && scopeCurrent(scope)) error = ex.message || 'Could not create a pairing code. Try again.'
     } finally { busy = false }
   }
 
   async function copyLink() {
-    if (disposed || session.user !== user) return
+    if (disposed || session.user !== user || !scopeCurrent(scope)) return
     const link = pairing?.pairing_url
     if (!link || !remaining) return
     const copied = await copyText(link)
-    if (disposed || session.user !== user || pairing?.pairing_url !== link) return
+    if (disposed || session.user !== user || !scopeCurrent(scope) || pairing?.pairing_url !== link) return
     copyMessage = copied ? 'Pairing link copied.' : 'Select the pairing link below and copy it manually.'
   }
 
   $effect(() => {
-    if (session.user !== user) {
+    if (session.user !== user || !scopeCurrent(scope)) {
+      void cancelCode(pairing?.code)
       pairing = null
       copyMessage = ''
       error = ''

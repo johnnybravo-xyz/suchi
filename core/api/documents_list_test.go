@@ -29,6 +29,7 @@ import (
 func newListServer(t *testing.T) *Server {
 	t.Helper()
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	return &Server{
 		DB:    d,
 		Log:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
@@ -143,8 +144,8 @@ func TestListDocuments_CorrespondentsPreferJunctionAndPreserveFallback(t *testin
 	junctionOnly := seedStatsDoc(t, s.DB, 1, "corr-junction-only", "junction only", inbox, false, 300)
 	empty := seedStatsDoc(t, s.DB, 1, "corr-empty", "none", inbox, false, 400)
 	if _, err := s.DB.Write.ExecContext(t.Context(), `
-		INSERT INTO correspondents(id, name, slug, created_at, updated_at) VALUES
-			(1, 'Alpha', 'alpha', 0, 0), (2, 'Beta', 'beta', 0, 0), (3, 'Gamma', 'gamma', 0, 0);
+		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at) VALUES
+			(1, 1, 'Alpha', 'alpha', 0, 0), (1, 2, 'Beta', 'beta', 0, 0), (1, 3, 'Gamma', 'gamma', 0, 0);
 		UPDATE documents SET correspondent_id = 1 WHERE id IN (?, ?)
 	`, fallback, junction); err != nil {
 		t.Fatal(err)
@@ -191,7 +192,7 @@ func TestListDocuments_JDCategoryFilter(t *testing.T) {
 	inbox := seedStatsJDInbox(t, s.DB)
 	// A second JD category so we can filter.
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_categories(id, area_start, code, name) VALUES (2, 0, 2, 'Tax')`); err != nil {
+		INSERT INTO jd_categories(system_id, id, area_start, code, name) VALUES (1, 2, 0, 2, 'Tax')`); err != nil {
 		t.Fatal(err)
 	}
 	seedStatsDoc(t, s.DB, 1, "sha_a", "inbox doc", inbox, false, 100)
@@ -291,9 +292,9 @@ func TestListDocuments_AllTagsFilterPrecedesPagination(t *testing.T) {
 	second := seedStatsDoc(t, s.DB, 1, "sha_second", "second match", inbox, false, 200)
 	newest := seedStatsDoc(t, s.DB, 1, "sha_newest", "not a match", inbox, false, 300)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES
-			(1, 'one', 'one', 0, 0),
-			(2, 'two', 'two', 0, 0);
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES
+			(1, 1, 'one', 'one', 0, 0),
+			(1, 2, 'two', 'two', 0, 0);
 		INSERT INTO document_tags(document_id, tag_id) VALUES
 			(?, 1), (?, 2), (?, 1), (?, 2), (?, 1)
 	`, first, first, second, second, newest); err != nil {

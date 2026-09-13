@@ -33,8 +33,9 @@ type Event struct {
 	Action     string               // e.g. "document.update", "auth.login"
 	ObjectKind string
 	ObjectID   int64
-	Before     any // marshaled to JSON; use nil for creates
-	After      any // marshaled to JSON; use nil for deletes
+	SystemID   int64 // zero only for instance-wide actions
+	Before     any   // marshaled to JSON; use nil for creates
+	After      any   // marshaled to JSON; use nil for deletes
 	RequestID  string
 }
 
@@ -91,6 +92,7 @@ func fanoutToSinks(ctx context.Context, log *slog.Logger, e Event, ts int64) {
 		Action:     e.Action,
 		ObjectKind: e.ObjectKind,
 		ObjectID:   e.ObjectID,
+		SystemID:   e.SystemID,
 		Before:     before,
 		After:      after,
 		RequestID:  e.RequestID,
@@ -161,12 +163,13 @@ func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO audit_events
-				(ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			ts,
 			kind, id,
 			e.Action, e.ObjectKind, nullInt64(e.ObjectID),
+			nullInt64(e.SystemID),
 			nullString(before), nullString(after),
 			nullString(e.RequestID),
 		)
@@ -210,12 +213,13 @@ func LogInTx(ctx context.Context, tx *sql.Tx, log *slog.Logger, e Event) {
 	ts := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO audit_events
-			(ts, actor_kind, actor_id, action, object_kind, object_id, before_json, after_json, request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		ts,
 		kind, id,
 		e.Action, e.ObjectKind, nullInt64(e.ObjectID),
+		nullInt64(e.SystemID),
 		nullString(before), nullString(after),
 		nullString(e.RequestID),
 	); err != nil {

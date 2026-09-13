@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
   import { listTokens, createToken, deleteToken, patchMe, uploadAvatar,
            listDecryptionPasswords, renameDecryptionPassword, deleteDecryptionPassword } from '../lib/api.js'
@@ -11,7 +12,7 @@
   const loadMailboxes = () => import('../lib/EmailAccounts.svelte')
   const loadMobilePairing = () => import('../lib/MobilePairing.svelte')
 
-  let { notify } = $props()
+  let { notify, profileOnly = false } = $props()
   let tokens = $state([])
   let err = $state('')
   let newName = $state('')
@@ -53,7 +54,7 @@
   }
 
   async function load({ background = false } = {}) {
-    if (disposed || !session.user || (background && loadPending)) return
+    if (profileOnly || disposed || !session.user || (background && loadPending)) return
     const user = session.user
     const generation = ++loadGeneration
     loadController?.abort()
@@ -109,6 +110,7 @@
   let vault = $state([])
   let vaultErr = $state('')
   async function loadVault() {
+    if (profileOnly) return
     try {
       const res = await listDecryptionPasswords()
       vault = res?.results || res || []
@@ -193,6 +195,7 @@
       {#each items as t (t.id)}
         <div class="token-row">
           <span class="token-name">{t.name}</span>
+          {#if t.system_code}<span class="pill">{t.system_code}</span>{/if}
           <span class="pill" title={t.scopes}>{tokenAccessLabel(t.scopes)}</span>
           <span class="row-date">
             <span>{connected ? 'Connected' : 'Created'} {t.created_at ? fmtDate(t.created_at) : '—'}</span>
@@ -238,6 +241,7 @@
   </section>
 
 
+  {#if !profileOnly}
   {#if !session.user?.demo}
     <section class="settings-section" aria-labelledby="mobile-heading">
       <div class="section-heading">
@@ -335,7 +339,7 @@
                 <span>{v.last_used_at ? `Last used ${fmtDate(v.last_used_at)}` : 'Not used yet'}</span>
                 {#if v.last_used_doc_id}
                   {#if v.last_used_doc_title}
-                    <a href={`#/doc/${v.last_used_doc_id}`} title={v.last_used_doc_title}>{v.last_used_doc_title}</a>
+                    <a href={filingHref(`#/doc/${v.last_used_doc_id}`)} title={v.last_used_doc_title}>{v.last_used_doc_title}</a>
                   {:else}
                     <button class="linkish" onclick={() => notify?.('That document is no longer available')}>(no longer available)</button>
                   {/if}
@@ -351,6 +355,7 @@
         <p class="empty-setting">No saved passwords. Unlock a protected document from Inbox to save one.</p>
       {/if}
   </section>
+  {/if}
 <style>
   .settings-section { padding:6px 0 28px;margin-bottom:26px;border-bottom:1px solid var(--line) }
   .section-heading { display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:18px }

@@ -6,9 +6,29 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Permanent deletion preserves unrelated files and symlinks at rendered paths.
+  Cleanup snapshots document and journal blob ownership before deleting records,
+  removes only verified CAS links, and reports rejected artifacts.
+- Remember published blob targets in the render journal so archive changes plus
+  refiling recover across restarts. Same-path refresh preserves unrelated files
+  and symlinks; unprovable pre-upgrade links are retained and reported.
+- Bind taxonomy previews to trimmed metadata references and reject colliding
+  generated and explicit starter names before application.
+- Allow valid scoped API tokens to permanently delete documents and empty Trash,
+  while rechecking credential revocation and membership in the write transaction.
+- Preserve historical skipped filesystem and mail intake events in the original
+  filing system during the beta.2 upgrade.
 - Filesystem views now link to the current blob layout and refresh after
   processing replaces a document's derived archive. Existing stale links are
   repaired on the next render or refile operation.
+- Taxonomy imports preserve local category descriptions, disabled preset rules
+  and edited forks, and reject stale previews before atomic application.
+- Seeded exports preserve supported symbolic filters and rule identity, rejecting
+  disabled or unrepresentable behavior rather than silently dropping it.
+- Repeated automation discard preserves the existing Trash timestamp; other
+  metadata actions still require a live document.
+- Version uploads retain their owning filing system in activity events, so new
+  versions appear in that system's feed without leaking into another system.
 
 ### Added
 
@@ -23,10 +43,37 @@ Notable user-visible changes to Suchi are recorded here.
   scopes, submit timestamped PDF OCR with explicit provenance, retry document
   and version uploads idempotently, resolve QR-split children, request bounded
   thumbnails, and fetch metadata without transferring extracted text.
+- Import HuML or TOML filing trees from setup and Settings with target-aware
+  previews, collision choices, actual rule effects and stale-preview recovery.
+  The first prefixed import atomically names the original archive or preserves it
+  separately; later prefixed imports merge/create one system without a mode toggle.
+- Add permanent A00–Z99 system codes, editable names, direct memberships, scoped
+  tokens/intake and full `SYS.AC.documentID` addresses using existing global IDs.
+  Unprefixed archives retain their existing presentation until successful first prefixed Apply.
+- Maintain a generated `00.00 archive.huml` tree-only index per system through
+  durable jobs, with startup recovery and explicit pending/failure reporting.
+- Export filing trees without keywords or starter rules using `--skip-seeds`
+  or the tree-only export choice.
 
 ### Changed
 
 - Center document and share-link QR codes in their dialogs.
+- Clarify that per-document custom-field values have no read API/UI yet, and that
+  automatic document-ID nonreuse starts with the taxonomy upgrade; surviving
+  beta.2 IDs are preserved, but earlier purged numbers have no retained history.
+- Define `suchi-taxonomy/v1` as strict offline HuML/TOML with optional top-level
+  `system` and generated System/49. Author-declared reserved areas, category-level
+  protected flags, `inbox`, YAML and unsupported fields fail. Standalone validation
+  requires neither server configuration nor a database.
+- Later preset applications and custom imports merge additively; explicit refile
+  remains a separate automation/render operation.
+- Keep named-system projections under immutable `rendered/<SYS>/` roots with
+  date/title/full-address default filenames; constrain explicit templates to that
+  root and recover journaled moves without overwriting unknown files. First
+  introduction queues render-only moves, not OCR or filing-rule reruns.
+- Native takeout emits manifest version 2 for one selected system, with additive
+  source-system/address sidecar metadata. It remains partial, not a full restore
+  protocol; whole-instance backups preserve IDs, memberships and relationships.
 - Saved-view rows use visible Edit and delete controls instead of a decorative
   eye badge and a hover-only delete action.
 - Clarified which files are needed for a complete archive backup in Settings.
@@ -41,8 +88,10 @@ Notable user-visible changes to Suchi are recorded here.
 - Successful mobile QR-code and pairing-link exchanges now appear in Settings
   > My account > Mobile app, with connection and last-use dates and Revoke.
   The list refreshes during pairing and excludes revoked or signed-out devices.
-- A forward migration preserves existing mobile-preview credentials; older
-  tokens remain in API tokens until replaced through pairing.
+- Consolidate all unreleased mobile and taxonomy changes into migration 0003.
+  Published beta.2 migrations 0001/0002 remain unchanged. Fresh installations and
+  beta.2/schema 0002 are supported; intermediate development schemas are not.
+  Existing tokens with unknown pairing provenance remain in API tokens until replaced.
 - Sized thumbnail requests decode image pixels only when resizing is needed,
   avoiding unnecessary work for cached and original-size responses.
 - Mobile schema changes ship after the unchanged beta.2 schema. Browser login
@@ -50,6 +99,16 @@ Notable user-visible changes to Suchi are recorded here.
   without leaving unused browser sessions.
 
 ### Security
+
+- Enforce explicit/token system, active membership and existing document permissions
+  across document, search, metadata, task, research and blob paths. Administrators
+  bypass membership/ACLs, never explicit or token boundaries. Membership removal
+  revokes system shares/tokens/pairings; re-addition cannot revive credentials.
+- Bind Microsoft OAuth creation handoffs to the authenticated actor and starting
+  system; `sealed_secret_b64` cannot import arbitrary at-rest credential ciphertext.
+- Pairing consumption, current system-entry checks and token issuance share one
+  writer transaction; failed issuance rolls back consumption. Token listings show
+  only the selected system's credentials and identify their binding.
 
 - Pairing creation rejects origins the mobile app cannot use: HTTP requires
   localhost, loopback or private literal IPs, with an actionable configuration

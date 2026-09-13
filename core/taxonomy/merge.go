@@ -70,6 +70,7 @@ type Result struct {
 
 // Options carries a merge invocation.
 type Options struct {
+	SystemID int64
 	Kind     string
 	FromName string
 	IntoName string
@@ -79,6 +80,9 @@ type Options struct {
 // Merge does one merge. Never touches unrelated rows; safe against a
 // running server.
 func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
+	if opts.SystemID <= 0 {
+		return nil, errors.New("taxonomy: system is required")
+	}
 	table, junction, err := tableFor(opts.Kind)
 	if err != nil {
 		return nil, err
@@ -91,11 +95,11 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 	}
 
 	// Resolve ids up front (read pool — no contention with the write tx).
-	fromID, err := lookupByName(ctx, d, table, opts.FromName)
+	fromID, err := lookupByName(ctx, d, opts.SystemID, table, opts.FromName)
 	if err != nil {
 		return nil, fmt.Errorf("resolve from %q: %w", opts.FromName, err)
 	}
-	intoID, err := lookupByName(ctx, d, table, opts.IntoName)
+	intoID, err := lookupByName(ctx, d, opts.SystemID, table, opts.IntoName)
 	if err != nil {
 		return nil, fmt.Errorf("resolve into %q: %w", opts.IntoName, err)
 	}
@@ -132,6 +136,13 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		tableName, err := table.sqlName()
 		if err != nil {
 			return err
+		}
+		var present int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+tableName+` WHERE system_id=? AND id IN (?,?)`, opts.SystemID, fromID, intoID).Scan(&present); err != nil {
+			return err
+		}
+		if present != 2 {
+			return errors.New("taxonomy: merge targets changed")
 		}
 		// Snapshot the affected doc IDs BEFORE mutating so we can enqueue
 		// render jobs afterward. For tag merges the source is the
@@ -173,7 +184,7 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 				return err
 			}
 		}
-		if err := rewriteAutomationReferences(ctx, tx, opts.Kind, fromID, intoID); err != nil {
+		if err := rewriteAutomationReferences(ctx, tx, opts.SystemID, opts.Kind, fromID, intoID); err != nil {
 			return err
 		}
 		// Finally drop the source row.
@@ -186,19 +197,19 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 	return res, err
 }
 
-func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, kind string, fromID, intoID int64) error {
+func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, systemID int64, kind string, fromID, intoID int64) error {
 	triggerColumn := map[string]string{
 		KindTag:           "filter_tag_id",
 		KindCorrespondent: "filter_corr_id",
 		KindDocumentType:  "filter_doctype_id",
 	}[kind]
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE automation_triggers SET `+triggerColumn+` = ? WHERE `+triggerColumn+` = ?`,
-		intoID, fromID); err != nil {
+		`UPDATE automation_triggers SET `+triggerColumn+` = ? WHERE `+triggerColumn+` = ? AND automation_id IN (SELECT id FROM automations WHERE system_id=?)`,
+		intoID, fromID, systemID); err != nil {
 		return err
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT id, kind, params_json FROM automation_actions`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind, params_json FROM automation_actions WHERE automation_id IN (SELECT id FROM automations WHERE system_id=?)`, systemID)
 	if err != nil {
 		return err
 	}
@@ -301,15 +312,15 @@ func fkColFor(kind string) string {
 	return ""
 }
 
-func lookupByName(ctx context.Context, d *db.DB, table NamedTable, name string) (int64, error) {
+func lookupByName(ctx context.Context, d *db.DB, systemID int64, table NamedTable, name string) (int64, error) {
 	tableName, err := table.sqlName()
 	if err != nil {
 		return 0, err
 	}
 	var id int64
 	err = d.Read.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, tableName),
-		name).Scan(&id)
+		fmt.Sprintf(`SELECT id FROM %s WHERE system_id = ? AND name = ?`, tableName),
+		systemID, name).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, fmt.Errorf("no row named %q", name)
 	}

@@ -22,6 +22,7 @@ import (
 
 func TestTagCRUD_Roundtrip(t *testing.T) {
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
 	ctx := auth.WithPrincipal(context.Background(),
@@ -96,8 +97,8 @@ func TestTagRenameTakesOwnershipOfClassifierReview(t *testing.T) {
 			s := newBulkServer(t)
 			docID := seedStatsDoc(t, s.DB, 1, "rename-review-sha", "Review", seedStatsJDInbox(t, s.DB), false, 0)
 			if _, err := s.DB.Write.ExecContext(context.Background(), `
-				INSERT INTO tags(id, name, slug, created_at, updated_at)
-				VALUES (99, 'needs-review', 'needs-review', 0, 0);
+				INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+				VALUES (1, 99, 'needs-review', 'needs-review', 0, 0);
 				INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
 			`, docID); err != nil {
 				t.Fatal(err)

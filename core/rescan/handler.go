@@ -71,6 +71,7 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 		}
 	}
 	opts := Options{
+		SystemID:       run.SystemID,
 		Stale:          kind,
 		SampleSize:     sampleSize,
 		OnlyRunnable:   true,

@@ -56,7 +56,8 @@ func (s *Server) GetSimilarDocuments(w http.ResponseWriter, r *http.Request) {
 
 	var sp *similar.Principal
 	if p != nil {
-		sp = &similar.Principal{UserID: p.UserID, Role: p.Role, Kind: p.Kind}
+		sp = &similar.Principal{UserID: p.UserID, Role: p.Role, Kind: p.Kind,
+			SystemID: selectedSystemID(r.Context()), TokenSystemID: tokenSystemID(p)}
 		if p.Role != "admin" && !isDemoCorpusKind(p.Kind) {
 			gs, err := s.principalGroups(r.Context(), p.UserID)
 			if err != nil {

@@ -8,16 +8,45 @@ change, or delete access without granting administrator privileges.
 
 ## Access model
 
-For an authenticated request, Suchi evaluates access in this order:
+For an authenticated object request, Suchi first loads the actual object and
+requires its system to match any explicit request system and the token's bound
+system. The account must be active and may enter the system only through direct
+membership or implicit instance-administrator access. Then:
 
-1. Administrators are allowed.
+1. Instance administrators bypass document ACLs.
 2. The object owner is allowed.
 3. User and group grants are combined; the effective bits must include the
    requested permission.
 4. Otherwise access is denied.
 
+Admins never bypass the explicit/token system boundary or authorize nonexistent
+objects. Membership alone grants no document ACL; ownership, a group/direct grant,
+or approval assignment alone grants no system entry. An S01 member with a retained
+S02 grant after losing S02 membership still cannot read that document. A partner
+admitted to both systems still needs ordinary document permission.
+
 Anonymous callers have no object access except through a valid share link.
-Grants add access and cannot reduce an owner's rights.
+Grants add access within these boundaries; they cannot override them.
+
+### System membership and trust
+
+[First prefixed taxonomy import](/jd) introduces systems atomically. Before it,
+the original archive is hidden and ordinary new users/admin demotions are admitted
+there automatically. Naming it retains those memberships. Afterwards new systems
+admit only instance admins until granted direct members; new users and demoted
+admins receive no automatic memberships. Codes are permanent, names editable.
+
+Admins manage memberships after introduction. Removing membership atomically
+revokes that user's system shares and removes system-bound API tokens and pending
+mobile pairings. Re-adding membership never resurrects those credentials. Document
+ACL rows remain ineffective while membership is absent; re-admission can make those
+retained grants useful again, subject to the other authorization checks.
+
+Writes and idempotent receipt replay recheck current account, membership and local
+token authority in the writer transaction. Read authorization is a snapshot:
+removal cannot retract bytes already delivered. Shared server admins, host and
+backup operators remain trusted; these are not separate databases, encryption
+keys or a regulatory/professional-independence guarantee.
 
 | Bit | Permission |
 | ---: | --- |
@@ -40,18 +69,20 @@ visibility restrictions inside their database queries so hidden rows do not
 leak through counts, snippets, or pagination.
 
 Taxonomy mutation endpoints enforce grants on existing taxonomy objects.
-Taxonomy names remain shared vocabulary for authenticated users, so list and
-autocomplete endpoints do not hide labels by object ACL.
+Taxonomy names are shared vocabulary only within an enterable selected system.
+Lists and autocomplete do not hide those same-system labels by object ACL, but
+never reveal another system's vocabulary.
 
-API token scopes and object permissions are separate gates. A token needs the
-endpoint's scope and the principal must be allowed to access the object.
+API tokens are bound to one system as both default and ceiling. Scopes and object
+permissions are additional gates, not substitutes for membership. Change a
+device's system by creating a new pairing/token, not by switching an old token.
 Mobile Reader calls require `documents:read` on document lists, search,
 document detail, version lists, thumbnails, and task reads. The scope check
 runs before object ACL and sensitivity checks; it never broadens row visibility.
 Mobile pairing should require both `documents:read` and `documents:write`.
-Upload idempotency keys are scoped to the authenticated user, but they never
-bypass authorization: token scope is checked on every document replay, and a
-version replay also rechecks change permission on its predecessor.
+Upload idempotency keys are user-global and their fingerprints bind the target
+system: reusing a key in another system conflicts. Every replay rechecks authority;
+a version replay also requires change permission on its predecessor.
 
 ## Capabilities
 
@@ -65,7 +96,7 @@ Administrators have every capability implicitly.
 | `archive_intelligence` | Extract, review, use in chat, and calendar document facts. |
 | `mailboxes` | Connect and manage their own mail intake. |
 | `share_links` | Create revocable document share links. |
-| `share_views` | Publish saved views to every user's dashboard. |
+| `share_views` | Publish saved views to other users in the selected system. |
 
 The web app labels these capabilities **Ask the archive**, **Manage document
 dates**, **Manage mailboxes**, **Create share links**, and **Share saved views**.
@@ -117,8 +148,11 @@ PUT    /api/acls/{kind}/{id}
 DELETE /api/acls/{kind}/{id}?principal_kind=user&principal_id=5
 ```
 
-ACL routes require an authenticated browser or OIDC session. An administrator
-can grant user 5 view and change access to document 17 with:
+ACL routes require an authenticated browser or OIDC session. New user grants check
+in the caller's write transaction that the recipient is active and can enter the
+object's system (member or administrator); a new grant to a nonmember is rejected,
+not stored as an access workaround. Assuming user 5 meets that requirement, an
+administrator can grant view and change access to document 17 with:
 
 ```sh
 curl -X PUT http://localhost:8000/api/acls/document/17 \
@@ -136,6 +170,11 @@ Share links are time-bounded anonymous bearer access, not ACL entries. They are
 useful for sending selected documents to someone who has no Suchi account.
 Revoking a share link does not change user or group grants.
 
+A share contains documents from exactly one system and remains subject to the
+creator being active and able to enter it. Public requests return only still-
+shareable live documents. Revocation, removal of membership, or loss of the
+creator's authority cannot be bypassed using the bearer link.
+
 Automations can change ownership but v0.1 does not include a general ACL-grant
 automation action. Approval definitions are governed by their own task and
 assignee rules rather than object ACLs.
@@ -144,10 +183,12 @@ assignee rules rather than object ACLs.
 
 1. Create users under **Settings > Archive configuration > People and
    metadata > Users** or through `/api/admin/users`.
-2. Create groups for recurring sharing boundaries such as household or finance.
-3. Grant access to individual documents through the ACL API.
-4. Verify list, search, preview, edit, and delete behavior as a non-admin user.
+2. After systems are introduced, grant direct membership in each required system.
+   Administrators' entry is implicit; no per-system administrator roles exist.
+3. Create groups for recurring document-sharing needs, then grant document ACLs.
+   Users, groups, roles and capabilities are instance-wide, not new tenant directories.
+4. Verify system entry as well as list, search, preview, edit and delete as a member.
 
-An object with no ACL grants remains visible only to its owner and
-administrators. See [Architecture](/architecture) for the authorization
+Within an enterable system, an object without ACL grants remains visible only to
+its owner and administrators. See [Architecture](/architecture) for authorization
 invariants and [API](/api) for complete payloads.

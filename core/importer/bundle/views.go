@@ -11,7 +11,7 @@
 //   - One report entry per source view (never per rule). Rules that don't
 //     map degrade the view to PARTIAL; a view with zero mappable rules is
 //     FAILED entirely.
-//   - Idempotent: INSERT ... ON CONFLICT(owner_id, name) DO NOTHING makes
+//   - Idempotent: INSERT ... ON CONFLICT(system_id, owner_id, name) DO NOTHING makes
 //     re-runs safe.
 //   - Owner remap: source-side Owner is a paperless auth.user PK we don't
 //     have a mapping table for. We fall back to the caller-supplied
@@ -62,6 +62,7 @@ type SavedViewFilterRuleFields struct {
 func ImportSavedViews(
 	ctx context.Context,
 	d *db.DB,
+	systemID int64,
 	log *slog.Logger,
 	objs []Object,
 	dry bool,
@@ -153,10 +154,10 @@ func ImportSavedViews(
 		var inserted int64
 		err = d.WriteTx(ctx, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(owner_id, name) DO NOTHING
-			`, effectiveOwner, f.Name, string(blob), display, 0, 0, now, now)
+				INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(system_id, owner_id, name) DO NOTHING
+			`, systemID, effectiveOwner, f.Name, string(blob), display, 0, 0, now, now)
 			if err != nil {
 				return err
 			}

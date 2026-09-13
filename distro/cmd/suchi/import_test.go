@@ -40,6 +40,7 @@ func TestEnsureImportTreeSelection(t *testing.T) {
 			if err := db.Migrate(ctx, d, migs, log); err != nil {
 				t.Fatal(err)
 			}
+			tt.opts.SystemID = 1
 			if err := ensureImportTree(ctx, d, log, jd.ModeJD, tt.opts); err != nil {
 				t.Fatal(err)
 			}

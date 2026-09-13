@@ -31,6 +31,7 @@ type preparedUpload struct {
 func (s *Server) prepareUpload(
 	w http.ResponseWriter,
 	r *http.Request,
+	systemID int64,
 	operation string,
 	predecessor int64,
 ) *preparedUpload {
@@ -98,7 +99,7 @@ func (s *Server) prepareUpload(
 	}
 	if idempotency.Key != "" {
 		idempotency.Fingerprint = buildUploadFingerprint(
-			operation, predecessor, ref.SHA256, header.Filename, metadata,
+			systemID, operation, predecessor, ref.SHA256, header.Filename, metadata,
 		)
 	}
 

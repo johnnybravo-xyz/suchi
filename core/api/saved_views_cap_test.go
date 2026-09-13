@@ -86,8 +86,8 @@ func TestSavedViews_unshare_without_capability(t *testing.T) {
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 	seedMember(t, s, 2, `[]`)
 	res, err := d.Write.Exec(`
-		INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-		VALUES (2, 'Previously shared', '{}', 'list', 0, 1, 0, 0)`)
+		INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+		VALUES (1, 2, 'Previously shared', '{}', 'list', 0, 1, 0, 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}

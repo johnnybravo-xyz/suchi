@@ -6,6 +6,10 @@ description: "How the doc-detail page finds and ranks documents like the one you
 Every document detail screen can show authorized lexical neighbours from the
 shared FTS5 index. The source document is excluded; low-score noise is removed;
 and `matched_on_title_only` warns when extracted body text was unavailable.
+Both the authorized source and all candidates remain in the source document's
+filing system, even when the caller belongs to several. Explicit/token mismatches
+are rejected; internal archive matching also stays in the source system. Shared
+FTS infrastructure does not imply permission to retrieve across systems.
 
 Token selection, BM25 weights, score direction and floor, ACL behavior, archive
 matching reuse, limits, and the absence of recency are centralized in

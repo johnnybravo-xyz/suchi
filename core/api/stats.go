@@ -38,6 +38,10 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	ctx := r.Context()
 	// isAdmin stays strict: approvals + dead-jobs are admin-only
 	// operational counters and demo visitors must not see the real admin's
@@ -58,12 +62,10 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 
 	var out StatsResponse
 
-	inbox, _ := jd.InboxCategoryID(ctx, s.DB)
+	inbox, _ := jd.InboxCategoryID(ctx, s.DB, systemID)
 	out.InboxCategoryID = inbox
 
-	// Doc counts. Members splice the visibility WHERE onto every
-	// document query; admins bypass it. The fragment references
-	// alias `d`.
+	// System entry and document ACLs constrain every counter, including admins.
 	docWhere := "d.trashed_at IS NULL"
 	trashWhere := "d.trashed_at IS NOT NULL"
 	weekWhere := "d.trashed_at IS NULL AND d.created_at >= unixepoch('now', '-7 days')"
@@ -73,17 +75,15 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 		docArgs, trashArgs, weekArgs []any
 		inboxArgs                    = []any{inbox}
 	)
-	if !isAdmin {
-		vf, vargs := documentVisibilityWhere(p, groups)
-		docWhere += " AND " + vf
-		trashWhere += " AND " + vf
-		weekWhere += " AND " + vf
-		inboxWhere += " AND " + vf
-		docArgs = append(docArgs, vargs...)
-		trashArgs = append(trashArgs, vargs...)
-		weekArgs = append(weekArgs, vargs...)
-		inboxArgs = append(inboxArgs, vargs...)
-	}
+	vf, vargs := documentVisibilityWhere(ctx, p, groups)
+	docWhere += " AND " + vf
+	trashWhere += " AND " + vf
+	weekWhere += " AND " + vf
+	inboxWhere += " AND " + vf
+	docArgs = append(docArgs, vargs...)
+	trashArgs = append(trashArgs, vargs...)
+	weekArgs = append(weekArgs, vargs...)
+	inboxArgs = append(inboxArgs, vargs...)
 
 	if err := scanCount(ctx, s.DB.Read,
 		"SELECT COUNT(*) FROM documents d WHERE "+docWhere, docArgs, &out.DocumentsTotal); err != nil {
@@ -136,7 +136,7 @@ func (s *Server) GetStats(w http.ResponseWriter, r *http.Request) {
 	// leak "the archive is broken" to non-admins.
 	if isAdmin {
 		_ = s.DB.Read.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM jobs WHERE state='dead'`).Scan(&out.DeadJobs)
+			`SELECT COUNT(*) FROM jobs WHERE state='dead' AND system_id = ?`, systemID).Scan(&out.DeadJobs)
 	}
 
 	s.writeJSON(w, http.StatusOK, out)

@@ -9,7 +9,7 @@ rendered storage-path template.
 
 ## What it does
 
-For each document that was live when the run began, Refile can:
+For each document live in the selected system when the run began, Refile can:
 
 1. rerun enabled `document_added` automations against current metadata
 2. enqueue a durable render job for the current storage-path template
@@ -22,29 +22,37 @@ Automation effects are additive. Removing an automation does not undo tags or
 other metadata it wrote earlier. Built-in assignment actions generally
 converge when repeated.
 
-## Preset changes
+## Filing-tree changes
 
-Replacing a filing tree after documents exist requires explicit confirmation.
-The admin APIs are session-only; these examples assume `SUCHI_SESSION` contains
-the signed-in administrator's `suchi_session` cookie value.
+Later imports and built-in preset applications merge additively; they do not
+reset filing or move existing documents to Inbox. Only safe unconfigured
+bootstrap setup may replace the initial tree. Preset `refile` cannot bypass
+merge protection or silently discard collisions; use custom import preview
+with explicit remaps/skips for conflicting categories.
 
-```sh
-curl -X POST http://127.0.0.1:8000/api/admin/setup/preset \
-  -H "Cookie: suchi_session=$SUCHI_SESSION" \
-  -H "Content-Type: application/json" \
-  -d '{"preset_id":"household","refile":true}'
-```
+Refile is a separate explicit operation over current configuration. It can
+rerun enabled filing automations and/or enqueue rendered paths; it is not a
+taxonomy reset or a new document version. Existing disabled preset originals
+and user-owned forks survive preset reapplication.
 
-Suchi moves affected documents to the new inbox, installs the tree, then runs
-the refile pass. Without `refile: true`, the request is rejected while filed
-documents exist.
+Default JD and flat filenames now begin with the document's recorded created
+date, falling back to added date and then `undated`, retaining title and ID
+suffix. To update old fallback paths without automation reruns, use
+`suchi refile --system S01 --skip-automations`. After introduction, the stable
+`rendered/<SYS>/` root is enforced outside explicit custom templates and each
+system's `00-09 System index` namespace is reserved. Original blobs and
+extraction/classification state are unchanged.
+First prefixed import already queues render-only moves for the original system;
+it does not rerun classification. Refile changes category/location within a system,
+not system ownership. `S01.13.147` can become `S01.14.147`, never S02 via category
+assignment; the installation-global ID stays 147 and the old address becomes stale.
 
 ## Admin API
 
-`POST /api/admin/refile` runs both passes for every owner by default:
+`POST /api/admin/refile?system=S01` runs both passes for every owner in S01 by default:
 
 ```sh
-curl -X POST http://127.0.0.1:8000/api/admin/refile \
+curl -X POST 'http://127.0.0.1:8000/api/admin/refile?system=S01' \
   -H "Cookie: suchi_session=$SUCHI_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"skip_automations":false,"skip_render":false,"owner_id":0}'
@@ -72,7 +80,10 @@ suchi refile
 suchi refile --skip-render       # automations only
 suchi refile --skip-automations  # render only
 suchi refile --owner-id 5
+suchi refile --system S02 --skip-automations
 ```
+Omitting `--system` (or the API query) selects original system 1; it never sweeps
+all systems. API administration still requires an active session administrator.
 
 The CLI opens the same database directly. It can run while `suchi serve` is
 active: document IDs are snapshotted at the start, and uploads arriving later

@@ -250,6 +250,268 @@ const presets = [
   { id: 'blank', name: 'Blank', description: 'Build your own', blank: true, areas: [] },
 ]
 
+const taxonomyContent = `format = "suchi-taxonomy/v1"
+id = "personal-records"
+version = 2
+name = "Personal records"
+market = "global"
+language = "en"
+story = "Keep identity paperwork together."
+[[areas]]
+code = 10
+name = "Life admin"
+[[areas.categories]]
+code = 11
+name = "Identity"
+description = "Passports and identity cards."
+`
+
+function taxonomyPreview(overrides = {}) {
+  return {
+    format: 'suchi-taxonomy/v1', preset_id: 'personal-records', preset_version: 2,
+    name: 'Personal records', story: 'Keep identity paperwork together.',
+    content_sha256: 'a'.repeat(64), state_hash: 'preview-state',
+    mode: 'merge', areas_incoming: 1, categories_incoming: 1,
+    categories_to_add: [11], collisions: [], keywords_to_seed: 0, automations_to_seed: 1,
+    user_areas: [{ code: 10, name: 'Life admin', categories: [{ code: 11, name: 'Identity', description: 'Passports and identity cards.' }] }],
+    generated_areas: [{ code: 40, name: 'System', categories: [{ code: 49, name: 'Inbox' }] }],
+    rules_to_add: ['File identity'], rules_preserved: [{ name: 'Local starter', enabled: false }],
+    rules_skipped: [], applied: false, index_refresh_pending: false,
+    ...overrides,
+  }
+}
+
+async function openTaxonomyImport(page) {
+  await page.goto('/#/setup')
+  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.getByRole('button', { name: 'Import a file' }).click()
+  return page.getByRole('region', { name: 'Import taxonomy', exact: true })
+}
+
+test('taxonomy import previews a named tree and refreshes setup and sidebar after apply', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    jdCategoriesAfterPreset: [
+      { id: 11, code: 11, name: 'Identity', area_code: 10, area_name: 'Life admin' },
+      { id: 49, code: 49, name: 'Inbox', area_code: 40, area_name: 'System', system: true },
+    ],
+    taxonomyImport: async payload => {
+      requests.push(payload)
+      return taxonomyPreview({ applied: payload.apply, index_refresh_pending: payload.apply })
+    },
+  })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Choose taxonomy file').setInputFiles({
+    name: 'personal.toml', mimeType: 'text/plain', buffer: Buffer.from(taxonomyContent),
+  })
+  await expect(importer.getByRole('combobox', { name: 'Serialization', exact: true })).toHaveValue('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByRole('heading', { name: /Personal records.*content revision 2/ })).toBeVisible()
+  await expect(importer.getByText('Passports and identity cards.')).toBeVisible()
+  await expect(importer.getByText('00–09 System index', { exact: true })).toBeVisible()
+  await expect(importer.getByText('49 Inbox', { exact: true })).toBeVisible()
+  await expect(importer.getByText('Local starter — disabled (stays disabled)', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeEnabled()
+  await expect(importer.getByRole('status')).toContainText('Filing-index refresh queued')
+  expect(requests[0]).toMatchObject({ content: taxonomyContent, format: 'toml', apply: false, skip_seeds: false, remaps: {} })
+  expect(requests[1]).toMatchObject({ expected_state_hash: 'preview-state', apply: true, format: 'toml' })
+  await page.goto('/#/dashboard')
+  if ((page.viewportSize()?.width || 0) <= 860) await page.getByRole('button', { name: 'Open navigation' }).click()
+  await page.locator('.area-toggle').filter({ hasText: 'Life admin' }).click()
+  await expect(page.getByRole('link', { name: '11 Identity', exact: true })).toBeVisible()
+})
+
+test('taxonomy import renders server validation failures and never applies invalid input', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    taxonomyImport: async (payload, route) => {
+      requests.push(payload)
+      await route.fulfill({ status: 400, json: { code: 'invalid_taxonomy', error: 'areas[0].code: area 40 is reserved' } })
+    },
+  })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Paste content').fill('unsupported content')
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByRole('alert')).toHaveText('areas[0].code: area 40 is reserved')
+  await expect(importer.getByLabel('Paste content')).toHaveValue('unsupported content')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  expect(requests).toHaveLength(1)
+  expect(requests[0].apply).toBe(false)
+})
+
+test('taxonomy import requires explicit previewed collision choices and retains them after invalidation', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    taxonomyImport: async payload => {
+      requests.push(payload)
+      const resolved = Object.hasOwn(payload.remaps, '11')
+      return taxonomyPreview({
+        collisions: [{ code: 11, existing: 'Old identity', incoming: 'Identity', proposed_code: 12, resolved }],
+        categories_to_add: payload.remaps['11'] === 12 ? [12] : [],
+        rules_to_add: [],
+        rules_skipped: payload.remaps['11'] === 0 ? [{ name: 'File identity', reason: 'Depends on skipped category 11' }] : [],
+        state_hash: `collision-${requests.length}`,
+      })
+    },
+  })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Paste content').fill(taxonomyContent)
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByLabel('Choice for 11')).toHaveValue('')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  expect(requests[0].remaps).toEqual({})
+  await importer.getByLabel('Choice for 11').selectOption('12')
+  await expect(importer.getByLabel('Choice for 11')).toHaveValue('12')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeEnabled()
+  expect(requests[1].remaps).toEqual({ 11: 12 })
+  await importer.getByLabel('Choice for 11').selectOption('0')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByText('File identity — Depends on skipped category 11')).toBeVisible()
+  await importer.getByLabel('Include starter rules').uncheck()
+  await expect(importer.getByLabel('Choice for 11')).toHaveValue('0')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  expect(requests[3]).toMatchObject({ remaps: { 11: 0 }, skip_seeds: true })
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('huml')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  await importer.getByLabel('Paste content').fill(taxonomyContent + '\n')
+  await expect(importer.getByLabel('Choice for 11')).toHaveCount(0)
+})
+
+test('taxonomy import preserves input after stale preview and binds apply to a fresh preview', async ({ page }) => {
+  const requests = []
+  let stale = true
+  await mockAPI(page, {
+    taxonomyImport: async (payload, route) => {
+      requests.push(payload)
+      if (payload.apply && stale) {
+        stale = false
+        await route.fulfill({ status: 409, json: { code: 'stale_preview', error: 'State changed' } })
+        return
+      }
+      return taxonomyPreview({ state_hash: stale ? 'old-state' : 'new-state' })
+    },
+  })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Paste content').fill(taxonomyContent)
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await expect(importer.getByRole('alert')).toContainText('Preview again before applying')
+  await expect(importer.getByLabel('Paste content')).toHaveValue(taxonomyContent)
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await expect.poll(() => requests.length).toBe(4)
+  expect(requests[1].expected_state_hash).toBe('old-state')
+  expect(requests[3].expected_state_hash).toBe('new-state')
+})
+
+test('taxonomy import confirms blank trees in a native modal before applying', async ({ page }) => {
+  const requests = []
+  await mockAPI(page, {
+    taxonomyImport: async payload => {
+      requests.push(payload)
+      return taxonomyPreview({ categories_incoming: 0, categories_to_add: [], user_areas: [], rules_to_add: [] })
+    },
+  })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Paste content').fill(taxonomyContent.split('[[areas]]')[0] + 'areas = []\n')
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  const confirmation = page.getByRole('alertdialog', { name: 'Import a blank filing tree?' })
+  await expect(confirmation).toBeVisible()
+  expect(await confirmation.evaluate(element => element.matches(':modal'))).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(confirmation).toHaveCount(0)
+  expect(requests).toHaveLength(1)
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await confirmation.getByRole('button', { name: 'Apply blank import' }).click()
+  await expect.poll(() => requests.length).toBe(2)
+  expect(requests[1].apply).toBe(true)
+})
+
+test('taxonomy import ignores late file reads and reports unreadable or unsupported files', async ({ page }) => {
+  await mockAPI(page)
+  await page.addInitScript(() => {
+    window.taxonomyReaders = []
+    window.FileReader = class {
+      readAsText() { window.taxonomyReaders.push(this) }
+      abort() {}
+    }
+  })
+  const importer = await openTaxonomyImport(page)
+  const file = importer.getByLabel('Choose taxonomy file')
+  await file.setInputFiles({ name: 'old.toml', mimeType: 'text/plain', buffer: Buffer.from('old') })
+  await expect(importer.getByRole('status')).toHaveText('Reading file…')
+  await importer.getByLabel('Paste content').fill('new pasted content')
+  await page.evaluate(() => {
+    const reader = window.taxonomyReaders[0]
+    reader.result = 'late old content'
+    reader.onload()
+  })
+  await expect(importer.getByLabel('Paste content')).toHaveValue('new pasted content')
+  await file.setInputFiles({ name: 'broken.huml', mimeType: 'text/plain', buffer: Buffer.from('broken') })
+  await page.evaluate(() => window.taxonomyReaders[1].onerror())
+  await expect(importer.getByRole('alert')).toContainText('Could not read broken.huml')
+  await expect(importer.getByRole('button', { name: 'Preview', exact: true })).toBeDisabled()
+  await file.setInputFiles({ name: 'unsupported.yaml', mimeType: 'text/plain', buffer: Buffer.from('x') })
+  await expect(importer.getByRole('alert')).toContainText('Choose a .huml or .toml file')
+})
+
+test('taxonomy import disables conflicting requests and discards a preview after navigation', async ({ page }) => {
+  let pending
+  await mockAPI(page, { taxonomyImport: async (_, route) => { pending = route } })
+  const importer = await openTaxonomyImport(page)
+  await importer.getByLabel('Paste content').fill(taxonomyContent)
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  await expect(importer.getByLabel('Paste content')).toBeDisabled()
+  await expect(importer.getByRole('combobox', { name: 'Serialization', exact: true })).toBeDisabled()
+  await expect(importer.getByLabel('Include starter rules')).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Back to presets' })).toBeDisabled()
+  await page.goto('/#/dashboard')
+  await pending.fulfill({ json: taxonomyPreview() }).catch(() => {})
+  const nextImporter = await openTaxonomyImport(page)
+  await expect(nextImporter.getByLabel('Paste content')).toHaveValue('')
+  await expect(nextImporter.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+})
+
+test('taxonomy settings offers explicit starter and tree-only exports without silent fallback', async ({ page }) => {
+  const exports = []
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.route('**/api/admin/taxonomy/export?**', async route => {
+    const url = new URL(route.request().url())
+    exports.push(Object.fromEntries(url.searchParams))
+    if (url.searchParams.get('skip_seeds') === 'false') {
+      await route.fulfill({ status: 400, json: { error: 'Disabled starter cannot be exported. Use tree-only export.' } })
+    } else {
+      await route.fulfill({ contentType: 'text/plain', body: taxonomyContent })
+    }
+  })
+  await page.goto('/#/settings?tab=archive&section=users')
+  await page.getByRole('button', { name: 'Taxonomy', exact: true }).click()
+  await page.getByLabel('Export serialization').selectOption('toml')
+  await page.getByRole('button', { name: 'Export with starter rules' }).click()
+  await expect(page.getByText('Disabled starter cannot be exported. Use tree-only export.', { exact: true })).toBeVisible()
+  expect(exports).toEqual([{ format: 'toml', skip_seeds: 'false' }])
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export tree only' }).click()
+  expect((await download).suggestedFilename()).toBe('archive-tree.toml')
+  expect(exports[1]).toEqual({ format: 'toml', skip_seeds: 'true' })
+  await page.getByRole('button', { name: 'Import a file' }).click()
+  await expect(page.getByRole('region', { name: 'Import taxonomy', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
 // Mirror the server's strict decoder so payload drift fails in the browser suite.
 const llmInputFields = [
   'enabled', 'endpoint_url', 'model', 'api_key', 'clear_api_key', 'egress_ack',
@@ -333,6 +595,7 @@ async function mockAPI(page, options = {}) {
       capabilities: options.capabilities ?? ['mailboxes'],
       kind: options.demoSession ? `demo-${options.demoSession}` : 'user',
     }
+    else if (path === '/api/jd/systems') body = options.systems || { introduced: false, default_system_code: '', results: [] }
     else if (path === '/api/stats/') body = {
       documents_total: options.documentsCount ?? options.documents?.length ?? 0,
       inbox_count: 0,
@@ -345,6 +608,14 @@ async function mockAPI(page, options = {}) {
         : (options.jdCategories || []),
     }
     else if (path === '/api/presets/') body = { results: presets }
+    else if (path === '/api/admin/taxonomy/import' && options.taxonomyImport) {
+      const payload = request.postDataJSON()
+      const result = await options.taxonomyImport(payload, route)
+      if (!result) return
+      if (result.applied) taxonomyApplied = true
+      await route.fulfill({ json: result })
+      return
+    }
     else if (path === '/api/admin/setup/preset' && request.method() === 'POST') {
       taxonomyApplied = true
       body = { applied: true }
@@ -353,7 +624,7 @@ async function mockAPI(page, options = {}) {
       intent: '',
       recommended_preset: '',
       current_preset: options.currentPreset || '',
-      filing_tree_chosen: options.filingTreeChosen ?? false,
+      filing_tree_chosen: taxonomyApplied || (options.filingTreeChosen ?? false),
       started_at: options.setupStartedAt ?? Math.floor(Date.now() / 1000),
       completed_at: options.setupCompletedAt ?? null,
     }
@@ -1174,14 +1445,14 @@ test('keeps capable member mailboxes in account settings', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Mailboxes' })).toBeVisible()
 })
 
-test('guides intent, filing tree, and LLM mode without exposing import', async ({ page }) => {
+test('guides intent, filing tree, and LLM mode', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/setup')
 
   await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Import a file' })).toHaveCount(0)
   await page.getByRole('button', { name: /Personal/ }).click()
   await expect(page.getByText('Recommended for Personal')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Import a file' })).toBeVisible()
   const filingTrees = page.locator('.preset-grid')
   await expect(filingTrees.getByText('Household', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Compare all filing trees' }).click()
@@ -3976,4 +4247,497 @@ test('navigation button toggles the sidebar at each breakpoint', async ({ page }
     await expand.click()
     await expect(sidebar).toBeVisible()
   }
+})
+
+// These cases exercise compiled browser lifetimes. Mocked API responses do not
+// establish server-side membership, ACL or credential isolation.
+const filingCabinets = [
+  { code: 'S01', name: 'First cabinet', is_default: true },
+  { code: 'S02', name: 'Second cabinet', is_default: false },
+]
+
+async function mockFilingSystems(page, overrides = {}) {
+  const options = {
+    setupCompletedAt: 1, filingTreeChosen: true,
+    systems: { introduced: true, default_system_code: 'S01', results: filingCabinets },
+    documentDetails: {
+      147: { document: { system_code: 'S01', jd_address: 'S01.13.147', title: 'First private record' } },
+      148: { document: { system_code: 'S02', jd_address: 'S02.13.148', title: 'Second private record' } },
+    },
+    ...overrides,
+  }
+  await mockAPI(page, options)
+  const requests = []
+  await page.route('**/api/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const code = url.searchParams.get('system')
+    requests.push({ path: url.pathname, system: code, method: request.method() })
+    if (request.method() !== 'GET') return route.fallback()
+    if (url.pathname === '/api/documents/') return route.fulfill({ json: {
+      count: 1, results: [code === 'S02'
+        ? { id: 148, title: 'Second private record', system_code: 'S02', jd_address: 'S02.13.148' }
+        : { id: 147, title: 'First private record', system_code: 'S01', jd_address: 'S01.13.147' }],
+    } })
+    if (url.pathname === '/api/jd/categories/') return route.fulfill({ json: {
+      results: [{ id: code === 'S02' ? 213 : 113, code: 13, name: `${code || 'Original'} filing`,
+        area_code: 10, area_name: `${code || 'Original'} records`, system: false }],
+    } })
+    if (url.pathname === '/api/stats/') return route.fulfill({ json: {
+      documents_total: code === 'S02' ? 19 : 731, inbox_count: 0, pending_approvals: 0, dead_jobs: 0,
+    } })
+    return route.fallback()
+  })
+  return { options, requests }
+}
+
+async function chooseFilingSystem(page, code) {
+  const select = page.getByRole('combobox', { name: 'Current filing system', exact: true })
+  if (!await select.isVisible()) await page.getByRole('button', { name: 'Open navigation', exact: true }).click()
+  await select.selectOption(code)
+  await expect(page).toHaveURL(new RegExp(`system=${code}`))
+}
+
+async function paintSettled(page) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+test('filing systems selects an S02-only member before any collection reads and retains it on reload', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page, {
+    userRole: 'member',
+    systems: { introduced: true, default_system_code: '', results: [filingCabinets[1]] },
+  })
+  await page.goto('/#/documents')
+  await expect(page).toHaveURL(/#\/documents\?system=S02$/)
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Current filing system' })).toHaveCount(0)
+  await expect(page.getByRole('link').filter({ hasText: 'Second private record' })).toHaveAttribute('href', '#/doc/148?system=S02')
+  await page.reload()
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  const scoped = requests.filter(item => ['/api/documents/', '/api/jd/categories/', '/api/stats/'].includes(item.path))
+  expect(scoped.length).toBeGreaterThan(0)
+  expect(scoped.every(item => item.system === 'S02')).toBe(true)
+  await expect(page.getByText('First private record', { exact: true })).toHaveCount(0)
+})
+
+test('filing systems never substitutes the default for an explicit unavailable route', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page, {
+    userRole: 'member',
+    systems: { introduced: true, default_system_code: '', results: [filingCabinets[1]] },
+  })
+  await page.goto('/#/documents?system=S01')
+  await expect(page.getByText('Filing system unavailable', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/system=S01$/)
+  expect(requests.filter(item => ['/api/documents/', '/api/jd/categories/', '/api/stats/'].includes(item.path))).toEqual([])
+  await expect(page.getByText('Second private record', { exact: true })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByText('Filing system unavailable', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/system=S01$/)
+})
+
+test('filing systems derives a legacy numeric deep link intrinsically, then scopes document and blob links', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page)
+  await page.goto('/#/doc/148')
+  await expect(page).toHaveURL(/#\/doc\/148\?system=S02$/)
+  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  expect(requests.filter(item => item.path === '/api/documents/148').map(item => item.system)).toEqual([null, 'S02'])
+  expect(requests.filter(item => item.path === '/api/jd/categories/').every(item => item.system === 'S02')).toBe(true)
+  await expect(page.getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', '/download/148?system=S02')
+  await page.getByRole('button', { name: 'Open on my phone', exact: true }).click()
+  await expect(page.getByLabel('Document link', { exact: true })).toHaveValue(/#\/doc\/148\?system=S02$/)
+})
+
+test('filing systems preserves cabinet history and resets selected documents', async ({ page }) => {
+  await mockFilingSystems(page)
+  await page.goto('/#/documents?system=S01')
+  await page.getByRole('checkbox', { name: 'Select First private record', exact: true }).check()
+  await chooseFilingSystem(page, 'S02')
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/documents\?system=S01$/)
+  await expect(page.getByRole('checkbox', { name: 'Select First private record', exact: true })).not.toBeChecked()
+  await page.goForward()
+  await expect(page).toHaveURL(/system=S02$/)
+  await page.reload()
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  await expect(page.getByText('First private record', { exact: true })).toHaveCount(0)
+})
+
+test('filing systems rejects delayed old tree, counters and recent documents after switching', async ({ page }) => {
+  await mockFilingSystems(page)
+  const pending = new Map()
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('system') === 'S01' && ['/api/documents/', '/api/jd/categories/', '/api/stats/'].includes(url.pathname)) {
+      pending.set(url.pathname, [...(pending.get(url.pathname) || []), route])
+      return
+    }
+    return route.fallback()
+  })
+  await page.goto('/#/dashboard?system=S01')
+  await expect.poll(() => pending.size).toBe(3)
+  await chooseFilingSystem(page, 'S02')
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  for (const [path, routes] of pending) {
+    const json = path === '/api/stats/' ? { documents_total: 731 } : path === '/api/jd/categories/'
+      ? { results: [{ id: 113, code: 13, name: 'Foreign secret category', area_code: 10, area_name: 'Foreign secret tree' }] }
+      : { count: 1, results: [{ id: 147, title: 'Foreign delayed receipt' }] }
+    for (const route of routes) await route.fulfill({ json })
+  }
+  await paintSettled(page)
+  await expect(page.getByText('19', { exact: true })).toBeVisible()
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Foreign delayed receipt|Foreign secret tree|Foreign secret category/)).toHaveCount(0)
+  await expect(page.getByText('731', { exact: true })).toHaveCount(0)
+})
+
+test('filing systems keeps a continuing upload batch bound to its starting system without new-scope receipts', async ({ page }) => {
+  await mockFilingSystems(page)
+  const destinations = []
+  let first
+  await page.route('**/api/documents/?*', route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    destinations.push(new URL(route.request().url()).searchParams.get('system'))
+    if (destinations.length === 1) { first = route; return }
+    return route.fulfill({ json: { id: 902, system_code: 'S01', jd_address: 'S01.49.902' } })
+  })
+  await page.goto('/#/upload?system=S01')
+  await page.locator('input[type=file]').setInputFiles([
+    { name: 'old-first.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
+    { name: 'old-second.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+  ])
+  await expect.poll(() => !!first).toBe(true)
+  await chooseFilingSystem(page, 'S02')
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  await first.fulfill({ json: { id: 901, system_code: 'S01', jd_address: 'S01.49.901' } })
+  await expect.poll(() => destinations).toEqual(['S01', 'S01'])
+  await paintSettled(page)
+  await expect(page.getByText(/old-first|old-second|S01\.49\.90/)).toHaveCount(0)
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+})
+
+test('filing systems resolves exact addresses but never treats a stale filing address as a search query', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page)
+  await page.route('**/api/jd/resolve?*', route => {
+    const address = new URL(route.request().url()).searchParams.get('address')
+    return address === 'S02.13.148'
+      ? route.fulfill({ json: { id: 148, system_code: 'S02', jd_address: address } })
+      : route.fulfill({ status: 404, json: { code: 'not_found', error: 'Address unavailable' } })
+  })
+  await page.goto('/#/documents?system=S01')
+  const omni = page.getByRole('searchbox', { name: 'Search or run a command' })
+  await omni.fill('S02.13.148')
+  await omni.press('Enter')
+  await expect(page).toHaveURL(/#\/doc\/148\?system=S02$/)
+  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await page.evaluate(() => { location.hash = '#/search?system=S02&q=S02.12.148' })
+  await expect(page.getByText('Address unavailable', { exact: true })).toBeVisible()
+  expect(requests.filter(item => item.path === '/api/search/')).toEqual([])
+})
+
+test('filing systems first named Apply invalidates unnamed reads and selects the imported system', async ({ page }) => {
+  const options = {
+    systems: { introduced: false, default_system_code: '', results: [] },
+    taxonomyImport: async payload => {
+      if (payload.apply) options.systems = { introduced: true, default_system_code: 'S01', results: filingCabinets }
+      return taxonomyPreview({ applied: payload.apply, system_code: 'S02', system_name: 'Second cabinet',
+        system_created: true, systems_introduced: true, existing_system_code: payload.existing_system_code || '' })
+    },
+  }
+  await mockAPI(page, options)
+  let oldRecent
+  await page.route('**/api/documents/**', route => {
+    const url = new URL(route.request().url())
+    if (!url.searchParams.has('system') && url.pathname === '/api/documents/') { oldRecent = route; return }
+    return route.fulfill({ json: { count: 1, results: [{ id: 148, title: 'New cabinet record', jd_address: 'S02.13.148' }] } })
+  })
+  await page.goto('/#/dashboard')
+  await expect.poll(() => !!oldRecent).toBe(true)
+  await expect(page.getByRole('combobox', { name: 'Current filing system' })).toHaveCount(0)
+  await page.evaluate(() => { location.hash = '#/setup' })
+  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.getByRole('button', { name: 'Import a file' }).click()
+  const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
+  await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
+  await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByRole('group', { name: 'First system import destination' })).toBeVisible()
+  await importer.getByRole('radio', { name: /Create separately/ }).check()
+  await importer.getByLabel('Existing archive code', { exact: true }).fill('S01')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
+  await expect(page).toHaveURL(/#\/dashboard\?system=S02$/)
+  await oldRecent.fulfill({ json: { count: 1, results: [{ id: 147, title: 'Obsolete unnamed receipt' }] } })
+  await paintSettled(page)
+  await expect(page.getByText('New cabinet record', { exact: true })).toBeVisible()
+  await expect(page.getByText('Obsolete unnamed receipt', { exact: true })).toHaveCount(0)
+  await expect(importer).toHaveCount(0)
+})
+
+test('filing systems membership editing preserves complete and inactive grants across directory pages', async ({ page }) => {
+  await mockFilingSystems(page)
+  const directory = Array.from({ length: 42 }, (_, i) => ({
+    id: i + 1, email: `user${i + 1}@example.test`, role: i === 0 ? 'admin' : 'member', disabled: i === 40,
+  }))
+  let saved
+  await page.route('**/api/admin/users', route => route.fulfill({ json: { results: directory } }))
+  await page.route('**/api/admin/jd/systems/S01/members', route => {
+    if (route.request().method() === 'PUT') saved = route.request().postDataJSON()
+    return route.fulfill({ json: saved || { user_ids: [2, 22, 41] } })
+  })
+  await page.goto('/#/settings?tab=archive&system=S01')
+  const panel = page.getByRole('region', { name: 'Filing system access', exact: true })
+  await expect(panel.getByRole('checkbox', { name: 'System access for user1@example.test', exact: true })).toBeDisabled()
+  await panel.getByRole('checkbox', { name: 'System access for user3@example.test', exact: true }).check()
+  await panel.getByRole('button', { name: 'Next members' }).click()
+  await expect(panel.getByRole('checkbox', { name: 'System access for user22@example.test', exact: true })).toBeChecked()
+  await panel.getByRole('button', { name: 'Next members' }).click()
+  await expect(panel.getByRole('checkbox', { name: 'System access for user41@example.test', exact: true })).toBeChecked()
+  await panel.getByRole('button', { name: 'Save memberships' }).click()
+  await expect.poll(() => saved).toEqual({ user_ids: [2, 3, 22, 41] })
+  await expect(panel.getByRole('checkbox', { name: 'System access for user41@example.test', exact: true })).toBeChecked()
+})
+
+test('filing systems with no accessible cabinet offers only account controls and signout', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page, {
+    userRole: 'member', systems: { introduced: true, default_system_code: '', results: [] },
+  })
+  await page.goto('/#/documents')
+  await expect(page.getByText(/Ask an administrator to grant access/)).toBeVisible()
+  await page.getByRole('link', { name: 'My account', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save profile', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
+  expect(requests.filter(item => ['/api/documents/', '/api/tokens/', '/api/decryption-passwords/', '/api/jd/categories/'].includes(item.path))).toEqual([])
+  await page.getByRole('button', { name: 'Sign out', exact: true }).last().click()
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+})
+
+test('filing systems cancels a late pairing in its captured cabinet and never restores its secret after a switch', async ({ page }) => {
+  await mockFilingSystems(page)
+  let pending
+  const cancellations = []
+  await page.route('**/api/mobile/pairing?*', route => {
+    if (route.request().method() === 'POST') { pending = route; return }
+    cancellations.push({ code: route.request().postDataJSON().code, system: new URL(route.request().url()).searchParams.get('system') })
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/settings?system=S01')
+  await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  await page.getByRole('button', { name: 'Generate QR code', exact: true }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  // A native modal makes the switcher inert; history/navigation still changes scope.
+  await page.evaluate(() => { location.hash = '#/settings?system=S02' })
+  await expect(page.getByRole('dialog', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
+  await pending.fulfill({ json: { code: 'old-pairing-code', pairing_url: 'suchi://pair?old-secret', expires_at: Math.floor(Date.now() / 1000) + 300 } })
+  await expect.poll(() => cancellations).toEqual([{ code: 'old-pairing-code', system: 'S01' }])
+  await page.getByRole('button', { name: 'Pair mobile app', exact: true }).click()
+  await expect(page.locator('#pairing-link')).toHaveCount(0)
+  await expect(page.getByText('suchi://pair?old-secret')).toHaveCount(0)
+})
+
+test('filing systems ignores a late share response and its clipboard effects after switching', async ({ page }) => {
+  await mockFilingSystems(page)
+  await page.addInitScript(() => {
+    window.shareCopies = []
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => { window.shareCopies.push(text) },
+    } })
+  })
+  let pending
+  await page.route('**/api/share_links/?*', route => {
+    if (route.request().method() === 'POST') { pending = route; return }
+    return route.fulfill({ json: { results: [] } })
+  })
+  await page.goto('/#/doc/147?system=S01')
+  await page.getByRole('button', { name: 'Share', exact: true }).click()
+  await page.getByRole('button', { name: 'Create & copy', exact: true }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  expect(new URL(pending.request().url()).searchParams.get('system')).toBe('S01')
+  await page.evaluate(() => { location.hash = '#/doc/148?system=S02' })
+  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await pending.fulfill({ json: { id: 9, public_url: 'https://archive.example.test/s/foreign-secret' } })
+  await paintSettled(page)
+  await expect(page.getByRole('dialog', { name: 'Share document' })).toHaveCount(0)
+  await expect(page.getByText(/foreign-secret/)).toHaveCount(0)
+  expect(await page.evaluate(() => window.shareCopies)).toEqual([])
+})
+
+for (const completed of [false, true]) {
+  test(`filing systems discards ${completed ? 'the completed OAuth handoff' : 'a pending OAuth completion'} on switch`, async ({ page }) => {
+    await mockFilingSystems(page)
+    const submitted = []
+    let completion
+    await page.route('**/api/email-accounts/**', route => {
+      const url = new URL(route.request().url())
+      if (url.pathname.endsWith('/oauth/start')) return route.fulfill({ json: {
+        flow_handle: 'first-flow', user_code: 'FIRST-CODE', verification_url: 'https://microsoft.com/devicelogin',
+        expires_at: Math.floor(Date.now() / 1000) + 300,
+      } })
+      if (url.pathname.endsWith('/oauth/complete')) {
+        completion = route
+        if (!completed) return
+        return route.fulfill({ json: { ok: true, username: 'first-flow@example.test', oauth_account_id: 'first-account', sealed_secret_b64: 'first-handoff' } })
+      }
+      return route.fallback()
+    })
+    await page.route('**/api/email-accounts?*', route => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      submitted.push({ body: route.request().postDataJSON(), system: new URL(route.request().url()).searchParams.get('system') })
+      return route.fulfill({ json: { id: 12 } })
+    })
+    await page.goto('/#/setup?system=S01')
+    await page.getByRole('button', { name: 'Email intake', exact: true }).click()
+    await page.getByRole('button', { name: 'Add mailbox', exact: true }).click()
+    await page.locator('#ma-provider').selectOption('microsoft')
+    await page.locator('#ma-oauth-btn').click()
+    await expect.poll(() => !!completion).toBe(true)
+    expect(new URL(completion.request().url()).searchParams.get('system')).toBe('S01')
+    if (completed) await expect(page.getByText('Signed in as first-flow@example.test', { exact: true })).toBeVisible()
+    await page.evaluate(() => { location.hash = '#/setup?system=S02' })
+    await expect(page.getByRole('dialog', { name: 'Sign in with Microsoft', exact: true })).toHaveCount(0)
+    if (!completed) await completion.fulfill({ json: { ok: true, username: 'late@example.test', sealed_secret_b64: 'late-handoff' } }).catch(() => {})
+    await page.getByRole('button', { name: 'Email intake', exact: true }).click()
+    await page.getByRole('button', { name: 'Add mailbox', exact: true }).click()
+    await expect(page.locator('#ma-user')).toHaveValue('')
+    await expect(page.getByText(/Signed in as first-flow|late@example/)).toHaveCount(0)
+    await page.locator('#ma-name').fill('Second cabinet mailbox')
+    await page.locator('#ma-owner').selectOption('1')
+    await page.locator('#ma-provider').selectOption('gmail')
+    await page.locator('#ma-user').fill('second@example.test')
+    await page.locator('#ma-pw').fill('new-app-password')
+    await page.getByRole('button', { name: 'Create mailbox', exact: true }).click()
+    await expect.poll(() => submitted.length).toBe(1)
+    expect(submitted[0].system).toBe('S02')
+    expect(submitted[0].body.username).toBe('second@example.test')
+    expect(submitted[0].body).not.toHaveProperty('sealed_secret_b64')
+    expect(submitted[0].body).not.toHaveProperty('oauth_account_id')
+  })
+}
+
+test('filing systems destroys parked research and excludes old source IDs and history from the next question', async ({ page }) => {
+  const chatRequests = []
+  await mockFilingSystems(page, {
+    chatEnabled: true, chatRequests,
+    chatResponse: (_, number) => ({
+      answer: number === 1 ? 'First cabinet confidential answer [1].' : 'Second cabinet answer [1].',
+      sources: [{ id: number === 1 ? 147 : 148, title: number === 1 ? 'First evidence' : 'Second evidence', snippet: 'Evidence', sensitivity: 'internal' }],
+      citations: [1], grounded: true, intelligence: { accepted: {}, pending: {} },
+    }),
+  })
+  await page.goto('/#/documents?system=S01')
+  await page.getByRole('searchbox', { name: 'Search or run a command' }).fill('First private question')
+  await page.getByRole('button', { name: 'Ask the archive', exact: true }).click()
+  await expect(page.getByText('First cabinet confidential answer', { exact: false })).toBeVisible()
+  await page.getByRole('link', { name: 'Open source 1: First evidence', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Return to archive research', exact: true })).toBeVisible()
+  await chooseFilingSystem(page, 'S02')
+  await expect(page.getByRole('button', { name: 'Return to archive research', exact: true })).toHaveCount(0)
+  await page.getByRole('searchbox', { name: 'Search or run a command' }).fill('Second question')
+  await page.getByRole('button', { name: 'Ask the archive', exact: true }).click()
+  await expect(page.getByText('Second cabinet answer', { exact: false })).toBeVisible()
+  expect(chatRequests).toHaveLength(2)
+  expect(chatRequests[1].history).toEqual([])
+  expect(chatRequests[1].context_source_ids).toEqual([])
+  await expect(page.getByText(/First private question|First cabinet confidential answer|First evidence/)).toHaveCount(0)
+})
+
+test('filing systems does not copy the selected system into a prefixed import body and drops its preview on switch', async ({ page }) => {
+  const calls = []
+  await mockFilingSystems(page, { taxonomyImport: async payload => {
+    calls.push(payload)
+    return taxonomyPreview({ system_code: 'S02', system_name: 'Second cabinet', system_created: false, systems_introduced: false })
+  } })
+  await page.goto('/#/setup?system=S01')
+  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.getByRole('button', { name: 'Import a file', exact: true }).click()
+  const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
+  await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
+  await importer.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(importer.getByText('S02 · Second cabinet', { exact: true })).toBeVisible()
+  expect(calls[0]).not.toHaveProperty('target_system')
+  await expect(importer.getByRole('group', { name: 'First system import destination' })).toHaveCount(0)
+  await chooseFilingSystem(page, 'S02')
+  await expect(importer).toHaveCount(0)
+  await page.evaluate(() => { location.hash = '#/setup?system=S01' })
+  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.getByRole('button', { name: 'Import a file', exact: true }).click()
+  await expect(importer.getByLabel('Paste content', { exact: true })).toHaveValue('')
+  await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
+})
+
+test('filing systems never shares an in-flight taxonomy GET between accounts with the same system URL', async ({ page }) => {
+  await mockFilingSystems(page)
+  let actor = 1
+  let oldTree
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/logout') { actor = 0; return route.fulfill({ status: 204 }) }
+    if (url.pathname === '/api/login') { actor = 2; return route.fulfill({ json: { ok: true } }) }
+    if (url.pathname === '/api/whoami') return route.fulfill({ json: {
+      user_id: actor, email: `actor${actor}@example.test`, role: 'member', capabilities: [],
+    } })
+    if (url.pathname === '/api/jd/categories/') {
+      if (actor === 1) { oldTree = route; return }
+      return route.fulfill({ json: { results: [{
+        id: 213, code: 13, name: 'New account category', area_code: 10, area_name: 'New account tree',
+      }] } })
+    }
+    return route.fallback()
+  })
+  await page.goto('/#/documents?system=S01')
+  await expect.poll(() => !!oldTree).toBe(true)
+  const openNav = page.getByRole('button', { name: 'Open navigation', exact: true })
+  if (await openNav.isVisible()) await openNav.click()
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await page.getByLabel('Email', { exact: true }).fill('actor2@example.test')
+  await page.getByLabel('Password', { exact: true }).fill('password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.locator('.area-toggle').filter({ hasText: 'New account tree' })).toHaveCount(1)
+  await oldTree.fulfill({ json: { results: [{
+    id: 113, code: 13, name: 'Old account category', area_code: 10, area_name: 'Old account tree',
+  }] } })
+  await paintSettled(page)
+  await expect(page.locator('.area-toggle').filter({ hasText: 'New account tree' })).toHaveCount(1)
+  await expect(page.getByText(/Old account tree|Old account category/)).toHaveCount(0)
+})
+
+test('filing systems clears an active surface on system_unavailable instead of falling back', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page)
+  let denied = false
+  await page.route('**/api/documents/?*', route => denied
+    ? route.fulfill({ status: 404, json: { code: 'system_unavailable', error: 'System unavailable' } })
+    : route.fallback())
+  await page.goto('/#/documents?system=S02')
+  await expect(page.getByText('Second private record', { exact: true })).toBeVisible()
+  denied = true
+  await page.getByRole('button', { name: 'Refresh documents', exact: true }).click()
+  await expect(page.getByText('Filing system unavailable', { exact: true })).toBeVisible()
+  await expect(page.getByText('Second private record', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('S02 records', { exact: true })).toHaveCount(0)
+  await expect(page).toHaveURL(/system=S02$/)
+  expect(requests.filter(item => item.path === '/api/documents/').every(item => item.system === 'S02')).toBe(true)
+})
+
+test('filing systems renames a display name without changing its code or document address', async ({ page }) => {
+  const { options } = await mockFilingSystems(page)
+  const changes = []
+  await page.route('**/api/admin/jd/systems/S01/members', route => route.fulfill({ json: { user_ids: [2] } }))
+  await page.route('**/api/admin/jd/systems/S01', route => {
+    changes.push(route.request().postDataJSON())
+    options.systems = { ...options.systems, results: options.systems.results.map(system =>
+      system.code === 'S01' ? { ...system, name: changes.at(-1).name } : system) }
+    return route.fulfill({ json: options.systems.results[0] })
+  })
+  await page.goto('/#/settings?tab=archive&system=S01')
+  const panel = page.getByRole('region', { name: 'Filing system access', exact: true })
+  await panel.getByRole('textbox', { name: 'System name', exact: true }).fill('')
+  await expect(panel.getByRole('button', { name: 'Save system name', exact: true })).toBeDisabled()
+  await panel.getByRole('textbox', { name: 'System name', exact: true }).fill('Renamed firm')
+  await panel.getByRole('button', { name: 'Save system name', exact: true }).click()
+  await expect(page.locator('.topbar h1')).toContainText('S01 · Renamed firm')
+  expect(changes).toEqual([{ name: 'Renamed firm' }])
+  await expect(page).toHaveURL(/system=S01$/)
+  await page.evaluate(() => { location.hash = '#/doc/147?system=S01' })
+  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S01.13.147')
 })

@@ -39,7 +39,11 @@ func Apply(ctx context.Context, d *db.DB, docID int64, inv *Invoice) error {
 		return nil
 	}
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		fieldIDs, err := ensureFields(ctx, tx)
+		var systemID int64
+		if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+			return err
+		}
+		fieldIDs, err := ensureFields(ctx, tx, systemID)
 		if err != nil {
 			return err
 		}
@@ -74,18 +78,18 @@ func Apply(ctx context.Context, d *db.DB, docID int64, inv *Invoice) error {
 
 // ensureFields creates any missing invoice_* rows in custom_fields and
 // returns the name→id lookup for all of them.
-func ensureFields(ctx context.Context, tx *sql.Tx) (map[string]int64, error) {
+func ensureFields(ctx context.Context, tx *sql.Tx, systemID int64) (map[string]int64, error) {
 	out := make(map[string]int64, len(InvoiceFieldNames))
 	now := time.Now().Unix()
 	for _, f := range InvoiceFieldNames {
 		var id int64
 		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM custom_fields WHERE name = ?`, f.Name).Scan(&id)
+			`SELECT id FROM custom_fields WHERE system_id = ? AND name = ?`, systemID, f.Name).Scan(&id)
 		if err == sql.ErrNoRows {
 			res, err := tx.ExecContext(ctx, `
-				INSERT INTO custom_fields(name, data_type, created_at, updated_at)
-				VALUES (?, ?, ?, ?)
-			`, f.Name, f.DataType, now, now)
+				INSERT INTO custom_fields(system_id, name, data_type, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?)
+			`, systemID, f.Name, f.DataType, now, now)
 			if err != nil {
 				return nil, err
 			}

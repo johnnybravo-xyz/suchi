@@ -32,6 +32,11 @@ Command flags, where available, override environment values for that command.
 Mailbox rows and the **Email intake** or member **Mailboxes** screen are
 authoritative for account-specific IMAP configuration.
 
+Filing systems are introduced by [taxonomy import](/jd), never a boot flag or
+writable enable setting. Tree, Inbox, mode and last-import provenance belong to
+each system. User/group directories, roles/capabilities, OCR/LLM settings, OAuth
+client registration, backup and server configuration remain instance-wide.
+
 ## Config file (optional)
 
 **Recommended format: TOML.** Explicit typing and no indentation
@@ -329,15 +334,18 @@ ID tokens. Invalid credentials never fall back to a browser session.
 | ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `INGEST_FS_OWNER_EMAIL` | (unset = idle)                        | User that owns docs picked up from the staging dir. Setting this activates the watcher.                                                             |
 | `INGEST_FS_DIR`         | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
+| `INGEST_FS_SYSTEM` | (unset = original system 1) | Existing target code, for example S02. Does not create a system. The owner must be active and able to enter it. |
 
 The setup wizard exposes the same values as database-backed overrides. Saving a
-new directory or owner validates it, stops the old watcher, drains the new
-directory, and starts watching immediately.
+new directory, owner or system validates the destination, stops the old watcher,
+drains the new directory, and starts watching immediately. Intake rechecks owner
+entry; sidecars cannot redirect the configured system. Optional sidecar `jd_system`
+must agree, and `jd_address` never allocates or routes a document.
 
 ## Email ingest (IMAP polling)
 
 Mailboxes live in the `email_accounts` table: one row per mailbox,
-per-account owner, provider preset, auth mode (password or
+immutable system, per-account owner, provider preset, auth mode (password or
 `xoauth2`), sealed secret at rest, per-account folder / poll
 interval, and typed intake policy. The supervisor
 picks up UI and API changes without a restart. Administrators configure
@@ -345,6 +353,10 @@ accounts in **Settings > Archive configuration > Email intake**. Members with
 **Manage mailboxes** configure their own accounts in **Settings > My account >
 Mailboxes**. The equivalent API is `/api/email-accounts`; there is no boot-time
 single-mailbox seed.
+Mailbox lists and editing are restricted to the selected system as well as the
+existing owner/admin rules. Message and attachment documents inherit the mailbox
+system, including files-only intake. Microsoft OAuth flows capture actor/system;
+completion and the `sealed_secret_b64` creation handoff cannot cross that boundary.
 
 | Env var | Purpose |
 | --- | --- |
@@ -366,9 +378,9 @@ Accepted messages may retain the email and its files or files only. Rejected
 messages advance the local cursor but are not stored, moved, or marked read.
 
 **Dedup** is by `Message-ID` — a doc with the same Message-ID under
-the same owner is skipped on re-polls. Safe across restarts + across
-transports (the same email that also arrived via mbsync + fs-watch
-won't double-ingest).
+the same owner and system is skipped on re-polls. Safe across restarts and
+transports within that system; equal mail filed into another system is a separate
+document, though its immutable CAS bytes can be shared.
 
 **Bridge tip.** The built-in Proton relay preset uses
 `protonmail-bridge:143` without TLS because that hop stays on the local
@@ -442,14 +454,16 @@ reload after a successful save; pinned fields retain their boot value.
 | Key                                                                                                   | Purpose                                                                                                      |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `backup.interval_hours`                                                                               | Backup cadence in hours when `BACKUP_INTERVAL` is not configured.                                            |
-| `ingest.fs_watch_dir` / `ingest.fs_watch_owner`                                                       | Wizard-written fs-watcher values for fields not pinned at boot.                                              |
-| `preset`                                                                                              | Current filing-tree preset.                                                                                  |
+| `ingest.fs_watch_dir` / `ingest.fs_watch_owner` / `ingest.fs_watch_system` | Wizard-written watcher destination values for fields not pinned at boot. |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local archive-matching controls.                                                    |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
 | `llm.date_auto_apply`                                                                                | Add high-confidence dates to Calendar automatically; defaults to `true`. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
 | `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
 | `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |
+
+Filing mode, Inbox and last-import author ID/version/hash/snapshot are stored on
+`jd_systems`, not global `settings.preset` or taxonomy setting aliases.
 
 ## Secrets convention
 

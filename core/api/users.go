@@ -197,7 +197,8 @@ func (s *Server) ListUsers(w http.ResponseWriter, r *http.Request) {
 // the corresponding revoke hooks run for each removed slug, and one
 // audit event is emitted per granted / revoked slug.
 func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -305,6 +306,13 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	args = append(args, uid)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var allowed bool
+		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, p.UserID).Scan(&allowed); err != nil {
+			return err
+		}
+		if !allowed {
+			return errSystemUnavailable
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
 		if err != nil {
@@ -312,6 +320,9 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return sql.ErrNoRows
+		}
+		if body.Disabled != nil && *body.Disabled {
+			s.oauthFlows.invalidateMember(uid, 0)
 		}
 		return nil
 	})

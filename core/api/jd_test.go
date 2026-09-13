@@ -23,20 +23,21 @@ import (
 // jd.EnsureTree uses this same shape.
 func seedJDTree(t *testing.T, d *db.DB) {
 	t.Helper()
+	seedUser(t, d, 1)
 	ctx := context.Background()
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO jd_areas(code_start, code_end, name, description, position) VALUES
-		  (10, 19, 'Life',  'life admin',  0),
-		  (20, 29, 'Money', 'money stuff', 1);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, description, position) VALUES
+		  (1, 10, 19, 'Life',  'life admin',  0),
+		  (1, 20, 29, 'Money', 'money stuff', 1);
 	`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO jd_categories(id, area_start, code, name, description, system) VALUES
-		  (1, 10, 11, 'Identity',   NULL,             0),
-		  (2, 10, 12, 'Health',     NULL,             0),
-		  (3, 20, 21, 'Banking',    NULL,             0),
-		  (4, 20, 22, 'Tax',        'annual filings', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, description, system) VALUES
+		  (1, 1, 10, 11, 'Identity',   NULL,             0),
+		  (1, 2, 10, 12, 'Health',     NULL,             0),
+		  (1, 3, 20, 21, 'Banking',    NULL,             0),
+		  (1, 4, 20, 22, 'Tax',        'annual filings', 0);
 	`); err != nil {
 		t.Fatal(err)
 	}

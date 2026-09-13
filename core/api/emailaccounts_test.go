@@ -8,6 +8,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/crypto"
+	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 )
@@ -36,6 +38,7 @@ import (
 func newEmailAccountsServer(t *testing.T) (*Server, *atomic.Int64) {
 	t.Helper()
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	k, err := crypto.LoadOrCreateKey(filepath.Join(t.TempDir(), ".decrypt-key"))
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +265,7 @@ func TestEmailAccounts_List_OmitsSealedSecret(t *testing.T) {
 	seedUser(t, s.DB, 1)
 	// Seed via the store to skip the handler path.
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "p")
-	if _, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	if _, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
 		Host: "h", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -300,7 +303,7 @@ func TestEmailAccounts_Patch_PasswordSealsAndAudits(t *testing.T) {
 	s, reloads := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "old")
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
 		Host: "h", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -345,7 +348,7 @@ func TestEmailAccounts_Patch_ProviderAndAuthAreFixed(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "old")
-	custom, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	custom, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "custom", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
 		Host: "imap.example.com", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -365,7 +368,7 @@ func TestEmailAccounts_Patch_ProviderAndAuthAreFixed(t *testing.T) {
 		emailaccounts.MicrosoftOAuthCredential{
 			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte("cache"),
 		})
-	microsoft, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	microsoft, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "outlook", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthXOAuth2, Username: "u", SealedSecret: oauthSeal,
@@ -387,7 +390,7 @@ func TestEmailAccounts_Delete(t *testing.T) {
 	s, reloads := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "p")
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
 		Host: "h", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -435,7 +438,7 @@ func TestEmailAccounts_TestDial_XOAUTH2_NoMSAL(t *testing.T) {
 		emailaccounts.MicrosoftOAuthCredential{
 			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte(`{"unused":true}`),
 		})
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthXOAuth2, Username: "u@example.com",
@@ -517,7 +520,7 @@ func TestEmailAccounts_TestDial_UsesStoredPlaintextMode(t *testing.T) {
 	s, _ := newEmailAccountsServer(t)
 	seedUser(t, s.DB, 1)
 	sealed, _ := emailaccounts.SealPassword(s.EmailwatchAEAD, "p")
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "plain", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
 		Host: host, Port: port, UseTLS: false, PollIntervalMin: 10,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -596,11 +599,9 @@ func TestEmailAccounts_OAuth_Complete_Pending(t *testing.T) {
 	}
 	s.EmailwatchMSAL = m
 	now := time.Now()
-	if !s.oauthFlows.put("pending", oauthFlowEntry{
-		clientID:  "11111111-1111-1111-1111-111111111111",
+	if !s.oauthFlows.put("pending", oauthFlowEntry{systemID: 1, clientID: "11111111-1111-1111-1111-111111111111",
 		ownerID:   1,
-		expiresAt: now.Add(time.Minute),
-	}, now) {
+		expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
 	rec := call(t, s, "POST", "/api/email-accounts/oauth/complete",
@@ -618,11 +619,9 @@ func TestEmailAccounts_OAuth_Complete_ProviderFailure(t *testing.T) {
 	}
 	s.EmailwatchMSAL = m
 	now := time.Now()
-	if !s.oauthFlows.put("failed", oauthFlowEntry{
-		clientID:  "11111111-1111-1111-1111-111111111111",
+	if !s.oauthFlows.put("failed", oauthFlowEntry{systemID: 1, clientID: "11111111-1111-1111-1111-111111111111",
 		ownerID:   1,
-		expiresAt: now.Add(time.Minute),
-	}, now) {
+		expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
 	s.oauthFlows.finish("failed", nil, errors.New("provider details must stay in logs"))
@@ -641,22 +640,22 @@ func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
 	var store oauthFlowStore
 	for i := 0; i < maxOAuthFlows; i++ {
 		handle := strconv.Itoa(i)
-		if !store.put(handle, oauthFlowEntry{ownerID: int64(i + 1), expiresAt: now.Add(time.Minute)}, now) {
+		if !store.put(handle, oauthFlowEntry{systemID: 1, ownerID: int64(i + 1), expiresAt: now.Add(time.Minute)}, now) {
 			t.Fatalf("flow %d rejected before limit", i)
 		}
 	}
-	if store.put("overflow", oauthFlowEntry{ownerID: 1000, expiresAt: now.Add(time.Minute)}, now) {
+	if store.put("overflow", oauthFlowEntry{systemID: 1, ownerID: 1000, expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("flow store exceeded its limit")
 	}
-	if !store.put("after-expiry", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
+	if !store.put("after-expiry", oauthFlowEntry{systemID: 1, ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
 		t.Fatal("expired flows were not pruned")
 	}
 	for i := 0; i < maxOAuthFlowsPerUser-1; i++ {
-		if !store.put("same-owner-"+strconv.Itoa(i), oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
+		if !store.put("same-owner-"+strconv.Itoa(i), oauthFlowEntry{systemID: 1, ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
 			t.Fatal("same-owner flow rejected before per-user limit")
 		}
 	}
-	if store.put("same-owner-overflow", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
+	if store.put("same-owner-overflow", oauthFlowEntry{systemID: 1, ownerID: 1, expiresAt: now.Add(3 * time.Minute)}, now.Add(2*time.Minute)) {
 		t.Fatal("flow store exceeded its per-user limit")
 	}
 }
@@ -664,21 +663,21 @@ func TestOAuthFlowStoreBoundsAndPrunes(t *testing.T) {
 func TestOAuthFlowStoreTracksPendingAndAllowsOneCompletion(t *testing.T) {
 	now := time.Now()
 	var store oauthFlowStore
-	if !store.put("flow", oauthFlowEntry{ownerID: 1, expiresAt: now.Add(time.Minute)}, now) {
+	if !store.put("flow", oauthFlowEntry{systemID: 1, ownerID: 1, expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
-	if _, err := store.begin("flow", now); !errors.Is(err, errOAuthFlowPending) {
+	if _, err := store.begin("flow", now, 1, 1); !errors.Is(err, errOAuthFlowPending) {
 		t.Fatalf("pending flow error = %v", err)
 	}
 	store.finish("flow", &oauth.CompletedFlow{}, nil)
-	if _, err := store.begin("flow", now); err != nil {
+	if _, err := store.begin("flow", now, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.begin("flow", now); !errors.Is(err, errOAuthFlowActive) {
+	if _, err := store.begin("flow", now, 1, 1); !errors.Is(err, errOAuthFlowActive) {
 		t.Fatalf("second completion error = %v", err)
 	}
 	store.release("flow")
-	if _, err := store.begin("flow", now); err != nil {
+	if _, err := store.begin("flow", now, 1, 1); err != nil {
 		t.Fatalf("retry after release: %v", err)
 	}
 }
@@ -691,7 +690,7 @@ func TestEmailAccounts_OAuth_Complete_ReauthenticatesAndEnables(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.EmailwatchMSAL = m
-	account, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	account, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "outlook", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthXOAuth2, Username: "old@example.com",
@@ -701,11 +700,9 @@ func TestEmailAccounts_OAuth_Complete_ReauthenticatesAndEnables(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if !s.oauthFlows.put("reauth", oauthFlowEntry{
-		clientID:  "11111111-1111-1111-1111-111111111111",
+	if !s.oauthFlows.put("reauth", oauthFlowEntry{systemID: 1, clientID: "11111111-1111-1111-1111-111111111111",
 		ownerID:   1,
-		expiresAt: now.Add(time.Minute),
-	}, now) {
+		expiresAt: now.Add(time.Minute)}, now) {
 		t.Fatal("put failed")
 	}
 	s.oauthFlows.finish("reauth", &oauth.CompletedFlow{
@@ -745,7 +742,7 @@ func TestEmailAccounts_OAuth_Revoke_ClearsAndDisables(t *testing.T) {
 		emailaccounts.MicrosoftOAuthCredential{
 			ClientID: "11111111-1111-1111-1111-111111111111", CacheJSON: []byte("cache"),
 		})
-	acc, err := emailaccounts.Create(context.Background(), s.DB, emailaccounts.Account{
+	acc, err := createOriginalEmailAccount(context.Background(), s.DB, emailaccounts.Account{
 		Name: "a", OwnerID: 1, Provider: emailaccounts.ProviderMicrosoft,
 		Host: "outlook.office365.com", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthXOAuth2, Username: "u", SealedSecret: sealed,
@@ -775,4 +772,15 @@ func TestEmailAccounts_OAuth_Revoke_ClearsAndDisables(t *testing.T) {
 	if reloads.Load() != prev+1 {
 		t.Fatal("reload didn't fire on revoke")
 	}
+}
+
+func createOriginalEmailAccount(ctx context.Context, d *db.DB, account emailaccounts.Account) (*emailaccounts.Account, error) {
+	account.SystemID = 1
+	var result *emailaccounts.Account
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = emailaccounts.Create(ctx, tx, account, nil)
+		return err
+	})
+	return result, err
 }

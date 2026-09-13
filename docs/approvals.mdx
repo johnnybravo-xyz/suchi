@@ -11,6 +11,14 @@ durable job queue.
 Use [Automations](/automations) for deterministic event-driven actions. Use
 approvals when a person's explicit choice controls what happens next.
 
+Definitions and runs belong to one [filing system](/jd), including documentless
+rescan proposals; builtin document-change/rescan definitions exist per system.
+Slug/version identity, deduplication, sweeping and eligibility are system-scoped.
+Task assignment never grants entry: members need the run's system membership and,
+for document-bound work, document visibility. Applying a suggestion cannot attach
+foreign-system metadata or transfer a document. Instance administrator access
+remains subject to an explicit request or token system boundary.
+
 ## Model
 
 - A **definition** stores a versioned JSON state machine under a stable slug.

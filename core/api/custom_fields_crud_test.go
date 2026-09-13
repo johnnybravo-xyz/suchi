@@ -28,6 +28,7 @@ import (
 //   - DELETE returns 204 and the row disappears
 func TestCustomFieldDef_Roundtrip(t *testing.T) {
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
 	ctx := auth.WithPrincipal(context.Background(),

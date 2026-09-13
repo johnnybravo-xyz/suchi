@@ -3,7 +3,8 @@ id = "household"
 version = 1
 name = "Household"
 license = "CC0-1.0"
-inbox = 49
+market = "global"
+language = "en"
 story = "Two adults, kids, shared finances. Adds a family area for school, activities, pets."
 
 [[areas]]
@@ -77,14 +78,6 @@ name = "Health & medical"
   code = 33
   name = "Prescriptions"
   keywords = ["prescription", "pharmacy"]
-
-[[areas]]
-code = 40
-name = "System"
-
-  [[areas.categories]]
-  code = 49
-  name = "Inbox"
 
 [[areas]]
 code = 50

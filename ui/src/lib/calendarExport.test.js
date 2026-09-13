@@ -91,3 +91,11 @@ test('keeps event identity stable but distinct across archives and facts, withou
   assert.equal(/name|secret|token=|private#/.test(contents), false)
   assert.throws(() => calendarDateFile(reviewedDate, 'javascript:alert(1)', now), /HTTP or HTTPS/)
 })
+
+test('calendar document links retain the selected filing system without calendar filters', () => {
+  const { contents } = calendarDateFile(reviewedDate, `${archiveURL}&system=S02&month=2028-02`, now)
+  const lines = unfold(contents).split('\r\n')
+  assert.ok(lines.includes('URL:https://archive.example.test/suchi/#/doc/28?system=S02'))
+  assert.equal(contents.includes('document_ids='), false)
+  assert.equal(contents.includes('month='), false)
+})

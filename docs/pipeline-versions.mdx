@@ -36,8 +36,11 @@ and use **Rescan** when you want to classify them.
 ## Automatic proposals
 
 On boot, Suchi compares stored revisions with the binary's current revisions.
+Detection, eligibility and documentless approval runs are scoped independently to
+each filing system. Global pipeline/OCR/LLM configuration does not make a proposal
+or `--system S02` rescan apply to another system.
 When previously processed results are older, it opens one admin approval per
-affected pipeline.
+affected pipeline and system.
 
 For LLM classification, automatic proposals only include documents with a
 successful earlier revision (`pipeline_version_llm >= 1`). Enabling the LLM or

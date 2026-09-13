@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listSavedViews, createSavedView, patchSavedView, deleteSavedView,
            listTags, listCorrespondents, listDocumentTypes } from '../lib/api.js'
   import { canonicalSavedViewQuery, documentListHash, parseSavedViewFilters } from '../lib/documentFilters.js'
@@ -251,7 +252,7 @@
       <div class="view-list">
         {#each views as v (v.id)}
           <div class="view-row" class:shared-view={!!v.owner_id}>
-            <a class="view-link" href={href(v)}>
+            <a class="view-link" href={filingHref(href(v))}>
               <span class="view-copy">
                 <span class="view-name">
                   <strong>{v.name}</strong>

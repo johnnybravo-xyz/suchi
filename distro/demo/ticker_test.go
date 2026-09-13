@@ -33,11 +33,11 @@ func TestSweep(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	var inbox int64
-	if err := d.Read.QueryRow("SELECT id FROM jd_categories WHERE system = 1 LIMIT 1").Scan(&inbox); err != nil {
+	if err := d.Read.QueryRow("SELECT id FROM jd_categories WHERE system_id=1 AND system = 1 LIMIT 1").Scan(&inbox); err != nil {
 		t.Fatal(err)
 	}
 	cas, err := blob.New(dir)
@@ -70,8 +70,8 @@ func TestSweep(t *testing.T) {
 		body  string
 	}{{1, "expired-only"}, {1, "shared"}, {2, "fresh"}, {3, "shared"}, {4, "quarantined"}} {
 		_, err := d.Write.ExecContext(ctx, `
-			INSERT INTO documents(owner_id,original_blob,original_size,title,jd_category_id,created_at,updated_at)
-			VALUES (?,?,?,?,?,?,?)
+			INSERT INTO documents(system_id,owner_id,original_blob,original_size,title,jd_category_id,created_at,updated_at)
+			VALUES (1,?,?,?,?,?,?,?)
 		`, row.owner, hashes[row.body], len(row.body), row.body, inbox, now, now)
 		if err != nil {
 			t.Fatal(err)
@@ -80,7 +80,7 @@ func TestSweep(t *testing.T) {
 	for owner := 1; owner <= 4; owner++ {
 		_, err := d.Write.ExecContext(ctx, `
 			INSERT INTO sessions(id,user_id,created_at,expires_at,last_seen_at) VALUES (?,?,?,?,?);
-			INSERT INTO api_tokens(user_id,name,token_hash,scopes,created_at) VALUES (?,'test',?,'documents:read',?);
+			INSERT INTO api_tokens(system_id,user_id,name,token_hash,scopes,created_at) VALUES (1,?,'test',?,'documents:read',?);
 		`, fmt.Sprint(owner), owner, now, now+3600, now, owner, fmt.Sprint(owner), now)
 		if err != nil {
 			t.Fatal(err)

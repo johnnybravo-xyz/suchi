@@ -36,23 +36,28 @@ type TagView struct {
 // Response is the DRF pagination envelope so mobile clients paginate
 // naturally.
 func (s *Server) ListTags(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
 		return
 	}
-	where := ""
-	args := []any{}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
+		return
+	}
+	where := " WHERE system_id = ?"
+	args := []any{systemID}
 	switch v := r.URL.Query().Get("parent_id"); v {
 	case "":
 		// no filter
 	case "null":
-		where = " WHERE parent_id IS NULL"
+		where += " AND parent_id IS NULL"
 	default:
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_parent_id", "must be integer or 'null'")
 			return
 		}
-		where = " WHERE parent_id = ?"
+		where += " AND parent_id = ?"
 		args = append(args, id)
 	}
 
@@ -123,7 +128,12 @@ type tagUpsert struct {
 // CreateTag — POST /api/tags/. Admin-only. Body: tagUpsert.
 // Returns {"id": <int>} on 201. 409 on unique-name/slug collision.
 func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	var in tagUpsert
@@ -147,20 +157,26 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errSystemUnavailable
+		}
 		var (
 			res sql.Result
-			err error
 		)
 		if in.Color != nil {
 			res, err = tx.ExecContext(r.Context(),
-				`INSERT INTO tags(name, slug, color, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?)`,
-				name, sl, strings.TrimSpace(*in.Color), now, now)
+				`INSERT INTO tags(system_id, name, slug, color, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				systemID, name, sl, strings.TrimSpace(*in.Color), now, now)
 		} else {
 			res, err = tx.ExecContext(r.Context(),
-				`INSERT INTO tags(name, slug, created_at, updated_at)
-				 VALUES (?, ?, ?, ?)`,
-				name, sl, now, now)
+				`INSERT INTO tags(system_id, name, slug, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+				systemID, name, sl, now, now)
 		}
 		if err != nil {
 			return err
@@ -178,6 +194,7 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID:   systemID,
 		Actor:      auth.FromContext(r.Context()),
 		Action:     "tag.create",
 		ObjectKind: "tag",
@@ -192,12 +209,17 @@ func (s *Server) CreateTag(w http.ResponseWriter, r *http.Request) {
 // moves live on /api/tags/{id}/parent — that endpoint owns the
 // cycle-check invariant and is not duplicated here.
 func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	systemID, ok := s.requireNamespaceObject(w, r, principal, "tags", id)
+	if !ok {
 		return
 	}
 	var in tagUpsert
@@ -228,6 +250,13 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id)
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE tags SET "+strings.Join(sets, ", ")+" WHERE id = ?",
 			args...)
@@ -263,7 +292,8 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: auth.FromContext(r.Context()), Action: "tag.update",
+		SystemID: systemID,
+		Actor:    auth.FromContext(r.Context()), Action: "tag.update",
 		ObjectKind: "tag", ObjectID: id,
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
@@ -275,7 +305,8 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 // ON DELETE SET NULL — the nested-tag migration set that up so a
 // deleted parent doesn't orphan its subtree.
 func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -283,7 +314,18 @@ func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, principal, "tags", id)
+	if !ok {
+		return
+	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			`DELETE FROM tags WHERE id = ?`, id)
 		if err != nil {
@@ -307,7 +349,8 @@ func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: auth.FromContext(r.Context()), Action: "tag.delete",
+		SystemID: systemID,
+		Actor:    auth.FromContext(r.Context()), Action: "tag.delete",
 		ObjectKind: "tag", ObjectID: id,
 	})
 	w.WriteHeader(http.StatusNoContent)
@@ -331,6 +374,7 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r, p, authz.KindTag, id, authz.PermChange) {
 		return
 	}
+	systemID := selectedSystemID(r.Context())
 	var req struct {
 		ParentID *int64 `json:"parent_id"`
 	}
@@ -354,7 +398,7 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 			}
 			var next sql.NullInt64
 			err := s.DB.Read.QueryRowContext(r.Context(),
-				`SELECT parent_id FROM tags WHERE id = ?`, cursor).Scan(&next)
+				`SELECT parent_id FROM tags WHERE id = ? AND system_id = ?`, cursor, systemID).Scan(&next)
 			if errors.Is(err, sql.ErrNoRows) {
 				s.writeError(w, http.StatusBadRequest, "no_parent",
 					"proposed parent does not exist")
@@ -372,6 +416,22 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 	}
 	var affected int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		allowed, err := s.authorized(r.Context(), tx, p, authz.KindTag, id, authz.PermChange)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errNotFound
+		}
+		if req.ParentID != nil {
+			var one int
+			if err := tx.QueryRowContext(r.Context(), "SELECT 1 FROM tags WHERE id = ? AND system_id = ?", *req.ParentID, systemID).Scan(&one); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errBadParams
+				}
+				return err
+			}
+		}
 		var pid any
 		if req.ParentID != nil {
 			pid = *req.ParentID
@@ -386,6 +446,14 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, errNotFound) || errors.Is(err, errSystemUnavailable) {
+			s.writeError(w, http.StatusNotFound, "not_found", "tag not found")
+			return
+		}
+		if errors.Is(err, errBadParams) {
+			s.writeError(w, http.StatusBadRequest, "no_parent", "parent unavailable in this system")
+			return
+		}
 		s.writeError(w, http.StatusInternalServerError, "db_write", err.Error())
 		return
 	}
@@ -394,7 +462,8 @@ func (s *Server) SetTagParent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "tag.set_parent", ObjectKind: "tag", ObjectID: id,
+		SystemID: systemID,
+		Actor:    p, Action: "tag.set_parent", ObjectKind: "tag", ObjectID: id,
 		After: map[string]any{"parent_id": req.ParentID},
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})

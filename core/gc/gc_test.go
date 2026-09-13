@@ -176,7 +176,7 @@ func setupDB(t *testing.T, ctx context.Context, dir string) (*db.DB, *slog.Logge
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	return d, log
@@ -198,7 +198,7 @@ func seedFKGraph(t *testing.T, ctx context.Context, d *db.DB) {
 
 func insertDoc(t *testing.T, ctx context.Context, d *db.DB, orig, archive string) {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		var archBlob any
 		var archSize any
@@ -207,10 +207,10 @@ func insertDoc(t *testing.T, ctx context.Context, d *db.DB, orig, archive string
 			archSize = int64(0)
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size,
 				archive_blob, archive_size, title, jd_category_id,
 				created_at, updated_at)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, orig, int64(0), archBlob, archSize, "t", inbox, 0, 0)
 		return err
 	})
@@ -221,17 +221,17 @@ func insertDoc(t *testing.T, ctx context.Context, d *db.DB, orig, archive string
 
 func insertTrashedDoc(t *testing.T, ctx context.Context, d *db.DB, orig, archive string) {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
 		var archBlob any
 		if archive != "" {
 			archBlob = archive
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size,
 				archive_blob, title, jd_category_id,
 				created_at, updated_at, trashed_at)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, orig, int64(0), archBlob, "trashed", inbox, 0, 0, 100)
 		return err
 	})

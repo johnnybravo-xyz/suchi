@@ -53,6 +53,8 @@ type V1 struct {
 	Created      string         `json:"created,omitempty"` // ISO8601
 	Notes        string         `json:"notes,omitempty"`
 	JDCategory   int            `json:"jd_category,omitempty"`
+	JDSystem     string         `json:"jd_system,omitempty"`
+	JDAddress    string         `json:"jd_address,omitempty"`
 	CustomFields map[string]any `json:"custom_fields,omitempty"`
 }
 

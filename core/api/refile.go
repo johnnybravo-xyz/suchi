@@ -18,7 +18,12 @@ import (
 // Refile — POST /api/admin/refile. Admin-only. Body is a JSON blob
 // mirroring refile.Options.
 func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	p := s.requireAdmin(w, r)
+	if p == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -34,6 +39,8 @@ func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{
+		SystemID:        systemID,
+		ActorID:         p.UserID,
 		SkipAutomations: body.SkipAutomations,
 		SkipRender:      body.SkipRender,
 		OwnerID:         body.OwnerID,

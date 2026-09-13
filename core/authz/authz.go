@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // Perm is the bitmask suchi uses on object_acls.perm_bits. Powers-of-two
@@ -47,15 +48,16 @@ const (
 	KindStoragePath   Kind = "storage_path"
 )
 
-// Principal is what handlers pass in — the caller's identity in the
-// terms authz cares about. UserID is required; Role decides
-// admin-bypass; Groups is the caller's precomputed group membership so
-// authorize() stays a pure decision function and doesn't hit the DB.
+// Principal carries the actor, precomputed groups, and request/token boundaries.
+// A zero SystemID addresses an object's intrinsic system; a token binding is
+// always a ceiling, including for administrators.
 type Principal struct {
-	UserID int64
-	Role   string  // "admin" | "member" | ""
-	Kind   string  // "user" | "demo-anon" | ... (pluginapi.Principal.Kind)
-	Groups []int64 // group IDs the user belongs to
+	UserID        int64
+	Role          string  // "admin" | "member" | ""
+	Kind          string  // "user" | "demo-anon" | ... (pluginapi.Principal.Kind)
+	Groups        []int64 // group IDs the user belongs to
+	SystemID      int64
+	TokenSystemID int64
 }
 
 // KindDemoAnon mirrors distro/demo.PrincipalKind + core/api.PrincipalKindDemoAnon.
@@ -97,21 +99,31 @@ func (e *ErrDenied) Error() string {
 
 // ---------- ACLAuthorizer ----------
 
-// ACLAuthorizer folds object_acls + group_members over owner/admin access. The
-// order is:
-//
-//  1. Admin → allow.
-//  2. Owner → allow.
-//  3. ACL grants (any grant covering (user OR any of their groups)
-//     whose perm_bits union covers `want`) → allow.
-//  4. Nothing matched → deny.
+// ACLAuthorizer first checks object existence and system entry, then folds
+// owner/admin access and direct/group grants over that boundary.
 type ACLAuthorizer struct {
 	DB *db.DB
 }
 
 func (a ACLAuthorizer) Can(ctx context.Context, p Principal, kind Kind, id int64, want Perm) error {
+	return a.can(ctx, a.DB.Read, p, kind, id, want)
+}
+
+// CanInTx keeps the object, membership and ACL reads in the mutation snapshot.
+func (a ACLAuthorizer) CanInTx(ctx context.Context, tx *sql.Tx, p Principal, kind Kind, id int64, want Perm) error {
+	return a.can(ctx, tx, p, kind, id, want)
+}
+
+func (a ACLAuthorizer) can(ctx context.Context, q systems.Queryer, p Principal, kind Kind, id int64, want Perm) error {
+	allowed, err := objectBoundary(ctx, q, p, kind, id)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return &ErrDenied{Kind: kind, ID: id, Want: want}
+	}
 	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
-		if want == PermView && demoObjectVisible(ctx, a.DB, p, kind, id) {
+		if want == PermView && demoObjectVisible(ctx, q, p, kind, id) {
 			return nil
 		}
 		if p.Kind == KindDemoAnon {
@@ -124,12 +136,12 @@ func (a ACLAuthorizer) Can(ctx context.Context, p Principal, kind Kind, id int64
 	if p.Role == "admin" {
 		return nil
 	}
-	if owner, ok := loadOwner(ctx, a.DB, kind, id); ok && owner == p.UserID {
+	if owner, ok := loadOwner(ctx, q, kind, id); ok && owner == p.UserID {
 		return nil
 	}
 	// Compute the union of perm_bits across every grant that names the
 	// caller directly or a group they belong to.
-	have, err := effectivePerms(ctx, a.DB, kind, id, p)
+	have, err := effectivePerms(ctx, q, kind, id, p)
 	if err != nil {
 		return err
 	}
@@ -141,6 +153,15 @@ func (a ACLAuthorizer) Can(ctx context.Context, p Principal, kind Kind, id int64
 
 // CanDocuments resolves built-in owner and ACL decisions in one read.
 func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int64, want Perm) (map[int64]bool, error) {
+	return a.canDocuments(ctx, a.DB.Read, p, ids, want)
+}
+
+// CanDocumentsInTx applies batch decisions to the caller's mutation snapshot.
+func (a ACLAuthorizer) CanDocumentsInTx(ctx context.Context, tx *sql.Tx, p Principal, ids []int64, want Perm) (map[int64]bool, error) {
+	return a.canDocuments(ctx, tx, p, ids, want)
+}
+
+func (a ACLAuthorizer) canDocuments(ctx context.Context, q systems.Queryer, p Principal, ids []int64, want Perm) (map[int64]bool, error) {
 	decisions := make(map[int64]bool, len(ids))
 	unique := make([]int64, 0, len(ids))
 	for _, id := range ids {
@@ -157,7 +178,7 @@ func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int6
 	batchableWant := want == PermView || want == PermChange || want == PermDelete
 	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch || !batchableWant {
 		for _, id := range unique {
-			err := a.Can(ctx, p, KindDocument, id, want)
+			err := a.can(ctx, q, p, KindDocument, id, want)
 			if err == nil {
 				decisions[id] = true
 				continue
@@ -170,12 +191,6 @@ func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int6
 		return decisions, nil
 	}
 	if p.UserID == 0 {
-		return decisions, nil
-	}
-	if p.Role == "admin" {
-		for _, id := range unique {
-			decisions[id] = true
-		}
 		return decisions, nil
 	}
 
@@ -192,14 +207,17 @@ func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int6
 			args = append(args, groupID)
 		}
 	}
-	rows, err := a.DB.Read.QueryContext(ctx, `
+	boundary, boundaryArgs := systemBoundaryWhere(p)
+	args = append(args, boundaryArgs...)
+	rows, err := q.QueryContext(ctx, `
 		WITH requested(id) AS (VALUES `+values+`)
-		SELECT requested.id, d.owner_id, COALESCE(acl.perm_bits, 0)
+		SELECT d.id, d.owner_id, COALESCE(acl.perm_bits, 0)
 		FROM requested
-		LEFT JOIN documents d ON d.id = requested.id
+		JOIN documents d ON d.id = requested.id
 		LEFT JOIN object_acls acl
-		  ON acl.object_kind = 'document' AND acl.object_id = requested.id
-		 AND (`+principalWhere+`)`, args...)
+		  ON acl.object_kind = 'document' AND acl.object_id = d.id
+		 AND (`+principalWhere+`)
+		WHERE `+boundary, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +233,7 @@ func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int6
 		if err := rows.Scan(&id, &owner, &bits); err != nil {
 			return nil, err
 		}
-		if owner.Valid && owner.Int64 == p.UserID {
+		if p.Role == "admin" || (owner.Valid && owner.Int64 == p.UserID) {
 			decisions[id] = true
 		}
 		have[id] |= Perm(bits)
@@ -233,11 +251,11 @@ func (a ACLAuthorizer) CanDocuments(ctx context.Context, p Principal, ids []int6
 
 // demoObjectVisible admits global taxonomy rows, the designated seeded corpus,
 // and a scratch visitor's own objects.
-func demoObjectVisible(ctx context.Context, d *db.DB, p Principal, kind Kind, id int64) bool {
+func demoObjectVisible(ctx context.Context, q systems.Queryer, p Principal, kind Kind, id int64) bool {
 	if _, _, owned := ownerColumnFor(kind); !owned {
 		return true
 	}
-	owner, ok := loadOwner(ctx, d, kind, id)
+	owner, ok := loadOwner(ctx, q, kind, id)
 	if !ok {
 		return false
 	}
@@ -245,7 +263,7 @@ func demoObjectVisible(ctx context.Context, d *db.DB, p Principal, kind Kind, id
 		return true
 	}
 	var one int
-	return d.Read.QueryRowContext(ctx, `
+	return q.QueryRowContext(ctx, `
 		SELECT 1 FROM users
 		WHERE id = ? AND email = ? AND role = 'admin'
 	`, owner, DemoCorpusOwnerEmail).Scan(&one) == nil
@@ -255,7 +273,7 @@ func demoObjectVisible(ctx context.Context, d *db.DB, p Principal, kind Kind, id
 // or any of the user's groups. Handled in one query — the reverse
 // index (object_acls.principal_kind, principal_id) makes it a small
 // nested loop.
-func effectivePerms(ctx context.Context, d *db.DB, kind Kind, id int64, p Principal) (int, error) {
+func effectivePerms(ctx context.Context, reader systems.Queryer, kind Kind, id int64, p Principal) (int, error) {
 	q := `
 		SELECT perm_bits
 		FROM object_acls
@@ -270,7 +288,7 @@ func effectivePerms(ctx context.Context, d *db.DB, kind Kind, id int64, p Princi
 	}
 	q += `)`
 
-	rows, err := d.Read.QueryContext(ctx, q, args...)
+	rows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -289,11 +307,40 @@ func effectivePerms(ctx context.Context, d *db.DB, kind Kind, id int64, p Princi
 
 // ---------- helpers ----------
 
+// ObjectSystemID loads an intrinsically addressed object's filing system.
+// Unknown kinds and nonexistent objects return sql.ErrNoRows, including admins.
+func ObjectSystemID(ctx context.Context, q queryRower, kind Kind, id int64) (int64, error) {
+	table, ok := objectTableFor(kind)
+	if !ok {
+		return 0, sql.ErrNoRows
+	}
+	var systemID int64
+	err := q.QueryRowContext(ctx, "SELECT system_id FROM "+table+" WHERE id = ?", id).Scan(&systemID)
+	return systemID, err
+}
+
+// objectBoundary deliberately loads even admin-addressed objects. The same
+// predicate is used for bulk and list decisions, before any ACL bypass.
+func objectBoundary(ctx context.Context, q queryRower, p Principal, kind Kind, id int64) (bool, error) {
+	table, ok := objectTableFor(kind)
+	if !ok {
+		return false, nil
+	}
+	where, args := systemBoundaryWhere(p)
+	args = append([]any{id}, args...)
+	var one int
+	err := q.QueryRowContext(ctx, "SELECT 1 FROM "+table+" d WHERE d.id = ? AND "+where, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // loadOwner returns the (owner_id, true) for kinds that carry a
 // natural owner column. Kinds without one (tags, document_types)
 // return (_, false) so the authorizer can use the global-object policy.
-func loadOwner(ctx context.Context, d *db.DB, kind Kind, id int64) (int64, bool) {
-	if d == nil {
+func loadOwner(ctx context.Context, q queryRower, kind Kind, id int64) (int64, bool) {
+	if q == nil {
 		return 0, false
 	}
 	col, table, ok := ownerColumnFor(kind)
@@ -301,7 +348,7 @@ func loadOwner(ctx context.Context, d *db.DB, kind Kind, id int64) (int64, bool)
 		return 0, false
 	}
 	var owner sql.NullInt64
-	err := d.Read.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		"SELECT "+col+" FROM "+table+" WHERE id = ?", id).Scan(&owner)
 	if err != nil || !owner.Valid {
 		return 0, false
@@ -330,10 +377,22 @@ func ownerColumnFor(kind Kind) (col, table string, ok bool) {
 // before invoking authz — the authorizer itself never hits
 // group_members so tests can inject a static Principal.
 func LoadGroups(ctx context.Context, d *db.DB, userID int64) ([]int64, error) {
-	if userID == 0 || d == nil {
+	if d == nil {
 		return nil, nil
 	}
-	rows, err := d.Read.QueryContext(ctx,
+	return loadGroups(ctx, d.Read, userID)
+}
+
+// LoadGroupsInTx observes membership changes in the caller's mutation snapshot.
+func LoadGroupsInTx(ctx context.Context, tx *sql.Tx, userID int64) ([]int64, error) {
+	return loadGroups(ctx, tx, userID)
+}
+
+func loadGroups(ctx context.Context, q systems.Queryer, userID int64) ([]int64, error) {
+	if userID == 0 {
+		return nil, nil
+	}
+	rows, err := q.QueryContext(ctx,
 		`SELECT group_id FROM group_members WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, err

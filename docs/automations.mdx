@@ -8,6 +8,14 @@ one or more event filters with an ordered action list, lives in SQLite, and can
 be managed in the Automations screen or through the API. Human decisions
 belong in [Approvals](/approvals).
 
+Rules and their vocabulary belong to one [filing system](/jd). Matching, offered
+categories, symbolic names and runtime metadata IDs stay in the document's system;
+equal names/codes in S01 and S02 do not collide. Category assignment cannot transfer
+a document. Owner assignment requires an active member/admin of that system.
+Actorless custom-field document-link actions may target only live same-system
+documents; authenticated API links require separate source/target authorization.
+Disabled originals and edited forks survive reimport independently in each system.
+
 ## Triggers
 
 | Trigger | Timing |
@@ -36,6 +44,9 @@ Automations do not re-trigger themselves from their own writes, so dependent
 actions should stay in one automation.
 
 Assignment and removal actions are designed to converge when retried.
+`discard` is idempotent for an already-trashed document and retains its original
+Trash timestamp. Other metadata actions still require a live document; discarding
+does not grant a rule permission to edit Trash or cross a filing-system boundary.
 
 Example:
 
@@ -86,9 +97,17 @@ apply directly, while uncertain results keep current metadata, add
 
 Filing-tree presets seed a small starter set of automations. Editing a
 preset-owned automation creates a user-owned copy and disables the original.
-Reapplying the preset does not overwrite the copy. The Automations screen
-keeps preset-owned entries in a collapsed **Built-in automations** list so
-user-created rules remain easy to scan.
+Reapplying a preset preserves the copy and the disabled original. Existing rule
+names remain local; imports report preserved/skipped rows rather than replacing
+them. The Automations screen keeps preset-owned entries in a collapsed
+**Built-in automations** list so user-created rules remain easy to scan.
+
+Taxonomy v1 imports only its explicit portable action subset, not every runtime
+action. Category skips skip whole dependent starters. Default taxonomy exports
+preserve supported preset-owned rule identity/order as named explicit starters,
+including keyword-generated rules; disabled/unrepresentable behavior fails.
+Tree-only export omits all starters. User-owned rules/forks require a complete
+backup. See [Filing trees](/jd#optional-starters).
 
 Preset category keywords match case-insensitive whole words or phrases, not
 substrings: `lease` matches a lease document but not `please`. Migration `0002`

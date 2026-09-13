@@ -1,12 +1,6 @@
-// SQL visibility filters. Every list-style endpoint that returns
-// documents needs to admit rows the caller may view — owner, admin
-// bypass, or an ACL grant (direct or via a group).
-//
-// Handlers call DocVisibilityWhere and splice the returned fragment
-// into their own SELECT. Admin callers should skip the filter
-// entirely (bypass is a caller decision, not our concern here —
-// keeps the fragment safe to reuse in contexts where "everyone in
-// the list") is exactly what's wanted).
+// SQL visibility filters constrain system entry and document permissions before
+// pagination. Administrators use these too: they cannot bypass a selected system
+// or a token's bound system.
 
 package authz
 
@@ -22,52 +16,64 @@ func DemoCorpusVisibilityWhere(userID int64) (string, []any) {
 	return "(d.owner_id = ? OR " + corpus + ")", []any{userID, DemoCorpusOwnerEmail}
 }
 
-// DocVisibilityWhere returns a SQL WHERE fragment (without the leading
-// AND) that admits documents visible to the given principal:
-//
-//   - owner match on d.owner_id
-//   - direct user grant in object_acls
-//   - group grant in object_acls for any of the caller's groups
-//
-// The fragment references the alias `d` for the documents table.
-// Admin callers should not use this — call at the handler level to
-// decide whether to splice it in at all.
-//
-// Returns ("", nil) for an anonymous caller so the SQL still
-// compiles; the caller should also reject anonymous before running
-// the query.
-func DocVisibilityWhere(userID int64, groupIDs []int64) (string, []any) {
-	if userID == 0 {
-		return "1=0", nil // no rows visible
+// systemBoundaryWhere uses alias d for a namespace-owned table. Zero selected
+// system means intrinsic object access, never an unrestricted token.
+func systemBoundaryWhere(p Principal) (string, []any) {
+	parts := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if p.SystemID != 0 {
+		parts = append(parts, "d.system_id = ?")
+		args = append(args, p.SystemID)
 	}
-	if len(groupIDs) == 0 {
-		return `(
-			d.owner_id = ?
-			OR EXISTS (
-				SELECT 1 FROM object_acls a
-				WHERE a.object_kind = 'document' AND a.object_id = d.id
-				  AND a.principal_kind = 'user' AND a.principal_id = ?
-				  AND (a.perm_bits & 1) = 1
-			)
-		)`, []any{userID, userID}
+	if p.TokenSystemID != 0 {
+		parts = append(parts, "d.system_id = ?")
+		args = append(args, p.TokenSystemID)
 	}
-	placeholders := strings.Repeat("?,", len(groupIDs)-1) + "?"
-	frag := `(
-		d.owner_id = ?
-		OR EXISTS (
+	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
+		parts = append(parts, "d.system_id = 1 AND EXISTS (SELECT 1 FROM jd_systems WHERE id = 1 AND code = '')")
+	} else {
+		parts = append(parts, `EXISTS (
+			SELECT 1 FROM users u WHERE u.id = ? AND u.disabled = 0
+			AND (u.role = 'admin' OR EXISTS (
+				SELECT 1 FROM jd_system_members m WHERE m.user_id = u.id AND m.system_id = d.system_id
+			))
+		)`)
+		args = append(args, p.UserID)
+	}
+	return "(" + strings.Join(parts, ") AND (") + ")", args
+}
+
+// DocVisibilityWhere returns the selected-system, entry, and ACL predicates.
+// Every fragment references documents as d; admins must not omit the filter.
+func DocVisibilityWhere(p Principal, systemID int64) (string, []any) {
+	if systemID <= 0 || (p.SystemID != 0 && p.SystemID != systemID) {
+		return "1=0", nil
+	}
+	p.SystemID = systemID
+	boundary, args := systemBoundaryWhere(p)
+	if p.Kind == KindDemoAnon || p.Kind == KindDemoScratch {
+		corpus, corpusArgs := DemoCorpusVisibilityWhere(p.UserID)
+		return boundary + " AND (" + corpus + ")", append(args, corpusArgs...)
+	}
+	if p.UserID <= 0 {
+		return "1=0", nil
+	}
+	if p.Role == "admin" {
+		return boundary, args
+	}
+	principals := "(a.principal_kind = 'user' AND a.principal_id = ?)"
+	args = append(args, p.UserID, p.UserID)
+	if len(p.Groups) > 0 {
+		principals += " OR (a.principal_kind = 'group' AND a.principal_id IN (" + placeholders(len(p.Groups)) + "))"
+		for _, groupID := range p.Groups {
+			args = append(args, groupID)
+		}
+	}
+	return boundary + ` AND (
+		d.owner_id = ? OR EXISTS (
 			SELECT 1 FROM object_acls a
 			WHERE a.object_kind = 'document' AND a.object_id = d.id
-			  AND (a.perm_bits & 1) = 1
-			  AND (
-				(a.principal_kind = 'user'  AND a.principal_id = ?)
-				OR (a.principal_kind = 'group' AND a.principal_id IN (` + placeholders + `))
-			  )
+			  AND (a.perm_bits & 1) = 1 AND (` + principals + `)
 		)
-	)`
-	args := make([]any, 0, 2+len(groupIDs))
-	args = append(args, userID, userID)
-	for _, g := range groupIDs {
-		args = append(args, g)
-	}
-	return frag, args
+	)`, args
 }

@@ -62,12 +62,13 @@ func TestOptionsValidate(t *testing.T) {
 		ok   bool
 	}{
 		{"empty bundle", bundle.Options{}, false},
-		{"missing owner", bundle.Options{BundleRoot: "/x"}, false},
-		{"dry-run OK without owner", bundle.Options{BundleRoot: "/x", DryRun: true}, true},
-		{"minimal ok", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b"}, true},
-		{"flat + auto conflict", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", Flat: true, AutoJD: true}, false},
-		{"map + auto conflict", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", MapJD: &bundle.Mapping{Rules: []bundle.Rule{{If: "tag:x", Category: 22}}}, AutoJD: true}, false},
-		{"just auto", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b", AutoJD: true}, true},
+		{"missing system", bundle.Options{BundleRoot: "/x", OwnerEmail: "a@b"}, false},
+		{"missing owner", bundle.Options{SystemID: 1, BundleRoot: "/x"}, false},
+		{"dry-run OK without owner", bundle.Options{SystemID: 1, BundleRoot: "/x", DryRun: true}, true},
+		{"minimal ok", bundle.Options{SystemID: 1, BundleRoot: "/x", OwnerEmail: "a@b"}, true},
+		{"flat + auto conflict", bundle.Options{SystemID: 1, BundleRoot: "/x", OwnerEmail: "a@b", Flat: true, AutoJD: true}, false},
+		{"map + auto conflict", bundle.Options{SystemID: 1, BundleRoot: "/x", OwnerEmail: "a@b", MapJD: &bundle.Mapping{Rules: []bundle.Rule{{If: "tag:x", Category: 22}}}, AutoJD: true}, false},
+		{"just auto", bundle.Options{SystemID: 1, BundleRoot: "/x", OwnerEmail: "a@b", AutoJD: true}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -93,6 +94,7 @@ func TestAutoJDEndToEnd(t *testing.T) {
 	d, cas, log, ownerEmail := setupTarget(t, ctx, tmp+"/data")
 
 	rep, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		SystemID:   1,
 		BundleRoot: bundleDir,
 		OwnerEmail: ownerEmail,
 		AutoJD:     true,

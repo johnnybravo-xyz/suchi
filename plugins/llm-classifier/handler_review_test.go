@@ -48,8 +48,8 @@ func TestHandlerClearsOnlyItsOwnReviewTag(t *testing.T) {
 					tagName = "review-myself"
 				}
 				if _, err := d.Write.ExecContext(ctx, `
-					INSERT INTO tags(id, name, slug, created_at, updated_at)
-					VALUES (99, ?, ?, 0, 0)
+					INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+					VALUES (1, 99, ?, ?, 0, 0)
 				`, tagName, tagSlug); err != nil {
 					t.Fatal(err)
 				}
@@ -99,7 +99,7 @@ func TestHandlerClearsOnlyItsOwnReviewTag(t *testing.T) {
 				t.Fatal(err)
 			}
 			h := NewHandler(p, d, silentLog())
-			event := pluginapi.Event{Kind: Kind, DocID: docID}
+			event := pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}
 			for range 2 {
 				if err := h.Handle(ctx, event); err != nil {
 					t.Fatal(err)
@@ -155,7 +155,7 @@ func TestConfidentModelReviewTagCanClearOnLaterRescan(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewHandler(p, d, silentLog())
-	event := pluginapi.Event{Kind: Kind, DocID: docID}
+	event := pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}
 	if err := h.Handle(ctx, event); err != nil {
 		t.Fatal(err)
 	}

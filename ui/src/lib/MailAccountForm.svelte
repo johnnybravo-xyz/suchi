@@ -2,10 +2,11 @@
   // Create/edit modal for one mailbox. Sealed secrets never come back from
   // the server, so the password field is always write-only and a blank
   // value on edit means "keep the stored secret".
-  import { untrack } from 'svelte'
+  import { untrack, onDestroy } from 'svelte'
   import { createEmailAccount, patchEmailAccount, deleteEmailAccount,
            testEmailAccount, previewEmailAccount, revokeEmailOAuth } from './api.js'
   import { session } from './session.svelte.js'
+  import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
 
@@ -119,6 +120,9 @@
   let preview = $state(null)
   let previewError = $state('')
   let intakeRules = $state(seedRules)
+  const scope = captureScope()
+  let disposed = false
+  onDestroy(() => { disposed = true; oauthOpen = false; form.sealed_secret_b64 = ''; form.password = '' })
 
   function intakePolicy() {
     return { rules: intakeRules.map((rule) => {
@@ -173,6 +177,7 @@
   }
 
   function onOAuthSuccess({ username, oauth_account_id, sealed_secret_b64 }) {
+    if (disposed || !scopeCurrent(scope)) return
     form.username = username || form.username
     form.oauth_account_id = oauth_account_id || ''
     form.sealed_secret_b64 = sealed_secret_b64 || ''
@@ -181,6 +186,7 @@
   }
 
   async function save() {
+    if (disposed || !scopeCurrent(scope)) return
     err = ''; busy = true
     try {
       const pollInterval = Number(form.poll_interval_min)

@@ -129,7 +129,12 @@ func isSafeTable(t string) bool {
 }
 
 func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table string, withPath bool) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	if !isSafeTable(table) {
@@ -138,7 +143,7 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 	}
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM "+table).Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM "+table+" WHERE system_id = ?", systemID).Scan(&total); err != nil {
 		s.serverErr(w, "taxonomy.count."+table, err)
 		return
 	}
@@ -157,9 +162,10 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 	q := "SELECT id, name, slug, " + pathCol + `matching_algorithm, match, is_insensitive,
 	       created_at, updated_at
 	     FROM ` + table + `
+	     WHERE system_id = ?
 	     ORDER BY ` + order + `
 	     LIMIT ? OFFSET ?`
-	rows, err := s.DB.Read.QueryContext(r.Context(), q, p.PageSize, p.Offset())
+	rows, err := s.DB.Read.QueryContext(r.Context(), q, systemID, p.PageSize, p.Offset())
 	if err != nil {
 		s.serverErr(w, "taxonomy.list."+table, err)
 		return
@@ -198,7 +204,12 @@ func (s *Server) taxonomyList(w http.ResponseWriter, r *http.Request, table stri
 }
 
 func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table string, withPath bool) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	if !isSafeTable(table) {
@@ -242,19 +253,25 @@ func (s *Server) taxonomyCreate(w http.ResponseWriter, r *http.Request, table st
 
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errSystemUnavailable
+		}
 		var res sql.Result
-		var err error
 		if withPath {
 			res, err = tx.ExecContext(r.Context(),
-				`INSERT INTO storage_paths(name, slug, path, matching_algorithm, match, is_insensitive, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				name, sl, strings.TrimSpace(*in.Path),
+				`INSERT INTO storage_paths(system_id, name, slug, path, matching_algorithm, match, is_insensitive, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				systemID, name, sl, strings.TrimSpace(*in.Path),
 				matchingAlgo, match, isInsens, now, now)
 		} else {
 			res, err = tx.ExecContext(r.Context(),
-				"INSERT INTO "+table+`(name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				name, sl, matchingAlgo, match, isInsens, now, now)
+				"INSERT INTO "+table+`(system_id, name, slug, matching_algorithm, match, is_insensitive, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				systemID, name, sl, matchingAlgo, match, isInsens, now, now)
 		}
 		if err != nil {
 			return err
@@ -340,6 +357,13 @@ func (s *Server) taxonomyUpdate(w http.ResponseWriter, r *http.Request, table st
 	args = append(args, id)
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		allowed, err := s.authorized(r.Context(), tx, principal, kindForTable(table), id, authz.PermChange)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE "+table+" SET "+strings.Join(sets, ", ")+" WHERE id = ?",
 			args...)
@@ -391,6 +415,13 @@ func (s *Server) taxonomyDelete(w http.ResponseWriter, r *http.Request, table st
 		return
 	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		allowed, err := s.authorized(r.Context(), tx, principal, kindForTable(table), id, authz.PermDelete)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"DELETE FROM "+table+" WHERE id = ?", id)
 		if err != nil {

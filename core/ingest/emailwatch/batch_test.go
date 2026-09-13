@@ -3,6 +3,7 @@ package emailwatch
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -157,7 +158,7 @@ func newBatchWatcher(t *testing.T, address string) *Watcher {
 	if _, err := database.Write.Exec("INSERT INTO users(id, email, display_name, role, created_at, updated_at) VALUES (1, 'test@example.com', 'Test', 'admin', 0, 0)"); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureBootstrapTree(ctx, database, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, database, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	cas, err := blob.New(dir)
@@ -180,11 +181,16 @@ func newBatchWatcher(t *testing.T, address string) *Watcher {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account, err := emailaccounts.Create(ctx, database, emailaccounts.Account{
-		Name: "test", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
-		Host: host, Port: port, Folder: "INBOX", PollIntervalMin: 10,
-		AuthMethod: emailaccounts.AuthPassword, Username: "test", SealedSecret: sealed,
-		Enabled: true,
+	var account *emailaccounts.Account
+	err = database.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		account, err = emailaccounts.Create(ctx, tx, emailaccounts.Account{
+			SystemID: 1, Name: "test", OwnerID: 1, Provider: emailaccounts.ProviderCustom,
+			Host: host, Port: port, Folder: "INBOX", PollIntervalMin: 10,
+			AuthMethod: emailaccounts.AuthPassword, Username: "test", SealedSecret: sealed,
+			Enabled: true,
+		}, nil)
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)

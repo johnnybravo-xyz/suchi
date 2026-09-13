@@ -1,6 +1,6 @@
 ---
-title: "Restore a Suchi export"
-description: "Export live documents and restore them into a fresh Suchi instance through filesystem-watch ingest."
+title: "Reingest a Suchi takeout"
+description: "Export one system's live documents and reingest them through a configured target watcher; use full backups for exact restoration."
 ---
 
 Use `suchi export` when you want a portable archive of document originals and
@@ -17,12 +17,12 @@ Run the command with the source instance's `DATA_DIR` configuration:
 suchi export --out /tmp/suchi-export.zip
 ```
 
-By default, this exports live documents owned by the first admin account.
-Choose the scope explicitly on multi-user instances:
+By default this selects original system 1 and its live documents owned by the first
+admin account. Choose the target and owner scope explicitly:
 
 ```sh
 suchi export --out /tmp/user-5.zip --owner-id 5
-suchi export --out /tmp/all-users.zip --all
+suchi export --out /tmp/S02-all-users.zip --system S02 --all
 ```
 
 Trashed documents are excluded. Check the archive before moving it:
@@ -35,26 +35,33 @@ unzip -p /tmp/suchi-export.zip manifest.json
 The zip contains original files and matching JSON sidecars under
 `documents/`. The files under `taxonomy/` are reference dumps; they are not
 automatically installed by the restore process.
+Manifest version `"2"` identifies the selected system code/name; `--all` means all
+owners there, not all systems. Sidecar format stays 1 with optional `jd_system` and
+`jd_address`. Those record the source, not an ID-preserving restore protocol.
 
 ## Prepare the fresh instance
 
 1. Start the target and complete first-run account setup.
-2. Apply the target filing-tree preset or custom tree before restoring
-   documents. Sidecars identify JD categories by numeric code. A code that
-   does not exist on the target falls back to its Inbox.
-3. Enable filesystem-watch ingest for the account that should own the restored
-   documents.
+2. Apply the target filing tree before ingesting documents. For a named export,
+   introduce the same target code through a prefixed taxonomy import first.
+   Sidecar `jd_system` must match the watcher target; it cannot create or route a
+   system. Category codes resolve there; an absent code falls back to its Inbox.
+3. Grant the intended owner entry and configure the watcher for that target.
 
 The watcher can be configured in **Settings**, or with environment variables:
 
 ```sh
 INGEST_FS_OWNER_EMAIL=owner@example.com
 INGEST_FS_DIR=/srv/suchi-staging
+INGEST_FS_SYSTEM=S02
 ```
 
 When using environment variables, restart Suchi after the owner account
 exists. At startup, the watcher must be able to resolve
 `INGEST_FS_OWNER_EMAIL` to an enabled user.
+Omit `INGEST_FS_SYSTEM` only when intentionally targeting the original system.
+Documents may receive new IDs and addresses. Memberships, ACLs and relationships
+are not reconstructed by sidecars; exact restoration requires a whole-instance backup.
 
 ## Restore the documents
 
@@ -83,9 +90,10 @@ The watcher removes successfully consumed originals and sidecars. Follow the
 server logs for `fswatch.ingested`, and inspect
 `/srv/suchi-staging/errors/` for a rejected file and its `.err` companion.
 
-Dropping the same export again is document-safe: live documents deduplicate by
-SHA-256 and no second document is created. A duplicate drop is not a metadata
-update mechanism; edit existing metadata through Suchi instead.
+Dropping the same export again into the same system for the same owner is
+document-safe: live documents deduplicate by SHA-256. Another system receives
+distinct document rows even if immutable CAS bytes are shared. A duplicate drop
+does not update metadata; edit existing records through Suchi.
 
 ## What survives the round trip
 

@@ -56,6 +56,14 @@ scan_split_dpi: 150
 #   client_id: "suchi"
 #   client_secret: "..."
 
+# Filesystem-watch ingest (idle without owner_email).
+# ingest_fs::
+#   dir: "/data/staging"
+#   owner_email: "you@example.com"
+#   system: "S02" # existing code; omit for original system 1
+# The owner must be able to enter it; sidecars cannot route to another system.
+# Introduce systems by taxonomy import, not by this boot configuration.
+
 # --------------------------------------------------------------------
 # Microsoft email OAuth
 # --------------------------------------------------------------------

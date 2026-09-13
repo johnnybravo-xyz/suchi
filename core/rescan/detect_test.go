@@ -28,7 +28,7 @@ func detectorEngine(t *testing.T, d *db.DB) *approvals.Engine {
 	e := approvals.New(d, log)
 	e.RegisterHandler(rescan.NewHandler(d, rescan.Versions{OCR: 2}))
 	e.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: e, Log: log})
-	if err := e.EnsureDef(context.Background(), rescan.ProposalSlug, rescan.ProposalSpec(), sysActor()); err != nil {
+	if err := e.EnsureDef(context.Background(), 1, rescan.ProposalSlug, rescan.ProposalSpec(), sysActor()); err != nil {
 		t.Fatalf("seed proposal def: %v", err)
 	}
 	return e
@@ -62,7 +62,7 @@ func TestDetect_StartsRun_WhenStaleFound(t *testing.T) {
 	seedDoc(t, ctx, d, owner, "sha-a", 0)
 	seedDoc(t, ctx, d, owner, "sha-b", 0)
 
-	err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2})
+	err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,11 +89,11 @@ func TestDetect_Idempotent_SameVersionNoDoubleStart(t *testing.T) {
 	seedDoc(t, ctx, d, owner, "sha-a", 0)
 
 	v := rescan.Versions{OCR: 2}
-	if err := rescan.EnsureProposals(ctx, d, e, v); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, v); err != nil {
 		t.Fatal(err)
 	}
 	// Second pass — should find the pending run and no-op.
-	if err := rescan.EnsureProposals(ctx, d, e, v); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, v); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
@@ -132,7 +132,7 @@ func TestDetect_DismissalSurvivesRestart(t *testing.T) {
 			e, d, owner := newDetectorEngine(t)
 			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
 			versions := rescan.Versions{OCR: 2}
-			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+			if err := rescan.EnsureProposals(ctx, d, 1, e, versions); err != nil {
 				t.Fatal(err)
 			}
 			runID := resolveProposal(t, ctx, e, "dismiss")
@@ -151,7 +151,7 @@ func TestDetect_DismissalSurvivesRestart(t *testing.T) {
 			t.Cleanup(func() { _ = reopened.Close() })
 			e = detectorEngine(t, reopened)
 			for range 2 {
-				if err := rescan.EnsureProposals(ctx, reopened, e, versions); err != nil {
+				if err := rescan.EnsureProposals(ctx, reopened, 1, e, versions); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -181,14 +181,14 @@ func TestDetect_DismissalScopedToKindAndRevision(t *testing.T) {
 			ctx := context.Background()
 			e, d, owner := newDetectorEngine(t)
 			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
-			if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2}); err != nil {
+			if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2}); err != nil {
 				t.Fatal(err)
 			}
 			runID := resolveProposal(t, ctx, e, "dismiss")
 			if err := e.Advance(ctx, runID, "dismiss"); err != nil {
 				t.Fatal(err)
 			}
-			if err := rescan.EnsureProposals(ctx, d, e, tc.versions); err != nil {
+			if err := rescan.EnsureProposals(ctx, d, 1, e, tc.versions); err != nil {
 				t.Fatal(err)
 			}
 			if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
@@ -216,7 +216,7 @@ func TestDetect_DismissalCancelsRecreatedProposalUnlessAlreadyApproved(t *testin
 			e, d, owner := newDetectorEngine(t)
 			seedDoc(t, ctx, d, owner, "sha-dismissed", 0)
 			versions := rescan.Versions{OCR: 2}
-			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+			if err := rescan.EnsureProposals(ctx, d, 1, e, versions); err != nil {
 				t.Fatal(err)
 			}
 			runID := resolveProposal(t, ctx, e, "dismiss")
@@ -224,7 +224,7 @@ func TestDetect_DismissalCancelsRecreatedProposalUnlessAlreadyApproved(t *testin
 				t.Fatal(err)
 			}
 			// Earlier binaries recreated a run after the completed dismissal.
-			duplicateID, err := e.Start(ctx, rescan.ProposalSlug, 0, map[string]any{
+			duplicateID, err := e.Start(ctx, 1, rescan.ProposalSlug, 0, map[string]any{
 				"kind": "ocr", "current_version": 2, "stale_count": 1,
 			}, sysActor())
 			if err != nil {
@@ -235,7 +235,7 @@ func TestDetect_DismissalCancelsRecreatedProposalUnlessAlreadyApproved(t *testin
 			} else if err := e.Advance(ctx, duplicateID, ""); err != nil {
 				t.Fatal(err)
 			}
-			if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+			if err := rescan.EnsureProposals(ctx, d, 1, e, versions); err != nil {
 				t.Fatal(err)
 			}
 			run, tasks, err := e.GetRun(ctx, duplicateID)
@@ -273,7 +273,7 @@ func TestDetect_SampleApprovalStillOffersRemainingDocuments(t *testing.T) {
 	e, d, owner := newDetectorEngine(t)
 	seedDocs(t, ctx, d, owner, "sha-sample", 21)
 	versions := rescan.Versions{OCR: 2}
-	if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, versions); err != nil {
 		t.Fatal(err)
 	}
 	runID := resolveProposal(t, ctx, e, "approve_sample")
@@ -283,11 +283,11 @@ func TestDetect_SampleApprovalStillOffersRemainingDocuments(t *testing.T) {
 	if err := e.Advance(ctx, runID, ""); err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := rescan.CountProposalStale(ctx, d, "ocr", 2)
+	remaining, err := rescan.CountProposalStale(ctx, d, 1, "ocr", 2)
 	if err != nil || remaining != 1 {
 		t.Fatalf("after queuing sample: %d remaining, err=%v, want 1", remaining, err)
 	}
-	if err := rescan.EnsureProposals(ctx, d, e, versions); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, versions); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
@@ -300,7 +300,7 @@ func TestDetect_CancelsWhenStaleHitsZero(t *testing.T) {
 	e, d, owner := newDetectorEngine(t)
 	doc := seedDoc(t, ctx, d, owner, "sha-a", 0)
 	v := rescan.Versions{OCR: 2}
-	if err := rescan.EnsureProposals(ctx, d, e, v); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, v); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
@@ -311,7 +311,7 @@ func TestDetect_CancelsWhenStaleHitsZero(t *testing.T) {
 		`UPDATE documents SET pipeline_version_ocr = 2 WHERE id = ?`, doc); err != nil {
 		t.Fatal(err)
 	}
-	if err := rescan.EnsureProposals(ctx, d, e, v); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, v); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
@@ -328,11 +328,11 @@ func TestDetect_SupersedesOnVersionBump(t *testing.T) {
 	seedDoc(t, ctx, d, owner, "sha-a", 0)
 
 	// Boot 1: binary at OCR v2.
-	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2}); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2}); err != nil {
 		t.Fatal(err)
 	}
 	// Boot 2: binary bumped to OCR v3. The v2-tagged run supersedes.
-	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 3}); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 3}); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "cancelled"); got != 1 {
@@ -361,7 +361,7 @@ func TestDetect_NoOp_WhenNothingStale(t *testing.T) {
 	ctx := context.Background()
 	e, d, owner := newDetectorEngine(t)
 	seedDoc(t, ctx, d, owner, "sha-a", 2) // already at current
-	err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2})
+	err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestDetect_LLMDoesNotProposeNeverProcessedDocuments(t *testing.T) {
 	e, d, owner := newDetectorEngine(t)
 	seedDoc(t, ctx, d, owner, "sha-never-classified", 0)
 
-	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{LLM: 1}); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{LLM: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
@@ -392,7 +392,7 @@ func TestDetect_DoesNotProposeEncryptedDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := rescan.EnsureProposals(ctx, d, e, rescan.Versions{OCR: 2}); err != nil {
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if got := countProposalRuns(t, ctx, d, "running"); got != 0 {
@@ -410,13 +410,13 @@ func TestProposalStillNeededTracksEligibleDocuments(t *testing.T) {
 	}
 
 	first := seedDoc(t, ctx, d, owner, "sha-first", 0)
-	needed, err := rescan.ProposalStillNeeded(ctx, d, vars)
+	needed, err := rescan.ProposalStillNeeded(ctx, d, 1, vars)
 	if err != nil || !needed {
 		t.Fatalf("live stale document: needed=%v err=%v", needed, err)
 	}
 	for _, version := range []any{2, int64(2)} {
 		vars["current_version"] = version
-		needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+		needed, err = rescan.ProposalStillNeeded(ctx, d, 1, vars)
 		if err != nil || !needed {
 			t.Fatalf("current_version=%T: needed=%v err=%v", version, needed, err)
 		}
@@ -424,7 +424,7 @@ func TestProposalStillNeededTracksEligibleDocuments(t *testing.T) {
 	if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET trashed_at = 1 WHERE id = ?`, first); err != nil {
 		t.Fatal(err)
 	}
-	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	needed, err = rescan.ProposalStillNeeded(ctx, d, 1, vars)
 	if err != nil || needed {
 		t.Fatalf("only stale document trashed: needed=%v err=%v", needed, err)
 	}
@@ -439,14 +439,14 @@ func TestProposalStillNeededTracksEligibleDocuments(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	needed, err = rescan.ProposalStillNeeded(ctx, d, 1, vars)
 	if err != nil || !needed {
 		t.Fatalf("eligible document beyond preview: needed=%v err=%v", needed, err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET trashed_at = 1 WHERE id = ?`, ids[10]); err != nil {
 		t.Fatal(err)
 	}
-	needed, err = rescan.ProposalStillNeeded(ctx, d, vars)
+	needed, err = rescan.ProposalStillNeeded(ctx, d, 1, vars)
 	if err != nil || needed {
 		t.Fatalf("all stale documents trashed: needed=%v err=%v", needed, err)
 	}
@@ -463,7 +463,7 @@ func TestProposalStillNeededRejectsMalformedVars(t *testing.T) {
 		{"kind": "ocr", "current_version": 1.5},
 		{"kind": "ocr", "current_version": "2"},
 	} {
-		if _, err := rescan.ProposalStillNeeded(ctx, d, vars); err == nil || err.Error() != "rescan: malformed proposal vars" {
+		if _, err := rescan.ProposalStillNeeded(ctx, d, 1, vars); err == nil || err.Error() != "rescan: malformed proposal vars" {
 			t.Fatalf("vars=%v: got error %v", vars, err)
 		}
 	}

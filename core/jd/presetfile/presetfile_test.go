@@ -1,282 +1,210 @@
 package presetfile
 
 import (
-	"errors"
 	"os"
-	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestParseTOMLValid(t *testing.T) {
-	pf := mustParseFile(t, "testdata/valid.toml", FormatTOML)
-	if pf.ID != "uk-landlord" {
-		t.Fatalf("id: got %q, want uk-landlord", pf.ID)
+const header = `format = "suchi-taxonomy/v1"
+id = "example"
+version = 1
+name = "Example"
+market = "global"
+language = "en"
+story = "A filing map for personal records."
+`
+
+func TestV1Compatibility(t *testing.T) {
+	a := mustParseFile(t, "testdata/valid.toml", FormatTOML)
+	b := mustParseFile(t, "testdata/valid.huml", FormatHuML)
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("serialization changes meaning:\n%+v\n%+v", a, b)
 	}
-	if pf.Inbox != 49 {
-		t.Fatalf("inbox: got %d, want 49", pf.Inbox)
+	if a.Inbox != 49 || len(a.Areas) != 2 || a.Areas[1].Code != 40 {
+		t.Fatalf("generated structure: %+v", a)
 	}
-	if len(pf.Areas) != 2 {
-		t.Fatalf("areas: got %d, want 2", len(pf.Areas))
-	}
-	if got := pf.Areas[0].Categories[0].Keywords; len(got) != 3 || got[0] != "tenancy" {
-		t.Fatalf("keywords: got %v", got)
-	}
-	if pf.Seeds == nil || len(pf.Seeds.Automations) != 1 {
-		t.Fatalf("seeds.automations: got %+v", pf.Seeds)
+	for _, f := range []SerFormat{FormatHuML, FormatTOML} {
+		data, err := Marshal(a, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := Parse(data, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(a, got) {
+			t.Fatalf("%s round trip changed taxonomy", f)
+		}
 	}
 }
 
-func TestParseYAMLValid(t *testing.T) {
-	pf := mustParseFile(t, "testdata/valid.yaml", FormatYAML)
-	if pf.ID != "uk-landlord" {
-		t.Fatalf("id: got %q, want uk-landlord", pf.ID)
+func TestRawShapeCannotDisappearDuringNormalization(t *testing.T) {
+	cases := map[string]string{
+		"missing areas":        "",
+		"inbox":                "inbox = 49\nareas = []",
+		"system":               "system = false\nareas = []",
+		"empty system":         "system = ''\nareas = []",
+		"system list":          "system = ['S01']\nareas = []",
+		"system object":        "system = {code='S01'}\nareas = []",
+		"system number":        "system = 1\nareas = []",
+		"multiple systems":     "systems = ['S01','S02']\nareas = []",
+		"documents":            "documents = [{id=147}]\nareas = []",
+		"members":              "members = [1]\nareas = []",
+		"flat areas":           "flat = true\nareas = []\ncategories = [{name='A'}]",
+		"tree categories":      "areas = []\ncategories = []",
+		"flat empty":           "flat = true\ncategories = []",
+		"flat excess":          "flat = true\ncategories = [" + strings.Repeat("{name='A'},", 10) + "]",
+		"flat advisory code":   "flat = true\ncategories = [{code=1,name='A'}]",
+		"flat explicit zero":   "flat = true\ncategories = [{code=0,name='A'}]",
+		"reserved index":       "areas = [{code=0,name='Index',categories=[]}]",
+		"reserved system":      "areas = [{code=40,name='System',categories=[{code=49,name='Inbox'}]}]",
+		"category zero":        "areas = [{code=10,name='A',categories=[{code=10,name='B'}]}]",
+		"duplicate area":       "areas = [{code=10,name='A',categories=[]},{code=10,name='B',categories=[]}]",
+		"duplicate category":   "areas = [{code=10,name='A',categories=[{code=11,name='B'},{code=11,name='C'}]}]",
+		"unsupported category": "areas = [{code=10,name='A',categories=[{code=11,name='B',sensitivity='public'}]}]",
+		"unsupported seeds":    "areas = []\n[seeds]\ntags = ['a']",
+		"fractional code":      "areas = [{code=10.0,name='A',categories=[]}]",
+		"typed keyword":        "areas = [{code=10,name='A',categories=[{code=11,name='B',keywords=[42]}]}]",
 	}
-	if got := pf.Areas[0].Categories[0].Keywords; len(got) != 3 || got[0] != "tenancy" {
-		t.Fatalf("keywords: got %v", got)
-	}
-}
-
-func TestDetectFormat(t *testing.T) {
-	cases := map[string]struct {
-		in   string
-		want SerFormat
-	}{
-		"huml directive": {"%HUML v0.6.0\nformat: \"suchi-taxonomy/v1\"", FormatHuML},
-		"toml equals":    {"format = \"suchi-taxonomy/v1\"\nid = \"x\"", FormatTOML},
-		"yaml colon":     {"format: \"suchi-taxonomy/v1\"\nid: x", FormatYAML},
-		"huml doublecolon": {
-			"format: \"suchi-taxonomy/v1\"\nareas::\n  - ::\n    code: 10", FormatHuML,
-		},
-	}
-	for name, tc := range cases {
+	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := DetectFormat([]byte(tc.in)); got != tc.want {
-				t.Fatalf("got %q, want %q", got, tc.want)
+			if _, err := Parse([]byte(header+body), FormatTOML); err == nil {
+				t.Fatal("invalid raw input accepted")
 			}
 		})
 	}
 }
 
-func TestParseFromExtDispatches(t *testing.T) {
-	pf, err := ParseFromExt(readFile(t, "testdata/valid.toml"), ".toml")
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if pf.ID != "uk-landlord" {
-		t.Fatalf("id: got %q", pf.ID)
-	}
-}
-
-func TestValidateInvariants(t *testing.T) {
-	cases := []struct {
-		name    string
-		build   func() *PresetFile
-		wantSub string
-	}{
-		{
-			name: "wrong format",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Format = "wrong/v1"
-				return pf
-			},
-			wantSub: `format must be "suchi-taxonomy/v1"`,
-		},
-		{
-			name: "bad id",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.ID = "-bad"
-				return pf
-			},
-			wantSub: "id",
-		},
-		{
-			name: "zero version",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Version = 0
-				return pf
-			},
-			wantSub: "version",
-		},
-		{
-			name: "area code not decade",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Areas[0].Code = 15
-				return pf
-			},
-			wantSub: "decade start",
-		},
-		{
-			name: "category outside decade",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Areas[0].Categories[0].Code = 25 // area is 10
-				return pf
-			},
-			wantSub: "outside area 10-19",
-		},
-		{
-			name: "missing inbox",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Inbox = 0
-				return pf
-			},
-			wantSub: "inbox",
-		},
-		{
-			name: "inbox no such category",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Inbox = 77
-				return pf
-			},
-			wantSub: "inbox code 77",
-		},
-		{
-			name: "too many areas",
-			build: func() *PresetFile {
-				pf := baseValid()
-				for i := 20; i <= 100; i += 10 {
-					pf.Areas = append(pf.Areas, Area{
-						Code: i, Name: "extra",
-						Categories: []Category{{Code: i + 1, Name: "cat"}},
-					})
-				}
-				return pf
-			},
-			wantSub: "too many areas",
-		},
-		{
-			name: "keyword too long",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Areas[0].Categories[0].Keywords = []string{strings.Repeat("x", 41)}
-				return pf
-			},
-			wantSub: "too long",
-		},
-		{
-			name: "duplicate category code",
-			build: func() *PresetFile {
-				pf := baseValid()
-				pf.Areas[0].Categories = append(pf.Areas[0].Categories,
-					Category{Code: 11, Name: "dup"})
-				return pf
-			},
-			wantSub: "duplicate code",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			es := Validate(tc.build())
-			if len(es) == 0 {
-				t.Fatalf("expected errors, got none")
+func TestBlankAndFlatRoundTrip(t *testing.T) {
+	for _, body := range []string{"areas = []", "flat = true\ncategories = [{name='Bills'},{code=12,name='Receipts'}]"} {
+		pf, err := Parse([]byte(header+body), FormatTOML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []SerFormat{FormatTOML, FormatHuML} {
+			data, err := Marshal(pf, f)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(es.Error(), tc.wantSub) {
-				t.Fatalf("no error mentioning %q; got:\n%s", tc.wantSub, es.Error())
+			got, err := Parse(data, f)
+			if err != nil {
+				t.Fatal(err)
 			}
-		})
+			if !reflect.DeepEqual(pf, got) {
+				t.Fatalf("round trip changed blank/flat: %s", data)
+			}
+		}
 	}
 }
 
-func TestParseRejectsUnknownField(t *testing.T) {
-	yaml := []byte(`format: "suchi-taxonomy/v1"
-id: "x"
-version: 1
-name: "x"
-story: "x"
-keyward: "typo"
-inbox: 49
-areas:
-  - code: 10
-    name: "x"
-    categories:
-      - code: 49
-        name: "Inbox"
-`)
-	_, err := Parse(yaml, FormatYAML)
-	if err == nil {
-		t.Fatalf("expected error on unknown field")
+func TestStrictHuMLAndFormatFirst(t *testing.T) {
+	valid := string(readFile(t, "testdata/valid.huml"))
+	for _, input := range []string{
+		valid + "inbox: 49\n",
+		valid + "system: null\n",
+		strings.Replace(valid, "code: 11", "code: 11\n        code: 12", 1),
+		strings.Replace(valid, "document_type: \"certificate\"", "document_type: \"certificate\"\n            document_type: \"invoice\"", 1),
+		strings.Replace(valid, "document_type: \"certificate\"", "owner_id: 1", 1),
+		strings.Replace(valid, "version: 1", "version: 1.5", 1),
+		strings.Replace(valid, "name: \"UK landlord\"", "name: null", 1),
+		strings.Replace(valid, "filter_content_matching: \"gas safety\"", "filter_future: \"gas safety\"", 1),
+	} {
+		if _, err := Parse([]byte(input), FormatHuML); err == nil {
+			t.Fatalf("accepted invalid HuML: %s", input)
+		}
 	}
-	if !strings.Contains(err.Error(), "keyward") {
-		t.Fatalf("expected `keyward` in error; got: %v", err)
-	}
-}
-
-func TestParseFlatModeSynthesizesAreas(t *testing.T) {
-	yaml := []byte(`format: "suchi-taxonomy/v1"
-id: "flat-example"
-version: 1
-name: "Flat"
-story: "flat mode test"
-flat: true
-categories:
-  - code: 1
-    name: "Bills"
-    keywords: ["invoice"]
-  - code: 2
-    name: "Receipts"
-`)
-	pf, err := Parse(yaml, FormatYAML)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(pf.Areas) != 2 {
-		t.Fatalf("areas: got %d, want 2 (10 + System)", len(pf.Areas))
-	}
-	if pf.Areas[0].Code != 10 || pf.Areas[0].Name != "Flat" {
-		t.Fatalf("area 10: got %+v", pf.Areas[0])
-	}
-	if len(pf.Areas[0].Categories) != 2 {
-		t.Fatalf("cat count: got %d, want 2", len(pf.Areas[0].Categories))
-	}
-	if pf.Areas[0].Categories[0].Code != 11 {
-		t.Fatalf("first cat code: got %d, want 11 (renumbered)", pf.Areas[0].Categories[0].Code)
-	}
-	if pf.Inbox != 49 {
-		t.Fatalf("inbox: got %d, want 49", pf.Inbox)
-	}
-	if len(pf.Categories) != 0 {
-		t.Fatalf("Categories should have been consumed into Areas, got %d", len(pf.Categories))
+	for _, f := range []SerFormat{FormatTOML, FormatHuML} {
+		input := "format = 'future/v2'\nunknown = true"
+		if f == FormatHuML {
+			input = "format: \"future/v2\"\nunknown: true"
+		}
+		_, err := Parse([]byte(input), f)
+		if err == nil || !strings.Contains(err.Error(), "format") || strings.Contains(err.Error(), "unknown") {
+			t.Fatalf("format dispatch: %v", err)
+		}
 	}
 }
 
-func TestParseEmptyDocumentFails(t *testing.T) {
-	_, err := Parse(nil, "")
-	if err == nil {
-		t.Fatalf("expected error")
+func TestPortableActionsAreExactAndTyped(t *testing.T) {
+	base := header + "areas = [{code=10,name='A',categories=[{code=11,name='B'}]}]\n[[seeds.automations]]\nname='Rule'\ntrigger={type=2,filter_title_matching='Invoice',filter_filename='*.pdf',filter_has_tag='incoming',filter_email_has_attachment=false}\nactions=["
+	good := []string{
+		"{kind='assign_title',params={template='Invoice'}}",
+		"{kind='assign_tags',params={tags=['a','b']}}",
+		"{kind='assign_tags',params={tag='a'}}",
+		"{kind='assign_correspondent',params={correspondent='Example'}}",
+		"{kind='assign_document_type',params={document_type='Invoice'}}",
+		"{kind='assign_jd_category',params={jd_category_code=11}}",
 	}
-	var es Errors
-	if !errors.As(err, &es) {
-		t.Fatalf("expected Errors, got %T", err)
+	for _, action := range good {
+		pf, err := Parse([]byte(base+action+"]"), FormatTOML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []SerFormat{FormatHuML, FormatTOML} {
+			if _, err := Marshal(pf, f); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	bad := []string{
+		"{kind='assign_title',params={template='Title',owner_id=1}}",
+		"{kind='assign_tags',params={tag='a',tags=['b']}}",
+		"{kind='assign_tags',params={tags=['a',1]}}",
+		"{kind='assign_tags',params={tags=[]}}",
+		"{kind='assign_jd_category',params={jd_category_code=11.5}}",
+		"{kind='assign_jd_category',params={jd_category_code=49}}",
+		"{kind='assign_jd_category',params={jd_category_code=12}}",
+		"{kind='assign_jd_category',params={jd_category_code=11,system='S02'}}",
+		"{kind='assign_jd_category',params={jd_category_code=11,system_id=2}}",
+		"{kind='assign_owner',params={owner_id=1}}",
+		"{kind='assign_document_type',params={document_type_id=1}}",
+		"{kind='assign_title',params={template=' '}}",
+	}
+	for _, action := range bad {
+		if _, err := Parse([]byte(base+action+"]"), FormatTOML); err == nil {
+			t.Fatalf("accepted %s", action)
+		}
+	}
+	valid := base + good[0] + "]"
+	for _, input := range []string{strings.Replace(valid, "type=2", "type=4", 1), strings.Replace(valid, "filter_title_matching='Invoice'", "filter_title_matching='['", 1), strings.Replace(valid, "filter_filename='*.pdf'", "filter_filename='['", 1), base + "]", valid + "\n[[seeds.automations]]\nname='Rule'\ntrigger={type=2}\nactions=[" + good[0] + "]"} {
+		if _, err := Parse([]byte(input), FormatTOML); err == nil {
+			t.Fatal("invalid starter accepted")
+		}
 	}
 }
 
-// baseValid returns a small valid PresetFile that individual tests
-// deform to trip a single invariant.
-func baseValid() *PresetFile {
-	return &PresetFile{
-		Format:  Format,
-		ID:      "solo",
-		Version: 1,
-		Name:    "Solo",
-		Story:   "solo story",
-		Inbox:   49,
-		Areas: []Area{
-			{
-				Code: 10, Name: "Life",
-				Categories: []Category{{Code: 11, Name: "Bills"}},
-			},
-			{
-				Code: 40, Name: "System",
-				Categories: []Category{{Code: 49, Name: "Inbox"}},
-			},
+func TestMarshalRefusesLegacyReservedContent(t *testing.T) {
+	for _, mutate := range []func(*PresetFile){
+		func(p *PresetFile) { p.Inbox = 11 },
+		func(p *PresetFile) { p.Areas[1].Name = "Custom" },
+		func(p *PresetFile) {
+			p.Areas[1].Categories = append(p.Areas[1].Categories, Category{Code: 41, Name: "Old"})
 		},
+		func(p *PresetFile) { p.Areas = append(p.Areas, Area{Code: 0, Name: "Index", Categories: []Category{}}) },
+	} {
+		pf := mustParseFile(t, "testdata/valid.toml", FormatTOML)
+		mutate(pf)
+		if _, err := Marshal(pf, FormatHuML); err == nil {
+			t.Fatal("legacy reserved structure silently removed")
+		}
+	}
+}
+
+func TestSerializationAndReadBoundaries(t *testing.T) {
+	for _, ext := range []string{".yaml", ".yml", ".json", "", ".txt"} {
+		if _, err := ParseFromExt(readFile(t, "testdata/valid.toml"), ext); err == nil {
+			t.Fatalf("accepted %q", ext)
+		}
+	}
+	for _, data := range [][]byte{nil, []byte(strings.Repeat("x", MaxFileSize+1)), {0xff}} {
+		if _, err := Parse(data, FormatHuML); err == nil {
+			t.Fatal("invalid document accepted")
+		}
+	}
+	if _, err := Parse(readFile(t, "testdata/valid.toml"), ""); err == nil {
+		t.Fatal("sniffed TOML")
 	}
 }
 
@@ -284,16 +212,59 @@ func mustParseFile(t *testing.T, path string, f SerFormat) *PresetFile {
 	t.Helper()
 	pf, err := Parse(readFile(t, path), f)
 	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("%s: %v", path, err)
 	}
 	return pf
 }
-
 func readFile(t *testing.T, path string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Clean(path))
+	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatal(err)
 	}
 	return b
+}
+
+func TestSystemHeaderRoundTripAndStrictCodes(t *testing.T) {
+	for _, code := range []string{"S01", "S02", "A00", "Z99"} {
+		a, err := Parse([]byte(header+"system = '"+code+"'\nareas = []"), FormatTOML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.System != code {
+			t.Fatalf("system lost: %+v", a)
+		}
+		for _, format := range []SerFormat{FormatHuML, FormatTOML} {
+			data, err := Marshal(a, format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := Parse(data, format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(a, b) {
+				t.Fatalf("%s changed system taxonomy", format)
+			}
+		}
+	}
+	for _, code := range []string{"s01", "AUD", "S1", "S001", " S01", "S01 ", "S01.13", "001", "Å01"} {
+		for _, format := range []SerFormat{FormatHuML, FormatTOML} {
+			base := string(readFile(t, "testdata/valid.huml"))
+			input := base + "system: \"" + code + "\"\n"
+			if format == FormatTOML {
+				input = header + "system = '" + code + "'\nareas = []"
+			}
+			if _, err := Parse([]byte(input), format); err == nil {
+				t.Fatalf("accepted system %q in %s", code, format)
+			}
+		}
+	}
+	unnamed, err := Parse([]byte(header+"areas = []"), FormatTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unnamed.System != "" {
+		t.Fatal("unprefixed file acquired a system")
+	}
 }

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { askArchive, login, uploadDocument } from './api.js'
+// Transport-only tests run without Svelte compilation. Browser regressions
+// exercise the reactive account/system lifecycle with the real compiled module.
+globalThis.$state = value => value
+const { askArchive, login, uploadDocument } = await import('./api.js')
+delete globalThis.$state
 
 test('uses the API-provided error message', async () => {
   const originalFetch = globalThis.fetch

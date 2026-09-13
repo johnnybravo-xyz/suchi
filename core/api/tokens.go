@@ -26,6 +26,7 @@ import (
 type APITokenView struct {
 	ID         int64  `json:"id"`
 	UserID     int64  `json:"user_id"`
+	SystemCode string `json:"system_code,omitempty"`
 	Source     string `json:"source,omitempty"`
 	Name       string `json:"name"`
 	Scopes     string `json:"scopes"`
@@ -51,6 +52,14 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil || p.UserID == 0 {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
+		return
+	}
+	if p.Kind != "user" {
+		s.writeError(w, http.StatusForbidden, "forbidden", "session required")
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
 		return
 	}
 	if s.TokenIssuer == nil {
@@ -92,13 +101,22 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	scopes := strings.Join(scopeList, ",")
 
-	token, err := s.TokenIssuer(r.Context(), p.UserID, name, scopes, "")
+	var token string
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
+		var err error
+		token, err = s.TokenIssuer(r.Context(), tx, p.UserID, systemID, name, scopes, "")
+		return err
+	})
 	if err != nil {
 		s.serverErr(w, "tokens.mint", err)
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "api_token.create",
+		SystemID: systemID,
+		Actor:    p, Action: "api_token.create",
 		ObjectKind: "api_token", ObjectID: 0,
 		After:     map[string]any{"name": name, "scopes": scopes},
 		RequestID: logx.RequestID(r.Context()),
@@ -121,15 +139,23 @@ func (s *Server) ListTokens(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	q := `SELECT id, user_id, source, name, COALESCE(scopes, ''), created_at,
-	             COALESCE(last_used_at, 0)
-	      FROM api_tokens WHERE revoked_at IS NULL`
-	args := []any{}
+	if p.Kind != "user" {
+		s.writeError(w, http.StatusForbidden, "forbidden", "session required")
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
+	q := `SELECT t.id, t.user_id, t.source, t.name, COALESCE(t.scopes, ''), t.created_at,
+	             COALESCE(t.last_used_at, 0), s.code
+	      FROM api_tokens t JOIN jd_systems s ON s.id = t.system_id WHERE t.revoked_at IS NULL AND t.system_id = ?`
+	args := []any{systemID}
 	if p.Role != "admin" {
-		q += ` AND user_id = ?`
+		q += ` AND t.user_id = ?`
 		args = append(args, p.UserID)
 	}
-	q += ` ORDER BY created_at DESC, id DESC`
+	q += ` ORDER BY t.created_at DESC, t.id DESC`
 	rows, err := s.DB.Read.QueryContext(r.Context(), q, args...)
 	if err != nil {
 		s.serverErr(w, "tokens.list", err)
@@ -139,7 +165,7 @@ func (s *Server) ListTokens(w http.ResponseWriter, r *http.Request) {
 	out := []APITokenView{}
 	for rows.Next() {
 		var t APITokenView
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Source, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Source, &t.Name, &t.Scopes, &t.CreatedAt, &t.LastUsedAt, &t.SystemCode); err != nil {
 			s.serverErr(w, "tokens.scan", err)
 			return
 		}
@@ -160,19 +186,31 @@ func (s *Server) DeleteToken(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
+	if p.Kind != "user" {
+		s.writeError(w, http.StatusForbidden, "forbidden", "session required")
+		return
+	}
 	id, ok := parsePathID(r, "id")
 	if !ok {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be positive")
 		return
 	}
-	q := `DELETE FROM api_tokens WHERE id = ?`
-	args := []any{id}
-	if p.Role != "admin" {
-		q += ` AND user_id = ?`
-		args = append(args, p.UserID)
+	systemID, ok := s.requireNamespaceObject(w, r, p, "api_tokens", id)
+	if !ok {
+		return
 	}
 	var n int64
 	if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID)
+		if err != nil {
+			return err
+		}
+		q := `DELETE FROM api_tokens WHERE id = ? AND system_id = ?`
+		args := []any{id, systemID}
+		if current.Role != "admin" {
+			q += ` AND user_id = ?`
+			args = append(args, current.UserID)
+		}
 		res, err := tx.ExecContext(r.Context(), q, args...)
 		if err != nil {
 			return err
@@ -190,7 +228,8 @@ func (s *Server) DeleteToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: p, Action: "api_token.revoke",
+		SystemID: systemID,
+		Actor:    p, Action: "api_token.revoke",
 		ObjectKind: "api_token", ObjectID: id,
 		RequestID: logx.RequestID(r.Context()),
 	})

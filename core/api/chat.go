@@ -217,6 +217,9 @@ func (s *Server) chatPrincipal(w http.ResponseWriter, r *http.Request) *pluginap
 	if p == nil {
 		return nil
 	}
+	if _, ok := s.requireSystem(w, r, p); !ok {
+		return nil
+	}
 	if isDemoCorpusKind(p.Kind) {
 		s.writeError(w, http.StatusForbidden, "public_demo_denied", "archive research is unavailable in public demo sessions")
 		return nil
@@ -658,15 +661,17 @@ func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatSc
 	if !includeSensitive {
 		where = append(where, "COALESCE(d.sensitivity, '') IN ('', 'public', 'internal')")
 	}
+	var groups []int64
 	if p.Role != "admin" {
-		groups, err := chatPrincipalGroups(ctx, q, p.UserID)
+		var err error
+		groups, err = chatPrincipalGroups(ctx, q, p.UserID)
 		if err != nil {
 			return nil, nil, err
 		}
-		visibility, visibilityArgs := documentVisibilityWhere(p, groups)
-		where = append(where, visibility)
-		args = append(args, visibilityArgs...)
 	}
+	visibility, visibilityArgs := documentVisibilityWhere(ctx, p, groups)
+	where = append(where, visibility)
+	args = append(args, visibilityArgs...)
 	where, args = appendDocumentScopePredicates(where, args, scope.documentScope())
 	if scope.Query != "" {
 		plan, err := s.compileQueryWith(ctx, q, scope.Query)

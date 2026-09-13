@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/render/paths"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -38,19 +41,20 @@ type Report struct {
 // filesystem cleanup implementation.
 type Service struct {
 	db             *db.DB
-	renderRoot     string
 	realRenderRoot string
 	log            *slog.Logger
 }
 
 type candidate struct {
-	id      int64
-	ownerID int64
+	id       int64
+	ownerID  int64
+	systemID int64
 }
 
 type purgeFilter struct {
-	idsJSON string
-	cutoff  *int64
+	systemID int64
+	idsJSON  string
+	cutoff   *int64
 }
 
 // New constructs a permanent-delete service. renderRoot must already exist.
@@ -70,43 +74,17 @@ func New(database *db.DB, renderRoot string, log *slog.Logger) (*Service, error)
 		return nil, fmt.Errorf("trash.New: resolve real render root: %w", err)
 	}
 	return &Service{
-		db: database, renderRoot: absRoot, realRenderRoot: realRoot,
+		db: database, realRenderRoot: realRoot,
 		log: log.With("component", "trash"),
 	}, nil
 }
 
-// TrashedIDs returns all trashed document IDs in the requested owner scope.
-// A nil ownerID selects the archive-wide admin scope.
-func (s *Service) TrashedIDs(ctx context.Context, ownerID *int64) ([]int64, error) {
-	query := `SELECT id FROM documents WHERE trashed_at IS NOT NULL`
-	var args []any
-	if ownerID != nil {
-		query += ` AND owner_id = ?`
-		args = append(args, *ownerID)
-	}
-	query += ` ORDER BY id`
-	rows, err := s.db.Read.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 // PurgeOne permanently deletes one already-trashed document.
-func (s *Service) PurgeOne(ctx context.Context, id int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+func (s *Service) PurgeOne(ctx context.Context, systemID, id int64, actor *pluginapi.Principal, requestID string) (Report, error) {
 	if id <= 0 {
 		return Report{}, ErrNotTrashed
 	}
-	report, err := s.PurgeIDs(ctx, []int64{id}, actor, requestID)
+	report, err := s.PurgeIDs(ctx, systemID, []int64{id}, actor, requestID)
 	if err == nil && report.Purged == 0 {
 		return Report{}, ErrNotTrashed
 	}
@@ -115,7 +93,10 @@ func (s *Service) PurgeOne(ctx context.Context, id int64, actor *pluginapi.Princ
 
 // PurgeIDs permanently deletes the requested documents only when they are in Trash.
 // Missing and restored IDs are skipped.
-func (s *Service) PurgeIDs(ctx context.Context, ids []int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+func (s *Service) PurgeIDs(ctx context.Context, systemID int64, ids []int64, actor *pluginapi.Principal, requestID string) (Report, error) {
+	if systemID <= 0 || actor == nil {
+		return Report{}, ErrNotTrashed
+	}
 	if len(ids) == 0 {
 		return Report{}, nil
 	}
@@ -135,7 +116,7 @@ func (s *Service) PurgeIDs(ctx context.Context, ids []int64, actor *pluginapi.Pr
 	if err != nil {
 		return Report{}, err
 	}
-	return s.purge(ctx, purgeFilter{idsJSON: string(rawIDs)}, actor, requestID)
+	return s.purge(ctx, purgeFilter{systemID: systemID, idsJSON: string(rawIDs)}, actor, requestID)
 }
 
 // PurgeExpired permanently deletes every document whose 30-day recovery window
@@ -179,12 +160,16 @@ func (s *Service) runSweep(ctx context.Context) {
 func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginapi.Principal, requestID string) (Report, error) {
 	var (
 		candidates []candidate
-		rendered   []string
+		rendered   map[string]map[string]struct{}
 	)
 	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		query := `SELECT id, owner_id
+		query := `SELECT id, owner_id, system_id
 			FROM documents WHERE trashed_at IS NOT NULL`
 		var args []any
+		if filter.systemID != 0 {
+			query += ` AND system_id=?`
+			args = append(args, filter.systemID)
+		}
 		if filter.idsJSON != "" {
 			query += ` AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`
 			args = append(args, filter.idsJSON)
@@ -201,7 +186,7 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		}
 		for rows.Next() {
 			var c candidate
-			if err := rows.Scan(&c.id, &c.ownerID); err != nil {
+			if err := rows.Scan(&c.id, &c.ownerID, &c.systemID); err != nil {
 				_ = rows.Close()
 				return err
 			}
@@ -221,42 +206,96 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		for i, c := range candidates {
 			candidateIDs[i] = c.id
 		}
+		if actor != nil {
+			principal := authz.Principal{UserID: actor.UserID, Kind: actor.Kind, SystemID: filter.systemID, TokenSystemID: actor.TokenSystemID}
+			if principal.TokenSystemID == 0 && (actor.Kind == "token" || actor.TokenID != 0) {
+				principal.TokenSystemID = systems.DefaultID
+			}
+			if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id=? AND disabled=0`, actor.UserID).Scan(&principal.Role); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return ErrNotTrashed
+				}
+				return err
+			}
+			if actor.TokenID != 0 {
+				var bound int64
+				if err := tx.QueryRowContext(ctx, `SELECT system_id FROM api_tokens WHERE id=? AND user_id=?
+					AND revoked_at IS NULL`,
+					actor.TokenID, actor.UserID).Scan(&bound); err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return ErrNotTrashed
+					}
+					return err
+				}
+				if bound != principal.TokenSystemID {
+					return ErrNotTrashed
+				}
+			}
+			if principal.Role != "admin" {
+				var err error
+				principal.Groups, err = authz.LoadGroupsInTx(ctx, tx, actor.UserID)
+				if err != nil {
+					return err
+				}
+			}
+			decisions, err := (authz.ACLAuthorizer{DB: s.db}).CanDocumentsInTx(ctx, tx, principal, candidateIDs, authz.PermDelete)
+			if err != nil {
+				return err
+			}
+			for _, id := range candidateIDs {
+				if !decisions[id] {
+					return ErrNotTrashed
+				}
+			}
+		}
 		rawCandidateIDs, err := json.Marshal(candidateIDs)
 		if err != nil {
 			return err
 		}
 		idsJSON := string(rawCandidateIDs)
 
+		// Snapshot ownership before deleting the document and its journal. A path
+		// may still contain any earlier journaled blob after interrupted rendering.
 		pathRows, err := tx.QueryContext(ctx, `
-			SELECT move.prev_path, move.new_path, move.state
-			FROM render_moves AS move
-			WHERE move.document_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
-			  AND (
-				move.state = 'pending'
-				OR move.id = (
-					SELECT applied.id
-					FROM render_moves AS applied
+			WITH cleanup_paths AS (
+				SELECT move.document_id, move.new_path AS path
+				FROM render_moves AS move
+				WHERE move.document_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+				  AND (move.state = 'pending' OR move.id = (
+					SELECT applied.id FROM render_moves AS applied
 					WHERE applied.document_id = move.document_id AND applied.state = 'applied'
-					ORDER BY applied.applied_at DESC, applied.id DESC
-					LIMIT 1
-				)
-			  )
-		`, idsJSON)
+					ORDER BY applied.applied_at DESC, applied.id DESC LIMIT 1
+				  ))
+				UNION
+				SELECT document_id, prev_path FROM render_moves
+				WHERE document_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND state = 'pending'
+			)
+			SELECT cleanup.path, document.original_blob, COALESCE(document.archive_blob, ''),
+				CASE WHEN move.prev_path = cleanup.path THEN move.prev_blob ELSE '' END,
+				CASE WHEN move.new_path = cleanup.path THEN move.new_blob ELSE '' END
+			FROM cleanup_paths AS cleanup
+			JOIN documents AS document ON document.id = cleanup.document_id
+			LEFT JOIN render_moves AS move ON move.document_id = cleanup.document_id
+				AND (move.prev_path = cleanup.path OR move.new_path = cleanup.path)
+			WHERE cleanup.path <> ''
+		`, idsJSON, idsJSON)
 		if err != nil {
 			return err
 		}
-		pathSet := make(map[string]struct{})
+		rendered = make(map[string]map[string]struct{})
 		for pathRows.Next() {
-			var previous, next, state string
-			if err := pathRows.Scan(&previous, &next, &state); err != nil {
+			var relative, original, archive, previous, next string
+			if err := pathRows.Scan(&relative, &original, &archive, &previous, &next); err != nil {
 				_ = pathRows.Close()
 				return err
 			}
-			if next != "" {
-				pathSet[next] = struct{}{}
+			if rendered[relative] == nil {
+				rendered[relative] = make(map[string]struct{})
 			}
-			if state == "pending" && previous != "" {
-				pathSet[previous] = struct{}{}
+			for _, hash := range []string{original, archive, previous, next} {
+				if hash != "" {
+					rendered[relative][hash] = struct{}{}
+				}
 			}
 		}
 		if err := pathRows.Close(); err != nil {
@@ -264,9 +303,6 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 		}
 		if err := pathRows.Err(); err != nil {
 			return err
-		}
-		for path := range pathSet {
-			rendered = append(rendered, path)
 		}
 
 		statements := []struct {
@@ -302,7 +338,8 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 	report := Report{Purged: len(candidates)}
 	for _, c := range candidates {
 		audit.Log(ctx, s.db, s.log, audit.Event{
-			Actor: actor, Action: "document.purge", ObjectKind: "document", ObjectID: c.id,
+			SystemID: c.systemID,
+			Actor:    actor, Action: "document.purge", ObjectKind: "document", ObjectID: c.id,
 			After: map[string]any{"owner_id": c.ownerID}, RequestID: requestID,
 		})
 	}
@@ -313,66 +350,98 @@ func (s *Service) purge(ctx context.Context, filter purgeFilter, actor *pluginap
 	return report, nil
 }
 
-func (s *Service) cleanupRendered(paths []string, report *Report) {
-	for _, relative := range paths {
-		target, ok := s.renderedTarget(relative)
-		if !ok {
-			report.CleanupFailures++
-			s.log.Warn("trash.render_path_rejected")
-			continue
-		}
-		info, err := os.Lstat(target)
+func (s *Service) cleanupRendered(rendered map[string]map[string]struct{}, report *Report) {
+	for relative, hashes := range rendered {
+		removed, err := s.removeRenderedLink(relative, hashes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			report.CleanupFailures++
-			s.log.Warn("trash.render_stat_failed", "err", err.Error())
+			s.log.Warn("trash.render_cleanup_failed", "path", relative, "err", err.Error())
 			continue
 		}
-		if info.IsDir() {
-			report.CleanupFailures++
-			s.log.Warn("trash.render_path_is_directory")
-			continue
+		if removed {
+			report.RenderedFilesRemoved++
 		}
-		realParent, err := filepath.EvalSymlinks(filepath.Dir(target))
-		if err != nil || !underRoot(s.realRenderRoot, realParent) {
-			report.CleanupFailures++
-			if err != nil {
-				s.log.Warn("trash.render_parent_failed", "err", err.Error())
-			} else {
-				s.log.Warn("trash.render_parent_rejected")
-			}
-			continue
-		}
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-			report.CleanupFailures++
-			s.log.Warn("trash.render_remove_failed", "err", err.Error())
-			continue
-		}
-		report.RenderedFilesRemoved++
 	}
 }
 
-func (s *Service) renderedTarget(relative string) (string, bool) {
+func (s *Service) removeRenderedLink(relative string, hashes map[string]struct{}) (bool, error) {
+	dir, target, err := s.renderedParent(relative)
+	if err != nil {
+		return false, err
+	}
+	defer dir.Close()
+	info, err := dir.Lstat(target)
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, fmt.Errorf("refusing non-document file %q", target)
+	}
+	link, err := dir.Readlink(target)
+	if err != nil {
+		return false, err
+	}
+	for hash := range hashes {
+		if paths.MatchesCASLink(link, hash) {
+			if err := dir.Remove(target); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("refusing foreign symlink %q", target)
+}
+
+// Pin each real parent so cleanup cannot follow a symlink into another directory.
+func (s *Service) renderedParent(relative string) (*os.Root, string, error) {
 	if relative == "" || filepath.IsAbs(relative) {
-		return "", false
+		return nil, "", fmt.Errorf("invalid rendered path %q", relative)
 	}
 	clean := filepath.Clean(filepath.FromSlash(relative))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", false
+		return nil, "", fmt.Errorf("rendered path escapes root: %q", relative)
 	}
-	target := filepath.Join(s.renderRoot, clean)
-	if !underRoot(s.renderRoot, target) {
-		return "", false
+	info, err := os.Lstat(s.realRenderRoot)
+	if err != nil {
+		return nil, "", err
 	}
-	return target, true
-}
-
-func underRoot(root, target string) bool {
-	relative, err := filepath.Rel(root, target)
-	if err != nil || filepath.IsAbs(relative) {
-		return false
+	if !info.IsDir() {
+		return nil, "", errors.New("refusing symlinked render root")
 	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	dir, err := os.OpenRoot(s.realRenderRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	opened, err := dir.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		dir.Close()
+		return nil, "", errors.New("render root changed while opening")
+	}
+	components := strings.Split(filepath.ToSlash(clean), "/")
+	for _, component := range components[:len(components)-1] {
+		info, err := dir.Lstat(component)
+		if err != nil {
+			dir.Close()
+			return nil, "", err
+		}
+		if !info.IsDir() {
+			dir.Close()
+			return nil, "", fmt.Errorf("refusing symlinked render parent %q", component)
+		}
+		next, err := dir.OpenRoot(component)
+		dir.Close()
+		if err != nil {
+			return nil, "", err
+		}
+		opened, err := next.Stat(".")
+		if err != nil || !os.SameFile(info, opened) {
+			next.Close()
+			return nil, "", errors.New("render parent changed while opening")
+		}
+		dir = next
+	}
+	return dir, components[len(components)-1], nil
 }

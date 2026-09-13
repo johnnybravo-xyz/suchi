@@ -40,7 +40,7 @@ var errMalformedProposalVars = fmt.Errorf("rescan: malformed proposal vars")
 
 // ProposalStillNeeded reports whether a rescan proposal still has eligible
 // work. target_documents is a bounded preview and is deliberately ignored.
-func ProposalStillNeeded(ctx context.Context, d *db.DB, vars map[string]any) (bool, error) {
+func ProposalStillNeeded(ctx context.Context, d *db.DB, systemID int64, vars map[string]any) (bool, error) {
 	kind, ok := vars["kind"].(string)
 	if !ok || kind == "" {
 		return false, errMalformedProposalVars
@@ -70,7 +70,7 @@ func ProposalStillNeeded(ctx context.Context, d *db.DB, vars map[string]any) (bo
 		return false, errMalformedProposalVars
 	}
 
-	count, err := CountProposalStale(ctx, d, kind, currentVersion)
+	count, err := CountProposalStale(ctx, d, systemID, kind, currentVersion)
 	if err != nil {
 		return false, err
 	}
@@ -82,7 +82,7 @@ func ProposalStillNeeded(ctx context.Context, d *db.DB, vars map[string]any) (bo
 // `engine` is the approvals engine (already Set-Default'd by main.go).
 // `versions` is the pipeline snapshot from main.go (postingest.PipelineVersion*
 // + llmclassifier.PipelineVersionLLM).
-func EnsureProposals(ctx context.Context, d *db.DB, engine *approvals.Engine, versions Versions) error {
+func EnsureProposals(ctx context.Context, d *db.DB, systemID int64, engine *approvals.Engine, versions Versions) error {
 	for _, kind := range kindsToCheck {
 		current := versionFor(kind, versions)
 		if current <= 0 {
@@ -90,7 +90,7 @@ func EnsureProposals(ctx context.Context, d *db.DB, engine *approvals.Engine, ve
 			// Cancel any pending run left over from when the kind
 			// WAS wired; the archive can never advance those rows,
 			// so nagging the operator to approve a rescan is stale.
-			pending, err := findPendingRun(ctx, d, kind)
+			pending, err := findPendingRun(ctx, d, systemID, kind)
 			if err != nil {
 				return fmt.Errorf("rescan.detect: find pending %s: %w", kind, err)
 			}
@@ -101,11 +101,11 @@ func EnsureProposals(ctx context.Context, d *db.DB, engine *approvals.Engine, ve
 			}
 			continue
 		}
-		stale, err := CountProposalStale(ctx, d, kind, current)
+		stale, err := CountProposalStale(ctx, d, systemID, kind, current)
 		if err != nil {
 			return fmt.Errorf("rescan.detect: count stale %s: %w", kind, err)
 		}
-		if err := reconcile(ctx, d, engine, kind, current, stale); err != nil {
+		if err := reconcile(ctx, d, systemID, engine, kind, current, stale); err != nil {
 			return fmt.Errorf("rescan.detect: reconcile %s: %w", kind, err)
 		}
 	}
@@ -127,8 +127,8 @@ func versionFor(kind string, v Versions) int {
 
 // reconcile is the per-kind decision: cancel stale pending runs,
 // start a new one if warranted, or leave things be.
-func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind string, current, stale int) error {
-	pending, err := findPendingRun(ctx, d, kind)
+func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.Engine, kind string, current, stale int) error {
+	pending, err := findPendingRun(ctx, d, systemID, kind)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 			SELECT 1 FROM approval_runs r
 			JOIN approval_defs def ON def.id = r.def_id
 			JOIN approval_tasks t ON t.run_id = r.id
-			WHERE def.slug = ?
+			WHERE r.system_id = ? AND def.slug = ?
 			  AND json_extract(r.vars_json, '$.kind') = ?
 			  AND json_extract(r.vars_json, '$.current_version') = ?
 			  AND t.status = 'resolved' AND t.resolved_choice = 'dismiss'
@@ -174,7 +174,7 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 			WHERE run_id = ? AND status = 'resolved'
 			  AND resolved_choice IN ('approve_all', 'approve_sample')
 		)
-	`, ProposalSlug, kind, current, pendingID).Scan(&dismissed)
+	`, systemID, ProposalSlug, kind, current, pendingID).Scan(&dismissed)
 	if err != nil {
 		return fmt.Errorf("check rescan dismissal for %s: %w", kind, err)
 	}
@@ -191,7 +191,7 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 		return nil
 	}
 	// Case 4: no pending run, but stale > 0. Start one.
-	targets, err := ProposalTargets(ctx, d, kind, current, proposalTargetPreview)
+	targets, err := ProposalTargets(ctx, d, systemID, kind, current, proposalTargetPreview)
 	if err != nil {
 		return fmt.Errorf("load rescan-proposal targets for %s: %w", kind, err)
 	}
@@ -201,7 +201,7 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 		"stale_count":      stale,
 		"target_documents": targets,
 	}
-	runID, err := engine.Start(ctx, ProposalSlug, 0, vars, systemActor())
+	runID, err := engine.Start(ctx, systemID, ProposalSlug, 0, vars, systemActor())
 	if err != nil {
 		return fmt.Errorf("start rescan-proposal for %s: %w", kind, err)
 	}
@@ -217,7 +217,7 @@ func reconcile(ctx context.Context, d *db.DB, engine *approvals.Engine, kind str
 // the kind match.
 //
 // Returns (nil, nil) when no matching run — not an error.
-func findPendingRun(ctx context.Context, d *db.DB, kind string) (*approvals.Run, error) {
+func findPendingRun(ctx context.Context, d *db.DB, systemID int64, kind string) (*approvals.Run, error) {
 	var (
 		id           int64
 		defID        int64
@@ -228,12 +228,12 @@ func findPendingRun(ctx context.Context, d *db.DB, kind string) (*approvals.Run,
 		SELECT r.id, r.def_id, r.current_state, r.vars_json
 		  FROM approval_runs r
 		  JOIN approval_defs def ON def.id = r.def_id
-		 WHERE def.slug = ?
+		 WHERE r.system_id = ? AND def.slug = ?
 		   AND r.state = 'running'
 		   AND json_extract(r.vars_json, '$.kind') = ?
 		 ORDER BY r.id DESC
 		 LIMIT 1
-	`, ProposalSlug, kind).Scan(&id, &defID, &currentState, &varsJSON)
+	`, systemID, ProposalSlug, kind).Scan(&id, &defID, &currentState, &varsJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -241,6 +241,7 @@ func findPendingRun(ctx context.Context, d *db.DB, kind string) (*approvals.Run,
 		return nil, err
 	}
 	run := &approvals.Run{
+		SystemID:     systemID,
 		ID:           id,
 		DefID:        defID,
 		CurrentState: currentState,

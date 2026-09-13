@@ -28,19 +28,20 @@ import (
 func TestListTasksScopesJobsToVisibleDocuments(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
 	seedUser(t, d, 5)
 	seedUser(t, d, 6)
 	if _, err := d.Write.ExecContext(context.Background(), `
 		UPDATE users SET role = 'member' WHERE id IN (5, 6);
-		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (40, 49, 'System', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system) VALUES (49, 40, 49, 'Inbox', 1);
-		INSERT INTO documents(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
-		VALUES (101, 5, 'sha-101', 1, 'Mine', 49, 0, 0),
-		       (102, 6, 'sha-102', 1, 'Theirs', 49, 0, 0);
-		INSERT INTO jobs(id, kind, doc_id, state, next_run_at, created_at, updated_at, last_error)
-		VALUES (201, 'post-ingest', 101, 'pending', 0, 1, 1, NULL),
-		       (202, 'post-ingest', 102, 'dead', 0, 2, 2, 'private failure'),
-		       (203, 'maintenance', NULL, 'dead', 0, 3, 3, 'operator only');
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 40, 49, 'System', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system) VALUES (1, 49, 40, 49, 'Inbox', 1);
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (1, 101, 5, 'sha-101', 1, 'Mine', 49, 0, 0),
+		       (1, 102, 6, 'sha-102', 1, 'Theirs', 49, 0, 0);
+		INSERT INTO jobs(system_id, id, kind, doc_id, state, next_run_at, created_at, updated_at, last_error)
+		VALUES (1, 201, 'post-ingest', 101, 'pending', 0, 1, 1, NULL),
+		       (1, 202, 'post-ingest', 102, 'dead', 0, 2, 2, 'private failure'),
+		       (1, 203, 'maintenance', NULL, 'dead', 0, 3, 3, 'operator only');
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -104,14 +105,14 @@ func TestListTasksCountsUseTheRequestedJobFilters(t *testing.T) {
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 	seedUser(t, d, 5)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (40, 49, 'System', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system) VALUES (49, 40, 49, 'Inbox', 1);
-		INSERT INTO documents(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
-		VALUES (101, 5, 'sha-101', 1, 'Mine', 49, 0, 0);
-		INSERT INTO jobs(id, kind, doc_id, state, next_run_at, created_at, updated_at)
-		VALUES (201, 'post-ingest', 101, 'pending', 0, 1, 1),
-		       (202, 'post-classify', 101, 'dead', 0, 2, 2),
-		       (203, 'post-ingest', 101, 'done', 0, 3, 3);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 40, 49, 'System', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system) VALUES (1, 49, 40, 49, 'Inbox', 1);
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+		VALUES (1, 101, 5, 'sha-101', 1, 'Mine', 49, 0, 0);
+		INSERT INTO jobs(system_id, id, kind, doc_id, state, next_run_at, created_at, updated_at)
+		VALUES (1, 201, 'post-ingest', 101, 'pending', 0, 1, 1),
+		       (1, 202, 'post-classify', 101, 'dead', 0, 2, 2),
+		       (1, 203, 'post-ingest', 101, 'done', 0, 3, 3);
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +163,12 @@ func TestListTasksCountsUseTheRequestedJobFilters(t *testing.T) {
 func TestRetryDeadJob(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
+	docID := seedApprovalDocument(t, d, "retry-job", 0, false)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jobs(id, kind, doc_id, state, attempts, next_run_at, last_error, created_at, updated_at)
-		VALUES (301, 'post-classify', 14, 'dead', 4, 0, 'bad model', 1, 1)
-	`); err != nil {
+		INSERT INTO jobs(system_id, id, kind, doc_id, state, attempts, next_run_at, last_error, created_at, updated_at)
+		VALUES (1, 301, 'post-classify', ?, 'dead', 4, 0, 'bad model', 1, 1)
+	`, docID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,9 +195,10 @@ func TestRetryDeadJob(t *testing.T) {
 func TestDismissDeadJob(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+	seedUser(t, d, 1)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jobs(id, kind, state, attempts, next_run_at, last_error, created_at, updated_at)
-		VALUES (302, 'maintenance', 'dead', 0, 0, 'expected test failure', 1, 1)
+		INSERT INTO jobs(system_id, id, kind, state, attempts, next_run_at, last_error, created_at, updated_at)
+		VALUES (1, 302, 'maintenance', 'dead', 0, 0, 'expected test failure', 1, 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -300,6 +304,8 @@ func seedApprovalTaskFixture(t *testing.T, d *db.DB, seed approvalTaskSeed) (def
 	t.Helper()
 	ctx := context.Background()
 	seedUser(t, d, 1)
+	seedUser(t, d, 5)
+	seedUser(t, d, 6)
 	if seed.Slug == "" {
 		seed.Slug = "t"
 	}
@@ -317,8 +323,8 @@ func seedApprovalTaskFixture(t *testing.T, d *db.DB, seed approvalTaskSeed) (def
 		t.Fatal(err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO approval_defs(slug, version, spec_json, active, created_at, created_by)
-		VALUES (?, 1, '{}', 1, 0, 1)
+		INSERT OR IGNORE INTO approval_defs(system_id, slug, version, spec_json, active, created_at, created_by)
+		VALUES (1, ?, 1, '{}', 1, 0, 1)
 	`, seed.Slug); err != nil {
 		t.Fatal(err)
 	}
@@ -331,8 +337,8 @@ func seedApprovalTaskFixture(t *testing.T, d *db.DB, seed approvalTaskSeed) (def
 		docID = *seed.DocID
 	}
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO approval_runs(def_id, doc_id, state, current_state, vars_json, state_entered_at, started_at)
-		VALUES (?, ?, ?, 'wait', ?, 0, 0)
+		INSERT INTO approval_runs(system_id, def_id, doc_id, state, current_state, vars_json, state_entered_at, started_at)
+		VALUES (1, ?, ?, ?, 'wait', ?, 0, 0)
 	`, defID, docID, seed.RunState, string(varsJSON))
 	if err != nil {
 		t.Fatal(err)
@@ -357,10 +363,10 @@ func seedApprovalDocument(t *testing.T, d *db.DB, sha string, ocrVersion int, tr
 	t.Helper()
 	seedUser(t, d, 1)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'Test', 0);
-		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1)
+		INSERT OR IGNORE INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'Test', 0);
+		INSERT OR IGNORE INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -369,9 +375,9 @@ func seedApprovalDocument(t *testing.T, d *db.DB, sha string, ocrVersion int, tr
 		trashedAt = int64(1)
 	}
 	res, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, jd_category_id, trashed_at,
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, jd_category_id, trashed_at,
 		                      created_at, updated_at, pipeline_version_ocr)
-		VALUES (1, ?, 0, ?, 1, ?, 0, 0, ?)
+		VALUES (1, 1, ?, 0, ?, 1, ?, 0, 0, ?)
 	`, sha, sha, trashedAt, ocrVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -393,19 +399,20 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 	_, _, _ = seedApprovalTask(t, d, "user:6", "open")
 	seedUser(t, d, 5)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_areas(code_start, code_end, name, position)
-		VALUES (20, 29, 'Money', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system)
-		VALUES (8, 20, 24, 'Receipts', 0);
-		INSERT INTO documents(id, owner_id, original_blob, original_size, title,
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 20, 29, 'Money', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 8, 20, 24, 'Receipts', 0);
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title,
 		                      jd_category_id, thumb_sha, created_at, updated_at)
-		VALUES (17, 5, 'sha-17', 1, 'Bank statement.pdf', 8, 'thumb-17', 0, 0);
+		VALUES (1, 17, 5, 'sha-17', 1, 'Bank statement.pdf', 8, 'thumb-17', 0, 0);
 		UPDATE approval_runs SET doc_id = 17 WHERE id = ?;
 	`, firstRun); err != nil {
 		t.Fatal(err)
 	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), memberPrincipal(5)))
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
 	if err != nil {
 		t.Fatal(err)
@@ -442,6 +449,7 @@ func TestApprovalTasksForUser_ExcludesResolved(t *testing.T) {
 	_, _, _ = seedApprovalTask(t, d, "user:5", "expired")
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), memberPrincipal(5)))
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 50)
 	if err != nil {
 		t.Fatal(err)
@@ -463,6 +471,7 @@ func TestApprovalTasksForUser_LimitRespectedOpenAccurate(t *testing.T) {
 	}
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), memberPrincipal(5)))
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -488,6 +497,9 @@ func TestApprovalTasksForUser_OnlyReturnsActionableTasks(t *testing.T) {
 	staleDoc := seedApprovalDocument(t, d, "sha-stale", 0, true)
 	seedApprovalTaskFixture(t, d, approvalTaskSeed{DocID: &liveDoc})
 	seedApprovalTaskFixture(t, d, approvalTaskSeed{DocID: &trashedDoc})
+	if _, err := d.Write.Exec(`INSERT INTO object_acls(object_kind,object_id,principal_kind,principal_id,perm_bits,created_at) VALUES ('document',?,'user',5,1,0),('document',?,'user',5,1,0)`, liveDoc, trashedDoc); err != nil {
+		t.Fatal(err)
+	}
 	seedApprovalTaskFixture(t, d, approvalTaskSeed{})
 	seedApprovalTaskFixture(t, d, approvalTaskSeed{RunState: "done"})
 	seedApprovalTaskFixture(t, d, approvalTaskSeed{
@@ -496,6 +508,7 @@ func TestApprovalTasksForUser_OnlyReturnsActionableTasks(t *testing.T) {
 	})
 
 	r := httptest.NewRequest("GET", "/api/tasks/", nil)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), memberPrincipal(5)))
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +560,7 @@ func TestApprovalTasksForUser_RescanPaginationWithSingleReadConnection(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	r := httptest.NewRequest(http.MethodGet, "/api/tasks/", nil).WithContext(ctx)
+	r = r.WithContext(auth.WithPrincipal(r.Context(), memberPrincipal(5)))
 	tasks, open, err := s.approvalTasksForUser(r, 5, "member", 1)
 	if err != nil {
 		t.Fatal(err)
@@ -580,6 +594,7 @@ func TestCountVisibleApprovalTasks_RescanWithSingleReadConnection(t *testing.T) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	ctx = auth.WithPrincipal(ctx, memberPrincipal(5))
 	count, err := s.countVisibleApprovalTasks(ctx, 5, "member", "open")
 	if err != nil {
 		t.Fatal(err)
@@ -614,6 +629,13 @@ func TestApprovalResolveTask_TerminalConflictAndUnavailableNotFound(t *testing.T
 		Slug: rescan.ProposalSlug,
 		Vars: map[string]any{"kind": "content", "current_version": 2},
 	})
+	if _, err := d.Write.ExecContext(context.Background(), `
+		UPDATE users SET role = 'member' WHERE id = 5;
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at)
+		VALUES ('document', ?, 'user', 5, 1, 0)
+	`, trashedDoc); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name     string
@@ -627,7 +649,7 @@ func TestApprovalResolveTask_TerminalConflictAndUnavailableNotFound(t *testing.T
 		{"claimed trashed document", claimedTrashedID, http.StatusNotFound, "no_task"},
 		{"open stopped run", stoppedRunID, http.StatusNotFound, "no_task"},
 		{"stale rescan proposal", staleProposalID, http.StatusNotFound, "no_task"},
-		{"missing task", 999999, http.StatusNotFound, "no_task"},
+		{"missing task", 999999, http.StatusNotFound, "not_found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/approvals/tasks/resolve",

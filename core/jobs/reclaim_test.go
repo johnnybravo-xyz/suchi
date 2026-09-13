@@ -6,6 +6,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -34,15 +35,43 @@ func openDB(t *testing.T) *db.DB {
 	return d
 }
 
+func seedJobDocuments(t *testing.T, d *db.DB, ids ...int64) {
+	t.Helper()
+	if err := d.WriteTx(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `
+			INSERT INTO users(id, email, display_name, role, created_at, updated_at)
+			VALUES (1, 'owner@example.test', 'Owner', 'admin', 0, 0);
+			INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+			VALUES (1, 40, 49, 'System', 0);
+			INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+			VALUES (1, 1, 40, 49, 'Inbox', 1);
+		`); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, jd_category_id, created_at, updated_at)
+				VALUES (1, ?, 1, printf('%064x', ?), 1, 1, 0, 0)
+			`, id, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Seed a running job and verify the boot reaper resets it.
 func TestReclaimOrphaned(t *testing.T) {
 	d := openDB(t)
+	seedJobDocuments(t, d, 1)
 	ctx := context.Background()
 
 	// The dispatcher owns all job kinds in this build.
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO jobs(kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-		VALUES ('post-ingest', 1, '{}', 'running', 0, 0, 0);
+		INSERT INTO jobs(kind, doc_id, system_id, payload, state, next_run_at, created_at, updated_at)
+		VALUES ('post-ingest', 1, 1, '{}', 'running', 0, 0, 0);
 	`); err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,7 @@ func openHandlerDocument(t *testing.T, title, content string) (*db.DB, int64) {
 	if err := db.Migrate(ctx, d, migs, silentLog()); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, silentLog(), jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	res, err := d.Write.ExecContext(ctx, `
@@ -52,14 +52,14 @@ func openHandlerDocument(t *testing.T, title, content string) (*db.DB, int64) {
 		t.Fatal(err)
 	}
 	ownerID, _ := res.LastInsertId()
-	inboxID, err := jd.InboxCategoryID(ctx, d)
+	inboxID, err := jd.InboxCategoryID(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res, err = d.Write.ExecContext(ctx, `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, content,
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, content,
 		                      jd_category_id, created_at, updated_at)
-		VALUES (?, 'handler-test-sha', 10, ?, ?, ?, 0, 0)
+		VALUES (1, ?, 'handler-test-sha', 10, ?, ?, ?, 0, 0)
 	`, ownerID, title, content, inboxID)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +381,7 @@ func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewHandler(p, d, silentLog())
-	if err := h.Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+	if err := h.Handle(ctx, pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -612,8 +612,8 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Statement", "credit card statement")
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO correspondents(id, name, slug, created_at, updated_at)
-		VALUES (1, 'Header Sender', 'header-sender', 0, 0);
+		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 1, 'Header Sender', 'header-sender', 0, 0);
 		UPDATE documents SET correspondent_id = 1 WHERE id = ?;
 		INSERT INTO document_correspondents(document_id, correspondent_id, role)
 		VALUES (?, 1, 'sender');
@@ -630,7 +630,7 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -662,8 +662,8 @@ func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Invoice", "Example supplies invoice")
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO correspondents(id, name, slug, created_at, updated_at)
-		VALUES (1, 'EXAMPLE SUPPLIES PRIVATE LIMITED',
+		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 1, 'EXAMPLE SUPPLIES PRIVATE LIMITED',
 		        'example-supplies-private-limited', 0, 0);
 		INSERT INTO document_correspondents(document_id, correspondent_id, role)
 		VALUES (?, 1, 'sender');
@@ -680,7 +680,7 @@ func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{Kind: Kind, DocID: docID}); err != nil {
+	if err := NewHandler(p, d, silentLog()).Handle(ctx, pluginapi.Event{SystemID: 1, Kind: Kind, DocID: docID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1002,7 +1002,7 @@ func TestDisableStopsClassifyUntilSetConfig(t *testing.T) {
 func TestDisabledHandlerIsNoOp(t *testing.T) {
 	p := NewDisabled(silentLog())
 	h := NewHandler(p, nil, silentLog())
-	if err := h.Handle(context.Background(), pluginapi.Event{DocID: 42}); err != nil {
+	if err := h.Handle(context.Background(), pluginapi.Event{SystemID: 1, DocID: 42}); err != nil {
 		t.Fatal(err)
 	}
 }

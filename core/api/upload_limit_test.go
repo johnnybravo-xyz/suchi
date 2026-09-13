@@ -29,10 +29,11 @@ import (
 func seedUploadCategory(t *testing.T, d *db.DB) {
 	t.Helper()
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
-		VALUES (10, 19, 'test-area', 0);
-		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 10, 11, 'test-category', 0);
+		INSERT OR IGNORE INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 10, 19, 'test-area', 0);
+		INSERT OR IGNORE INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 10, 11, 'test-category', 1);
+		UPDATE jd_systems SET inbox_category_id=1 WHERE id=1;
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -65,17 +66,6 @@ func TestUpload_BodyTooLarge(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	seedUploadCategory(t, d)
-	// Upload path resolves inbox from settings.jd_inbox_category_id.
-	if _, err := d.Write.ExecContext(context.Background(),
-		`UPDATE jd_categories SET system = 1 WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO settings(key, value_json, updated_at)
-		VALUES ('jd_inbox_category_id', '1', 0)
-	`); err != nil {
-		t.Fatal(err)
-	}
 
 	casDir := t.TempDir()
 	cas, err := blob.New(casDir)
@@ -165,17 +155,6 @@ func TestUpload_AtCapSucceeds(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	seedUploadCategory(t, d)
-	// Upload path resolves inbox from settings.jd_inbox_category_id.
-	if _, err := d.Write.ExecContext(context.Background(),
-		`UPDATE jd_categories SET system = 1 WHERE id = 1`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO settings(key, value_json, updated_at)
-		VALUES ('jd_inbox_category_id', '1', 0)
-	`); err != nil {
-		t.Fatal(err)
-	}
 
 	casDir := t.TempDir()
 	cas, err := blob.New(casDir)

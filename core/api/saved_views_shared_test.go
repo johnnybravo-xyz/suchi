@@ -26,8 +26,8 @@ func seedSavedView(t *testing.T, d *db.DB, ownerID int64, name string, shared bo
 		sh = 1
 	}
 	res, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-		VALUES (?, ?, '{}', 'table', 0, ?, 0, 0)
+		INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+		VALUES (1, ?, ?, '{}', 'table', 0, ?, 0, 0)
 	`, ownerID, name, sh)
 	if err != nil {
 		t.Fatal(err)

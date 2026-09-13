@@ -22,6 +22,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 	"github.com/makiuchi-d/gozxing"
@@ -44,6 +45,10 @@ func (s *Server) CreateMobilePairing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	p := s.mobilePairingSession(w, r)
 	if p == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
 		return
 	}
 	if s.TokenIssuer == nil {
@@ -94,16 +99,17 @@ func (s *Server) CreateMobilePairing(w http.ResponseWriter, r *http.Request) {
 	expires := time.Now().Add(5 * time.Minute).Unix()
 	sum := sha256.Sum256([]byte(code))
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(r.Context(), `DELETE FROM mobile_pairings WHERE expires_at <= ?`, time.Now().Unix())
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(r.Context(), `DELETE FROM mobile_pairings WHERE expires_at <= ? OR user_id = ?`, time.Now().Unix(), p.UserID)
 		if err != nil {
 			return err
 		}
 		result, err := tx.ExecContext(r.Context(), `
-			INSERT INTO mobile_pairings(user_id, code_hash, name, expires_at)
-			SELECT id, ?, ?, ? FROM users WHERE id = ? AND disabled = 0
-			ON CONFLICT(user_id) DO UPDATE SET
-			  code_hash = excluded.code_hash, name = excluded.name, expires_at = excluded.expires_at
-		`, hex.EncodeToString(sum[:]), name, expires, p.UserID)
+			INSERT INTO mobile_pairings(user_id, system_id, code_hash, name, expires_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, p.UserID, systemID, hex.EncodeToString(sum[:]), name, expires)
 		if err != nil {
 			return err
 		}
@@ -133,6 +139,10 @@ func (s *Server) DeleteMobilePairing(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	var body struct {
 		Code string `json:"code"`
 	}
@@ -141,17 +151,22 @@ func (s *Server) DeleteMobilePairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256([]byte(body.Code))
-	if _, err := s.DB.ExecWrite(r.Context(), `DELETE FROM mobile_pairings WHERE user_id = ? AND code_hash = ?`,
-		p.UserID, hex.EncodeToString(sum[:])); err != nil {
+	if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := s.currentWriterPrincipal(r.Context(), tx, p, systemID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(r.Context(), `DELETE FROM mobile_pairings WHERE user_id = ? AND system_id = ? AND code_hash = ?`,
+			p.UserID, systemID, hex.EncodeToString(sum[:]))
+		return err
+	}); err != nil {
 		s.serverErr(w, "mobile_pairing.delete", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ExchangeMobilePairing consumes the code before issuing the durable token.
-// TokenIssuer owns its own write transaction, so it must run after commit.
-// An issuance failure deliberately burns the code; start a new pairing.
+// ExchangeMobilePairing consumes the code, checks current membership and inserts
+// the bound token in one writer transaction. Failed issuance restores the code.
 func (s *Server) ExchangeMobilePairing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body struct {
@@ -167,40 +182,49 @@ func (s *Server) ExchangeMobilePairing(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_name", "device name must be <= 64 chars without control characters")
 		return
 	}
+	if s.TokenIssuer == nil {
+		s.writeError(w, http.StatusNotImplemented, "no_issuer", "token issuance is unavailable")
+		return
+	}
 	sum := sha256.Sum256([]byte(body.Code))
-	var userID int64
-	var name string
+	var userID, systemID int64
+	var name, token string
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(r.Context(), `
+		err := tx.QueryRowContext(r.Context(), `
 			DELETE FROM mobile_pairings
 			WHERE code_hash = ? AND expires_at > ?
 			  AND user_id IN (SELECT id FROM users WHERE disabled = 0)
-			RETURNING user_id, name
-		`, hex.EncodeToString(sum[:]), time.Now().Unix()).Scan(&userID, &name)
+			RETURNING user_id, system_id, name
+		`, hex.EncodeToString(sum[:]), time.Now().Unix()).Scan(&userID, &systemID, &name)
+		if err != nil {
+			return err
+		}
+		allowed, err := systems.CanEnter(r.Context(), tx, userID, systemID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return sql.ErrNoRows
+		}
+		if deviceName != "" {
+			name = deviceName
+		}
+		token, err = s.TokenIssuer(r.Context(), tx, userID, systemID, name, mobilePairingScopes, auth.TokenSourceMobilePairing)
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusBadRequest, "pairing_invalid", "pairing code is invalid or expired")
 		return
 	}
 	if err != nil {
-		s.serverErr(w, "mobile_pairing.consume", err)
-		return
-	}
-	if s.TokenIssuer == nil {
-		s.writeError(w, http.StatusNotImplemented, "no_issuer", "token issuance is unavailable")
-		return
-	}
-	if deviceName != "" {
-		name = deviceName
-	}
-	token, err := s.TokenIssuer(r.Context(), userID, name, mobilePairingScopes, auth.TokenSourceMobilePairing)
-	if err != nil {
+		// Issuer errors may contain credentials; keep logs and responses generic.
 		s.Log.Error("api.mobile_pairing.issue", "user_id", userID)
-		s.writeError(w, http.StatusInternalServerError, "internal", "could not issue mobile token; start a new pairing")
+		s.writeError(w, http.StatusInternalServerError, "internal", "could not issue mobile token")
 		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-		Actor: &pluginapi.Principal{Kind: "user", UserID: userID}, Action: "api_token.create",
+		SystemID: systemID,
+		Actor:    &pluginapi.Principal{Kind: "user", UserID: userID}, Action: "api_token.create",
 		ObjectKind: "api_token", After: map[string]any{"name": name, "scopes": mobilePairingScopes, "method": "mobile_pairing"},
 		RequestID: logx.RequestID(r.Context()),
 	})

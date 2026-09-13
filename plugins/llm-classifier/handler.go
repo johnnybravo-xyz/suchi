@@ -81,11 +81,14 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		return nil
 	}
 
-	// Load the installation's JD categories so the model gets real
-	// codes + names instead of a bare "integer 10-99" hint. Empty
-	// slice on read error keeps classify best-effort — the model
-	// falls back to guessing rather than blocking on a taxonomy read.
-	jdCats, err := h.loadJDCategories(ctx)
+	var systemID int64
+	if err := h.db.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, e.DocID).Scan(&systemID); err != nil {
+		return err
+	}
+	if e.SystemID != 0 && e.SystemID != systemID {
+		return errors.New("classifier: mismatched job system")
+	}
+	jdCats, err := h.loadJDCategories(ctx, systemID)
 	if err != nil {
 		log.Warn("llm-classifier.jd_load_error", "err", err.Error())
 	}
@@ -213,7 +216,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 					return err
 				}
 			} else {
-				corID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableCorrespondents,
+				corID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents,
 					res.Correspondent, now)
 				if err != nil {
 					return err
@@ -237,7 +240,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 		if res.JDCategory > 0 {
 			var catID int64
 			err := tx.QueryRowContext(ctx,
-				`SELECT id FROM jd_categories WHERE code = ?`, res.JDCategory).Scan(&catID)
+				`SELECT id FROM jd_categories WHERE system_id = ? AND code = ? AND system = 0`, systemID, res.JDCategory).Scan(&catID)
 			if err == nil {
 				// Only move OUT of the inbox — never override an
 				// already-classified doc. Operators expect the LLM to
@@ -246,7 +249,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 					UPDATE documents
 					SET jd_category_id = CASE
 					    WHEN jd_category_id = (
-					        SELECT value_json FROM settings WHERE key = 'jd_inbox_category_id'
+					        SELECT inbox_category_id FROM jd_systems WHERE id = documents.system_id
 					    ) THEN ?
 					    ELSE jd_category_id
 					    END,
@@ -350,9 +353,9 @@ func (h *Handler) loadDoc(ctx context.Context, id int64) (title, content, source
 // code order. System-only rows (Inbox and its siblings) are excluded —
 // the LLM should never pick them as a suggested classification, and
 // dropping them from the prompt cuts token cost.
-func (h *Handler) loadJDCategories(ctx context.Context) ([]JDCat, error) {
+func (h *Handler) loadJDCategories(ctx context.Context, systemID int64) ([]JDCat, error) {
 	rows, err := h.db.Read.QueryContext(ctx,
-		`SELECT code, name FROM jd_categories WHERE system = 0 ORDER BY code`)
+		`SELECT code, name FROM jd_categories WHERE system_id = ? AND system = 0 ORDER BY code`, systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +460,11 @@ func replaceDateCandidatesInTx(ctx context.Context, tx *sql.Tx, docID int64, sou
 }
 
 func upsertTagAndAttach(ctx context.Context, tx *sql.Tx, name string, docID int64, now int64, classifierOwned bool) (int64, error) {
-	tagID, err := taxonomy.UpsertByName(ctx, tx, taxonomy.TableTags, name, now)
+	var systemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+		return 0, err
+	}
+	tagID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableTags, name, now)
 	if err != nil {
 		return 0, err
 	}

@@ -62,6 +62,7 @@ func parseIdempotencyKey(r *http.Request) (string, *uploadMetadataError) {
 }
 
 func buildUploadFingerprint(
+	systemID int64,
 	operation string,
 	predecessor int64,
 	uploadSHA string,
@@ -108,7 +109,7 @@ func buildUploadFingerprint(
 		_, _ = hash.Write(length[:])
 		_, _ = hash.Write([]byte(field))
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+	return strconv.FormatInt(systemID, 10) + ":" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func loadStoredUploadResponse(

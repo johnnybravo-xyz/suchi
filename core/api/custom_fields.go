@@ -50,12 +50,17 @@ var customFieldTypes = map[string]bool{
 
 // ListCustomFieldDefs — GET /api/custom_fields/.
 func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
-	if s.requireAuth(w, r) == nil {
+	principal := s.requireAuth(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	var total int
 	if err := s.DB.Read.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM custom_fields").Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM custom_fields WHERE system_id = ?", systemID).Scan(&total); err != nil {
 		s.serverErr(w, "custom_fields.count", err)
 		return
 	}
@@ -69,10 +74,10 @@ func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.DB.Read.QueryContext(r.Context(), `
 		SELECT id, name, data_type, extra_data, created_at, updated_at
-		FROM custom_fields
+		FROM custom_fields WHERE system_id = ?
 		ORDER BY `+order+`
 		LIMIT ? OFFSET ?
-	`, p.PageSize, p.Offset())
+	`, systemID, p.PageSize, p.Offset())
 	if err != nil {
 		s.serverErr(w, "custom_fields.list", err)
 		return
@@ -100,7 +105,12 @@ func (s *Server) ListCustomFieldDefs(w http.ResponseWriter, r *http.Request) {
 
 // CreateCustomFieldDef — POST /api/custom_fields/. Admin-only.
 func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
 		return
 	}
 	var in CustomFieldUpsert
@@ -128,10 +138,17 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errSystemUnavailable
+		}
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO custom_fields(name, data_type, extra_data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, strings.TrimSpace(*in.Name), *in.DataType, extra, now, now)
+			INSERT INTO custom_fields(system_id, name, data_type, extra_data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, systemID, strings.TrimSpace(*in.Name), *in.DataType, extra, now, now)
 		if err != nil {
 			return err
 		}
@@ -156,12 +173,17 @@ func (s *Server) CreateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 // expected to know what they're doing (or delete the field and
 // recreate).
 func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
+		return
+	}
+	systemID, ok := s.requireNamespaceObject(w, r, principal, "custom_fields", id)
+	if !ok {
 		return
 	}
 	var in CustomFieldUpsert
@@ -201,6 +223,13 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 	args = append(args, id)
 
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			"UPDATE custom_fields SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
 		if err != nil {
@@ -234,7 +263,8 @@ func (s *Server) UpdateCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 // DeleteCustomFieldDef — DELETE /api/custom_fields/{id}. Admin-only.
 // Cascades to document_custom_field_values via schema FK.
 func (s *Server) DeleteCustomFieldDef(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -242,7 +272,18 @@ func (s *Server) DeleteCustomFieldDef(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_id", "id must be integer")
 		return
 	}
+	systemID, ok := s.requireNamespaceObject(w, r, principal, "custom_fields", id)
+	if !ok {
+		return
+	}
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errNotFound
+		}
 		res, err := tx.ExecContext(r.Context(),
 			`DELETE FROM custom_fields WHERE id = ?`, id)
 		if err != nil {

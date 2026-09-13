@@ -135,13 +135,21 @@ func TestPurgeTrashDocumentRequiresTrashedStateAndDeletePermission(t *testing.T)
 	liveID := seedTrashAPIDocument(t, server, cas, 1, "Live", false, now)
 	trashedID := seedTrashAPIDocument(t, server, cas, 1, "Trashed", true, now)
 	seedUser(t, server.DB, 2)
-
-	response := doTrashAPIRequest(t, mux, http.MethodDelete,
-		"/api/trash/"+itoa(trashedID), memberPrincipal(2))
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("unauthorized status=%d, want 403; body=%s", response.Code, response.Body.String())
+	if _, err := server.DB.Write.ExecContext(context.Background(), `UPDATE users SET role = 'member' WHERE id IN (1, 2)`); err != nil {
+		t.Fatal(err)
 	}
-	response = doTrashAPIRequest(t, mux, http.MethodDelete,
+
+	for _, id := range []int64{trashedID, 999999} {
+		response := doTrashAPIRequest(t, mux, http.MethodDelete,
+			"/api/trash/"+itoa(id), memberPrincipal(2))
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) {
+			t.Fatalf("inaccessible or missing document %d: status=%d body=%s, want 404/not_found", id, response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "Trashed") {
+			t.Fatalf("inaccessible document title disclosed: %s", response.Body.String())
+		}
+	}
+	response := doTrashAPIRequest(t, mux, http.MethodDelete,
 		"/api/trash/"+itoa(liveID), memberPrincipal(1))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("live status=%d, want 404; body=%s", response.Code, response.Body.String())
@@ -162,6 +170,9 @@ func TestEmptyTrashUsesMemberAndAdminScopes(t *testing.T) {
 		now := time.Now().Unix()
 		ownID := seedTrashAPIDocument(t, server, cas, 1, "Member trash", true, now)
 		otherID := seedTrashAPIDocument(t, server, cas, 2, "Other trash", true, now)
+		if _, err := server.DB.Write.ExecContext(context.Background(), `UPDATE users SET role = 'member' WHERE id = 1`); err != nil {
+			t.Fatal(err)
+		}
 
 		response := doTrashAPIRequest(t, mux, http.MethodDelete, "/api/trash/", memberPrincipal(1))
 		if response.Code != http.StatusOK {

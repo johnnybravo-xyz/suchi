@@ -67,6 +67,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 )
 
@@ -78,6 +79,8 @@ type exportManifest struct {
 	OwnerID     int64  `json:"owner_id,omitempty"`
 	Documents   int    `json:"documents"`
 	Skipped     int    `json:"skipped"` // docs whose blob was missing
+	SystemCode  string `json:"system_code"`
+	SystemName  string `json:"system_name"`
 }
 
 // exportSidecar mirrors sidecar.V1 shape but adds the extra fields
@@ -91,6 +94,8 @@ type exportSidecar struct {
 	Tags           []string         `json:"tags,omitempty"`
 	Notes          string           `json:"notes,omitempty"`
 	JDCategory     int              `json:"jd_category,omitempty"`
+	JDSystem       string           `json:"jd_system,omitempty"`
+	JDAddress      string           `json:"jd_address,omitempty"`
 	Sensitivity    string           `json:"sensitivity,omitempty"`
 	MIME           string           `json:"mime_type,omitempty"`
 	SHA256         string           `json:"sha256,omitempty"`
@@ -105,7 +110,8 @@ func runExport(args []string) int {
 	fs := flag.NewFlagSet("suchi export", flag.ContinueOnError)
 	out := fs.String("out", "", "output zip path (required)")
 	ownerID := fs.Int64("owner-id", 0, "scope to one owner id (default: current admin)")
-	all := fs.Bool("all", false, "export every document across every owner (admin action)")
+	all := fs.Bool("all", false, "export every owner within the selected system")
+	systemCode := fs.String("system", "", "system code (default: original archive)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -147,6 +153,11 @@ func runExport(args []string) int {
 		log.Error("export.cas", "err", err.Error())
 		return 1
 	}
+	system, err := resolveCommandSystem(ctx, d, *systemCode)
+	if err != nil {
+		log.Error("export.system", "err", err)
+		return 1
+	}
 
 	// Resolve scope. --all overrides --owner-id.
 	scope := *ownerID
@@ -171,7 +182,9 @@ func runExport(args []string) int {
 	defer zw.Close()
 
 	man := exportManifest{
-		Version:     "1",
+		Version:     "2",
+		SystemCode:  system.Code,
+		SystemName:  system.Name,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if !*all {
@@ -182,11 +195,11 @@ func runExport(args []string) int {
 		log.Error("export.readme", "err", err.Error())
 		return 1
 	}
-	if err := dumpTaxonomy(ctx, zw, d); err != nil {
+	if err := dumpTaxonomy(ctx, zw, d, system.ID); err != nil {
 		log.Error("export.taxonomy", "err", err.Error())
 		return 1
 	}
-	docs, skipped, err := dumpDocuments(ctx, zw, d, cas, scope, *all, log)
+	docs, skipped, err := dumpDocuments(ctx, zw, d, cas, system, scope, *all, log)
 	if err != nil {
 		log.Error("export.documents", "err", err.Error())
 		return 1
@@ -205,15 +218,21 @@ func runExport(args []string) int {
 		return 1
 	}
 
+	if err := zw.Close(); err != nil {
+		log.Error("export.close", "err", err)
+		return 1
+	}
+	if err := f.Close(); err != nil {
+		log.Error("export.close", "err", err)
+		return 1
+	}
 	fmt.Fprintf(os.Stdout, "exported %d documents (%d skipped) → %s\n",
 		docs, skipped, *out)
 	return 0
 }
 
-// dumpTaxonomy writes taxonomy/*.json inside the zip. Simple table
-// dumps — round-tripping is the caller's problem (importer). Not
-// scoped to owner because taxonomy is shared.
-func dumpTaxonomy(ctx context.Context, zw *zip.Writer, d *db.DB) error {
+// dumpTaxonomy exports only the selected system's metadata, across all owners.
+func dumpTaxonomy(ctx context.Context, zw *zip.Writer, d *db.DB, systemID int64) error {
 	dumps := []struct {
 		name  string
 		query string
@@ -226,7 +245,7 @@ func dumpTaxonomy(ctx context.Context, zw *zip.Writer, d *db.DB) error {
 		{"taxonomy/jd_categories.json", `SELECT id, code, name, description, area_start FROM jd_categories`},
 	}
 	for _, dump := range dumps {
-		if err := dumpTableAsJSON(ctx, zw, d, dump.name, dump.query); err != nil {
+		if err := dumpTableAsJSON(ctx, zw, d, dump.name, dump.query+" WHERE system_id=?", systemID); err != nil {
 			return fmt.Errorf("%s: %w", dump.name, err)
 		}
 	}
@@ -235,8 +254,8 @@ func dumpTaxonomy(ctx context.Context, zw *zip.Writer, d *db.DB) error {
 
 // dumpTableAsJSON reads a query into []map[string]any and writes it
 // to a zip entry. Not memory-perfect but taxonomy tables are small.
-func dumpTableAsJSON(ctx context.Context, zw *zip.Writer, d *db.DB, name, query string) error {
-	rows, err := d.Read.QueryContext(ctx, query)
+func dumpTableAsJSON(ctx context.Context, zw *zip.Writer, d *db.DB, name, query string, args ...any) error {
+	rows, err := d.Read.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -277,10 +296,10 @@ func dumpTableAsJSON(ctx context.Context, zw *zip.Writer, d *db.DB, name, query 
 // into the zip. Returns (writtenCount, skippedCount, err). A missing
 // blob logs at Warn and skips; a hard error aborts.
 func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
-	ownerID int64, all bool, log *slog.Logger) (int, int, error) {
+	system systems.System, ownerID int64, all bool, log *slog.Logger) (int, int, error) {
 
-	where := "WHERE trashed_at IS NULL"
-	args := []any{}
+	where := "WHERE trashed_at IS NULL AND system_id=?"
+	args := []any{system.ID}
 	if !all {
 		where += " AND owner_id = ?"
 		args = append(args, ownerID)
@@ -320,6 +339,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			Sensitivity: sensitivity,
 			SHA256:      blobSHA,
 			MIME:        mime.String,
+			JDSystem:    system.Code,
 		}
 		// Tags + correspondents + jd_category — each best-effort;
 		tags, err := loadDocTags(ctx, d, id)
@@ -345,6 +365,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 				return written, skipped, fmt.Errorf("load JD category for document %d: %w", id, err)
 			}
 			side.JDCategory = code
+			side.JDAddress = systems.Address(system.Code, code, id)
 		}
 
 		// Sidecar first (never fails), then the blob (may skip).

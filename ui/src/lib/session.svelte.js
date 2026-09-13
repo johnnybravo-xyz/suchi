@@ -1,5 +1,6 @@
 import { logout, whoami } from './api.js'
 import { getLoginPath, usesExternalLogin } from './login.js'
+import { resetSystems } from './systems.svelte.js'
 
 export const session = $state({
   user: null,        // { user_id, email, role, ... } | null
@@ -22,6 +23,7 @@ export async function refreshSession() {
 
 export async function signOut() {
   try { await logout() } catch {}
+  resetSystems()
   session.user = null
   if (usesExternalLogin()) {
     location.assign(getLoginPath())

@@ -1,77 +1,121 @@
 ---
 title: "Johnny.Decimal filing trees"
-description: "Intent-led presets, starter automations, custom taxonomies, and filing invariants."
+description: "Built-in and custom filing trees, strict HuML/TOML authoring, safe imports, and the generated index."
 ---
 
-Suchi uses [Johnny.Decimal](https://johnnydecimal.com/) areas and categories as
-its filing tree. Every document belongs to a category; uncertain classification
-lands in the preset's inbox rather than disappearing into an unfiled state.
+Suchi uses [Johnny.Decimal](https://johnnydecimal.com/) areas and categories.
+Every document belongs to a category; uncertain filing remains in generated
+**40 System / 49 Inbox**. Categories describe document kinds. Keep growing
+clients, properties, donors and family members in correspondents, not categories.
 
-## Presets
+The [normative Suchi JD/taxonomy v1 specification](https://git.johnnybravo.xyz/ritesh/suchi-taxonomy-examples/src/branch/main/SPEC.md)
+defines the exact authoring and address contract, its adaptations from official
+Johnny.Decimal, and examples. The adjacent CC0 reference collection is unreviewed
+and is not compliance advice; Suchi does not depend on that repository at runtime.
 
-The setup wizard recommends a preset from the operator's stated intent:
+## Filing systems and document addresses
 
-| Intent | Preset | Focus |
-| --- | --- | --- |
-| Personal | `solo` | Identity, housing, money, tax, health |
-| Household | `household` | Shared admin, finance, health, family activities |
-| Freelance | `freelance` | Clients, projects, invoices, expenses, tax |
-| Small business | `smb_billing` | Customers, vendors, payroll, compliance |
-| Choose myself | none | Compare the complete catalog |
+Before the first taxonomy file with a top-level `system` header is applied, Suchi
+has one hidden original system. Unprefixed files keep the existing archive and
+paths; there is no enable-systems toggle or prerequisite configuration.
 
-`blank` provides only a system inbox for operators building a tree from
-scratch. It requires explicit confirmation.
+The first prefixed import, for example `system = "S01"`, offers two destinations:
 
-Each non-blank preset includes a small set of keyword automations that assign
-likely categories. Setup can install or skip these starters. They are
-examples, not a promise that every document will classify correctly.
+- **Use this archive:** name the original archive S01 and import into its existing
+  tree, retaining documents, IDs, memberships and document grants.
+- **Create separately:** preserve the original under a distinct code (for example
+  A00) and create S01 for the incoming tree. The preserved archive keeps its name.
 
-Preset-owned automations are identifiable and editable in the Automations
-screen. Editing one creates a user-owned copy and disables the preset original.
-Reapplying the same preset does not overwrite user-owned copies.
+Preview describes the destination and access changes. Apply commits introduction,
+tree, starters, provenance and projection jobs atomically; stale or failed Apply
+leaves no partially introduced system. Afterwards a prefixed file targets its
+code, creating a new system if needed. An unprefixed file uses the captured
+selected system; unqualified CLI/session collection calls use the original
+system. Import cannot disable or collapse the system layer.
 
-## Changing the tree
+Codes match exactly `^[A-Z][0-9]{2}$` (A00–Z99) and become immutable. Display names
+are editable, nonblank and at most 80 Unicode characters. First adoption or
+creation uses the file's name; reimport preserves a locally edited system name.
+New systems initially admit only active instance administrators. Administrators
+grant direct user memberships separately from document permissions. There are
+no system roles, deletion, merge or document-transfer controls.
 
-Changing a filing tree on an archive with categorized documents requires an
-explicit refile choice. Suchi moves documents to the new inbox, applies the new
-tree, reruns filing automations, and updates the rendered filesystem view. Without
-that confirmation, the API refuses the replacement.
+Official [SYS.AC.ID notation](https://johnnydecimal.com/documentation/acid-notation)
+uses an assigned, category-local [ID folder](https://johnnydecimal.com/documentation/ids).
+Suchi deliberately uses the existing **installation-global document number**
+as `.ID`, not a folder counter, authored seed ID or new per-system counter.
+Assuming an upload has returned document 147 in S01/category 13, its address is
+`S01.13.147`. Refiling it to category 14 gives `S01.14.147`; the number and numeric
+document URL remain stable, while the old address no longer resolves. New versions
+and split children receive their own document IDs. There is no 99-document limit.
+Automatic allocation does not reuse IDs allocated after the taxonomy upgrade.
+Surviving beta.2 IDs are preserved, but numbers purged before the upgrade have no
+retained allocation history and may be reused.
 
-Reapplying the current preset can restore its starter rows without replacing
-the tree. Use [Refile](/refile) when automations or paths change independently of the
-preset.
+Canonical addresses require a two-digit category and an unpadded positive decimal
+document ID in the signed 64-bit range. Spaces, signs, lowercase codes and padded
+IDs such as `S01.13.0147` are invalid. A syntactically valid address still needs an
+existing live document in that exact current location and permission to view it.
 
-## Custom taxonomy files
+Selecting a system is Suchi's simple “choose a filing cabinet” model, not a claim
+to reproduce every upstream JD convention. System entry **and** existing document
+ACLs are required; even admins cannot escape an explicit request or token system.
+Shared server administrators, host operators and backups remain trusted. This is
+application isolation over shared SQLite/CAS/FTS, not independent infrastructure,
+per-system encryption or evidence of professional independence. See
+[Permissions](/permissions) for membership and delegated credentials.
 
-The `suchi-taxonomy/v1` format supports TOML and HuML. A file contains:
+## Choose a tree
 
-- preset identity, version, name, inbox code, and optional description
-- areas and their category codes and names
-- optional keywords
-- optional starter automations with symbolic category, tag, document-type, or
-  correspondent references
+Setup recommends `solo`, `household`, `freelance` or `smb_billing` from your
+intent. Compare the built-in cards or choose **Import a file**. `blank` contains
+no user categories and needs explicit confirmation. Settings offers the same
+import under **Archive configuration > Filing tree**.
 
-Manage custom taxonomies from **Settings > Archive configuration > People and
-metadata > Taxonomy** or the CLI:
+Choose a `.huml` or `.toml` file, or paste content and select its serialization.
+The starter-rule choice is explicit. Preview shows the name, story, content
+revision, user tree, generated structure, category/rule additions, preserved
+rules, skips and collisions. Changing input, format, seed choice or remaps
+requires another preview. If relevant destination state changes before Apply,
+Suchi preserves your input and asks you to preview again; unrelated system edits
+do not invalidate a preview.
 
-```sh
-suchi taxonomy validate my-tree.toml
-suchi taxonomy import my-tree.toml --apply
-suchi taxonomy export --format huml > current-tree.huml
-```
+Validation checks supported structure, not domain suitability or reliable
+classification. Review imported keywords and rules against your documents.
+Suchi never fetches remote taxonomy files or requires a catalog service.
 
-Taxonomy import is intentionally absent from the first-run filing-tree picker
-in v0.1; it remains available after setup under **Taxonomy** and through the
-CLI. Suchi never fetches taxonomy files automatically.
+## Safe import and reimport
 
-Minimal TOML example:
+Only initial unconfigured setup can replace a bootstrap tree, and only when no
+filed documents (including recoverable Trash) or dependent user configuration
+would be orphaned. Later imports merge additively; an empty archive alone is
+not permission to reset a chosen tree.
+
+- Same category code and name preserves the row and local description.
+- Different names at one code need explicit skip or an unused same-decade remap.
+- Existing rule names are preserved, including disabled preset originals and
+  user-owned edited forks. Reimport does not restore disabled rules.
+- Skipping a category skips its entire dependent starter rule, not just one action.
+- System destination, tree, supported starters, last-import provenance and required
+  jobs commit together; unresolved references leave no partial import.
+
+Use [Refile](/refile) explicitly to rerun current automations or rebuild paths.
+Ordinary taxonomy import is not a reset or document-version operation.
+
+## Authoring v1
+
+HuML and TOML are co-equal. YAML, unknown/duplicate keys, unsupported formats,
+wrong types and unsupported actions are errors. Validation is offline and
+bounded to 1 MiB. The entire file is checked even when seeds are skipped.
 
 ```toml
 format = "suchi-taxonomy/v1"
-id = "personal-custom"
+id = "personal-records"
 version = 1
-name = "Personal custom"
-inbox = 49
+name = "Personal records"
+market = "global"
+language = "en"
+story = "Keep identity paperwork in a stable filing tree. Unclassified documents remain in Suchi's generated Inbox until filed."
 
 [[areas]]
 code = 10
@@ -80,39 +124,146 @@ name = "Life admin"
 [[areas.categories]]
 code = 11
 name = "Identity"
-
-[[areas]]
-code = 40
-name = "System"
-
-[[areas.categories]]
-code = 49
-name = "Inbox"
+description = "Passports, identity cards and related certificates."
+keywords = ["birth certificate"]
 ```
 
-## Invariants
+Required header: `format`, `id`, positive integer `version`, nonempty `name`,
+`market`, `language`, `story`. Author IDs match `[a-z0-9][a-z0-9_-]*`. Optional
+`system` names exactly one filing system; optional metadata is `maintainer` and
+`license`. Importing or exporting never implicitly licenses your configuration.
+Names are at most 80 Unicode characters, story 500, descriptions 240;
+each category allows at most 20 literal keywords of at most 40 characters.
 
-- Every document has a live `jd_category_id`.
-- The configured system inbox cannot be deleted.
-- Category codes are unique.
-- A category code belongs to its area's ten-number range.
-- The rendered tree is generated from database metadata and blob references.
+Tree form requires explicit `areas`; `areas = []` is a blank tree. Flat authoring
+shorthand uses `flat = true` and 1–9 `categories` instead of areas. Codes are
+11–19 in order; explicit codes must match. Parsing expands it into an area tree;
+it does not select the separate runtime flat rendering mode. Database export may
+spell the tree as explicit areas rather than preserve the original shorthand.
+Never repurpose a category code within an author's ID or call reordering compatible.
 
-## API
+User area starts are **10, 20, 30, 50, 60, 70, 80, 90**. Categories belong to
+their area's decade and never end in zero. Do not declare `inbox`, category-level
+protected `system` flags, 00–09 or 40–49: Suchi generates reserved structure after
+raw validation. The optional top-level `system = "S01"` is distinct and valid.
+Both reserved decades are forbidden remap destinations. The index is not a
+category or a selectable filing destination.
 
-`GET /api/jd/categories/` lists the tree and accepts `q` and `area` filters.
-Rows include area and category labels for grouped pickers. Document responses
-include denormalized category code, category name, and area name. Change a
-document's category with:
+### Optional starters
 
-```json
-{"jd_category_id": 17}
+Only `seeds.automations` is supported. Existing trigger types and filters use
+the runtime's glob/regex validation; category keywords remain literal matching,
+not regex. Starters need unique names, nonempty actions and exact parameters:
+
+| Action | Portable parameters |
+| --- | --- |
+| `assign_title` | `template` |
+| `assign_tags` | `tags` list or single `tag`, never both |
+| `assign_correspondent` | `correspondent` name |
+| `assign_document_type` | `document_type` name |
+| `assign_jd_category` | Integer `jd_category_code` declared in the user tree |
+
+Keyword-generated names include the authoring ID and effective category code/name.
+If two rules to be added have the same name, Preview rejects the proposal with the
+conflicting name. Rename the explicit starter or remove the category keywords
+before previewing again. Existing local rules still win, and skipped rules do not
+participate in this collision check. Metadata references resolve trimmed exact
+names first, then canonical slugs; Preview and Apply use the same normalization.
+
+No instance row IDs or arbitrary action parameters. Sensitivity defaults,
+`review_after_days`, custom fields, standalone tag/type/correspondent seeds,
+link vocabulary/endpoints, access grants, secrets, provider configuration and
+trust state are unsupported. New schema capabilities require a new format;
+adding a runtime action does not automatically make it portable in v1.
+
+## Export and provenance
+
+```sh
+suchi taxonomy validate my-tree.toml
+suchi taxonomy import my-tree.toml                 # preview only
+suchi taxonomy import my-tree.toml --apply
+suchi taxonomy export --format huml > current-tree.huml
+suchi taxonomy export --format huml --skip-seeds > filing-tree.huml
 ```
 
-See [API](/api#get-apijdcategories) for payloads and [Automations](/automations)
-for filing actions.
+Use `--system S01` to select an existing system for unprefixed import or export.
+It must agree with a prefixed file. Only the first prefixed import accepts
+`--existing-system-code A00` to preserve the original separately.
+
+Export creates a validated current snapshot with `id = "archive"`, `version = 1`,
+not a claim that a merged archive equals its **last imported file**. Source
+identity/revision/byte SHA-256 remain separate provenance. Equivalent HuML and
+TOML can have different hashes; schema version, content revision, source hash
+and Suchi release version have different meanings.
+
+Default export includes representable preset-owned starters, not all archive
+automations. Keyword-generated rules export as named explicit starters to retain
+their distinct identity and order, not collapsed category keywords. Disabled or
+otherwise unrepresentable starters cause an error, never silent loss or
+re-enabling. Choose tree-only export explicitly to omit both keywords and
+starters. User-owned forks, permissions, review history and documents need a
+[complete backup](/backup-restore).
+
+Only validated generated System/49 is removed from raw output. Legacy custom
+reserved categories, renamed system rows or a different Inbox produce an
+actionable error; Suchi does not hide or automatically renumber those records.
+
+## Generated filing index and paths
+
+Before introduction the map is
+`rendered/00-09 System index/00.00 archive.huml`; afterwards each system has
+`rendered/<SYS>/00-09 System index/00.00 archive.huml`. It contains the current
+system code/name and tree/descriptions, with snapshot `id = "archive"` and
+`version = 1`, but no keywords/automations. Generated System/49 is implicit.
+It is a managed area/category map, not the original authoring starter file,
+the upstream JD register of assigned ID folders, a document inventory or backup.
+Do not edit it in place.
+
+Committed filing-tree changes queue a durable `taxonomy_index` refresh. Server
+startup also queues a refresh per system to recover missing/stale indexes. Jobs
+build current state when they run and replace the file atomically. Failure preserves
+the last complete index and uses normal retries/dead-job reporting. A successful
+import with pending work does not mean the physical file has refreshed; CLI-only
+imports need the server to process jobs. No document row or CAS blob is created.
+
+After introduction, document projections are rooted at `rendered/<SYS>/` using
+the immutable code, not the editable display name. Default JD layout is, for an
+illustrative already-returned document:
+
+```text
+rendered/S01/
+  00-09 System index/00.00 archive.huml
+  10-19 Client document kinds/
+    13 GST filings/2026/2026-07-31 GST return__S01.13.147.pdf
+  40-49 System/49 Inbox/...
+```
+
+Default JD and runtime-flat filenames use created date, then added date, otherwise
+`undated`, title, and the full address suffix after introduction. Explicit templates
+retain relative behavior with `jd.system.code`, `jd.system.name` and `jd.address`
+available, but cannot escape the enforced system root or occupy a managed index.
+Renaming a system does not move its root.
+
+First introduction queues render-only moves for existing live documents. Durable
+move journals recover interrupted publication at the current target; cleanup removes
+only a verified document CAS link or proved-managed legacy index, never arbitrary
+user files. Only the original system's index writer removes the old root index,
+after publishing its named replacement. Startup does not rewrite the whole filesystem.
+Use `suchi refile --system S01 --skip-automations` for render-only work without
+rerunning OCR or classification.
+
+## Category API
+
+`GET /api/jd/categories/` lists ordinary categories with area labels and optional
+`q` and `area` filters within the selected system. Category `system` remains a
+protected-row boolean; `system_code` identifies its filing system. Set a document's
+category with `{"jd_category_id":17}`: the row must belong to that document's
+system, and runtime row IDs differ from portable category codes. Full addresses
+resolve through `GET /api/jd/resolve?address=S01.13.147`; numeric IDs are unchanged.
+Mobile uses ordinary bound-system APIs; taxonomy administration is session-admin web/CLI.
+See [API](/api) and [Automations](/automations).
 
 <Note>
-  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is an independent
-  implementation and is not affiliated with or endorsed by them.
+  Johnny.Decimal is a trademark of Coruscade Pty Ltd. Suchi is independent and
+  is not affiliated with or endorsed by them.
 </Note>

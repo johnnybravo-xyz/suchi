@@ -13,6 +13,11 @@ This guide wires the adapter into three common runtimes. The pattern
 is the same everywhere: a subprocess spoken over stdio (or a Streamable HTTP
 endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
 
+One adapter uses one token bound to one filing system. Select that system when
+minting the token; ordinary unqualified MCP requests then use its binding. There is
+no all-systems token or adapter routing option. Membership and document ACLs still
+apply; a scope alone does not grant access, and membership removal revokes credentials.
+
 ## Prerequisites
 
 - A running suchi instance you can reach at some URL. Local dev
@@ -22,7 +27,7 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
   ```bash
   # Copy the suchi_session cookie value from an authenticated browser session.
   export SUCHI_SESSION='...'
-  curl -sS -X POST http://127.0.0.1:8000/api/tokens/ \
+  curl -sS -X POST 'http://127.0.0.1:8000/api/tokens/?system=S02' \
     -H "Content-Type: application/json" \
     -H "Cookie: suchi_session=$SUCHI_SESSION" \
     -d '{"name":"mcp-desktop","scopes":"documents:read,documents:write"}'
@@ -32,11 +37,15 @@ endpoint) with `SUCHI_URL` + `SUCHI_TOKEN` in the environment.
   Or exchange email and password directly:
 
   ```bash
-  curl -sS -X POST http://127.0.0.1:8000/api/token/ \
+  curl -sS -X POST 'http://127.0.0.1:8000/api/token/?system=S02' \
     -H "Accept: application/json" \
     -H "Content-Type: application/json" \
     -d '{"email":"you@example.com","password":"..."}'
   ```
+
+  These examples assume S02 has already been introduced and the account can enter
+  it. Omit `?system=S02` to target the original archive, including before introduction;
+  omission never selects whichever system the browser last displayed.
 
   Every MCP action is attributed to the token's owner in the audit log.
   A Read-only token supports search, document reads, and inbox inspection.
@@ -120,8 +129,8 @@ Point the runtime at `http://<host>:7000`. Two things to know:
 
 - The `--token` flag is baked into the process's memory for the
   lifetime of the run — every tool call is attributed to that
-  token's owner. To use different tokens per caller, run one
-  adapter per caller.
+  token's owner and bound filing system. To use different credentials or systems,
+  run a separate adapter per caller/system.
 - The MCP HTTP listener has no separate auth of its own. Restrict access to
   port 7000 with your usual mechanism (VPN, firewall rule,
   Tailscale, reverse-proxy with basic auth). Suchi's MCP surface
@@ -129,19 +138,17 @@ Point the runtime at `http://<host>:7000`. Two things to know:
 
 ## Verifying the connection
 
-The MCP client will call `list_inbox` or `search_documents` on
-first activation. Watch suchi's logs (`journalctl -u suchi` or
-`docker logs -f suchi`):
+Ask the MCP client to call `list_inbox` or `search_documents` and inspect its returned
+result in the token's bound system. Client startup behavior varies; do not rely on
+an automatic first tool call. Suchi's access logs (`journalctl -u suchi` or
+`docker logs -f suchi`) can help correlate route, status and request ID. Query text,
+credentials and document evidence are not diagnostic log fields.
 
-```
-INFO api.tasks.list  method=GET  status=200  request_id=…  actor=user:5
-INFO api.search      method=GET  status=200  q="insurance"  actor=user:5
-```
-
-If you see `401 unauthorized` — token is wrong, or wasn't set in
-the env. If you see `403 forbidden` — token was generated with
-insufficient scopes; generate a new one with `documents:read` and
-`documents:write`.
+If you see `401 unauthorized`, check the token and environment; revocation or
+account disablement also prevents authentication. A `403` can mean a missing
+scope or capability: grant only what the requested operation needs. An unavailable
+object/system is a 404, not an invitation to retry in another archive. Create a
+new token after an administrator restores membership; old credentials do not revive.
 
 ## Revoking access
 
@@ -152,11 +159,11 @@ browser's `suchi_session` cookie value.
 
 ```bash
 # List your tokens with the session cookie.
-curl -sS http://127.0.0.1:8000/api/tokens/ \
+curl -sS 'http://127.0.0.1:8000/api/tokens/?system=S02' \
   -H "Cookie: suchi_session=$SUCHI_SESSION" | jq
 
 # Revoke by id.
-curl -sS -X DELETE http://127.0.0.1:8000/api/tokens/7 \
+curl -sS -X DELETE 'http://127.0.0.1:8000/api/tokens/7?system=S02' \
   -H "Cookie: suchi_session=$SUCHI_SESSION"
 ```
 

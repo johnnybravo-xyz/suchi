@@ -30,6 +30,31 @@ does not need its WAL or shared-memory files. An atomic snapshot of a live
 archive must include the database and its WAL together; never copy them at
 different times.
 
+The generated `rendered/<SYS>/00-09 System index/00.00 archive.huml` (without the
+SYS root before introduction) is only a current system/tree map with descriptions.
+It contains no keywords, automations,
+document inventory, permissions or review/version/link history, and is not the
+original imported preset. Neither this file nor a taxonomy export replaces a
+complete backup. Default seeded taxonomy exports cover representable preset-owned
+starters, not user-owned rules or edited forks.
+
+Server startup queues a refresh of a missing/stale index through durable jobs.
+After introduction startup queues one per system. Rendered links and indexes
+are recoverable projections, not the authority for document identity.
+
+It rebuilds from current database state without scanning document files.
+Failure preserves the last complete index; queued work is not a completed
+refresh. Do not edit the generated file or place your own files in its reserved
+namespace. Legacy incompatible reserved categories cause diagnostics, not an
+automatic renumbering or lossy recovery.
+
+A complete backup is **whole-instance**: systems share SQLite, CAS and credential
+keys. It preserves membership, ACLs, document/version/link relationships and the
+global document-ID high-water state. Host/backup operators can access every system
+and remain trusted; a filing prefix is not backup isolation or per-system encryption.
+Native takeout manifest v2 selects one system and is deliberately partial; source
+addresses do not request preservation of IDs when documents are ingested again.
+
 The mbsync deployment keeps credentials and Maildir state outside `DATA_DIR`;
 back up its deployment directory separately when that path is used.
 

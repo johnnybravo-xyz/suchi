@@ -2,6 +2,7 @@ package jd_test
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,17 +11,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
-
-func TestStarterTreeValid(t *testing.T) {
-	tree, err := jd.StarterTree()
-	if err != nil {
-		t.Fatalf("starter tree: %v", err)
-	}
-	if len(tree.Areas) == 0 {
-		t.Fatal("starter tree empty")
-	}
-}
 
 func TestBootstrapTreeIsInboxOnly(t *testing.T) {
 	if err := jd.BootstrapTree.Validate(); err != nil {
@@ -72,10 +64,10 @@ func TestEnsureTreeFirstBoot(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
-	inbox, err := jd.InboxCategoryID(ctx, d)
+	inbox, err := jd.InboxCategoryID(ctx, d, 1)
 	if err != nil {
 		t.Fatalf("inbox: %v", err)
 	}
@@ -83,10 +75,10 @@ func TestEnsureTreeFirstBoot(t *testing.T) {
 		t.Fatal("inbox pointer not set")
 	}
 	// Re-run must be a no-op.
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("re-ensure: %v", err)
 	}
-	inbox2, _ := jd.InboxCategoryID(ctx, d)
+	inbox2, _ := jd.InboxCategoryID(ctx, d, 1)
 	if inbox2 != inbox {
 		t.Errorf("inbox drifted %d -> %d on idempotent re-run", inbox, inbox2)
 	}
@@ -97,7 +89,7 @@ func TestEnsureBootstrapTreeFirstBoot(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("ensure bootstrap: %v", err)
 	}
 	var areas, categories, nonSystem, selectedPreset int
@@ -105,7 +97,7 @@ func TestEnsureBootstrapTreeFirstBoot(t *testing.T) {
 		SELECT (SELECT COUNT(*) FROM jd_areas),
 		       (SELECT COUNT(*) FROM jd_categories),
 		       (SELECT COUNT(*) FROM jd_categories WHERE system = 0),
-		       (SELECT COUNT(*) FROM settings WHERE key = 'preset')
+		       (SELECT COUNT(*) FROM jd_systems WHERE id=1 AND preset_id IS NOT NULL)
 	`).Scan(&areas, &categories, &nonSystem, &selectedPreset); err != nil {
 		t.Fatal(err)
 	}
@@ -116,14 +108,14 @@ func TestEnsureBootstrapTreeFirstBoot(t *testing.T) {
 	if selectedPreset != 0 {
 		t.Fatal("bootstrap must not record a preset selection")
 	}
-	mode, err := jd.Mode(ctx, d)
+	mode, err := jd.Mode(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mode != jd.ModeJD {
 		t.Fatalf("bootstrap mode = %q, want jd", mode)
 	}
-	if _, err := jd.InboxCategoryID(ctx, d); err != nil {
+	if _, err := jd.InboxCategoryID(ctx, d, 1); err != nil {
 		t.Fatalf("bootstrap inbox pointer: %v", err)
 	}
 }
@@ -133,14 +125,14 @@ func TestEnsureBootstrapTreePreservesExistingTaxonomy(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("seed starter: %v", err)
 	}
 	var before int
 	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM jd_categories`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatalf("ensure bootstrap over existing tree: %v", err)
 	}
 	var after, identity int
@@ -161,7 +153,7 @@ func TestEnsureTreeFlatMode(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeFlat); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeFlat, 1); err != nil {
 		t.Fatalf("ensure flat: %v", err)
 	}
 	var areas int
@@ -171,7 +163,7 @@ func TestEnsureTreeFlatMode(t *testing.T) {
 	if areas != 1 {
 		t.Errorf("flat mode areas = %d, want 1", areas)
 	}
-	mode, _ := jd.Mode(ctx, d)
+	mode, _ := jd.Mode(ctx, d, 1)
 	if mode != jd.ModeFlat {
 		t.Errorf("mode setting = %q, want flat", mode)
 	}
@@ -194,4 +186,62 @@ func setupDB(t *testing.T) (*db.DB, *slog.Logger) {
 		t.Fatal(err)
 	}
 	return d, log
+}
+
+func TestBootstrapAndInboxRepairAreSystemLocal(t *testing.T) {
+	d, log := setupDB(t)
+	defer d.Close()
+	ctx := t.Context()
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, 1); err != nil {
+		t.Fatal(err)
+	}
+	first, err := jd.InboxCategoryID(ctx, d, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second int64
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := systems.SetCode(ctx, tx, 1, "S01", 1); err != nil {
+			return err
+		}
+		var err error
+		second, err = systems.Create(ctx, tx, "S02", "Second", "flat", 1)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeFlat, second); err != nil {
+		t.Fatal(err)
+	}
+	secondInbox, err := jd.InboxCategoryID(ctx, d, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondInbox == first {
+		t.Fatal("second system reused first Inbox")
+	}
+	if _, err := d.ExecWrite(ctx, `UPDATE jd_systems SET inbox_category_id=NULL WHERE id=?`, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := jd.EnsureBootstrapTree(ctx, d, log, jd.ModeJD, second); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := jd.InboxCategoryID(ctx, d, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != secondInbox {
+		t.Fatal("repair selected another system Inbox")
+	}
+	mode, err := jd.Mode(ctx, d, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != jd.ModeFlat {
+		t.Fatal("repair replaced existing filing mode")
+	}
+	unchanged, err := jd.InboxCategoryID(ctx, d, 1)
+	if err != nil || unchanged != first {
+		t.Fatal("second system repair changed first Inbox", err)
+	}
 }

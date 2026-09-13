@@ -95,6 +95,34 @@ func TestUploadNewVersionCarriesFilenameIntoPostIngest(t *testing.T) {
 	}
 }
 
+func TestUploadNewVersionAppearsOnlyInOwningSystemActivity(t *testing.T) {
+	s, mux := newSystemsBoundaryServer(t)
+	seedSystemsBoundary(t, s)
+	req := multipartUploadRequest(t, "/api/documents/202/versions/?system=S02",
+		"revision.pdf", testPDFBytes(), nil, memberPrincipal(6))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var created uploadVersionResponse
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &created) != nil {
+		t.Fatalf("version upload: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, code := range []string{"S01", "S02"} {
+		rec = systemsBoundaryRequest(mux, "GET",
+			"/api/events/?system="+code+"&kinds=document.version.create", "", adminPrincipal(1))
+		var events EventsResponse
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &events) != nil {
+			t.Fatalf("%s activity: %d %s", code, rec.Code, rec.Body.String())
+		}
+		if code == "S01" {
+			if len(events.Results) != 0 {
+				t.Fatalf("S02 version appeared in S01 activity: %+v", events.Results)
+			}
+		} else if len(events.Results) != 1 || events.Results[0].DocID == nil || *events.Results[0].DocID != created.ID {
+			t.Fatalf("new version %d missing from S02 activity: %+v", created.ID, events.Results)
+		}
+	}
+}
+
 func TestListVersionsAuthorizesEveryReturnedNode(t *testing.T) {
 	d := openTestDB(t)
 	inbox := seedStatsJDInbox(t, d)

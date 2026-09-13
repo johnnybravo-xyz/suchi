@@ -21,7 +21,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/core/ui"
@@ -84,8 +86,8 @@ func TestPreConsumeTagsTakeOwnershipOfClassifierReview(t *testing.T) {
 	d, cas := openPostIngestHarness(t)
 	docID := seedPostIngestDocument(t, d, cas, "text/plain", []byte("Review this document"))
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT INTO tags(id, name, slug, created_at, updated_at)
-		VALUES (99, 'needs-review', 'needs-review', 0, 0);
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 99, 'needs-review', 'needs-review', 0, 0);
 		INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
 	`, docID); err != nil {
 		t.Fatal(err)
@@ -418,7 +420,7 @@ func TestRescanRepairsGenericPDFMIMEAndPreview(t *testing.T) {
 		PipelineVersionContent, docID); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := rescan.Enqueue(ctx, d, rescan.Options{IDs: []int64{docID}}); err != nil || n != 1 {
+	if n, err := rescan.Enqueue(ctx, d, rescan.Options{SystemID: 1, IDs: []int64{docID}}); err != nil || n != 1 {
 		t.Fatalf("explicit rescan enqueue = %d, err=%v", n, err)
 	}
 	var payload string
@@ -819,17 +821,17 @@ func seedPostIngestDocument(t *testing.T, d *db.DB, cas *blob.CAS, mime string, 
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO users(id, email, display_name, role, created_at, updated_at)
 		VALUES (1, 'owner@example.test', 'Owner', 'admin', 0, 0);
-		INSERT INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'Test', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'Test', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1);
 	`); err != nil {
 		t.Fatal(err)
 	}
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, mime_type,
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, mime_type,
 			jd_category_id, created_at, added_at, updated_at)
-		VALUES (1, ?, ?, 'opaque.bin', ?, 1, 0, 0, 0)
+		VALUES (1, 1, ?, ?, 'opaque.bin', ?, 1, 0, 0, 0)
 	`, ref.SHA256, ref.Size, mime)
 	if err != nil {
 		t.Fatal(err)
@@ -839,4 +841,208 @@ func seedPostIngestDocument(t *testing.T, d *db.DB, cas *blob.CAS, mime string, 
 		t.Fatal(err)
 	}
 	return id
+}
+
+func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
+	for _, mode := range []string{"split", "email", "files-only"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			d, cas := openPostIngestHarness(t)
+			originalID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(msgConvertedEmail))
+			if _, err := d.Write.ExecContext(ctx, `
+				UPDATE jd_systems SET code = 'S01' WHERE id = 1;
+				INSERT INTO jd_systems(id, code, name, taxonomy, created_at, updated_at)
+				VALUES (2, 'S02', 'Second', 'jd', 0, 0);
+				INSERT INTO jd_areas(system_id, code_start, code_end, name, position)
+				VALUES (2, 0, 9, 'Test', 0);
+				INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+				VALUES (2, 2, 0, 1, 'Inbox', 1);
+				UPDATE documents SET email_message_id = '<msg-fixture@example.com>' WHERE id = ?;
+			`, originalID); err != nil {
+				t.Fatal(err)
+			}
+			result, err := d.Write.ExecContext(ctx, `
+				INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, mime_type, jd_category_id, created_at, updated_at)
+				SELECT 2, owner_id, original_blob, original_size, title, mime_type, 2, created_at, updated_at FROM documents WHERE id = ?
+			`, originalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parentID, err := result.LastInsertId()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Write.ExecContext(ctx, `
+				INSERT INTO correspondents(id, system_id, name, slug, created_at, updated_at)
+				VALUES (1, 1, 'sender@example.com', 'sender-example-com', 0, 0);
+				UPDATE documents SET correspondent_id = 1 WHERE id = ?;
+			`, originalID); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+				if err := ingestmeta.RecordSource(ctx, tx, originalID, ingestmeta.SourceWatchedFolder, "S01 acquisition", "original.eml", 123); err != nil {
+					return err
+				}
+				return ingestmeta.RecordSource(ctx, tx, parentID, ingestmeta.SourceWatchedFolder, "S02 acquisition", "target.eml", 456)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			// Reject the final outbox insert after the child and provenance
+			// writes. Retrying must not encounter a half-created split/attachment.
+			if _, err := d.Write.ExecContext(ctx, `
+				CREATE TRIGGER fail_child_outbox BEFORE INSERT ON jobs
+				WHEN NEW.system_id = 2
+				BEGIN SELECT RAISE(ABORT, 'test child outbox unavailable'); END;
+			`); err != nil {
+				t.Fatal(err)
+			}
+			var childErr error
+			if mode == "split" {
+				parent, err := h.loadParentForSplit(ctx, parentID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				childErr = h.createSplitChild(ctx, h.log, parent, parentID, 1, 1, docsplit.Segment{}, []byte("split child"))
+			} else {
+				parsed, err := eml.Parse([]byte(msgConvertedEmail))
+				if err != nil {
+					t.Fatal(err)
+				}
+				childErr = h.createEmailAttachmentChild(ctx, h.log, parentID, 1, 2, 1, parsed.Attachments[0], parsed, mode == "files-only")
+			}
+			if childErr == nil || !strings.Contains(childErr.Error(), "test child outbox unavailable") {
+				t.Fatalf("expected child outbox failure, got %v", childErr)
+			}
+			var documentCount, sourceCount, jobCount int
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT (SELECT COUNT(*) FROM documents), (SELECT COUNT(*) FROM document_sources), (SELECT COUNT(*) FROM jobs)
+			`).Scan(&documentCount, &sourceCount, &jobCount); err != nil {
+				t.Fatal(err)
+			}
+			if documentCount != 2 || sourceCount != 2 || jobCount != 0 {
+				t.Fatalf("outbox failure leaked child/provenance: documents=%d sources=%d jobs=%d", documentCount, sourceCount, jobCount)
+			}
+			if _, err := d.Write.ExecContext(ctx, `DROP TRIGGER fail_child_outbox`); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "split" {
+				parent, err := h.loadParentForSplit(ctx, parentID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := h.createSplitChild(ctx, h.log, parent, parentID, 1, 1, docsplit.Segment{}, []byte("split child")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				retired, err := h.handleEmail(ctx, h.log, parentID, []byte(msgConvertedEmail), mode == "files-only")
+				if err != nil || retired != (mode == "files-only") {
+					t.Fatalf("email fanout retired=%v err=%v", retired, err)
+				}
+			}
+			var childID, systemID, categoryID, jobSystem int64
+			var emailParent, splitParent sql.NullInt64
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT d.id, d.system_id, d.jd_category_id, d.email_parent_id, d.split_parent_id, j.system_id
+				FROM documents d JOIN jobs j ON j.doc_id = d.id
+				WHERE d.id NOT IN (?, ?) AND j.kind = ?
+			`, originalID, parentID, Kind).Scan(&childID, &systemID, &categoryID, &emailParent, &splitParent, &jobSystem); err != nil {
+				t.Fatal(err)
+			}
+			if systemID != 2 || categoryID != 2 || jobSystem != 2 {
+				t.Fatalf("child namespace: system=%d category=%d job=%d", systemID, categoryID, jobSystem)
+			}
+			if mode == "files-only" {
+				var remains bool
+				if err := d.Read.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE id = ?)`, parentID).Scan(&remains); err != nil {
+					t.Fatal(err)
+				}
+				if remains || emailParent.Valid {
+					t.Fatal("files-only staging parent retained")
+				}
+			} else if mode == "email" && emailParent.Int64 != parentID {
+				t.Fatal("email parent not retained")
+			} else if mode == "split" && splitParent.Int64 != parentID {
+				t.Fatal("split parent not retained")
+			}
+			if mode != "split" {
+				var correspondentSystem int64
+				if err := d.Read.QueryRowContext(ctx, `SELECT c.system_id FROM documents d JOIN correspondents c ON c.id = d.correspondent_id WHERE d.id = ?`, childID).Scan(&correspondentSystem); err != nil {
+					t.Fatal(err)
+				}
+				if correspondentSystem != 2 {
+					t.Fatal("child inherited foreign correspondent")
+				}
+			}
+			var sourceLabel, sourceDetail string
+			var observed int64
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT label, detail, observed_at FROM document_sources WHERE document_id = ?
+			`, childID).Scan(&sourceLabel, &sourceDetail, &observed); err != nil {
+				t.Fatal(err)
+			}
+			if sourceLabel != "S02 acquisition" || sourceDetail != "target.eml" || observed != 456 {
+				t.Fatalf("child acquired foreign or lost staging provenance: %q %q %d", sourceLabel, sourceDetail, observed)
+			}
+			// The namespace is an invariant after fanout as well as at insert.
+			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET jd_category_id = 1 WHERE id = ?`, childID); err == nil {
+				t.Fatal("child accepted foreign category")
+			}
+			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = 1 WHERE id = ?`, childID); err == nil {
+				t.Fatal("child accepted foreign correspondent")
+			}
+			parentColumn := "email_parent_id"
+			if mode == "split" {
+				parentColumn = "split_parent_id"
+			}
+			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET `+parentColumn+` = ? WHERE id = ?`, originalID, childID); err == nil {
+				t.Fatal("child accepted foreign parent")
+			}
+			var childBlob, originalBlob, originalTitle string
+			var originalCategory, originalCorrespondent int64
+			if err := d.Read.QueryRowContext(ctx, `
+				SELECT original_blob, title, jd_category_id, correspondent_id FROM documents WHERE id = ?
+			`, originalID).Scan(&originalBlob, &originalTitle, &originalCategory, &originalCorrespondent); err != nil {
+				t.Fatal(err)
+			}
+			if originalTitle != "opaque.bin" || originalCategory != 1 || originalCorrespondent != 1 {
+				t.Fatal("S02 fanout mutated S01 parent metadata")
+			}
+			if mode != "files-only" {
+				var parentBlob string
+				if err := d.Read.QueryRowContext(ctx, `SELECT original_blob FROM documents WHERE id = ? AND jd_category_id = 2`, parentID).Scan(&parentBlob); err != nil {
+					t.Fatal(err)
+				}
+				if parentBlob != originalBlob {
+					t.Fatal("fanout replaced the S02 parent's immutable original")
+				}
+			}
+			if err := d.Read.QueryRowContext(ctx, `SELECT original_blob FROM documents WHERE id = ? AND jd_category_id = 2`, childID).Scan(&childBlob); err != nil {
+				t.Fatal(err)
+			}
+			wantChild := "Hello world\n"
+			if mode == "split" {
+				wantChild = "split child"
+			}
+			for _, item := range []struct{ hash, want string }{
+				{originalBlob, msgConvertedEmail},
+				{childBlob, wantChild},
+			} {
+				r, err := cas.Get(item.hash)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := io.ReadAll(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != item.want {
+					t.Fatal("fanout changed original CAS bytes or published the wrong child content")
+				}
+			}
+		})
+	}
 }

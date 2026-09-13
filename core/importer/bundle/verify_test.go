@@ -29,6 +29,7 @@ func TestVerifyReport(t *testing.T) {
 
 	// Import the base bundle to seed suchi with 100 and 101.
 	if _, err := bundle.Run(ctx, d, cas, log, bundle.Options{
+		SystemID:   1,
 		BundleRoot: baseBundle,
 		OwnerEmail: ownerEmail,
 	}); err != nil {
@@ -92,7 +93,7 @@ func TestVerifyReport(t *testing.T) {
 	must(t, err)
 	must(t, os.WriteFile(nextRoot+"/manifest.json", b, 0o644))
 
-	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{BundleRoot: nextRoot})
+	rep, err := bundle.Verify(ctx, d, log, bundle.VerifyOptions{SystemID: 1, BundleRoot: nextRoot})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}

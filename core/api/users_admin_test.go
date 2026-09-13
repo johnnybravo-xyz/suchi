@@ -185,7 +185,7 @@ func TestPatchUser_revoke_mailboxes_cascade(t *testing.T) {
 	// Two mailboxes under uid=2, both enabled.
 	sealed, _ := emailaccounts.SealPassword(k, "p")
 	for i := 0; i < 2; i++ {
-		if _, err := emailaccounts.Create(context.Background(), d, emailaccounts.Account{
+		if _, err := createOriginalEmailAccount(context.Background(), d, emailaccounts.Account{
 			Name: "m" + strconv.Itoa(i), OwnerID: 2, Provider: emailaccounts.ProviderCustom,
 			Host: "h", Port: 993, UseTLS: true,
 			AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -222,8 +222,8 @@ func TestPatchUser_revoke_sharelinks_cascade(t *testing.T) {
 	// Two live share links owned by uid=2.
 	for i := 0; i < 2; i++ {
 		_, err := d.Write.ExecContext(context.Background(), `
-			INSERT INTO share_links(token, doc_ids_json, created_by, label, view_count, created_at)
-			VALUES (?, '[]', 2, '', 0, 0)
+			INSERT INTO share_links(system_id, token, doc_ids_json, created_by, label, view_count, created_at)
+			VALUES (1, ?, '[]', 2, '', 0, 0)
 		`, "token-"+strconv.Itoa(i)+"-"+strings.Repeat("a", 55))
 		if err != nil {
 			t.Fatal(err)
@@ -254,8 +254,8 @@ func TestPatchUser_revoke_shared_views_cascade(t *testing.T) {
 
 	for i, shared := range []int{1, 1, 0} {
 		if _, err := d.Write.ExecContext(context.Background(), `
-			INSERT INTO saved_views(owner_id, name, filter_json, display, position, shared, created_at, updated_at)
-			VALUES (2, ?, '{}', 'list', ?, ?, 0, 0)
+			INSERT INTO saved_views(system_id, owner_id, name, filter_json, display, position, shared, created_at, updated_at)
+			VALUES (1, 2, ?, '{}', 'list', ?, ?, 0, 0)
 		`, "view-"+strconv.Itoa(i), i, shared); err != nil {
 			t.Fatal(err)
 		}
@@ -296,8 +296,8 @@ func TestPatchUser_regrant_does_not_resurrect_share_links(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		if _, err := d.Write.ExecContext(context.Background(), `
-			INSERT INTO share_links(token, doc_ids_json, created_by, label, view_count, created_at)
-			VALUES (?, '[]', 2, '', 0, 0)
+			INSERT INTO share_links(system_id, token, doc_ids_json, created_by, label, view_count, created_at)
+			VALUES (1, ?, '[]', 2, '', 0, 0)
 		`, "token-"+strconv.Itoa(i)+"-"+strings.Repeat("a", 55)); err != nil {
 			t.Fatal(err)
 		}
@@ -346,7 +346,7 @@ func TestPatchUser_regrant_does_not_reenable_mailboxes(t *testing.T) {
 
 	sealed, _ := emailaccounts.SealPassword(k, "p")
 	for i := 0; i < 2; i++ {
-		if _, err := emailaccounts.Create(context.Background(), d, emailaccounts.Account{
+		if _, err := createOriginalEmailAccount(context.Background(), d, emailaccounts.Account{
 			Name: "m" + strconv.Itoa(i), OwnerID: 2, Provider: emailaccounts.ProviderCustom,
 			Host: "h", Port: 993, UseTLS: true,
 			AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,

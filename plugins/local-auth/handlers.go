@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // SetupRequest is the payload for POST /setup.
@@ -208,8 +209,30 @@ func (p *Plugin) TokenHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	token, err := p.issueAPIToken(r.Context(), userID, "login",
-		auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, "")
+	systemID := systems.DefaultID
+	if values, present := r.URL.Query()["system"]; present {
+		if len(values) != 1 || !systems.ValidCode(values[0]) {
+			http.Error(w, "system unavailable", http.StatusNotFound)
+			return
+		}
+		system, err := systems.ByCode(r.Context(), p.db.Read, values[0])
+		if err != nil {
+			http.Error(w, "system unavailable", http.StatusNotFound)
+			return
+		}
+		systemID = system.ID
+	}
+	var token string
+	err := p.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var err error
+		token, err = p.IssueAPIToken(r.Context(), tx, userID, systemID, "login",
+			auth.ScopeDocumentsRead+","+auth.ScopeDocumentsWrite, "")
+		return err
+	})
+	if errors.Is(err, errTokenSystemUnavailable) {
+		http.Error(w, "system unavailable", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "token failed", http.StatusInternalServerError)
 		return
@@ -428,18 +451,21 @@ func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// IssueAPIToken creates and returns a fresh API token. The plaintext
-// is returned once here and never persisted — only sha256(token) hits
-// disk. Exported so core/api can wire it in through Server.TokenIssuer
-// and mint tokens for session-authed callers (OIDC or cookie) without
-// this package needing to know about the API surface.
-func (p *Plugin) IssueAPIToken(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
-	return p.issueAPIToken(ctx, userID, name, scopes, source)
-}
+var errTokenSystemUnavailable = errors.New("token system unavailable")
 
-// issueAPIToken creates and returns a fresh API token. The plaintext is
-// returned once here and never persisted — only sha256(token) hits disk.
-func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes, source string) (string, error) {
+// IssueAPIToken inserts one system-bound credential into the caller's writer
+// transaction. Only the digest reaches disk; plaintext is returned once.
+func (p *Plugin) IssueAPIToken(ctx context.Context, tx *sql.Tx, userID, systemID int64, name, scopes, source string) (string, error) {
+	if tx == nil {
+		return "", errors.New("token issuance requires a caller-owned transaction")
+	}
+	allowed, err := systems.CanEnter(ctx, tx, userID, systemID)
+	if err != nil {
+		return "", err
+	}
+	if !allowed {
+		return "", errTokenSystemUnavailable
+	}
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -447,13 +473,10 @@ func (p *Plugin) issueAPIToken(ctx context.Context, userID int64, name, scopes, 
 	token := hex.EncodeToString(raw[:])
 	sum := sha256.Sum256([]byte(token))
 	hashHex := hex.EncodeToString(sum[:])
-	err := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO api_tokens(user_id, name, token_hash, scopes, created_at, source)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, userID, name, hashHex, scopes, time.Now().Unix(), source)
-		return err
-	})
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO api_tokens(system_id, user_id, name, token_hash, scopes, created_at, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, systemID, userID, name, hashHex, scopes, time.Now().Unix(), source)
 	if err != nil {
 		return "", err
 	}

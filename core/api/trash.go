@@ -30,8 +30,12 @@ func (s *Server) ListTrash(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	where := "trashed_at IS NOT NULL"
-	args := []any{}
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
+	where := "trashed_at IS NOT NULL AND system_id = ?"
+	args := []any{systemID}
 	if p.Role != "admin" {
 		where += " AND owner_id = ?"
 		args = append(args, p.UserID)
@@ -96,7 +100,7 @@ func (s *Server) PurgeTrashDocument(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "trash.unavailable", errors.New("trash service is not configured"))
 		return
 	}
-	_, err = s.trash.PurgeOne(r.Context(), id, p, logx.RequestID(r.Context()))
+	_, err = s.trash.PurgeOne(r.Context(), selectedSystemID(r.Context()), id, p, logx.RequestID(r.Context()))
 	if errors.Is(err, trash.ErrNotTrashed) {
 		s.writeError(w, http.StatusNotFound, "not_found", "no such trashed document")
 		return
@@ -115,21 +119,43 @@ func (s *Server) EmptyTrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := auth.FromContext(r.Context())
+	systemID, ok := s.requireSystem(w, r, p)
+	if !ok {
+		return
+	}
 	if s.trash == nil {
 		s.serverErr(w, "trash.unavailable", errors.New("trash service is not configured"))
 		return
 	}
-	var ownerID *int64
-	if p.Role != "admin" {
-		id := p.UserID
-		ownerID = &id
+	visibility, args, err := s.collectionVisibility(r.Context(), p)
+	if err != nil {
+		s.serverErr(w, "trash.visibility", err)
+		return
 	}
-	ids, err := s.trash.TrashedIDs(r.Context(), ownerID)
+	rows, err := s.DB.Read.QueryContext(r.Context(), `SELECT d.id FROM documents d WHERE d.trashed_at IS NOT NULL AND `+visibility, args...)
 	if err != nil {
 		s.serverErr(w, "trash.ids", err)
 		return
 	}
-	decisions, err := s.documentPermissionDecisions(r.Context(), p, ids, authz.PermDelete)
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			s.serverErr(w, "trash.ids", err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		s.serverErr(w, "trash.ids", err)
+		return
+	}
+	if err := rows.Err(); err != nil {
+		s.serverErr(w, "trash.ids", err)
+		return
+	}
+	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, ids, authz.PermDelete)
 	if err != nil {
 		s.serverErr(w, "trash.authorize", err)
 		return
@@ -140,8 +166,12 @@ func (s *Server) EmptyTrash(w http.ResponseWriter, r *http.Request) {
 			allowed = append(allowed, id)
 		}
 	}
-	report, err := s.trash.PurgeIDs(r.Context(), allowed, p, logx.RequestID(r.Context()))
+	report, err := s.trash.PurgeIDs(r.Context(), systemID, allowed, p, logx.RequestID(r.Context()))
 	if err != nil {
+		if errors.Is(err, trash.ErrNotTrashed) {
+			s.writeError(w, http.StatusNotFound, "not_found", "document unavailable")
+			return
+		}
 		s.serverErr(w, "trash.empty", err)
 		return
 	}

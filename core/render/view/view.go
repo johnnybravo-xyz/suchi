@@ -16,15 +16,13 @@
 //   - Render(ctx, docID) builds the target path from documents + its
 //     storage_paths row (falling back to the default template) and
 //     creates a symlink at $renderDir/<rendered> → CAS blob.
-//   - Idempotent: re-rendering a doc removes any existing symlink at
-//     the new target and creates fresh. Old-location cleanup on
-//     re-render is a follow-up when we track prior paths.
-//   - Never fails ingest — a rendered-view error logs a warning and
-//     returns nil to the caller so the doc still lands.
+//   - Pending-before-publication journaling makes initial renders and moves
+//     recoverable. Filesystem and journal failures are returned to the job owner.
 package view
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -32,21 +30,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
 )
 
 // DefaultTemplateJD is what suchi renders against when the doc's
 // storage_paths row is unset AND taxonomy = jd (the default mode).
-const DefaultTemplateJD = `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
+const DefaultTemplateJD = `{{ jd.area.code_start }}-{{ jd.area.code_end }} {{ jd.area.name }}/{{ jd.category.code }} {{ jd.category.name }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}.pdf`
 
 // DefaultTemplateFlat is the fallback for flat-mode installs — the
-// classic correspondent/year/title shape so migrators keep their
-// folder layout.
-const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ title }}__{{ doc_pk }}.pdf`
+// correspondent/year shape, with the same stable date and document-ID suffix.
+const DefaultTemplateFlat = `{{ correspondent }}/{{ created_year }}/{{ created }} {{ title }}__{{ doc_pk }}.pdf`
 
 // Renderer is the projection engine. Constructed once at boot;
 // Render(ctx, docID) is safe for concurrent calls.
@@ -54,13 +53,14 @@ type Renderer struct {
 	db        *db.DB
 	cas       *blob.CAS
 	renderDir string
-	mode      string // "jd" or "flat"; picks the default template
+	mu        sync.Mutex
 	log       *slog.Logger
+	// Instance-local publication barrier for deterministic crash/race tests.
+	beforePublish func()
 }
 
-// New builds a Renderer. renderDir is created if missing. mode selects
-// the default template — normally taxonomy setting from the DB.
-func New(d *db.DB, cas *blob.CAS, renderDir, mode string, log *slog.Logger) (*Renderer, error) {
+// New builds a Renderer. Each document resolves its current system and mode.
+func New(d *db.DB, cas *blob.CAS, renderDir string, log *slog.Logger) (*Renderer, error) {
 	if renderDir == "" {
 		return nil, errors.New("view: renderDir required")
 	}
@@ -69,165 +69,162 @@ func New(d *db.DB, cas *blob.CAS, renderDir, mode string, log *slog.Logger) (*Re
 	}
 	return &Renderer{
 		db: d, cas: cas, renderDir: renderDir,
-		mode: mode, log: log.With("component", "view"),
+		log: log.With("component", "view"),
 	}, nil
 }
 
-// Render projects docID onto the file tree — used at ingest time when
-// there's no prior symlink yet. Writes an applied render_moves row so
-// subsequent Move() calls have a baseline.
-//
-// Selection order for the template:
-//
-//  1. documents.storage_path → storage_paths.path (per-doc override)
-//  2. Default template for the taxonomy mode
+// Render and Move serialize resolution, recovery, publication and journal
+// completion. An import can commit concurrently, but its queued Move cannot
+// overtake an old projection and leave an untracked legacy link behind.
 func (r *Renderer) Render(ctx context.Context, docID int64) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.project(ctx, docID)
+}
+
+func (r *Renderer) Move(ctx context.Context, docID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.project(ctx, docID)
+	return err
+}
+
+type projection struct {
+	path string
+	blob string
+}
+
+type pendingMove struct {
+	id       int64
+	previous projection
+	next     projection
+}
+
+func (r *Renderer) project(ctx context.Context, docID int64) (string, error) {
+	if err := r.reconcileDocument(ctx, docID); err != nil {
+		return "", err
+	}
 	rendered, src, err := r.resolveTarget(ctx, docID)
 	if err != nil {
 		return "", err
 	}
-	fullTarget := filepath.Join(r.renderDir, rendered)
-	if !underRoot(r.renderDir, fullTarget) {
-		return "", fmt.Errorf("view: rendered path %q escapes renderDir", rendered)
+	current := projection{path: rendered, blob: filepath.Base(src)}
+	previous, err := r.lastAppliedProjection(ctx, docID)
+	if err != nil {
+		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
-		return "", fmt.Errorf("view.mkdir: %w", err)
+	if previous == current {
+		return rendered, r.publishDocumentLink(ctx, docID, current.path, src)
 	}
-	if err := replaceSymlink(src, fullTarget); err != nil {
-		return "", fmt.Errorf("view.symlink: %w", err)
+	move, err := r.recordPending(ctx, docID, previous, current)
+	if err != nil {
+		return "", err
 	}
-	if err := r.recordApplied(ctx, docID, "", rendered); err != nil {
-		r.log.Warn("view.record.baseline", "doc_id", docID, "err", err.Error())
+	if err := r.finishPending(ctx, docID, []pendingMove{move}); err != nil {
+		return "", err
 	}
-	r.log.Info("view.rendered", "doc_id", docID, "path", rendered)
-	return rendered, nil
+	applied, err := r.lastAppliedProjection(ctx, docID)
+	return applied.path, err
 }
 
-// Move re-renders docID and, if the storage-path target changed since
-// the last applied render, atomically moves the symlink from the
-// previous path to the new one. Called from the "render" job kind so
-// every metadata mutator can enqueue instead of taking a direct
-// Renderer dependency.
-//
-// Semantics:
-//   - No prior render row → falls through to Render (initial baseline).
-//   - Prev == new       → repair an absent or stale link without a move row.
-//   - Prev != new       → INSERT pending → mv → UPDATE applied.
-//
-// Crash between INSERT and UPDATE is safe: Reconcile() on next boot
-// probes the filesystem and finishes or fails the pending row.
-func (r *Renderer) Move(ctx context.Context, docID int64) error {
+// Reconcile publishes the current target, not a possibly superseded journal
+// destination. A failure leaves the pending row retryable and is never hidden.
+func (r *Renderer) Reconcile(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rows, err := r.db.Read.QueryContext(ctx, `SELECT DISTINCT document_id FROM render_moves WHERE state='pending' ORDER BY document_id`)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	var result error
+	for _, id := range ids {
+		result = errors.Join(result, r.reconcileDocument(ctx, id))
+	}
+	return result
+}
+
+func (r *Renderer) reconcileDocument(ctx context.Context, docID int64) error {
+	rows, err := r.db.Read.QueryContext(ctx, `
+		SELECT id, prev_path, prev_blob, new_path, new_blob
+		FROM render_moves WHERE document_id=? AND state='pending' ORDER BY id`, docID)
+	if err != nil {
+		return err
+	}
+	var moves []pendingMove
+	for rows.Next() {
+		var move pendingMove
+		if err := rows.Scan(&move.id, &move.previous.path, &move.previous.blob, &move.next.path, &move.next.blob); err != nil {
+			rows.Close()
+			return err
+		}
+		moves = append(moves, move)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(moves) == 0 {
+		return err
+	}
+	return r.finishPending(ctx, docID, moves)
+}
+
+func (r *Renderer) finishPending(ctx context.Context, docID int64, moves []pendingMove) error {
 	rendered, src, err := r.resolveTarget(ctx, docID)
 	if err != nil {
 		return err
 	}
-	prev, err := r.lastAppliedPath(ctx, docID)
-	if err != nil {
-		return err
-	}
-	if prev == "" {
-		// First render — delegate to Render() which writes the
-		// baseline row.
-		_, err := r.Render(ctx, docID)
-		return err
-	}
-	fullTarget := filepath.Join(r.renderDir, rendered)
-	if !underRoot(r.renderDir, fullTarget) {
-		return fmt.Errorf("view: rendered path %q escapes renderDir", rendered)
-	}
-	if prev == rendered {
-		if target, err := os.Readlink(fullTarget); err == nil && target == src {
-			return nil
-		}
-		if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
-			return fmt.Errorf("view.mkdir: %w", err)
-		}
-		if err := replaceSymlink(src, fullTarget); err != nil {
-			return fmt.Errorf("view.symlink.repair: %w", err)
-		}
-		r.log.Info("view.repaired", "doc_id", docID, "path", rendered)
-		return nil
-	}
-	fullPrev := filepath.Join(r.renderDir, prev)
-
-	moveID, err := r.recordPending(ctx, docID, prev, rendered)
-	if err != nil {
-		return fmt.Errorf("view.record.pending: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(fullTarget), 0o750); err != nil {
-		_ = r.markFailed(ctx, moveID, err.Error())
-		return fmt.Errorf("view.mkdir: %w", err)
-	}
-	if err := replaceSymlink(src, fullTarget); err != nil {
-		_ = r.markFailed(ctx, moveID, err.Error())
-		return fmt.Errorf("view.symlink.new: %w", err)
-	}
-	// Remove old symlink only after the new one is in place — a crash
-	// between the two leaves both paths pointing at the same blob,
-	// which Reconcile can clean up idempotently.
-	if err := os.Remove(fullPrev); err != nil && !errors.Is(err, os.ErrNotExist) {
-		r.log.Warn("view.remove.prev", "doc_id", docID, "prev", prev, "err", err.Error())
-	}
-	if err := r.markApplied(ctx, moveID); err != nil {
-		r.log.Warn("view.record.applied", "doc_id", docID, "err", err.Error())
-	}
-	r.log.Info("view.moved", "doc_id", docID, "prev", prev, "new", rendered)
-	return nil
-}
-
-// Reconcile is the boot-time recovery pass. Every render_moves row in
-// state='pending' represents a move that crashed mid-flight; probe the
-// filesystem and finish or fail it. Runs once per boot from main.
-func (r *Renderer) Reconcile(ctx context.Context) error {
-	rows, err := r.db.Read.QueryContext(ctx, `
-		SELECT id, document_id, prev_path, new_path
-		FROM render_moves
-		WHERE state = 'pending'
-		ORDER BY created_at
-	`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type pending struct {
-		id, docID  int64
-		prev, newP string
-	}
-	var pendings []pending
-	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.id, &p.docID, &p.prev, &p.newP); err != nil {
+	current := projection{path: rendered, blob: filepath.Base(src)}
+	latest := moves[len(moves)-1]
+	if latest.next != current {
+		// A superseded attempt may already be visible on disk. Retain its path
+		// and blob until cleanup, and journal the new target before publication.
+		move, err := r.recordPending(ctx, docID, latest.next, current)
+		if err != nil {
 			return err
 		}
-		pendings = append(pendings, p)
+		moves = append(moves, move)
 	}
-	if err := rows.Err(); err != nil {
+	if r.beforePublish != nil {
+		r.beforePublish()
+	}
+	if err := r.publishDocumentLink(ctx, docID, current.path, src); err != nil {
 		return err
 	}
-
-	for _, p := range pendings {
-		fullNew := filepath.Join(r.renderDir, p.newP)
-		if _, err := os.Lstat(fullNew); err == nil {
-			// New path already exists — the move happened, we just
-			// didn't get to mark it applied. Finish the bookkeeping
-			// and try to remove the old symlink.
-			_ = os.Remove(filepath.Join(r.renderDir, p.prev))
-			if err := r.markApplied(ctx, p.id); err != nil {
-				r.log.Warn("view.reconcile.apply", "id", p.id, "err", err.Error())
+	removed := make(map[string]bool)
+	for _, move := range moves {
+		for _, old := range []projection{move.previous, move.next} {
+			if old.path == "" || old.path == current.path || removed[old.path] {
+				continue
 			}
-			r.log.Info("view.reconcile.applied", "doc_id", p.docID, "path", p.newP)
-			continue
+			if err := r.removeDocumentLink(ctx, docID, old.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			removed[old.path] = true
 		}
-		// New path not on disk — the move never happened. Mark failed
-		// and let the next metadata mutator retry via a fresh job.
-		if err := r.markFailed(ctx, p.id, "boot reconcile: new_path missing"); err != nil {
-			r.log.Warn("view.reconcile.fail", "id", p.id, "err", err.Error())
-		}
-		r.log.Warn("view.reconcile.failed", "doc_id", p.docID, "new_path", p.newP)
 	}
-	return nil
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for _, move := range moves {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE render_moves SET new_path=?, new_blob=?, state='applied', applied_at=?
+				WHERE id=?`, current.path, current.blob, time.Now().Unix(), move.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // resolveTarget builds the render context and returns (relPath, absSymlinkSrc).
@@ -245,9 +242,21 @@ func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, stri
 	if err != nil {
 		return "", "", fmt.Errorf("view.render: %w", err)
 	}
+	if err := safeRelative(rendered); err != nil {
+		return "", "", err
+	}
 	rendered = paths.SanitizePath(rendered)
 	if rendered == "" {
 		return "", "", errors.New("view: rendered path empty after sanitize")
+	}
+	if cctx.JDSystemCode != "" {
+		if paths.IsIndexPath(rendered) {
+			return "", "", errors.New("view: reserved system index path")
+		}
+		rendered = filepath.Join(cctx.JDSystemCode, rendered)
+	}
+	if err := r.checkDocumentPath(rendered); err != nil {
+		return "", "", err
 	}
 	src, err := r.cas.Path(blobHash)
 	if err != nil {
@@ -256,65 +265,36 @@ func (r *Renderer) resolveTarget(ctx context.Context, docID int64) (string, stri
 	return rendered, src, nil
 }
 
-// lastAppliedPath returns the most-recent applied new_path for a doc,
-// or "" when no baseline exists yet.
-func (r *Renderer) lastAppliedPath(ctx context.Context, docID int64) (string, error) {
-	var p string
+// lastAppliedProjection returns the most-recent completed path and blob.
+// Legacy rows have no recorded blob; ownership must then be proved against
+// the document's retained original/current archive before replacing a link.
+func (r *Renderer) lastAppliedProjection(ctx context.Context, docID int64) (projection, error) {
+	var p projection
 	err := r.db.Read.QueryRowContext(ctx, `
-		SELECT new_path FROM render_moves
+		SELECT new_path, new_blob FROM render_moves
 		WHERE document_id = ? AND state = 'applied'
 		ORDER BY applied_at DESC, id DESC LIMIT 1
-	`, docID).Scan(&p)
+	`, docID).Scan(&p.path, &p.blob)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return projection{}, nil
 	}
 	return p, err
 }
 
-func (r *Renderer) recordApplied(ctx context.Context, docID int64, prev, newP string) error {
-	now := time.Now().Unix()
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO render_moves(document_id, prev_path, new_path, state, created_at, applied_at)
-			VALUES (?, ?, ?, 'applied', ?, ?)
-		`, docID, prev, newP, now, now)
-		return err
-	})
-}
-
-func (r *Renderer) recordPending(ctx context.Context, docID int64, prev, newP string) (int64, error) {
-	now := time.Now().Unix()
-	var id int64
+func (r *Renderer) recordPending(ctx context.Context, docID int64, previous, next projection) (pendingMove, error) {
+	move := pendingMove{previous: previous, next: next}
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO render_moves(document_id, prev_path, new_path, state, created_at)
-			VALUES (?, ?, ?, 'pending', ?)
-		`, docID, prev, newP, now)
+			INSERT INTO render_moves(document_id, prev_path, prev_blob, new_path, new_blob, state, created_at)
+			VALUES (?, ?, ?, ?, ?, 'pending', ?)
+		`, docID, previous.path, previous.blob, next.path, next.blob, time.Now().Unix())
 		if err != nil {
 			return err
 		}
-		id, err = res.LastInsertId()
+		move.id, err = res.LastInsertId()
 		return err
 	})
-	return id, err
-}
-
-func (r *Renderer) markApplied(ctx context.Context, id int64) error {
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE render_moves SET state = 'applied', applied_at = ? WHERE id = ?
-		`, time.Now().Unix(), id)
-		return err
-	})
-}
-
-func (r *Renderer) markFailed(ctx context.Context, id int64, msg string) error {
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE render_moves SET state = 'failed', applied_at = ?, err = ? WHERE id = ?
-		`, time.Now().Unix(), msg, id)
-		return err
-	})
+	return move, err
 }
 
 // underRoot rejects target paths that don't sit under renderDir. Guards
@@ -338,25 +318,81 @@ func underRoot(root, target string) bool {
 	return !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
 }
 
+// Refuse the managed index namespace and symlinked parents, including aliases
+// into that namespace. The final document symlink itself is expected and allowed.
+func safeRelative(relative string) error {
+	if relative == "" || filepath.IsAbs(relative) || strings.Contains(relative, "\\") {
+		return errors.New("view: path must be relative")
+	}
+	for _, component := range strings.Split(relative, "/") {
+		if component == ".." {
+			return errors.New("view: path traversal is forbidden")
+		}
+	}
+	return nil
+}
+
+func (r *Renderer) checkDocumentPath(relative string) error {
+	if err := safeRelative(relative); err != nil {
+		return err
+	}
+	first, rest, _ := strings.Cut(filepath.ToSlash(relative), "/")
+	if systems.ValidCode(first) && paths.IsIndexPath(rest) {
+		var introduced bool
+		var err error
+		introduced, err = systems.Introduced(context.Background(), r.db.Read)
+		if err != nil {
+			return err
+		}
+		if introduced {
+			return errors.New("view: reserved system index path")
+		}
+	}
+	if paths.IsIndexPath(relative) {
+		return fmt.Errorf("view: %q is reserved for the generated filing index", paths.IndexDirectory)
+	}
+	target := filepath.Join(r.renderDir, relative)
+	if !underRoot(r.renderDir, target) {
+		return fmt.Errorf("view: path escapes render root")
+	}
+	for parent := filepath.Dir(target); ; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err == nil && !info.IsDir() {
+			return fmt.Errorf("view: refusing non-directory or symlinked parent %q", parent)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if filepath.Clean(parent) == filepath.Clean(r.renderDir) {
+			break
+		}
+		if parent == filepath.Dir(parent) {
+			return fmt.Errorf("view: path escapes render root")
+		}
+	}
+	return nil
+}
+
 // buildContext loads the doc + related rows and returns the template
 // to use + the render context + the blob hash to symlink at.
 func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths.Context, string, error) {
 	var (
-		title              string
-		correspondent      sql.NullString
-		documentType       sql.NullString
-		storagePathTpl     sql.NullString
-		storagePathName    sql.NullString
-		archiveBlob        sql.NullString
-		originalBlob       string
-		created            int64
-		added              sql.NullInt64
-		asn                sql.NullInt64
-		ownerEmail         string
-		jdCode             int
-		jdName             string
-		areaStart, areaEnd int
-		areaName           string
+		title                        string
+		correspondent                sql.NullString
+		documentType                 sql.NullString
+		storagePathTpl               sql.NullString
+		storagePathName              sql.NullString
+		archiveBlob                  sql.NullString
+		originalBlob                 string
+		created                      int64
+		added                        sql.NullInt64
+		asn                          sql.NullInt64
+		ownerEmail                   string
+		jdCode                       int
+		jdName                       string
+		areaStart, areaEnd           int
+		areaName                     string
+		systemCode, systemName, mode string
 	)
 	err := r.db.Read.QueryRowContext(ctx, `
 		SELECT
@@ -368,19 +404,20 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			d.created_at, d.added_at, d.archive_serial_number,
 			u.email,
 			jc.code, jc.name,
-			ja.code_start, ja.code_end, ja.name
+			ja.code_start, ja.code_end, ja.name, js.code, js.name, js.taxonomy
 		FROM documents d
 		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
 		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
 		LEFT JOIN storage_paths   sp ON sp.id = d.storage_path_id
 		LEFT JOIN users           u  ON u.id  = d.owner_id
 		JOIN jd_categories        jc ON jc.id = d.jd_category_id
-		JOIN jd_areas             ja ON ja.code_start = jc.area_start
+		JOIN jd_areas             ja ON ja.code_start = jc.area_start AND ja.system_id = d.system_id
+		JOIN jd_systems           js ON js.id = d.system_id
 		WHERE d.id = ? AND d.trashed_at IS NULL
 	`, docID).Scan(&title, &correspondent, &documentType,
 		&storagePathTpl, &storagePathName,
 		&archiveBlob, &originalBlob, &created, &added, &asn,
-		&ownerEmail, &jdCode, &jdName, &areaStart, &areaEnd, &areaName)
+		&ownerEmail, &jdCode, &jdName, &areaStart, &areaEnd, &areaName, &systemCode, &systemName, &mode)
 	if err != nil {
 		return "", paths.Context{}, "", err
 	}
@@ -388,10 +425,13 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 	tpl := ""
 	if storagePathTpl.Valid && storagePathTpl.String != "" {
 		tpl = storagePathTpl.String
-	} else if r.mode == "flat" {
+	} else if mode == "flat" {
 		tpl = DefaultTemplateFlat
 	} else {
 		tpl = DefaultTemplateJD
+	}
+	if systemCode != "" && (!storagePathTpl.Valid || storagePathTpl.String == "") {
+		tpl = strings.Replace(tpl, "{{ doc_pk }}", "{{ jd.address }}", 1)
 	}
 
 	// Read tags for the template context.
@@ -423,6 +463,27 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 		JDAreaName:      areaName,
 		JDCategoryCode:  jdCode,
 		JDCategoryName:  jdName,
+		JDSystemCode:    systemCode,
+		JDSystemName:    systemName,
+		JDAddress:       systems.Address(systemCode, jdCode, docID),
+	}
+	// Fallbacks use the recorded creation date, then added date, then an
+	// explicit undated prefix. Explicit user templates keep their old values.
+	if !storagePathTpl.Valid || storagePathTpl.String == "" {
+		if mode == "flat" && cctx.Correspondent == "" {
+			tpl = strings.TrimPrefix(tpl, "{{ correspondent }}/")
+		}
+		if cctx.Created == "" {
+			cctx.Created = cctx.Added
+		}
+		if cctx.Created == "" {
+			cctx.Created = "undated"
+			// There is no year to render for undated documents. Omit the
+			// default flat year directory rather than producing a leading slash.
+			if mode == "flat" {
+				tpl = strings.Replace(tpl, "{{ created_year }}/", "", 1)
+			}
+		}
 	}
 	return tpl, cctx, blobHash, nil
 }
@@ -449,32 +510,146 @@ func (r *Renderer) docTags(ctx context.Context, docID int64) ([]string, error) {
 	return out, rows.Err()
 }
 
-// replaceSymlink atomically points target at src, replacing any prior
-// symlink or regular file at target. Uses the standard tmp+rename
-// dance to avoid a window where target doesn't exist.
-func replaceSymlink(src, target string) error {
-	// If target exists (previous render), remove it. Refuse to walk
-	// through a real directory — the caller controls the render root.
-	if fi, err := os.Lstat(target); err == nil {
-		if fi.IsDir() {
-			return fmt.Errorf("view: refusing to overwrite directory %s", target)
-		}
-		if err := os.Remove(target); err != nil {
-			return fmt.Errorf("remove prior: %w", err)
+// replaceSymlink atomically refreshes a symlink after its caller proves ownership.
+// Recheck the entry type before the temporary-link/rename operation.
+func replaceSymlink(dir *os.Root, src, target string) error {
+	if fi, err := dir.Lstat(target); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("view: refusing to overwrite non-document file %s", target)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("lstat %s: %w", target, err)
+		return err
 	}
-	// tmpname + rename → atomic replace even under concurrent renderers.
-	tmp := target + ".tmp"
-	if err := os.Symlink(src, tmp); err != nil {
-		return fmt.Errorf("symlink: %w", err)
+	tmp := ".document-" + rand.Text() + ".tmp"
+	if err := dir.Symlink(src, tmp); err != nil {
+		return err
 	}
-	if err := os.Rename(tmp, target); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+	defer dir.Remove(tmp)
+	return dir.Rename(tmp, target)
+}
+
+func (r *Renderer) publishDocumentLink(ctx context.Context, docID int64, relative, src string) error {
+	dir, target, err := r.documentParent(relative, true)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer dir.Close()
+	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return replaceSymlink(dir, src, target)
+}
+
+func (r *Renderer) removeDocumentLink(ctx context.Context, docID int64, relative string) error {
+	dir, target, err := r.documentParent(relative, false)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil {
+		return err
+	}
+	return dir.Remove(target)
+}
+
+func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative string, dir *os.Root, target string) error {
+	info, err := dir.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("view: refusing non-document file %q", target)
+	}
+	link, err := dir.Readlink(target)
+	if err != nil {
+		return err
+	}
+	rows, err := r.db.Read.QueryContext(ctx, `
+		SELECT original_blob FROM documents WHERE id=?
+		UNION SELECT archive_blob FROM documents WHERE id=? AND archive_blob IS NOT NULL
+		UNION SELECT new_blob FROM render_moves WHERE document_id=? AND new_path=? AND new_blob<>''
+		UNION SELECT prev_blob FROM render_moves WHERE document_id=? AND prev_path=? AND prev_blob<>''`,
+		docID, docID, docID, relative, docID, relative)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return err
+		}
+		if hash == "" {
+			continue
+		}
+		src, err := r.cas.Path(hash)
+		if err != nil {
+			return err
+		}
+		if link == src || paths.MatchesCASLink(link, hash) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("view: refusing foreign symlink %q", target)
+}
+
+// Open each real parent through a pinned os.Root, so a concurrent symlink swap
+// cannot redirect document writes into the index namespace (or outside the root).
+func (r *Renderer) documentParent(relative string, create bool) (*os.Root, string, error) {
+	if err := safeRelative(relative); err != nil {
+		return nil, "", err
+	}
+	if create {
+		if err := r.checkDocumentPath(relative); err != nil {
+			return nil, "", err
+		}
+	}
+	info, err := os.Lstat(r.renderDir)
+	if err != nil {
+		return nil, "", err
+	}
+	dir, err := os.OpenRoot(r.renderDir)
+	if err != nil {
+		return nil, "", err
+	}
+	opened, err := dir.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		dir.Close()
+		return nil, "", fmt.Errorf("view: render root changed while opening")
+	}
+	components := strings.Split(filepath.ToSlash(filepath.Clean(relative)), "/")
+	for _, component := range components[:len(components)-1] {
+		if create {
+			if err := dir.Mkdir(component, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
+				dir.Close()
+				return nil, "", err
+			}
+		}
+		info, err := dir.Lstat(component)
+		if err != nil {
+			dir.Close()
+			return nil, "", err
+		}
+		if !info.IsDir() {
+			dir.Close()
+			return nil, "", fmt.Errorf("view: refusing symlinked document parent %q", component)
+		}
+		next, err := dir.OpenRoot(component)
+		dir.Close()
+		if err != nil {
+			return nil, "", err
+		}
+		opened, err := next.Stat(".")
+		if err != nil || !os.SameFile(info, opened) {
+			next.Close()
+			return nil, "", fmt.Errorf("view: document parent changed while opening")
+		}
+		dir = next
+	}
+	return dir, components[len(components)-1], nil
 }
 
 func nsToStr(s sql.NullString) string {

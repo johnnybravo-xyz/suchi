@@ -33,6 +33,7 @@ func runRefile(args []string) int {
 		skipAutomations = fs.Bool("skip-automations", false, "don't re-run automations; enqueue render only")
 		skipRender      = fs.Bool("skip-render", false, "don't enqueue render jobs — re-run classifier only")
 		ownerID         = fs.Int64("owner-id", 0, "restrict to docs owned by this user id; 0 = every owner")
+		systemCode      = fs.String("system", "", "system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -72,7 +73,13 @@ func runRefile(args []string) int {
 	// enqueued jobs. Nothing calls it here.
 	_ = blob.CAS{}
 
+	system, err := resolveCommandSystem(ctx, d, *systemCode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "system: %v\n", err)
+		return 1
+	}
 	stats, err := refile.All(ctx, d, log, refile.Options{
+		SystemID:        system.ID,
 		SkipAutomations: *skipAutomations,
 		SkipRender:      *skipRender,
 		OwnerID:         *ownerID,

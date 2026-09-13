@@ -61,6 +61,11 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 	if err != nil {
 		return fmt.Errorf("create blob server: %w", err)
 	}
+	blobServer.DemoMode = cfg.DemoMode
+	if cfg.UIDisabled {
+		mux.Handle("GET /preview/{id}", httpx.RequireAuth(http.HandlerFunc(blobServer.Preview)))
+		mux.Handle("GET /download/{id}", httpx.RequireAuth(http.HandlerFunc(blobServer.Download)))
+	}
 	mux.Handle("GET /api/documents/{id}/preview", httpx.RequireAuth(http.HandlerFunc(blobServer.Preview)))
 	mux.Handle("GET /api/documents/{id}/download", httpx.RequireAuth(http.HandlerFunc(blobServer.Download)))
 	return nil

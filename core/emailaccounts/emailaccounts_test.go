@@ -74,7 +74,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := emailaccounts.Create(ctx, d, emailaccounts.Account{
+	created, err := createOriginalEmailAccount(ctx, d, emailaccounts.Account{
 		Name:         "primary",
 		OwnerID:      uid,
 		Provider:     emailaccounts.ProviderFastmail,
@@ -114,7 +114,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 	newName := "primary-fastmail"
 	disabled := false
 	newPoll := 30
-	patched, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{
+	patched, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{
 		Name:            &newName,
 		Enabled:         &disabled,
 		PollIntervalMin: &newPoll,
@@ -133,7 +133,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	newPoll = 45
-	patched, err = emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &newPoll})
+	patched, err = patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &newPoll})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 		t.Fatal("non-source patch reset the UID cursor")
 	}
 	newFolder := "Receipts"
-	patched, err = emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Folder: &newFolder})
+	patched, err = patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{Folder: &newFolder})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,13 +149,13 @@ func TestCRUDRoundTrip(t *testing.T) {
 		t.Fatalf("source patch kept cursor: uid=%d uidvalidity=%d", patched.LastUIDSeen, patched.UIDValiditySeen)
 	}
 
-	if err := emailaccounts.Delete(ctx, d, created.ID); err != nil {
+	if err := deleteEmailAccount(ctx, d, created.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err := emailaccounts.Get(ctx, d, created.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("get after delete: want ErrNoRows, got %v", err)
 	}
-	if err := emailaccounts.Delete(ctx, d, created.ID); !errors.Is(err, sql.ErrNoRows) {
+	if err := deleteEmailAccount(ctx, d, created.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("second delete: want ErrNoRows, got %v", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestListEnabledFilters(t *testing.T) {
 	sealed, _ := emailaccounts.SealPassword(k, "p")
 
 	mk := func(name string, enabled bool) {
-		_, err := emailaccounts.Create(ctx, d, emailaccounts.Account{
+		_, err := createOriginalEmailAccount(ctx, d, emailaccounts.Account{
 			Name: name, OwnerID: uid, Provider: emailaccounts.ProviderCustom,
 			Host: "h", Port: 993, UseTLS: true,
 			AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -182,7 +182,7 @@ func TestListEnabledFilters(t *testing.T) {
 	mk("off", false)
 	mk("on-2", true)
 
-	all, err := emailaccounts.List(ctx, d)
+	all, err := emailaccounts.List(ctx, d, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestMarkSync(t *testing.T) {
 	k := newAEAD(t)
 	sealed, _ := emailaccounts.SealPassword(k, "p")
 
-	a, err := emailaccounts.Create(ctx, d, emailaccounts.Account{
+	a, err := createOriginalEmailAccount(ctx, d, emailaccounts.Account{
 		Name: "m", OwnerID: uid, Provider: emailaccounts.ProviderCustom,
 		Host: "h", Port: 993, UseTLS: true,
 		AuthMethod: emailaccounts.AuthPassword, Username: "u", SealedSecret: sealed,
@@ -252,7 +252,7 @@ func TestMarkSync(t *testing.T) {
 func TestCreateValidations(t *testing.T) {
 	ctx := context.Background()
 	d := setupDB(t)
-	_, err := emailaccounts.Create(ctx, d, emailaccounts.Account{})
+	_, err := createOriginalEmailAccount(ctx, d, emailaccounts.Account{})
 	if err == nil {
 		t.Fatal("expected validation error for empty account")
 	}
@@ -267,40 +267,40 @@ func TestCreateValidations(t *testing.T) {
 	for _, poll := range []int{-1, emailaccounts.MaxPollIntervalMin + 1} {
 		candidate := base
 		candidate.PollIntervalMin = poll
-		if _, err := emailaccounts.Create(ctx, d, candidate); err == nil {
+		if _, err := createOriginalEmailAccount(ctx, d, candidate); err == nil {
 			t.Fatalf("poll interval %d should be rejected", poll)
 		}
 	}
 	invalidPoll := 0
-	created, err := emailaccounts.Create(ctx, d, base)
+	created, err := createOriginalEmailAccount(ctx, d, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &invalidPoll}); err == nil {
+	if _, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{PollIntervalMin: &invalidPoll}); err == nil {
 		t.Fatal("zero poll interval patch should be rejected")
 	}
 	emptyHost := ""
-	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Host: &emptyHost}); err == nil {
+	if _, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{Host: &emptyHost}); err == nil {
 		t.Fatal("empty host patch should be rejected")
 	}
 	negativeSince := int64(-1)
-	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{SyncSince: &negativeSince}); err == nil {
+	if _, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{SyncSince: &negativeSince}); err == nil {
 		t.Fatal("negative sync_since patch should be rejected")
 	}
 	longName := strings.Repeat("x", 201)
-	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Name: &longName}); err == nil {
+	if _, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{Name: &longName}); err == nil {
 		t.Fatal("overlong name patch should be rejected")
 	}
 	badCA := filepath.Join(t.TempDir(), "missing-ca.pem")
 	base.TLSCAFile = badCA
-	if _, err := emailaccounts.Create(ctx, d, base); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
+	if _, err := createOriginalEmailAccount(ctx, d, base); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
 		t.Fatalf("invalid CA file error = %v", err)
 	}
 	if _, err := d.ExecWrite(ctx, `UPDATE email_accounts SET tls_ca_file = ? WHERE id = ?`, badCA, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	on := true
-	if _, err := emailaccounts.Patch(ctx, d, created.ID, emailaccounts.AccountPatch{Enabled: &on}); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
+	if _, err := patchEmailAccount(ctx, d, created.ID, emailaccounts.AccountPatch{Enabled: &on}); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
 		t.Fatalf("enabling with invalid CA file error = %v", err)
 	}
 }
@@ -351,4 +351,31 @@ func TestMicrosoftOAuthCredentialEnvelope(t *testing.T) {
 	if _, err := emailaccounts.OpenMicrosoftOAuthCredential(k, legacySeal); err == nil {
 		t.Fatal("raw token cache should require reauthentication")
 	}
+}
+
+func createOriginalEmailAccount(ctx context.Context, d *db.DB, account emailaccounts.Account) (*emailaccounts.Account, error) {
+	account.SystemID = 1
+	var result *emailaccounts.Account
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = emailaccounts.Create(ctx, tx, account, nil)
+		return err
+	})
+	return result, err
+}
+
+func patchEmailAccount(ctx context.Context, d *db.DB, id int64, patch emailaccounts.AccountPatch) (*emailaccounts.Account, error) {
+	var result *emailaccounts.Account
+	err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = emailaccounts.Patch(ctx, tx, id, patch, nil)
+		return err
+	})
+	return result, err
+}
+
+func deleteEmailAccount(ctx context.Context, d *db.DB, id int64) error {
+	return d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return emailaccounts.Delete(ctx, tx, id, nil)
+	})
 }

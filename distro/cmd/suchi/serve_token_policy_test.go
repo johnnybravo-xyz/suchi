@@ -34,16 +34,16 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	_, err = d.ExecWrite(ctx, `
 		INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES
-		(1,'admin@example.test','Admin','admin',0,0),(2,'member@example.test','Member','member',0,0);
-		INSERT INTO documents(id,owner_id,original_blob,original_size,title,content,jd_category_id,created_at,updated_at)
-		VALUES(1,2,'fixture',0,'Private fixture','PRIVATE_OCR_MARKER',(SELECT id FROM jd_categories LIMIT 1),0,0);
-		INSERT INTO api_tokens(id,user_id,name,token_hash,scopes,created_at)
-		VALUES(2,2,'member-device','fixture-token-hash','documents:read',0)`)
+		(1,'admin@example.test','Admin','admin',0,0),(2,'member@example.test','Member','member',0,0),(3,'reader@example.test','Reader','member',0,0);
+		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,content,jd_category_id,created_at,updated_at)
+		VALUES(1,1,2,'fixture',0,'Private fixture','PRIVATE_OCR_MARKER',(SELECT id FROM jd_categories WHERE system_id=1 LIMIT 1),0,0);
+		INSERT INTO api_tokens(system_id,id,user_id,name,token_hash,scopes,created_at)
+		VALUES(1,2,2,'member-device','fixture-token-hash','documents:read',0)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,11 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	}{
 		{name: "events cannot read OCR", method: "GET", path: "/api/documents/1", scope: auth.ScopeEventsRead, role: "member", kind: "token", userID: 2, want: 403},
 		{name: "read scope can read owned OCR", method: "GET", path: "/api/documents/1", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 200},
-		{name: "scope does not replace document ACL", method: "GET", path: "/api/documents/1", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 3, want: 403},
+		{name: "read token can list filing systems", method: "GET", path: "/api/jd/systems", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 200},
+		{name: "events token cannot list filing systems", method: "GET", path: "/api/jd/systems", scope: auth.ScopeEventsRead, role: "member", kind: "token", userID: 2, want: 403},
+		{name: "read token reaches address validation", method: "GET", path: "/api/jd/resolve?address=invalid", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 2, want: 400},
+		{name: "admin read token cannot manage membership", method: "GET", path: "/api/admin/jd/systems/S01/members", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "scope does not replace document ACL", method: "GET", path: "/api/documents/1", scope: auth.ScopeDocumentsRead, role: "member", kind: "token", userID: 3, want: 404},
 		{name: "admin read token cannot create account", method: "POST", path: "/api/admin/users", body: `{"email":"blocked@example.test","password":"test-password-123","role":"admin"}`, scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "admin session can create account", method: "POST", path: "/api/admin/users", body: `{"email":"allowed@example.test","password":"test-password-123","role":"admin"}`, role: "admin", kind: "user", userID: 1, want: 201},
 		{name: "admin token cannot list credentials", method: "GET", path: "/api/tokens/", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
@@ -72,6 +76,12 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		{name: "member session can mint credential", method: "POST", path: "/api/tokens/", body: `{"name":"allowed-token","scopes":"documents:read"}`, role: "member", kind: "user", userID: 2, want: 201},
 		{name: "admin session can list credentials", method: "GET", path: "/api/tokens/", role: "admin", kind: "user", userID: 1, want: 200},
 		{name: "admin session can revoke member credential", method: "DELETE", path: "/api/tokens/2", role: "admin", kind: "user", userID: 1, want: 204},
+		{name: "admin token cannot preview taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, scope: auth.ScopeDocumentsWrite, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "admin token cannot export taxonomy", method: "GET", path: "/api/admin/taxonomy/export", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "scratch cannot import taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, role: "admin", kind: "demo-scratch", userID: 2, want: 403},
+		{name: "member cannot import taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, role: "member", kind: "user", userID: 2, want: 403},
+		{name: "admin session validates taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, role: "admin", kind: "user", userID: 1, want: 400},
+		{name: "admin session exports taxonomy", method: "GET", path: "/api/admin/taxonomy/export", role: "admin", kind: "user", userID: 1, want: 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))

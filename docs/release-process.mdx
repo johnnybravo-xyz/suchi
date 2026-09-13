@@ -31,9 +31,23 @@ User-visible changes update the `[Unreleased]` section of
 in the same pull request. Write for operators and call out required migration
 steps directly.
 
-A release may add at most one numbered database migration. Fold all schema
-changes for an unreleased version into that migration; never rewrite it after
-the release is published.
+A release normally adds at most one numbered database migration; never rewrite a
+published migration. For this taxonomy cutover, beta.2 at schema 0002 is the published
+upgrade baseline. Published 0001/0002 are unchanged; all unreleased mobile and
+taxonomy changes are consolidated in `0003_taxonomy_foundation.sql`. Verify fresh
+initialization and populated **0002 → 0003** upgrades, restart idempotence, preserved
+data and failed-upgrade rollback. Intermediate development schemas are not supported
+upgrade inputs. The rebuild marker must remain the first line of 0003.
+See [Architecture](/architecture#storage-and-transaction-invariants) for the runner.
+
+Before v1.0, plan a fresh-schema baseline and a final beta upgrade bridge. The final
+beta must bring supported older archives to the baseline's schema version. v1.0
+can then create that schema directly for a new database, accept an archive already
+at that version, and direct older archives to the tagged final beta first. Keep
+schema versions increasing independently of release versions. Remove the old
+upgrade SQL from the active runner only after testing exact schema equivalence
+and the complete upgrade path. This transition requires migration-runner support;
+renaming branches or resetting schema version numbers cannot implement it.
 
 Suchi follows SemVer:
 

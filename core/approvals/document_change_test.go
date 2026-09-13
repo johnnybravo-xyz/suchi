@@ -86,8 +86,8 @@ func TestApprovedTagTakesOwnershipOfClassifierReview(t *testing.T) {
 	ctx := context.Background()
 	seedDocumentForChange(t, e.DB())
 	if _, err := e.DB().Write.ExecContext(ctx, `
-		INSERT INTO tags(id, name, slug, created_at, updated_at)
-		VALUES (99, 'needs-review', 'needs-review', 0, 0)
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 99, 'needs-review', 'needs-review', 0, 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +273,8 @@ func TestDocumentChangeSweepSupersededFiling(t *testing.T) {
 		ctx := context.Background()
 		seedDocumentForChange(t, e.DB())
 		if _, err := e.DB().Write.ExecContext(ctx, `
-			INSERT INTO jd_categories(id, area_start, code, name) VALUES (11, 10, 11, 'Housing'), (12, 10, 12, 'Banking');
-			INSERT INTO settings(key, value_json, updated_at) VALUES ('jd_inbox_category_id', '10', 0);
+			INSERT INTO jd_categories(system_id, id, area_start, code, name) VALUES (1, 11, 10, 11, 'Housing'), (1, 12, 10, 12, 'Banking');
+			UPDATE jd_systems SET inbox_category_id = 10 WHERE id = 1;
 		`); err != nil {
 			t.Fatal(err)
 		}
@@ -337,10 +337,10 @@ func seedDocumentForChange(t *testing.T, d interface {
 	t.Helper()
 	err := d.WriteTx(context.Background(), func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (10, 19, 'Personal', 0);
-			INSERT INTO jd_categories(id, area_start, code, name, system) VALUES (10, 10, 10, 'Inbox', 1);
-			INSERT INTO documents(id, owner_id, original_blob, original_size, title, jd_category_id, created_at, added_at, updated_at)
-			VALUES (10, 1, 'change-test', 1, 'scan.pdf', 10, 0, 0, 0);
+			INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 10, 19, 'Personal', 0);
+			INSERT INTO jd_categories(system_id, id, area_start, code, name, system) VALUES (1, 10, 10, 10, 'Inbox', 1);
+			INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title, jd_category_id, created_at, added_at, updated_at)
+			VALUES (1, 10, 1, 'change-test', 1, 'scan.pdf', 10, 0, 0, 0);
 		`)
 		return err
 	})

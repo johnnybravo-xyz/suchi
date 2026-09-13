@@ -16,12 +16,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 )
 
 func TestPreviewCSP_SandboxHeaderSet(t *testing.T) {
@@ -42,13 +44,14 @@ func TestPreviewCSP_SandboxHeaderSet(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(),
 		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin", Email: "admin@example.com"})
 
-	// No doc seeded — Preview falls through to serveBlob which 404s.
-	// The CSP header is set before serveBlob runs, so the recorder
-	// captures it regardless of the 404.
+	id := seedEmailPreviewDoc(t, s, "<h1>Untrusted email</h1>")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/preview/1", nil).WithContext(ctx)
-	req.SetPathValue("id", "1")
+	req.SetPathValue("id", strconv.FormatInt(id, 10))
 	s.Preview(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", rec.Code, rec.Body.String())
+	}
 
 	csp := rec.Header().Get("Content-Security-Policy")
 	if csp == "" {
@@ -74,12 +77,25 @@ func TestPreviewCSP_SandboxHeaderSet(t *testing.T) {
 
 func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
 	s := newUISrv(t)
+	id := seedEmailPreviewDoc(t, s, "Scope-protected body")
+	var err error
+	s.CAS, err = blob.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := s.CAS.Put(strings.NewReader("Scope-protected bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecWrite(t.Context(), `UPDATE documents SET original_blob=? WHERE id=?`, ref.SHA256, id); err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{"/preview/1", "/download/1"} {
 		t.Run(path, func(t *testing.T) {
 			request := func(scopes []string) *httptest.ResponseRecorder {
 				rec := httptest.NewRecorder()
 				req := httptest.NewRequest(http.MethodGet, path, nil)
-				req.SetPathValue("id", "1")
+				req.SetPathValue("id", strconv.FormatInt(id, 10))
 				req = req.WithContext(auth.WithPrincipal(context.Background(), &pluginapi.Principal{
 					Kind: "token", UserID: 1, Role: "admin", Scopes: scopes,
 				}))
@@ -96,8 +112,8 @@ func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
 				t.Fatalf("missing-scope response = %d %q", denied.Code, denied.Body.String())
 			}
 			allowed := request([]string{auth.ScopeDocumentsRead})
-			if allowed.Code == http.StatusForbidden && strings.Contains(allowed.Body.String(), "insufficient_scope") {
-				t.Fatalf("read-scoped token was rejected: %d %q", allowed.Code, allowed.Body.String())
+			if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), "Scope-protected") {
+				t.Fatalf("read-scoped token did not receive its document: %d %q", allowed.Code, allowed.Body.String())
 			}
 		})
 	}

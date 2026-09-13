@@ -34,7 +34,9 @@ func TestTrashPreviewAndDownloadKeepOwnerScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Write.Exec(`INSERT INTO users(id, email, display_name, role, created_at, updated_at)
-		VALUES (2, 'reader@example.test', 'Reader', 'member', 0, 0)`); err != nil {
+		VALUES (2, 'reader@example.test', 'Reader', 'member', 0, 0),
+		(3, 'admin3@example.test', 'Admin', 'admin', 0, 0),
+		(4, 'outsider@example.test', 'Outsider', 'member', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Write.Exec(`INSERT INTO object_acls(
@@ -81,7 +83,7 @@ func TestTrashPreviewAndDownloadKeepOwnerScope(t *testing.T) {
 				path := "/" + endpoint + "/" + idText
 				request(t, path, owner, http.StatusOK, "archive fixture")
 				request(t, path, admin, http.StatusOK, "archive fixture")
-				request(t, path, outsider, http.StatusForbidden, "")
+				request(t, path, outsider, http.StatusNotFound, "")
 				request(t, path, nil, http.StatusUnauthorized, "")
 				if state.trashedAt == nil {
 					request(t, path, reader, http.StatusOK, "archive fixture")

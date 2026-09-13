@@ -3,15 +3,17 @@ package taxonomy_test
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
@@ -30,7 +32,8 @@ func TestMergeTags(t *testing.T) {
 
 	// Dry-run
 	res, err := taxonomy.Merge(ctx, d, taxonomy.Options{
-		Kind: taxonomy.KindTag, FromName: "BESCOM", IntoName: "Bescom",
+		SystemID: 1,
+		Kind:     taxonomy.KindTag, FromName: "BESCOM", IntoName: "Bescom",
 	})
 	if err != nil {
 		t.Fatalf("dry: %v", err)
@@ -44,7 +47,8 @@ func TestMergeTags(t *testing.T) {
 
 	// Apply
 	_, err = taxonomy.Merge(ctx, d, taxonomy.Options{
-		Kind: taxonomy.KindTag, FromName: "BESCOM", IntoName: "Bescom", Apply: true,
+		SystemID: 1,
+		Kind:     taxonomy.KindTag, FromName: "BESCOM", IntoName: "Bescom", Apply: true,
 	})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -90,7 +94,8 @@ func TestMergeTagsTakesOwnershipOfResultingReviewTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := taxonomy.Merge(ctx, d, taxonomy.Options{
-		Kind: taxonomy.KindTag, FromName: "follow-up", IntoName: "needs-review", Apply: true,
+		SystemID: 1,
+		Kind:     taxonomy.KindTag, FromName: "follow-up", IntoName: "needs-review", Apply: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +126,7 @@ func TestMergeCorrespondents(t *testing.T) {
 	setCorrespondent(t, ctx, d, docB, "A Corporation")
 
 	_, err := taxonomy.Merge(ctx, d, taxonomy.Options{
+		SystemID: 1,
 		Kind:     taxonomy.KindCorrespondent,
 		FromName: "A Corp", IntoName: "A Corporation", Apply: true,
 	})
@@ -138,58 +144,6 @@ func TestMergeCorrespondents(t *testing.T) {
 	}
 }
 
-func TestMergeRewritesAutomations(t *testing.T) {
-	ctx := context.Background()
-	d := setup(t, ctx)
-	seedUser(t, ctx, d)
-	seedTag(t, ctx, d, "old-name")
-	seedTag(t, ctx, d, "new-name")
-
-	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
-		var oldID int64
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE name = 'old-name'`).Scan(&oldID); err != nil {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-			VALUES ('a1', 100, 1, 0, 0)`)
-		if err != nil {
-			return err
-		}
-		automationID, _ := res.LastInsertId()
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO automation_triggers(automation_id, type, filter_tag_id, created_at)
-			VALUES (?, 'document_added', ?, 0)`, automationID, oldID); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO automation_actions(automation_id, order_index, kind, params_json, created_at)
-			VALUES (?, 0, 'assign_tags', ?, 0)`, automationID, fmt.Sprintf(`{"tag_ids":[%d]}`, oldID))
-		return err
-	}))
-
-	_, err := taxonomy.Merge(ctx, d, taxonomy.Options{
-		Kind: taxonomy.KindTag, FromName: "old-name", IntoName: "new-name", Apply: true,
-	})
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-	var newID, filterID int64
-	var params string
-	if err := d.Read.QueryRow(`SELECT id FROM tags WHERE name = 'new-name'`).Scan(&newID); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Read.QueryRow(`SELECT filter_tag_id FROM automation_triggers LIMIT 1`).Scan(&filterID); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Read.QueryRow(`SELECT params_json FROM automation_actions LIMIT 1`).Scan(&params); err != nil {
-		t.Fatal(err)
-	}
-	if filterID != newID || params != fmt.Sprintf(`{"tag_ids":[%d]}`, newID) {
-		t.Errorf("automation not rewritten: filter=%d params=%s want=%d", filterID, params, newID)
-	}
-}
-
 // --- helpers ---
 
 func setup(t *testing.T, ctx context.Context) *db.DB {
@@ -202,7 +156,7 @@ func setup(t *testing.T, ctx context.Context) *db.DB {
 	migs, _ := db.LoadMigrations(migrations.FS, ".")
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	must(t, db.Migrate(ctx, d, migs, log))
-	must(t, jd.EnsureTree(ctx, d, log, jd.ModeJD))
+	must(t, jd.EnsureTree(ctx, d, log, jd.ModeJD, 1))
 	return d
 }
 
@@ -220,7 +174,7 @@ func seedTag(t *testing.T, ctx context.Context, d *db.DB, name string) {
 	t.Helper()
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO tags(name, slug, created_at, updated_at) VALUES (?, ?, 0, 0)`,
+			INSERT INTO tags(system_id, name, slug, created_at, updated_at) VALUES (1, ?, ?, 0, 0)`,
 			name, name)
 		return err
 	}))
@@ -230,7 +184,7 @@ func seedCorrespondent(t *testing.T, ctx context.Context, d *db.DB, name string)
 	t.Helper()
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO correspondents(name, slug, created_at, updated_at) VALUES (?, ?, 0, 0)`,
+			INSERT INTO correspondents(system_id, name, slug, created_at, updated_at) VALUES (1, ?, ?, 0, 0)`,
 			name, name)
 		return err
 	}))
@@ -238,13 +192,13 @@ func seedCorrespondent(t *testing.T, ctx context.Context, d *db.DB, name string)
 
 func seedDoc(t *testing.T, ctx context.Context, d *db.DB, title string) int64 {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size, title, jd_category_id,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, jd_category_id,
 			                      created_at, updated_at)
-			VALUES (1, ?, 0, ?, ?, 0, 0)`,
+			VALUES (1, 1, ?, 0, ?, ?, 0, 0)`,
 			"sha_"+title, title, inbox)
 		if err != nil {
 			return err
@@ -279,5 +233,64 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNamedMergePreservesRuleBehaviorWithoutTouchingAnotherSystem(t *testing.T) {
+	ctx := t.Context()
+	d := setup(t, ctx)
+	seedUser(t, ctx, d)
+	seedTag(t, ctx, d, "old-name")
+	seedTag(t, ctx, d, "new-name")
+	doc := seedDoc(t, ctx, d, "Rule source")
+	var other int64
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := systems.SetCode(ctx, tx, 1, "S01", 1); err != nil {
+			return err
+		}
+		var err error
+		other, err = systems.Create(ctx, tx, "S02", "Other", "jd", 1)
+		if err != nil {
+			return err
+		}
+		for _, name := range []string{"old-name", "new-name"} {
+			if _, err := taxonomy.UpsertByName(ctx, tx, other, taxonomy.TableTags, name, 1); err != nil {
+				return err
+			}
+		}
+		var old int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM tags WHERE system_id=1 AND name='old-name'`).Scan(&old); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `INSERT INTO automations(system_id,name,order_index,enabled,created_at,updated_at) VALUES(1,'File merged tag',0,1,0,0)`)
+		if err != nil {
+			return err
+		}
+		rule, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO automation_triggers(automation_id,type,created_at) VALUES(?,'document_added',0)`, rule); err != nil {
+			return err
+		}
+		params, err := json.Marshal(map[string]any{"tag_ids": []int64{old}})
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO automation_actions(automation_id,order_index,kind,params_json,created_at) VALUES(?,0,'assign_tags',?,0)`, rule, string(params))
+		return err
+	}))
+	_, err := taxonomy.Merge(ctx, d, taxonomy.Options{SystemID: 1, Kind: taxonomy.KindTag, FromName: "old-name", IntoName: "new-name", Apply: true})
+	must(t, err)
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, slog.New(slog.NewTextHandler(os.Stderr, nil)), doc))
+	var name string
+	must(t, d.Read.QueryRowContext(ctx, `SELECT t.name FROM document_tags dt JOIN tags t ON t.id=dt.tag_id WHERE dt.document_id=?`, doc).Scan(&name))
+	if name != "new-name" {
+		t.Fatalf("merged automation filed under %q", name)
+	}
+	var remaining int
+	must(t, d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM tags WHERE system_id=? AND name IN ('old-name','new-name')`, other).Scan(&remaining))
+	if remaining != 2 {
+		t.Fatal("merge removed another system's tags")
 	}
 }

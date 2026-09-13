@@ -110,8 +110,8 @@ func TestBulkEditAddTagTakesOwnershipOfClassifierReview(t *testing.T) {
 	s := newBulkServer(t)
 	docID := seedStatsDoc(t, s.DB, 1, "review-sha", "Review", seedStatsJDInbox(t, s.DB), false, 0)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO tags(id, name, slug, created_at, updated_at)
-		VALUES (99, 'needs-review', 'needs-review', 0, 0);
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 99, 'needs-review', 'needs-review', 0, 0);
 		INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, 99, 1)
 	`, docID); err != nil {
 		t.Fatal(err)
@@ -171,9 +171,12 @@ func TestBulkEdit_AuthorizerErrorFailsRequest(t *testing.T) {
 	s := newBulkServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)
 	docID := seedStatsDoc(t, s.DB, 1, "auth-error-sha", "auth error", inbox, false, 0)
-	s.Authz = &recordingAuthorizer{errors: map[int64]error{
-		docID: errors.New("authorizer unavailable"),
-	}}
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET sensitivity='public' WHERE id=?`, docID); err != nil {
+		t.Fatal(err)
+	}
+	s.Authz = authorizerFunc(func(context.Context, authz.Principal, authz.Kind, int64, authz.Perm) error {
+		return errors.New("authorizer unavailable")
+	})
 
 	code, _ := doBulkEdit(t, s,
 		map[string]any{
@@ -186,6 +189,13 @@ func TestBulkEdit_AuthorizerErrorFailsRequest(t *testing.T) {
 	if code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500", code)
 	}
+	var sensitivity string
+	if err := s.DB.Read.QueryRow(`SELECT sensitivity FROM documents WHERE id=?`, docID).Scan(&sensitivity); err != nil {
+		t.Fatal(err)
+	}
+	if sensitivity != "public" {
+		t.Fatalf("authorization failure mutated document sensitivity to %q", sensitivity)
+	}
 }
 
 func TestBulkEdit_SetJDCategory(t *testing.T) {
@@ -196,8 +206,8 @@ func TestBulkEdit_SetJDCategory(t *testing.T) {
 
 	// Seed a second JD category to move to.
 	_, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_categories(id, area_start, code, name)
-		VALUES (2, 0, 2, 'Tax')`)
+		INSERT INTO jd_categories(system_id, id, area_start, code, name)
+		VALUES (1, 2, 0, 2, 'Tax')`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -63,15 +63,19 @@ type docSnapshot struct {
 // Action failures roll back that automation and return to the caller so the
 // surrounding job or request can report the failure accurately.
 func ApplyOnDocumentAdded(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
-	_, err := ApplyOnDocumentAddedCount(ctx, d, log, docID)
+	_, err := ApplyOnDocumentAddedCount(ctx, d, log, docID, 0)
 	return err
 }
 
 // ApplyOnDocumentAddedCount is used by explicit refiles, where callers need
 // to report how many automations matched the document.
-func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) (int, error) {
+func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, log *slog.Logger, docID, actorID int64) (int, error) {
 	s := &Store{DB: d}
-	atms, err := s.ByTrigger(ctx, TriggerDocumentAdded)
+	var systemID int64
+	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+		return 0, err
+	}
+	atms, err := s.ByTrigger(ctx, systemID, TriggerDocumentAdded)
 	if err != nil {
 		return 0, fmt.Errorf("automations: load automations: %w", err)
 	}
@@ -83,14 +87,18 @@ func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, log *slog.Logger, 
 		return 0, fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx := Context{DocID: docID}
-	return runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentAdded)
+	return runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentAdded, actorID)
 }
 
 // ApplyOnDocumentUpdated mirrors the above for the update trigger.
 // Called from PATCH /api/documents/{id} handlers after the write lands.
 func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
 	s := &Store{DB: d}
-	atms, err := s.ByTrigger(ctx, TriggerDocumentUpdated)
+	var systemID int64
+	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+		return err
+	}
+	atms, err := s.ByTrigger(ctx, systemID, TriggerDocumentUpdated)
 	if err != nil {
 		return fmt.Errorf("automations: load automations: %w", err)
 	}
@@ -102,7 +110,7 @@ func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, doc
 		return fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx := Context{DocID: docID}
-	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentUpdated)
+	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentUpdated, 0)
 	return err
 }
 
@@ -113,7 +121,11 @@ func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, doc
 // corresponding filter without erroring.
 func ApplyOnConsumption(ctx context.Context, d *db.DB, log *slog.Logger, docID int64, evCtx Context) error {
 	s := &Store{DB: d}
-	atms, err := s.ByTrigger(ctx, TriggerConsumption)
+	var systemID int64
+	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
+		return err
+	}
+	atms, err := s.ByTrigger(ctx, systemID, TriggerConsumption)
 	if err != nil {
 		return fmt.Errorf("automations: load automations: %w", err)
 	}
@@ -125,12 +137,12 @@ func ApplyOnConsumption(ctx context.Context, d *db.DB, log *slog.Logger, docID i
 		return fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx.DocID = docID
-	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerConsumption)
+	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerConsumption, 0)
 	return err
 }
 
 func runMatching(ctx context.Context, d *db.DB, log *slog.Logger,
-	atms []Automation, evCtx Context, snap *docSnapshot, t TriggerType) (int, error) {
+	atms []Automation, evCtx Context, snap *docSnapshot, t TriggerType, actorID int64) (int, error) {
 
 	matchedCount := 0
 	for _, atm := range atms {
@@ -151,6 +163,15 @@ func runMatching(ctx context.Context, d *db.DB, log *slog.Logger,
 
 		alog := log.With("automation.id", atm.ID, "automation.name", atm.Name, "doc_id", evCtx.DocID)
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			if actorID != 0 {
+				var allowed bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, actorID).Scan(&allowed); err != nil {
+					return err
+				}
+				if !allowed {
+					return errors.New("automations: active admin required for refile")
+				}
+			}
 			for _, a := range atm.Actions {
 				if err := runAction(ctx, tx, evCtx.DocID, a); err != nil {
 					return fmt.Errorf("action %q: %w", a.Kind, err)
@@ -288,6 +309,15 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 
 // runAction dispatches on Kind. Metadata actions converge when rerun.
 func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
+	var systemID int64
+	// Discard may revisit a trashed document, but metadata actions still require
+	// a live one. Keep both admission and reference validation in this writer.
+	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ? AND (trashed_at IS NULL OR ? = 'discard')`, docID, a.Kind).Scan(&systemID); err != nil {
+		return err
+	}
+	if err := validateAction(ctx, tx, systemID, a); err != nil {
+		return err
+	}
 	switch a.Kind {
 	case "assign_title":
 		tpl, _ := a.Params["template"].(string)
@@ -341,7 +371,7 @@ func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
 		// silently move docs to a deleted category id and dangle the FK.
 		var exists int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT 1 FROM jd_categories WHERE id = ?`, id).Scan(&exists); err != nil {
+			`SELECT 1 FROM jd_categories WHERE system_id = ? AND id = ?`, systemID, id).Scan(&exists); err != nil {
 			return fmt.Errorf("assign_jd_category: unknown category id %d", id)
 		}
 		_, err := tx.ExecContext(ctx,
@@ -457,7 +487,7 @@ func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
 func upsertCustomField(ctx context.Context, tx *sql.Tx, docID, fieldID int64, val any) error {
 	var dataType, extra string
 	err := tx.QueryRowContext(ctx,
-		`SELECT data_type, extra_data FROM custom_fields WHERE id = ?`, fieldID).
+		`SELECT data_type, extra_data FROM custom_fields WHERE id = ? AND system_id = (SELECT system_id FROM documents WHERE id = ?)`, fieldID, docID).
 		Scan(&dataType, &extra)
 	if err != nil {
 		return fmt.Errorf("custom_field %d: %w", fieldID, err)

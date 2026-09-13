@@ -3,16 +3,14 @@
 //
 // The design opinion is: JD on by default, flat mode is a degenerate JD
 // tree (one area, one category, no branching in code). Either way
-// documents.jd_category_id is NOT NULL and settings.jd_inbox_category_id
-// always points at a live row — the UI just chooses whether to expose
-// the tree.
+// documents.jd_category_id is NOT NULL and each system owns its Inbox
+// pointer; the UI chooses whether to expose that system's tree.
 package jd
 
 import (
 	"context"
 	"database/sql"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +19,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/render/index"
 )
 
 //go:embed defaults/jd-tree.yaml
@@ -48,17 +48,13 @@ type Category struct {
 	System      bool   `yaml:"system,omitempty"`
 }
 
-// TaxonomyMode is stored under settings.taxonomy. "jd" (default) shows the
-// full tree; "flat" hides JD affordances but keeps one internal category
-// so the schema shape is invariant across modes (see design §Taxonomy).
+// TaxonomyMode belongs to a filing system. Flat mode hides JD affordances
+// while retaining the internal category invariant.
 type TaxonomyMode string
 
 const (
 	ModeJD   TaxonomyMode = "jd"
 	ModeFlat TaxonomyMode = "flat"
-
-	SettingTaxonomy        = "taxonomy"
-	SettingInboxCategoryID = "jd_inbox_category_id"
 )
 
 // BootstrapTree is the neutral first-boot baseline. It satisfies the document
@@ -140,12 +136,12 @@ func (t Tree) Validate() error {
 
 // EnsureBootstrapTree establishes the neutral System/Inbox baseline used by
 // normal server boot. A populated taxonomy is only repaired, never replaced.
-func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode) error {
+func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, systemID int64) error {
 	tree := BootstrapTree
 	if mode == ModeFlat {
 		tree = FlatTree
 	}
-	return ensureTree(ctx, d, log, mode, tree)
+	return ensureTree(ctx, d, log, mode, systemID, tree)
 }
 
 // EnsureTree preserves the established starter taxonomy used by explicit
@@ -153,15 +149,11 @@ func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode T
 // EnsureBootstrapTree so it does not choose categories before the wizard.
 // Behavior:
 //
-//   - If jd_areas is empty: load the caller's tree (starter by default,
-//     FlatTree if mode=flat), seed jd_areas + jd_categories, write
-//     settings.jd_inbox_category_id and settings.taxonomy.
-//   - If jd_areas is populated: verify settings.jd_inbox_category_id
-//     still points at a live system category. Repair it if stale (never
-//     brick ingest just because a user pruned a row).
+//   - An empty system receives the caller's tree and its own Inbox pointer.
+//   - A populated system is only checked for a stale Inbox pointer.
 //
 // Idempotent: safe to run on every boot.
-func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode) error {
+func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, systemID int64) error {
 	// The active tree depends on the mode. Flat mode uses the built-in
 	// degenerate tree — no file read, no external state.
 	tree := FlatTree
@@ -172,148 +164,77 @@ func EnsureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMo
 		}
 		tree = t
 	}
-	return ensureTree(ctx, d, log, mode, tree)
+	return ensureTree(ctx, d, log, mode, systemID, tree)
 }
 
-func ensureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, tree Tree) error {
-	log = log.With("component", "jd")
-
-	var have int
-	if err := d.Read.QueryRowContext(ctx, "SELECT COUNT(*) FROM jd_areas").Scan(&have); err != nil {
-		return err
-	}
-	if have == 0 {
-		if err := seed(ctx, d, tree, mode); err != nil {
+func ensureTree(ctx context.Context, d *db.DB, log *slog.Logger, mode TaxonomyMode, systemID int64, tree Tree) error {
+	return d.WriteTx(ctx, func(tx *sql.Tx) error {
+		system, err := systems.Get(ctx, tx, systemID)
+		if err != nil {
 			return err
 		}
-		log.Info("jd.tree.loaded", "mode", mode, "areas", len(tree.Areas))
-		return nil
-	}
-
-	// Repair: settings.jd_inbox_category_id must exist and point at a
-	// row with system=1. If not, pick any system=1 row.
-	return repairInbox(ctx, d, log)
-}
-
-func seed(ctx context.Context, d *db.DB, tree Tree, mode TaxonomyMode) error {
-	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return seedInTx(ctx, tx, tree, mode)
-	})
-}
-
-// seedInTx writes the tree rows + inbox/taxonomy settings inside an
-// existing tx. Used by both first-boot seed and preset-apply, so both
-// paths pin the same invariants.
-func seedInTx(ctx context.Context, tx *sql.Tx, tree Tree, mode TaxonomyMode) error {
-	now := time.Now().Unix()
-	for pos, a := range tree.Areas {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO jd_areas(code_start, code_end, name, description, position)
-			VALUES (?, ?, ?, ?, ?)
-		`, a.Start, a.End, a.Name, nullString(a.Description), pos); err != nil {
-			return fmt.Errorf("insert area %s: %w", a.Name, err)
+		var have int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM jd_areas WHERE system_id=?", systemID).Scan(&have); err != nil {
+			return err
 		}
-		for _, c := range a.Categories {
-			sys := 0
-			if c.System {
-				sys = 1
+		now := time.Now().Unix()
+		if have == 0 {
+			for pos, a := range tree.Areas {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO jd_areas(system_id,code_start,code_end,name,description,position) VALUES(?,?,?,?,?,?)`,
+					systemID, a.Start, a.End, a.Name, nullString(a.Description), pos); err != nil {
+					return fmt.Errorf("insert area %s: %w", a.Name, err)
+				}
+				for _, c := range a.Categories {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO jd_categories(system_id,area_start,code,name,description,system) VALUES(?,?,?,?,?,?)`,
+						systemID, a.Start, c.Code, c.Name, nullString(c.Description), c.System); err != nil {
+						return fmt.Errorf("insert category %d: %w", c.Code, err)
+					}
+				}
 			}
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO jd_categories(area_start, code, name, description, system)
-				VALUES (?, ?, ?, ?, ?)
-			`, a.Start, c.Code, c.Name, nullString(c.Description), sys); err != nil {
-				return fmt.Errorf("insert category %d: %w", c.Code, err)
+			if _, err := tx.ExecContext(ctx, `UPDATE jd_systems SET taxonomy=?,updated_at=? WHERE id=?`, string(mode), now, systemID); err != nil {
+				return err
+			}
+		} else if system.InboxCategoryID != 0 {
+			var valid bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jd_categories WHERE id=? AND system_id=? AND system=1)`, system.InboxCategoryID, systemID).Scan(&valid); err != nil {
+				return err
+			}
+			if valid {
+				return nil
 			}
 		}
-	}
-	var inbox int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&inbox); err != nil {
-		return fmt.Errorf("locate inbox after seed: %w", err)
-	}
-	if err := writeSetting(ctx, tx, SettingInboxCategoryID, inbox, now); err != nil {
-		return err
-	}
-	return writeSetting(ctx, tx, SettingTaxonomy, string(mode), now)
-}
-
-func repairInbox(ctx context.Context, d *db.DB, log *slog.Logger) error {
-	// Read settings.jd_inbox_category_id. If missing or stale, refresh.
-	var cur sql.NullString
-	err := d.Read.QueryRowContext(ctx,
-		`SELECT value_json FROM settings WHERE key = ?`, SettingInboxCategoryID).Scan(&cur)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-
-	if cur.Valid {
-		var id int64
-		if jerr := json.Unmarshal([]byte(cur.String), &id); jerr == nil {
-			var ok int
-			if err := d.Read.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM jd_categories WHERE id = ? AND system = 1`, id).Scan(&ok); err == nil && ok == 1 {
-				return nil // pointer still valid
-			}
+		var inbox int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE system_id=? AND system=1 ORDER BY code LIMIT 1`, systemID).Scan(&inbox); err != nil {
+			return fmt.Errorf("jd repair: no protected Inbox in system %d: %w", systemID, err)
 		}
-	}
-
-	// Repair path — pick any system=1 row, or fail loudly if none exists.
-	var id int64
-	if err := d.Read.QueryRowContext(ctx,
-		`SELECT id FROM jd_categories WHERE system = 1 LIMIT 1`).Scan(&id); err != nil {
-		return fmt.Errorf("jd repair: no system category present, cannot recover: %w", err)
-	}
-	log.Warn("jd.inbox.repaired", "new_id", id,
-		"detail", "jd_inbox_category_id was missing or stale — repointed to a live system category")
-	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return writeSetting(ctx, tx, SettingInboxCategoryID, id, time.Now().Unix())
+		if err := systems.SetInbox(ctx, tx, systemID, inbox, now); err != nil {
+			return err
+		}
+		log.Info("jd.tree.ready", "system_id", systemID, "inbox", inbox)
+		return index.Enqueue(ctx, tx, systemID)
 	})
 }
 
 // InboxCategoryID reads the current inbox pointer. Callers use this to
 // resolve "no category picked" → concrete row on ingest.
-func InboxCategoryID(ctx context.Context, d *db.DB) (int64, error) {
-	var s string
-	err := d.Read.QueryRowContext(ctx,
-		`SELECT value_json FROM settings WHERE key = ?`, SettingInboxCategoryID).Scan(&s)
+func InboxCategoryID(ctx context.Context, d *db.DB, systemID int64) (int64, error) {
+	system, err := systems.Get(ctx, d.Read, systemID)
 	if err != nil {
-		return 0, fmt.Errorf("read inbox pointer: %w", err)
+		return 0, err
 	}
-	var id int64
-	if err := json.Unmarshal([]byte(s), &id); err != nil {
-		return 0, fmt.Errorf("decode inbox pointer: %w", err)
+	if system.InboxCategoryID == 0 {
+		return 0, fmt.Errorf("system %d has no Inbox", systemID)
 	}
-	return id, nil
+	return system.InboxCategoryID, nil
 }
 
-// Mode reads settings.taxonomy. Missing => ModeJD.
-func Mode(ctx context.Context, d *db.DB) (TaxonomyMode, error) {
-	var s string
-	err := d.Read.QueryRowContext(ctx,
-		`SELECT value_json FROM settings WHERE key = ?`, SettingTaxonomy).Scan(&s)
-	if err == sql.ErrNoRows {
-		return ModeJD, nil
-	}
+// Mode reads the selected system's filing mode.
+func Mode(ctx context.Context, d *db.DB, systemID int64) (TaxonomyMode, error) {
+	system, err := systems.Get(ctx, d.Read, systemID)
 	if err != nil {
 		return "", err
 	}
-	var m string
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		return "", err
-	}
-	return TaxonomyMode(m), nil
-}
-
-func writeSetting(ctx context.Context, tx *sql.Tx, key string, val any, now int64) error {
-	b, err := json.Marshal(val)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
-	`, key, string(b), now)
-	return err
+	return TaxonomyMode(system.Taxonomy), nil
 }
 
 func nullString(s string) any {

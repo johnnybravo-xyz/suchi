@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
@@ -303,7 +304,7 @@
                      checked={groupSelection.all} use:indeterminate={groupSelection.some}
                      onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
               <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail}
-                 href={`#/doc/${group.documentID}`} aria-label={`Open ${group.title || `document ${group.documentID}`}`}>
+                 href={filingHref(`#/doc/${group.documentID}`)} aria-label={`Open ${group.title || `document ${group.documentID}`}`}>
                 {#if group.thumbnail}
                   <img src={thumbPath(group.documentID)} alt="" loading="lazy" />
                 {:else}
@@ -311,7 +312,7 @@
                 {/if}
               </a>
               <div>
-                <a href={`#/doc/${group.documentID}`}>{group.title || `Document #${group.documentID}`}</a>
+                <a href={filingHref(`#/doc/${group.documentID}`)}>{group.title || `Document #${group.documentID}`}</a>
                 <small>{group.candidates.length} date{group.candidates.length === 1 ? '' : 's'} to check</small>
               </div>
             </header>
@@ -349,7 +350,7 @@
           {#if group.document}
             <header class="approval-card-header document-header">
               <a class="task-thumb" class:placeholder={!group.document.doc_has_thumbnail}
-                 href={`#/doc/${group.document.doc_id}`}
+                 href={filingHref(`#/doc/${group.document.doc_id}`)}
                  aria-label={`Open ${group.document.doc_title || `document ${group.document.doc_id}`}`}>
                 {#if group.document.doc_has_thumbnail}
                   <img src={thumbPath(group.document.doc_id)} alt="" loading="lazy" />
@@ -358,7 +359,7 @@
                 {/if}
               </a>
               <div class="document-identity">
-                <a href={`#/doc/${group.document.doc_id}`}>
+                <a href={filingHref(`#/doc/${group.document.doc_id}`)}>
                   {group.document.doc_title || `Document #${group.document.doc_id}`}
                 </a>
                 <div class="document-meta">
@@ -409,7 +410,7 @@
                   <div class="rescan-targets">
                     <ul>
                       {#each targets as target (target.id)}
-                        <li><a href={`#/doc/${target.id}`}>{target.title || `Document #${target.id}`}</a></li>
+                        <li><a href={filingHref(`#/doc/${target.id}`)}>{target.title || `Document #${target.id}`}</a></li>
                       {/each}
                     </ul>
                     {#if Number(t.vars?.stale_count || 0) > targets.length}
@@ -437,7 +438,7 @@
             {#if j.last_error}<span class="sub" title={j.last_error}>{j.last_error.slice(0, 90)}</span>{/if}
           </span>
           <span class="sub">{retryLabel(j)}</span>
-          {#if j.doc_id}<a class="btn sm" href={`#/doc/${j.doc_id}`}>Doc #{j.doc_id}</a>{/if}
+          {#if j.doc_id}<a class="btn sm" href={filingHref(`#/doc/${j.doc_id}`)}>Doc #{j.doc_id}</a>{/if}
           <button class="btn sm" disabled={busyJobs.has(j.id)} onclick={() => actOnDeadJob(j, 'retry')} title="Run this job again">
             <Icon name="refresh" size={13} /> Retry
           </button>

@@ -1,4 +1,5 @@
 <script>
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { emptyTrash, listTrash, permanentlyDeleteDocument, restoreDocument } from '../lib/api.js'
   import { fmtDate, fmtBytes } from '../lib/format.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
@@ -92,7 +93,7 @@
     <div class="index">
       {#each rows as d (d.id)}
         <div class="irow trash-row">
-          <a class="trash-document" href={`#/doc/${d.id}`}>
+          <a class="trash-document" href={filingHref(`#/doc/${d.id}`)}>
             <span class="file-icon"><Icon name="docs" size={23} /></span>
             <span class="trash-info">
               <span class="title">{d.title || `Document #${d.id}`}</span>

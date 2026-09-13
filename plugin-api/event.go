@@ -10,10 +10,11 @@ import (
 //
 // The zero value is not useful; the dispatcher always populates all fields.
 type Event struct {
-	Kind    string
-	DocID   int64
-	Time    time.Time
-	Payload map[string]any
+	Kind     string
+	DocID    int64
+	SystemID int64 // zero only for instance-wide work
+	Time     time.Time
+	Payload  map[string]any
 }
 
 // Subscriber is what plugins implement to receive events.

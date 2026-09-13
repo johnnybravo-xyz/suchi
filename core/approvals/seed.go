@@ -12,6 +12,7 @@ package approvals
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,39 +27,52 @@ import (
 //
 // actor is optional — pass a synthesized "system" principal (with
 // UserID=0) to attribute the seed to the process itself.
-func (e *Engine) EnsureDef(ctx context.Context, slug string, spec Spec, actor *pluginapi.Principal) error {
+func (e *Engine) EnsureDef(ctx context.Context, systemID int64, slug string, spec Spec, actor *pluginapi.Principal) error {
+	return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return EnsureDefInTx(ctx, tx, systemID, slug, spec, actor)
+	})
+}
+
+// EnsureDefInTx seeds a builtin in the caller's atomic system transaction.
+func EnsureDefInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string, spec Spec, actor *pluginapi.Principal) error {
+	currentPrincipal, err := currentActor(ctx, tx, actor, systemID)
+	if err != nil {
+		return err
+	}
+	if currentPrincipal != nil && currentPrincipal.UserID != 0 && currentPrincipal.Role != "admin" {
+		return ErrForbidden
+	}
+	actor = currentPrincipal
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("approvals.ensure_def: invalid spec: %w", err)
 	}
-	current, err := activeDefBySlug(ctx, e.db.Read, slug)
+	current, err := activeDefBySlug(ctx, tx, systemID, slug)
 	if err != nil && !errors.Is(err, ErrNoDef) {
-		return fmt.Errorf("approvals.ensure_def: load current: %w", err)
+		return err
 	}
-	newJSON, err := EncodeSpec(spec)
+	raw, err := EncodeSpec(spec)
 	if err != nil {
-		return fmt.Errorf("approvals.ensure_def: encode: %w", err)
+		return err
 	}
-	if err == nil && specsEqual(current.SpecJSON, newJSON) {
-		// Active def already matches — nothing to do.
+	if specsEqual(current.SpecJSON, raw) {
 		return nil
 	}
-	if _, err := e.Register(ctx, spec, slug, actor); err != nil {
-		return fmt.Errorf("approvals.ensure_def: register: %w", err)
+	var actorID int64
+	if actor != nil {
+		actorID = actor.UserID
 	}
-	if e.log != nil {
-		e.log.Info("approvals.seed.registered", "slug", slug)
-	}
-	return nil
+	_, _, err = insertDef(ctx, tx, systemID, slug, raw, actorID)
+	return err
 }
 
 // EnsureDef is the top-level convenience. Uses the package-level
 // engine — main.go's SetDefault must have run first.
-func EnsureDef(ctx context.Context, slug string, spec Spec, actor *pluginapi.Principal) error {
+func EnsureDef(ctx context.Context, systemID int64, slug string, spec Spec, actor *pluginapi.Principal) error {
 	e := Default()
 	if e == nil {
 		return ErrEngineNotConfigured
 	}
-	return e.EnsureDef(ctx, slug, spec, actor)
+	return e.EnsureDef(ctx, systemID, slug, spec, actor)
 }
 
 // specsEqual compares two spec JSON blobs by round-tripping through
@@ -96,7 +110,7 @@ func (r AdminAssigneeResolver) Resolve(ctx context.Context, assignee string) ([]
 	}
 	if assignee == "role:admin" {
 		rows, err := r.Engine.db.Read.QueryContext(ctx,
-			`SELECT id FROM users WHERE role = 'admin' ORDER BY id`)
+			`SELECT id FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY id`)
 		if err != nil {
 			return nil, fmt.Errorf("role:admin resolve: %w", err)
 		}

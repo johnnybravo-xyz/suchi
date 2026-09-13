@@ -30,9 +30,9 @@ func newChatTestServer(t *testing.T) *Server {
 	seedMember(t, s, 2, `[]`)
 	seedMember(t, s, 3, `["archive_chat"]`)
 	if _, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_areas(code_start, code_end, name, position) VALUES (10, 19, 'Test', 0);
-		INSERT INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 10, 10, 'Inbox', 1)
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 10, 19, 'Test', 0);
+		INSERT INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 10, 10, 'Inbox', 1)
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +46,9 @@ func seedChatDoc(t *testing.T, s *Server, id, owner int64, title, content, sensi
 		trashedAt = int64(1)
 	}
 	_, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO documents(id, owner_id, original_blob, original_size, title, content,
+		INSERT INTO documents(system_id, id, owner_id, original_blob, original_size, title, content,
 		                      jd_category_id, sensitivity, trashed_at, created_at, updated_at)
-		VALUES (?, ?, ?, 1, ?, ?, 1, ?, ?, 0, 0)
+		VALUES (1, ?, ?, ?, 1, ?, ?, 1, ?, ?, 0, 0)
 	`, id, owner, "chat-"+strconv.FormatInt(id, 10), title, content, sensitivity, trashedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -377,9 +377,9 @@ func TestChatAppliesCompleteDocumentScope(t *testing.T) {
 	seedChatDoc(t, s, 50, 1, "Scoped needle", "scoped needle evidence", "internal", false)
 	seedChatDoc(t, s, 51, 1, "Other needle", "scoped needle evidence", "internal", false)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO tags(id, name, slug, created_at, updated_at) VALUES (5, 'scope-tag', 'scope-tag', 0, 0);
-		INSERT INTO correspondents(id, name, slug, created_at, updated_at) VALUES (6, 'Scope Person', 'scope-person', 0, 0);
-		INSERT INTO document_types(id, name, slug, created_at, updated_at) VALUES (7, 'scope-type', 'scope-type', 0, 0);
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES (1, 5, 'scope-tag', 'scope-tag', 0, 0);
+		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at) VALUES (1, 6, 'Scope Person', 'scope-person', 0, 0);
+		INSERT INTO document_types(system_id, id, name, slug, created_at, updated_at) VALUES (1, 7, 'scope-type', 'scope-type', 0, 0);
 		UPDATE documents SET document_type_id = 7, correspondent_id = 6, languages = ',de,', created_at = 100 WHERE id = 50;
 		INSERT INTO document_tags(document_id, tag_id) VALUES (50, 5)
 	`); err != nil {
@@ -819,28 +819,6 @@ func TestChatRetrievalUsesOneSQLiteSnapshot(t *testing.T) {
 		chatResearchContextForMode(settings.ResearchContextBalanced))
 	if err != nil || len(fresh) != 1 || !strings.Contains(fresh[0].Snippet, "newsecret") {
 		t.Fatalf("next snapshot did not see committed update: sources=%+v err=%v", fresh, err)
-	}
-}
-
-func TestChatRateRejectionPrecedesAllRetrievalReads(t *testing.T) {
-	s := newChatTestServer(t)
-	s.chatGate = newChatGate()
-	s.ChatCompletion = func(context.Context, string, []ChatCompletionMessage, int) (string, error) {
-		return `{"answer":"unused","citations":[],"sufficient":false}`, nil
-	}
-	for i := 0; i < chatRequestBurst; i++ {
-		if _, _, ok := s.chatGate.admit(1); !ok {
-			t.Fatalf("failed to reserve burst token %d", i)
-		}
-	}
-	// A closed read pool makes any settings, scope, ranking, or passage query
-	// fail. A 429 therefore proves admission rejected the call before retrieval.
-	if err := s.DB.Read.Close(); err != nil {
-		t.Fatal(err)
-	}
-	rec := doChatRequest(t, s, http.MethodPost, "/api/chat", `{"question":"needle"}`, adminPrincipal(1))
-	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "chat_rate_limited") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

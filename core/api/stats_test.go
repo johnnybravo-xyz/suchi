@@ -26,6 +26,7 @@ import (
 func newStatsServer(t *testing.T) *Server {
 	t.Helper()
 	d := openTestDB(t)
+	seedUser(t, d, 1)
 	return &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 }
 
@@ -33,18 +34,17 @@ func seedStatsJDInbox(t *testing.T, d *db.DB) int64 {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO jd_areas(code_start, code_end, name, position)
-		VALUES (0, 9, 'Test', 0)`); err != nil {
+		INSERT OR IGNORE INTO jd_areas(system_id, code_start, code_end, name, position)
+		VALUES (1, 0, 9, 'Test', 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO jd_categories(id, area_start, code, name, system)
-		VALUES (1, 0, 1, 'Inbox', 1)`); err != nil {
+		INSERT OR IGNORE INTO jd_categories(system_id, id, area_start, code, name, system)
+		VALUES (1, 1, 0, 1, 'Inbox', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Write.ExecContext(ctx, `
-		INSERT OR IGNORE INTO settings(key, value_json, updated_at)
-		VALUES ('jd_inbox_category_id', '1', 0)`); err != nil {
+		UPDATE jd_systems SET inbox_category_id=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	return 1
@@ -58,8 +58,8 @@ func seedStatsDoc(t *testing.T, d *db.DB, ownerID int64, sha, title string, jdCa
 		trashCol = createdAt
 	}
 	res, err := d.Write.ExecContext(context.Background(), `
-		INSERT INTO documents(owner_id, original_blob, original_size, title, jd_category_id, trashed_at, created_at, updated_at)
-		VALUES (?, ?, 0, ?, ?, ?, ?, ?)
+		INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, jd_category_id, trashed_at, created_at, updated_at)
+		VALUES (1, ?, ?, 0, ?, ?, ?, ?, ?)
 	`, ownerID, sha, title, jdCat, trashCol, createdAt, createdAt)
 	if err != nil {
 		t.Fatal(err)
@@ -176,22 +176,25 @@ func TestStats_DeadJobsAdminOnly(t *testing.T) {
 	s := newStatsServer(t)
 	seedUser(t, s.DB, 1)
 	seedUser(t, s.DB, 2)
-	// One dead + one running for signal.
+	// One selected-system dead job and one running job; global jobs stay out.
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO jobs(kind, state, next_run_at, created_at, updated_at)
-		VALUES ('post-ingest', 'dead', 0, 0, 0), ('post-ingest', 'running', 0, 0, 0)
+		UPDATE users SET role = 'member' WHERE id = 2;
+		INSERT INTO jobs(system_id, kind, state, next_run_at, created_at, updated_at)
+		VALUES (1, 'post-ingest', 'dead', 0, 0, 0),
+		       (1, 'post-ingest', 'running', 0, 0, 0),
+		       (NULL, 'maintenance', 'dead', 0, 0, 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
 
-	_, admin := doStats(t, s, adminPrincipal(1))
-	if admin.DeadJobs != 1 {
-		t.Errorf("admin dead_jobs = %d, want 1", admin.DeadJobs)
+	code, admin := doStats(t, s, adminPrincipal(1))
+	if code != 200 || admin.DeadJobs != 1 {
+		t.Errorf("admin stats: status=%d dead_jobs=%d, want 200/1", code, admin.DeadJobs)
 	}
 
-	_, member := doStats(t, s, memberPrincipal(2))
-	if member.DeadJobs != 0 {
-		t.Errorf("member dead_jobs = %d, want 0 (admin-only)", member.DeadJobs)
+	code, member := doStats(t, s, memberPrincipal(2))
+	if code != 200 || member.DeadJobs != 0 {
+		t.Errorf("member stats: status=%d dead_jobs=%d, want 200/0 (admin-only)", code, member.DeadJobs)
 	}
 }
 
@@ -201,6 +204,9 @@ func TestStats_PendingApprovalsMatchesActionableInbox(t *testing.T) {
 	trashedDoc := seedApprovalDocument(t, s.DB, "stats-trashed", 2, true)
 	seedApprovalDocument(t, s.DB, "stats-stale", 0, false)
 	seedUser(t, s.DB, 5)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `UPDATE users SET role = 'member' WHERE id = 5`); err != nil {
+		t.Fatal(err)
+	}
 
 	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &liveDoc, Assignee: "user:5"})
 	seedApprovalTaskFixture(t, s.DB, approvalTaskSeed{DocID: &trashedDoc, Assignee: "user:5"})
@@ -221,6 +227,18 @@ func TestStats_PendingApprovalsMatchesActionableInbox(t *testing.T) {
 	})
 
 	code, member := doStats(t, s, memberPrincipal(5))
+	if code != 200 || member.PendingApprovals != 2 {
+		t.Fatalf("assignment without document access: status=%d pending=%d, want 200/2", code, member.PendingApprovals)
+	}
+	// Assignment alone does not grant document access. Grant both documents so
+	// the trashed task is excluded for its lifecycle state, not a missing ACL.
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO object_acls(object_kind, object_id, principal_kind, principal_id, perm_bits, created_at)
+		VALUES ('document', ?, 'user', 5, 1, 0), ('document', ?, 'user', 5, 1, 0)
+	`, liveDoc, trashedDoc); err != nil {
+		t.Fatal(err)
+	}
+	code, member = doStats(t, s, memberPrincipal(5))
 	if code != 200 || member.PendingApprovals != 3 {
 		t.Fatalf("member stats: status=%d pending=%d, want 200/3", code, member.PendingApprovals)
 	}

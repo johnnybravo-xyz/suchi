@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"sync"
@@ -124,16 +125,30 @@ func (d *Dispatcher) Register(s pluginapi.Subscriber) {
 // Enqueue inserts a job row inside tx. Caller controls the transaction
 // so the doc row and its post-ingest job land in the same commit — the
 // entire point of a durable outbox.
-func Enqueue(ctx context.Context, tx *sql.Tx, kind string, docID int64, payload string) error {
+func Enqueue(ctx context.Context, tx *sql.Tx, kind string, docID, systemID int64, payload string) error {
+	if docID < 0 || systemID < 0 || (docID > 0 && systemID == 0) {
+		return fmt.Errorf("enqueue %s: invalid document/system ownership", kind)
+	}
 	if payload == "" {
 		payload = "{}"
 	}
 	now := time.Now().Unix()
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO jobs(kind, doc_id, payload, state, next_run_at, created_at, updated_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?)
-	`, kind, nullInt64(docID), payload, now, now, now)
-	return err
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO jobs(kind, doc_id, system_id, payload, state, next_run_at, created_at, updated_at)
+		SELECT ?, ?, ?, ?, 'pending', ?, ?, ?
+		WHERE ? = 0 OR EXISTS (SELECT 1 FROM documents WHERE id = ? AND system_id = ?)
+	`, kind, nullInt64(docID), nullInt64(systemID), payload, now, now, now, docID, docID, systemID)
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted != 1 {
+		return fmt.Errorf("enqueue %s: document unavailable in system", kind)
+	}
+	return nil
 }
 
 // Nudge asks the dispatcher to poll immediately instead of waiting for
@@ -205,6 +220,7 @@ type row struct {
 	ID       int64
 	Kind     string
 	DocID    sql.NullInt64
+	SystemID sql.NullInt64
 	Payload  string
 	Attempts int
 }
@@ -226,7 +242,7 @@ func (d *Dispatcher) claim(ctx context.Context) ([]row, error) {
 			      ORDER BY next_run_at
 			      LIMIT ?
 			 )
-			RETURNING id, kind, doc_id, payload, attempts
+			RETURNING id, kind, doc_id, system_id, payload, attempts
 		`, batch)
 		if err != nil {
 			return err
@@ -234,7 +250,7 @@ func (d *Dispatcher) claim(ctx context.Context) ([]row, error) {
 		defer q.Close()
 		for q.Next() {
 			var r row
-			if err := q.Scan(&r.ID, &r.Kind, &r.DocID, &r.Payload, &r.Attempts); err != nil {
+			if err := q.Scan(&r.ID, &r.Kind, &r.DocID, &r.SystemID, &r.Payload, &r.Attempts); err != nil {
 				return err
 			}
 			out = append(out, r)
@@ -253,9 +269,10 @@ func (d *Dispatcher) runJob(ctx context.Context, r row) {
 		return
 	}
 	e := pluginapi.Event{
-		Kind:  r.Kind,
-		DocID: r.DocID.Int64,
-		Time:  time.Now(),
+		Kind:     r.Kind,
+		DocID:    r.DocID.Int64,
+		SystemID: r.SystemID.Int64,
+		Time:     time.Now(),
 	}
 	// Payload parsing is per-subscriber; we hand it the raw string via
 	// a documented convention (event.Payload["raw"]) so this file stays
@@ -318,11 +335,12 @@ func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
 	var (
 		kind     string
 		docID    sql.NullInt64
+		systemID sql.NullInt64
 		attempts int64
 	)
 	_ = d.db.Read.QueryRowContext(ctx,
-		`SELECT kind, doc_id, attempts FROM jobs WHERE id = ?`,
-		id).Scan(&kind, &docID, &attempts)
+		`SELECT kind, doc_id, system_id, attempts FROM jobs WHERE id = ?`,
+		id).Scan(&kind, &docID, &systemID, &attempts)
 
 	if err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
@@ -352,7 +370,8 @@ func (d *Dispatcher) markDead(ctx context.Context, id int64, msg string) {
 		after["doc_id"] = docID.Int64
 	}
 	audit.Log(ctx, d.db, d.log, audit.Event{
-		Action: "job.dead", ObjectKind: "job", ObjectID: id,
+		SystemID: systemID.Int64,
+		Action:   "job.dead", ObjectKind: "job", ObjectID: id,
 		After: after,
 	})
 }

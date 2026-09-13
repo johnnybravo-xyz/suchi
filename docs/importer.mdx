@@ -7,6 +7,13 @@ description: "Review and import a Paperless-ngx export from the Suchi host or a 
 JSON-manifest + `originals/` + `archive/` layout. The import is idempotent and
 safe to re-run against a nightly export during a shadow window.
 
+Select the existing destination with `--system S02` for both import and `--verify`;
+omission uses original system 1. Bundle import does not introduce systems: use
+[taxonomy import](/jd) first. Category/name resolution, metadata/workflow upserts,
+legacy resume, ASN and duplicate lookup all stay in the target system. The owner
+must be able to enter it. This Paperless/Django importer is not a native Suchi
+takeout reader or a whole-instance backup restore.
+
 Imported documents retain a `Paperless-ngx import` source with their original
 filename. This provenance is independent from the preserved legacy id and does
 not create a version or document link.
@@ -137,9 +144,9 @@ The importer:
 
 1. Loads every manifest object (top-level `manifest.json` plus any
    per-document sidecar files under `<root>/` or `<root>/documents/`).
-2. Upserts tags, correspondents, document types, storage paths, and
-   custom-field definitions **verbatim**. Names are the identity —
-   re-running against a modified export updates the row.
+2. Upserts tags, correspondents, document types, storage paths, and custom-field
+   definitions **verbatim** within the selected system. Names are local identities —
+   re-running there against a modified export updates that system's row only.
 3. For each document, streams the original (and optional archive)
    file into the CAS by SHA-256, then inserts one `documents` row
    plus tag junctions and custom-field values in a single
@@ -148,10 +155,9 @@ The importer:
 
 ## Dedup
 
-Documents are keyed by the SHA-256 of the ingested bytes and by
-`legacy_id`. A re-run against the same bundle skips every
-already-imported document — the counter is reported as
-`Skipped (dupes)`. Idempotent by construction.
+Documents are keyed within the selected system by ingested-byte SHA-256/owner and
+`legacy_id`. Re-running the same bundle against that system skips already imported
+documents and reports them as `Skipped (dupes)`.
 
 ## Category resolution
 
@@ -296,7 +302,7 @@ zero rules map — the view row is skipped and reported.
 | -------------------------------------------------------------------- | ------------------------- | ------------------------------------------ |
 | 0 title contains                                                     | `q`                       | Full                                       |
 | 1 content contains                                                   | `q`                       | Partial (q matches title+content combined) |
-| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | —                         | Failed — suchi has no ASN                  |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt | — | Failed — the importer does not translate ASN filters, although document ASN identity is retained within the target system |
 | 3 correspondent is                                                   | `correspondents__id__in`  | Full                                       |
 | 4 document type is                                                   | `document_type__id`       | Full (multi → last wins, Partial)          |
 | 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively    |

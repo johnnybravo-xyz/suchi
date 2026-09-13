@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/automations"
+	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
@@ -30,8 +31,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 	docID := seedDocWithCorr(t, ctx, d, "March rent", "please pay by the 5th", corrID)
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "route landlord",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "route landlord",
 		Enabled: true,
 		Triggers: []automations.Trigger{
 			{Type: automations.TriggerDocumentAdded, FilterCorrID: corrID},
@@ -43,8 +43,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 			{Kind: "assign_title", Params: map[string]any{
 				"template": "{{correspondent}} — {{title}}",
 			}},
-		},
-	})
+		}})
 	if err != nil {
 		t.Fatalf("create automation: %v", err)
 	}
@@ -80,11 +79,9 @@ func TestAssignTagsTakesOwnershipOfClassifierReview(t *testing.T) {
 		`INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, 1)`, docID, tagID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := automations.New(d).Create(ctx, automations.Automation{
-		Name: "always review", Enabled: true,
+	if _, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: "always review", Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
-		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}},
-	}); err != nil {
+		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -109,19 +106,18 @@ func TestApplySkipsWhenFilterMisses(t *testing.T) {
 	d, log := setup(t, ctx)
 	seedUser(t, ctx, d)
 	tag := seedTag(t, ctx, d, "should-not-tag")
+	filterTag := seedTag(t, ctx, d, "required-filter-tag")
 	docID := seedDoc(t, ctx, d, "unrelated doc", "")
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "narrow tag rule",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "narrow tag rule",
 		Enabled: true,
 		Triggers: []automations.Trigger{
-			{Type: automations.TriggerDocumentAdded, FilterTagID: 999},
+			{Type: automations.TriggerDocumentAdded, FilterTagID: filterTag},
 		},
 		Actions: []automations.Action{
 			{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tag)}}},
-		},
-	})
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,20 +141,18 @@ func TestApplyMatchesTitle(t *testing.T) {
 	tag := seedTag(t, ctx, d, "invoice")
 	docID := seedDoc(t, ctx, d, "August INVOICE", "")
 
-	_, err := automations.New(d).Create(ctx, automations.Automation{
-		Name:    "invoice titles",
+	_, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: "invoice titles",
 		Enabled: true,
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterTitleRE: `invoice`,
 		}},
 		Actions: []automations.Action{{
 			Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tag)}},
-		}},
-	})
+		}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	matched, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, docID)
+	matched, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, docID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,16 +177,14 @@ func TestApplyConsumption(t *testing.T) {
 	docID := seedDoc(t, ctx, d, "amazon-receipt-2026-03.pdf", "irrelevant content")
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "consumption filename",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "consumption filename",
 		Enabled: true,
 		Triggers: []automations.Trigger{
 			{Type: automations.TriggerConsumption, FilterFilename: "*receipt*"},
 		},
 		Actions: []automations.Action{
 			{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tag)}}},
-		},
-	})
+		}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -238,8 +230,7 @@ func TestApplyCustomField(t *testing.T) {
 	fieldID := seedCustomField(t, ctx, d, "Vendor Ref", "text")
 
 	store := automations.New(d)
-	_, err := store.Create(ctx, automations.Automation{
-		Name:    "annotate",
+	_, err := store.Create(ctx, 1, automations.Automation{Name: "annotate",
 		Enabled: true,
 		Triggers: []automations.Trigger{
 			{Type: automations.TriggerDocumentUpdated},
@@ -249,8 +240,7 @@ func TestApplyCustomField(t *testing.T) {
 				"field_id": float64(fieldID),
 				"value":    "PO-42",
 			}},
-		},
-	})
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,11 +285,9 @@ func TestStoreRejectsInvalidRules(t *testing.T) {
 			if trigger.Type == "" && trigger.TypeCode == 0 {
 				trigger.Type = automations.TriggerDocumentAdded
 			}
-			_, err := automations.New(d).Create(ctx, automations.Automation{
-				Name:     tc.name,
+			_, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: tc.name,
 				Triggers: []automations.Trigger{trigger},
-				Actions:  []automations.Action{tc.action},
-			})
+				Actions:  []automations.Action{tc.action}})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Create error = %v, want containing %q", err, tc.wantErr)
 			}
@@ -315,8 +303,8 @@ func TestApplyPropagatesActionFailureAndRollsBack(t *testing.T) {
 	docID := seedDoc(t, ctx, d, "Invoice", "invoice")
 
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO automations(name, order_index, enabled, created_at, updated_at)
-		VALUES ('broken import', 0, 1, 0, 0)
+		INSERT INTO automations(system_id, name, order_index, enabled, created_at, updated_at)
+		VALUES (1, 'broken import', 0, 1, 0, 0)
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -353,6 +341,73 @@ func TestApplyPropagatesActionFailureAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestRulesAndDocumentLinksStayInTheirSystem(t *testing.T) {
+	ctx := context.Background()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	docID := seedDocWithCorr(t, ctx, d, "Source", "source content", 0)
+	peerID := seedDocWithCorr(t, ctx, d, "Peer", "peer content", 0)
+	tagID := seedTag(t, ctx, d, "review")
+	fieldID := seedCustomField(t, ctx, d, "Related", "documentlink")
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE jd_systems SET code = 'S01' WHERE id = 1;
+			INSERT INTO jd_systems(id, code, name, taxonomy, created_at, updated_at) VALUES (2, 'S02', 'Second', 'jd', 0, 0);
+			INSERT INTO tags(id, system_id, name, slug, created_at, updated_at) VALUES (900, 2, 'review', 'review', 0, 0);
+			INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (2, 40, 49, 'System', 0);
+			INSERT INTO jd_categories(id, system_id, area_start, code, name, system) VALUES (900, 2, 40, 49, 'Inbox', 1);
+			INSERT INTO documents(id, system_id, owner_id, original_blob, original_size, title, jd_category_id, created_at, updated_at)
+			VALUES (900, 2, 1, 'foreign-source', 1, 'Foreign', 900, 0, 0);
+		`)
+		return err
+	}))
+	store := automations.New(d)
+	rule := automations.Automation{Name: "Review", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}},
+	}
+	_, err := store.Create(ctx, 1, rule)
+	must(t, err)
+	rule.Actions[0].Params["tag_ids"] = []any{float64(900)}
+	_, err = store.Create(ctx, 2, rule)
+	must(t, err)
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	var gotTag int64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT tag_id FROM document_tags WHERE document_id = ?`, docID).Scan(&gotTag))
+	if gotTag != tagID {
+		t.Fatalf("S01 rule applied foreign tag %d", gotTag)
+	}
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, 900))
+	must(t, d.Read.QueryRowContext(ctx, `SELECT tag_id FROM document_tags WHERE document_id = 900`).Scan(&gotTag))
+	if gotTag != 900 {
+		t.Fatalf("S02 rule applied wrong tag %d", gotTag)
+	}
+	writeLink := func(target int64, cross bool) error {
+		return d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return customfield.WriteDocumentLinkInTx(ctx, tx, docID, fieldID, target, cross)
+		})
+	}
+	must(t, writeLink(peerID, false))
+	if err := writeLink(900, false); err == nil {
+		t.Fatal("actorless link crossed systems")
+	}
+	var target int64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT value_int FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`, docID, fieldID).Scan(&target))
+	if target != peerID {
+		t.Fatalf("rejected link replaced existing target: %d", target)
+	}
+	must(t, writeLink(900, true))
+	must(t, d.Read.QueryRowContext(ctx, `SELECT value_int FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`, docID, fieldID).Scan(&target))
+	if target != 900 {
+		t.Fatalf("authorized cross-system link target = %d", target)
+	}
+	rule.Name = "Foreign link"
+	rule.Actions = []automations.Action{{Kind: "assign_custom_field", Params: map[string]any{"field_id": float64(fieldID), "value": float64(900)}}}
+	if _, err := store.Create(ctx, 1, rule); err == nil {
+		t.Fatal("automation accepted a cross-system document link")
+	}
+}
+
 // --- helpers ---
 
 func setup(t *testing.T, ctx context.Context) (*db.DB, *slog.Logger) {
@@ -371,7 +426,7 @@ func setup(t *testing.T, ctx context.Context) (*db.DB, *slog.Logger) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD); err != nil {
+	if err := jd.EnsureTree(ctx, d, log, jd.ModeJD, 1); err != nil {
 		t.Fatal(err)
 	}
 	return d, log
@@ -392,7 +447,7 @@ func seedTag(t *testing.T, ctx context.Context, d *db.DB, name string) int64 {
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO tags(name, slug, created_at, updated_at) VALUES (?, ?, 0, 0)`,
+			`INSERT INTO tags(system_id, name, slug, created_at, updated_at) VALUES (1, ?, ?, 0, 0)`,
 			name, name)
 		if err != nil {
 			return err
@@ -408,7 +463,7 @@ func seedCorrespondent(t *testing.T, ctx context.Context, d *db.DB, name string)
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO correspondents(name, slug, created_at, updated_at) VALUES (?, ?, 0, 0)`,
+			`INSERT INTO correspondents(system_id, name, slug, created_at, updated_at) VALUES (1, ?, ?, 0, 0)`,
 			name, name)
 		if err != nil {
 			return err
@@ -424,7 +479,7 @@ func seedCustomField(t *testing.T, ctx context.Context, d *db.DB, name, dataType
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO custom_fields(name, data_type, created_at, updated_at) VALUES (?, ?, 0, 0)`,
+			`INSERT INTO custom_fields(system_id, name, data_type, created_at, updated_at) VALUES (1, ?, ?, 0, 0)`,
 			name, dataType)
 		if err != nil {
 			return err
@@ -441,7 +496,7 @@ func seedDoc(t *testing.T, ctx context.Context, d *db.DB, title, content string)
 
 func seedDocWithCorr(t *testing.T, ctx context.Context, d *db.DB, title, content string, corrID int64) int64 {
 	t.Helper()
-	inbox, _ := jd.InboxCategoryID(ctx, d)
+	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
 		var corr sql.NullInt64
@@ -449,9 +504,9 @@ func seedDocWithCorr(t *testing.T, ctx context.Context, d *db.DB, title, content
 			corr = sql.NullInt64{Int64: corrID, Valid: true}
 		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO documents(owner_id, original_blob, original_size, title, content,
+			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, content,
 			                      correspondent_id, jd_category_id, created_at, updated_at)
-			VALUES (1, ?, 0, ?, ?, ?, ?, 0, 0)`,
+			VALUES (1, 1, ?, 0, ?, ?, ?, ?, 0, 0)`,
 			"sha_"+title, title, content, corr, inbox)
 		if err != nil {
 			return err

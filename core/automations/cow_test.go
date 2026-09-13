@@ -28,9 +28,9 @@ func seedPresetRow(t *testing.T, ctx context.Context, d *db.DB, name, presetSlug
 	t.Helper()
 	now := time.Now().Unix()
 	res, err := d.Write.ExecContext(ctx, `
-		INSERT INTO automations(name, order_index, enabled, preset_slug,
+		INSERT INTO automations(system_id, name, order_index, enabled, preset_slug,
 		                        created_at, updated_at)
-		VALUES (?, 0, 1, ?, ?, ?)
+		VALUES (1, ?, 0, 1, ?, ?, ?)
 	`, name, presetSlug, now, now)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestStore_Update_TogglePresetIsIdempotent(t *testing.T) {
 	on := true
 
 	for i, flip := range []*bool{&off, &on, &off, &on} {
-		patched, err := s.Update(ctx, origID, automations.AutomationPatch{Enabled: flip})
+		patched, err := s.Update(ctx, 1, origID, automations.AutomationPatch{Enabled: flip})
 		if err != nil {
 			t.Fatalf("iter %d: %v", i, err)
 		}
@@ -104,7 +104,7 @@ func TestStore_Update_SubstantiveEditForksPreset(t *testing.T) {
 
 	s := automations.New(d)
 	newName := "File tax + insurance docs"
-	patched, err := s.Update(ctx, origID, automations.AutomationPatch{Name: &newName})
+	patched, err := s.Update(ctx, 1, origID, automations.AutomationPatch{Name: &newName})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestStore_Delete_PresetRowDisablesInPlace(t *testing.T) {
 	origID := seedPresetRow(t, ctx, d, "File tax documents", "household")
 
 	s := automations.New(d)
-	if err := s.Delete(ctx, origID); err != nil {
+	if err := s.Delete(ctx, 1, origID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -177,17 +177,15 @@ func TestStore_Update_UserOwnedIsNormalUpdate(t *testing.T) {
 	d, _ := setup(t, ctx)
 
 	s := automations.New(d)
-	created, err := s.Create(ctx, automations.Automation{
-		Name:    "user-owned",
+	created, err := s.Create(ctx, 1, automations.Automation{Name: "user-owned",
 		Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded,
-			TypeCode: automations.TriggerToCode(automations.TriggerDocumentAdded)}},
-	})
+			TypeCode: automations.TriggerToCode(automations.TriggerDocumentAdded)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	disabled := false
-	patched, err := s.Update(ctx, created.ID, automations.AutomationPatch{Enabled: &disabled})
+	patched, err := s.Update(ctx, 1, created.ID, automations.AutomationPatch{Enabled: &disabled})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +205,7 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 	d, _ := setup(t, ctx)
 	s := automations.New(d)
 
-	firstA, err := s.Create(ctx, automations.Automation{
-		Name:    "first",
+	firstA, err := s.Create(ctx, 1, automations.Automation{Name: "first",
 		Enabled: true,
 		Triggers: []automations.Trigger{{
 			Type:            automations.TriggerDocumentAdded,
@@ -218,14 +215,12 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 		Actions: []automations.Action{{
 			Kind:   "assign_title",
 			Params: map[string]any{"template": "Filed {{title}}"},
-		}},
-	})
+		}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = s.Create(ctx, automations.Automation{
-		Name:    "clone (different name, same content)",
+	_, err = s.Create(ctx, 1, automations.Automation{Name: "clone (different name, same content)",
 		Enabled: false,
 		Triggers: []automations.Trigger{{
 			Type:            automations.TriggerDocumentAdded,
@@ -235,8 +230,7 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 		Actions: []automations.Action{{
 			Kind:   "assign_title",
 			Params: map[string]any{"template": "Filed {{title}}"},
-		}},
-	})
+		}}})
 	var dup *automations.ErrDuplicateRule
 	if !errors.As(err, &dup) {
 		t.Fatalf("expected ErrDuplicateRule, got %v", err)
@@ -256,21 +250,17 @@ func TestStore_Update_DuplicateRule_Refused(t *testing.T) {
 	d, _ := setup(t, ctx)
 	s := automations.New(d)
 
-	a, err := s.Create(ctx, automations.Automation{
-		Name: "rule A",
+	a, err := s.Create(ctx, 1, automations.Automation{Name: "rule A",
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "aaa",
-		}},
-	})
+		}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Create(ctx, automations.Automation{
-		Name: "rule B",
+	b, err := s.Create(ctx, 1, automations.Automation{Name: "rule B",
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "bbb",
-		}},
-	})
+		}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +269,7 @@ func TestStore_Update_DuplicateRule_Refused(t *testing.T) {
 	newTriggers := []automations.Trigger{{
 		Type: automations.TriggerDocumentAdded, FilterContentRE: "bbb",
 	}}
-	_, err = s.Update(ctx, a.ID, automations.AutomationPatch{Triggers: &newTriggers})
+	_, err = s.Update(ctx, 1, a.ID, automations.AutomationPatch{Triggers: &newTriggers})
 	var dup *automations.ErrDuplicateRule
 	if !errors.As(err, &dup) {
 		t.Fatalf("expected ErrDuplicateRule, got %v", err)
@@ -296,12 +286,10 @@ func TestStore_Update_SelfMatchAllowed(t *testing.T) {
 	d, _ := setup(t, ctx)
 	s := automations.New(d)
 
-	created, err := s.Create(ctx, automations.Automation{
-		Name: "same shape",
+	created, err := s.Create(ctx, 1, automations.Automation{Name: "same shape",
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
-		}},
-	})
+		}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,8 +297,7 @@ func TestStore_Update_SelfMatchAllowed(t *testing.T) {
 	sameTriggers := []automations.Trigger{{
 		Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
 	}}
-	patched, err := s.Update(ctx, created.ID,
-		automations.AutomationPatch{Triggers: &sameTriggers})
+	patched, err := s.Update(ctx, 1, created.ID, automations.AutomationPatch{Triggers: &sameTriggers})
 	if err != nil {
 		t.Fatalf("self-match must not error: %v", err)
 	}
@@ -328,29 +315,25 @@ func TestStore_Create_ParamsMapOrderIndependent(t *testing.T) {
 	d, _ := setup(t, ctx)
 	s := automations.New(d)
 
-	if _, err := s.Create(ctx, automations.Automation{
-		Name: "params-a",
+	if _, err := s.Create(ctx, 1, automations.Automation{Name: "params-a",
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
 		}},
 		Actions: []automations.Action{{
 			Kind:   "assign_title",
 			Params: map[string]any{"template": "Filed {{title}}", "note": "keep"},
-		}},
-	}); err != nil {
+		}}}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := s.Create(ctx, automations.Automation{
-		Name: "params-b (different key insert order)",
+	_, err := s.Create(ctx, 1, automations.Automation{Name: "params-b (different key insert order)",
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterContentRE: "x",
 		}},
 		Actions: []automations.Action{{
 			Kind:   "assign_title",
 			Params: map[string]any{"note": "keep", "template": "Filed {{title}}"},
-		}},
-	})
+		}}})
 	var dup *automations.ErrDuplicateRule
 	if !errors.As(err, &dup) {
 		t.Fatalf("expected ErrDuplicateRule despite map insert order, got %v", err)

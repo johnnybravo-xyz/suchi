@@ -1,6 +1,8 @@
 <script>
   import { startEmailOAuth, completeEmailOAuth } from './api.js'
   import Icon from './Icon.svelte'
+  import { onDestroy } from 'svelte'
+  import { captureScope, scopeCurrent } from './systems.svelte.js'
 
   let { provider, accountID = null, onSuccess, onClose, notify } = $props()
 
@@ -11,11 +13,16 @@
   let starting = $state(false)
   let tickHandle = null
   let controller = null
+  const scope = captureScope()
+  let disposed = false
+  onDestroy(() => { disposed = true; stop(); flow = null })
 
   async function begin() {
+    if (disposed || !scopeCurrent(scope)) return
     starting = true; err = ''; expired = false
     try {
       const r = await startEmailOAuth(provider)
+      if (disposed || !scopeCurrent(scope)) return
       flow = r
       now = Math.floor(Date.now() / 1000)
       schedule()
@@ -46,7 +53,7 @@
     while (flow && !expired && !signal.aborted) {
       try {
         const r = await completeEmailOAuth(flow.flow_handle, { account_id: accountID, signal })
-        if (signal.aborted || expired) return
+        if (disposed || !scopeCurrent(scope) || signal.aborted || expired) return
         if (r?.ok) {
           stop()
           onSuccess?.({
@@ -85,7 +92,7 @@
   }
 
   function copyCode() {
-    if (!flow?.user_code) return
+    if (disposed || !scopeCurrent(scope) || !flow?.user_code) return
     navigator.clipboard?.writeText(flow.user_code)
     notify?.('Code copied')
   }

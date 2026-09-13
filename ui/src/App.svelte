@@ -1,18 +1,20 @@
 <script>
+  import { scopedHash as filingHref } from './lib/systems.svelte.js'
   import { untrack } from 'svelte'
   import { route, go } from './lib/router.svelte.js'
   import { session, refreshSession, initTheme, setTheme, signOut } from './lib/session.svelte.js'
+  import { systems, resetSystems, refreshSystems, enterRoute, selectSystem, captureScope, scopeCurrent } from './lib/systems.svelte.js'
   import { listJDCategories, listDocuments, setupState, stats as fetchStats, getDemoMode, mintDemoSession, chatStatus } from './lib/api.js'
   import { hasCapability } from './lib/capabilities.js'
   import Icon from './lib/Icon.svelte'
-  import Login from './routes/Login.svelte'
-  import Dashboard from './routes/Dashboard.svelte'
   import Omnibox from './lib/Omnibox.svelte'
   import Lazy from './lib/Lazy.svelte'
   import BrandMark from './lib/BrandMark.svelte'
-  import SetupReminder from './lib/SetupReminder.svelte'
 
   const lazyRoutes = {
+    login:       () => import('./routes/Login.svelte'),
+    dashboard:   () => import('./routes/Dashboard.svelte'),
+    setupReminder: () => import('./lib/SetupReminder.svelte'),
     documents:   () => import('./routes/Documents.svelte'),
     detail:      () => import('./routes/DocumentDetail.svelte'),
     upload:      () => import('./routes/Upload.svelte'),
@@ -24,6 +26,7 @@
     tasks:       () => import('./routes/Tasks.svelte'),
     automations: () => import('./routes/Automations.svelte'),
     settings:    () => import('./routes/Settings.svelte'),
+    account:     () => import('./routes/AccountSettings.svelte'),
     setup:       () => import('./routes/Setup.svelte'),
     demo:        () => import('./routes/Demo.svelte'),
   }
@@ -53,7 +56,7 @@
   let chatOpenedFromRibbon = $state(false)
   let visibleChatScope = $state(null)
   let jdTree = $state([])            // [{lo, name, categories:[…]}]
-  let openAreas = $state(loadOpenAreas())
+  let openAreas = $state(new Set())
   let inboxCategory = $state(null)
   let taxonomyLoaded = $state(false)
   let taxonomyError = $state('')
@@ -108,6 +111,11 @@
   let toastTimer
   let pollTimer
 
+  const scopedNotify = $derived.by(() => {
+    const scope = captureScope()
+    return message => { if (scopeCurrent(scope)) notify(message) }
+  })
+
   export function notify(msg) {
     toast = msg
     clearTimeout(toastTimer)
@@ -115,12 +123,12 @@
   }
 
   function loadOpenAreas() {
-    try { return new Set(JSON.parse(localStorage.getItem('suchi.jd.open') || '[]')) } catch { return new Set() }
+    try { return new Set(JSON.parse(localStorage.getItem(`suchi.jd.open.${session.user?.user_id}.${systems.code || 'default'}`) || '[]')) } catch { return new Set() }
   }
   function toggleArea(lo) {
     openAreas.has(lo) ? openAreas.delete(lo) : openAreas.add(lo)
     openAreas = new Set(openAreas)
-    try { localStorage.setItem('suchi.jd.open', JSON.stringify([...openAreas])) } catch {}
+    try { localStorage.setItem(`suchi.jd.open.${session.user?.user_id}.${systems.code || 'default'}`, JSON.stringify([...openAreas])) } catch {}
   }
 
   initTheme()
@@ -134,7 +142,6 @@
         try { await mintDemoSession() } catch {}
       }
       await refreshSession()
-      if (session.user) boot()
       // Preserve demo deep links; redirect only the first default-route visit.
       if (j?.enabled && session.user?.kind === 'demo-anon' && (!location.hash || location.hash === '#/' || location.hash === '#/dashboard')) {
         try {
@@ -147,11 +154,11 @@
     })
     .catch(async () => {
       await refreshSession()
-      if (session.user) boot()
     })
 
   async function boot() {
-    const user = session.user
+    if (!systems.ready) return
+    const scope = captureScope()
     clearInterval(pollTimer)
     const categories = loadTaxonomy()
     // Keep a fresh-install reminder for 48 hours, until the admin opens it,
@@ -159,7 +166,7 @@
     // browser-local acknowledgement leaking into a new installation.
     const setup = session.user?.role === 'admin'
       ? setupState().then(state => {
-          if (session.user !== user) return
+          if (!scopeCurrent(scope)) return
           const startedAt = Number(state?.started_at || 0)
           const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
           setupReminderKey = setupDismissalKey(startedAt)
@@ -169,23 +176,23 @@
       : Promise.resolve()
     const chat = pollChatStatus()
     await Promise.all([pollStats(), categories, setup, chat])
-    if (session.user !== user) return
+    if (!scopeCurrent(scope)) return
     pollTimer = setInterval(() => { pollStats(); pollChatStatus() }, 60_000)
   }
 
   async function loadTaxonomy() {
-    const user = session.user
+    const scope = captureScope()
     taxonomyError = ''
     try {
       const cats = await listJDCategories()
-      if (session.user !== user) return
+      if (!scopeCurrent(scope)) return
       if (!cats?.results) return
       buildTree(cats.results)
       revealPendingInbox()
     } catch (ex) {
-      if (session.user === user) taxonomyError = ex.message || 'Could not load the filing tree.'
+      if (scopeCurrent(scope)) taxonomyError = ex.message || 'Could not load the filing tree.'
     } finally {
-      if (session.user === user) taxonomyLoaded = true
+      if (scopeCurrent(scope)) taxonomyLoaded = true
     }
   }
 
@@ -209,21 +216,21 @@
   }
 
   async function pollStats() {
-    const user = session.user
+    const scope = captureScope()
     try {
       const result = await fetchStats()
-      if (session.user !== user) return
+      if (!scopeCurrent(scope)) return
       st = result
       statsError = ''
       inboxCount = st?.inbox_count ?? 0
       revealPendingInbox()
     } catch (ex) {
-      if (session.user === user && !st) statsError = ex.message || 'Could not load archive status.'
+      if (scopeCurrent(scope) && !st) statsError = ex.message || 'Could not load archive status.'
     }
   }
 
   async function pollChatStatus() {
-    const user = session.user
+    const scope = captureScope()
     if (!canUseArchiveChat) {
       chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
@@ -231,28 +238,28 @@
     }
     try {
       const result = await chatStatus()
-      if (session.user !== user) return
+      if (!scopeCurrent(scope)) return
       chatStatusInfo = result
       chatEnabled = !!chatStatusInfo?.enabled
     } catch {
-      if (session.user !== user) return
+      if (!scopeCurrent(scope)) return
       chatEnabled = false
       chatStatusInfo = { enabled: false, provider: '', local: false }
     }
   }
 
   async function loadRecentDocuments({ background = false } = {}) {
-    const user = session.user
+    const scope = captureScope()
     if (!background) {
       recentDocs = undefined
       recentError = ''
     }
     try {
       const r = await listDocuments({ page_size: 6, ordering: '-created_at' })
-      if (session.user !== user) return
+      if (!scopeCurrent(scope)) return
       recentDocs = r?.results || []
     } catch (ex) {
-      if (session.user === user && !background) {
+      if (scopeCurrent(scope) && !background) {
         recentDocs = []
         recentError = ex.message || 'Could not load recent documents.'
       }
@@ -333,14 +340,19 @@
   }
 
   async function openArchiveChat(question = '', returnFocus = null, scope = currentChatScope()) {
+    const requestScope = captureScope()
     chatOpen = true
     chatParked = false
     chatOpenedFromRibbon = false
     chatReturnFocus = returnFocus
     chatRequest = { id: chatRequest.id + 1, question, scope }
     if (!ChatDrawer) {
-      try { ChatDrawer = (await import('./lib/ArchiveChat.svelte')).default }
-      catch { chatOpen = false; chatParked = false; notify('Could not open archive research') }
+      try {
+        const drawer = (await import('./lib/ArchiveChat.svelte')).default
+        if (scopeCurrent(requestScope)) ChatDrawer = drawer
+      } catch {
+        if (scopeCurrent(requestScope)) { chatOpen = false; chatParked = false; notify('Could not open archive research') }
+      }
     }
   }
 
@@ -372,6 +384,10 @@
 
   async function handleSignOut() {
     await signOut()
+    clearScopedState()
+  }
+
+  function clearScopedState() {
     clearInterval(pollTimer)
     clearTimeout(toastTimer)
     jdTree = []
@@ -400,8 +416,36 @@
     chatReturnFocus = null
     chatOpenedFromRibbon = false
     visibleChatScope = null
+    openAreas = loadOpenAreas()
   }
 
+  $effect(() => {
+    const user = session.user
+    untrack(() => {
+      resetSystems(user)
+      clearScopedState()
+      if (user) refreshSystems().catch(ex => {
+        if (systems.user === user) systems.error = ex.message || 'Could not load filing systems.'
+      })
+    })
+  })
+  $effect(() => {
+    const user = session.user
+    const loaded = systems.loaded
+    const path = route.path
+    const query = route.query
+    if (user && loaded) untrack(() => { void enterRoute(path, query) })
+  })
+  $effect(() => {
+    const generation = systems.generation
+    const ready = systems.ready
+    untrack(() => {
+      clearScopedState()
+      if (ready) boot()
+    })
+  })
+  const scopeReady = $derived(systems.ready && systems.user === session.user &&
+    (!systems.introduced || route.query.get('system') === systems.code))
   $effect(() => {
     route.path
     untrack(() => { mobileNavOpen = false; closeUpload(); visibleChatScope = null })
@@ -410,7 +454,7 @@
   const documentID = $derived(/^\d+$/.test(route.parts[1] || '') && Number(route.parts[1]) > 0 ? route.parts[1] : '')
   const jdCategories = $derived(jdTree.flatMap((area) => area.categories))
   $effect(() => {
-    if (session.user && page === 'dashboard') loadRecentDocuments()
+    if (session.user && scopeReady && page === 'dashboard') loadRecentDocuments()
   })
   const nav = $derived([
     { hash: '#/dashboard',   ico: 'gauge',    label: 'Dashboard',   key: 'dashboard' },
@@ -471,25 +515,45 @@
 {#if !session.checked}
   <div class="login-wrap"><div class="skel" style="width:220px"></div></div>
 {:else if !session.user}
-  <Login onSignedIn={() => { boot(); go('#/dashboard') }} />
+  <Lazy load={lazyRoutes.login} props={{ onSignedIn: () => { go('#/dashboard') } }} />
 {:else}
+  {#key systems.generation}
   <div class="shell" class:sidebar-collapsed={sidebarCollapsed} inert={chatOpen || uploadOpen}>
     {#if mobileNavOpen}
       <button class="mobile-nav-veil" aria-label="Close navigation" onclick={() => (mobileNavOpen = false)}></button>
     {/if}
     <aside id="primary-navigation" class="sidebar" class:mobile-open={mobileNavOpen}>
-      <a class="brand" href="#/dashboard" aria-label="suchi home">
+      <a class="brand" href={filingHref("#/dashboard")} aria-label="suchi home">
         <BrandMark />
         <b>suchi</b>
       </a>
 
+      {#if systems.introduced}
+        <div class="side-head">Filing system</div>
+        <div style="padding:8px 16px;overflow-wrap:anywhere">
+          {#if systems.results.length > 1}
+            <label>Current filing system
+              <select class="input" aria-label="Current filing system" value={route.query.get('system') || ''}
+                onchange={event => selectSystem(event.currentTarget.value)}>
+                {#if !scopeReady}<option value="">Choose a system</option>{/if}
+                {#each systems.results as system (system.code)}
+                  <option value={system.code}>{system.code} · {system.name}</option>
+                {/each}
+              </select>
+            </label>
+          {:else if scopeReady}
+            <b>{systems.code} · {systems.results.find(item => item.code === systems.code)?.name}</b>
+          {/if}
+        </div>
+      {/if}
       {#if setupNeeded}
-        <SetupReminder onClose={dismissSetupReminder} onContinue={openSetupFromReminder} />
+        <Lazy load={lazyRoutes.setupReminder} props={{ onClose: dismissSetupReminder, onContinue: openSetupFromReminder }} />
       {/if}
 
+      {#if scopeReady}
       <nav class="nav">
         {#each nav as n}
-          <a href={n.hash} class:on={page === n.key} onclick={() => (mobileNavOpen = false)}>
+          <a href={filingHref(n.hash)} class:on={page === n.key} onclick={() => (mobileNavOpen = false)}>
             <Icon name={n.ico} />{n.label}
             {#if n.key === 'inbox' && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
             {#if n.key === 'tasks' && ((st?.pending_approvals ?? 0) + (canReviewIntelligence ? (st?.pending_intelligence ?? 0) : 0)) > 0}<span class="badge">{(st?.pending_approvals ?? 0) + (canReviewIntelligence ? (st?.pending_intelligence ?? 0) : 0)}</span>{/if}
@@ -511,7 +575,7 @@
             </button>
             {#if openAreas.has(area.lo)}
               {#each area.categories as c (c.id)}
-                <a href={`#/documents?jd=${c.id}`} class:on={route.query.get('jd') == c.id} onclick={() => (mobileNavOpen = false)}>
+                <a href={filingHref(`#/documents?jd=${c.id}`)} class:on={route.query.get('jd') == c.id} onclick={() => (mobileNavOpen = false)}>
                   <span class="code">{c.code}</span>{c.name}
                   {#if inboxCategory && c.id === inboxCategory.id && inboxCount > 0}<span class="badge">{inboxCount}</span>{/if}
                 </a>
@@ -520,9 +584,10 @@
           {/each}
         </nav>
       {/if}
+      {/if}
 
       <div class="side-user">
-        <a class="side-user-btn" href="#/settings" aria-label="Profile & settings" onclick={() => (mobileNavOpen = false)}>
+        <a class="side-user-btn" href={filingHref("#/settings")} aria-label="Profile & settings" onclick={() => (mobileNavOpen = false)}>
           <span class="avatar sm">
             {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{initials}{/if}
           </span>
@@ -550,10 +615,10 @@
                 aria-controls="primary-navigation" aria-expanded={mobileNavOpen}>
           <Icon name={mobileNavOpen ? 'x' : 'menu'} size={17} />
         </button>
-        <h1>{pageTitle}</h1>
-        <Omnibox pages={session.user?.role === 'admin'
+        <h1>{pageTitle}{#if scopeReady && systems.introduced}<small style="display:block;font-size:.68rem;font-weight:400;max-width:28ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{systems.code} · {systems.results.find(item => item.code === systems.code)?.name}</small>{/if}</h1>
+        {#if scopeReady}<Omnibox pages={session.user?.role === 'admin'
           ? [...PAGES, { href: '#/settings?tab=archive', label: 'Archive configuration', ico: 'settings' }, { href: '#/settings?tab=archive&section=users', label: 'People and metadata', ico: 'shield' }]
-          : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />
+          : PAGES} commands={COMMANDS} canAsk={chatEnabled && canUseArchiveChat} onAsk={openArchiveChat} />{/if}
         {#if chatParked && ChatDrawer}
           <button class="research-ribbon" bind:this={chatRibbon} onclick={resumeArchiveChat}
                   aria-label="Return to archive research" title="Return to archive research">
@@ -562,11 +627,11 @@
             <span class="research-ribbon-label">Research active</span>
           </button>
         {/if}
-        <button class="btn primary topbar-upload" onclick={openUpload} aria-label="Upload documents">
+        <button class="btn primary topbar-upload" disabled={!scopeReady} onclick={openUpload} aria-label="Upload documents">
           <Icon name="upload" size={15} /><span>Upload</span>
         </button>
         {#if demoMode}
-          <a class="btn sm" class:on={page === 'demo'} style="padding:8px 11px" href="#/demo"
+          <a class="btn sm" class:on={page === 'demo'} style="padding:8px 11px" href={filingHref("#/demo")}
              title="Open demo guide" aria-label="Open demo guide">
             <Icon name="help" size={15} />
           </a>
@@ -578,36 +643,53 @@
       </div>
 
       {#if setupNeeded && page === 'dashboard'}
-        <SetupReminder placement="mobile" onClose={dismissSetupReminder} onContinue={openSetupFromReminder} />
+        <Lazy load={lazyRoutes.setupReminder} props={{ placement: 'mobile', onClose: dismissSetupReminder, onContinue: openSetupFromReminder }} />
       {/if}
 
       {#if demoMode && !demoBannerDismissed}
         <div class="setup-banner">
           <span><b>You're on the public demo.</b> Resets daily at 00:00 UTC — don't upload confidential documents.</span>
-          <a role="button" class="btn sm" href="#/demo">Tour</a>
+          <a role="button" class="btn sm" href={filingHref("#/demo")}>Tour</a>
           <button class="btn sm" onclick={dismissDemoBanner}>Dismiss</button>
         </div>
       {/if}
 
       <div class="content">
-        {#if page === 'dashboard'}<Dashboard {st} {statsError} {inboxCategory} {taxonomyLoaded} {taxonomyError} recent={recentDocs} {recentError} onRetryRecent={loadRecentDocuments} />
-        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
-        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify, jdCategories }} />
-        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
+        {#if !scopeReady}
+          <div class="empty" role="status">
+            {#if systems.error}
+              <b>Filing system unavailable</b><span>{systems.error}</span>
+            {:else if systems.loaded && systems.introduced && !systems.results.length}
+              <b>Access required</b><span>An administrator must grant you access to a filing system.</span>
+            {:else}<span>Loading filing systems…</span>{/if}
+            {#if systems.error && systems.results.length === 1}
+              <a class="btn" href={`#/dashboard?system=${systems.results[0].code}`}>Open {systems.results[0].code} · {systems.results[0].name}</a>
+            {/if}
+            <span>{session.user.email}</span>
+            <button class="btn" onclick={handleSignOut}>Sign out</button>
+          {#if page !== 'settings'}<a class="btn" href={filingHref('#/settings')}>My account</a>{/if}
+          </div>
+          {#if page === 'settings'}
+            <Lazy load={lazyRoutes.account} props={{ notify: scopedNotify, profileOnly: true }} />
+          {/if}
+        {:else if page === 'dashboard'}<Lazy load={lazyRoutes.dashboard} props={{ st, statsError, inboxCategory, taxonomyLoaded, taxonomyError, recent: recentDocs, recentError, onRetryRecent: loadRecentDocuments }} />
+        {:else if page === 'documents'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
+        {:else if page === 'doc' && documentID}<Lazy load={lazyRoutes.detail} props={{ id: documentID, notify: scopedNotify, jdCategories }} />
+        {:else if page === 'inbox'}<Lazy load={lazyRoutes.documents} props={{ notify: scopedNotify, inbox: inboxCategory, inboxMode: true, taxonomyLoaded, jdCategories, canAskArchive: chatEnabled && canUseArchiveChat, canReviewIntelligence, onAskDocuments: askSelectedDocuments, onScopeChange: publishChatScope }} />
         {:else if page === 'search'}<Lazy load={lazyRoutes.search} props={{ onScopeChange: publishChatScope }} />
-        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify, onCount: pollStats, canReviewIntelligence }} />
-        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify, readOnly: session.user?.role !== 'admin', jdCategories }} />
-        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify, jdCategories }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
-        {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify }} />
-        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
+        {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence }} />
+        {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
+        {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify: scopedNotify, jdCategories }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
+        {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
+        {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}
           {#key route.query.toString()}
             <Lazy load={lazyRoutes.calendar} props={{ query: route.query, demo: demoVisitor }} />
           {/key}
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
-        {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
-        {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href="#/dashboard">Back to the dashboard</a></div>
+        {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify: scopedNotify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
+        {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href={filingHref("#/dashboard")}>Back to the dashboard</a></div>
         {/if}
       </div>
     </div>
@@ -623,7 +705,7 @@
           <button class="btn sm" onclick={() => closeUpload({ refresh: true })}
                   title="Close upload" aria-label="Close upload"><Icon name="x" size={13} /></button>
         </div>
-        <Lazy load={lazyRoutes.uploadBox} props={{ notify, jdCategories, initialFiles: uploadFiles }} />
+        <Lazy load={lazyRoutes.uploadBox} props={{ notify: scopedNotify, jdCategories, initialFiles: uploadFiles }} />
       </div>
     </div>
   {/if}
@@ -633,6 +715,7 @@
       canReviewIntelligence={canReviewIntelligence} onClose={closeArchiveChat}
       onPark={parkArchiveChat} onReturnFocus={chatReturnFocus} />
   {/if}
+  {/key}
 
 {/if}
 
