@@ -84,9 +84,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Successful mobile QR-code and pairing-link exchanges now appear in Settings
   > My account > Mobile app, with connection and last-use dates and Revoke.
   The list refreshes during pairing and excludes revoked or signed-out devices.
-- Taxonomy systems use migration 0005, following the unchanged unpublished mobile
-  migrations 0003 and 0004. Published beta.2/schema 0002 is the upgrade baseline;
-  the intermediate mobile schemas are not separate compatibility targets.
+- Consolidate all unreleased mobile and taxonomy changes into migration 0003.
+  Published beta.2 migrations 0001/0002 remain unchanged. Fresh installations and
+  beta.2/schema 0002 are supported; intermediate development schemas are not.
   Existing tokens with unknown pairing provenance remain in API tokens until replaced.
 - Sized thumbnail requests decode image pixels only when resizing is needed,
   avoiding unnecessary work for cached and original-size responses.

@@ -239,29 +239,24 @@ Back up the complete data directory with writers stopped or an atomic whole-
 directory snapshot, including the keys that decrypt sealed credentials. A
 database-only snapshot is not a complete archive backup.
 
-Migrations are embedded and ordered. Never rewrite a migration already published
-in a release. Keep the existing 0003 and 0004 files unchanged during this taxonomy
-cutover; do not consolidate them. Startup validates every version before touching the database
-and rejects duplicate or nonpositive versions with the conflicting names.
+Migrations are embedded and ordered. Published beta.2 migrations 0001/0002 remain
+unchanged; the complete unreleased mobile/taxonomy cutover is consolidated in
+`0003_taxonomy_foundation.sql`. Supported inputs are fresh databases and published
+beta.2/schema 2, with no intermediate development-schema conversion. Its first-line
+rebuild marker selects a dedicated writer connection with foreign keys disabled
+outside the transaction, followed by an immediate transaction, table rebuilds,
+foreign-key validation and atomic version update. Enforcement is restored even on
+failure. Startup validates every version before touching the database and rejects
+duplicate or nonpositive versions with the conflicting names.
 See [Release process](/release-process).
 
-Beta.2 at `0002_document_intelligence.sql` is the published upgrade baseline.
-The unpublished mobile migrations remain separate and unchanged:
-`0003_mobile_ingest.sql` contains OCR provenance, split origins, upload idempotency
-and pending mobile pairings; `0004_mobile_tokens.sql` adds `api_tokens.source`.
-Normal ordered upgrade is **0002 → 0003 → 0004 → 0005**. Taxonomy 0005 requires
-the mobile schema additions from both predecessors; it does not run on bare 0002.
-Intermediate unpublished states are useful upgrade-test fixtures, not additional
-published compatibility baselines.
+The consolidated migration includes device OCR provenance, split origins, upload
+idempotency, mobile pairings and token provenance before the taxonomy table rebuilds.
 Existing credentials retain their hashes; unknown pairing provenance stays empty.
-
-The taxonomy migration's explicit rebuild marker uses the existing runner's
-dedicated connection: disable FK enforcement before BEGIN, rebuild with retained
-IDs, check foreign keys before commit, then restore enforcement or discard the
-connection. Hidden-default memberships and existing token bindings migrate to
-system 1 without new credentials. Verify populated beta.2 upgrades through
-0003/0004/0005 and fresh initialization; retain useful populated intermediate-state
-coverage. Integrated evidence remains a separate gate.
+Hidden-default memberships and existing token bindings migrate to system 1 without
+new credentials. Tests pin the published SQL bytes, exercise populated beta.2 and
+fresh initialization, and verify rollback and writer enforcement after failure.
+Integrated runtime evidence remains a separate gate.
 
 ## HTTP and security boundaries
 

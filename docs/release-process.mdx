@@ -33,14 +33,21 @@ steps directly.
 
 A release normally adds at most one numbered database migration; never rewrite a
 published migration. For this taxonomy cutover, beta.2 at schema 0002 is the published
-upgrade baseline. Keep the existing unpublished `0003_mobile_ingest.sql` and
-`0004_mobile_tokens.sql` separate and unchanged; do not fold them together.
-Taxonomy remains in `0005_taxonomy_systems.sql` and expects the mobile additions:
-the ordered upgrade is **0002 → 0003 → 0004 → 0005**, never 0005 on bare 0002.
-No separate published compatibility promise is made for intermediate mobile schemas,
-but useful intermediate-state upgrade coverage remains. Verify populated beta.2
-upgrades and fresh initialization. See [Architecture](/architecture#storage-and-transaction-invariants)
-for the current layout and rebuild path.
+upgrade baseline. Published 0001/0002 are unchanged; all unreleased mobile and
+taxonomy changes are consolidated in `0003_taxonomy_foundation.sql`. Verify fresh
+initialization and populated **0002 → 0003** upgrades, restart idempotence, preserved
+data and failed-upgrade rollback. Intermediate development schemas are not supported
+upgrade inputs. The rebuild marker must remain the first line of 0003.
+See [Architecture](/architecture#storage-and-transaction-invariants) for the runner.
+
+Before v1.0, plan a fresh-schema baseline and a final beta upgrade bridge. The final
+beta must bring supported older archives to the baseline's schema version. v1.0
+can then create that schema directly for a new database, accept an archive already
+at that version, and direct older archives to the tagged final beta first. Keep
+schema versions increasing independently of release versions. Remove the old
+upgrade SQL from the active runner only after testing exact schema equivalence
+and the complete upgrade path. This transition requires migration-runner support;
+renaming branches or resetting schema version numbers cannot implement it.
 
 Suchi follows SemVer:
 
