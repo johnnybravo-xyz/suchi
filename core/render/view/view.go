@@ -586,7 +586,7 @@ func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative 
 		if err != nil {
 			return err
 		}
-		if link == src || oldCASLink(link, hash) {
+		if link == src || paths.MatchesCASLink(link, hash) {
 			return nil
 		}
 	}
@@ -594,17 +594,6 @@ func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative 
 		return err
 	}
 	return fmt.Errorf("view: refusing foreign symlink %q", target)
-}
-
-// Whole-directory restores can retain an absolute link into the old data root.
-// Require the complete canonical CAS layout and a hash already owned by this
-// document/path; a matching filename alone is not ownership evidence.
-func oldCASLink(link, hash string) bool {
-	if !filepath.IsAbs(link) || filepath.Clean(link) != link {
-		return false
-	}
-	suffix := filepath.Join("blobs", "sha256", hash[:2], hash[2:4], hash[4:6], hash)
-	return strings.HasSuffix(link, string(filepath.Separator)+suffix)
 }
 
 // Open each real parent through a pinned os.Root, so a concurrent symlink swap

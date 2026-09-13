@@ -194,8 +194,13 @@ Do not delete by hash on a request failure; another document may reference it.
 
 Preserve `original_blob` and the original MIME type. Decryption, normalization,
 and OCR create derived objects rather than overwriting the upload. The rendered
-Johnny.Decimal tree is a rebuildable projection. Trash and retention remove
-document state and rendered files; `core/gc/` owns physical CAS reclamation.
+Johnny.Decimal tree is a rebuildable projection. Trash and retention delete
+document state and attempt cleanup of verified rendered links; `core/gc/` owns
+physical CAS reclamation. Purge snapshots candidate paths and their document/
+journal hashes inside the write transaction before deleting rows. Cleanup runs
+after commit, pins real parent directories, and removes only matching CAS
+symlinks. Foreign artifacts remain in place and count as reported cleanup failures.
+`core/render/paths` owns the canonical CAS-link predicate shared by view and trash.
 The renderer obtains filesystem targets from validated `CAS.Path`, not its own
 copy of the shard layout. Even when a filing path has not changed, a render job
 refreshes missing or stale links to the currently selected archive/original

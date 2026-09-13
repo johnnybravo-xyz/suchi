@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Permanent deletion preserves unrelated files and symlinks at rendered paths.
+  Cleanup snapshots document and journal blob ownership before deleting records,
+  removes only verified CAS links, and reports rejected artifacts.
 - Remember published blob targets in the render journal so archive changes plus
   refiling recover across restarts. Same-path refresh preserves unrelated files
   and symlinks; unprovable pre-upgrade links are retained and reported.

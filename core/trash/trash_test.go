@@ -176,7 +176,11 @@ func TestPurgeRemovesOwnedStateAndRenderedFilesButRetainsBlobs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(validPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("missing-cas-target", validPath); err != nil {
+	target, err := cas.Path(sharedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, validPath); err != nil {
 		t.Fatal(err)
 	}
 	outsidePath := filepath.Join(filepath.Dir(renderRoot), "outside.txt")
