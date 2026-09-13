@@ -492,4 +492,3 @@
     .user-row > .grow { flex-basis: 100%; }
   }
 </style>
-
