@@ -1,6 +1,6 @@
-// Custom-field value writer + deleter endpoints. Reads sit on the
-// existing GET /api/documents/{id} projection. This file only handles
-// mutation — Type-dispatched validation lives in core/customfield.
+// Custom-field value writer and deleter endpoints. Per-document values
+// have no read projection yet; future reads must recheck document-link
+// target visibility. Typed validation lives in core/customfield.
 //
 // Endpoints:
 //   PUT    /api/documents/{id}/custom_fields/{field}   body: {"value": <any>}

@@ -1524,6 +1524,13 @@ List of docs awaiting a password in the selected system; additionally owner-scop
 
 ### `PUT /api/documents/{id}/custom_fields/{field}`
 
+Per-document custom-field values can currently be written and deleted, but are
+not returned by document detail or a dedicated read endpoint. `/api/custom_fields/`
+lists field definitions, not document values. Authenticated document-link writes
+require permission to change the source and view the target in their respective
+filing systems. A future value read endpoint must recheck target visibility and
+redact inaccessible links; read-time redaction is not an implemented capability.
+
 Write a typed custom-field value. `{field}` accepts either the numeric
 field id OR the field name.
 Definitions resolve within the source document's system. Ordinary metadata values

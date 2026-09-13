@@ -47,6 +47,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Clarify that per-document custom-field values have no read API/UI yet, and that
+  automatic document-ID nonreuse starts with the taxonomy upgrade; surviving
+  beta.2 IDs are preserved, but earlier purged numbers have no retained history.
 - Define `suchi-taxonomy/v1` as strict offline HuML/TOML with optional top-level
   `system` and generated System/49. Author-declared reserved areas, category-level
   protected flags, `inbox`, YAML and unsupported fields fail. Standalone validation

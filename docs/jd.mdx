@@ -48,6 +48,9 @@ Assuming an upload has returned document 147 in S01/category 13, its address is
 `S01.13.147`. Refiling it to category 14 gives `S01.14.147`; the number and numeric
 document URL remain stable, while the old address no longer resolves. New versions
 and split children receive their own document IDs. There is no 99-document limit.
+Automatic allocation does not reuse IDs allocated after the taxonomy upgrade.
+Surviving beta.2 IDs are preserved, but numbers purged before the upgrade have no
+retained allocation history and may be reused.
 
 Canonical addresses require a two-digit category and an unpadded positive decimal
 document ID in the signed 64-bit range. Spaces, signs, lowercase codes and padded

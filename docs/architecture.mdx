@@ -153,12 +153,17 @@ is hidden until the first prefixed taxonomy import atomically names it or
 preserves it under a distinct code while creating the import destination.
 Codes are immutable; names and tree/provenance belong to the system. See [JD](/jd).
 
-Documents retain installation-global AUTOINCREMENT IDs and immutable system
-ownership. Categories, metadata, saved views, automations, mailboxes, passwords,
+The taxonomy upgrade preserves surviving installation-global document IDs and
+uses AUTOINCREMENT for subsequent automatic allocation. Numbers purged before
+that upgrade have no retained allocation history and may be reused; nonreuse is
+guaranteed from the upgrade onward. Document system ownership is immutable.
+Categories, metadata, saved views, automations, mailboxes, passwords,
 shares and approval definitions/runs are system-owned. Composite constraints and
 targeted guards reject foreign-system relationships. Authenticated custom-field
-document links are the deliberate exception: change-source and view-target checks
-cover both systems; unreadable targets are redacted. Actorless writes stay local.
+document-link writes are the deliberate exception: change-source and view-target
+checks cover both systems. Actorless writes stay local. Per-document custom-field
+values currently have no API/UI read projection. Any future read projection must
+recheck target visibility and redact inaccessible links before exposing values.
 
 SQLite, FTS and CAS remain shared. Duplicate document identity is system-and-owner
 scoped, while equal bytes can share a CAS hash. User-global upload idempotency keys
