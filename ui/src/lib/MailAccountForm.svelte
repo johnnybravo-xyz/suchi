@@ -463,23 +463,23 @@
               <div class="condition-grid">
                 <div class="field">
                   <label for={`ma-from-${rule.id}`}>From</label>
-                  <input id={`ma-from-${rule.id}`} class="input" bind:value={rule.from}
-                         placeholder="billing@example.com, @trusted.org" />
+                  <textarea id={`ma-from-${rule.id}`} class="input" rows="1" bind:value={rule.from}
+                            placeholder="billing@example.com, @trusted.org"></textarea>
                 </div>
                 <div class="field">
                   <label for={`ma-recipients-${rule.id}`}>To or Cc</label>
-                  <input id={`ma-recipients-${rule.id}`} class="input" bind:value={rule.recipients}
-                         placeholder="receipts@example.com" />
+                  <textarea id={`ma-recipients-${rule.id}`} class="input" rows="1" bind:value={rule.recipients}
+                            placeholder="receipts@example.com"></textarea>
                 </div>
                 <div class="field">
                   <label for={`ma-subject-${rule.id}`}>Subject contains</label>
-                  <input id={`ma-subject-${rule.id}`} class="input" bind:value={rule.subject_terms}
-                         placeholder="invoice, statement" />
+                  <textarea id={`ma-subject-${rule.id}`} class="input" rows="1" bind:value={rule.subject_terms}
+                            placeholder="invoice, statement"></textarea>
                 </div>
                 <div class="field">
                   <label for={`ma-filename-${rule.id}`}>File name</label>
-                  <input id={`ma-filename-${rule.id}`} class="input mono" bind:value={rule.attachment_names}
-                         placeholder="*.pdf, invoice-*" />
+                  <textarea id={`ma-filename-${rule.id}`} class="input mono" rows="1" bind:value={rule.attachment_names}
+                            placeholder="*.pdf, invoice-*"></textarea>
                 </div>
               </div>
             {/if}
@@ -670,7 +670,8 @@
   .rule-footer { display: flex; align-items: center; gap: 9px; }
   .rule-footer > span { color: var(--faint); font-size: .72rem; }
   .overlap-note { margin: -5px 0 0; color: var(--muted); font-size: .76rem; }
-  .condition-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .condition-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .condition-grid textarea { min-height: 2.5rem; font-family: inherit; font-size: .9rem; line-height: 1.4; resize: vertical; }
   .preview-row { display: flex; align-items: center; gap: 10px; font-size: .78rem; }
   .compact-error { margin: 0; }
   .preview-list { border-left: 2px solid var(--accent); padding-left: 12px; }
@@ -690,7 +691,6 @@
   .tls-field { min-width: 92px; justify-content: end; }
 
   @media (max-width: 620px) {
-    .condition-grid { grid-template-columns: 1fr; }
     .choice-row { display: grid; width: 100%; }
     .choice-row button { min-height: 38px; }
     .rule-block { padding: 11px 10px; }

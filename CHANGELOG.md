@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Stack email intake matching fields at full width with equal single-line
+  heights and individual resize handles.
 - Require a saved filing-tree choice before continuing setup. Remove its skip
   action, including on loading errors, and keep later steps optional.
 - Permanent deletion preserves unrelated files and symlinks at rendered paths.
