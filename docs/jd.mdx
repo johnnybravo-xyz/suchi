@@ -163,6 +163,13 @@ not regex. Starters need unique names, nonempty actions and exact parameters:
 | `assign_document_type` | `document_type` name |
 | `assign_jd_category` | Integer `jd_category_code` declared in the user tree |
 
+Keyword-generated names include the authoring ID and effective category code/name.
+If two rules to be added have the same name, Preview rejects the proposal with the
+conflicting name. Rename the explicit starter or remove the category keywords
+before previewing again. Existing local rules still win, and skipped rules do not
+participate in this collision check. Metadata references resolve trimmed exact
+names first, then canonical slugs; Preview and Apply use the same normalization.
+
 No instance row IDs or arbitrary action parameters. Sensitivity defaults,
 `review_after_days`, custom fields, standalone tag/type/correspondent seeds,
 link vocabulary/endpoints, access grants, secrets, provider configuration and

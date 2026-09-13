@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Bind taxonomy previews to trimmed metadata references and reject colliding
+  generated and explicit starter names before application.
 - Allow valid scoped API tokens to permanently delete documents and empty Trash,
   while rechecking credential revocation and membership in the write transaction.
 - Preserve historical skipped filesystem and mail intake events in the original

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -265,6 +266,7 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		byName[rule.Name] = rule
 	}
 	var relevantRules []automations.Automation
+	plannedNames := map[string]bool{}
 	for _, candidate := range incomingRules(pf, p.codes) {
 		if prior, exists := byName[candidate.seed.Name]; exists {
 			relevantRules = append(relevantRules, prior)
@@ -288,6 +290,10 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 			p.diff.RulesSkipped = append(p.diff.RulesSkipped, SkippedRule{candidate.seed.Name, reason})
 			continue
 		}
+		if plannedNames[candidate.seed.Name] {
+			return nil, fmt.Errorf("starter rule %q is planned more than once; rename the explicit starter or remove the category keywords, then preview again", candidate.seed.Name)
+		}
+		plannedNames[candidate.seed.Name] = true
 		p.rules = append(p.rules, candidate)
 		p.diff.RulesToAdd = append(p.diff.RulesToAdd, candidate.seed.Name)
 		if len(candidate.keywords) > 0 {
@@ -327,6 +333,8 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 func referenceState(ctx context.Context, tx *sql.Tx, systemID int64, rules []plannedRule) ([]string, error) {
 	names := map[string]bool{}
 	add := func(table, name string) {
+		// Apply resolves trimmed exact names before canonical slug aliases.
+		name = strings.TrimSpace(name)
 		if name != "" {
 			names[table+"\x00"+name] = true
 		}
