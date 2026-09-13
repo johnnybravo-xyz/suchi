@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -627,81 +626,109 @@ func TestSystemsUploadDedupeAndIdempotencyHaveDifferentNamespaceBoundaries(t *te
 	assertUploadSideEffectCounts(t, s.DB, 11, 2, 2, 2)
 }
 
-func TestSystemsUpgradeReplaysPersistedDocumentAndVersionReceipts(t *testing.T) {
-	ctx := context.Background()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "pre-systems.db"))
+func TestSystemsRestartReplaysPersistedDocumentAndVersionReceipts(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "receipts.db")
+	d, err := db.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	migs, err := db.LoadMigrations(migrations.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var prior []db.Migration
-	for _, m := range migs {
-		if m.Version <= 4 {
-			prior = append(prior, m)
-		}
-	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if err := db.Migrate(ctx, d, prior, log); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Write.Exec(`
-		INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES (5,'legacy@example.com','Legacy','member',0,0);
-		INSERT INTO jd_areas(code_start,code_end,name,position) VALUES (10,19,'Legacy',0);
-		INSERT INTO jd_categories(id,area_start,code,name,system) VALUES (101,10,13,'Legacy inbox',1);
-		INSERT INTO settings(key,value_json,updated_at) VALUES ('jd_inbox_category_id','101',0);
-		INSERT INTO documents(id,owner_id,jd_category_id,title,original_blob,original_size,previous_version_id,created_at,updated_at)
-		VALUES (101,5,101,'Legacy receipt','aca482b53b6a687aed3bfb036625baf486121045e00bb5b1eda8c7b4508f3050',21,NULL,0,0),
-		       (102,5,101,'Legacy version','9fbe6318365fe29f9e5e4e09571d25371c4cbdb15e3a8cfccaf8c514979ca7e6',23,101,0,0);
-	`); err != nil {
-		t.Fatal(err)
-	}
-	// Golden pre-SYS fingerprints deliberately do not call the current builder.
-	// Their persisted receipt shape has no system_code or jd_address fields.
-	for _, tc := range []struct {
-		key, operation, digest, sha string
-		predecessor, id             int64
-	}{
-		{testIdempotencyKey, "document", "fee9d0f6f72f9ad5aa893c7b6c58f34a0e5ce30c51ac1c1ab3766d41642ae20a", "aca482b53b6a687aed3bfb036625baf486121045e00bb5b1eda8c7b4508f3050", 0, 101},
-		{secondIdempotencyKey, "version", "d05148a71b3cbef4b85e20593cec63e2041073e60034ef4b6abe36dee846213f", "9fbe6318365fe29f9e5e4e09571d25371c4cbdb15e3a8cfccaf8c514979ca7e6", 101, 102},
-	} {
-		if _, err := d.Write.Exec(`INSERT INTO upload_idempotency(user_id,idempotency_key,operation,predecessor_id,request_fingerprint,sha256,document_id,response_status,response_json,created_at) VALUES (5,?,?,?,?,?,?,201,?,?)`, tc.key, tc.operation, tc.predecessor, tc.digest, tc.sha, tc.id, fmt.Sprintf(`{"id":%d,"title":"Persisted legacy receipt"}`, tc.id), time.Now().Unix()); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	cas, err := blob.New(t.TempDir())
-	if err != nil {
+	if _, err := d.ExecWrite(ctx, `
+		INSERT INTO users(id,email,display_name,role,created_at,updated_at)
+			VALUES(5,'receipts@example.com','Receipts','member',0,0);
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position)
+			VALUES(1,40,49,'System',0);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+			VALUES(1,101,40,49,'Inbox',1);
+		UPDATE jd_systems SET code='S01',name='Receipts',inbox_category_id=101 WHERE id=1;
+	`); err != nil {
 		t.Fatal(err)
 	}
-	for _, payload := range []string{"legacy first receipt\n", "legacy version receipt\n"} {
-		if _, err := cas.Put(strings.NewReader(payload)); err != nil {
-			t.Fatal(err)
-		}
+	cas, err := blob.New(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 	s := newUploadTestServer(t, d, cas)
 	mux := http.NewServeMux()
 	s.Register(mux)
-	for _, tc := range []struct {
+	requests := []struct {
 		path, key, payload string
-		id                 int64
+		response           uploadVersionResponse
+		location           string
 	}{
-		{"/api/documents/", testIdempotencyKey, "legacy first receipt\n", 101},
-		{"/api/documents/101/versions/", secondIdempotencyKey, "legacy version receipt\n", 102},
-	} {
-		r := multipartUploadRequest(t, tc.path, "legacy.txt", []byte(tc.payload), nil, memberPrincipal(5))
-		r.Header.Set("Idempotency-Key", tc.key)
+		{path: "/api/documents/?system=S01", key: testIdempotencyKey, payload: "persisted first receipt\n"},
+		{key: secondIdempotencyKey, payload: "persisted version receipt\n"},
+	}
+	for i := range requests {
+		request := &requests[i]
+		if i == 1 {
+			request.path = fmt.Sprintf("/api/documents/%d/versions/?system=S01", requests[0].response.ID)
+		}
+		r := multipartUploadRequest(t, request.path, "receipt.txt", []byte(request.payload), nil, memberPrincipal(5))
+		r.Header.Set("Idempotency-Key", request.key)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
-		var receipt UploadResponse
-		if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &receipt) != nil || receipt.ID != tc.id || !receipt.IdempotentReplay || !strings.Contains(w.Body.String(), `"title":"Persisted legacy receipt"`) {
-			t.Fatalf("pre-upgrade replay %s: %d %s", tc.path, w.Code, w.Body.String())
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &request.response) != nil || request.response.ID <= 0 || request.response.IdempotentReplay || request.response.SystemCode != "S01" {
+			t.Fatalf("initial upload %s: %d %s", request.path, w.Code, w.Body.String())
+		}
+		if request.response.JDAddress != fmt.Sprintf("S01.49.%d", request.response.ID) {
+			t.Fatalf("receipt has wrong filing address: %+v", request.response)
+		}
+		request.location = w.Header().Get("Location")
+	}
+	if requests[1].response.PreviousVersionID != requests[0].response.ID || requests[1].response.ID == requests[0].response.ID {
+		t.Fatalf("version receipt lost predecessor identity: %+v", requests)
+	}
+	assertUploadSideEffectCounts(t, d, 2, 2, 2, 2)
+	// Replay must retain the persisted receipt even after current metadata changes.
+	if _, err := d.ExecWrite(ctx, `UPDATE documents SET title='Edited after upload'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = reopened
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+	cas, err = blob.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = newUploadTestServer(t, d, cas)
+	mux = http.NewServeMux()
+	s.Register(mux)
+	for _, request := range requests {
+		for _, path := range []string{request.path, strings.TrimSuffix(request.path, "?system=S01")} {
+			r := multipartUploadRequest(t, path, "receipt.txt", []byte(request.payload), nil, memberPrincipal(5))
+			r.Header.Set("Idempotency-Key", request.key)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, r)
+			var receipt uploadVersionResponse
+			want := request.response
+			want.IdempotentReplay = true
+			if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &receipt) != nil || receipt != want || w.Header().Get("Location") != request.location {
+				t.Fatalf("persisted replay %s: %d %s; want %+v", path, w.Code, w.Body.String(), want)
+			}
 		}
 	}
-	assertUploadSideEffectCounts(t, d, 2, 0, 0, 2)
+	assertUploadSideEffectCounts(t, d, 2, 2, 2, 2)
+	var unchanged int
+	if err := d.Read.QueryRowContext(ctx, `SELECT count(*) FROM documents WHERE system_id=1 AND title='Edited after upload'`).Scan(&unchanged); err != nil || unchanged != 2 {
+		t.Fatalf("replay changed current document metadata: count=%d err=%v", unchanged, err)
+	}
 }
