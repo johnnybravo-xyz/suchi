@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
+	"github.com/johnnybravo-xyz/suchi/core/logx"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -169,6 +172,65 @@ func TestBuildHTTPHandlerRateLimitsShareRoutes(t *testing.T) {
 				if rec.Code != want {
 					t.Fatalf("request %d: status = %d, want %d", i+1, rec.Code, want)
 				}
+			}
+		})
+	}
+}
+
+func TestBuildHTTPHandlerObservesRateLimitRejections(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		method  string
+		path    string
+		demo    bool
+	}{
+		{"POST /api/login", "POST", "/api/login/", false},
+		{"POST /api/login", "POST", "/api/login%2f", false},
+		{"POST /api/demo/session", "POST", "/api/demo/session%2f", true},
+		{"POST /s/{token}", "POST", "/s/private-share-token", false},
+		{"GET /s/{token}/{doc_id}/download", "HEAD", "/s/private-share-token/1/download", false},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc(tc.pattern, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			var logs bytes.Buffer
+			metrics := httpx.NewMetrics()
+			var demoLimiter *httpx.RateLimit
+			if tc.demo {
+				demoLimiter = httpx.NewRateLimit(5, 10)
+			}
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, demoLimiter, metrics, logx.Setup(&logs, "info"))
+			var rec *httptest.ResponseRecorder
+			for range 11 {
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req.RemoteAddr = "192.0.2.1:1234"
+				rec = httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+			}
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("exhausted limiter status = %d", rec.Code)
+			}
+			requestID := rec.Header().Get("X-Request-Id")
+			if requestID == "" || rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") == "" {
+				t.Fatalf("rate-limit response missing request ID or security headers: %v", rec.Header())
+			}
+			lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
+			var last map[string]any
+			if err := json.Unmarshal(lines[len(lines)-1], &last); err != nil {
+				t.Fatal(err)
+			}
+			if last["msg"] != "http.access" || last["status"] != float64(429) || last["request_id"] != requestID {
+				t.Fatalf("rate-limit access log = %v", last)
+			}
+			scrape := httptest.NewRecorder()
+			metrics.Handler().ServeHTTP(scrape, httptest.NewRequest("GET", "/metrics", nil))
+			if !strings.Contains(scrape.Body.String(), `status="429"} 1`) {
+				t.Fatal("rate-limit rejection missing from request metrics")
+			}
+			if strings.Contains(logs.String(), "private-share-token") || strings.Contains(scrape.Body.String(), "private-share-token") {
+				t.Fatal("share credential leaked into access logs or metrics")
 			}
 		})
 	}

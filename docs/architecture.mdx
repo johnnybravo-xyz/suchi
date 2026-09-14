@@ -1,563 +1,434 @@
 ---
 title: "Backend architecture"
-description: "Follow a document through the Go runtime, find the owning code, and verify changes without breaking storage or security boundaries."
+description: "Runtime ownership, document flow, storage and security invariants, and verification for the Go backend."
 ---
 
-Suchi turns incoming files into a local archive: capture, extract, file,
-retrieve, and review. Each step must remain useful without an LLM or an external
-service. The production distribution is one statically linked Go binary with
-an embedded Svelte application, SQLite, immutable blobs, and rebuildable filing
-views under `DATA_DIR`. It needs no database server, cache, or message broker.
+Suchi captures, extracts, files, retrieves and reviews documents locally. Each
+step remains useful without an LLM or external service. The production runtime
+is one static Go binary with an embedded Svelte app, SQLite, immutable CAS blobs
+and rebuildable filing views under `DATA_DIR`; no database server, cache or broker.
 
-This guide describes the implementation in this checkout. Product proposals in
-`../specs/` can include future work or contracts implemented on other branches;
-check the source and contract tests before carrying them into a change. For
-browser composition and bundle ownership, see [Frontend architecture](/spa-architecture).
+This guide describes the checkout, not future proposals in `../specs/`. Confirm
+contracts against source/tests. [Frontend architecture](/spa-architecture) owns
+browser composition; linked feature guides own detailed user and wire behavior.
 
 ## Where to start a change
 
-These are ownership boundaries, not interchangeable layers or a directory inventory.
-
 | Concern | Entry point and owner |
 | --- | --- |
-| Process lifecycle and dependency wiring | `distro/cmd/suchi/main.go: runServe`; `serve_*.go` assembles runtime services and HTTP policy |
-| JSON requests and wire contracts | `core/api/api.go: Server.Register`; feature handlers stay together in `core/api/` |
-| Browser entry pages and blob delivery | `core/ui/ui.go` and `core/ui/spa.go`; API preview/download mirrors are wired in the CLI |
-| Identity and access decisions | `core/auth/`, `core/authz/`, `core/httpx/`; credential implementations in `plugins/local-auth/` and `plugins/oidc/` |
-| Durable state and work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
-| Capture and processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
-| Filing, review, and retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; their HTTP projections live in `core/api/` |
-| Portable filing configuration | `core/jd/presetfile` raw HuML/TOML contract and normalization; `core/jd/importer` shared preview/apply; `core/taxonomy` consistent export |
-| Filing-index projection | `core/render/index` composes tree-only export with an atomic filesystem writer; `core/render/view` owns document paths |
+| Lifecycle and wiring | `distro/cmd/suchi/main.go: runServe`; `serve_*.go` assembles services and HTTP policy |
+| JSON contracts | `core/api/api.go: Server.Register`; feature handlers in `core/api/` |
+| Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; CLI wires API preview/download mirrors |
+| Identity/access | `core/auth/`, `core/authz/`, `core/httpx/`; credentials in `plugins/local-auth/`, `plugins/oidc/` |
+| Durable state/work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
+| Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
+| Filing/review/retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; API projections in `core/api/` |
+| Portable taxonomy | `core/jd/presetfile` validates/normalizes HuML/TOML; `core/jd/importer` previews/applies; `core/taxonomy` exports |
+| Filing projections | `core/render/index` writes tree-only indexes; `core/render/view` owns document paths |
 
-Keep behavior in its existing domain owner. `plugin-api/` is the small shared
-vocabulary for authenticators, job subscribers, and audit sinks, not a service
-framework. Plugins are compile-linked; there is no runtime Go plugin loader.
-The API receives explicit callbacks from the CLI when it needs an integration
-without importing `plugins/*`.
+Keep behavior with its domain owner. `plugin-api/` provides vocabulary for
+compile-linked authenticators, job subscribers and audit sinks, without a runtime
+Go plugin loader or service framework. The CLI injects integration callbacks into
+the API instead of importing `plugins/*` there. See [Plugins](/plugins).
 
 ## Boot and shutdown
 
-Follow `runServe` when a service works in a unit test but is absent at runtime:
+Follow `runServe` to diagnose missing runtime wiring:
 
-1. Load and validate configuration, create `DATA_DIR`, open SQLite, apply
-   embedded migrations, and establish the Johnny.Decimal Inbox invariants.
-2. Construct authentication, CAS, rendering, retention, encryption keys, and
-   configured integrations. Optional parser availability is reported without
-   making a missing tool a startup failure.
-3. Register all durable subscribers before reclaiming interrupted jobs and
-   starting the dispatcher. Start the configured intake supervisors, backup,
-   and retention loops.
-4. Construct the API and browser handlers, inject runtime dependencies, register
-   routes, then wrap the assembled mux in the HTTP middleware.
-5. On termination, cancel the shared context and shut down HTTP with a bounded
-   grace period. Subscribers and subprocesses must honor cancellation.
+1. Validate configuration, create `DATA_DIR`, open/migrate SQLite and establish
+   Johnny.Decimal Inbox invariants.
+2. Construct auth, CAS, rendering, retention, keys and configured integrations.
+   Report unavailable optional parsers without failing startup.
+3. Register durable subscribers before job reclamation/dispatcher startup; start
+   configured intake, backup and retention loops.
+4. Inject API/browser dependencies, register routes and wrap the mux in middleware.
+5. On termination, cancel the shared context and give HTTP bounded shutdown grace.
+   Subscribers and subprocesses honor cancellation.
 
-This is a single-server-process design. The single writer and startup job
-reclamation are not coordination for multiple servers sharing one database.
+One server process owns an archive. The writer pool and startup reclamation do
+not coordinate multiple servers sharing SQLite.
 
-The executable resolves its build version and source revision once at boot and
-passes them to the API. Authenticated `/api/whoami` responses expose
-`build_version` and optional `build_revision`; Settings displays that existing
-session metadata. Docker builds receive the revision explicitly because their
-context excludes `.git`. This is build identification, not an update service.
+Build version/revision resolve once at boot and enter authenticated `/api/whoami`
+metadata. Docker receives revision explicitly because its context excludes `.git`.
+Settings consumes that identity; no update service is involved.
 
 ## From upload to usable document
 
 ```mermaid
 flowchart LR
   I[Upload or intake] --> B[Original bytes in CAS]
-  B --> T[Commit document, source, and first job]
-  T --> J[Durable dispatcher]
-  J --> P[Extract and normalize]
-  P --> F[File and review]
+  B --> T[Commit document, source, first job] --> J[Durable dispatcher]
+  J --> P[Extract and normalize] --> F[File and review]
   P --> S[(SQLite text and metadata)]
   P --> D[Derived CAS objects]
-  F --> S
-  S --> A[ACL-filtered retrieval]
-  D --> A
-  A --> C[Web app and API clients]
+  F --> S --> A[ACL-filtered retrieval]
+  D --> A --> C[Web app and API clients]
 ```
 
-For a new upload, `UploadDocument` follows this sequence:
+`UploadDocument` requires write scope, enforces the body limit and sniffs content
+rather than trusting supplied MIME. It streams original bytes to CAS, then opens
+one write transaction to recheck authority, deduplicate by system/owner/hash or
+insert the document, record provenance and enqueue system-owned `post-ingest` work.
+After commit it nudges dispatch and emits audit. A lost nudge cannot lose the job;
+re-uploading a live duplicate records its source without another extraction job.
 
-1. Require write scope and enforce the HTTP body limit. Sniff the content;
-   the supplied MIME type is not authoritative.
-2. Stream the original into CAS before opening the database write transaction.
-3. In one transaction, recheck actor/target authority, resolve system/owner/hash
-   deduplication or insert the document, record acquisition provenance, and enqueue
-   system-owned `post-ingest` work for a new document.
-4. After commit, nudge the dispatcher and emit the audit event. A lost nudge
-   cannot lose the persisted job. Re-uploading an existing live document records
-   its source without adding another extraction job.
-5. The post-ingest subscriber selects the format path, extracts content, and
-   writes derived bytes and metadata. Its common post-content path performs
-   local archive matching, automations, filing-view and thumbnail refresh, and
-   the optional `post-classify` handoff.
+Post-ingest selects the format path and stores extracted metadata/derived bytes.
+The common post-content path performs local matching, automations, filing/thumbnail
+refresh and optional `post-classify`. Document/version uploads share
+`core/api/upload_prepare.go` for multipart validation, rewind-safe MIME detection,
+source attribution, CAS and idempotency fingerprints; each owns its transaction
+and authorization. Keyed response receipts commit with document/job in
+`upload_idempotency`; subsequent keyed uploads prune receipts older than 30 days.
 
-Document and version uploads share `core/api/upload_prepare.go` for multipart
-validation, rewind-safe MIME detection, source attribution, CAS storage, and
-idempotency fingerprints. Each handler owns its transaction and authorization.
-Keyed retries persist their response with the document and job in
-`upload_idempotency`; subsequent keyed uploads prune records older than 30
-days. Device OCR is provisional PDF text gated by the configured confidence;
-native PDF text remains authoritative, and empty extraction cannot erase
-accepted device text. Split children retain their immutable upload origin so
-clients can resolve completed parts after the parent is retired.
+Device OCR is provisional PDF text subject to configured confidence. Native PDF
+text remains authoritative; empty extraction cannot erase accepted device text.
+Mail/post-ingest use `core/mimeutil` to refine missing, generic or malformed MIME
+from bytes while retaining specific valid source types. Rescans can therefore
+repair mislabeled PDFs and reach encryption handling without rewriting originals
+or changing the pipeline revision. [Supported formats](/formats) owns dispatch,
+format limits and real-tool requirements.
 
-Mail attachment creation and post-ingest refine missing, generic, or malformed
-MIME labels from the original bytes through `core/mimeutil`. Specific valid
-source types remain intact. An explicit rescan can therefore repair a PDF
-previously labeled `bin` and reach the ordinary encrypted-PDF gate; it does not
-modify the original CAS object or require a pipeline revision change.
+Split extraction/CAS work stays outside the writer. Child insertion then reads the
+**current live parent inside the transaction**, inheriting system, owner, category,
+title, MIME, source time and sensitivity after any intervening edits. A trashed or
+missing parent cannot produce a new visible child. Source copying and the child's
+job commit together. Immutable split origins identify completed parts after parent
+retirement; retrying retirement does not reset an existing Trash deadline.
+See [Scan splitting](/formats#multi-doc-splitting-on-qr-separator-sheets).
 
-Image barcode extraction keeps the in-process Go readers and uses optional
-`zbarimg` only when QR decoding fails. It validates source dimensions before
-pixel allocation, passes a re-encoded PNG over stdin, and parses bounded XML
-through the existing subprocess runner with a five-second timeout and empty
-environment. Native failures preserve successful Go results, and no decoded
-payload or stderr is logged. This does not add an OS network sandbox or fetch
-decoded URLs. Both runtime images supply the local fallback; see [Supported
-file types](/formats#images-barcodes).
+Filesystem/IMAP producers use the same document/job transaction pattern. IMAP
+checkpoints ascending batches of at most 50 UIDs after import/bookkeeping; failure
+stops the cycle while preserving earlier progress, and connection tests do not
+clear polling failures. [Mail intake](/guides/mail-intake) owns history/rules/health.
+Portable import differs: `core/importer/bundle/` may restore supplied content,
+archive bytes and metadata without scheduling extraction.
 
-Filesystem and IMAP intake have their own producer code and use the same
-transactional document/job pattern. Import is deliberately different:
-`core/importer/bundle/` can restore supplied content, archive bytes, and
-metadata without automatically scheduling fresh extraction. Do not assume
-every document row means a new processing job.
-
-IMAP history is fetched in ascending UID batches of at most 50 messages.
-`core/ingest/emailwatch` checkpoints each batch after imports and configured
-mailbox bookkeeping; a failed batch stops the cycle without losing earlier
-progress. Connection tests do not clear polling failures. See
-[Mail intake](/guides/mail-intake) for history, rules and health semantics.
-
-`document_sources` describes acquisition, not document identity. The same system,
-owner and original hash can have several sources; one CAS object can be referenced
-by different documents, including documents in different systems. Mailbox history retains its observed name/folder even if
-the configured account is deleted. Split children and email attachments inherit
-sources; a version records its own upload. Sources, version chains, and document
-relationships are not substitutes for one another.
+`document_sources` records acquisition, separately from identity, version chains
+and relationships. One system/owner/hash document may have multiple sources, and
+different documents/systems may share CAS bytes. Mailbox history preserves the
+observed name/folder after account deletion. Split children/email attachments
+inherit sources; each version records its own upload.
 
 ## Storage and transaction invariants
 
-`DB.Write` has one connection; `DB.Read` has a small concurrent pool. Both open
-the same SQLite file with WAL, foreign keys, a busy timeout, and bounded memory
-mapping. Use `WriteTx` for mutations and pass its `*sql.Tx` into helpers that
-participate in that transaction. Re-entering the write pool from inside a
-transaction waits on the connection already held by the caller.
-`WriteTx` defers rollback so callback errors and panics release that connection;
-a recovered panic cannot leave later archive writes waiting indefinitely.
+`DB.Write` has one connection; `DB.Read` has a small pool. Both use the same WAL
+SQLite file with foreign keys, busy timeout and bounded mmap. Mutations use
+`WriteTx`; participating helpers receive its `*sql.Tx`. Re-entering the writer
+from its transaction deadlocks on the held connection. Deferred rollback releases
+it after errors or panics, including when callers recover.
 
-`core/jd/systems` is the leaf owner for system identity, membership, target
-resolution and address syntax; it is not a tenant framework. Original system 1
-is hidden until the first prefixed taxonomy import atomically names it or
-preserves it under a distinct code while creating the import destination.
-Codes are immutable; names and tree/provenance belong to the system. See [JD](/jd).
+Keep network calls, subprocesses and long processing outside write transactions.
+Enqueue required work with the state change, never as a later best-effort write.
+Audit persistence/delivery is best-effort and usually post-commit; it is not the
+transactional job outbox. Audit failures remain logged.
 
-The taxonomy upgrade preserves surviving installation-global document IDs and
-uses AUTOINCREMENT for subsequent automatic allocation. Numbers purged before
-that upgrade have no retained allocation history and may be reused; nonreuse is
-guaranteed from the upgrade onward. Document system ownership is immutable.
-Categories, metadata, saved views, automations, mailboxes, passwords,
-shares and approval definitions/runs are system-owned. Composite constraints and
-targeted guards reject foreign-system relationships. Authenticated custom-field
-document-link writes are the deliberate exception: change-source and view-target
-checks cover both systems. Actorless writes stay local. Per-document custom-field
-values currently have no API/UI read projection. Any future read projection must
-recheck target visibility and redact inaccessible links before exposing values.
+`core/jd/systems` is the leaf owner of identity, membership, target resolution and
+address syntax. System 1 stays hidden until first prefixed import atomically names
+it or preserves it separately. Codes and document system ownership are immutable;
+names/tree/provenance belong to the system. [JD](/jd) owns presentation/import rules.
 
-SQLite, FTS and CAS remain shared. Duplicate document identity is system-and-owner
-scoped, while equal bytes can share a CAS hash. User-global upload idempotency keys
-bind their fingerprint to the target system; stored receipts are not authorization
-exemptions. Users, groups, roles/capabilities, sessions, builtin catalog, server/OCR/
-LLM configuration and full backups remain instance-wide. Host and backup operators
-and instance admins remain trusted; SYS is not separate infrastructure or keys.
+The taxonomy upgrade retains surviving global document IDs and introduces
+AUTOINCREMENT. IDs purged before upgrade have no retained allocation history and
+may be reused; nonreuse starts at upgrade. Categories, metadata, views, automations,
+mailboxes, passwords, shares and approval definitions/runs are system-owned.
+Composite constraints/targeted guards reject foreign-system relationships.
+Authenticated custom-field document links are the exception: change-source and
+view-target checks cover both systems; actorless writes stay local. There is no
+per-document custom-field value read projection yet; one must recheck/redact
+inaccessible targets before exposing links.
 
-Keep network calls, subprocesses, and long file processing outside write
-transactions. Enqueue required asynchronous work with the state change that
-requires it, not in a separate best-effort write afterward. Audit persistence and
-sink delivery remain best-effort, with failures reported through logs. Most
-auditing is post-commit and must not be mistaken for a transactional job outbox.
+SQLite/FTS/CAS remain shared. Document deduplication is system/owner scoped;
+user-global idempotency keys bind fingerprints to the system and never exempt
+receipt replay from authorization. Users/groups, roles/capabilities, sessions,
+built-in catalog, server/OCR/LLM settings and full backups are instance-wide.
+Admins and host/backup operators remain trusted; system codes do not create
+separate infrastructure or keys.
 
-Original and derived bytes are addressed by SHA-256:
+Original/derived bytes are SHA-256-addressed:
 
 ```text
 $DATA_DIR/blobs/sha256/ab/cd/ef/<full-hash>
 ```
 
-`CAS.Put` hashes a stream into a temporary file at the CAS root, then renames it
-into its shard on the same filesystem. SQLite and the filesystem are not one
-transaction: a later database failure can leave an unreferenced blob. Online
-purge, including demo visitor expiry, never deletes CAS bytes: it cannot
-distinguish an unused hash from an in-flight publisher reusing it. Only offline
-GC reclaims blobs, with the server
-and all other archive writers stopped. A blob's age is not a concurrency guard.
-Do not delete by hash on a request failure; another document may reference it.
+`CAS.Put` streams to a temporary file at the CAS root, then renames on the same
+filesystem. A failed subsequent database transaction may leave an unreferenced
+blob. Never delete by hash on request failure: another document or in-flight
+publisher may use it. Online purge, including demo expiry, never deletes CAS;
+only offline `core/gc/` with **all archive writers stopped** reclaims bytes.
+Blob age cannot establish concurrency safety.
 
-Preserve `original_blob` and the original MIME type. Decryption, normalization,
-and OCR create derived objects rather than overwriting the upload. The rendered
-Johnny.Decimal tree is a rebuildable projection. Trash and retention delete
-document state and attempt cleanup of verified rendered links; `core/gc/` owns
-physical CAS reclamation. Purge snapshots candidate paths and their document/
-journal hashes inside the write transaction before deleting rows. Cleanup runs
-after commit, pins real parent directories, and removes only matching CAS
-symlinks. Foreign artifacts remain in place and count as reported cleanup failures.
-The short liveness/ownership check and atomic symlink replacement share the writer
-with purge's snapshot. Directory preparation stays outside it; a render paused
-before publication cannot recreate a link after the document has been deleted.
-`core/render/paths` owns the canonical CAS-link predicate shared by view and trash.
-The renderer obtains filesystem targets from validated `CAS.Path`, not its own
-copy of the shard layout. Even when a filing path has not changed, a render job
-refreshes missing or stale links to the currently selected archive/original
-blob. Existing stale links are repaired on their next render/refile operation;
-startup does not walk and rewrite the entire projection.
-`core/render/index` separately refreshes each system's generated index at startup
-and after tree mutations: `<SYS>/00-09 System index/00.00 archive.huml` after
-introduction, the former root path before it.
-It builds a current tree-only `core/taxonomy` snapshot, serializes through
-`presetfile.Marshal`, then writes, flushes and closes a unique same-directory
-temporary file before atomic replacement. Symlinked parents/targets and
-unexpected files are refused; failed refreshes keep the last complete file.
-The index creates no area/category/document/blob row, and the whole namespace
-is reserved from document templates. View must not import taxonomy back:
-taxonomy already depends on view.
+Preserve `original_blob` and original MIME; decryption, normalization and OCR
+produce derived objects. Rendered paths are rebuildable. Trash/retention purge
+snapshots candidate paths plus document/journal hashes in the writer before
+removing rows. Post-commit cleanup pins real parent directories and removes only
+matching CAS symlinks; foreign artifacts remain and count as cleanup failures.
 
-JD and runtime-flat default filenames use created date, added date, then `undated`,
-title and the full `SYS.AC.documentID` suffix after introduction. View resolves
-system/mode per document and enforces a code-only root outside explicit templates.
-Display-name edits do not move roots. Index snapshot/publication and view journal/
-publication each serialize through their owner's mutex. Initial renders, moves
-and same-path blob replacements journal the previous and intended path/blob pairs
-before publishing. Superseded attempts retain their ownership evidence until the
-current link is published and old paths are cleaned; completion is transactional.
-Recovery converges on the current system destination, cleaning only verified
-links to the document's retained blobs or the journaled blobs for that path.
-Same-path refresh also proves ownership before replacing a symlink. Only system 1 removes the proved-managed
-legacy root index after its named replacement succeeds. Unknown files stay untouched.
-A recorded pre-introduction template link can occupy a future named index path.
-New-destination validation must refuse that namespace, while old-link relocation
-may remove only the journaled link verified against this document's CAS target
-through the pinned parent. This lets index jobs retry after safe relocation without
-deleting an unknown file or deadlocking recovery. Superseded journal destinations
-are never republished merely because they were once valid.
-Pre-upgrade journal rows have unknown blob hashes. A link to a historical archive
-that is no longer referenced cannot be attributed safely; recovery leaves it in
-place and reports the error. Restored absolute links with a known hash and the
-complete canonical CAS layout can be refreshed after a data-directory move.
-Render-only refile changes projections without OCR, classifier or filing reruns.
-Back up the complete data directory with writers stopped or an atomic whole-
-directory snapshot, including the keys that decrypt sealed credentials. A
-database-only snapshot is not a complete archive backup.
+Rendering prepares directories outside the writer, then shares a short liveness/
+ownership check and atomic link replacement with purge's snapshot transaction.
+A paused render cannot recreate a deleted document's link. `core/render/paths`
+owns CAS-link validation shared with Trash; targets come from
+validated `CAS.Path`, not duplicated shard logic. Same-path jobs repair missing/
+stale links to the selected archive/original blob. Startup does not rewrite the
+whole document projection; repair occurs on render/refile.
 
-Migrations are embedded and ordered. Published beta.2 migrations 0001/0002 remain
-unchanged; the complete unreleased mobile/taxonomy cutover is consolidated in
+`core/render/index` refreshes a current tree-only `core/taxonomy` snapshot at
+startup/tree changes. After introduction its path is
+`<SYS>/00-09 System index/00.00 archive.huml`; before introduction it uses the old
+root. `presetfile.Marshal` serializes it; a unique same-directory temporary file
+is written, flushed and closed before atomic replacement. Refuse symlinked
+parents/targets and unexpected files; failures preserve the previous complete
+index. It creates no area/category/document/blob rows. Reserve this namespace
+from document templates. View cannot import taxonomy because taxonomy depends
+on view.
+
+Index snapshot/publication and view journal/publication each use their owner's
+mutex. Initial renders, moves and same-path blob changes journal previous/intended
+path/blob pairs before publication. Keep superseded evidence until current
+publication and old-path cleanup finish transactionally. Recovery targets the
+**current** system destination and cleans only verified links to retained document
+blobs or that path's journaled blobs; same-path replacement also proves ownership.
+Never republish a superseded destination merely because it was once valid.
+
+View resolves system/mode per document, enforcing a code-only root outside explicit
+templates; display-name edits do not move roots. [Generated paths](/jd#generated-filing-index-and-paths)
+own filename/default-mode details. Only system 1 removes a proved-managed legacy
+index after its named replacement succeeds. Unknown files stay untouched. An old
+template link occupying a future index namespace may be relocated only when its
+journaled CAS target verifies through the pinned parent; new destinations still
+refuse that namespace. Index retry can then converge without deleting foreign
+files or deadlocking recovery.
+
+Pre-upgrade journal hashes may be unknown. Recovery reports and preserves a link
+to an unreferenced historical archive when ownership cannot be established.
+Restored absolute links with a known hash and complete CAS shard layout may
+be repaired after a data-directory move. Render-only refile changes projections
+without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requires
+all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
+whole-directory snapshot; a database-only copy is incomplete.
+
+Migrations are embedded/ordered. Published beta.2 migrations 0001/0002 stay byte-
+identical; unreleased mobile/taxonomy changes reside in
 `0003_taxonomy_foundation.sql`. Supported inputs are fresh databases and published
-beta.2/schema 2, with no intermediate development-schema conversion. Its first-line
-rebuild marker selects a dedicated writer connection with foreign keys disabled
-outside the transaction, followed by an immediate transaction, table rebuilds,
-foreign-key validation and atomic version update. Enforcement is restored even on
-failure. Startup validates every version before touching the database and rejects
-duplicate or nonpositive versions with the conflicting names.
-See [Release process](/release-process).
+beta.2/schema 2, not intermediate development schemas. Validate all versions before
+touching the database; reject duplicates/nonpositive versions with names.
+The rebuild marker selects a dedicated writer, disables foreign keys outside the
+transaction, then uses an immediate transaction for rebuilds, foreign-key validation
+and version update. Restore enforcement even on failure.
 
-The consolidated migration includes device OCR provenance, split origins, upload
-idempotency, mobile pairings and token provenance before the taxonomy table rebuilds.
-Existing credentials retain their hashes; unknown pairing provenance stays empty.
-Hidden-default memberships and existing token bindings migrate to system 1 without
-new credentials. Tests pin the published SQL bytes, exercise populated beta.2 and
-fresh initialization, and verify rollback and writer enforcement after failure.
-Integrated runtime evidence remains a separate gate.
+Device OCR provenance, split origins, idempotency, pairing/token provenance precede
+taxonomy rebuilds. Existing credential hashes remain; unknown pairing provenance
+stays empty; default memberships/token bindings move to system 1 without issuing
+credentials. Tests pin published SQL, exercise populated beta.2/fresh startup and
+verify rollback/writer enforcement. Runtime compatibility is a separate gate;
+see [Release process](/release-process).
 
 ## HTTP and security boundaries
 
-`distro/cmd/suchi/serve_middleware.go: buildHTTPHandler` composes request IDs,
-security headers, access logging, metrics, body limits, authentication, token
-policy, and Fetch Metadata checks around the normalized API mux.
+`serve_middleware.go: buildHTTPHandler` wraps all requests, including rate-limit
+rejections, with request IDs, security headers, access logs and metrics. Limiters
+run before body limits, authentication, token policy, Fetch Metadata checks and
+the normalized mux. Credential/pairing and demo POST limiters classify the
+**decoded URL path** consistently with API trailing-slash normalization: ordinary,
+slash and escaped aliases receive the same policy without rewriting the request.
+Share routes use matched mux patterns. Test the assembled handler.
 
-These gates answer different questions:
+These gates remain distinct:
 
-- **Authentication:** `core/auth` establishes a principal. OIDC is checked
-  before local authentication and delegates Suchi's exact API-token shape to
-  it; anonymous demo authentication is last. Invalid credentials cannot fall
-  back to a browser session. Both OIDC login paths require signed verified-email
-  claims before binding a local account. The configured issuer remains trusted
-  to control email assignment; email is not a stable subject identifier.
-- **Token authority:** `serve_token_policy.go` explicitly lists routes available
-  to local API tokens and restricted demo scratch identities. Unlisted routes are session-only;
-  an admin role does not bypass this boundary. Add a route's scope deliberately
-  and test the assembled handler, not only the bare API method.
-- **Roles and capabilities:** handlers enforce administration or feature grants,
-  including archive chat and intelligence. Scopes do not imply those grants.
-  User administration rejects self-disable and checks that an active administrator
-  remains after role/status updates, rolling back the writer transaction otherwise.
-  Creation rechecks the acting administrator after password hashing under the
-  writer, so concurrent disable or demotion cannot create a replacement account.
-  Creation and admin updates store no member capability grants on administrators.
-  User updates read role/capabilities in the writer transaction and compute revoke
-  hooks from effective access, so promotion does not quarantine still-authorized
-  resources and demotion cannot revive hidden grants.
-  Local mailbox, share-link and shared-view revocations commit in that same
-  transaction; cascade failure rolls back the entire transition. Capability audit
-  writes also use it, so successfully persisted events retain committed transition
-  order even when external delivery is delayed. Persistence remains best-effort:
-  `core/audit.RecordInTx` captures write outcomes without logging or sink calls;
-  `Record.Emit` reports failed writes or delivers persisted events after commit.
-  Account-disable and membership-removal OAuth invalidation run only after successful commit. The
-  existing flow-store mutex spans commit and invalidation, preserving the
-  writer-to-flow-store lock order without deleting flows on rollback or letting
-  a later re-enable or readmission/start overtake invalidation. Resource logs, audit fan-out and
-  mailbox supervisor reloads remain outside the writer.
-  See [account safeguards](/permissions#account-safeguards).
-- **Object authorization:** `core/authz` first checks actual object existence and
-  explicit/token system boundary, then active-user system entry, then existing
-  owner/admin/direct/group permission. Admins bypass membership/ACL, not request
-  or token boundaries. Lists, counts, search and similarity constrain system and
-  visibility in SQL before pagination.
-- **Browser origin:** cookie-session mutations reject sibling-origin
-  `same-site` and `cross-site` Fetch Metadata requests. Same-origin and
-  headerless compatibility requests remain supported; explicit token/bearer
-  integrations are exempt. Do not replace this with a CORS-only check.
+- **Authentication:** `core/auth` checks OIDC before local auth and anonymous demo
+  last. OIDC delegates Suchi's exact API-token shape to local auth; invalid
+  credentials cannot fall back to session cookies. Both OIDC login paths require
+  signed verified-email claims. The issuer remains trusted for email assignment;
+  email is not a stable subject identifier.
+- **Token authority:** `serve_token_policy.go` lists routes/scopes for local API
+  tokens and restricted demo scratch identities. Unlisted routes stay session-only,
+  including for admins. Public `documents:read`, `documents:write` and `events:read`
+  are separate grants; feed-only tokens cannot read documents. Token management
+  requires browser/OIDC identity; admin-token metrics is an explicit exception.
+- **Roles/capabilities:** scopes grant neither admin status nor feature capabilities.
+  User creation rechecks admin authority under the writer after password hashing.
+  Updates read current role/capabilities there, reject self-disable/last-admin loss,
+  store no hidden member grants on admins and derive revocations from effective
+  access. Promotion must not quarantine still-authorized resources, nor demotion
+  revive hidden grants. Local mailbox/share/view revocations and capability audit
+  writes share the transaction; cascade failure rolls back the transition.
+  `core/audit.RecordInTx` captures outcomes without logging/fan-out; `Record.Emit`
+  logs failures or delivers committed events afterward. Persisted rows retain writer
+  order; post-commit sink delivery can interleave.
+  Disable/membership OAuth invalidation occurs only after successful commit, with
+  the flow-store mutex spanning commit/invalidation in writer-to-flow lock order.
+  Rollback preserves flows; re-enable/readmission/start cannot overtake invalidation.
+  Logs, sink delivery and supervisor reload stay outside the writer. See
+  [Account safeguards](/permissions#account-safeguards).
+- **Objects:** `core/authz` checks existence, explicit/token system boundary,
+  active-user system entry, then owner/admin/direct/group permission. Admins bypass
+  membership/ACL only. Lists/counts/search/similarity filter system and visibility
+  in SQL before pagination.
+- **Browser origin:** cookie mutations reject sibling-origin `same-site` and
+  `cross-site` Fetch Metadata requests. Same-origin/headerless compatibility remains;
+  explicit token/bearer integrations are exempt. CORS alone is insufficient.
 
-The public token scopes are `documents:read`, `documents:write`, and
-`events:read`; they are distinct grants, not a hierarchy. A feed-only token
-cannot read document content. Document-read access still needs a document ACL.
-Token management requires a browser/OIDC identity: API tokens cannot mint,
-list, or revoke credentials. Admin-token metrics remain a deliberate exception;
-read [HTTP API](/api) before changing compatibility.
+Sessions select `?system=CODE`, defaulting to original system 1; token binding is
+its default and ceiling. Unqualified numeric objects resolve their actual system.
+There is no server last-selected context or accessible-system fallback. Unknown,
+inaccessible and mismatched targets return indistinguishable 404-style errors.
+Writer-held authorization refreshes actor/role, membership and token existence/
+binding before mutation or replay. Membership removal atomically revokes shares,
+tokens and pairings; re-addition does not revive them. See [Permissions](/permissions).
 
-Session collections use `?system=S01`, otherwise original system 1; a token's
-binding is its default and ceiling. Unqualified numeric objects resolve their
-actual system. There is no server-wide last-selected archive or accessible-system
-fallback. Unknown/inaccessible/mismatched targets use indistinguishable 404-style
-errors. The browser may explicitly select an accessible initial system in its route.
-Writer-held authorization refreshes account/role, membership and local token
-existence/binding before mutation or receipt replay. Membership removal revokes
-shares/tokens/pairings atomically; removal and re-addition never revive credentials.
+First-party clients probe public `/api/handshake` before credentials. `/api/whoami`
+reports actual scopes/build identity. `/api/token/` creates tokens, `/api/login`
+creates sessions; mobile reads use existing ACL-filtered API projections.
+[HTTP API](/api) owns handshake, payload, scope and mobile-read details.
 
-First-party clients probe public `GET /api/handshake` before sending credentials.
-`GET /api/whoami` reports the actual token scopes alongside the build identity.
-Password exchange at `/api/token/` creates only an API token; browser login at
-`/api/login` creates only a session. Mobile reads reuse the existing ACL-filtered
-API, with metadata-only detail requests and sensitive search snippets withheld.
+`core/api/mobile_pairing.go` transfers a browser/OIDC identity to a device.
+Creation binds the short-lived code to configured `PUBLIC_URL`, never forwarded
+hosts, using the mobile HTTPS/local-HTTP boundary (localhost/loopback/private
+literal IPs, excluding broader local DNS/link-local egress allowances). Validate
+before replacing pending state; store only code digest, owner/system, fallback
+name and expiry. Exchange validates optional device naming before consumption,
+then consumes the code, rechecks enabled-user system entry and calls `TokenIssuer`
+in one writer transaction. Token digest, fixed read/write scopes and server-selected
+`mobile_pairing` provenance commit together. Failure restores consumability;
+a lost successful response needs a new pairing. Cancellation matches user/system/
+digest; no secret is logged or cacheable. [Pairing API](/api#post-apimobilepairing)
+owns timing, QR, names and connected-app projection contracts.
 
-`core/api/mobile_pairing.go` connects an existing browser/OIDC session to a new
-mobile device without a password in the QR. Session-only creation replaces a
-five-minute pairing and renders its PNG locally through the existing QR library.
-The link binds the opaque code to configured `PUBLIC_URL`, never forwarded host
-headers. Creation applies the mobile client's HTTPS/local-HTTP boundary:
-HTTP accepts only localhost, loopback and private literal IPs, not the broader
-integration-egress policy's local DNS or link-local addresses. Invalid origins
-fail before replacing a pending code. `mobile_pairings` stores only a SHA-256
-code digest, owner, system binding, fallback token name, and expiry; user
-deletion cascades, and later creation prunes expired rows.
-The public handshake advertises `pairing_device_name` support. Exchange accepts
-an optional `device_name` from the phone; a trimmed nonblank value replaces the
-browser label. Names are bounded to 64 Unicode code points with no controls
-before consuming a code, so a validation retry cannot burn the pending pairing.
-No new storage or permission is needed: the existing token name owns this label.
-Public exchange consumes one valid code, checks the enabled user's current
-system entry, and calls `TokenIssuer` in the same writer transaction. Local auth
-inserts the system-bound digest with fixed document-read/write scopes and the
-server-selected `mobile_pairing` source, so issuance cannot commit a credential
-without its connected-app metadata. Manual token creation and password exchange
-pass an empty source.
-The session-only token projection exposes owner/source and active credentials
-only; existing ownership
-and revocation rules apply. Issuance failure rolls back code consumption, allowing
-retry while the pairing remains valid; successful issuance with a lost response
-requires a new pairing. No pairing credential is logged or cacheable, and
-cancellation matches user, system and digest so stale dialogs cannot revoke a
-replacement. Endpoint, QR decode,
-race, migration, and assembled origin/token-policy tests cover this boundary.
+Demo anonymous cookies are signed/stateless; first write obtains a digest-backed
+session bounded by scratch TTL through CLI-injected local issuance. Local auth
+preserves restricted scratch scope on API and direct resources, without a separate
+credential store. Demo Calendar is a local intelligence-handler exception: only
+accepted `demo-corpus` dates with source/trash SQL filtering before pagination;
+no extraction/review/chat grant. The generic seeder validates manifest facts and
+inserts them with document/job; the sibling demo repository owns content. See
+[Demo instance](/demo-instance).
 
-Browser demo visitors use HttpOnly cookies too. The anonymous cookie is signed
-and stateless; the first write exchanges it for an ordinary digest-backed
-session bounded by the scratch TTL. Local authentication recognizes the reserved
-scratch user and retains its restricted scopes on API, preview, and download
-requests; it must never become an unrestricted member session. The CLI injects
-local session issuance into the demo provisioner, without a separate credential
-store or schema. See [Demo instance](/demo-instance) for retention and isolation.
+Preview/download aliases share `core/ui` object checks, Reveal, ETags and CSP.
+Trashed bytes require owner/admin; ordinary ACL readers and public shares cannot
+fetch them. Thumbnails have a separate live-document handler. Sensitivity is a
+Reveal posture, not another access boundary: authorized API reads may contain
+text; untouched `raw=1` downloads require an admin session.
 
-Demo Calendar reads are a local exception in `core/api/intelligence.go`, not an
-authentication or capability grant. They expose only accepted `demo-corpus`
-dates, with source visibility and trash filtering inside SQL before counts and
-pagination. Extraction, review, chat, and other facts stay denied. The generic
-fixture seeder in `distro/cmd/suchi/demo.go` validates optional manifest dates
-and inserts them in the document/job transaction; the sibling demo repository
-owns their content. No schema or shared authorization helper changes are needed.
-
-Preview/download aliases share `core/ui`'s blob-serving behavior, including
-object checks, reveal gates, ETags, and preview CSP. These endpoints allow
-trashed documents only for their owner or an administrator, matching the Trash
-scope; ordinary ACL readers and public share links cannot fetch trashed bytes.
-Thumbnails have their own live-document handler in `core/api/documents_thumb.go`.
-High sensitivity is a reveal posture,
-not an additional tenant boundary. Normal API document reads can return content
-to an authorized reader; untouched `raw=1` downloads are an administrator
-session-only surface.
-
-Mailbox secrets, OAuth caches, PDF passwords, and model keys are sealed.
-Browser session identifiers and API tokens are stored as digests. Audit events
-must exclude document bodies and credentials, including share bearers. Access
-logs and metrics use matched route patterns; request copies must propagate that
-pattern back to the outer middleware. See [Permissions](/permissions)
-and [Privacy](/privacy) for the user-facing contract.
+Seal mailbox secrets, OAuth caches, PDF passwords and model keys; digest session
+IDs/API tokens. Exclude document bodies and credentials/share bearers from audit.
+Logs/metrics use matched route patterns, propagated outward through request copies.
+[Privacy](/privacy) owns the user-facing egress/data contract.
 
 ## Retrieval, filing, and human review
 
-`core/searchquery` parses a bounded flat clause list, resolves symbolic names
-at the API boundary, and compiles parameterized SQL and FTS constraints.
-`core/api/search_query.go` connects that plan to both ranked Search and sortable
-Documents. Keep the document set consistent while retaining each endpoint's
-different response shape. Saved views use the same query contract.
+`core/searchquery` parses bounded flat clauses, resolves names at the API boundary
+and compiles parameterized SQL/FTS. `core/api/search_query.go` keeps ranked Search,
+sortable Documents and saved views on the same document-set contract while
+preserving response shapes. See [Search](/search).
 
-Local archive matching fills unresolved metadata before user automations.
-Automations are the deterministic trigger/condition/action engine; approvals
-are the state-machine engine for human decisions. Do not introduce a second
-workflow engine for a new intake source or integration.
-Approval advancement jobs carry the originating transition revision and system.
-Handlers work outside the writer; their transactional effects and task creation
-recheck the run's revision/status before writing. Tasks retain the originating
-revision so retries cannot reopen a resolved visit. Resolution clears the deadline,
-and timeout selection, expiration and enqueue share one transaction. See
-[Approvals](/approvals#timeouts-and-recovery).
+Local matching fills unresolved metadata before deterministic user automations.
+`core/automations` owns triggers/conditions/actions; `core/approvals` owns human
+state machines. Integrations must not add another workflow engine. Advancement
+jobs carry system/transition revision; handlers run outside the writer, then their
+transactional effects/tasks recheck revision/status. Tasks retain originating
+revision so retries cannot reopen resolved visits. Resolution clears deadlines;
+timeout selection, expiration and enqueue are one transaction. Filing-suggestion
+sweeps check/resolve satisfied or superseded proposals transactionally through the
+same state machine without changing documents. See [Approvals](/approvals#timeouts-and-recovery).
 
-`core/jd/presetfile` owns strict offline bounded HuML/TOML input. Validate raw
-author structure before flat expansion or generated System/49; `Marshal`
-reverses only validated generated rows and revalidates raw output. No YAML
-fallback, runtime catalog, unsupported-field passthrough or separate UI schema.
-`core/jd/importer` owns shared built-in/custom/CLI preview and application:
-bind source bytes, destination/first-import choice, memberships, options/remaps and
-relevant target state in `state_hash`; recheck active API administrator and plan in
-the write transaction, resolve target-local symbols, preserve local/disabled rules,
-then commit introduction/creation, tree, provenance and required jobs together.
-Unrelated systems' edits do not stale the plan. Only safe initial setup replaces
-bootstrap; later imports merge. Refile remains explicitly separate.
-`core/taxonomy` builds consistent snapshot exports (`archive`, revision 1);
-tree-only export omits keywords/starters, while seeded export rejects
-unrepresentable/disabled behavior and retains named rule identity and order.
-Last-import provenance is not installed-pack state or whole-archive attribution.
+`core/jd/presetfile` validates bounded offline HuML/TOML before expansion/generated
+System/49. `Marshal` reverses only validated generated rows and revalidates output;
+no YAML fallback, runtime catalog, passthrough fields or separate UI schema.
+`core/jd/importer` shares built-in/custom/CLI preview/apply. Its hash binds source,
+destination/first-import choice, memberships, options/remaps and relevant target
+state. Recheck active API admin and plan under the writer, resolve local symbols,
+preserve local/disabled rules and atomically commit systems/tree/provenance/jobs.
+Unrelated systems do not stale a plan; only safe initial setup replaces bootstrap,
+later imports merge, and refile stays explicit.
 
-`core/jd/importer` seeds literal word/phrase patterns for preset keywords;
-migration `0002` repairs existing generated preset rules without changing
-user-owned copies or document categories. There is no runtime compatibility
-layer. The approval sweep checks and resolves satisfied or superseded filing suggestions
-in one write transaction; superseded proposals reject through the existing
-state machine without changing the document. See [Automations](/automations)
-and [Approvals](/approvals) for operator-facing behavior and existing-data limits.
+`core/taxonomy` exports consistent `archive` revision-1 snapshots. Tree-only omits
+keywords/starters; seeded export rejects unrepresentable/disabled behavior and
+preserves rule identity/order. Import provenance is neither installed-pack state
+nor whole-archive attribution. Preset keywords use literal word/phrase patterns;
+published migration 0002 repaired generated rules without altering user copies or
+categories, leaving no runtime compatibility layer. [JD](/jd) and
+[Automations](/automations) own authoring/operator details.
 
-`core/intelligence` validates reviewable extracted facts; its API applies
-source-document visibility and fact filters before counts and pagination.
-Calendar's exact-day requests use the date `precision` filter so month/year
-sorting placeholders cannot become day events; see [Document dates](/document-dates)
-and the [API reference](/api#extracted-facts-archive_intelligence).
-Archive chat is bounded, on-demand retrieval in
-`core/api/chat.go`, not a background job or a general agent runtime. It uses
-the same configured model integration through explicit callbacks. Preserve
-evidence limits, review decisions, and human-edited metadata when changing
-extraction or classification.
+`core/intelligence` validates facts; API source visibility/fact filters precede
+counts/pages. Exact-day precision excludes month/year placeholders from Calendar
+days. [Document dates](/document-dates) owns precision/review. On-demand bounded
+research in `core/api/chat.go` uses explicit callbacks to the configured model;
+it is not background work or a general agent runtime. Preserve evidence bounds,
+review decisions and human edits; see [Archive research](/archive-chat).
 
-The LLM handler records `document_tags.classifier_owned` only when it creates a
-review-tag assignment. The default is false, including assignments migrated
-from older releases. In the same write transaction that applies a successful
-high-confidence result, it removes its earlier review marker only when the
-result no longer requests it. It never adopts an existing assignment. Explicit
-tag additions, approved suggestions, deterministic rules, source metadata, and
-user-directed tag renames/merges clear ownership in their own write transactions;
-a human reassertion during the model call therefore survives result application.
-Other model tags remain additive. This is a narrow cleanup marker, not a tag
-history or general metadata-provenance ledger. See [LLM classifier](/llm-classifier).
+Classifier review-tag cleanup is narrowly tracked by `document_tags.classifier_owned`,
+default false including migrated assignments. The LLM handler marks only assignments
+it creates, never adopts existing ones, and removes an earlier marker only in the
+successful high-confidence result transaction when no longer requested. Explicit
+adds, approved suggestions, rules, source metadata and user renames/merges clear
+ownership in their own transactions; human reassertions during model calls survive.
+Other model tags remain additive. This is not a general provenance ledger; see
+[LLM classifier](/llm-classifier).
 
 ## Durable work and optional integrations
 
-`core/jobs/jobs.go` owns claims, retries, and dead letters. Current job kinds
-are `post-ingest`, `post-classify`, `render`, `taxonomy_index`, `approval:advance`,
-and `approval:timeout-sweep`. The dispatcher drains ready work in serial batches;
-polling is only the idle fallback. A job can run again after failure or a
-crash, including when its side effect succeeded but completion was not recorded.
+`core/jobs/jobs.go` owns claims/retries/dead letters for `post-ingest`,
+`post-classify`, `render`, `taxonomy_index`, `approval:advance` and
+`approval:timeout-sweep`. It drains serial ready batches; polling is idle fallback.
+A crash can replay completed side effects, so subscribers are idempotent,
+cancellation-aware and keep payload contracts with their owner. Register before
+`Run`; the registry is not dynamically synchronized. Unknown/terminal work becomes
+`dead`; other failures have bounded attempts/backoff. Processing-owner versions
+enable targeted rescans.
 
-Subscribers must be idempotent, honor cancellation, and keep payload contracts
-beside their owner. Register before `Run`; the registry is not dynamically
-synchronized. Unknown kinds and terminal errors become `dead`; other failures
-retry with bounded attempts/backoff. Pipeline versions in the processing
-owners let rescan target stale results.
+Document/namespace jobs and audit retain system ownership even after a document
+disappears; instance-wide work uses NULL. Documentless `taxonomy_index` carries
+`{"system_id":N}`, enqueues with tree changes and once/system at startup, and reads
+current committed state on execution. Import reports queued work, not completed
+filesystem projection. Existing retry/dead-job handling owns failures; no extra
+scheduler, broker, provider or automation switch is needed.
 
-`taxonomy_index` is system-owned and documentless, with payload `{"system_id":N}`.
-Tree mutations enqueue it transactionally; startup enqueues one per system.
-Jobs and audit events carry the system for namespace/document work, including work
-outliving a document; genuinely instance-wide work uses NULL system ownership.
-Its subscriber reads current committed state when executing rather than an
-old captured payload. No automation toggle/tag/provider dependency, extra
-scheduler or broker is needed. Import success reports queued projection work,
-not physical index completion; ordinary retry/dead-job handling owns failures.
+Local parsing remains useful without classification. Remote model calls require
+egress acknowledgment and reject redirects; intake/identity have explicit configured
+destinations, never a mandatory Suchi-operated service. MCP calls its configured
+Suchi origin without redirects, accepts bounded valid JSON and excludes queries,
+response bodies and transport diagnostics from tool errors. It uses ordinary
+scoped HTTP/object authorization.
 
-Local parsing remains useful without the optional classifier. Remote model
-endpoints require explicit egress acknowledgement, and redirects are rejected.
-Intake and identity integrations have their own configured destinations; do not
-make useful local operation depend on a Suchi-operated service.
+`core/sandbox` bounds subprocess duration/output, sets explicit environment/temp
+directories and kills Unix process groups on cancellation. It is **not OS-level
+isolation**: no filesystem/network denial or process-memory limit. Keep format
+bounds and deployment isolation explicit; stub tests prove neither parser safety
+nor real-tool availability.
 
-The MCP adapter calls the configured Suchi origin without following redirects.
-It accepts bounded valid JSON and keeps query values, response bodies and
-transport diagnostics out of tool errors. Its tool contracts remain ordinary
-scoped API requests; it does not bypass HTTP or object authorization.
-
-External parsers run through `core/sandbox` with timeouts, bounded captured
-stdout/stderr, explicit environment, and temporary working directories.
-Unix cancellation kills the process group. This is a subprocess resource
-wrapper, **not OS-level isolation**: it does not deny filesystem/network access
-or impose process memory limits. Keep format-specific input/output limits and
-deployment isolation explicit; a unit test with a stub executable does not
-establish the safety or availability of the real parser.
-
-`core/pipeline/tessocr/` runs rasterization and all OCR pages under one context
-deadline and text-output cap. Successful empty pages get one sparse-segmentation
-retry; already extracted text is kept. It indexes text without embedding a PDF
-text layer. Raster-image callers additionally request one 2400-pixel sparse TSV
-pass; confident whole lines supplement, rather than replace, normal OCR under
-the same deadline/output cap. PDF-input callers retain the normal page path.
-Neither path infers orientation or perspective correction. See
-[OCR engine dispatch](/formats#ocr-engine-dispatch) for language and engine choices.
-
-`core/pipeline/imgpdf/` owns all supported raster-to-PDF conversion, including
-HEIC/HEIF; there is no separate HEIC adapter or intermediate PNG step. It
-explicitly requests PDF encoding and rejects output without the PDF signature
-before OCR/CAS publication. Camera EXIF orientation is applied to derived pixels,
-and PDFs use 300-DPI page density without resampling, matching the OCR rasterizer
-instead of inflating phone photos into oversized pages. ImageMagick scratch stays
-inside the converter's temporary directory and is removed after conversion.
-Container ImageMagick policy permits the necessary
-PDF writes without enabling PDF reads. Verify the actual encoder and policy,
-not merely an executable's presence or an `archive_blob` value. See
-[Supported file types](/formats) and [Pipeline versions](/pipeline-versions)
-for frame handling, dependencies and repair of older image archives.
+`core/pipeline/tessocr` shares one deadline/text cap across rasterization/pages;
+`core/pipeline/imgpdf` owns raster-to-PDF including HEIC/HEIF, validates PDF output
+before OCR/CAS and keeps temporary scratch local. Image barcode fallback preserves
+successful in-process results, validates dimensions and bounds native processing
+without logging decoded payloads/stderr or fetching decoded URLs. [Supported
+formats](/formats) owns sparse OCR, image density/orientation, encoder policies,
+barcode limits and dependencies. [Pipeline versions](/pipeline-versions) describes
+repair of older derivatives. Verify actual tools/output, not binary presence or
+an `archive_blob` field alone.
 
 ## Change and verification map
 
-Start with the affected boundary, then run the aggregate loop.
+Start at the affected boundary, then run the aggregate loop.
 
 | Change | Focused verification |
 | --- | --- |
-| Routes, scopes, credentials, or ACLs | `go test ./core/auth/... ./core/authz/... ./core/httpx/... ./core/api/... ./core/ui/... ./distro/cmd/suchi/...`; cover denied principals, aliases, counts, and direct blob routes |
-| Query/filter semantics | `go test ./core/searchquery/... ./core/api/...`; preserve Search/Documents parity and hidden-document exclusion |
-| Ingest or a format tool | `go test ./core/ingest/... ./core/pipeline/... ./core/sandbox/...`; verify original preservation, retries, and the affected real-tool smoke test |
-| Queue or concurrent runtime state | `go test -race ./core/jobs/... ./distro/cmd/suchi/...`; exercise backlog draining, cancellation, and restart recovery |
-| Schema, blobs, or deletion | `go test ./core/db/... ./core/blob/... ./core/trash/... ./core/gc/... ./core/importer/bundle/...`; cover migration and shared-blob references |
-| Filing, model suggestions, or review | `go test ./core/automations/... ./core/approvals/... ./core/intelligence/... ./plugins/llm-classifier/...`; preserve human decisions and no-model behavior |
+| Routes, scopes, credentials, ACLs | `go test ./core/auth/... ./core/authz/... ./core/httpx/... ./core/api/... ./core/ui/... ./distro/cmd/suchi/...`; denied principals, aliases, counts, direct blobs |
+| Query/filter semantics | `go test ./core/searchquery/... ./core/api/...`; Search/Documents parity and hidden-document exclusion |
+| Ingest/format tools | `go test ./core/ingest/... ./core/pipeline/... ./core/sandbox/...`; originals, retries and affected real-tool smoke tests |
+| Queue/concurrency | `go test -race ./core/jobs/... ./distro/cmd/suchi/...`; backlog, cancellation, restart recovery |
+| Schema/blobs/deletion | `go test ./core/db/... ./core/blob/... ./core/trash/... ./core/gc/... ./core/importer/bundle/...`; migrations/shared blobs |
+| Filing/model/review | `go test ./core/automations/... ./core/approvals/... ./core/intelligence/... ./plugins/llm-classifier/...`; human decisions/no-model operation |
 
 ```sh
-make check        # format, vet, tests, staticcheck across Go modules; UI and embedded parity
-make smoke        # build; health/readiness against a disposable loopback server
+make check        # Go formatting/vet/tests/staticcheck; UI and embedded parity
+make smoke        # build and disposable-server health/readiness
 make docs-check   # documentation links
 ```
 
-Use a writable `GOCACHE` in a restricted environment. To force re-execution, use
-`make test TEST_FLAGS='-count=1 -timeout 60s'`. The race detector needs a working
-CGO toolchain. UI changes additionally require `make ui` and
-the relevant browser regressions. Use focused benchmarks for a claimed local
-performance win and `make bench-check` for startup/memory/binary guardrails.
+Use writable `GOCACHE` when restricted; force re-execution with
+`make test TEST_FLAGS='-count=1 -timeout 60s'`. Race tests need CGO. UI changes also
+need `make ui` and relevant browser regressions. Use focused benchmarks for local
+performance claims and `make bench-check` for startup/memory/binary guardrails.
 
-When a change moves ownership, entry points, state flow, or an invariant, update
-this guide in the same change. Update the relevant public API/feature guide and
-changelog for observable changes. Report missing real-tool or runtime checks
-explicitly; passing mocks does not establish end-to-end compatibility.
+Update this guide when ownership, entry points, state flow or invariants change;
+update owning feature/API guides and changelog for observable changes. Report
+missing runtime/real-tool checks: mocks do not establish end-to-end compatibility.

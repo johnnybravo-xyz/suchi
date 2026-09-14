@@ -14,10 +14,6 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 	demoLimiter *httpx.RateLimit, metrics *httpx.Metrics, log *slog.Logger) http.Handler {
 	router := httpx.NormalizeAPITrailingSlash(mux)
 	middleware := []httpx.Middleware{
-		httpx.RequestID,
-		httpx.SecurityHeaders,
-		httpx.AccessLog(log),
-		metrics.HTTPInstrument,
 		httpx.BodyLimit(cfg.BodyLimit),
 		httpx.Authenticate(authChain, log),
 		httpx.EnforceTokenScopes(tokenScopeResolver(mux)),
@@ -34,7 +30,7 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 	if demoLimiter != nil {
 		demoHandler = demoLimiter.Middleware(handler)
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			path := r.URL.Path
 			if strings.HasPrefix(path, "/api/") {
@@ -62,4 +58,6 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 		}
 		handler.ServeHTTP(w, r)
 	})
+	return httpx.Chain(limited, httpx.RequestID, httpx.SecurityHeaders,
+		httpx.AccessLog(log), metrics.HTTPInstrument)
 }
