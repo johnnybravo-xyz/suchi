@@ -1043,6 +1043,9 @@ Scope: `documents:write`. Cap: 500 documents per call.
 - All authorized ids run inside a single `WriteTx`. A per-id error
   inside the tx aborts the whole batch by design — partial writes
   would leave the archive in a half-state.
+- `restore` enforces the same 30-day window as individual restore. An expired
+  authorized document rejects the batch with `400 bad_parameters`; already-live
+  documents are unchanged.
 
 The `{documents, method, parameters}` body is Suchi's stable bulk-edit
 contract for the SPA and external clients.

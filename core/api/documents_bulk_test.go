@@ -19,11 +19,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 func newBulkServer(t *testing.T) *Server {
@@ -103,6 +105,40 @@ func TestBulkEdit_TrashHappyPath(t *testing.T) {
 		`SELECT COUNT(*) FROM audit_events WHERE action = 'documents.bulk_edit'`).Scan(&n)
 	if n != 1 {
 		t.Errorf("bulk_edit audit rows = %d, want 1", n)
+	}
+}
+
+func TestBulkRestoreRejectsExpiredDocumentsAtomically(t *testing.T) {
+	s := newBulkServer(t)
+	inbox := seedStatsJDInbox(t, s.DB)
+	recoverable := seedStatsDoc(t, s.DB, 1, "recoverable-sha", "Recoverable", inbox, false, 0)
+	expired := seedStatsDoc(t, s.DB, 1, "expired-sha", "Expired", inbox, false, 0)
+	now := time.Now().Unix()
+	if _, err := s.DB.Write.Exec(`UPDATE documents SET trashed_at = CASE id WHEN ? THEN ? ELSE ? END
+		WHERE id IN (?, ?)`, recoverable, now, time.Now().Add(-trash.Retention-time.Hour).Unix(), recoverable, expired); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{recoverable, expired}, "method": "restore",
+	}, adminPrincipal(1))
+	if code != http.StatusBadRequest {
+		t.Fatalf("expired batch status=%d, want 400", code)
+	}
+	var stillTrashed, audits int
+	if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM documents WHERE id IN (?, ?) AND trashed_at IS NOT NULL`, recoverable, expired).Scan(&stillTrashed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='documents.bulk_edit'`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if stillTrashed != 2 || audits != 0 {
+		t.Fatalf("failed restore changed state: trashed=%d audits=%d", stillTrashed, audits)
+	}
+	code, response := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{recoverable}, "method": "restore",
+	}, adminPrincipal(1))
+	if code != http.StatusOK || response.Applied != 1 {
+		t.Fatalf("recoverable restore status=%d response=%+v", code, response)
 	}
 }
 

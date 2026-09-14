@@ -36,6 +36,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 // BulkEditRequest is the wire input.
@@ -281,11 +282,23 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=?, updated_at=? WHERE id IN ("+placeholders+") AND trashed_at IS NULL", args...)
 		return err
 	case "restore":
+		cutoff := time.Now().Add(-trash.Retention).Unix()
+		checkArgs := []any{cutoff}
+		for _, id := range ids {
+			checkArgs = append(checkArgs, id)
+		}
+		var expired bool
+		if err := tx.QueryRowContext(r.Context(), "SELECT EXISTS (SELECT 1 FROM documents WHERE trashed_at <= ? AND id IN ("+placeholders+"))", checkArgs...).Scan(&expired); err != nil {
+			return err
+		}
+		if expired {
+			return fmt.Errorf("%w: a selected document's 30-day recovery window has expired", errBadParams)
+		}
 		args = append(args, now)
 		for _, id := range ids {
 			args = append(args, id)
 		}
-		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=NULL, updated_at=? WHERE id IN ("+placeholders+")", args...)
+		_, err := tx.ExecContext(r.Context(), "UPDATE documents SET trashed_at=NULL, updated_at=? WHERE id IN ("+placeholders+") AND trashed_at IS NOT NULL", args...)
 		return err
 	case "rescan_enqueue":
 		_, err := rescan.EnqueueInTx(r.Context(), tx, rescan.Options{SystemID: systemID, IDs: ids})
