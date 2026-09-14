@@ -217,8 +217,12 @@ a web admin session; mobile tokens cannot use it. See [Filing trees](/jd).
 
 `lib/configuration.js` owns one section inventory; setup derives its order/labels
 with the shorter People label. `Setup.svelte` owns navigation/completion;
-`ArchiveSettings.svelte` owns overview and section navigation. Its shared frame
-uses a scrolling section rail on narrow screens.
+`ArchiveSettings.svelte` owns overview and section navigation.
+`Settings.svelte` fills the shell's remaining dynamic viewport height, keeping
+Settings tabs and the build footer outside its scrolling content row.
+The archive frame fills that row: its right pane scrolls independently with a
+stable scrollbar gutter. The sidebar can scroll in shorter windows and becomes
+a horizontal section rail on narrow screens.
 
 `ConfigurationSection.svelte` shares form state, validation, required-load/retry
 gates and writes across setup/Settings. Mailbox editing delegates to
@@ -231,7 +235,7 @@ one type selector including custom fields; file operations stay separate.
 it submits no hidden member capabilities for admins. Self-disable checks use
 `session.user.user_id`; the API owns self-disable, last-admin and capability
 normalization safeguards. Verify shared configuration with:
-`cd ui && bun run e2e --grep 'separates completed archive administration|refreshes intake owners|failed configuration reads'`.
+`cd ui && bun run e2e --grep 'separates completed archive administration|keeps archive layout|refreshes intake owners|failed configuration reads'`.
 
 `AccountSettings.svelte` sends only `display_name` for profile saves; sign-in email
 is read-only. One token list separates owned `mobile_pairing` rows from manual/

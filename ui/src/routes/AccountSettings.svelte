@@ -374,7 +374,7 @@
   .profile-layout { display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:start }
   .avatar-control { display:flex;flex-direction:column;align-items:center;gap:8px }
   .profile-avatar { width:64px;height:64px;font-size:1.25rem }
-  .profile-fields { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:end }
+  .profile-fields { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start }
   .profile-fields .field { margin:0 }
   .profile-save { justify-self:start }
   .auth-syntax { display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0 }

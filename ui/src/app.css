@@ -76,7 +76,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 /* ---------- app shell ---------- */
-.shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
+.shell { display: grid; grid-template-columns: 232px 1fr; height: 100dvh; }
 @media (min-width: 861px) {
   .shell.sidebar-collapsed { grid-template-columns: 1fr; }
   .shell.sidebar-collapsed > .sidebar { display: none; }

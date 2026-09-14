@@ -90,7 +90,7 @@
     </nav>
   </aside>
 
-  <div class="archive-content">
+  <div class="archive-content" role="region" aria-label="Configuration content">
     {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'archive')}
       <SystemSettings {notify} />
     {/if}
@@ -153,16 +153,16 @@
 </section>
 
 <style>
-  .archive-settings { display: grid; grid-template-columns: 212px minmax(0, 1fr); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-  .archive-sidebar { min-width: 0; border-right: 1px solid var(--line); border-radius: var(--r) 0 0 var(--r); background: var(--bg); }
-  .archive-rail { position: sticky; top: 12px; display: flex; flex-direction: column; max-height: calc(100dvh - 120px); overflow-y: auto; padding: 12px; scrollbar-width: thin; }
+  .archive-settings { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .archive-sidebar { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); border-radius: var(--r) 0 0 var(--r); background: var(--bg); }
+  .archive-rail { display: flex; flex-direction: column; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 12px; scrollbar-width: thin; }
   .rail-group { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
   .rail-group-label { padding: 2px 10px 6px; color: var(--muted); font-size: .62rem; font-weight: 650; letter-spacing: .04em; line-height: 1.4; }
   .archive-rail a { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 8px 10px; border-radius: 7px; color: var(--muted); font-size: .78rem; line-height: 1.4; text-decoration: none; }
   .archive-rail a :global(svg) { flex: none; }
   .archive-rail a:hover { background: var(--surface-2); color: var(--ink); }
   .archive-rail a.on { background: var(--tint); color: var(--accent); font-weight: 650; }
-  .archive-content { min-width: 0; padding: 22px; }
+  .archive-content { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 22px; }
   .archive-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
   .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: ui-monospace, monospace; font-size: .64rem; font-weight: 700; letter-spacing: .07em; }
   .archive-intro h2 { font-size: 1.35rem; line-height: 1.2; }
@@ -195,9 +195,9 @@
   .handoff-copy p { margin:4px 0 0;color:var(--muted);font-size:.78rem;line-height:1.45 }
   .handoff-action { white-space:nowrap;text-decoration:none }
   @media (max-width: 900px) {
-    .archive-settings { grid-template-columns: 1fr; }
+    .archive-settings { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
     .archive-sidebar { border-right: 0; border-bottom: 1px solid var(--line); border-radius: var(--r) var(--r) 0 0; }
-    .archive-rail { position: static; flex-direction: row; gap: 4px; max-height: none; overflow-x: auto; padding: 10px; scroll-padding-inline: 10px; }
+    .archive-rail { flex-direction: row; gap: 4px; height: auto; overflow-x: auto; overflow-y: hidden; padding: 10px; scroll-padding-inline: 10px; }
     .rail-group { display: contents; }
     .rail-group-label { display: none; }
     .archive-rail a { flex: none; min-height: 40px; white-space: nowrap; }

@@ -167,7 +167,8 @@ without deleting them.
 
 ## Settings
 
-The footer shows the running version. Development builds add the source revision,
+The running version stays in a footer at the bottom of Settings, outside the
+scrolling content. Development builds add the source revision,
 with `.dirty` for modified source or **revision unavailable** when missing.
 Tagged releases show only their version. Include this offline status in bug
 reports; it performs no update check.
@@ -176,6 +177,9 @@ reports; it performs no update check.
 API tokens, Saved decryption passwords, and Mailboxes for capable members.
 **Profile** saves your display name/photo; sign-in email is read-only.
 Demo visitors see a read-only profile without account tools.
+Profile fields sit side by side on wide screens and stack on phones. The account
+pane scrolls with clearance between its content and scrollbar, while the Settings
+tabs and version footer stay visible.
 
 **Pair mobile app** generates a private, single-use QR code that expires in five
 minutes. Scan it in Suchi and confirm the server address. A new code replaces the
@@ -204,6 +208,10 @@ Admins also have **Settings > Archive configuration**:
 | **Document intake** | **Watched folder**, **Email intake** |
 | **Processing** | **Classification**, **Automations** |
 | **Maintenance** | **OCR and backups** |
+
+The configuration frame fills the available screen height. Long sections scroll
+inside the right pane without moving section navigation or the version footer.
+On narrow screens, section navigation becomes a horizontally scrolling rail.
 
 **People and metadata** contains Users, Groups, Metadata and Taxonomy. Metadata's
 type selector covers tags, correspondents, document types, storage paths and

@@ -43,6 +43,7 @@
     </nav>
   {/if}
 
+  <div class="settings-body" class:account-body={!archiveSelected}>
   {#if setupNeedsAttention}
     <section class="setup-row settings-section" aria-label="Setup wizard">
       <div>
@@ -70,6 +71,7 @@
   {:else}
     <AccountSettings {notify} />
   {/if}
+  </div>
 
   {#if session.user?.build_version}
     <footer class="build-info" aria-label="Suchi build">
@@ -82,11 +84,13 @@
 </div>
 
 <style>
-  .settings-page { width:100%;max-width:1120px;gap:0 }
-  .settings-tabs { display:flex;gap:4px;margin:-4px 0 28px;border-bottom:1px solid var(--line) }
+  .settings-page { display:flex;flex-direction:column;width:100%;height:100%;min-height:0;max-width:1120px;gap:0 }
+  .settings-tabs { display:flex;flex:none;gap:4px;margin:0 0 28px;border-bottom:1px solid var(--line) }
   .settings-tabs a { padding:9px 14px;border-bottom:2px solid transparent;color:var(--muted);font-size:.84rem;font-weight:600;text-decoration:none }
   .settings-tabs a:hover { color:var(--ink) }
   .settings-tabs a.on { border-color:var(--accent);color:var(--accent) }
+  .settings-body { flex:1;min-height:0;overflow-y:auto }
+  .account-body { padding-inline-end:16px;scrollbar-gutter:stable }
   .archive-loading { display:grid;gap:14px;padding:20px 0 }
   .settings-error { display:flex;align-items:center;justify-content:space-between;gap:12px }
   .setup-row { display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0 8px }
@@ -94,7 +98,7 @@
   .setup-row b { font-size:.86rem }
   .setup-row span { color:var(--muted);font-size:.8rem }
   .settings-section { padding:6px 0 28px;margin-bottom:26px;border-bottom:1px solid var(--line) }
-  .build-info { padding:20px 0;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere }
+  .build-info { flex:none;padding:16px 0 0;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere }
   @media (max-width: 520px) {
     .setup-row { align-items:flex-start;flex-direction:column }
   }

@@ -1129,6 +1129,62 @@ test('keeps the running revision in Settings only', async ({ page }) => {
     .toHaveText('Suchi v0.1.0-beta.2-dev · 1234567890ab.dirty')
 })
 
+test('keeps archive layout and version footer fixed while scrolling', async ({ page }) => {
+  await mockAPI(page, { buildVersion: 'dev', setupCompletedAt: 1, filingTreeChosen: true })
+  const users = Array.from({ length: 12 }, (_, index) => ({
+    id: index + 2, email: `layout-${index + 1}@example.test`,
+    display_name: `Layout user ${index + 1}`, role: 'member', capabilities: [],
+  }))
+  await page.route('**/api/admin/users', route => route.fulfill({ json: { results: users } }))
+  await page.goto('/#/settings?tab=archive&section=automations')
+  const frame = page.getByRole('region', { name: 'Archive configuration' })
+  const pane = frame.locator('.archive-content')
+  await expect(frame.getByRole('button', { name: 'Open automations', exact: true })).toBeVisible()
+  await expect(page.getByRole('contentinfo', { name: 'Suchi build' })).toBeVisible()
+  await page.evaluate(() => document.fonts.ready)
+
+  const measure = () => frame.evaluate(element => {
+    const content = element.querySelector('.archive-content')
+    const footer = document.querySelector('.build-info').getBoundingClientRect()
+    const ancestors = []
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) ancestors.push(parent)
+    return {
+      frameHeight: element.getBoundingClientRect().height,
+      footerY: footer.y,
+      footerBottom: footer.bottom,
+      navigationY: element.querySelector('.archive-sidebar').getBoundingClientRect().y,
+      navigationScrollTop: element.querySelector('.archive-rail').scrollTop,
+      paneScrollTop: content.scrollTop,
+      paneOverflow: content.scrollHeight - content.clientHeight,
+      outerScrollTops: ancestors.map(parent => parent.scrollTop),
+      outerOverflow: Math.max(...ancestors.map(parent => parent.scrollHeight - parent.clientHeight)),
+    }
+  })
+  const short = await measure()
+  await frame.getByRole('navigation', { name: 'Archive settings sections' })
+    .getByRole('link', { name: /People and metadata/ }).click()
+  await expect(frame.getByText('Layout user 12', { exact: true })).toBeVisible()
+  const long = await measure()
+  expect(long.frameHeight).toBeCloseTo(short.frameHeight, 0)
+  expect(long.footerY).toBeCloseTo(short.footerY, 0)
+  expect(long.paneOverflow).toBeGreaterThan(0)
+  expect(long.outerOverflow).toBeLessThanOrEqual(1)
+  expect(long.outerScrollTops).toEqual(short.outerScrollTops)
+  expect(long.footerBottom).toBeLessThanOrEqual(page.viewportSize().height)
+
+  const box = await pane.boundingBox()
+  await page.mouse.move(box.x + box.width - 24, box.y + box.height / 2)
+  await page.mouse.wheel(0, 500)
+  await expect.poll(async () => (await measure()).paneScrollTop).toBeGreaterThan(long.paneScrollTop)
+  const scrolled = await measure()
+  expect(scrolled.frameHeight).toBeCloseTo(short.frameHeight, 0)
+  expect(scrolled.footerY).toBeCloseTo(short.footerY, 0)
+  expect(scrolled.navigationY).toBeCloseTo(long.navigationY, 0)
+  expect(scrolled.navigationScrollTop).toBe(long.navigationScrollTop)
+  expect(scrolled.outerScrollTops).toEqual(long.outerScrollTops)
+  expect(scrolled.outerOverflow).toBeLessThanOrEqual(1)
+})
+
 test('separates completed archive administration from account settings', async ({ page }, testInfo) => {
   const llmSettingsRequests = []
   await mockAPI(page, {
