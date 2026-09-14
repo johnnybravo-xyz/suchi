@@ -114,6 +114,35 @@ func TestListUsers_admin_only(t *testing.T) {
 	}
 }
 
+func TestCreateUserRechecksAdministratorAfterPasswordHashing(t *testing.T) {
+	for _, change := range []string{`{"disabled":true}`, `{"role":"member"}`} {
+		t.Run(change, func(t *testing.T) {
+			d := openTestDB(t)
+			seedUser(t, d, 1)
+			seedUser(t, d, 2)
+			s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			s.PasswordHasher = func(string) (string, error) {
+				// The actor passed the request gate before hashing; another
+				// administrator removes that authority before the write begins.
+				rec := doAdmin(t, s, http.MethodPatch, "/api/admin/users/1", change, adminPrincipal(2))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("revoke administrator: %d %s", rec.Code, rec.Body.String())
+				}
+				return "unused-hash", nil
+			}
+			rec := doAdmin(t, s, http.MethodPost, "/api/admin/users",
+				`{"email":"replacement@example.com","password":"password","role":"admin"}`, adminPrincipal(1))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("revoked administrator created an account: %d %s", rec.Code, rec.Body.String())
+			}
+			var created int
+			if err := d.Read.QueryRow(`SELECT count(*) FROM users WHERE email='replacement@example.com'`).Scan(&created); err != nil || created != 0 {
+				t.Fatalf("replacement accounts=%d, error=%v", created, err)
+			}
+		})
+	}
+}
+
 func TestPatchUser_cannot_disable_self(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}

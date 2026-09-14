@@ -288,6 +288,8 @@ These gates answer different questions:
   including archive chat and intelligence. Scopes do not imply those grants.
   User administration rejects self-disable and checks that an active administrator
   remains after role/status updates, rolling back the writer transaction otherwise.
+  Creation rechecks the acting administrator after password hashing under the
+  writer, so concurrent disable or demotion cannot create a replacement account.
   Creation and admin updates store no member capability grants on administrators.
   User updates read role/capabilities in the writer transaction and compute revoke
   hooks from effective access, so promotion does not quarantine still-authorized

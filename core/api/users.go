@@ -23,6 +23,17 @@ import (
 
 var errLastActiveAdmin = errors.New("at least one active administrator is required")
 
+func requireActiveAdminInTx(ctx context.Context, tx *sql.Tx, userID int64) error {
+	var allowed bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, userID).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return errSystemUnavailable
+	}
+	return nil
+}
+
 // UserSelf is returned by GET /api/whoami and PATCH /api/users/me.
 type UserSelf struct {
 	Kind          string   `json:"kind"`
@@ -286,12 +297,8 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		var allowed bool
-		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, p.UserID).Scan(&allowed); err != nil {
+		if err := requireActiveAdminInTx(r.Context(), tx, p.UserID); err != nil {
 			return err
-		}
-		if !allowed {
-			return errSystemUnavailable
 		}
 		var priorRole, priorCapsRaw string
 		if err := tx.QueryRowContext(r.Context(),

@@ -136,6 +136,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Recheck the acting administrator after password hashing so concurrent disable
+  or demotion cannot authorize a replacement account.
 - Honor token scopes in chunked JSON requests instead of silently granting the
   default read/write scopes.
 - Apply credential and demo rate limits consistently across canonical,

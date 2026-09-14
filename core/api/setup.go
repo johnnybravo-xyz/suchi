@@ -139,7 +139,8 @@ var emailPattern = regexp.MustCompile(`^[^\s@<>"'\\;]+@[^\s@<>"'\\;]+\.[^\s@<>"'
 // local-auth's argon2id helper (imported lazily via a hook set from
 // main.go — see Server.PasswordHasher).
 func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	p := s.requireAdmin(w, r)
+	if p == nil {
 		return
 	}
 	if s.PasswordHasher == nil {
@@ -197,6 +198,9 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var newID int64
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := requireActiveAdminInTx(r.Context(), tx, p.UserID); err != nil {
+			return err
+		}
 		now := time.Now().Unix()
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO users(email, display_name, role, password_hash, capabilities, created_at, updated_at)
