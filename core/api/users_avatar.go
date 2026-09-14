@@ -1,21 +1,6 @@
-// Avatar upload + serve for /api/users/me/avatar and
-// /api/users/{id}/avatar.
-//
-// Security posture:
-//   - Multipart size cap is enforced by BodyLimit middleware upstream
-//     (default 500M, room for a 2MB image; a dedicated 2MB check
-//     here bounds a decompression bomb regardless).
-//   - Only image/png + image/jpeg accepted. Content-Type is sniffed
-//     server-side; the multipart Content-Type header is a hint only.
-//   - DecodeConfig reads only the header, so a "PNG that claims
-//     50000×50000" gets refused before Decode allocates.
-//   - Decode + re-encode as PNG. That strips EXIF, kills polyglot
-//     tricks (nothing after the PNG IEND is emitted), and normalizes
-//     the on-disk representation. The original bytes are never stored.
-//   - CAS put by sha256 of the re-encoded bytes; users.avatar_sha
-//     holds the hex. Immutable ETag on serve — a re-upload always
-//     produces a fresh sha because the pixel data changes, so client
-//     caches invalidate automatically.
+// Avatar uploads accept bounded PNG/JPEG input and re-encode pixels as PNG.
+// Original metadata and appended bytes are not stored. UserSelf versions the
+// URL by content hash; reads revalidate and always serve current pixels.
 
 package api
 
@@ -165,9 +150,7 @@ func (s *Server) PostSelfAvatar(w http.ResponseWriter, r *http.Request) {
 // authed graph — any authed user can see any other user's avatar,
 // same posture as display_name. 404 when no avatar is set.
 //
-// Immutable ETag: users.avatar_sha changes on every upload, so
-// max-age=31536000 + strong ETag lets browsers cache aggressively and
-// invalidate automatically on the next upload.
+// Even old version URLs serve current pixels, so caches must revalidate.
 func (s *Server) GetUserAvatar(w http.ResponseWriter, r *http.Request) {
 	if s.requireAuth(w, r) == nil {
 		return
@@ -190,7 +173,7 @@ func (s *Server) GetUserAvatar(w http.ResponseWriter, r *http.Request) {
 	// RFC 9110 (strong validator syntax).
 	etag := `"` + sha + `"`
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return

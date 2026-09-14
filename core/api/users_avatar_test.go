@@ -7,15 +7,18 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
@@ -123,23 +126,43 @@ func TestAvatar_UploadRejectsBadMIME(t *testing.T) {
 func TestAvatar_Serve(t *testing.T) {
 	s := newAvatarServer(t)
 	seedUser(t, s.DB, 1)
-
-	// Land an avatar first.
-	body, ct := multipartAvatar(t, "me.png", tinyPNG(t))
-	rec := httptest.NewRecorder()
 	ctx := auth.WithPrincipal(context.Background(), memberPrincipal(1))
-	r := httptest.NewRequest("POST", "/api/users/me/avatar", body).WithContext(ctx)
-	r.Header.Set("Content-Type", ct)
-	s.PostSelfAvatar(rec, r)
-	if rec.Code != 200 {
-		t.Fatalf("upload status=%d body=%s", rec.Code, rec.Body.String())
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/users/{id}/avatar", s.GetUserAvatar)
+	upload := func(data []byte) string {
+		t.Helper()
+		body, ct := multipartAvatar(t, "me.png", data)
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/users/me/avatar", body).WithContext(ctx)
+		r.Header.Set("Content-Type", ct)
+		s.PostSelfAvatar(rec, r)
+		if rec.Code != 200 {
+			t.Fatalf("upload status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var self UserSelf
+		if err := json.Unmarshal(rec.Body.Bytes(), &self); err != nil {
+			t.Fatal(err)
+		}
+		return self.AvatarURL
+	}
+	get := func(path, etag string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+		r.Header.Set("If-None-Match", etag)
+		mux.ServeHTTP(rec, r)
+		if cache := rec.Header().Get("Cache-Control"); cache != "private, no-cache" {
+			t.Errorf("Cache-Control = %q, want private, no-cache", cache)
+		}
+		return rec
 	}
 
-	// Now serve.
-	rec2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest("GET", "/api/users/1/avatar", nil).WithContext(ctx)
-	r2.SetPathValue("id", "1")
-	s.GetUserAvatar(rec2, r2)
+	original := tinyPNG(t)
+	originalURL := upload(original)
+	if repeated := upload(original); repeated != originalURL {
+		t.Fatalf("same pixels changed avatar URL: %q != %q", repeated, originalURL)
+	}
+	rec2 := get(originalURL, "")
 	if rec2.Code != 200 {
 		t.Fatalf("serve status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
@@ -150,19 +173,44 @@ func TestAvatar_Serve(t *testing.T) {
 	if etag == "" || etag[0] != '"' {
 		t.Errorf("ETag missing or wrong shape: %q", etag)
 	}
+	if originalURL != "/api/users/1/avatar?v="+strings.Trim(etag, `"`) {
+		t.Errorf("avatar URL does not identify its pixels: %q", originalURL)
+	}
 	got, _ := io.ReadAll(rec2.Body)
 	if len(got) == 0 {
 		t.Errorf("empty body")
 	}
 
-	// If-None-Match short-circuits to 304.
-	rec3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest("GET", "/api/users/1/avatar", nil).WithContext(ctx)
-	r3.SetPathValue("id", "1")
-	r3.Header.Set("If-None-Match", etag)
-	s.GetUserAvatar(rec3, r3)
+	// A changed avatar is served on revalidation of the same URL.
+	changed := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	changed.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, changed); err != nil {
+		t.Fatal(err)
+	}
+	updatedURL := upload(encoded.Bytes())
+	if updatedURL == originalURL {
+		t.Fatal("changed pixels did not change avatar URL")
+	}
+	updated := get(updatedURL, etag)
+	if updated.Code != 200 || updated.Header().Get("ETag") == etag {
+		t.Fatalf("changed avatar: status=%d ETag=%q", updated.Code, updated.Header().Get("ETag"))
+	}
+	pixels, err := png.Decode(updated.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if color.RGBAModel.Convert(pixels.At(0, 0)) != (color.RGBA{R: 255, A: 255}) {
+		t.Fatal("old ETag did not receive the changed avatar pixels")
+	}
+
+	// The current ETag avoids retransmitting the body but still requires revalidation.
+	rec3 := get(updatedURL, updated.Header().Get("ETag"))
 	if rec3.Code != 304 {
 		t.Errorf("If-None-Match match status=%d, want 304", rec3.Code)
+	}
+	if rec3.Body.Len() != 0 || rec3.Header().Get("ETag") != updated.Header().Get("ETag") {
+		t.Errorf("304 response: ETag=%q body=%q", rec3.Header().Get("ETag"), rec3.Body.String())
 	}
 }
 

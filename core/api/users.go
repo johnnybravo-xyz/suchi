@@ -556,7 +556,7 @@ func loadSelf(ctx context.Context, rdb *sql.DB, p *pluginapi.Principal) (UserSel
 		self.DisplayName = displayName.String
 	}
 	if avatarSha.Valid && avatarSha.String != "" {
-		self.AvatarURL = "/api/users/" + strconv.FormatInt(p.UserID, 10) + "/avatar"
+		self.AvatarURL = "/api/users/" + strconv.FormatInt(p.UserID, 10) + "/avatar?v=" + avatarSha.String
 	}
 	if capsRaw != "" {
 		set, err := authz.ParseJSON([]byte(capsRaw))
