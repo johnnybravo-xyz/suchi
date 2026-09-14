@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Preserve the predecessor's sensitivity when uploading a version, retaining
+  reveal gates on confidential and restricted documents.
 - Enforce the 30-day recovery limit on bulk restore. An expired selection rejects
   the batch atomically; live documents remain unchanged.
 - Preserve pending Microsoft sign-ins when a filing-system membership update

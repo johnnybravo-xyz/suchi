@@ -1638,7 +1638,7 @@ Upload a new version of {id}. Multipart, same shape as
 `POST /api/documents/`. Result row's `previous_version_id` = {id}.
 Default carry-forward: title (if uploader gave a bland filename)
 and JD category (a filed doc's version stays filed). The new version keeps the
-predecessor's immutable system, owner and explicit document ACL grants. A conflicting
+predecessor's immutable system, owner, sensitivity and explicit document ACL grants. A conflicting
 requested system fails; version upload is not a document transfer.
 
 The device OCR, `source_mtime`, and `Idempotency-Key` rules are identical to a

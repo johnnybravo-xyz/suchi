@@ -95,6 +95,39 @@ func TestUploadNewVersionCarriesFilenameIntoPostIngest(t *testing.T) {
 	}
 }
 
+func TestUploadNewVersionPreservesSensitivity(t *testing.T) {
+	s, d, _, principal, previousID := newVersionUploadServer(t, "previous-sha")
+	if _, err := d.Write.Exec(`UPDATE documents SET sensitivity='restricted' WHERE id=?`, previousID); err != nil {
+		t.Fatal(err)
+	}
+	req := multipartUploadRequest(t, "/api/documents/1/versions/", "revision.pdf", testPDFBytes(), nil, principal)
+	req.SetPathValue("id", strconv.FormatInt(previousID, 10))
+	rec := httptest.NewRecorder()
+	s.UploadNewVersion(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created uploadVersionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	var sensitivity string
+	if err := d.Read.QueryRow(`SELECT COALESCE(sensitivity, '') FROM documents WHERE id=?`, created.ID).Scan(&sensitivity); err != nil {
+		t.Fatal(err)
+	}
+	if sensitivity != "restricted" {
+		t.Fatalf("version sensitivity=%q, want restricted", sensitivity)
+	}
+	thumb := httptest.NewRequest(http.MethodGet, "/api/documents/1/thumb/", nil)
+	thumb.SetPathValue("id", strconv.FormatInt(created.ID, 10))
+	thumb = thumb.WithContext(auth.WithPrincipal(thumb.Context(), principal))
+	gate := httptest.NewRecorder()
+	s.GetDocumentThumb(gate, thumb)
+	if gate.Code != http.StatusAccepted {
+		t.Fatalf("new version lost reveal gate: status=%d body=%s", gate.Code, gate.Body.String())
+	}
+}
+
 func TestUploadNewVersionAppearsOnlyInOwningSystemActivity(t *testing.T) {
 	s, mux := newSystemsBoundaryServer(t)
 	seedSystemsBoundary(t, s)

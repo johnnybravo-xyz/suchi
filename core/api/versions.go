@@ -68,7 +68,7 @@ var (
 //	POST .../{6}/versions/    → row 8 with previous_version_id=6
 //	                            (extends the chain from row 6)
 //
-// The write is one tx: CAS put + dedup + doc row + post-ingest job.
+// CAS storage precedes the transaction; dedup, document and job commit together.
 // Auth: callers with change permission on {id} can add a version.
 func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
@@ -110,6 +110,7 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		prevOwner       int64
 		prevTitle       string
 		prevJDCatID     int64
+		prevSensitivity sql.NullString
 		title           string
 		response        uploadVersionResponse
 		replay          *storedUploadResponse
@@ -142,9 +143,9 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		// authorization after acquiring the write lock so ACL revocation or
 		// trashing cannot race the version insert.
 		err := tx.QueryRowContext(r.Context(), `
-			SELECT owner_id, title, jd_category_id
+			SELECT owner_id, title, jd_category_id, sensitivity
 			FROM documents WHERE id = ? AND trashed_at IS NULL
-		`, prevID).Scan(&prevOwner, &prevTitle, &prevJDCatID)
+		`, prevID).Scan(&prevOwner, &prevTitle, &prevJDCatID, &prevSensitivity)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errVersionPredecessorChanged
 		}
@@ -245,12 +246,12 @@ func (s *Server) UploadNewVersion(w http.ResponseWriter, r *http.Request) {
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO documents(
 				system_id, owner_id, original_blob, original_size, title, mime_type,
-				jd_category_id, added_at, created_at, updated_at,
+				jd_category_id, sensitivity, added_at, created_at, updated_at,
 				previous_version_id, source_mtime, content, content_source,
 				device_content_confidence, device_ocr_language,
 				device_content_received_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, systemID, prevOwner, upload.SHA256, upload.Size, title, upload.MIME, prevJDCatID, prevSensitivity,
 			now, now, now, prevID, dbValues.SourceMTime, dbValues.Content,
 			dbValues.ContentSource, dbValues.DeviceConfidence,
 			dbValues.DeviceLanguage, dbValues.DeviceContentTime)
