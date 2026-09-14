@@ -27,11 +27,17 @@ async function req(method, path, body, opts = {}) {
     payload = JSON.stringify(body)
   }
   const r = await fetch(path, { method, headers, body: payload, credentials: 'same-origin', signal: opts.signal })
-  const data = await r.json().catch(() => null)
+  const data = r.ok && opts.responseType === 'text'
+    ? await r.text()
+    : await r.json().catch(() => null)
   if (revision !== sessionRevision || (!opts.keepScope && !scopeCurrent(scope))) {
     throw new DOMException('The account or filing system changed', 'AbortError')
   }
-  if (data?.code === 'system_unavailable' && scoped && scopeCurrent(scope)) unavailableSystem()
+  if (data?.code === 'system_unavailable' && scoped && scopeCurrent(scope)) {
+    // Continuing uploads and pairing cleanup may still target the previous system.
+    const target = new URLSearchParams(path.split('?')[1] || '').get('system') || ''
+    if (target === scope.code) unavailableSystem()
+  }
   // At most one retry, and never after the caller's account changes.
   if (r.status === 403 && data?.code === 'demo_upgrade_required' && !opts._noUpgrade &&
       revision === sessionRevision) {
@@ -47,7 +53,8 @@ async function req(method, path, body, opts = {}) {
 }
 
 export const mintDemoSession = () => api.post('/api/demo/session')
-export const getDemoMode = () => api.get('/api/demo/mode')
+// Public server configuration loads while the initial filing context is reset.
+export const getDemoMode = () => req('GET', '/api/demo/mode', undefined, { keepScope: true })
 
 function upgradeDemoSession() {
   if (demoUpgrade) return demoUpgrade.promise
@@ -130,19 +137,9 @@ export const resolveIntelligence = (body) => api.post('/api/intelligence/resolve
 
 // suchi-taxonomy/v1 admin import/export.
 export const importTaxonomy = (b, signal) => req('POST', '/api/admin/taxonomy/import', b, { signal })
-export async function exportTaxonomy(format = 'huml', skipSeeds = false) {
-  const scope = captureScope()
-  const r = await fetch(scopedURL(`/api/admin/taxonomy/export${qs({ format, skip_seeds: skipSeeds })}`),
-    { credentials: 'same-origin' })
-  if (!r.ok) {
-    const data = await r.json().catch(() => null)
-    throw new ApiError(r.status, data?.code || 'export_failed',
-      data?.message || data?.detail || data?.error || `Export failed (${r.status})`, data)
-  }
-  const text = await r.text()
-  if (!scopeCurrent(scope)) throw new DOMException('The filing system changed', 'AbortError')
-  return text
-}
+export const exportTaxonomy = (format = 'huml', skipSeeds = false) =>
+  req('GET', `/api/admin/taxonomy/export${qs({ format, skip_seeds: skipSeeds })}`,
+    undefined, { responseType: 'text' })
 
 export const listJDCategories = (params) => singleFlightGet(`/api/jd/categories/${qs({ page_size: 500, ...params })}`)
 

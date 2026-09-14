@@ -3,7 +3,8 @@ import test from 'node:test'
 // Transport-only tests run without Svelte compilation. Browser regressions
 // exercise the reactive account/system lifecycle with the real compiled module.
 globalThis.$state = value => value
-const { askArchive, login, uploadDocument } = await import('./api.js')
+const { askArchive, login, logout, uploadDocument, exportTaxonomy, cancelMobilePairing, getDemoMode } = await import('./api.js')
+const { systems, resetSystems } = await import('./systems.svelte.js')
 delete globalThis.$state
 
 test('uses the API-provided error message', async () => {
@@ -100,5 +101,92 @@ test('concurrent demo uploads share one cookie-session upgrade', async () => {
     assert.equal(upgrades, 1)
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('taxonomy exports capture the filing system and preserve the requested text format', async () => {
+  const originalFetch = globalThis.fetch
+  resetSystems({ user_id: 1 })
+  systems.code = 'S02'
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, '/api/admin/taxonomy/export?format=toml&skip_seeds=true&system=S02')
+    assert.equal(options.credentials, 'same-origin')
+    return new Response('system = "S02"\n', { headers: { 'content-type': 'text/plain' } })
+  }
+  try {
+    assert.equal(await exportTaxonomy('toml', true), 'system = "S02"\n')
+  } finally {
+    globalThis.fetch = originalFetch
+    resetSystems()
+  }
+})
+
+test('taxonomy export rejects a late download as soon as logout starts', async () => {
+  const originalFetch = globalThis.fetch
+  let finishExport
+  globalThis.fetch = path => path.startsWith('/api/admin/taxonomy/export')
+    ? new Promise(resolve => { finishExport = resolve })
+    : Promise.resolve(new Response(null, { status: 204 }))
+  try {
+    const pending = exportTaxonomy()
+    await logout()
+    finishExport(new Response('private taxonomy'))
+    await assert.rejects(pending, err => err.name === 'AbortError')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('taxonomy export invalidates an unavailable system and preserves server validation errors', async () => {
+  const originalFetch = globalThis.fetch
+  resetSystems({ user_id: 1 })
+  systems.code = 'S02'
+  systems.ready = true
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    code: 'system_unavailable', error: 'System unavailable',
+  }), { status: 404 })
+  try {
+    await assert.rejects(exportTaxonomy(), err => err.code === 'system_unavailable' && err.message === 'System unavailable')
+    assert.equal(systems.ready, false)
+    assert.match(systems.error, /Ask an administrator/)
+  } finally {
+    globalThis.fetch = originalFetch
+    resetSystems()
+  }
+})
+
+test('background uploads and pairing cancellation cannot invalidate a different active system', async () => {
+  const originalFetch = globalThis.fetch
+  resetSystems({ user_id: 1 })
+  systems.code = 'S02'
+  systems.ready = true
+  globalThis.fetch = async path => {
+    assert.equal(new URL(path, 'https://archive.example.test').searchParams.get('system'), 'S01')
+    return new Response(JSON.stringify({ code: 'system_unavailable', error: 'System unavailable' }), { status: 404 })
+  }
+  try {
+    await assert.rejects(uploadDocument(new File(['old batch'], 'old.txt'), 'S01'), err => err.code === 'system_unavailable')
+    await assert.rejects(cancelMobilePairing('old-code', 'S01'), err => err.code === 'system_unavailable')
+    assert.equal(systems.code, 'S02')
+    assert.equal(systems.ready, true)
+    assert.equal(systems.error, '')
+  } finally {
+    globalThis.fetch = originalFetch
+    resetSystems()
+  }
+})
+
+test('public demo detection survives initialization of the filing context', async () => {
+  const originalFetch = globalThis.fetch
+  let finishMode
+  globalThis.fetch = () => new Promise(resolve => { finishMode = resolve })
+  try {
+    const pending = getDemoMode()
+    resetSystems()
+    finishMode(new Response(JSON.stringify({ enabled: true })))
+    assert.deepEqual(await pending, { enabled: true })
+  } finally {
+    globalThis.fetch = originalFetch
+    resetSystems()
   }
 })

@@ -22,7 +22,7 @@ export const USER_CAPABILITIES = Object.freeze([
   Object.freeze({
     key: 'share_views',
     label: 'Share saved views',
-    description: "Publish saved views to every user's dashboard.",
+    description: 'Publish saved views to others in the same filing system.',
   }),
 ])
 

@@ -89,6 +89,9 @@ two seconds only while the prompt is open, immediately on close, and on window
 focus. Reads are bounded, abortable, ordered, and checked against their original
 account+system generation; either change clears the list, and unmount stops polling.
 Revocation reloads the list so an earlier poll cannot restore a disconnected app.
+Profile saves send only the supported `display_name`; email is a read-only sign-in
+identifier. My account uses `whoami.kind` to keep mobile pairing out of both demo
+session kinds, matching the server's pairing eligibility.
 Keep the shell at or
 below 35 KiB gzip and remeasure the actual route dependency set after UI changes.
 
@@ -155,8 +158,13 @@ Existing route abort/version guards remain in place.
 API helpers capture complete scoped URLs before starting requests and reject
 responses from older account/system generations. Single-flight GET keys include
 the generation and full URL, never only an unqualified endpoint. Blob/export
-helpers capture the same destination. A `system_unavailable` response clears the
-active surface rather than presenting another cabinet. These browser guards
+helpers capture the same destination. Text taxonomy exports use the shared request
+helper, including its logout and generation guards and structured API errors.
+A `system_unavailable` response for the current system clears the active surface
+rather than presenting another cabinet; background upload or pairing-cleanup errors
+for an earlier destination cannot invalidate the current one.
+Every new upload entry point, including window file drops,
+requires the current route's system to be ready. These browser guards
 prevent stale display; the server remains responsible for authorization.
 `system-routing.js` owns catalog refresh and route entry, using the existing API
 helpers and their error handling. Dependencies are one-way:
@@ -210,6 +218,9 @@ time; explicit month/day URLs still work. `demo-corpus` entries show **Demo
 example**, without model confidence or export controls. The tour offers real
 Search and Calendar actions and labels Archive research as private-installation
 only. Server authorization remains authoritative.
+The initial public `/api/demo/mode` request survives filing-context initialization;
+it still obeys session revision cancellation. This lets first-time demo visits mint
+their cookie and open the tour before normal collection loading.
 
 `lib/intelligence.js` formats date facts to their recorded day/month/year
 precision for Calendar and Approvals. Month/year sorting placeholders stay out

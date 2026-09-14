@@ -6,6 +6,12 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Save profile display names using the supported API fields; show the sign-in
+  email read-only and hide mobile pairing for both demo identities.
+- Keep first-visit demo setup alive through filing-context initialization.
+- Block new file-drop uploads until a filing system is ready, and prevent late
+  errors from an earlier system from clearing the current one. Taxonomy downloads
+  now share the normal session, destination and error guards.
 - Preserve the predecessor's sensitivity when uploading a version, retaining
   reveal gates on confidential and restricted documents.
 - Enforce the 30-day recovery limit on bulk restore. An expired selection rejects

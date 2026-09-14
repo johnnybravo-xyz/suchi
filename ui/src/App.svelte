@@ -276,7 +276,7 @@
     const handled = e.defaultPrevented
     e.preventDefault()
     dragDepth = 0
-    if (handled || uploadOpen || page === 'upload' || !user) return
+    if (handled || uploadOpen || page === 'upload' || !user || !scopeReady) return
     const files = [...(e.dataTransfer?.files || [])]
     if (!files.length) return
     openUpload()
@@ -284,6 +284,7 @@
   }
 
   function openUpload() {
+    if (!session.user || !scopeReady) return
     uploadFiles = []
     uploadReturnFocus = document.activeElement
     uploadOpen = true
@@ -501,7 +502,7 @@
 </script>
 
 <svelte:window onkeydown={onKey}
-  ondragenter={(e) => { if (e.dataTransfer?.types?.includes('Files') && !uploadOpen && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
+  ondragenter={(e) => { if (scopeReady && e.dataTransfer?.types?.includes('Files') && !uploadOpen && page !== 'upload') { e.preventDefault(); dragDepth++ } }}
   ondragleave={() => (dragDepth = Math.max(0, dragDepth - 1))}
   ondragover={(e) => { if (dragDepth > 0) e.preventDefault() }}
   ondrop={globalDrop} />

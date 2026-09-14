@@ -25,6 +25,7 @@
   let loadGeneration = 0
   let loadPending = false
   let disposed = false
+  const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
 
   function isOwnMobileToken(token) {
     return token.source === 'mobile_pairing' && token.user_id === session.user?.user_id
@@ -32,13 +33,13 @@
   const mobileTokens = $derived(tokens.filter(isOwnMobileToken))
   const apiTokens = $derived(tokens.filter(token => !isOwnMobileToken(token)))
 
-  let profile = $state({ display_name: session.user?.display_name || '', email: session.user?.email || '' })
+  let profile = $state({ display_name: session.user?.display_name || '' })
   let profileBusy = $state(false)
   let avatarInput = $state()
   async function saveProfile() {
     profileBusy = true
     try {
-      await patchMe({ display_name: profile.display_name.trim(), email: profile.email.trim() })
+      await patchMe({ display_name: profile.display_name.trim() })
       await refreshSession()
       notify?.('Profile saved')
     } catch (ex) {
@@ -233,7 +234,8 @@
         </div>
         <div class="field">
           <label for="p-email">Email</label>
-          <input id="p-email" class="input" type="email" bind:value={profile.email} />
+          <input id="p-email" class="input" type="email" value={session.user?.email || ''} readonly />
+          <span class="sub">Your sign-in email cannot be changed here.</span>
         </div>
         <button class="btn primary sm profile-save" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
       </div>
@@ -242,7 +244,7 @@
 
 
   {#if !profileOnly}
-  {#if !session.user?.demo}
+  {#if !demoVisitor}
     <section class="settings-section" aria-labelledby="mobile-heading">
       <div class="section-heading">
         <div>

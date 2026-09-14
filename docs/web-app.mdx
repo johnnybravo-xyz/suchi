@@ -41,6 +41,7 @@ and does not identify which password was used.
 | **Documents** | The searchable document list, filters, list or grid display, selection, bulk actions, and filing controls. |
 | **Inbox** | Documents in the protected system Inbox that still need filing. |
 | **Views** | Saved document searches and filing shortcuts. |
+| **Calendar** | Document dates for administrators, members with **Manage document dates**, and demo visitors. |
 | **Approvals** | Human decisions, processing-revision rescan proposals, and **Dead jobs — needs attention**. |
 | **Automations** | Rules that tag, title, and file incoming documents. Administrators can edit them; members see a read-only view. |
 | **Trash** | Open soft-deleted documents, restore them, or confirm permanent deletion. |
@@ -56,8 +57,10 @@ Search results with the complete Omnibox text. Query-filter suggestions live in
 the Search and Documents fields rather than the global command palette.
 
 Drop files onto **Upload** or anywhere on the archive page to add documents.
-Window-level drops open the Upload dialog with per-file results. Each file uploads
-once, and the visible document list refreshes after successful uploads.
+Window-level drops open the Upload dialog with per-file results once the current
+filing system is available. Upload controls and file drops wait for that context;
+an unavailable system cannot receive a new upload batch. Each file uploads once,
+and the visible document list refreshes after successful uploads.
 
 In Upload, focus the drop area and paste a screenshot. **Upload image** confirms
 sending it; **Discard** removes the local preview. The file picker remains available,
@@ -228,6 +231,9 @@ Every user has **Settings > My account**:
 - **API tokens**
 - **Mailboxes**, only for a member with **Manage mailboxes**
 - **Saved decryption passwords**
+
+**Profile** saves your display name and lets you change your photo. Email is
+shown read-only because changing the sign-in address is not supported here.
 
 **Pair mobile app** opens a prompt to name the device and generate a QR code.
 Scan it in the Suchi app and confirm the displayed server address before

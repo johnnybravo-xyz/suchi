@@ -2825,6 +2825,41 @@ test('previews archived email bodies inline', async ({ page }) => {
   await expect(preview.contentFrame().getByRole('heading', { name: 'Distribution advice' })).toBeVisible()
 })
 
+test('saves the display name through supported profile fields and keeps email read-only', async ({ page }) => {
+  await mockAPI(page)
+  const changes = []
+  await page.route('**/api/users/me', route => {
+    const body = route.request().postDataJSON()
+    changes.push(body)
+    if ('email' in body) return route.fulfill({ status: 400, json: {
+      code: 'email_change_unsupported', error: 'Email changes require a dedicated flow.',
+    } })
+    return route.fulfill({ json: { display_name: body.display_name } })
+  })
+  await page.route('**/api/whoami', route => changes.length
+    ? route.fulfill({ json: { kind: 'user', user_id: 1, email: 'admin@example.test',
+      display_name: changes.at(-1).display_name, role: 'admin', capabilities: [] } })
+    : route.fallback())
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await profile.getByLabel('Display name', { exact: true }).fill('  Updated name  ')
+  await profile.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect(profile.getByLabel('Display name', { exact: true })).toHaveValue('Updated name')
+  await expect(profile.getByLabel('Email', { exact: true })).toHaveValue('admin@example.test')
+  await expect(profile.getByLabel('Email', { exact: true })).toHaveAttribute('readonly', '')
+  expect(changes).toEqual([{ display_name: 'Updated name' }])
+})
+
+for (const demoSession of ['anon', 'scratch']) {
+  test(`hides unsupported mobile pairing from ${demoSession} demo account settings`, async ({ page }) => {
+    await mockAPI(page, { demoMode: true, demoSession, capabilities: [] })
+    await page.goto('/#/settings')
+    await expect(page.getByRole('region', { name: 'Profile', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Mobile app', exact: true })).toHaveCount(0)
+  })
+}
+
 test('names scoped tokens and account vault records', async ({ page }) => {
   await mockAPI(page)
   await page.goto('/#/settings')
@@ -4479,6 +4514,22 @@ test('filing systems never substitutes the default for an explicit unavailable r
   await page.reload()
   await expect(page.getByText('Filing system unavailable', { exact: true })).toBeVisible()
   await expect(page).toHaveURL(/system=S01$/)
+})
+
+test('filing systems refuses dropped uploads until the selected system is available', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page)
+  await page.goto('/#/documents?system=S99')
+  await expect(page.getByText('Filing system unavailable', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Upload documents', exact: true })).toBeDisabled()
+  await page.evaluate(() => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(new File(['private content'], 'private.txt', { type: 'text/plain' }))
+    window.dispatchEvent(new DragEvent('dragenter', { dataTransfer, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true }))
+  })
+  await paintSettled(page)
+  await expect(page.getByRole('dialog', { name: 'Upload documents', exact: true })).toHaveCount(0)
+  expect(requests.filter(item => item.path === '/api/documents/' && item.method === 'POST')).toEqual([])
 })
 
 test('filing systems derives a legacy numeric deep link intrinsically, then scopes document and blob links', async ({ page }) => {
