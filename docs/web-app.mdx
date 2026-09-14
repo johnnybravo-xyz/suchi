@@ -1,118 +1,91 @@
 ---
 title: "Web app"
-description: "Navigation, setup, settings, saved views, permissions, and document behavior in the Suchi interface."
+description: "Navigation, setup, account settings, and everyday document actions in Suchi."
 ---
 
-The web app opens on the working archive, not a product landing page. The
-sidebar, top bar, and settings labels below match the v0.1 interface exactly.
+The web app opens on the working archive. This guide describes its current
+controls; [Frontend architecture](/spa-architecture) covers implementation.
 
 ## Current filing system
 
-Before the [first prefixed taxonomy import](/jd), the original archive is hidden:
-there is no system selector or enable toggle. First import can name this archive
-or preserve it under another code and create the incoming system separately.
-Preview explains the destination, retained documents and initial access; Apply
-introduces the layer atomically and selects the import result.
+Before the [first prefixed taxonomy import](/jd), there is no system selector.
+That import can name the original archive or preserve it under another code and
+create the incoming system separately. Preview explains the destination and
+initial access; Apply selects the result.
 
-After introduction the header identifies the current code/name. One accessible
-system gets a label; more than one gets a switcher. An initial unqualified collection
-route explicitly chooses the accessible original, otherwise the first accessible
-code, before loading data. An explicitly unavailable system never falls back.
-With no memberships, Suchi asks an administrator to grant access and offers account/
-sign-out controls rather than showing another archive.
+After introduction, one accessible system gets a code/name label; multiple systems
+get a switcher. Unqualified collection links select the accessible original,
+otherwise the first accessible system, before loading data. An explicitly
+unavailable system never falls back. Without membership, Suchi offers account/
+sign-out controls and asks an administrator to grant access.
 
-Switching clears documents, tree, counts, selections, revealed content and research;
-late responses cannot refill the new screen. Upload batches keep their starting
-destination even if navigation continues, and their receipts do not populate the
-new system. Switching invalidates import previews, share/pairing dialogs and pending
-OAuth state. System selection is a browser route context, not server authority.
+Switching clears displayed data, selections, Reveal, research, import previews and
+share/pairing/OAuth dialogs. Late responses cannot refill the new screen. Accepted
+upload batches retain their starting destination without showing receipts in the
+new system. [Permissions](/permissions) explains the server-enforced boundary.
 
 ## Main navigation
 
-Documents and Inbox show an open-padlock icon for password-unlocked documents,
-including those unlocked automatically with a saved password. Document detail
-also labels this **Password unlocked**. Suchi uses an unlocked working copy;
-the original remains password-protected. This status includes manual unlocks
-and does not identify which password was used.
-
-| Label | What it opens |
+| Label | Opens |
 | --- | --- |
-| **Dashboard** | Archive totals, Inbox and Approvals counts, failed jobs, recent documents, and up to four saved views. |
-| **Documents** | The searchable document list, filters, list or grid display, selection, bulk actions, and filing controls. |
-| **Inbox** | Documents in the protected system Inbox that still need filing. |
-| **Views** | Saved document searches and filing shortcuts. |
-| **Calendar** | Document dates for administrators, members with **Manage document dates**, and demo visitors. |
-| **Approvals** | Human decisions, processing-revision rescan proposals, and **Dead jobs — needs attention**. |
-| **Automations** | Rules that tag, title, and file incoming documents. Administrators can edit them; members see a read-only view. |
-| **Trash** | Open soft-deleted documents, restore them, or confirm permanent deletion. |
+| **Dashboard** | Archive totals, Inbox/Approvals counts, failed jobs, recent documents, and saved views. |
+| **Documents** | Search, filters, list/grid display, selections, bulk actions and filing. |
+| **Inbox** | Documents awaiting filing in the protected system Inbox. |
+| **Views** | Saved document searches and shortcuts. |
+| **Calendar** | Document dates for admins, members with **Manage document dates**, and demo visitors. |
+| **Approvals** | Human decisions, rescan proposals and **Dead jobs — needs attention**. |
+| **Automations** | Filing/metadata rules; admins can edit, members have read-only access. |
+| **Trash** | Deleted documents, restoration and confirmed permanent deletion. |
 
-The **Index** appears below the main navigation after a filing tree is chosen.
-It contains only normal filing areas and categories. The protected system
-Inbox is intentionally available through the dedicated **Inbox** item instead
-of being repeated in the Index.
+The **Index** lists normal filing areas/categories after a tree is chosen. The
+protected Inbox appears only in its dedicated navigation item. Password-unlocked
+documents show an open-padlock icon in lists and **Password unlocked** in detail.
+This includes manual and saved-password unlocks without identifying a password;
+Suchi uses an unlocked working copy while preserving the protected original.
 
-The top bar provides archive search, **Upload**, and the theme control. Its menu
-combines matching **Commands** and **Pages**. **Search everything for** opens
-Search results with the complete Omnibox text. Query-filter suggestions live in
-the Search and Documents fields rather than the global command palette.
+The top bar provides search, **Upload** and theme controls. The search menu matches
+**Commands** and **Pages**; **Search everything for** submits its complete text.
+Query suggestions appear in Search/Documents fields, separately from this menu.
 
-Drop files onto **Upload** or anywhere on the archive page to add documents.
-Window-level drops open the Upload dialog with per-file results once the current
-filing system is available. Upload controls and file drops wait for that context;
-an unavailable system cannot receive a new upload batch. Each file uploads once,
-and the visible document list refreshes after successful uploads.
+Drop files on Upload or anywhere on an available archive page to open per-file
+results. New uploads wait until the selected system is available. Each drop
+uploads once and refreshes visible lists after success. In Upload, focus the drop
+area to paste a screenshot; **Upload image** confirms sending and **Discard**
+removes the local preview. Ordinary text-field pasting stays unchanged.
 
-In Upload, focus the drop area and paste a screenshot. **Upload image** confirms
-sending it; **Discard** removes the local preview. The file picker remains available,
-and ordinary pasting into text fields is unchanged.
+Results distinguish new, duplicate, restored and failed files. **Text extracted**
+or **No text found** appears after processing; errors stay explicit. Automatic
+checks pause after about 100 seconds; **Check again** resumes them. Accepted
+batches continue through navigation while the same account remains signed in;
+closing the browser can interrupt them.
 
-Upload results distinguish new documents, duplicates, restored documents, and
-failed uploads. **Text extracted** or **No text found** appears after post-processing
-finishes; failed or unavailable checks remain explicit. After about 100 seconds,
-automatic checks pause without declaring completion. **Check again** resumes them.
-Accepted batches continue across in-app navigation while the same account remains
-signed in; closing the browser can interrupt unfinished uploads.
+Document/selection sharing displays the created link. **Copy link** retries without
+creating another; blocked clipboard access leaves the URL selectable. **Show QR
+code** locally encodes that same link, retaining expiry/password/revocation.
+Document sharing's **Show link** reopens an existing active link.
 
-Document and selection sharing always displays the created link. **Copy link**
-retries clipboard copying without creating another link; if the browser blocks
-clipboard access, select the displayed URL and copy it manually.
-**Show QR code** encodes that same link locally in the browser and centers the
-code in the dialog. Expiry, password, and revocation still apply; displaying or
-copying it does not create another link.
-Document sharing's **Show link** also reopens an existing active link.
-
-**Open on my phone** on a live document displays its private browser URL and a QR
-code, with **Copy link** and manual selection as fallbacks. It does not publish
-the document or issue a credential. The phone needs network access to the same
-server and an account allowed to read the document. A `localhost` address only
-works on the original computer; open Suchi using its network address first.
+**Open on my phone** displays a live document's private browser URL/QR without
+publishing it or issuing credentials. The phone needs network access and an
+account authorized for the document. A `localhost` link works only on the original
+computer; open Suchi through its network address first.
 
 ## Extracted text
 
-Document detail previews the first 2,000 characters of extracted text. **Read all**
-opens the complete text in a scrollable area; **Show less** returns to the preview.
-**Copy text** copies the entire extracted text, including content beyond that
-preview. If clipboard access is unavailable, a selectable full-text field provides
-manual copying. Confidential and Restricted documents still require **Reveal**
-before reading or copying text. These actions do not edit the stored extraction.
+Detail previews 2,000 characters. **Read all** expands the complete text; **Show
+less** collapses it. **Copy text** copies the whole extraction and offers a
+selectable field if copying fails. Confidential/Restricted text requires **Reveal**.
+These controls do not change stored extraction.
 
 ## Dashboard behavior
 
-The four status cards are **Total documents**, **Inbox**, **Approvals**, and
-**Failed jobs**. Counts come from one status request. An unavailable count is
-shown as `—` with its error or loading text; it is never presented as zero or
-as a healthy pipeline.
-
-**Recently added** shows the six newest visible documents. **Views** shows up
-to four saved views and their live counts. If shared views exist, at least one
-is included in those four so current-system shared shortcuts are not hidden by a user's
-private views. Its action is **New view**, and its empty state is **No saved
-views yet.** A read failure is shown as an error with **Retry**, not as an empty
-archive.
+**Total documents**, **Inbox**, **Approvals** and **Failed jobs** share one status
+request. Loading/unavailable counts show `—`, not zero or a healthy status.
+**Recently added** shows six newest visible documents. **Views** shows up to four
+shortcuts with live counts, including at least one shared view when available.
+**New view** starts creation; the empty message is **No saved views yet.** Read
+failures show **Retry** rather than an empty archive.
 
 ## Document URLs and filters
-
-Document-list links use the following hash parameters:
 
 | Filter | Browser parameter | Example |
 | --- | --- | --- |
@@ -125,147 +98,105 @@ Document-list links use the following hash parameters:
 | Sensitivity | `sensitivity` | `#/documents?sensitivity=confidential` |
 | Sort order | `ordering` | `#/documents?ordering=title` |
 | Page | `page` | `#/documents?page=3` |
-| Added on or after (Unix seconds) | `created_at__gte` | `#/documents?created_at__gte=1788220800` |
-| Added on or before (Unix seconds, inclusive) | `created_at__lte` | `#/documents?created_at__lte=1790812799` |
+| Added on/after (Unix seconds) | `created_at__gte` | `#/documents?created_at__gte=1788220800` |
+| Added on/before (inclusive Unix seconds) | `created_at__lte` | `#/documents?created_at__lte=1790812799` |
 
-After introduction, combine `system=CODE` with collection filters and scoped
-document links. Reload/back/forward retain it. An old numeric document link without
-a system resolves the actual authorized object first, then updates route/header.
-Whole full-address inputs such as `S01.13.147` use the address resolver; a stale
-address is not a historical alias or broad text-search fallback.
-`jd_category_id` is the API and saved-view field. It is translated to `jd`
-when the app creates a browser link and is not a supported browser parameter.
-Documents and Inbox keep the current page in the URL. Opening a document and
-using browser Back restores that page and its filters; Forward and reload work
-the same way. The footer provides nearby numbered pages, first/last pages, and
-Previous/Next controls. Page one may omit the `page` parameter.
+Combine `system=CODE` with other filters after introduction. Reload, Back/Forward,
+copied links and new tabs retain it. An old unqualified numeric document URL first
+resolves its authorized document, then updates system context. Full addresses such
+as `S01.13.147` use the resolver; stale addresses are not aliases or broad searches.
+The API/saved-view field `jd_category_id` translates to browser `jd`; it is not a
+supported browser parameter itself.
 
-Changing a filter or sort control starts at page one. Following a URL with an
-explicit page restores that page, including across filter changes in browser
-history. Invalid page values become page one; pages beyond the current result
-count move to the last available page without adding a history entry. If two
-requests overlap during fast navigation, only the newest response is shown.
+Documents/Inbox keep pagination in the URL. Opening detail and using Back restores
+the page and filters. The compact footer provides nearby pages, first/last and
+Previous/Next; page one may omit `page`. Changing a filter/sort starts at page one;
+explicit historical URLs restore their page. Invalid values become page one and
+out-of-range values become the last page without adding history. Only the newest
+request updates the screen.
 
-Hover quick actions appear on mouse/trackpad devices. On touchscreens, tap the
-document to open it and use its filing or Trash controls there.
-
-Search results and Documents accept the same [query language](/query-language).
-Suggestions appear while typing; validation happens only when the user applies
-the query. A rejected query stays visible with its error instead of becoming an
-empty result. Ranking, recency, completion, similarity, and Archive research
-retrieval are centralized in [Search architecture](/search).
+Mouse/trackpad devices have hover quick actions; on touchscreens open the document
+for filing/Trash actions. Search and Documents share the [query language](/query-language):
+suggestions appear while typing, validation occurs on Apply, and rejected queries
+remain visible with their error. [Search architecture](/search) covers retrieval.
 
 ## Document tags
 
-On a document, select **Edit** beside **Tags** to add an existing tag or remove
-one with its × button. Each change saves immediately; **Done** closes the
-editor. Untagged documents show **No tags** with the same Edit control.
-Failed changes leave the current tags intact and show an error. Trashed
-documents remain read-only. Administrators can create new tags in
+Select **Edit** beside **Tags** to add an existing tag or remove one with ×.
+Changes save immediately; **Done** closes the editor. Failures preserve current
+tags and show an error; Trash remains read-only. Create tags under
 **Settings > Archive configuration > People and metadata > Metadata**.
 
 ## Approvals
 
-Approval cards show the decision, confidence, supporting evidence and any
-deadline. Internal workflow identifiers are omitted. Rescan proposals expose
-their document links under **Affected documents**.
+Cards show decisions, confidence, evidence and deadlines. Rescan document links
+are under **Affected documents**. Internal workflow identifiers are omitted.
+See [Approvals](/approvals) for workflow behavior and [Document dates](/document-dates)
+for date review.
 
 ## Trash
 
-Select a document in Trash to open its normal document URL in read-only mode.
-Within the document's enterable system, owners and administrators can preview and
-download the file, read metadata/text, restore within 30 days or confirm deletion.
-Sensitive previews and extracted text still require **Reveal**. Public share
-links cannot serve trashed documents.
+Open a Trash row to use its normal document URL in read-only recovery mode.
+Within an enterable system, owners/admins can preview/download, read metadata/text,
+restore within 30 days or confirm permanent deletion. Sensitive content still
+requires **Reveal**; public shares cannot serve trashed documents.
 
-The detail screen prominently labels the document **Document in Trash**, with
-a warning colour, read-only notice, and permanent-deletion date. It hides
-editing, filing, sharing, access management, versions,
-and similar-document controls until the document is restored. **Back to Trash**
-returns to the list; restoring keeps the document open and restores its ordinary
-controls. On phones, each Trash row puts the document title and deletion date
-above its **Restore** and **Delete permanently** actions.
+**Document in Trash** shows the deletion deadline and hides editing, filing,
+sharing, access, versions and similarity until restoration. Restore keeps the
+document open; **Back to Trash** returns to the list. On phones, row titles/deadlines
+sit above **Restore** and **Delete permanently**.
 
 ## Saved views
 
-**New view** opens **Create a view**. A view can combine the optional **Query**
-field with **Filing category**, **Tag**, **Correspondent**, **Document type**,
-and **Sensitivity**. Empty filters mean all values for that field. With no
-saved views, the list says **No saved views yet**.
+**New view** opens **Create a view** with optional Query, category, tag,
+correspondent, document type, sensitivity and date filters. Empty choices mean all
+values. Select a view's name to open its documents; **Edit** is available only for
+your views. **Save changes** updates in place; **Cancel**/Escape discards the draft.
 
-Select a view's name to open its matching documents. **Edit** beside a view you
-own opens the same form with its saved name, query, filters, and sharing state.
-**Save changes** updates that view in place; **Cancel** or Escape discards the
-draft. Rich-query filters appear in **Query**, where you can change or remove
-their clauses. Older flat filters retain their existing selections, including
-multi-value scopes, and editing keeps the view's saved ordering. Exact research
-snapshots can be renamed or shared without changing their saved document set.
+Rich filters appear in **Query** for editing/removal. Older flat filters retain
+selections, multi-value scopes and ordering; exact research snapshots can be
+renamed/shared without changing their document set. New views store a normalized
+rich query; untouched legacy fields survive edits. Validation failures remain in
+the open form. Choices load when needed, not for an empty view list. See
+[Saved-view query rules](/query-language#saved-views).
 
-**Save view** and **Save changes** validate every query and filing value.
-A failure remains inside the open form for correction. New Views store one
-normalized rich query; unchanged older flat filters are preserved when editing.
-See [Query language: Saved Views](/query-language#saved-views).
-
-Members with **Share saved views**, and all administrators, also see **Share
-this view**. A shared view appears for users of its system, with document ACLs still applied.
-Only its owner can edit or delete it. Removing **Share saved views** from an owner
-makes their shared views private without deleting them.
-
-Filter choices are loaded when the create/edit form or an existing view needs them;
-an empty Views screen does not fetch every vocabulary in advance.
+Admins and members with **Share saved views** can select **Share this view**.
+Shared views appear within their system and still obey document ACLs. Only the
+owner can edit/delete; revoking sharing capability makes their views private
+without deleting them.
 
 ## Settings
 
-The Settings footer shows the running Suchi version, such as `v0.1.0-beta.2`.
-Development builds identify their version line (`v0.1.0-beta.2-dev`) and add the
-short source revision when available; `.dirty` marks modified source. Missing
-development revision metadata is labeled **revision unavailable**. Tagged
-production releases display only their version. Include this text when reporting
-a problem. This display is limited to Settings, works offline, and does not check
-for updates.
+The footer shows the running version. Development builds add the source revision,
+with `.dirty` for modified source or **revision unavailable** when missing.
+Tagged releases show only their version. Include this offline status in bug
+reports; it performs no update check.
 
-Every user has **Settings > My account**:
+**Settings > My account** contains Profile, Mobile app,
+API tokens, Saved decryption passwords, and Mailboxes for capable members.
+**Profile** saves your display name/photo; sign-in email is read-only.
+Demo visitors see a read-only profile without account tools.
 
-- **Profile**
-- **Mobile app**, outside demo sessions
-- **API tokens**
-- **Mailboxes**, only for a member with **Manage mailboxes**
-- **Saved decryption passwords**
+**Pair mobile app** generates a private, single-use QR code that expires in five
+minutes. Scan it in Suchi and confirm the server address. A new code replaces the
+old one; closing cancels unused codes. If scanning/copying fails, manually select
+the link and use **Paste pairing link** in the app. Manual server/password/API-token
+sign-in remains available. Pairing ships with the later mobile release, not beta.2.
 
-**Profile** saves your display name and lets you change your photo. Email is
-shown read-only because changing the sign-in address is not supported here.
+Each successful exchange adds a separate **Mobile app** entry showing device
+name, read/write access, connection and last-use dates. Updated apps let you name
+the device during confirmation, replacing the browser label; older clients keep
+that label. Existing entries keep their name until paired again. Matching names
+do not merge connections. The list refreshes during/after pairing and on window
+focus. **Revoke**, or signing out in the app, removes the connection; generating,
+cancelling or expiring a code creates no device entry.
 
-**Pair mobile app** opens a prompt to name the device and generate a QR code.
-Scan it in the Suchi app and confirm the displayed server address before
-connecting. The code is private, works once, and expires after five minutes.
-A new code replaces the previous one; closing the prompt cancels an unused
-code. Every successful QR-code or pairing-link exchange adds an entry under
-**Mobile app** with its device name, document read/write access, connection date,
-and last-use date. Updated apps fill in the device name during confirmation;
-you can edit it on the phone before connecting. That name replaces the label
-entered in the browser. iOS may supply only “iPhone” or “iPad,” so use a
-recognizable name such as “Ritesh’s iPhone” when needed. Older clients retain the
-browser label. Already connected apps keep their recorded name until paired again.
-The list refreshes while the pairing prompt is open, when
-it closes, and when you return to the browser window. **Revoke** immediately
-disconnects that app; signing out in the app also removes its active entry.
-Generating, cancelling, or attempting an expired code does not add a device.
-Pairing captures the current system; token rows identify that binding after
-introduction. A device needs a new pairing to change systems. Removing membership
-revokes its system credentials and shares; adding it back does not revive them.
+Pairing/token rows retain their system binding; changing systems requires a new
+pairing. Membership removal revokes system credentials/shares permanently.
+Legacy credentials without recorded pairing origin, and manual connections, stay
+under **API tokens**; revoke/re-pair to move legacy devices to Mobile app.
 
-Each completed pairing creates its own entry, even if device names match.
-Credentials created before this update remain under **API tokens** because
-their pairing origin was not recorded. Revoke and pair them again to show them
-under **Mobile app**. Manual password/API-token connections remain API tokens.
-
-If scanning or clipboard access is unavailable, select and copy the pairing
-link manually, then use **Paste pairing link** in the app. Manual server and
-password/API-token sign-in remains available. Pairing is part of the later
-mobile release, not the beta.2 server release.
-
-Administrators also have **Settings > Archive configuration**. Its overview
-uses these exact groups and sections:
+Admins also have **Settings > Archive configuration**:
 
 | Group | Sections |
 | --- | --- |
@@ -274,94 +205,61 @@ uses these exact groups and sections:
 | **Processing** | **Classification**, **Automations** |
 | **Maintenance** | **OCR and backups** |
 
-**People and metadata** has four views: **Users**, **Groups**, **Metadata**, and
-**Taxonomy**. In **Metadata**, use **Metadata type** to choose tags,
-correspondents, document types, storage paths, or custom fields. Each editor
-separates creation from the existing entries. Optional user capabilities are
-under **Additional access**; Groups expands members beside the group being edited.
-Creating an admin does not save hidden member capabilities from Additional access.
+**People and metadata** contains Users, Groups, Metadata and Taxonomy. Metadata's
+type selector covers tags, correspondents, document types, storage paths and
+custom fields. Groups expands its members beside the selected group. User
+capabilities are under **Additional access**; hidden member choices are not saved
+when creating an admin. Setup reuses the same user-creation form.
 
-**Taxonomy** handles filing-tree files, not individual metadata entries.
-Import previews changes before Apply. Export offers HuML or TOML, with supported
-starter rules or tree only. **What is included?** explains the limits; neither
-export replaces a full archive backup.
+**Taxonomy** imports/exports HuML or TOML filing-tree files. Preview precedes Apply;
+export explicitly offers starter rules or tree only. **What is included?** explains
+why neither replaces a [full backup](/backup-restore). Both **Automations** entry
+points open the same main editor.
 
-**Automations** hands off to the main Automations screen so the rule editor has
-one home. Setup's **People** step uses the same user-creation form as Settings.
+After introduction, **Filing system · CODE** edits a nonblank name of at most 80
+characters and the complete direct membership set, including off-page people.
+Codes are permanent; admin entry is implicit/read-only. New systems initially
+admit admins only. Membership and document ACLs remain separate.
 
-After introduction the **Filing system · CODE** panel manages the current system's
-nonblank display name (at most 80 characters) and direct membership. Codes are read-only and permanent.
-Admins have implicit access, displayed read-only; the membership editor preserves
-the complete explicit set, including people outside the current directory page.
-New systems initially admit admins only. Membership and document ACLs are separate.
-
-Filing tree, metadata, automations, views, mailbox/password records and membership
-use the current system. Users/groups, global capabilities, account profile, server,
-OCR/LLM and backup configuration remain instance-wide even when shown nearby.
-
-In **Classification**, **Use similar documents for automatic filing and
-suggestions** controls local archive matching.
-
-Administrators manage the current system's mailboxes under **Email intake** and choose each
-owner. A member with **Manage mailboxes** manages only their own rows under
-**My account > Mailboxes**. This separation is deliberate; there is no second
-administrator mailbox editor under My account.
+Filing trees, metadata, rules, views, mailboxes/password records and memberships
+use the current system. Accounts/groups, global capabilities, profiles, watched
+folders, OCR/models and backups are server-wide. **Classification** includes
+**Use similar documents for automatic filing and suggestions** for local matching.
+Admins manage system mailboxes and owners in **Email intake**; capable members
+manage only their own under **My account > Mailboxes**.
 
 ## First-run setup
 
-Before a filing tree is chosen, a new archive contains only its protected
-System/Inbox baseline. No user-facing preset is applied implicitly and the
-sidebar does not show a filing Index.
+A fresh archive has only System/Inbox, without an implicit preset or filing Index.
+Setup order is **Filing tree → People → Watched folder → Email intake →
+Classification → Automations → OCR and backups**.
 
-The setup steps are:
+Filing tree is the only required step: apply a preset/import before advancing or
+**Finish setup**. Starting from scratch requires explicitly confirming **Blank**.
+Other steps are optional and remain available in Archive configuration.
 
-1. **Filing tree**
-2. **People**
-3. **Watched folder**
-4. **Email intake**
-5. **Classification**
-6. **Automations**
-7. **OCR and backups**
+**Import a file** sits beside preset cards and shares Settings' importer. Choose
+HuML/TOML or paste content, include/exclude starter rules, Preview and Apply.
+Preview separates your tree from generated System/49, explains 00.00 and shows
+additions, preserved rules and collision choices. A blank tree needs confirmation;
+stale previews preserve input and require re-preview. Success refreshes setup and
+the sidebar. Later applications merge, without resetting existing filing.
+Validation checks supported structure, not domain correctness or rule trust.
+See [Filing trees](/jd) for destination, collision and export rules.
 
-Choosing a filing tree is the only required step. Apply a preset or import a tree
-before continuing to another step or choosing **Finish setup**. To start from
-scratch, explicitly choose and confirm **Blank**. This step cannot be skipped;
-every other step is optional and remains available later under **Archive
-configuration**.
+For 48 hours after first-admin creation, incomplete setup shows **Choose your
+filing tree** in the sidebar/narrow Dashboard with **Continue setup**. Opening or
+closing the reminder, choosing a tree, finishing setup or expiry dismisses it.
+Browser dismissal is specific to user/installation start; Setup remains in Settings.
 
-**Filing tree** offers **Import a file** beside built-in preset cards, using the
-same import component as Settings. Choose HuML/TOML or paste content, select
-whether to include starter rules, and preview before Apply. The preview separates
-your named tree from Suchi-generated System/49 and explains the 00.00 filing
-index, actual additions, preserved/disabled rules and collision skip/remap choices.
-Blank files need explicit confirmation. A stale preview keeps input and asks for
-another preview; success refreshes setup state and the filing sidebar.
-
-Later imports and preset applications merge rather than reset existing filing.
-Validation proves supported structure, not domain correctness or trustworthy
-automation. Settings offers seeded and explicit tree-only exports; neither is
-a complete backup. See [Filing trees](/jd).
-
-For the first 48 hours after the first administrator is created, an incomplete
-archive shows **Choose your filing tree** near the top of the sidebar and on
-the narrow Dashboard layout. Its action is **Continue setup**. The reminder
-disappears when that administrator opens it, closes it, chooses a filing tree,
-finishes setup, or reaches the end of the 48-hour window. Closing it is stored
-in that browser for the current user and installation start, and confirms:
-**Setup reminder closed. Setup is always available in Settings.**
-
-While setup has not yet been engaged with, Settings shows **Setup is
-incomplete**, **Choose a filing tree to finish the guided archive setup.**, and
-**Continue setup**. The Archive configuration tab does not expose its sections
-until that prompt is retired. Opening or closing the reminder, choosing a
-filing tree, or finishing setup retires the prompt and exposes every **Archive
-configuration** section. The optional wizard steps never remain a gate after
-that point.
+Before engagement, Settings shows **Setup is incomplete** and **Continue setup**
+in place of Archive configuration sections. Retiring the prompt exposes all
+sections; optional wizard steps never keep administration locked.
 
 ## Capabilities and sensitive documents
 
-Administrators have all capabilities. Under **People and metadata > Users**,
-they can give a member:
+Admins have all capabilities. Grant members additional access in
+**People and metadata > Users**:
 
 | Interface label | Stored key |
 | --- | --- |
@@ -371,63 +269,39 @@ they can give a member:
 | **Create share links** | `share_links` |
 | **Share saved views** | `share_views` |
 
-See [Permissions](/permissions) for revocation effects and object-level access.
+[Permissions](/permissions) owns revocation and object-access rules.
 
-When a model is active, **Ask** appears on the right side of the global
-Omnibox for administrators and members with **Ask the archive**. Enter remains
-ordinary search. **Ask** opens the **Archive research** desk as a right-side
-drawer and a full-screen mobile surface.
+With a model enabled, capable users see **Ask** in the Omnibox; Enter remains
+search. **Archive research** opens a side drawer/full-screen mobile desk with its
+current scope and cited sources. Following evidence parks it as **Research active**;
+the ribbon restores it. Escape/**Close** ends the parked state; **Clear** removes
+history and resets sensitive consent. Scope/provider changes reset conversation;
+turning sensitive consent off clears history. The background is inert while open.
 
-The header shows the active scope: all archive documents, the current rich
-query/category, one document, an exact saved snapshot, or selected documents.
-Answers render with linked citations, cited documents first, and additional
-retrieved documents collapsed. Following a citation or evidence link parks the
-drawer as a **Research active** ribbon on the right edge; selecting the ribbon
-restores the conversation. Closing with Escape or **Close** ends that parked
-state. **Clear** removes the transcript and resets sensitive-document consent.
-Scope or provider changes reset the session, and turning sensitive consent off
-clears accumulated history. The application shell is inert while the drawer is
-open.
+**Save retrieved documents as a view** preserves exact source IDs. Reviewable dates
+link to Approvals; available dates open the retrieved documents' all-dates agenda.
+Research is read-only and does not itself extract/save data. See
+[Archive research](/archive-chat) for the complete workflow and contracts.
 
-**Save retrieved documents as a view** opens the View creator with exact
-document IDs, not inferred question words. Dates waiting for a decision link to
-Approvals; dates already available link to an all-dates Calendar agenda for the
-retrieved documents, across months and years. Archive Q&A itself is read-only
-and never extracts or saves data.
+**Manage document dates** enables selection extraction, review and Calendar/query
+use. Calendar's **Document view** applies a saved View through the server; research
+links use exact documents with **Date role** and **Open full calendar**. Day links
+open exact-day agendas, preserve View/role, and return through **Back to Month YYYY**.
+Month/day/View/role survive history and reload. Partial dates appear in broader
+agendas, not exact-day cells. Expand Automatic/Reviewed status for classifier
+confidence. Reviewed exact-day **Add to calendar** offers a disclosed local `.ics`
+export, not synchronization. [Document dates](/document-dates) owns precision,
+review, filtering and export rules.
 
-Members with **Manage document dates** can extract dates from a Documents
-selection, review dates in Approvals, and use accepted dates in Calendar and
-rich queries. The full Calendar's **Document view** selector sends the saved View
-ID; the server applies its complete filter and ACLs. Research links instead show
-their selected-document scope with **Date role** and **Open full calendar**.
-Selecting a day number opens a full-width agenda for that exact day, retaining
-the View and role. **Back to Month YYYY** returns to the originating month;
-the URL preserves month, day, View, and role across reload and browser navigation.
-Calendar and Approvals preserve day, month, or year precision in the displayed
-date. Partial dates appear in month/all-dates agendas, not day cells or exact-day
-agendas. Expand an agenda entry's **Automatic** or **Reviewed** status to see
-**LLM Classifier confidence: N%**.
-For a reviewed exact-day entry, **Add to calendar** offers a local `.ics` download
-after an export notice. Automatic and partial dates do not offer export; importing
-the file does not establish calendar synchronization.
-See [Document dates](/document-dates) for precision, month-filter limits, scope,
-review, rescan, and troubleshooting rules.
-
-See [Archive research](/archive-chat) for the complete workflow and contracts.
-
-Sensitivity choices are **Public**, **Internal**, **Confidential**, and
-**Restricted**; a document without a choice displays **Unset**. Confidential
-and Restricted documents blur list thumbnails and gate the inline preview and
-extracted text behind **Reveal**. **Create share links** controls whether a
-member sees document share actions; it does not bypass document access.
+Sensitivity choices are Public, Internal, Confidential and Restricted; absent
+values show **Unset**. Confidential/Restricted thumbnails blur and previews/text
+require **Reveal**. **Create share links** controls share actions without bypassing
+document access.
 
 ## Loading and failures
 
-Routes that depend on server data have separate loading, empty, and failure
-states. A failed Inbox lookup does not fall back to all documents. A failed
-settings read does not expose an editable form populated with defaults. Fast
-route changes, search changes, and autocomplete requests discard stale
-responses so an older request cannot replace the current screen.
-
-For implementation ownership and the required verification steps, see
-[Frontend architecture](/spa-architecture).
+Data-dependent screens distinguish loading, empty and failure states. Failed Inbox
+lookup never opens all documents; failed settings reads never expose default-filled
+editable forms. Superseded route/search/autocomplete responses are discarded.
+Late metadata saves cannot change another document's displayed values or Reveal
+state after navigation.

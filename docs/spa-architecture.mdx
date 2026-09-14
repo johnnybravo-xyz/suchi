@@ -1,40 +1,32 @@
 ---
 title: "Frontend architecture"
-description: "How the embedded Svelte application is organized, built, and connected to the API."
+description: "Ownership, request lifetimes, security boundaries, and verification for the embedded Svelte application."
 ---
 
-The primary UI is a Svelte 5 single-page application under `ui/`. Vite builds
-static assets into `ui/dist`; `make ui` copies them to `core/ui/spa/dist`, where
-Go embeds them into the Suchi binary.
-
-Server-rendered pages remain only where they are useful before or outside the
-application shell, such as bootstrap and direct preview or download responses.
+Suchi's primary UI is a Svelte 5 application under `ui/`, embedded in the Go
+binary. Server-rendered pages cover bootstrap and direct preview/download
+responses. This guide owns frontend implementation contracts; [Web app](/web-app)
+owns user actions and labels, and the [API reference](/api) owns wire contracts.
 
 ## Source layout
 
 ```text
 ui/src/
-  App.svelte                  application shell and navigation
+  App.svelte                  shell, navigation, route selection
   app.css                     global tokens and component styles
-  lib/api.js                  fetch, errors, and named API operations
-  lib/system-routing.js       filing-system loading and route entry
-  lib/configuration.js        setup and archive-setting labels
-  lib/capabilities.js         member capability labels and checks
-  lib/documentFilters.js      saved-view to browser-route translation
-  lib/intelligence.js          intelligence type labels and value formatting
-  lib/format.js               dates, sizes, and sensitivity vocabulary
-  lib/net.js                  local endpoint validation
-  lib/router.svelte.js        hash-route state
-  lib/session.svelte.js       current principal and session state
-  lib/systems.svelte.js       filing identity, accessible systems, request generation
-  lib/Lazy.svelte             route-level lazy loading
+  lib/api.js                  transport, errors, named API operations
+  lib/system-routing.js       filing-system catalog and route entry
+  lib/router.svelte.js        sole hash router
+  lib/session.svelte.js       principal, session, theme
+  lib/systems.svelte.js       accessible systems and request generation
+  lib/Lazy.svelte             deferred route/component loading
   lib/*.svelte                shared feature components
-  routes/*.svelte             application screens
+  routes/*.svelte             screen-owned state and behavior
 ```
 
-Keep route-specific state in its route. Shared state belongs in a small module
-only when multiple routes genuinely coordinate through it. Suchi does not use a
-general client cache or state framework; the server remains authoritative.
+Keep state in its screen unless multiple screens coordinate through it. Shared
+modules remain small; there is no general client cache or state framework.
+The [wording inventory](#interface-wording) identifies shared value helpers.
 
 ## Build and embedding
 
@@ -89,9 +81,6 @@ two seconds only while the prompt is open, immediately on close, and on window
 focus. Reads are bounded, abortable, ordered, and checked against their original
 account+system generation; either change clears the list, and unmount stops polling.
 Revocation reloads the list so an earlier poll cannot restore a disconnected app.
-Profile saves send only the supported `display_name`; email is a read-only sign-in
-identifier. My account uses `whoami.kind` to keep mobile pairing out of both demo
-session kinds, matching the server's pairing eligibility.
 Keep the shell at or
 below 35 KiB gzip and remeasure the actual route dependency set after UI changes.
 
@@ -115,301 +104,224 @@ done
 
 ## Routing and loading
 
-`router.svelte.js` tracks the URL hash and exposes route state. `App.svelte`
-selects the route component and owns the persistent navigation. Routes load
-through `Lazy.svelte`; keep ordinary nested components together unless a
-conditional feature would otherwise force unrelated code into the request.
-
-New screens should use a stable path, support browser back and forward, and
-have a useful narrow-screen layout. Avoid adding a second router or navigation
-registry.
+`router.svelte.js` owns hash state; `App.svelte` chooses routes and persistent
+navigation. Screens support reload, Back/Forward and narrow layouts through this
+router, without a second navigation registry.
 
 ### Filing systems and request lifetimes
 
-`systems.svelte.js` owns only the accessible list, introduced state, current code
-and account+system request generation. `GET /api/jd/systems` is authoritative.
-Before the first prefixed taxonomy import the list is empty and the existing
-unprefixed UI/URLs remain unchanged. Introduction is not a browser preference
-or an enable/disable control.
+`GET /api/jd/systems` is authoritative. `systems.svelte.js` stores only its
+accessible list, introduced state, current code and account/system generation.
+Before first prefixed import, the empty list preserves unprefixed UI and URLs;
+introduction is not a browser preference. [Filing systems](/jd) owns import and
+storage semantics; [Permissions](/permissions) owns authorization.
 
-`App.svelte` waits for identity and the accessible list before mounting any
-collection screen or requesting its tree/counters. For an unqualified route it
-selects the accessible original system, otherwise the first enterable system,
-and writes `system=CODE` into the hash before starting collection requests.
-An explicitly unavailable system never falls back. With no memberships, the
-shell explains that access must be granted and offers the existing profile
-controls and sign-out without requesting document-bearing settings.
+`App.svelte` waits for identity and the catalog before mounting collection screens
+or requesting tree/counters. An unqualified route selects the accessible original
+system, otherwise the first enterable system, and writes `system=CODE` before
+collection reads. An explicit unavailable system never falls back. No-access
+screens offer profile/sign-out without document-bearing settings requests.
 
-Numeric document routes without a system first load that document intrinsically.
-The returned `system_code` binds the route/sidebar and subsequent metadata and
-blob requests. Full-address searches use `/api/jd/resolve`; a stale address is
-an error, not an alias or a broad text search. Document lists/detail display the
-server-projected `jd_address`; the detail address and private numeric URL are
-copyable. Existing category pickers remain two-level pickers within the cabinet.
+An unqualified numeric document link loads the authorized document intrinsically;
+its returned `system_code` binds the route, sidebar and subsequent metadata/blob
+requests. Full addresses use `/api/jd/resolve`; stale addresses are errors, never
+aliases or broad searches. Display the server's `jd_address`; address and private
+numeric links are copyable. Category pickers stay two-level within the system.
 
-`router.svelte.js` remains the sole hash router. Navigation and native links use
-the scoped hash helper, so reload, Back/Forward, copied links and new tabs retain
-context. A switch drops foreign filters and document IDs. The shell keys its
-scoped subtree by generation and clears tree, counters, selections, reveal state,
-upload/share/pairing/import/OAuth dialogs and parked research. Directory expansion
-uses `suchi.jd.open.<user>.<system>`; theme remains a presentation-only preference.
-Existing route abort/version guards remain in place.
+Native links and `go()` use the scoped hash helper. Switching drops foreign
+filters/IDs and increments generation. The shell keys its scoped subtree by that
+generation, clearing tree, counters, selections, Reveal, upload/share/pairing/
+import/OAuth dialogs and parked research. Expansion state uses
+`suchi.jd.open.<user>.<system>`; theme is presentation-only. Route abort/version
+guards still reject superseded reads within one generation.
 
-API helpers capture complete scoped URLs before starting requests and reject
-responses from older account/system generations. Single-flight GET keys include
-the generation and full URL, never only an unqualified endpoint. Blob/export
-helpers capture the same destination. Text taxonomy exports use the shared request
-helper, including its logout and generation guards and structured API errors.
-A `system_unavailable` response for the current system clears the active surface
-rather than presenting another cabinet; background upload or pairing-cleanup errors
-for an earlier destination cannot invalidate the current one.
-Every new upload entry point, including window file drops,
-requires the current route's system to be ready. These browser guards
-prevent stale display; the server remains responsible for authorization.
-`system-routing.js` owns catalog refresh and route entry, using the existing API
-helpers and their error handling. Dependencies are one-way:
-`system-routing.js` → `api.js` → `systems.svelte.js`. The state module has no API
-dependency; synchronous scope helpers stay there so transport and routing share
-the same account/system generation checks without a circular import.
+API helpers capture complete URLs before requests and reject older account/system
+responses. Single-flight GET keys include generation and full URL. Blob links and
+text taxonomy exports use the same captured destination; exports share transport,
+logout guards and structured errors. A current-system `system_unavailable` clears
+the surface. Continuing upload or pairing-cleanup errors from a previous system
+cannot invalidate the current one. All new upload entry points, including window
+drops, require the route's system to be ready.
 
-`SystemSettings.svelte` is visible to administrators only after introduction.
-It edits the current system's display name and complete explicit membership set.
-The existing all-user directory is paged in the browser, separately from that set;
-off-page/inactive memberships are preserved until explicitly removed. Implicit
-administrator access is displayed read-only and never manufactured as a grant.
-Codes are permanent; there is no delete-system control. Filing configuration,
-metadata, rules and mailboxes are scoped; identity, OCR/model settings, watched
-folder configuration and backups remain visibly server-wide.
+Dependencies stay one-way: `system-routing.js` → `api.js` → `systems.svelte.js`.
+Catalog refresh/route entry live in the first module; synchronous scope helpers
+live in the last, which has no API dependency. Browser guards prevent stale
+display; the server enforces access.
 
-`Documents.svelte` derives Documents/Inbox pagination, filters, and date bounds
-from the hash query. Page links preserve the current route and query; filter
-controls remove `page`. There is no separate page-state cache. A bounded page
-window keeps the footer compact on mobile. Invalid or out-of-range pages use
-`go(hash, { replace: true })`, which replaces browser history and synchronizes
-route state without creating a Back-button loop. Existing abort/version guards
-discard stale list reads. Browser regressions cover history, reload, date/sort
-state, Inbox scope, and shrinking result sets:
+`SystemSettings.svelte` edits the current name and complete explicit membership
+set for admins after introduction. Browser directory pages do not own that set:
+off-page/inactive grants survive until removed explicitly. Admin access is implicit
+and read-only; codes are permanent and there is no delete-system control. Filing
+configuration, metadata, rules and mailboxes are scoped; identity, watched-folder
+configuration, OCR/models and backups remain visibly server-wide.
+
+Documents/Inbox derive filters, dates and pagination from the hash, without a page
+cache. Links preserve route/query; filter controls remove `page`. A bounded footer
+fits mobile. Invalid/out-of-range pages use `go(hash, { replace: true })` to sync
+route state without creating Back-button loops. Verify with:
 `cd ui && bun run e2e --grep 'document pagination|inbox pagination'`.
 
-Trash links use the existing `#/doc/{id}` route. `DocumentDetail.svelte` uses
-the server's `trashed_at`, `deletes_at`, and `owner_id` fields to show a read-only
-recovery screen rather than a second document viewer. It skips versions,
-similarity, and access-management requests while trashed. Restore reloads the
-same document; confirmed permanent deletion returns to Trash. Blob access is
-enforced by the server, not these UI conditions. Trash row links and recovery
-buttons are separate semantic controls, with actions below the title on mobile.
+Trash uses `#/doc/{id}` and the same detail owner. Server `trashed_at`, `deletes_at`
+and `owner_id` select read-only recovery; skip versions, similarity and access
+management reads. Restore reloads that document; confirmed deletion returns to
+Trash. Keep row links separate from recovery buttons, with actions below titles
+on mobile. Server authorization still governs blobs.
 
-Calendar links with `document_ids` open the same route's all-dates agenda;
-ordinary `#/calendar` keeps the month grid and saved-View selector. Calendar's
-`month` (`YYYY-MM`), `date` (`YYYY-MM-DD`), `view_id`, and `role` come from the hash
-query. Day links open a full-width agenda and preserve the originating month,
-View, and role for return navigation and reload. Exact-day reads use the existing
-intelligence API with equal date bounds and `precision=day`; the server filters
-before counting and paginating, rather than dropping partial dates in the UI.
-Document-scoped research links still omit month bounds and reset stale scope
-state. Day and all-dates agendas page through 500 facts at a time. See
-[Document dates](/document-dates).
+Detail reloads only when its document ID changes or an explicit action requests
+refresh. Arrival of sidebar categories must not restart reads or discard edits.
+Metadata/language saves check that same document generation before updating local
+state, so an earlier save cannot change the next document's sensitivity or Reveal.
 
-`App.svelte` uses `/api/whoami`'s `kind` (`demo-anon`/`demo-scratch`), not a
-separate demo field, and separates Calendar visibility from extraction/review capability:
-demo visitors see Calendar but gain no mutation or chat controls. Their default
-Calendar opens the all-dates agenda so fixed fixtures remain discoverable over
-time; explicit month/day URLs still work. `demo-corpus` entries show **Demo
-example**, without model confidence or export controls. The tour offers real
-Search and Calendar actions and labels Archive research as private-installation
-only. Server authorization remains authoritative.
-The initial public `/api/demo/mode` request survives filing-context initialization;
-it still obeys session revision cancellation. This lets first-time demo visits mint
-their cookie and open the tour before normal collection loading.
+Calendar derives `month`, `date`, `view_id`, `role` and document scope from the
+hash. `document_ids` opens an all-dates agenda; ordinary routes use the month grid.
+Day links preserve originating month/View/role. Exact-day requests use equal date
+bounds and `precision=day`; filtering precedes server counts/pagination. Day and
+all-dates agendas page by 500; research links omit month bounds and reset prior
+scope. `lib/intelligence.js` preserves recorded precision; partial dates never
+populate day cells. [Document dates](/document-dates) owns review/display behavior.
 
-`lib/intelligence.js` formats date facts to their recorded day/month/year
-precision for Calendar and Approvals. Month/year sorting placeholders stay out
-of Calendar day cells. Agenda status details use native disclosure controls
-for `LLM Classifier confidence: N%`, without custom interaction state.
+Calendar exports use `lib/calendarExport.js` for explicitly requested, reviewed
+exact-day `.ics` files: escape text, fold UTF-8 lines, preserve stable event IDs
+and disclose the exported contents. This adds no subscription or authority.
 
-Calendar serializes explicitly requested, reviewed exact-day events through
-`lib/calendarExport.js` into local iCalendar downloads. It escapes text, folds
-UTF-8 lines, and preserves an event identifier across repeated exports. A native
-disclosure explains what leaves Suchi when the user imports the file. No API,
-schema, subscription, or document-access changes are involved.
+Demo eligibility comes from `whoami.kind` (`demo-anon`/`demo-scratch`). Calendar
+remains visible without mutation/research access; default demo Calendar opens
+all dates, while explicit month/day links work. Curated `demo-corpus` entries omit
+confidence/export controls. Public `/api/demo/mode` survives initial filing-state
+reset but obeys session revision cancellation, allowing cookie minting and the
+first-visit tour. The tour links real Search/Calendar and labels research as
+private-installation only.
 
 ## API conventions
 
-`api.js` owns fetch behavior, JSON errors, and the named product operations
-consumed by components. `net.js` validates user-supplied local endpoints. Route
-components should call API helpers rather than duplicating URLs or response
-parsing.
+Components call named `api.js` operations, which own fetch and error parsing;
+`net.js` handles local-endpoint validation. Add and test new server contracts
+before using them in a screen. API field names may stay technical; visible labels
+follow [Web app](/web-app).
 
-The SPA uses the same documented endpoints as other clients:
-
-| Area | Main API surfaces |
-| --- | --- |
-| Session and profile | `/api/login`, `/api/logout`, `/api/whoami`, `/api/users/me` |
-| Documents | `/api/documents/`, document detail, preview, download, bulk edit |
-| Search and views | `/api/search/`, `/api/autocomplete/`, `/api/saved_views/` |
-| Taxonomy | JD categories, tags, correspondents, document types, custom fields |
-| Work | automations, approvals, and durable tasks |
-| Administration | setup state, settings, users, mail accounts, and LLM status |
-
-The [API reference](/api) is authoritative for payloads and scopes. When a UI
-needs a new server capability, add the endpoint contract and integration tests
-before depending on it in a component.
-
-`TaxonomyImport.svelte` is shared by setup's filing-tree step and Settings,
-using the existing API helpers. It owns file/paste state, explicit HuML/TOML
-selection, seed choice, remaps and preview freshness; it does not validate a
-second schema in the browser. Late FileReader/network results cannot replace
+`TaxonomyImport.svelte` is shared by setup and Settings. It owns file/paste reads,
+HuML/TOML choice, seed/remap/destination choices and preview freshness; schema
+validation stays server-side. Late FileReader/network responses cannot replace
 new input, and conflicting actions are disabled in flight.
 
-Preview presents the declared schema/content revision, source story, destination
-code/name, named `user_areas`, separate System/49 `generated_areas`, category/rule
-additions, preserved disabled rules and dependency skips. 00–09 is an explanatory
-label, not a row. A first prefixed import alone offers “use this archive” versus
-“create separately”, with an explicit code for preserving the original archive.
-Content/format/seed/remap/destination changes invalidate preview; Apply carries
-`expected_state_hash`. The browser does not copy its current code into a body
-target, so opening S02 while viewing S01 correctly previews S02. A stale preview
-preserves input and asks for another preview. Successful named Apply refreshes
-the accessible list, selects the returned system, and invalidates the unnamed or
-previous request generation. Blank confirmation and full/tree-only export stay
-in this shared flow. Taxonomy administration remains session-admin web, not mobile
-token access.
+Preview renders the declared schema/content revision, source story, destination,
+`user_areas`, separate System/49 `generated_areas`, additions, preserved disabled
+rules and dependency skips. 00–09 is explanatory, not a row. First prefixed import
+offers using the original archive or preserving it under an explicit other code.
+Changing content/format/seeds/remaps/destination invalidates preview. Apply sends
+`expected_state_hash`, never a body target copied from current browser scope;
+stale previews preserve input. Named success refreshes the catalog, selects the
+returned system and invalidates old requests. Blank confirmation and explicit
+full/tree-only exports stay in this shared flow. Taxonomy administration requires
+a web admin session; mobile tokens cannot use it. See [Filing trees](/jd).
 
-`lib/configuration.js` owns one section inventory. Setup steps derive their order,
-keys, and labels from it, with only a shorter People label. `Setup.svelte` owns
-step navigation/completion; `ArchiveSettings.svelte` owns the status overview and
-section navigation, not configuration writes. Its sidebar and content share one
-frame; narrow screens use a horizontally scrollable section rail.
+`lib/configuration.js` owns one section inventory; setup derives its order/labels
+with the shorter People label. `Setup.svelte` owns navigation/completion;
+`ArchiveSettings.svelte` owns overview and section navigation. Its shared frame
+uses a scrolling section rail on narrow screens.
 
-`ConfigurationSection.svelte` owns the same form state, validation, required reads,
-and writes for filing trees, watched folders, classification, and OCR/backups in
-both surfaces. Required load keys drive both loading and error/retry gates.
-Email editing delegates to `EmailAccounts.svelte`; filing-tree file previews and
-application delegate to `TaxonomyImport.svelte`. Both automation entry points
-link to `Automations.svelte` rather than maintaining another editor.
+`ConfigurationSection.svelte` shares form state, validation, required-load/retry
+gates and writes across setup/Settings. Mailbox editing delegates to
+`EmailAccounts.svelte`, imports to `TaxonomyImport.svelte`, and both automation
+entry points link to the existing `Automations.svelte` editor.
 
-`PeopleSettings.svelte` keeps Users, Groups, Metadata, and Taxonomy in one
-settings owner. Metadata uses a labeled type selector, including custom fields,
-instead of nested tabs. File operations remain separate from metadata CRUD.
-`UserCreateForm.svelte` owns user creation for both Settings and setup: labeled
-fields, optional capability disclosure, validation/error state, and a form footer.
-The shared form submits no member capabilities for an admin, preventing hidden
-selections from taking effect if that account is later demoted.
-It uses the existing API and shared capability labels; it adds no data cache,
-router, or authorization layer. User/group scope and filing-system boundaries
-remain unchanged.
-The signed-in user's Active switch reads `session.user.user_id`; the API remains
-authoritative for self-disable, last-active-administrator, and capability
-normalization safeguards.
-
-Verify the shared configuration flows with
+`PeopleSettings.svelte` owns Users, Groups, Metadata and Taxonomy. Metadata has
+one type selector including custom fields; file operations stay separate.
+`UserCreateForm.svelte` shares creation/validation between setup and Settings;
+it submits no hidden member capabilities for admins. Self-disable checks use
+`session.user.user_id`; the API owns self-disable, last-admin and capability
+normalization safeguards. Verify shared configuration with:
 `cd ui && bun run e2e --grep 'separates completed archive administration|refreshes intake owners|failed configuration reads'`.
+
+`AccountSettings.svelte` sends only `display_name` for profile saves; sign-in email
+is read-only. One token list separates owned `mobile_pairing` rows from manual/
+legacy credentials. Reads are ordered, abortable, bounded, generation-checked and
+refresh every two seconds while pairing is open, on close and on window focus.
+Account/system changes clear the list; unmount stops polling; revoke reloads so
+older polls cannot restore a credential. Demo kinds receive a read-only profile
+without token, vault, mailbox or pairing controls or requests.
 
 ## Interface wording
 
-Product labels have one source in the frontend:
-
 | Vocabulary | Source |
 | --- | --- |
-| Main navigation and page titles | `App.svelte` |
-| Setup steps and Archive configuration sections | `lib/configuration.js` |
-| Member capabilities | `lib/capabilities.js` |
-| Sensitivity choices | `lib/format.js` |
-| Document-list browser parameters | `lib/documentFilters.js` |
-| Intelligence roles and values | `lib/intelligence.js` |
+| Navigation and titles | `App.svelte` |
+| Setup/settings sections | `lib/configuration.js` |
+| Capabilities | `lib/capabilities.js` |
+| Dates, sizes, sensitivity | `lib/format.js` |
+| Saved-view filters and browser parameters | `lib/documentFilters.js` |
+| Intelligence roles/values | `lib/intelligence.js` |
 
-Components import these values instead of maintaining local copies. A wording
-or behavior change must update [Web app](/web-app), the focused feature guide,
-and its browser test in the same change. API field names can remain technical;
-visible labels should use the terms documented in the Web app guide.
+Import shared values instead of duplicating them. Update the owning feature guide,
+[Web app](/web-app) and relevant browser regression when labels/behavior change.
 
 ## State and interaction
 
-- Server responses are the source of truth for documents and settings.
-- Session state is shared because every route needs the current principal.
-- Successful uploads increment a small shared revision so visible document
-  lists can refresh in the same tab, including window-level drops. The shell
-  ignores drops already handled by the upload dialog or Upload screen and hands
-  other drops to its existing lazy Upload dialog. `UploadBox.svelte` owns picker,
-  drop, and confirmed paste batches through one upload path. Accepted batches
-  retain their immutable starting system during navigation while the account
-  remains unchanged. A system switch never redirects remaining files; old receipts
-  cannot increment the new system's refresh revision. Its unfinished processing
-  task reads precede document reads. Unmount releases polling timers and local
-  paste-preview URLs; timeouts remain explicit rather than declaring success.
-- Builder vocabularies come from their focused API endpoints, such as
-  `/api/automations/schema`; local values only keep the editor usable while a
-  request is unavailable.
-- Optimistic updates are limited to reversible interactions and must restore
-  state on failure.
+`UploadBox.svelte` owns picker, drop and confirmed paste batches through one path.
+The shell ignores drops handled by the dialog/Upload screen. Accepted batches
+keep their starting system across navigation while the account remains unchanged;
+old receipts cannot advance the new system's upload-refresh revision. Processing
+task reads precede document reads. Unmount releases polling timers and local paste
+URLs; timeouts pause checks without claiming completion.
 
-Document and selection sharing publish the created URL before attempting
-clipboard access. `lib/clipboard.js` reports whether copying succeeded; the
-same URL stays selectable for manual copy. Late creation responses are ignored
-after navigation or an account transition, including their clipboard effects.
+Share creation displays its URL before clipboard access. `lib/clipboard.js`
+reports failures so that URL stays manually selectable. Late creation/copy feedback
+is discarded after navigation/account changes. `LinkQR.svelte` lazily encodes
+private or existing shared links locally with escaped SVG matrix attributes;
+it issues no request, credential or new share. Document-detail full-text controls
+use already-authorized `content`, retaining Reveal for sensitive text and a
+selectable fallback when copying fails.
 
-`LinkQR.svelte` renders private document URLs and already-created share URLs with
-a browser-local encoder loaded only when a QR is opened. It draws escaped SVG
-attributes from the encoder matrix, not injected markup. QR generation has no
-server endpoint, outbound request, persistence, or credential issuance. The
-native document-link dialog keeps the normal authenticated document route;
-share codes retain the existing link's access, expiry, and revocation rules.
+Pairing secrets stay in component memory; QR/link displays disappear on expiry.
+Navigation/account/system changes discard them and cancel against their captured
+system when the original session remains. Late-created codes are cancelled too;
+generation/clipboard actions check
+the originating account/system. Mailbox OAuth flow and `sealed_secret_b64` handoff
+state also die with the form. The latter is a server-sealed actor/system-bound
+creation handoff, not a copy of the at-rest credential.
 
-Document detail expands and copies the full `content` already returned by its
-authorized API read. High-sensitivity text stays behind Reveal, including manual
-copy fallbacks. Copy failures provide a read-only text field; route/account
-changes discard late feedback. No extraction or clipboard-read request is added.
-
-Mailbox OAuth flows and `sealed_secret_b64` handoffs exist only in the current
-form's memory. Switching account/system destroys them; completion cannot reopen
-a discarded form. The wire field is a server-sealed actor/system-bound handoff,
-not a reusable copy of an at-rest mailbox credential.
-
-Focused `filing systems` cases in `ui/tests/setup.spec.js` use controlled delayed
-responses to exercise old-tree/counter/document and same-URL account races,
-captured uploads, numeric deep links, address resolution, Back/reload, S02-only
-entry, no-access profile controls, first-import selection, membership pagination,
-name changes, pairing cancellation, share/OAuth invalidation and parked research.
-These use the compiled browser and existing API fixtures; they are not evidence
-of server isolation. Real-server/browser integration must additionally exercise
-membership, document ACLs, delegated credentials and actual import/render work.
-
-Approval cards display decision context and deadlines without internal workflow
-or assignee identifiers. Rescan proposals use an **Affected documents** disclosure
-only when document links are available.
-
-Use semantic controls, visible focus, labels for icon-only actions, and stable
-dimensions for toolbars and repeated rows. Mobile layouts must preserve every
-workflow rather than hiding administrative actions without an alternative.
+Vocabularies come from focused endpoints; local fallbacks keep forms usable without
+becoming authoritative. Reversible optimistic changes restore state on failure.
+Use semantic controls, visible focus, icon labels and stable responsive layouts.
+Approval cards show decision context, not internal IDs; rescan document links live
+under **Affected documents**. [Web app](/web-app) owns remaining interaction detail.
 
 ## Security
 
-All browser authentication uses HttpOnly cookies, including the anonymous demo
-and its upgraded scratch session. The SPA does not read or persist credentials.
-Concurrent demo writes share one upgrade request; signing out or signing in
-invalidates pending reads/retries and cancels an unfinished upgrade.
-The scratch session retains its restricted demo identity on both API and direct
-resource requests. Cookie-authenticated mutations remain same-origin and pass
-Fetch Metadata protection on the server.
-Preview content is served by dedicated endpoints under a restrictive CSP, not
-injected into component HTML.
+Login/demo authentication uses HttpOnly cookies. The SPA does not persist session,
+mailbox or provider credentials; freshly issued tokens/pairing secrets remain in
+memory for their explicit handoff. Concurrent demo writes share one upgrade;
+login/logout invalidate reads/retries and abort unfinished upgrades. Scratch
+identity remains restricted for API and direct resources. Cookie mutations pass
+server same-origin/Fetch Metadata checks.
 
-Destructive confirmations use native modal dialogs for Escape, focus return,
-and an inert background rather than a custom keyboard/focus manager.
-
-Render ordinary text through Svelte escaping. The only intentionally marked-up
-search content is sanitized before display. Do not extend browser token storage
-to ordinary login, or store mailbox credentials or provider keys there.
+Serve previews through dedicated endpoints with restrictive CSP. Render ordinary
+text through Svelte escaping; sanitize marked-up search snippets before display.
+Destructive confirmations use native dialogs for Escape, focus return and inert
+backgrounds. Browser visibility never substitutes for server authorization.
 
 ## Adding or changing a screen
 
-1. Reuse or add an operation in `lib/api.js` and cover parsing behavior where
-   it is non-trivial.
-2. Put the screen in `routes/` and shared controls in `lib/`.
-3. Add the route and navigation entry in the existing registries.
-4. Cover loading, empty, error, and permission states.
-5. Check desktop and mobile layouts, keyboard operation, and text overflow.
-6. Run `make ui`, `make ui-check`, and the relevant API integration tests.
+1. Reuse named API operations, existing route registries and shared controls.
+2. Keep screen state in `routes/`; cover loading, empty, failure and permission states.
+3. Check desktop/mobile, keyboard behavior and text overflow.
+4. Update the owning user/architecture guide and run relevant API integration tests.
+5. Run `make ui` and `make ui-check`; commit the embedded assets.
 
-Keep dependencies rare. Svelte, Vite, and the existing icon approach cover the
-current product; a new package should remove more maintained code than it adds.
+Keep dependencies rare; a package should remove more maintained code than it adds.
+Additional verification:
+
+```sh
+cd ui
+bun run check
+bun test src
+bun run e2e --grep 'filing systems'
+PLAYWRIGHT_PRODUCTION=1 bun run e2e
+```
+
+Production preview serves built assets and proxies backend routes only. The
+controlled-response `filing systems` cases cover delayed reads, account races,
+captured uploads, deep links/history, no-access controls, first import, membership
+paging/name changes, pairing/share/OAuth cleanup and parked research. These verify
+compiled browser lifetimes, not server isolation: real-server checks must also
+exercise membership, document ACLs, delegated credentials and import/render work.

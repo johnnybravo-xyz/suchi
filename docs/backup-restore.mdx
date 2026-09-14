@@ -30,23 +30,12 @@ does not need its WAL or shared-memory files. An atomic snapshot of a live
 archive must include the database and its WAL together; never copy them at
 different times.
 
-The generated `rendered/<SYS>/00-09 System index/00.00 archive.huml` (without the
-SYS root before introduction) is only a current system/tree map with descriptions.
-It contains no keywords, automations,
-document inventory, permissions or review/version/link history, and is not the
-original imported preset. Neither this file nor a taxonomy export replaces a
-complete backup. Default seeded taxonomy exports cover representable preset-owned
-starters, not user-owned rules or edited forks.
-
-Server startup queues a refresh of a missing/stale index through durable jobs.
-After introduction startup queues one per system. Rendered links and indexes
-are recoverable projections, not the authority for document identity.
-
-It rebuilds from current database state without scanning document files.
-Failure preserves the last complete index; queued work is not a completed
-refresh. Do not edit the generated file or place your own files in its reserved
-namespace. Legacy incompatible reserved categories cause diagnostics, not an
-automatic renumbering or lossy recovery.
+The [generated filing index](/jd#generated-filing-index-and-paths) contains only
+the current system/tree map and descriptions. Taxonomy exports can also contain
+representable preset starters; neither preserves documents, user-owned rules,
+permissions or review/version/link history. They cannot replace a complete backup.
+Keep the generated index namespace reserved for Suchi; see the filing guide for
+refresh, recovery and legacy-category diagnostics.
 
 A complete backup is **whole-instance**: systems share SQLite, CAS and credential
 keys. It preserves membership, ACLs, document/version/link relationships and the
@@ -118,6 +107,11 @@ chown -R suchi:suchi /var/lib/suchi
 chmod 600 /var/lib/suchi/.decrypt-key
 systemctl start suchi
 ```
+
+If `rendered/` was omitted or the data directory moved, queue link rebuilding
+with `suchi refile --skip-automations`; add `--system S01` for each additional
+system. The running server processes those jobs. Startup itself refreshes
+filing indexes and pending moves, not every document link.
 
 The restore drill in the manually dispatched `checks` workflow verifies a
 built-in database snapshot, then stops and copies a synthetic archive into a
