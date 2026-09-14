@@ -26,6 +26,7 @@
   let loadPending = false
   let disposed = false
   const demoVisitor = $derived(session.user?.kind === 'demo-anon' || session.user?.kind === 'demo-scratch')
+  const accountToolsAvailable = $derived(!profileOnly && !demoVisitor)
 
   function isOwnMobileToken(token) {
     return token.source === 'mobile_pairing' && token.user_id === session.user?.user_id
@@ -37,6 +38,7 @@
   let profileBusy = $state(false)
   let avatarInput = $state()
   async function saveProfile() {
+    if (demoVisitor) return
     profileBusy = true
     try {
       await patchMe({ display_name: profile.display_name.trim() })
@@ -47,7 +49,7 @@
     } finally { profileBusy = false }
   }
   async function sendAvatar(file) {
-    if (!file) return
+    if (!file || demoVisitor) return
     try { await uploadAvatar(file); await refreshSession(); notify?.('Avatar updated') }
     catch (ex) {
       notify?.(ex.message || 'Could not upload the avatar')
@@ -55,7 +57,7 @@
   }
 
   async function load({ background = false } = {}) {
-    if (profileOnly || disposed || !session.user || (background && loadPending)) return
+    if (disposed || !accountToolsAvailable || !session.user || (background && loadPending)) return
     const user = session.user
     const generation = ++loadGeneration
     loadController?.abort()
@@ -84,10 +86,11 @@
 
   $effect(() => {
     const user = session.user
+    const available = accountToolsAvailable
     tokens = []
     err = ''
-    tokensLoading = !!user
-    if (user) untrack(() => void load())
+    tokensLoading = !!user && available
+    if (user && available) untrack(() => void load())
     return () => {
       loadGeneration++
       loadController?.abort()
@@ -111,7 +114,7 @@
   let vault = $state([])
   let vaultErr = $state('')
   async function loadVault() {
-    if (profileOnly) return
+    if (!accountToolsAvailable) return
     try {
       const res = await listDecryptionPasswords()
       vault = res?.results || res || []
@@ -224,27 +227,31 @@
         <span class="avatar profile-avatar">
           {#if session.user?.avatar_url}<img src={session.user.avatar_url} alt="" />{:else}{(profile.display_name || session.user?.email || '?').split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('')}{/if}
         </span>
-        <button class="btn sm" onclick={() => avatarInput.click()}>Change photo</button>
-        <input bind:this={avatarInput} type="file" accept="image/png,image/jpeg" hidden onchange={(e) => sendAvatar(e.target.files[0])} />
+        {#if !demoVisitor}
+          <button class="btn sm" onclick={() => avatarInput.click()}>Change photo</button>
+          <input bind:this={avatarInput} type="file" accept="image/png,image/jpeg" hidden onchange={(e) => sendAvatar(e.target.files[0])} />
+        {/if}
       </div>
       <div class="profile-fields">
         <div class="field">
           <label for="p-name">Display name</label>
-          <input id="p-name" class="input" bind:value={profile.display_name} />
+          <input id="p-name" class="input" bind:value={profile.display_name} readonly={demoVisitor} />
+          {#if demoVisitor}<span class="sub">Demo profiles are read-only.</span>{/if}
         </div>
         <div class="field">
           <label for="p-email">Email</label>
           <input id="p-email" class="input" type="email" value={session.user?.email || ''} readonly />
           <span class="sub">Your sign-in email cannot be changed here.</span>
         </div>
-        <button class="btn primary sm profile-save" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
+        {#if !demoVisitor}
+          <button class="btn primary sm profile-save" disabled={profileBusy} onclick={saveProfile}>Save profile</button>
+        {/if}
       </div>
     </div>
   </section>
 
 
-  {#if !profileOnly}
-  {#if !demoVisitor}
+  {#if accountToolsAvailable}
     <section class="settings-section" aria-labelledby="mobile-heading">
       <div class="section-heading">
         <div>
@@ -260,8 +267,6 @@
       {/if}
       {@render tokenRows(mobileTokens, 'No connected mobile apps. Pair the app to add one here.', true)}
     </section>
-  {/if}
-
   {#if pairingOpen}
     <Lazy load={loadMobilePairing} props={{ notify, onClose: () => { pairingOpen = false; load() } }} />
   {/if}

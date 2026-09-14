@@ -541,6 +541,21 @@ async function mockAPI(page, options = {}) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     options.apiRequests?.push({ method: request.method(), path })
+    if (options.demoSession && /^\/api\/(tokens|decryption-passwords|email-accounts|mobile\/pairing|users\/me)(\/|$)/.test(path)) {
+      if (options.demoSession === 'scratch') {
+        return route.fulfill({ status: 403, json: { code: 'token_route_forbidden', error: 'API tokens are not allowed on this route' } })
+      }
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+        return route.fulfill({ status: 403, json: { code: 'demo_upgrade_required', message: 'Anonymous demo sessions are read-only' } })
+      }
+      if (path.startsWith('/api/tokens')) {
+        return route.fulfill({ status: 401, json: { code: 'unauthorized', error: 'auth required' } })
+      }
+      if (path.startsWith('/api/email-accounts')) {
+        return route.fulfill({ status: 403, json: { code: 'forbidden', error: 'mailboxes not enabled for this user' } })
+      }
+      return route.fulfill({ json: { results: [] } })
+    }
     const thumb = path.match(/^\/api\/documents\/(\d+)\/thumb\/?$/)
     const documentDetail = path.match(/^\/api\/documents\/(\d+)$/)
     const documentVersions = path.match(/^\/api\/documents\/(\d+)\/versions\/$/)
@@ -595,7 +610,7 @@ async function mockAPI(page, options = {}) {
       authn_by: options.demoSession ? 'demo' : 'local',
       build_version: options.buildVersion,
       build_revision: options.buildRevision,
-      capabilities: options.capabilities ?? ['mailboxes'],
+      capabilities: options.capabilities ?? (options.demoSession ? [] : ['mailboxes']),
       kind: options.demoSession ? `demo-${options.demoSession}` : 'user',
     }
     else if (path === '/api/jd/systems') body = options.systems || { introduced: false, default_system_code: '', results: [] }
@@ -2911,13 +2926,68 @@ test('saves the display name through supported profile fields and keeps email re
   expect(changes).toEqual([{ display_name: 'Updated name' }])
 })
 
+test('refreshes the profile photo from the versioned avatar URL after upload', async ({ page }) => {
+  await mockAPI(page)
+  let avatarVersion = 'old-pixels'
+  const avatarRequests = []
+  await page.route('**/api/whoami', route => route.fulfill({ json: {
+    kind: 'user', user_id: 1, email: 'admin@example.test', display_name: 'Admin',
+    role: 'admin', capabilities: [], avatar_url: `/api/users/1/avatar?v=${avatarVersion}`,
+  } }))
+  const pixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64')
+  await page.route('**/api/users/1/avatar?*', route => {
+    avatarRequests.push(new URL(route.request().url()).searchParams.get('v'))
+    return route.fulfill({ contentType: 'image/png', body: pixels })
+  })
+  await page.route('**/api/users/me/avatar', route => {
+    avatarVersion = 'new-pixels'
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/#/settings')
+  const profile = page.getByRole('region', { name: 'Profile', exact: true })
+  await expect(profile.locator('img')).toHaveAttribute('src', '/api/users/1/avatar?v=old-pixels')
+  await expect.poll(() => avatarRequests.includes('old-pixels')).toBe(true)
+  await profile.locator('input[type=file]').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: pixels })
+  await expect(profile.locator('img')).toHaveAttribute('src', '/api/users/1/avatar?v=new-pixels')
+  await expect.poll(() => avatarRequests.includes('new-pixels')).toBe(true)
+})
+
 for (const demoSession of ['anon', 'scratch']) {
-  test(`hides unsupported mobile pairing from ${demoSession} demo account settings`, async ({ page }) => {
-    await mockAPI(page, { demoMode: true, demoSession, capabilities: [] })
+  test(`keeps ${demoSession} demo account settings read-only without unavailable requests`, async ({ page }) => {
+    const apiRequests = []
+    await mockAPI(page, { demoMode: true, demoSession, capabilities: [], apiRequests })
     await page.goto('/#/settings')
-    await expect(page.getByRole('region', { name: 'Profile', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Pair mobile app', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Mobile app', exact: true })).toHaveCount(0)
+    const profile = page.getByRole('region', { name: 'Profile', exact: true })
+    await expect(profile).toBeVisible()
+    await expect(profile.getByLabel('Display name', { exact: true })).toHaveAttribute('readonly', '')
+    await expect(profile.getByLabel('Email', { exact: true })).toHaveAttribute('readonly', '')
+    for (const name of ['Save profile', 'Change photo', 'Pair mobile app', 'Create token', 'Delete saved password']) {
+      await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
+    }
+    for (const name of ['Mobile app', 'API tokens', 'Saved decryption passwords', 'Mailboxes']) {
+      await expect(page.getByRole('heading', { name, exact: true })).toHaveCount(0)
+    }
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await paintSettled(page)
+    expect(apiRequests.filter(request => /^\/api\/(tokens|decryption-passwords|email-accounts|mobile\/pairing|users\/me)(\/|$)/.test(request.path))).toEqual([])
+
+    // The fixture must reject these operations just like the assembled server.
+    const denied = await page.evaluate(async () => {
+      const requests = [
+        ['GET', '/api/tokens/'], ['GET', '/api/email-accounts'],
+        ['PATCH', '/api/users/me'], ['POST', '/api/users/me/avatar'],
+        ['POST', '/api/mobile/pairing'], ['POST', '/api/tokens/'],
+        ['DELETE', '/api/decryption-passwords/1'],
+      ]
+      return Promise.all(requests.map(async ([method, path]) => {
+        const response = await fetch(path, { method })
+        return { status: response.status, code: (await response.json()).code }
+      }))
+    })
+    expect(denied).toEqual(demoSession === 'scratch'
+      ? Array(7).fill({ status: 403, code: 'token_route_forbidden' })
+      : [{ status: 401, code: 'unauthorized' }, { status: 403, code: 'forbidden' },
+        ...Array(5).fill({ status: 403, code: 'demo_upgrade_required' })])
   })
 }
 
