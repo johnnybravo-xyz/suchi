@@ -2902,6 +2902,11 @@ test('previews archived email bodies inline', async ({ page }) => {
 })
 
 test('saves the display name through supported profile fields and keeps email read-only', async ({ page }) => {
+  const pageErrors = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('console', message => {
+    if (message.text().includes('derived_inert')) pageErrors.push(message.text())
+  })
   await mockAPI(page)
   const changes = []
   await page.route('**/api/users/me', route => {
@@ -2924,9 +2929,15 @@ test('saves the display name through supported profile fields and keeps email re
   await expect(profile.getByLabel('Email', { exact: true })).toHaveValue('admin@example.test')
   await expect(profile.getByLabel('Email', { exact: true })).toHaveAttribute('readonly', '')
   expect(changes).toEqual([{ display_name: 'Updated name' }])
+  expect(pageErrors).toEqual([])
 })
 
 test('refreshes the profile photo from the versioned avatar URL after upload', async ({ page }) => {
+  const pageErrors = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('console', message => {
+    if (message.text().includes('derived_inert')) pageErrors.push(message.text())
+  })
   await mockAPI(page)
   let avatarVersion = 'old-pixels'
   const avatarRequests = []
@@ -2950,6 +2961,7 @@ test('refreshes the profile photo from the versioned avatar URL after upload', a
   await profile.locator('input[type=file]').setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: pixels })
   await expect(profile.locator('img')).toHaveAttribute('src', '/api/users/1/avatar?v=new-pixels')
   await expect.poll(() => avatarRequests.includes('new-pixels')).toBe(true)
+  expect(pageErrors).toEqual([])
 })
 
 for (const demoSession of ['anon', 'scratch']) {

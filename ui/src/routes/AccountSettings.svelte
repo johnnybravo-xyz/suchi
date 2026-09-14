@@ -39,20 +39,22 @@
   let avatarInput = $state()
   async function saveProfile() {
     if (demoVisitor) return
+    const notifyResult = notify
     profileBusy = true
     try {
       await patchMe({ display_name: profile.display_name.trim() })
       await refreshSession()
-      notify?.('Profile saved')
+      notifyResult?.('Profile saved')
     } catch (ex) {
-      notify?.(ex.message || 'Could not save the profile')
-    } finally { profileBusy = false }
+      notifyResult?.(ex.message || 'Could not save the profile')
+    } finally { if (!disposed) profileBusy = false }
   }
   async function sendAvatar(file) {
     if (!file || demoVisitor) return
-    try { await uploadAvatar(file); await refreshSession(); notify?.('Avatar updated') }
+    const notifyResult = notify
+    try { await uploadAvatar(file); await refreshSession(); notifyResult?.('Avatar updated') }
     catch (ex) {
-      notify?.(ex.message || 'Could not upload the avatar')
+      notifyResult?.(ex.message || 'Could not upload the avatar')
     }
   }
 
