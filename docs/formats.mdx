@@ -49,9 +49,12 @@ flowchart TD
     SPLIT -- no<br/>separators --> BLANK[pageanalyze<br/><i>optional · drop blank pages</i>]
     BLANK --> INSP[pdf-inspector<br/>pdftotext -layout]
     INSP -- ≥ 32 non-whitespace<br/>chars --> TN[text-native shortcut<br/>write content directly]
-    INSP -- otherwise --> OCR[OCR path<br/><i>tesseract or ocrmypdf</i>]
+    INSP -- otherwise --> DEVICE{Accepted nonblank<br/>device OCR?}
+    DEVICE -- yes --> DT[retain device text]
+    DEVICE -- no --> OCR[OCR path<br/><i>tesseract or ocrmypdf</i>]
     OCR -.->|only when engine=ocrmypdf| ARCH[(searchable-PDF archive<br/>documents.archive_blob)]
     TN --> ZUG[zugferd<br/><i>Factur-X / XRechnung CII XML</i>]
+    DT --> ZUG
     OCR --> ZUG
     ZUG --> RULES[automations → rendered-view symlink → optional LLM handoff]
 
@@ -77,7 +80,11 @@ Detail per step (matching the boxes above):
   working copy.
 - **pdf-inspector** — `pdftotext -layout`. ≥ 32 non-whitespace chars is
   the text-native shortcut (write `documents.content` directly);
-  otherwise fall through to OCR (see engine dispatch below).
+  native text replaces provisional device text.
+- **Device text** — an image-only PDF retains accepted nonblank device OCR,
+  skipping server OCR. This creates no new searchable-PDF archive, including
+  with OCRmyPDF. See [upload OCR metadata](/api#post-apidocuments) for confidence
+  and validation rules. Without accepted text, use server OCR below.
 - **OCR path** — writes the text sidecar to `documents.content`. When
   the engine is `ocrmypdf` it also writes a searchable-PDF archive
   into `documents.archive_blob`.
@@ -85,9 +92,9 @@ Detail per step (matching the boxes above):
   XML parse. Emits `invoice_*` custom fields when a Factur-X /
   XRechnung attachment is present.
 
-Each step degrades independently. Missing `pdftotext` sends every PDF
-to the OCR path (slower but correct). Missing OCR engine leaves the
-content empty for scanned PDFs. Missing `qpdf` keeps the original
+Each step degrades independently. Missing `pdftotext` retains accepted device
+text or falls through to server OCR. Without accepted text or an available
+OCR engine, a scanned PDF's content stays empty. Missing `qpdf` keeps the original
 bytes as-is (encrypted PDFs will then fail downstream).
 
 ### OCR engine dispatch
@@ -243,12 +250,13 @@ a specific payload — and fan out one document per segment.
 - Separator pages are dropped; the ranges between them become segments.
 - Each segment becomes a fresh document (with its own `original_blob`
   and `post-ingest` job), linked via `split_parent_id`.
-- Children inherit the original capture time, filing category, and sensitivity
-  immediately. Device OCR belongs to the combined feeder scan and is not copied
-  to a segment; each child runs server extraction independently.
+- Each child inherits the live parent's owner, title, capture time, category,
+  and sensitivity in its creation transaction. Edits during extraction are
+  preserved; a trashed parent cannot create new children. Device OCR belongs to
+  the combined scan and is discarded; each child runs server extraction.
 - The parent doc is soft-deleted so the workspace only shows the
   children. Undelete brings the parent (original combined scan) back
-  if the split was wrong.
+  if the split was wrong. Retries preserve its original Trash retention date.
 
 **Why QR-only:** blank-page splitting sounds ergonomic but silently
 breaks legit multi-page docs that happen to contain a mostly-empty

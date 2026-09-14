@@ -702,14 +702,11 @@ func (h *Handler) splitAndFanOut(ctx context.Context, log *slog.Logger, parentID
 }
 
 func (h *Handler) fanOutSegments(ctx context.Context, log *slog.Logger, parentID int64, pdfBytes []byte, segments []docsplit.Segment) (bool, error) {
-	// Load the parent's durable acquisition and classification metadata before
-	// creating children. In particular, sensitivity must be present from the
-	// first child read; adding it later would briefly expose a restricted scan.
-	parent, err := h.loadParentForSplit(ctx, parentID)
-	if err != nil {
+	var contentSource string
+	if err := h.db.Read.QueryRowContext(ctx, `SELECT content_source FROM documents WHERE id=?`, parentID).Scan(&contentSource); err != nil {
 		return false, fmt.Errorf("load parent for split: %w", err)
 	}
-	if parent.HasDeviceOCR {
+	if contentSource == "device_ocr" {
 		// Device OCR describes the combined feeder scan, so there is no safe way
 		// to assign its text or confidence to individual segments. Each child
 		// starts without device text and runs the normal server extraction path.
@@ -728,7 +725,7 @@ func (h *Handler) fanOutSegments(ctx context.Context, log *slog.Logger, parentID
 		if err != nil {
 			return false, fmt.Errorf("extract segment %d: %w", i+1, err)
 		}
-		if err := h.createSplitChild(ctx, log, parent, parentID, i+1, len(segments), seg, segBytes); err != nil {
+		if err := h.createSplitChild(ctx, log, parentID, i+1, len(segments), seg, segBytes); err != nil {
 			return false, fmt.Errorf("create segment %d: %w", i+1, err)
 		}
 	}
@@ -752,41 +749,6 @@ func (h *Handler) splitChildExists(ctx context.Context, parentID int64, index in
 	return exists, err
 }
 
-// splitParent is the projection of the parent doc row needed to seed
-// its split children.
-type splitParent struct {
-	OwnerID      int64
-	SystemID     int64
-	Title        string
-	MIME         string
-	JDCategoryID int64
-	SourceMTime  sql.NullInt64
-	Sensitivity  string
-	HasDeviceOCR bool
-}
-
-func (h *Handler) loadParentForSplit(ctx context.Context, docID int64) (*splitParent, error) {
-	p := &splitParent{}
-	var (
-		mimeNull      sql.NullString
-		contentSource string
-	)
-	err := h.db.Read.QueryRowContext(ctx, `
-		SELECT system_id, owner_id, title, COALESCE(mime_type, ''), jd_category_id,
-		       source_mtime, COALESCE(sensitivity, ''), content_source
-		FROM documents WHERE id = ?
-	`, docID).Scan(&p.SystemID, &p.OwnerID, &p.Title, &mimeNull, &p.JDCategoryID,
-		&p.SourceMTime, &p.Sensitivity, &contentSource)
-	if err != nil {
-		return nil, err
-	}
-	if mimeNull.Valid {
-		p.MIME = mimeNull.String
-	}
-	p.HasDeviceOCR = contentSource == "device_ocr"
-	return p, nil
-}
-
 func (h *Handler) extractSegment(ctx context.Context, log *slog.Logger, pdfBytes []byte, seg docsplit.Segment) ([]byte, error) {
 	res, err := qpdf.SelectPages(ctx, pdfBytes, seg.Pages(), log, qpdf.Options{})
 	if err != nil {
@@ -801,43 +763,41 @@ func (h *Handler) extractSegment(ctx context.Context, log *slog.Logger, pdfBytes
 // createSplitChild writes the document row and post-ingest job atomically.
 // The preceding CAS put may leave an unreferenced blob on failure; normal GC
 // reclaims it.
-func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent *splitParent, parentID int64, index, total int, seg docsplit.Segment, segBytes []byte) error {
+func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parentID int64, index, total int, seg docsplit.Segment, segBytes []byte) error {
 	ref, err := h.cas.Put(bytes.NewReader(segBytes))
 	if err != nil {
 		return fmt.Errorf("cas put: %w", err)
 	}
-	// Title suffix disambiguates children in list views.
-	title := fmt.Sprintf("%s (part %d/%d)", parent.Title, index, total)
-	if parent.Title == "" {
-		title = fmt.Sprintf("Untitled (part %d/%d)", index, total)
-	}
-
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix()
-		res, err := tx.ExecContext(ctx, `
+		var childID, systemID int64
+		var mime string
+		// Privacy and human edits come from the live parent under the writer,
+		// after segment extraction. Trash cannot race a new visible child.
+		err := tx.QueryRowContext(ctx, `
 			INSERT INTO documents(
 				system_id, owner_id, original_blob, original_size, title, mime_type,
 				jd_category_id, added_at, created_at, updated_at,
 				split_parent_id, split_origin_id, split_index,
 				source_mtime, sensitivity
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, parent.SystemID, parent.OwnerID, ref.SHA256, ref.Size, title, parent.MIME,
-			parent.JDCategoryID, now, now, now,
-			parentID, parentID, index, parent.SourceMTime, parent.Sensitivity)
+			)
+			SELECT system_id, owner_id, ?, ?,
+			       CASE WHEN title = '' THEN 'Untitled' ELSE title END || ?, COALESCE(mime_type, ''),
+			       jd_category_id, ?, ?, ?, id, id, ?, source_mtime, sensitivity
+			FROM documents WHERE id = ? AND trashed_at IS NULL
+			RETURNING id, system_id, mime_type
+		`, ref.SHA256, ref.Size, fmt.Sprintf(" (part %d/%d)", index, total), now, now, now, index, parentID).
+			Scan(&childID, &systemID, &mime)
 		if err != nil {
-			return err
-		}
-		childID, err := res.LastInsertId()
-		if err != nil {
-			return err
+			return fmt.Errorf("create child from live parent %d: %w", parentID, err)
 		}
 		if err := ingestmeta.CopySources(ctx, tx, parentID, childID); err != nil {
 			return err
 		}
 		payload, _ := json.Marshal(postIngestPayload{
-			SHA256: ref.SHA256, Size: ref.Size, MIME: parent.MIME,
+			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,
 		})
-		if err := jobs.Enqueue(ctx, tx, Kind, childID, parent.SystemID, string(payload)); err != nil {
+		if err := jobs.Enqueue(ctx, tx, Kind, childID, systemID, string(payload)); err != nil {
 			return err
 		}
 		log.Info("post-ingest.scan_split.child_created",
@@ -850,7 +810,7 @@ func (h *Handler) createSplitChild(ctx context.Context, log *slog.Logger, parent
 func (h *Handler) softDeleteParent(ctx context.Context, docID int64) error {
 	return h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			UPDATE documents SET trashed_at = ?, updated_at = ? WHERE id = ?
+			UPDATE documents SET trashed_at = ?, updated_at = ? WHERE id = ? AND trashed_at IS NULL
 		`, time.Now().Unix(), time.Now().Unix(), docID)
 		return err
 	})

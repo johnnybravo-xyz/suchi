@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Split scans inherit current parent privacy and filing metadata at child
+  creation; trash during extraction prevents new children, and retries preserve
+  the original recovery deadline.
 - Honor refile options in streamed requests and clarify that render-only refiling
   does not run classification.
 - Serialize rendered-link publication with permanent deletion so an in-flight

@@ -899,11 +899,7 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			}
 			var childErr error
 			if mode == "split" {
-				parent, err := h.loadParentForSplit(ctx, parentID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				childErr = h.createSplitChild(ctx, h.log, parent, parentID, 1, 1, docsplit.Segment{}, []byte("split child"))
+				childErr = h.createSplitChild(ctx, h.log, parentID, 1, 1, docsplit.Segment{}, []byte("split child"))
 			} else {
 				parsed, err := eml.Parse([]byte(msgConvertedEmail))
 				if err != nil {
@@ -927,11 +923,7 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "split" {
-				parent, err := h.loadParentForSplit(ctx, parentID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := h.createSplitChild(ctx, h.log, parent, parentID, 1, 1, docsplit.Segment{}, []byte("split child")); err != nil {
+				if err := h.createSplitChild(ctx, h.log, parentID, 1, 1, docsplit.Segment{}, []byte("split child")); err != nil {
 					t.Fatal(err)
 				}
 			} else {
