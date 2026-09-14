@@ -174,8 +174,9 @@ and instance admins remain trusted; SYS is not separate infrastructure or keys.
 
 Keep network calls, subprocesses, and long file processing outside write
 transactions. Enqueue required asynchronous work with the state change that
-requires it, not in a separate best-effort write afterward. Audit logging is
-generally post-commit and must not be mistaken for a transactional job outbox.
+requires it, not in a separate best-effort write afterward. Audit persistence and
+sink delivery remain best-effort, with failures reported through logs. Most
+auditing is post-commit and must not be mistaken for a transactional job outbox.
 
 Original and derived bytes are addressed by SHA-256:
 
@@ -290,8 +291,16 @@ These gates answer different questions:
   hooks from effective access, so promotion does not quarantine still-authorized
   resources and demotion cannot revive hidden grants.
   Local mailbox, share-link and shared-view revocations commit in that same
-  transaction; a cascade failure rolls back the entire transition. Resource logs,
-  audit fan-out and mailbox supervisor reloads run after commit.
+  transaction; cascade failure rolls back the entire transition. Capability audit
+  writes also use it, so successfully persisted events retain committed transition
+  order even when external delivery is delayed. Persistence remains best-effort:
+  `core/audit.RecordInTx` captures write outcomes without logging or sink calls;
+  `Record.Emit` reports failed writes or delivers persisted events after commit.
+  Account-disable OAuth invalidation runs only after successful commit. The
+  existing flow-store mutex spans commit and invalidation, preserving the
+  writer-to-flow-store lock order without deleting flows on rollback or letting
+  a later re-enable/start overtake invalidation. Resource logs, audit fan-out and
+  mailbox supervisor reloads remain outside the writer.
   See [account safeguards](/permissions#account-safeguards).
 - **Object authorization:** `core/authz` first checks actual object existence and
   explicit/token system boundary, then active-user system entry, then existing

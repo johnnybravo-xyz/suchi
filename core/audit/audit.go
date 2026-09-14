@@ -39,6 +39,24 @@ type Event struct {
 	RequestID  string
 }
 
+// Record holds an audit write outcome awaiting post-commit reporting.
+// Call Emit only after the transaction commits; discard it on rollback.
+type Record struct {
+	event     Event
+	timestamp int64
+	writeErr  error
+}
+
+// Emit reports failed persistence or delivers a committed event to sinks.
+// It does not acquire the database writer.
+func (r Record) Emit(ctx context.Context, log *slog.Logger) {
+	if r.writeErr != nil {
+		log.Error("audit.write.failed_intx", "err", r.writeErr.Error(), "action", r.event.Action)
+		return
+	}
+	fanoutToSinks(ctx, log, r.event, r.timestamp)
+}
+
 // ---------- sinks (SIEM export etc.) ----------
 
 // sinkRegistry holds every registered AuditSink. Populated at boot;
@@ -133,74 +151,68 @@ func toMap(v any) (map[string]any, error) {
 
 // Log persists e. Failures are logged and swallowed on purpose — a failed
 // audit write must not fail the user's action, only be visible in logs
-// and metrics for operator response. The trade-off is documented in
-// docs/audit.md.
+// for operator response. See docs/architecture.mdx.
 //
 // After the DB write, every registered AuditSink (see RegisterSink) is
 // fired with the same event. Sink failures don't roll back the row.
 func Log(ctx context.Context, d *db.DB, log *slog.Logger, e Event) {
-	before, err := marshal(e.Before)
-	if err != nil {
-		log.Error("audit.marshal_before", "err", err.Error(), "action", e.Action)
-		return
+	record, before, after, err := prepareRecord(e)
+	if err == nil {
+		err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return record.write(ctx, tx, before, after)
+		})
 	}
-	after, err := marshal(e.After)
-	if err != nil {
-		log.Error("audit.marshal_after", "err", err.Error(), "action", e.Action)
-		return
-	}
-
-	kind, id := ActorSystem, sql.NullInt64{}
-	if e.Actor != nil {
-		switch e.Actor.Kind {
-		case "user":
-			kind, id = ActorUser, sql.NullInt64{Int64: e.Actor.UserID, Valid: true}
-		case "token", "demo-scratch":
-			kind, id = ActorToken, sql.NullInt64{Int64: e.Actor.TokenID, Valid: true}
-		}
-	}
-	ts := time.Now().Unix()
-	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO audit_events
-				(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`,
-			ts,
-			kind, id,
-			e.Action, e.ObjectKind, nullInt64(e.ObjectID),
-			nullInt64(e.SystemID),
-			nullString(before), nullString(after),
-			nullString(e.RequestID),
-		)
-		return err
-	})
 	if err != nil {
 		log.Error("audit.write.failed", "err", err.Error(), "action", e.Action)
 		return
 	}
-	// Only fan out on successful DB write. A sink seeing an event
-	// that isn't in audit_events would corrupt the "durable record"
-	// invariant downstream verifiers depend on.
-	fanoutToSinks(ctx, log, e, ts)
+	record.Emit(ctx, log)
 }
 
 // LogInTx is the same as Log, but writes through a caller-supplied
 // tx. Use this when the caller is already inside a WriteTx (the
 // automations action layer, the resolve-proposal handler) — writing
 // via the top-level `Log` would deadlock the single-writer pool.
-// Sinks fanout still runs on success.
+// Sinks fanout still runs on success, before the caller's commit decision.
+// Use RecordInTx and deferred Emit when delivery must wait for commit.
 func LogInTx(ctx context.Context, tx *sql.Tx, log *slog.Logger, e Event) {
+	record, before, after, err := prepareRecord(e)
+	if err == nil {
+		err = record.write(ctx, tx, before, after)
+	}
+	if err != nil {
+		log.Error("audit.write.failed_intx", "err", err.Error(), "action", e.Action)
+		return
+	}
+	fanoutToSinks(ctx, log, e, record.timestamp)
+}
+
+// RecordInTx attempts to persist an event without logging or invoking sinks.
+// Persistence is best-effort, as in LogInTx. Emit the returned record only after
+// commit to report a failed write or deliver a persisted event; discard on rollback.
+func RecordInTx(ctx context.Context, tx *sql.Tx, e Event) Record {
+	record, before, after, err := prepareRecord(e)
+	if err != nil {
+		return Record{event: e, writeErr: err}
+	}
+	record.writeErr = record.write(ctx, tx, before, after)
+	return record
+}
+
+func prepareRecord(e Event) (Record, string, string, error) {
 	before, err := marshal(e.Before)
 	if err != nil {
-		log.Error("audit.marshal_before", "err", err.Error(), "action", e.Action)
-		return
+		return Record{}, "", "", err
 	}
 	after, err := marshal(e.After)
 	if err != nil {
-		log.Error("audit.marshal_after", "err", err.Error(), "action", e.Action)
-		return
+		return Record{}, "", "", err
 	}
+	return Record{event: e, timestamp: time.Now().Unix()}, before, after, nil
+}
+
+func (r Record) write(ctx context.Context, tx *sql.Tx, before, after string) error {
+	e := r.event
 	kind, id := ActorSystem, sql.NullInt64{}
 	if e.Actor != nil {
 		switch e.Actor.Kind {
@@ -210,23 +222,19 @@ func LogInTx(ctx context.Context, tx *sql.Tx, log *slog.Logger, e Event) {
 			kind, id = ActorToken, sql.NullInt64{Int64: e.Actor.TokenID, Valid: true}
 		}
 	}
-	ts := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO audit_events
 			(ts, actor_kind, actor_id, action, object_kind, object_id, system_id, before_json, after_json, request_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		ts,
+		r.timestamp,
 		kind, id,
 		e.Action, e.ObjectKind, nullInt64(e.ObjectID),
 		nullInt64(e.SystemID),
 		nullString(before), nullString(after),
 		nullString(e.RequestID),
-	); err != nil {
-		log.Error("audit.write.failed_intx", "err", err.Error(), "action", e.Action)
-		return
-	}
-	fanoutToSinks(ctx, log, e, ts)
+	)
+	return err
 }
 
 func marshal(v any) (string, error) {

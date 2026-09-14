@@ -339,10 +339,14 @@ administrator can still use, while demotion revokes access not explicitly retain
 
 The active-administrator check and role/capability normalization use the current
 row inside the write transaction. Local mailbox, share-link and shared-view
-revocations run in the same transaction. Rejected patches and failed cascades
-leave the user and resources unchanged; cascade failures return **500**.
-Later promotions or regrants cannot be overtaken by older revocations. Resource
-logs, audit emission and runtime reloads happen after commit.
+revocations use the same transaction. Capability audit writes also occur there:
+successfully stored records follow committed transition order. Audit persistence
+remains best-effort; failed audit writes are logged without rejecting an otherwise
+valid update. Rejected patches and cascade failures leave the user and resources
+unchanged; cascade failures return **500**. Later promotions or regrants cannot be
+overtaken by older revocations. OAuth flows are invalidated only after a disable
+commits; rejected disables preserve them. Resource logs, audit failure reports,
+external audit delivery and runtime reloads happen after commit.
 
 ### `PATCH /api/users/me`
 

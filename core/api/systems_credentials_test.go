@@ -412,6 +412,80 @@ func TestSystemsDisablingActorInvalidatesPendingOAuthEvenAfterReenable(t *testin
 	}
 }
 
+func TestSystemsDisableOAuthFollowsCommit(t *testing.T) {
+	for _, failure := range []string{"cascade", "audit"} {
+		t.Run(failure, func(t *testing.T) {
+			s, mux := newSystemsOAuthServer(t)
+			sealed, err := emailaccounts.SealPassword(s.EmailwatchAEAD, "password")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := createOriginalEmailAccount(t.Context(), s.DB, emailaccounts.Account{
+				Name: "rollback", OwnerID: 5, Provider: emailaccounts.ProviderCustom,
+				Host: "mail.example.test", Port: 993, UseTLS: true,
+				AuthMethod: emailaccounts.AuthPassword, Username: "owner",
+				SealedSecret: sealed, Enabled: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			trigger := `CREATE TRIGGER fail_disable BEFORE UPDATE OF enabled ON email_accounts
+				BEGIN SELECT RAISE(ABORT, 'forced cascade failure'); END`
+			if failure == "audit" {
+				trigger = `CREATE TRIGGER fail_disable BEFORE INSERT ON audit_events
+					WHEN NEW.action LIKE 'user.capability_%'
+					BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`
+			}
+			if _, err := s.DB.Write.Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			if !s.oauthFlows.put("pending-disable", oauthFlowEntry{
+				clientID: "11111111-1111-1111-1111-111111111111",
+				ownerID:  5, systemID: 1, expiresAt: now.Add(time.Minute),
+			}, now) {
+				t.Fatal("flow rejected")
+			}
+			wantStatus, wantDisabled, wantEnabled := http.StatusInternalServerError, 0, 1
+			if failure == "audit" {
+				wantStatus, wantDisabled, wantEnabled = http.StatusOK, 1, 0
+			}
+			w := systemsBoundaryRequest(mux, "PATCH", "/api/admin/users/5",
+				`{"disabled":true,"capabilities":[]}`, adminPrincipal(1))
+			if w.Code != wantStatus {
+				t.Fatalf("disable: %d %s; want %d", w.Code, w.Body.String(), wantStatus)
+			}
+			var disabled, enabled int
+			if err := s.DB.Read.QueryRow(`SELECT disabled FROM users WHERE id=5`).Scan(&disabled); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DB.Read.QueryRow(`SELECT count(*) FROM email_accounts WHERE owner_id=5 AND enabled=1`).Scan(&enabled); err != nil {
+				t.Fatal(err)
+			}
+			if disabled != wantDisabled || enabled != wantEnabled {
+				t.Fatalf("account state: disabled=%d enabled mailboxes=%d; want %d/%d",
+					disabled, enabled, wantDisabled, wantEnabled)
+			}
+			wantOAuthStatus, wantOAuthBody := http.StatusAccepted, `"status":"pending"`
+			if failure == "audit" {
+				// Audit persistence is best-effort: the disable committed and
+				// its pending flow must stay gone after restoring access.
+				w = systemsBoundaryRequest(mux, "PATCH", "/api/admin/users/5",
+					`{"disabled":false,"capabilities":["mailboxes"]}`, adminPrincipal(1))
+				if w.Code != http.StatusOK {
+					t.Fatalf("restore access: %d %s", w.Code, w.Body.String())
+				}
+				wantOAuthStatus, wantOAuthBody = http.StatusNotFound, `"code":"flow_gone"`
+			}
+			w = systemsBoundaryRequest(mux, "POST", "/api/email-accounts/oauth/complete?system=S01",
+				`{"flow_handle":"pending-disable"}`, memberPrincipal(5))
+			if w.Code != wantOAuthStatus || !strings.Contains(w.Body.String(), wantOAuthBody) {
+				t.Fatalf("OAuth after transaction: %d %s; want %d %s",
+					w.Code, w.Body.String(), wantOAuthStatus, wantOAuthBody)
+			}
+		})
+	}
+}
+
 func TestSystemsOAuthReconnectWaitingForWriterCannotSurviveReadmission(t *testing.T) {
 	s, mux := newSystemsOAuthServer(t)
 	var account *emailaccounts.Account

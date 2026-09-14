@@ -12,9 +12,10 @@ Notable user-visible changes to Suchi are recorded here.
 - Canonicalize administrator capabilities on creation and role changes, including
   direct API calls. Promotion preserves implicit access; demotion cannot revive
   hidden member grants.
-- Commit capability revocations with the user change, preventing stale demotions
-  from revoking resources created after a regrant. Cascade failures roll back
-  the account change and all dependent resource updates.
+- Commit capability revocations and successful audit writes with the user change,
+  preserving transition order and protecting resources created after a regrant.
+  Cascade failures roll back the account and dependent resources. Audit persistence
+  remains best-effort; rejected disables preserve pending Microsoft sign-ins.
 - Remove ineffective dynamic API imports and missing-Svelte-config build notices.
 - Stack email intake matching fields at full width with equal single-line
   heights and individual resize handles.

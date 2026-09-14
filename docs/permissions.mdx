@@ -134,7 +134,10 @@ Removing a capability also closes the access it granted:
 
 The database revocations and account change succeed or fail together. A concurrent
 promotion or regrant cannot cause an older revocation to remove resources created
-after access was restored.
+after access was restored. Successfully stored capability audit records follow
+committed transition order. Audit persistence remains best-effort; failed writes
+are logged without rejecting account updates. Rejected disables do not discard
+pending Microsoft sign-ins.
 
 ## Groups
 

@@ -515,6 +515,20 @@ func TestPatchUser_demotion_preserves_post_promotion_resources(t *testing.T) {
 	if links != 1 || views != 1 {
 		t.Fatalf("stale demotion revoked newly authorized resources: live links=%d shared views=%d", links, views)
 	}
+	var trail string
+	if err := d.Read.QueryRow(`
+		SELECT group_concat(action, ',') FROM (
+			SELECT action FROM audit_events
+			WHERE object_kind='user' AND object_id=2
+			  AND COALESCE(json_extract(before_json, '$.capability'),
+			               json_extract(after_json, '$.capability'))='share_links'
+			ORDER BY id
+		)`).Scan(&trail); err != nil {
+		t.Fatal(err)
+	}
+	if trail != "user.capability_revoked,user.capability_granted" {
+		t.Fatalf("audit trail reversed committed transitions: %s", trail)
+	}
 }
 
 func TestPatchUser_revoke_failure_rolls_back_demotion(t *testing.T) {

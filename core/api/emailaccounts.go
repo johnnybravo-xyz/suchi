@@ -175,6 +175,12 @@ func (s *oauthFlowStore) delete(handle string) {
 func (s *oauthFlowStore) invalidateMember(userID, systemID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.invalidateMemberLocked(userID, systemID)
+}
+
+// The caller holds mu, including across commit when invalidation must wait for
+// successful persistence without letting a later flow overtake it.
+func (s *oauthFlowStore) invalidateMemberLocked(userID, systemID int64) {
 	for handle, entry := range s.entries {
 		if entry.ownerID == userID && (systemID == 0 || entry.systemID == systemID) {
 			delete(s.entries, handle)

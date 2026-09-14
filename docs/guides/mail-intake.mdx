@@ -106,6 +106,8 @@ not require a Suchi restart.
 Removing an owner's `mailboxes` capability atomically disables their mailbox rows
 with the user change, then reloads the supervisor after commit. See
 [capability revocation](/permissions#capabilities) for regrant behavior.
+Disabling an account discards its pending Microsoft sign-ins only after the
+account change commits; a rejected disable does not discard them.
 
 Renaming a mailbox also updates its display name on linked document sources.
 The address and folder remain the values observed at ingest. Deleting the

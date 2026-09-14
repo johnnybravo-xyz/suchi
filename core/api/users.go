@@ -267,6 +267,8 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		requestedCaps  authz.Set
 		added, removed authz.Set
 		revokedCounts  map[authz.Capability]int64
+		auditRecords   []audit.Record
+		oauthLocked    bool
 	)
 	capsWereTouched := body.Capabilities != nil || body.Role != nil
 	if body.Capabilities != nil {
@@ -277,6 +279,12 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	actor := auth.FromContext(r.Context())
+	defer func() {
+		if oauthLocked {
+			s.oauthFlows.mu.Unlock()
+		}
+	}()
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		var allowed bool
 		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, p.UserID).Scan(&allowed); err != nil {
@@ -367,11 +375,37 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 			}
 			revokedCounts[cap] = n
 		}
+		for cap := range added {
+			record := audit.RecordInTx(r.Context(), tx, audit.Event{
+				Actor: actor, Action: "user.capability_granted",
+				ObjectKind: "user", ObjectID: uid,
+				After: map[string]any{"capability": string(cap)},
+			})
+			auditRecords = append(auditRecords, record)
+		}
+		for cap := range removed {
+			record := audit.RecordInTx(r.Context(), tx, audit.Event{
+				Actor: actor, Action: "user.capability_revoked",
+				ObjectKind: "user", ObjectID: uid,
+				Before: map[string]any{"capability": string(cap)},
+			})
+			auditRecords = append(auditRecords, record)
+		}
 		if body.Disabled != nil && *body.Disabled {
-			s.oauthFlows.invalidateMember(uid, 0)
+			// Preserve writer -> flow-store lock order through commit. A later
+			// re-enable/start cannot slip between commit and invalidation.
+			s.oauthFlows.mu.Lock()
+			oauthLocked = true
 		}
 		return nil
 	})
+	if oauthLocked {
+		if err == nil {
+			s.oauthFlows.invalidateMemberLocked(uid, 0)
+		}
+		s.oauthFlows.mu.Unlock()
+		oauthLocked = false
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "user not found")
 		return
@@ -385,34 +419,13 @@ func (s *Server) PatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actor := auth.FromContext(r.Context())
-
 	// Report only committed cascades, without holding the writer during logging.
 	for cap, n := range revokedCounts {
 		hook := revokeHooks[cap]
 		s.Log.Info(hook.event, "owner_id", uid, hook.countField, n)
 	}
-	if capsWereTouched {
-		// One audit event per granted / revoked slug. Small payloads
-		// are easier to grep than one blob with a diff.
-		for cap := range added {
-			audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-				Actor:      actor,
-				Action:     "user.capability_granted",
-				ObjectKind: "user",
-				ObjectID:   uid,
-				After:      map[string]any{"capability": string(cap)},
-			})
-		}
-		for cap := range removed {
-			audit.Log(r.Context(), s.DB, s.Log, audit.Event{
-				Actor:      actor,
-				Action:     "user.capability_revoked",
-				ObjectKind: "user",
-				ObjectID:   uid,
-				Before:     map[string]any{"capability": string(cap)},
-			})
-		}
+	for _, record := range auditRecords {
+		record.Emit(r.Context(), s.Log)
 	}
 	if (body.Disabled != nil || removed.Has(authz.CapMailboxes)) && s.EmailwatchReload != nil {
 		if err := s.EmailwatchReload(r.Context()); err != nil {
