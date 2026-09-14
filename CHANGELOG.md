@@ -136,6 +136,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Honor token scopes in chunked JSON requests instead of silently granting the
+  default read/write scopes.
 - Apply credential and demo rate limits consistently across canonical,
   trailing-slash and escaped-slash API paths.
 - Enforce explicit/token system, active membership and existing document permissions

@@ -68,7 +68,7 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body CreateTokenRequest
-	if r.ContentLength > 0 {
+	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &body); err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 			return
