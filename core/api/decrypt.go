@@ -235,7 +235,8 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 	for _, id := range req.DocIDs {
 		ownerID, blobSHA, title, ok, err := s.loadEncryptedDoc(r, id, p)
 		if err != nil {
-			results = append(results, DecryptBatchResult{DocID: id, Reason: "db_read: " + err.Error()})
+			s.Log.ErrorContext(r.Context(), "api.decrypt.batch.load", "doc_id", id, "err", err.Error())
+			results = append(results, DecryptBatchResult{DocID: id, Reason: "db_read"})
 			continue
 		}
 		if !ok {
@@ -243,11 +244,16 @@ func (s *Server) DecryptBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := s.attemptDecrypt(r, id, ownerID, blobSHA, single); err != nil {
-			if errors.Is(err, errBadPassword) {
-				results = append(results, DecryptBatchResult{DocID: id, Reason: "bad_password"})
-			} else {
-				results = append(results, DecryptBatchResult{DocID: id, Reason: err.Error()})
+			reason := "decrypt_failed"
+			switch {
+			case errors.Is(err, errBadPassword):
+				reason = "bad_password"
+			case errors.Is(err, errSystemUnavailable):
+				reason = "system unavailable"
+			default:
+				s.Log.ErrorContext(r.Context(), "api.decrypt.batch.failed", "doc_id", id, "err", err.Error())
 			}
+			results = append(results, DecryptBatchResult{DocID: id, Reason: reason})
 			continue
 		}
 		anySuccess = true
