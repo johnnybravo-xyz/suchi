@@ -2614,6 +2614,44 @@ test('keeps a new document behind Reveal when an earlier sensitivity save finish
   await expect(page.locator('.preview iframe')).toHaveCount(0)
 })
 
+for (const action of [
+  { name: 'trash', method: 'DELETE', path: '/api/documents/42', button: 'Trash', confirm: 'Move to trash' },
+  { name: 'restore', method: 'POST', path: '/api/documents/42/restore', button: 'Restore', trashed: true },
+  { name: 'permanent deletion', method: 'DELETE', path: '/api/trash/42', button: 'Delete permanently', confirm: 'Delete permanently', trashed: true },
+]) {
+  test(`ignores late ${action.name} completion after opening another document`, async ({ page }) => {
+    const apiRequests = []
+    const now = Math.floor(Date.now() / 1000)
+    await mockAPI(page, { apiRequests, documentDetails: {
+      42: { document: { title: 'Earlier document', owner_id: 1,
+        ...(action.trashed ? { trashed_at: now - 86400, deletes_at: now + 86400 } : {}) } },
+      43: { document: { title: 'Current document' } },
+    } })
+    let pending
+    await page.route(`**${action.path}`, route => route.request().method() === action.method
+      ? (pending = route)
+      : route.fallback())
+    await page.goto('/#/doc/42')
+    await page.getByRole('button', { name: action.button, exact: true }).click()
+    if (action.confirm) await page.getByRole('alertdialog').getByRole('button', { name: action.confirm, exact: true }).click()
+    await expect.poll(() => !!pending).toBe(true)
+
+    await page.evaluate(() => { location.hash = '#/doc/43' })
+    await expect(page.getByRole('heading', { name: 'Current document', exact: true })).toBeVisible()
+    await page.getByTitle('Rename', { exact: true }).click()
+    const draft = page.locator('.detail form input')
+    await draft.fill('Unsaved current title')
+    const finished = page.waitForEvent('requestfinished', request => request === pending.request())
+    await pending.fulfill({ status: 204 })
+    await finished
+    await paintSettled(page)
+
+    await expect(page).toHaveURL(/#\/doc\/43$/)
+    await expect(draft).toHaveValue('Unsaved current title')
+    expect(apiRequests.filter(request => request.method === 'GET' && request.path === '/api/documents/43')).toHaveLength(1)
+  })
+}
+
 test('adds the first document tag and recovers from a tag-list error', async ({ page }) => {
   await mockAPI(page)
   let fail = true

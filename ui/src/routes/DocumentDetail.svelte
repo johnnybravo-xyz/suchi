@@ -113,7 +113,9 @@
     documentLinkOpen = false
     shareURL = ''
     trashOpen = false
+    trashBusy = false
     deleteOpen = false
+    recoveryBusy = false
     try {
       const loaded = await getDocument(documentID)
       if (version !== loadVersion) return
@@ -374,35 +376,50 @@
   }
 
   async function trash() {
+    const version = loadVersion
     trashBusy = true
     try {
       await deleteDocument(id)
+      if (disposed || version !== loadVersion) return
       trashOpen = false
       notify?.('Moved to trash')
       go('#/documents')
-    } catch (ex) { notify?.(ex.message || 'Could not delete') }
-    finally { trashBusy = false }
+    } catch (ex) {
+      if (!disposed && version === loadVersion) notify?.(ex.message || 'Could not delete')
+    } finally {
+      if (!disposed && version === loadVersion) trashBusy = false
+    }
   }
 
   async function restore() {
+    const version = loadVersion
     recoveryBusy = true
     try {
       await restoreDocument(id)
+      if (disposed || version !== loadVersion) return
       notify?.('Restored')
       await load()
-    } catch (ex) { notify?.(ex.message || 'Could not restore') }
-    finally { recoveryBusy = false }
+    } catch (ex) {
+      if (!disposed && version === loadVersion) notify?.(ex.message || 'Could not restore')
+    } finally {
+      if (!disposed && version === loadVersion) recoveryBusy = false
+    }
   }
 
   async function permanentlyDelete() {
+    const version = loadVersion
     recoveryBusy = true
     try {
       await permanentlyDeleteDocument(id)
+      if (disposed || version !== loadVersion) return
       deleteOpen = false
       notify?.('Permanently deleted')
       go('#/trash')
-    } catch (ex) { notify?.(ex.message || 'Could not permanently delete') }
-    finally { recoveryBusy = false }
+    } catch (ex) {
+      if (!disposed && version === loadVersion) notify?.(ex.message || 'Could not permanently delete')
+    } finally {
+      if (!disposed && version === loadVersion) recoveryBusy = false
+    }
   }
 
   async function copyAddress() {
