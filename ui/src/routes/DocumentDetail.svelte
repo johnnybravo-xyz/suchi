@@ -1,7 +1,7 @@
 <script>
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listTags, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
@@ -46,6 +46,7 @@
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
   let loadVersion = 0
+  let loadedID
   let disposed = false
   onDestroy(() => { disposed = true; loadVersion++ })
 
@@ -223,11 +224,16 @@
   }
 
   async function save(patch, label) {
+    const version = loadVersion
     try {
       await patchDocument(id, patch)
+      if (disposed || version !== loadVersion) return
       doc = { ...doc, ...patch }
+      if ('languages' in patch) doc.languages_locked = patch.languages !== ''
       notify?.(label || 'Saved')
-    } catch (ex) { notify?.(ex.message || 'Could not save') }
+    } catch (ex) {
+      if (!disposed && version === loadVersion) notify?.(ex.message || 'Could not save')
+    }
   }
 
   async function startEditTags() {
@@ -282,18 +288,10 @@
     editingLanguages = true
   }
 
-  async function saveLanguages() {
+  function saveLanguages() {
     const trimmed = languagesDraft.trim()
     editingLanguages = false
-    try {
-      await patchDocument(id, { languages: trimmed })
-      doc = {
-        ...doc,
-        languages: trimmed,
-        languages_locked: trimmed !== '',
-      }
-      notify?.(trimmed ? 'Languages updated' : 'Languages cleared')
-    } catch (ex) { notify?.(ex.message || 'Could not update languages') }
+    return save({ languages: trimmed }, trimmed ? 'Languages updated' : 'Languages cleared')
   }
 
   // ---- share dialog: expiry + optional password + existing links ----
@@ -414,7 +412,11 @@
     const copied = await copyText(address)
     if (!disposed && scopeCurrent(scope)) notify?.(copied ? 'Filing address copied' : 'Select the filing address and copy it manually.')
   }
-  $effect(() => { id; revealed = false; accessOpen = false; load() })
+  $effect(() => {
+    if (id === loadedID) return
+    loadedID = id
+    untrack(() => { revealed = false; accessOpen = false; void load() })
+  })
 </script>
 
 <div class="toolbar">

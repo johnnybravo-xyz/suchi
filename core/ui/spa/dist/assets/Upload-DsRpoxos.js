@@ -1,0 +1,1 @@
+import{Bn as e,Qn as t,Rn as n,gn as r,ur as i}from"./shell-CpSXbBIT.js";import a from"./UploadBox-Bj_-Tlaq.js";var o=e(`<div class="upload-wrap"><!></div>`);function s(e,s){let c=r(s,`jdCategories`,19,()=>[]);var l=o(),u=t(l);a(u,{get notify(){return s.notify},get jdCategories(){return c()}}),i(l),n(e,l)}export{s as default};

@@ -2591,6 +2591,29 @@ test('edits document tags inline and preserves tags when a change is refused', a
   await expect(row.locator('.pill')).toHaveText(['airtel', 'payment'])
 })
 
+test('keeps a new document behind Reveal when an earlier sensitivity save finishes', async ({ page }) => {
+  await mockAPI(page, { documentDetails: {
+    42: { document: { sensitivity: 'internal', title: 'Earlier document' } },
+    43: { document: { sensitivity: 'restricted', title: 'Restricted document', content: 'Restricted extracted text' } },
+  } })
+  let pending
+  await page.route('**/api/documents/42', route => route.request().method() === 'PATCH'
+    ? (pending = route)
+    : route.fallback())
+  await page.goto('/#/doc/42')
+  await page.getByRole('combobox', { name: 'Sensitivity', exact: true }).selectOption('public')
+  await expect.poll(() => !!pending).toBe(true)
+  await page.evaluate(() => { location.hash = '#/doc/43' })
+  await expect(page.getByRole('combobox', { name: 'Sensitivity', exact: true })).toHaveValue('restricted')
+  const finished = page.waitForEvent('requestfinished', request => request === pending.request())
+  await pending.fulfill({ json: { ok: true } })
+  await finished
+  await paintSettled(page)
+  await expect(page.getByRole('combobox', { name: 'Sensitivity', exact: true })).toHaveValue('restricted')
+  await expect(page.locator('.extracted')).toHaveAttribute('aria-hidden', 'true')
+  await expect(page.locator('.preview iframe')).toHaveCount(0)
+})
+
 test('adds the first document tag and recovers from a tag-list error', async ({ page }) => {
   await mockAPI(page)
   let fail = true
@@ -4542,6 +4565,23 @@ test('filing systems derives a legacy numeric deep link intrinsically, then scop
   await expect(page.getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', '/download/148?system=S02')
   await page.getByRole('button', { name: 'Open on my phone', exact: true }).click()
   await expect(page.getByLabel('Document link', { exact: true })).toHaveValue(/#\/doc\/148\?system=S02$/)
+})
+
+test('filing systems does not reload document detail when the sidebar tree arrives', async ({ page }) => {
+  const { requests } = await mockFilingSystems(page)
+  let tree
+  await page.route('**/api/jd/categories/?*', route => { tree = route })
+  await page.goto('/#/doc/148?system=S02')
+  await expect(page.getByLabel('Filing address', { exact: true })).toHaveValue('S02.13.148')
+  await page.getByRole('button', { name: 'Edit tags', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: 'Tag to add', exact: true })).toBeVisible()
+  await expect.poll(() => !!tree).toBe(true)
+  const finished = page.waitForEvent('requestfinished', request => request === tree.request())
+  await tree.fulfill({ json: { results: [{ id: 213, code: 13, name: 'Second filing', area_code: 10, area_name: 'Records' }] } })
+  await finished
+  await paintSettled(page)
+  expect(requests.filter(item => item.path === '/api/documents/148')).toHaveLength(1)
+  await expect(page.getByRole('combobox', { name: 'Tag to add', exact: true })).toBeVisible()
 })
 
 test('filing systems preserves cabinet history and resets selected documents', async ({ page }) => {

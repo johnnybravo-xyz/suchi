@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Ignore late document saves after navigation and avoid reloading the editor
+  when sidebar metadata arrives; language edits share the guarded save path.
 - Split scans inherit current parent privacy and filing metadata at child
   creation; trash during extraction prevents new children, and retries preserve
   the original recovery deadline.
