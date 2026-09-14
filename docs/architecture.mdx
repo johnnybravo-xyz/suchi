@@ -298,10 +298,10 @@ These gates answer different questions:
   order even when external delivery is delayed. Persistence remains best-effort:
   `core/audit.RecordInTx` captures write outcomes without logging or sink calls;
   `Record.Emit` reports failed writes or delivers persisted events after commit.
-  Account-disable OAuth invalidation runs only after successful commit. The
+  Account-disable and membership-removal OAuth invalidation run only after successful commit. The
   existing flow-store mutex spans commit and invalidation, preserving the
   writer-to-flow-store lock order without deleting flows on rollback or letting
-  a later re-enable/start overtake invalidation. Resource logs, audit fan-out and
+  a later re-enable or readmission/start overtake invalidation. Resource logs, audit fan-out and
   mailbox supervisor reloads remain outside the writer.
   See [account safeguards](/permissions#account-safeguards).
 - **Object authorization:** `core/authz` first checks actual object existence and

@@ -37,8 +37,10 @@ admit only instance admins until granted direct members; new users and demoted
 admins receive no automatic memberships. Codes are permanent, names editable.
 
 Admins manage memberships after introduction. Removing membership atomically
-revokes that user's system shares and removes system-bound API tokens and pending
-mobile pairings. Re-adding membership never resurrects those credentials. Document
+revokes that user's system shares and API tokens and removes pending mobile
+pairings. Pending Microsoft sign-ins for that system are discarded only after
+the membership change commits; failed changes preserve them. Re-adding membership
+never resurrects those credentials or sign-ins. Document
 ACL rows remain ineffective while membership is absent; re-admission can make those
 retained grants useful again, subject to the other authorization checks.
 

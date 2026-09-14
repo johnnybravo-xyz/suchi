@@ -171,13 +171,6 @@ func (s *oauthFlowStore) delete(handle string) {
 	s.mu.Unlock()
 }
 
-// Called while holding the database writer; flow creation uses the same order.
-func (s *oauthFlowStore) invalidateMember(userID, systemID int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.invalidateMemberLocked(userID, systemID)
-}
-
 // The caller holds mu, including across commit when invalidation must wait for
 // successful persistence without letting a later flow overtake it.
 func (s *oauthFlowStore) invalidateMemberLocked(userID, systemID int64) {

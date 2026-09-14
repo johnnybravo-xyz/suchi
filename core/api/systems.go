@@ -329,6 +329,13 @@ func (s *Server) PutSystemMembers(w http.ResponseWriter, r *http.Request) {
 		wanted[id] = true
 	}
 	badMembers := errors.New("unknown or inactive new member")
+	var removed []int64
+	oauthLocked := false
+	defer func() {
+		if oauthLocked {
+			s.oauthFlows.mu.Unlock()
+		}
+	}()
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, p, system.ID)
 		if err != nil {
@@ -389,10 +396,25 @@ func (s *Server) PutSystemMembers(w http.ResponseWriter, r *http.Request) {
 			if _, err := tx.ExecContext(r.Context(), "DELETE FROM mobile_pairings WHERE system_id = ? AND user_id = ?", system.ID, id); err != nil {
 				return err
 			}
-			s.oauthFlows.invalidateMember(id, system.ID)
+			removed = append(removed, id)
+		}
+		if len(removed) != 0 {
+			// Match user-disable ordering: hold writer -> flow-store through
+			// commit so rollback preserves flows and readmission cannot overtake.
+			s.oauthFlows.mu.Lock()
+			oauthLocked = true
 		}
 		return nil
 	})
+	if oauthLocked {
+		if err == nil {
+			for _, id := range removed {
+				s.oauthFlows.invalidateMemberLocked(id, system.ID)
+			}
+		}
+		s.oauthFlows.mu.Unlock()
+		oauthLocked = false
+	}
 	if errors.Is(err, badMembers) {
 		s.writeError(w, http.StatusBadRequest, "bad_members", err.Error())
 		return

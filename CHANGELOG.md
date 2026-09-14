@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Preserve pending Microsoft sign-ins when a filing-system membership update
+  rolls back; committed removals discard them before readmission can reuse them.
 - Roll back writer transactions when a callback panics, so recovered failures
   cannot leave the archive's only writer occupied.
 - Prevent administrators from disabling their own account or removing the last

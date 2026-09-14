@@ -486,6 +486,75 @@ func TestSystemsDisableOAuthFollowsCommit(t *testing.T) {
 	}
 }
 
+func TestSystemsMembershipOAuthFollowsCommit(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback=%t", fail), func(t *testing.T) {
+			s, mux := newSystemsOAuthServer(t)
+			if fail {
+				// Fail the second removal regardless of map iteration order,
+				// after the first member's cascades have already run.
+				_, err := s.DB.Write.Exec(`CREATE TRIGGER fail_membership BEFORE DELETE ON jd_system_members
+					WHEN OLD.system_id=2 AND (SELECT count(*) FROM jd_system_members WHERE system_id=2)=1
+					BEGIN SELECT RAISE(ABORT, 'forced membership cascade failure'); END`)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			now := time.Now()
+			for _, owner := range []int64{5, 6} {
+				if !s.oauthFlows.put(fmt.Sprintf("member-%d", owner), oauthFlowEntry{
+					clientID: "11111111-1111-1111-1111-111111111111",
+					ownerID:  owner, systemID: 2, expiresAt: now.Add(time.Minute),
+				}, now) {
+					t.Fatal("flow rejected")
+				}
+			}
+			if !s.oauthFlows.put("other-system", oauthFlowEntry{
+				clientID: "11111111-1111-1111-1111-111111111111",
+				ownerID:  5, systemID: 1, expiresAt: now.Add(time.Minute),
+			}, now) {
+				t.Fatal("other-system flow rejected")
+			}
+			w := systemsBoundaryRequest(mux, "PUT", "/api/admin/jd/systems/S02/members",
+				`{"user_ids":[]}`, adminPrincipal(1))
+			wantStatus, wantMembers := http.StatusOK, 0
+			if fail {
+				wantStatus, wantMembers = http.StatusInternalServerError, 2
+			}
+			if w.Code != wantStatus {
+				t.Fatalf("remove members: %d %s; want %d", w.Code, w.Body.String(), wantStatus)
+			}
+			var members int
+			if err := s.DB.Read.QueryRow(`SELECT count(*) FROM jd_system_members WHERE system_id=2`).Scan(&members); err != nil || members != wantMembers {
+				t.Fatalf("membership count = %d, want %d; error=%v", members, wantMembers, err)
+			}
+			if !fail {
+				w = systemsBoundaryRequest(mux, "PUT", "/api/admin/jd/systems/S02/members",
+					`{"user_ids":[5,6]}`, adminPrincipal(1))
+				if w.Code != http.StatusOK {
+					t.Fatalf("readmit members: %d %s", w.Code, w.Body.String())
+				}
+			}
+			for _, owner := range []int64{5, 6} {
+				w = systemsBoundaryRequest(mux, "POST", "/api/email-accounts/oauth/complete?system=S02",
+					fmt.Sprintf(`{"flow_handle":"member-%d"}`, owner), memberPrincipal(owner))
+				want := http.StatusNotFound
+				if fail {
+					want = http.StatusAccepted
+				}
+				if w.Code != want {
+					t.Fatalf("member %d OAuth after membership change: %d %s; want %d", owner, w.Code, w.Body.String(), want)
+				}
+			}
+			w = systemsBoundaryRequest(mux, "POST", "/api/email-accounts/oauth/complete?system=S01",
+				`{"flow_handle":"other-system"}`, memberPrincipal(5))
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("unrelated system flow changed: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestSystemsOAuthReconnectWaitingForWriterCannotSurviveReadmission(t *testing.T) {
 	s, mux := newSystemsOAuthServer(t)
 	var account *emailaccounts.Account
@@ -540,8 +609,13 @@ func TestSystemsOAuthReconnectWaitingForWriterCannotSurviveReadmission(t *testin
 		INSERT INTO jd_system_members(system_id,user_id,created_at) VALUES (2,6,1)`); err != nil {
 		t.Fatal(err)
 	}
-	s.oauthFlows.invalidateMember(6, 2)
-	if err := tx.Commit(); err != nil {
+	s.oauthFlows.mu.Lock()
+	err = tx.Commit()
+	if err == nil {
+		s.oauthFlows.invalidateMemberLocked(6, 2)
+	}
+	s.oauthFlows.mu.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
