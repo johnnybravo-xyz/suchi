@@ -58,14 +58,6 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 			if err := enqueueAdvanceWithTrigger(ctx, tx, id, "timeout"); err != nil {
 				return err
 			}
-			// Clear deadline so the next sweep pass doesn't fire again
-			// while the advance is queued. Handlers re-set deadline_at
-			// when they enter the next state.
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE approval_runs SET deadline_at = NULL WHERE id = ?
-			`, id); err != nil {
-				return err
-			}
 		}
 		for _, item := range settled {
 			reason := "satisfied"

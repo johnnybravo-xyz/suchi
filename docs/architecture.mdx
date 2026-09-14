@@ -323,12 +323,19 @@ preserving response shapes. See [Search](/search).
 Local matching fills unresolved metadata before deterministic user automations.
 `core/automations` owns triggers/conditions/actions; `core/approvals` owns human
 state machines. Integrations must not add another workflow engine. Advancement
-jobs carry system/transition revision; handlers run outside the writer, then their
+jobs carry system/run revision; handlers run outside the writer, then their
 transactional effects/tasks recheck revision/status. Tasks retain originating
-revision so retries cannot reopen resolved visits. Resolution clears deadlines;
+revision so retries cannot reopen resolved visits. Accepted decisions/timeouts
+increment revision and clear deadlines before queued advancement;
 timeout selection, expiration and enqueue are one transaction. Filing-suggestion
 sweeps check/resolve satisfied or superseded proposals transactionally through the
 same state machine without changing documents. See [Approvals](/approvals#timeouts-and-recovery).
+
+Approval run/task IDs use AUTOINCREMENT; run allocation also skips retained legacy
+job references. Upgrade recovery requires complete entry-job history and a resolved
+current-state task for human decisions. Only initial-visit legacy timeouts have a
+provable origin. Ambiguous jobs remain dead for operator review; retry cannot bind
+them to a new state. Migration expires tasks from terminal or different states.
 
 `core/jd/presetfile` validates bounded offline HuML/TOML before expansion/generated
 System/49. `Marshal` reverses only validated generated rows and revalidates output;

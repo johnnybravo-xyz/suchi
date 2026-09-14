@@ -217,3 +217,160 @@ func TestAdvanceDoesNotOverwriteCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeoutBeforeTaskCreationDoesNotRearm(t *testing.T) {
+	e := newEngine(t)
+	spec := approvals.Spec{Start: "review", States: map[string]approvals.State{
+		"review": {Kind: "approve", Assignee: "user:1", Choices: []string{"approve"}, TimeoutSec: 1, On: map[string]string{"approve": "done", "timeout": "expired"}},
+		"done":   {Kind: "end"}, "expired": {Kind: "end"},
+	}}
+	if _, err := e.Register(t.Context(), 1, spec, "late-task", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := e.Start(t.Context(), 1, "late-task", 0, nil, adminPrincipal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := queuedApprovalEvent(t, e, runID)
+	if _, err := e.DB().ExecWrite(t.Context(), `UPDATE approval_runs SET deadline_at=1 WHERE id=?`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.TimeoutSweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvals.NewSubscriber(e).Handle(t.Context(), initial); err != nil {
+		t.Fatal(err)
+	}
+	run, tasks, err := e.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) > 0 || run.DeadlineAt != nil {
+		t.Fatalf("timed-out run became actionable again: tasks=%d deadline=%v", len(tasks), run.DeadlineAt)
+	}
+}
+
+func TestAcceptedTimeoutInvalidatesInFlightWork(t *testing.T) {
+	for _, task := range []bool{false, true} {
+		t.Run(map[bool]string{false: "effect", true: "task"}[task], func(t *testing.T) {
+			e := newEngine(t)
+			h := &pausedApprovalHandler{reached: make(chan struct{}, 1), release: make(chan struct{}), task: task}
+			e.RegisterHandler(h)
+			spec := approvals.Spec{Start: "work", States: map[string]approvals.State{
+				"work": {Kind: h.Kind(), TimeoutSec: 1, On: map[string]string{"success": "done", "timeout": "expired"}},
+				"done": {Kind: "end"}, "expired": {Kind: "end"},
+			}}
+			if _, err := e.Register(t.Context(), 1, spec, "timeout-in-flight", adminPrincipal()); err != nil {
+				t.Fatal(err)
+			}
+			runID, err := e.Start(t.Context(), 1, "timeout-in-flight", 0, nil, adminPrincipal())
+			if err != nil {
+				t.Fatal(err)
+			}
+			finished := make(chan error, 1)
+			go func() { finished <- e.Advance(t.Context(), runID, "") }()
+			<-h.reached
+			_, err = e.DB().ExecWrite(t.Context(), `UPDATE approval_runs SET deadline_at=1 WHERE id=?`, runID)
+			if err == nil {
+				err = e.TimeoutSweep(t.Context())
+			}
+			close(h.release)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := <-finished; err != nil {
+				t.Fatal(err)
+			}
+			run, tasks, err := e.GetRun(t.Context(), runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.CurrentState != "work" || run.DeadlineAt != nil || len(tasks) != 0 || h.effects.Load() != 0 {
+				t.Fatalf("accepted timeout overwritten: state=%s deadline=%v tasks=%d effects=%d", run.CurrentState, run.DeadlineAt, len(tasks), h.effects.Load())
+			}
+		})
+	}
+}
+
+func TestDeletedRunCannotReceiveOldDecision(t *testing.T) {
+	e := newEngine(t)
+	spec := approvals.Spec{Start: "review", States: map[string]approvals.State{
+		"review": {Kind: "approve", Assignee: "user:1", Choices: []string{"approve", "reject"}, On: map[string]string{"approve": "done", "reject": "denied"}},
+		"done":   {Kind: "end"}, "denied": {Kind: "end"},
+	}}
+	if _, err := e.Register(t.Context(), 1, spec, "reuse", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	start := func(choice string) int64 {
+		t.Helper()
+		id, err := e.Start(t.Context(), 1, "reuse", 0, nil, adminPrincipal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Advance(t.Context(), id, ""); err != nil {
+			t.Fatal(err)
+		}
+		_, tasks, err := e.GetRun(t.Context(), id)
+		if err != nil || len(tasks) != 1 {
+			t.Fatalf("task: %v %v", tasks, err)
+		}
+		if err := e.Resolve(t.Context(), tasks[0].ID, choice, adminPrincipal()); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	oldID := start("approve")
+	oldEvent := queuedApprovalEvent(t, e, oldID)
+	if _, err := e.DB().ExecWrite(t.Context(), `DELETE FROM approval_runs WHERE id=?`, oldID); err != nil {
+		t.Fatal(err)
+	}
+	newID := start("reject")
+	if err := approvals.NewSubscriber(e).Handle(t.Context(), oldEvent); err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := e.GetRun(t.Context(), newID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "running" {
+		t.Fatalf("old decision affected replacement run %d (old id %d): %s/%s", newID, oldID, run.Status, run.CurrentState)
+	}
+}
+
+func TestDeletedTaskCannotResolveReplacement(t *testing.T) {
+	e := newEngine(t)
+	spec := approvals.Spec{Start: "review", States: map[string]approvals.State{
+		"review": {Kind: "approve", Assignee: "user:1", Choices: []string{"approve"}, On: map[string]string{"approve": "done"}},
+		"done":   {Kind: "end"},
+	}}
+	if _, err := e.Register(t.Context(), 1, spec, "task-reuse", adminPrincipal()); err != nil {
+		t.Fatal(err)
+	}
+	start := func() (int64, int64) {
+		t.Helper()
+		id, err := e.Start(t.Context(), 1, "task-reuse", 0, nil, adminPrincipal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Advance(t.Context(), id, ""); err != nil {
+			t.Fatal(err)
+		}
+		_, tasks, err := e.GetRun(t.Context(), id)
+		if err != nil || len(tasks) != 1 {
+			t.Fatalf("task: %v %v", tasks, err)
+		}
+		return id, tasks[0].ID
+	}
+	oldRun, oldTask := start()
+	if _, err := e.DB().ExecWrite(t.Context(), `DELETE FROM approval_runs WHERE id=?`, oldRun); err != nil {
+		t.Fatal(err)
+	}
+	newRun, newTask := start()
+	if err := e.Resolve(t.Context(), oldTask, "approve", adminPrincipal()); err != approvals.ErrNoTask {
+		t.Fatalf("old task %d resolved new task %d: %v", oldTask, newTask, err)
+	}
+	_, tasks, err := e.GetRun(t.Context(), newRun)
+	if err != nil || len(tasks) != 1 || tasks[0].ID != newTask {
+		t.Fatalf("replacement task changed: %v %v", tasks, err)
+	}
+}

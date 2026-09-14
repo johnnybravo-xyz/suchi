@@ -173,8 +173,7 @@ func loadRun(ctx context.Context, d rowQuerier, id int64) (Run, error) {
 	)
 	err := d.QueryRowContext(ctx, `
 		SELECT id, system_id, def_id, doc_id, state, current_state, vars_json,
-		       state_entered_at, deadline_at, started_by, started_at, ended_at,
-		       COALESCE((SELECT MAX(id) FROM approval_transitions WHERE run_id = approval_runs.id), 0)
+		       state_entered_at, deadline_at, started_by, started_at, ended_at, revision
 		FROM approval_runs WHERE id = ?
 	`, id).Scan(&r.ID, &r.SystemID, &r.DefID, &docID, &r.Status, &r.CurrentState, &varsJSON,
 		&r.StateEnteredAt, &deadline, &startedBy, &r.StartedAt, &endedAt, &r.revision)
@@ -217,7 +216,8 @@ func updateRunState(ctx context.Context, tx *sql.Tx, runID int64, nextState stri
 		   SET current_state = ?,
 		       vars_json = ?,
 		       state_entered_at = ?,
-		       deadline_at = ?
+		       deadline_at = ?,
+		       revision = revision + 1
 		 WHERE id = ?
 	`, nextState, varsJSON, now, nullInt64(deadline), runID)
 	return err
@@ -426,6 +426,7 @@ func ensureTaskRunActionable(ctx context.Context, tx *sql.Tx, taskID int64) erro
 		LEFT JOIN documents d ON d.id = r.doc_id
 		WHERE t.id = ?
 		  AND r.state = 'running'
+		  AND t.state_key = r.current_state AND t.state_revision = r.revision
 		  AND (r.doc_id IS NULL OR (d.id IS NOT NULL AND d.trashed_at IS NULL))
 	`, taskID).Scan(&actionable)
 	if errors.Is(err, sql.ErrNoRows) {

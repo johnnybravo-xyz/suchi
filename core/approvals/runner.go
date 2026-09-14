@@ -338,9 +338,8 @@ func (e *Engine) writeCurrentRun(ctx context.Context, run Run, fn func(*sql.Tx) 
 	return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var current bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
-			SELECT 1 FROM approval_runs WHERE id = ? AND state = 'running'
-			AND COALESCE((SELECT MAX(id) FROM approval_transitions WHERE run_id = ?), 0) = ?
-		)`, run.ID, run.ID, run.revision).Scan(&current); err != nil {
+			SELECT 1 FROM approval_runs WHERE id = ? AND state = 'running' AND revision = ?
+		)`, run.ID, run.revision).Scan(&current); err != nil {
 			return err
 		}
 		if !current {
@@ -397,9 +396,6 @@ func (e *Engine) ResolveInTx(ctx context.Context, tx *sql.Tx, taskID int64, choi
 		return err
 	}
 	if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE approval_runs SET deadline_at = NULL WHERE id = ?`, run.ID); err != nil {
 		return err
 	}
 	// Enqueue advance with trigger=<choice> — the handler picks it up.
@@ -503,6 +499,14 @@ func enqueueAdvance(ctx context.Context, tx *sql.Tx, runID int64, trigger string
 }
 
 func enqueueAdvanceWithTrigger(ctx context.Context, tx *sql.Tx, runID int64, trigger string) error {
+	// Accepting an event invalidates work from before the decision, even while
+	// its transition is still queued. Task creation must not rearm a timeout.
+	if trigger != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE approval_runs
+			SET revision = revision + 1, deadline_at = NULL WHERE id = ?`, runID); err != nil {
+			return err
+		}
+	}
 	run, err := loadRun(ctx, tx, runID)
 	if err != nil {
 		return err

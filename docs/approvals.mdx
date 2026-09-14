@@ -121,6 +121,19 @@ bound to one visit to a state; stale retries cannot replay a choice on a later
 visit or recreate a resolved task. Effects and task creation recheck that revision
 inside the writer transaction. Cancellation records a transition and expires tasks;
 accepted decisions clear their deadline before a later timeout sweep can act.
+Accepting a decision or timeout increments the run revision immediately, so delayed
+entry work cannot create another task or apply an effect while advancement waits.
+
+The beta.2 upgrade preserves pending decisions only when retained entry jobs and
+the resolved task prove their state. Initial-state timeouts can resume; later-state
+timeouts have ambiguous origins in the old implementation. Missing entry history
+or ambiguous events leave affected jobs `dead` with a recovery message, preserving
+the current review. Inspect the run and resolve a current task, or cancel and
+restart a stalled run. Retrying an unbound old job cannot authorize it.
+
+Run and task IDs are retained and no longer reused after deletion. The run allocator
+also skips IDs retained in old jobs. Purged task IDs without pre-upgrade allocation
+history cannot be reconstructed.
 
 Approval jobs appear in `/api/tasks/`; filter by `kind=approval:` when
 investigating a stalled run. Application logs use `component=approvals`.

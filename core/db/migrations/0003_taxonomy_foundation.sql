@@ -395,7 +395,7 @@ DROP TABLE approval_defs;
 ALTER TABLE approval_defs_new RENAME TO approval_defs;
 
 CREATE TABLE approval_runs_new (
-    id               INTEGER PRIMARY KEY,
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
     def_id           INTEGER NOT NULL REFERENCES "approval_defs"(id),
     doc_id           INTEGER REFERENCES documents(id),
     state            TEXT NOT NULL,
@@ -955,14 +955,102 @@ END;
 ALTER TABLE render_moves ADD COLUMN prev_blob TEXT NOT NULL DEFAULT '';
 ALTER TABLE render_moves ADD COLUMN new_blob TEXT NOT NULL DEFAULT '';
 
--- Bind durable approval work and task creation to one visit to a state.
--- Existing closed tasks are historical and cannot suppress a future visit.
-CREATE INDEX idx_approval_transitions_revision ON approval_transitions(run_id,id);
-ALTER TABLE approval_tasks ADD COLUMN state_revision INTEGER NOT NULL DEFAULT -1;
-UPDATE approval_tasks SET state_revision=COALESCE((
-    SELECT MAX(id) FROM approval_transitions WHERE run_id=approval_tasks.run_id
-),0) WHERE status IN ('open','claimed');
-UPDATE jobs SET payload=json_set(payload,'$.revision',COALESCE((
-    SELECT MAX(id) FROM approval_transitions
-    WHERE run_id=json_extract(jobs.payload,'$.run_id')
-),0)) WHERE kind='approval:advance' AND json_valid(payload);
+-- Accepting a decision/timeout advances revision before its queued transition.
+ALTER TABLE approval_runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+-- Public task IDs must also survive deletion without being reassigned to an
+-- unrelated review that a stale browser request could resolve.
+CREATE TABLE approval_tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES approval_runs(id) ON DELETE CASCADE,
+    state_key TEXT NOT NULL,
+    assignee TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    choices_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    deadline_at INTEGER,
+    resolved_choice TEXT,
+    resolved_by TEXT,
+    resolved_at INTEGER,
+    created_at INTEGER NOT NULL,
+    state_revision INTEGER NOT NULL DEFAULT -1
+) STRICT;
+INSERT INTO approval_tasks_new(id,run_id,state_key,assignee,prompt,choices_json,status,
+    deadline_at,resolved_choice,resolved_by,resolved_at,created_at)
+SELECT id,run_id,state_key,assignee,prompt,choices_json,status,
+    deadline_at,resolved_choice,resolved_by,resolved_at,created_at FROM approval_tasks;
+DROP TABLE approval_tasks;
+ALTER TABLE approval_tasks_new RENAME TO approval_tasks;
+CREATE UNIQUE INDEX idx_approval_tasks_open_state ON approval_tasks(run_id,state_key)
+    WHERE status IN ('open','claimed');
+CREATE INDEX idx_approval_tasks_open ON approval_tasks(status,assignee);
+CREATE INDEX idx_approval_tasks_run ON approval_tasks(run_id);
+UPDATE approval_tasks SET status='expired'
+WHERE status IN ('open','claimed') AND NOT EXISTS (
+    SELECT 1 FROM approval_runs run WHERE run.id=approval_tasks.run_id
+      AND run.state='running' AND run.current_state=approval_tasks.state_key
+);
+UPDATE approval_tasks SET state_revision=0 WHERE status IN ('open','claimed');
+
+-- Document purge can leave documentless approval jobs behind. Never allocate
+-- their run IDs again, including references whose beta.2 runs were purged.
+INSERT INTO sqlite_sequence(name,seq)
+SELECT 'approval_runs',0 WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='approval_runs');
+UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE((
+    SELECT MAX(json_extract(payload,'$.run_id')) FROM jobs
+    WHERE kind='approval:advance' AND json_valid(payload)
+      AND json_type(payload,'$.run_id')='integer'
+),0)) WHERE name='approval_runs';
+
+-- Beta.2 queued an empty-trigger entry job in every state-entry transaction.
+-- Its ID, unlike second-resolution timestamps, proves which older work was
+-- already superseded. Require complete entry history: dead-job deletion may
+-- otherwise make a previous entry appear current. Preserve the first accepted
+-- event after the latest entry.
+CREATE TEMP TABLE approval_upgrade_resume AS
+WITH parsed AS (
+    SELECT id,
+           json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.run_id') AS run_id,
+           json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.trigger') AS trigger
+    FROM jobs WHERE kind='approval:advance'
+), entries AS (
+    SELECT run_id, MAX(id) AS entry_id, COUNT(*) AS entry_count FROM parsed
+    WHERE typeof(run_id)='integer' AND typeof(trigger)='text' AND trigger=''
+    GROUP BY run_id
+), candidates AS (
+    SELECT entries.run_id, entry_id,
+       (SELECT MIN(id) FROM parsed
+                 WHERE parsed.run_id=entries.run_id AND id>entry_id
+                   AND typeof(trigger)='text' AND trigger<>''
+                   AND ((trigger='timeout' AND entry_count=1)
+                     OR (trigger<>'timeout' AND EXISTS (
+                         SELECT 1 FROM approval_tasks task
+                         WHERE task.run_id=entries.run_id AND task.state_key=approval_runs.current_state
+                           AND task.status='resolved' AND task.resolved_choice=parsed.trigger
+                     )))) AS event_id,
+       EXISTS(SELECT 1 FROM parsed WHERE parsed.run_id=entries.run_id
+              AND id>entry_id AND typeof(trigger)='text' AND trigger<>'') AS has_event
+    FROM entries JOIN approval_runs ON approval_runs.id=entries.run_id
+    WHERE approval_runs.state='running'
+      AND entry_count=1+(SELECT COUNT(*) FROM approval_transitions WHERE run_id=entries.run_id)
+)
+-- The old timeout sweeper read before acquiring the writer. After a transition,
+-- a late timeout has no provable origin; only a resolved current-state task can
+-- authorize a human event. Leave ambiguous work dead without expiring the review.
+SELECT run_id, COALESCE(event_id,entry_id) AS job_id, event_id IS NOT NULL AS accepted
+FROM candidates WHERE event_id IS NOT NULL OR NOT has_event;
+
+UPDATE approval_runs SET revision=1, deadline_at=NULL
+WHERE id IN (SELECT run_id FROM approval_upgrade_resume WHERE accepted);
+UPDATE approval_tasks SET status='expired'
+WHERE status IN ('open','claimed')
+  AND run_id IN (SELECT run_id FROM approval_upgrade_resume WHERE accepted);
+UPDATE jobs SET payload=json_set(payload,'$.revision',-1)
+WHERE kind='approval:advance' AND json_valid(payload);
+UPDATE jobs SET payload=json_set(payload,'$.revision',(
+    SELECT accepted FROM approval_upgrade_resume WHERE job_id=jobs.id
+)) WHERE id IN (SELECT job_id FROM approval_upgrade_resume);
+UPDATE jobs SET state='dead',
+    last_error='Upgrade could not bind this approval job to the current state. Inspect the run; cancel and restart if needed. Retrying cannot reauthorize it.'
+WHERE kind='approval:advance' AND state IN ('pending','running')
+  AND id NOT IN (SELECT job_id FROM approval_upgrade_resume);
+DROP TABLE approval_upgrade_resume;
