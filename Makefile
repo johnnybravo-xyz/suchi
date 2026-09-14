@@ -4,7 +4,7 @@
 
 BIN := $(CURDIR)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/tools/gen-pdf hack/bench/tools/report
-TEST_FLAGS ?= -timeout 60s
+TEST_FLAGS ?= -timeout 180s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0

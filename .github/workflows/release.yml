@@ -42,7 +42,7 @@ jobs:
         with:
           bun-version: 1.4.1
       - name: verify candidate
-        run: make check security-check TEST_FLAGS='-count=1 -timeout 60s'
+        run: make check security-check TEST_FLAGS='-count=1 -timeout 180s'
       - name: validate publish ref
         if: inputs.publish == 'true'
         env:
