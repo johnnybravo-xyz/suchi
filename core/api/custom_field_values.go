@@ -85,6 +85,11 @@ func (s *Server) SetCustomField(w http.ResponseWriter, r *http.Request) {
 		} else if !ok {
 			return errForbidden
 		}
+		var live int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT 1 FROM documents WHERE id = ? AND trashed_at IS NULL`, docID).Scan(&live); err != nil {
+			return err
+		}
 		if dataType == "documentlink" {
 			targetID := typed.(int64)
 			if targetID != 0 {
@@ -154,6 +159,11 @@ func (s *Server) DeleteCustomField(w http.ResponseWriter, r *http.Request) {
 			return err
 		} else if !ok {
 			return errForbidden
+		}
+		var live int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT 1 FROM documents WHERE id = ? AND trashed_at IS NULL`, docID).Scan(&live); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			`DELETE FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`,

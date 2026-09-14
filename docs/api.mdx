@@ -1589,13 +1589,14 @@ viewable. Actorless handler/automation writes accept only same-system live targe
 `url` validates as `http`/`https`. Empty value ⇒ row is deleted.
 
 Returns `204 No Content` on success, `400` with a `code` on validation
-failure, `403` if the doc isn't yours, `404` if either the doc or the
-field doesn't exist. A successful write enqueues a storage-path
+failure, and `404` if the document is trashed, inaccessible, or missing, or the
+field is missing. A successful write enqueues a storage-path
 re-render if the field is referenced in the template.
 
 ### `DELETE /api/documents/{id}/custom_fields/{field}`
 
-Remove the value row for one (doc, field) pair. `204` on success.
+Remove the value row for one live, change-authorized document and field pair.
+`204` on success; trashed documents return `404` without changing values or jobs.
 
 ### `GET /api/documents/{id}/versions/`
 

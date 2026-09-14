@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Reject custom-field value changes on trashed documents, preserving their
+  metadata and queued work until restoration.
 - Save profile display names using the supported API fields; show the sign-in
   email read-only and hide mobile pairing for both demo identities.
 - Keep first-visit demo setup alive through filing-context initialization.
