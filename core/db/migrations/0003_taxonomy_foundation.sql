@@ -954,3 +954,15 @@ END;
 -- Empty hashes retain unknown ownership for pre-upgrade journal entries.
 ALTER TABLE render_moves ADD COLUMN prev_blob TEXT NOT NULL DEFAULT '';
 ALTER TABLE render_moves ADD COLUMN new_blob TEXT NOT NULL DEFAULT '';
+
+-- Bind durable approval work and task creation to one visit to a state.
+-- Existing closed tasks are historical and cannot suppress a future visit.
+CREATE INDEX idx_approval_transitions_revision ON approval_transitions(run_id,id);
+ALTER TABLE approval_tasks ADD COLUMN state_revision INTEGER NOT NULL DEFAULT -1;
+UPDATE approval_tasks SET state_revision=COALESCE((
+    SELECT MAX(id) FROM approval_transitions WHERE run_id=approval_tasks.run_id
+),0) WHERE status IN ('open','claimed');
+UPDATE jobs SET payload=json_set(payload,'$.revision',COALESCE((
+    SELECT MAX(id) FROM approval_transitions
+    WHERE run_id=json_extract(jobs.payload,'$.run_id')
+),0)) WHERE kind='approval:advance' AND json_valid(payload);

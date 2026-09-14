@@ -3,6 +3,7 @@ package approvals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -45,18 +46,23 @@ func (s *Subscriber) Handle(ctx context.Context, e pluginapi.Event) error {
 	case KindAdvance:
 		raw, _ := e.Payload["raw"].(string)
 		var body struct {
-			RunID   int64  `json:"run_id"`
-			Trigger string `json:"trigger"`
+			RunID    int64  `json:"run_id"`
+			Trigger  string `json:"trigger"`
+			Revision *int64 `json:"revision"`
 		}
 		if raw != "" {
 			if err := json.Unmarshal([]byte(raw), &body); err != nil {
 				return fmt.Errorf("approvals.subscriber: bad payload: %w", err)
 			}
 		}
-		if body.RunID == 0 {
-			return fmt.Errorf("approvals.subscriber: missing run_id in payload")
+		if body.RunID <= 0 || e.SystemID <= 0 || body.Revision == nil || *body.Revision < 0 {
+			return fmt.Errorf("approvals.subscriber: missing or invalid run, system, or revision")
 		}
-		return s.e.Advance(ctx, body.RunID, body.Trigger)
+		err := s.e.advance(ctx, body.RunID, body.Trigger, e.SystemID, body.Revision)
+		if errors.Is(err, ErrNoRun) {
+			return nil // Permanent deletion removes the run before queued work drains.
+		}
+		return err
 	default:
 		return fmt.Errorf("approvals.subscriber: unknown kind %q", e.Kind)
 	}

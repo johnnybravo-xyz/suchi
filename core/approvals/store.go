@@ -24,6 +24,7 @@ type Run struct {
 	StartedBy      *int64
 	StartedAt      int64
 	EndedAt        *int64
+	revision       int64
 }
 
 // Task mirrors approval_tasks.
@@ -172,10 +173,11 @@ func loadRun(ctx context.Context, d rowQuerier, id int64) (Run, error) {
 	)
 	err := d.QueryRowContext(ctx, `
 		SELECT id, system_id, def_id, doc_id, state, current_state, vars_json,
-		       state_entered_at, deadline_at, started_by, started_at, ended_at
+		       state_entered_at, deadline_at, started_by, started_at, ended_at,
+		       COALESCE((SELECT MAX(id) FROM approval_transitions WHERE run_id = approval_runs.id), 0)
 		FROM approval_runs WHERE id = ?
 	`, id).Scan(&r.ID, &r.SystemID, &r.DefID, &docID, &r.Status, &r.CurrentState, &varsJSON,
-		&r.StateEnteredAt, &deadline, &startedBy, &r.StartedAt, &endedAt)
+		&r.StateEnteredAt, &deadline, &startedBy, &r.StartedAt, &endedAt, &r.revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Run{}, ErrNoRun
 	}
@@ -286,34 +288,31 @@ func listTransitions(ctx context.Context, d rowQuerier, runID int64) ([]Transiti
 
 // ---------- approval_tasks ----------
 
-func insertTask(ctx context.Context, tx *sql.Tx, runID int64, stateKey string, spec TaskSpec, deadline *int64) (int64, bool, error) {
+func insertTask(ctx context.Context, tx *sql.Tx, run Run, spec TaskSpec, deadline *int64) (int64, bool, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM approval_tasks
+		WHERE run_id = ? AND state_key = ? AND state_revision = ? ORDER BY id DESC LIMIT 1`,
+		run.ID, run.CurrentState, run.revision).Scan(&id)
+	if err == nil {
+		return id, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
 	choicesJSON, err := json.Marshal(spec.Choices)
 	if err != nil {
 		return 0, false, err
 	}
 	now := time.Now().Unix()
-	var id int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO approval_tasks(
-			run_id, state_key, assignee, prompt, choices_json,
+			run_id, state_key, state_revision, assignee, prompt, choices_json,
 			status, deadline_at, created_at
-		) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
-		ON CONFLICT(run_id, state_key) WHERE status IN ('open', 'claimed')
-		DO NOTHING
+		) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
 		RETURNING id
-	`, runID, stateKey, spec.Assignee, spec.Prompt, string(choicesJSON),
+	`, run.ID, run.CurrentState, run.revision, spec.Assignee, spec.Prompt, string(choicesJSON),
 		nullInt64(deadline), now).Scan(&id)
-	if err == nil {
-		return id, true, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, false, err
-	}
-	err = tx.QueryRowContext(ctx, `
-		SELECT id FROM approval_tasks
-		WHERE run_id = ? AND state_key = ? AND status IN ('open', 'claimed')
-	`, runID, stateKey).Scan(&id)
-	return id, false, err
+	return id, err == nil, err
 }
 
 // loadTask reads one task row.

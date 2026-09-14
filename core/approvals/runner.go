@@ -158,9 +158,19 @@ func specUsesDocumentOwner(spec Spec) bool {
 // Everything runs in one tx per transition. Errors bubble to the outbox
 // which retries with backoff.
 func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error {
+	return e.advance(ctx, runID, trigger, 0, nil)
+}
+
+func (e *Engine) advance(ctx context.Context, runID int64, trigger string, systemID int64, revision *int64) error {
 	run, err := loadRun(ctx, e.db.Read, runID)
 	if err != nil {
 		return err
+	}
+	if systemID != 0 && run.SystemID != systemID {
+		return ErrForbidden
+	}
+	if revision != nil && run.revision != *revision {
+		return nil
 	}
 	if run.Status != "running" {
 		if e.log != nil {
@@ -182,7 +192,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	// Terminal state — nothing to do beyond finalizing.
 	if state.Kind == "end" {
-		return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return e.writeCurrentRun(ctx, run, func(tx *sql.Tx) error {
 			if err := expireOpenTasksForRun(ctx, tx, runID); err != nil {
 				return err
 			}
@@ -221,8 +231,8 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 			taskID      int64
 			taskCreated bool
 		)
-		if err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
-			id, created, err := insertTask(ctx, tx, runID, run.CurrentState, *res.Task, deadline)
+		if err := e.writeCurrentRun(ctx, run, func(tx *sql.Tx) error {
+			id, created, err := insertTask(ctx, tx, run, *res.Task, deadline)
 			if err != nil {
 				return err
 			}
@@ -285,7 +295,8 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	}
 	// One tx: write transition, update run, expire tasks for the state
 	// we're leaving, finalize if terminal, enqueue advance if not.
-	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+	transitioned := false
+	err = e.writeCurrentRun(ctx, run, func(tx *sql.Tx) error {
 		if res.Effect != nil {
 			if err := res.Effect(ctx, tx); err != nil {
 				return err
@@ -305,6 +316,7 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 		if err := updateRunState(ctx, tx, runID, next, mergedVars, nextDeadline); err != nil {
 			return err
 		}
+		transitioned = true
 		if nextState.Kind == "end" {
 			return finalizeRun(ctx, tx, runID, "done")
 		}
@@ -313,11 +325,29 @@ func (e *Engine) Advance(ctx context.Context, runID int64, trigger string) error
 	if err != nil {
 		return err
 	}
-	if e.log != nil {
+	if transitioned && e.log != nil {
 		e.log.Info("approvals.advance.transition",
 			"run_id", runID, "from", run.CurrentState, "to", next, "event", res.Event)
 	}
 	return nil
+}
+
+// Handlers run outside the writer. A cancellation or another transition may
+// commit while a handler works; only the state revision it read can be changed.
+func (e *Engine) writeCurrentRun(ctx context.Context, run Run, fn func(*sql.Tx) error) error {
+	return e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var current bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM approval_runs WHERE id = ? AND state = 'running'
+			AND COALESCE((SELECT MAX(id) FROM approval_transitions WHERE run_id = ?), 0) = ?
+		)`, run.ID, run.ID, run.revision).Scan(&current); err != nil {
+			return err
+		}
+		if !current {
+			return nil
+		}
+		return fn(tx)
+	})
 }
 
 // Resolve marks a task done and enqueues approval:advance so the run
@@ -367,6 +397,9 @@ func (e *Engine) ResolveInTx(ctx context.Context, tx *sql.Tx, taskID int64, choi
 		return err
 	}
 	if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE approval_runs SET deadline_at = NULL WHERE id = ?`, run.ID); err != nil {
 		return err
 	}
 	// Enqueue advance with trigger=<choice> — the handler picks it up.
@@ -470,16 +503,16 @@ func enqueueAdvance(ctx context.Context, tx *sql.Tx, runID int64, trigger string
 }
 
 func enqueueAdvanceWithTrigger(ctx context.Context, tx *sql.Tx, runID int64, trigger string) error {
-	payload := map[string]any{"run_id": runID, "trigger": trigger}
+	run, err := loadRun(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{"run_id": runID, "trigger": trigger, "revision": run.revision}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	var systemID int64
-	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM approval_runs WHERE id = ?`, runID).Scan(&systemID); err != nil {
-		return err
-	}
-	return jobs.Enqueue(ctx, tx, "approval:advance", 0, systemID, string(b))
+	return jobs.Enqueue(ctx, tx, KindAdvance, 0, run.SystemID, string(b))
 }
 
 // mergeVars returns a fresh map that is base + overrides. Overrides

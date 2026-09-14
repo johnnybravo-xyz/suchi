@@ -534,6 +534,9 @@ func TestEngineTimeoutSweep(t *testing.T) {
 	if deadline.Valid {
 		t.Errorf("deadline_at not cleared after sweep: %d", deadline.Int64)
 	}
+	if _, tasks, err := e.GetRun(ctx, runID); err != nil || len(tasks) != 0 {
+		t.Fatalf("timed-out task remains actionable while its advance waits: %v %v", tasks, err)
+	}
 	// Drive the sweep-generated advance manually to verify the run
 	// lands in the expired end state.
 	if err := e.Advance(ctx, runID, "timeout"); err != nil {

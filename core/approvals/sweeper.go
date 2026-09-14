@@ -23,36 +23,38 @@ const SweepInterval = 30 * time.Second
 // swept twice for the same deadline.
 func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	now := time.Now().Unix()
-	rows, err := e.db.Read.QueryContext(ctx, `
-		SELECT id FROM approval_runs
-		WHERE state = 'running'
-		  AND deadline_at IS NOT NULL
-		  AND deadline_at <= ?
-	`, now)
-	if err != nil {
-		return err
-	}
 	var due []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+	settledCount := 0
+	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id FROM approval_runs
+			WHERE state = 'running' AND deadline_at IS NOT NULL AND deadline_at <= ?
+		`, now)
+		if err != nil {
 			return err
 		}
-		due = append(due, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	settledCount := 0
-	err = e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			due = append(due, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
 		settled, err := settledDocumentChanges(ctx, tx)
 		if err != nil {
 			return err
 		}
 		settledCount = len(settled)
 		for _, id := range due {
+			if err := expireOpenTasksForRun(ctx, tx, id); err != nil {
+				return err
+			}
 			if err := enqueueAdvanceWithTrigger(ctx, tx, id, "timeout"); err != nil {
 				return err
 			}

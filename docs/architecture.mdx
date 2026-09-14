@@ -413,6 +413,12 @@ Local archive matching fills unresolved metadata before user automations.
 Automations are the deterministic trigger/condition/action engine; approvals
 are the state-machine engine for human decisions. Do not introduce a second
 workflow engine for a new intake source or integration.
+Approval advancement jobs carry the originating transition revision and system.
+Handlers work outside the writer; their transactional effects and task creation
+recheck the run's revision/status before writing. Tasks retain the originating
+revision so retries cannot reopen a resolved visit. Resolution clears the deadline,
+and timeout selection, expiration and enqueue share one transaction. See
+[Approvals](/approvals#timeouts-and-recovery).
 
 `core/jd/presetfile` owns strict offline bounded HuML/TOML input. Validate raw
 author structure before flat expansion or generated System/49; `Marshal`

@@ -6,6 +6,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Bind approval jobs and tasks to their originating state revision, preventing
+  retries from replaying old decisions or reviving cancelled work. Accepted
+  decisions take precedence over later timeout sweeps.
 - Reject custom-field value changes on trashed documents, preserving their
   metadata and queued work until restoration.
 - Save profile display names using the supported API fields; show the sign-in

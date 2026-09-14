@@ -116,9 +116,11 @@ Entering a state with `timeout_sec` records a deadline. A recurring durable
 timeout sweep enqueues a `timeout` advancement for due runs and expires their
 open tasks. The definition must map `timeout` when timeout behavior is desired.
 
-Handlers are retry-safe. Interrupted internal approval jobs are reclaimed on
-startup, while a completed or cancelled run ignores redelivered advancement.
-Cancelling records a transition and expires open tasks.
+Interrupted jobs are reclaimed on startup. Each queued advancement and task is
+bound to one visit to a state; stale retries cannot replay a choice on a later
+visit or recreate a resolved task. Effects and task creation recheck that revision
+inside the writer transaction. Cancellation records a transition and expires tasks;
+accepted decisions clear their deadline before a later timeout sweep can act.
 
 Approval jobs appear in `/api/tasks/`; filter by `kind=approval:` when
 investigating a stalled run. Application logs use `component=approvals`.
