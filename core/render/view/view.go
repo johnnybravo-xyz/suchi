@@ -534,10 +534,21 @@ func (r *Renderer) publishDocumentLink(ctx context.Context, docID int64, relativ
 		return err
 	}
 	defer dir.Close()
-	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return replaceSymlink(dir, src, target)
+	// Serialize the short symlink publication with purge's ownership snapshot.
+	// Purge either sees this link in its journal or wins before it can appear.
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var live bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE id=? AND trashed_at IS NULL)`, docID).Scan(&live); err != nil {
+			return err
+		}
+		if !live {
+			return sql.ErrNoRows
+		}
+		if err := r.proveDocumentLink(ctx, tx, docID, relative, dir, target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return replaceSymlink(dir, src, target)
+	})
 }
 
 func (r *Renderer) removeDocumentLink(ctx context.Context, docID int64, relative string) error {
@@ -546,13 +557,15 @@ func (r *Renderer) removeDocumentLink(ctx context.Context, docID int64, relative
 		return err
 	}
 	defer dir.Close()
-	if err := r.proveDocumentLink(ctx, docID, relative, dir, target); err != nil {
+	if err := r.proveDocumentLink(ctx, r.db.Read, docID, relative, dir, target); err != nil {
 		return err
 	}
 	return dir.Remove(target)
 }
 
-func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative string, dir *os.Root, target string) error {
+func (r *Renderer) proveDocumentLink(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, docID int64, relative string, dir *os.Root, target string) error {
 	info, err := dir.Lstat(target)
 	if err != nil {
 		return err
@@ -564,7 +577,7 @@ func (r *Renderer) proveDocumentLink(ctx context.Context, docID int64, relative 
 	if err != nil {
 		return err
 	}
-	rows, err := r.db.Read.QueryContext(ctx, `
+	rows, err := q.QueryContext(ctx, `
 		SELECT original_blob FROM documents WHERE id=?
 		UNION SELECT archive_blob FROM documents WHERE id=? AND archive_blob IS NOT NULL
 		UNION SELECT new_blob FROM render_moves WHERE document_id=? AND new_path=? AND new_blob<>''

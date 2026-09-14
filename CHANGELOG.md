@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Serialize rendered-link publication with permanent deletion so an in-flight
+  render cannot recreate a link after its document is purged.
 - Bind approval jobs and tasks to their originating state revision, preventing
   retries from replaying old decisions or reviving cancelled work. Accepted
   decisions take precedence over later timeout sweeps.

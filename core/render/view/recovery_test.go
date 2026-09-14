@@ -16,6 +16,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
+	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
 func recoveryRenderer(t *testing.T) (*Renderer, *db.DB, string) {
@@ -58,6 +59,38 @@ func recoveryRenderer(t *testing.T) (*Renderer, *db.DB, string) {
 		t.Fatal(err)
 	}
 	return r, d, src
+}
+
+func TestPublicationDoesNotRecreatePurgedDocument(t *testing.T) {
+	r, d, _ := recoveryRenderer(t)
+	reached, release := make(chan struct{}), make(chan struct{})
+	r.beforePublish = func() {
+		close(reached)
+		<-release
+	}
+	finished := make(chan error, 1)
+	go func() { _, err := r.Render(t.Context(), 147); finished <- err }()
+	<-reached
+	var path string
+	if err := d.Read.QueryRowContext(t.Context(), `SELECT new_path FROM render_moves WHERE document_id=147`).Scan(&path); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	s, err := trash.New(d, r.renderDir, r.log)
+	if err == nil {
+		_, err = d.ExecWrite(t.Context(), `UPDATE documents SET trashed_at = 1 WHERE id=147`)
+	}
+	if err == nil {
+		_, err = s.PurgeExpired(t.Context(), time.Now())
+	}
+	close(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-finished
+	if _, err := os.Lstat(filepath.Join(r.renderDir, path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rendered link recreated after purge: %v", err)
+	}
 }
 
 func assertProjection(t *testing.T, r *Renderer, path string) {

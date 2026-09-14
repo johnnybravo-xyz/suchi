@@ -203,6 +203,9 @@ physical CAS reclamation. Purge snapshots candidate paths and their document/
 journal hashes inside the write transaction before deleting rows. Cleanup runs
 after commit, pins real parent directories, and removes only matching CAS
 symlinks. Foreign artifacts remain in place and count as reported cleanup failures.
+The short liveness/ownership check and atomic symlink replacement share the writer
+with purge's snapshot. Directory preparation stays outside it; a render paused
+before publication cannot recreate a link after the document has been deleted.
 `core/render/paths` owns the canonical CAS-link predicate shared by view and trash.
 The renderer obtains filesystem targets from validated `CAS.Path`, not its own
 copy of the shard layout. Even when a filing path has not changed, a render job
