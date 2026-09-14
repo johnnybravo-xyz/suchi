@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Roll back writer transactions when a callback panics, so recovered failures
+  cannot leave the archive's only writer occupied.
 - Prevent administrators from disabling their own account or removing the last
   active administrator. Enforce both safeguards in the API and make the signed-in
   account's Active switch read-only.

@@ -120,14 +120,13 @@ func (d *DB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	// modernc/sqlite honors LevelSerializable as BEGIN, not BEGIN IMMEDIATE.
 	// Force it explicitly so our discipline is what we say it is.
 	if _, err := tx.ExecContext(ctx, "ROLLBACK; BEGIN IMMEDIATE"); err != nil {
-		_ = tx.Rollback()
 		return fmt.Errorf("begin immediate: %w", err)
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

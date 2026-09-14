@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,10 +10,57 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
+
+func TestWriteTxFailureReleasesWriter(t *testing.T) {
+	for _, failure := range []string{"commit", "panic"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "failure.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if _, err := d.ExecWrite(ctx, `CREATE TABLE parents(id INTEGER PRIMARY KEY);
+				CREATE TABLE children(parent_id INTEGER REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED)`); err != nil {
+				t.Fatal(err)
+			}
+			func() {
+				defer func() {
+					if got := recover(); failure == "panic" && got != "forced transaction panic" {
+						t.Fatalf("panic = %v", got)
+					} else if failure != "panic" && got != nil {
+						t.Fatalf("unexpected panic: %v", got)
+					}
+				}()
+				err = d.WriteTx(ctx, func(tx *sql.Tx) error {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO children(parent_id) VALUES (1)`); err != nil {
+						return err
+					}
+					if failure == "panic" {
+						panic("forced transaction panic")
+					}
+					return nil
+				})
+				if err == nil {
+					t.Fatal("invalid transaction succeeded")
+				}
+			}()
+			if _, err := d.ExecWrite(ctx, `INSERT INTO parents(id) VALUES (2)`); err != nil {
+				t.Fatalf("writer unusable after %s: %v", failure, err)
+			}
+			var children int
+			if err := d.Read.QueryRowContext(ctx, `SELECT count(*) FROM children`).Scan(&children); err != nil || children != 0 {
+				t.Fatalf("failed transaction leaked rows: children=%d error=%v", children, err)
+			}
+		})
+	}
+}
 
 // Smoke test: open a DB, run migrations, verify pragmas + writer discipline.
 // Fast, hermetic — no external services.

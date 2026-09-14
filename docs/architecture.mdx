@@ -146,6 +146,8 @@ the same SQLite file with WAL, foreign keys, a busy timeout, and bounded memory
 mapping. Use `WriteTx` for mutations and pass its `*sql.Tx` into helpers that
 participate in that transaction. Re-entering the write pool from inside a
 transaction waits on the connection already held by the caller.
+`WriteTx` defers rollback so callback errors and panics release that connection;
+a recovered panic cannot leave later archive writes waiting indefinitely.
 
 `core/jd/systems` is the leaf owner for system identity, membership, target
 resolution and address syntax; it is not a tenant framework. Original system 1
