@@ -4,178 +4,81 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
-### Fixed
-
-- Ignore late document saves after navigation and avoid reloading the editor
-  when sidebar metadata arrives; language edits share the guarded save path.
-- Split scans inherit current parent privacy and filing metadata at child
-  creation; trash during extraction prevents new children, and retries preserve
-  the original recovery deadline.
-- Honor refile options in streamed requests and clarify that render-only refiling
-  does not run classification.
-- Serialize rendered-link publication with permanent deletion so an in-flight
-  render cannot recreate a link after its document is purged.
-- Bind approval jobs and tasks to their originating state revision, preventing
-  retries from replaying old decisions or reviving cancelled work. Accepted
-  decisions take precedence over later timeout sweeps.
-- Reject custom-field value changes on trashed documents, preserving their
-  metadata and queued work until restoration.
-- Save profile display names using the supported API fields; show the sign-in
-  email read-only and hide mobile pairing for both demo identities.
-- Keep first-visit demo setup alive through filing-context initialization.
-- Block new file-drop uploads until a filing system is ready, and prevent late
-  errors from an earlier system from clearing the current one. Taxonomy downloads
-  now share the normal session, destination and error guards.
-- Preserve the predecessor's sensitivity when uploading a version, retaining
-  reveal gates on confidential and restricted documents.
-- Enforce the 30-day recovery limit on bulk restore. An expired selection rejects
-  the batch atomically; live documents remain unchanged.
-- Preserve pending Microsoft sign-ins when a filing-system membership update
-  rolls back; committed removals discard them before readmission can reuse them.
-- Roll back writer transactions when a callback panics, so recovered failures
-  cannot leave the archive's only writer occupied.
-- Prevent administrators from disabling their own account or removing the last
-  active administrator. Enforce both safeguards in the API and make the signed-in
-  account's Active switch read-only.
-- Canonicalize administrator capabilities on creation and role changes, including
-  direct API calls. Promotion preserves implicit access; demotion cannot revive
-  hidden member grants.
-- Commit capability revocations and successful audit writes with the user change,
-  preserving transition order and protecting resources created after a regrant.
-  Cascade failures roll back the account and dependent resources. Audit persistence
-  remains best-effort; rejected disables preserve pending Microsoft sign-ins.
-- Remove ineffective dynamic API imports and missing-Svelte-config build notices.
-- Stack email intake matching fields at full width with equal single-line
-  heights and individual resize handles.
-- Require a saved filing-tree choice before continuing setup. Remove its skip
-  action, including on loading errors, and keep later steps optional.
-- Permanent deletion preserves unrelated files and symlinks at rendered paths.
-  Cleanup snapshots document and journal blob ownership before deleting records,
-  removes only verified CAS links, and reports rejected artifacts.
-- Remember published blob targets in the render journal so archive changes plus
-  refiling recover across restarts. Same-path refresh preserves unrelated files
-  and symlinks; unprovable pre-upgrade links are retained and reported.
-- Bind taxonomy previews to trimmed metadata references and reject colliding
-  generated and explicit starter names before application.
-- Allow valid scoped API tokens to permanently delete documents and empty Trash,
-  while rechecking credential revocation and membership in the write transaction.
-- Preserve historical skipped filesystem and mail intake events in the original
-  filing system during the beta.2 upgrade.
-- Filesystem views now link to the current blob layout and refresh after
-  processing replaces a document's derived archive. Existing stale links are
-  repaired on the next render or refile operation.
-- Taxonomy imports preserve local category descriptions, disabled preset rules
-  and edited forks, and reject stale previews before atomic application.
-- Seeded exports preserve supported symbolic filters and rule identity, rejecting
-  disabled or unrepresentable behavior rather than silently dropping it.
-- Repeated automation discard preserves the existing Trash timestamp; other
-  metadata actions still require a live document.
-- Version uploads retain their owning filing system in activity events, so new
-  versions appear in that system's feed without leaking into another system.
-
 ### Added
 
-- Show a password-unlocked indicator in document lists, grids, and detail,
-  including documents automatically unlocked with saved passwords.
-- Edit tags directly on document detail, including documents with no tags.
-- Edit existing saved views in place, including their name, query, filters, and
-  sharing, while preserving legacy filter scopes and exact research snapshots.
-- Pair a mobile device from a signed-in browser using a locally generated QR
-  with a five-minute, single-use code and document-only token scopes.
-- First-party mobile clients can negotiate API compatibility, inspect token
-  scopes, submit timestamped PDF OCR with explicit provenance, retry document
-  and version uploads idempotently, resolve QR-split children, request bounded
-  thumbnails, and fetch metadata without transferring extracted text.
-- Import HuML or TOML filing trees from setup and Settings with target-aware
-  previews, collision choices, actual rule effects and stale-preview recovery.
-  The first prefixed import atomically names the original archive or preserves it
-  separately; later prefixed imports merge/create one system without a mode toggle.
-- Add permanent A00–Z99 system codes, editable names, direct memberships, scoped
-  tokens/intake and full `SYS.AC.documentID` addresses using existing global IDs.
-  Unprefixed archives retain their existing presentation until successful first prefixed Apply.
-- Maintain a generated `00.00 archive.huml` tree-only index per system through
-  durable jobs, with startup recovery and explicit pending/failure reporting.
-- Export filing trees without keywords or starter rules using `--skip-seeds`
-  or the tree-only export choice.
+- Import HuML/TOML filing trees with target-aware previews, collision handling,
+  and stale-preview protection. First prefixed Apply introduces permanent
+  A00–Z99 systems, names, direct memberships, and `SYS.AC.documentID` addresses;
+  existing unprefixed archives retain their presentation until then.
+- Generate a recoverable `00.00 archive.huml` tree index per system; offer
+  tree-only export without keywords or starter rules.
+- Pair mobile apps through five-minute, single-use QR codes. Settings lists
+  connected devices by their app-confirmed names, activity dates, and revocation.
+- Add mobile compatibility/scopes discovery, timestamped PDF OCR provenance,
+  idempotent document/version uploads, split-origin lookup, bounded thumbnails,
+  and metadata-only reads.
+- Edit document tags and existing saved views; show password-unlocked status
+  in document lists and detail.
 
 ### Changed
 
-- Simplify People and metadata into Users, Groups, Metadata, and Taxonomy.
-  Replace nested taxonomy tabs with one metadata-type selector, including custom
-  fields. Separate filing-tree file actions and backup guidance from metadata
-  editing, align form actions, and share user creation between Settings and setup.
-  Derive setup steps from the Archive configuration section inventory and share
-  configuration loading decisions. Join Archive navigation and content in one
-  continuous frame, with a scrollable section rail on smaller screens.
-- Center document and share-link QR codes in their dialogs.
-- Clarify that per-document custom-field values have no read API/UI yet, and that
-  automatic document-ID nonreuse starts with the taxonomy upgrade; surviving
-  beta.2 IDs are preserved, but earlier purged numbers have no retained history.
-- Define `suchi-taxonomy/v1` as strict offline HuML/TOML with optional top-level
-  `system` and generated System/49. Author-declared reserved areas, category-level
-  protected flags, `inbox`, YAML and unsupported fields fail. Standalone validation
-  requires neither server configuration nor a database.
-- Later preset applications and custom imports merge additively; explicit refile
-  remains a separate automation/render operation.
-- Keep named-system projections under immutable `rendered/<SYS>/` roots with
-  date/title/full-address default filenames; constrain explicit templates to that
-  root and recover journaled moves without overwriting unknown files. First
-  introduction queues render-only moves, not OCR or filing-rule reruns.
-- Native takeout emits manifest version 2 for one selected system, with additive
-  source-system/address sidecar metadata. It remains partial, not a full restore
-  protocol; whole-instance backups preserve IDs, memberships and relationships.
-- Saved-view rows use visible Edit and delete controls instead of a decorative
-  eye badge and a hover-only delete action.
-- Clarified which files are needed for a complete archive backup in Settings.
-- Clarified that local archive matching controls automatic filing and
-  suggestions, not the Similar documents box.
-- Release images reuse the verified AnyDoc binaries built for standalone
-  downloads, avoiding a second Rust compilation for each architecture. Local
-  Docker builds and standalone packages share the same pinned build recipe.
-- Mobile pairing records the device name confirmed in the app as the connected
-  entry's label. Older clients retain the browser label; invalid names can be
-  corrected without consuming the pairing code.
-- Successful mobile QR-code and pairing-link exchanges now appear in Settings
-  > My account > Mobile app, with connection and last-use dates and Revoke.
-  The list refreshes during pairing and excludes revoked or signed-out devices.
-- Consolidate all unreleased mobile and taxonomy changes into migration 0003.
-  Published beta.2 migrations 0001/0002 remain unchanged. Fresh installations and
-  beta.2/schema 0002 are supported; intermediate development schemas are not.
-  Existing tokens with unknown pairing provenance remain in API tokens until replaced.
-- Sized thumbnail requests decode image pixels only when resizing is needed,
-  avoiding unnecessary work for cached and original-size responses.
-- Mobile schema changes ship after the unchanged beta.2 schema. Browser login
-  creates only a session; headless credential exchange uses `/api/token/`
-  without leaving unused browser sessions.
+- Ship all unreleased schema changes in migration 0003. Published beta.2
+  migrations 0001/0002 remain unchanged; fresh installs and beta.2/schema 2
+  upgrades are supported, intermediate development schemas are not. Surviving
+  IDs/history/credentials are preserved; automatic ID nonreuse begins at upgrade.
+- Define strict offline `suchi-taxonomy/v1` HuML/TOML, with generated reserved
+  System/49 structure. YAML and unsupported fields fail validation. Later
+  preset/import applications merge additively; refile remains explicit.
+- Keep projections under immutable `rendered/<SYS>/` roots. First introduction
+  queues render-only moves. Native takeout v2 exports one selected system and
+  remains partial; complete backups preserve the whole instance.
+- Simplify shared setup and People/metadata forms. Setup requires a saved filing
+  tree; profile email is read-only, and display-name saves use supported fields.
+  Improve saved-view controls, email-rule resizing, and QR alignment.
+- Reuse verified AnyDoc release artifacts in images and skip unnecessary
+  thumbnail decoding and document-detail reloads.
+- Consolidate guides and release notes; clarify backup, matching, mobile OCR,
+  and API behavior. Per-document custom-field values still have no read API/UI.
+  Legacy tokens without pairing provenance remain under API tokens.
+
+### Fixed
+
+- Preserve local taxonomy descriptions, disabled rules, edited forks, symbolic
+  filters, and rule identity; reject conflicting references and unsupported
+  seeded exports before changing data.
+- Recover rendered links after archive changes/restarts without overwriting
+  unrelated artifacts. Coordinate publication with purge so deleted links cannot
+  reappear; retain and report links whose ownership cannot be proven.
+- Preserve sensitivity in new versions and current parent metadata in split
+  scans. Trashing during extraction prevents new split children.
+- Enforce the 30-day bulk-restore limit, preserve existing Trash timestamps,
+  and reject custom-field edits on trashed documents.
+- Bind approval decisions and retries to their original review. Prevent duplicate
+  effects, reused run/task IDs, and reopened expired reviews. Recover proven
+  beta.2 work; ambiguous legacy jobs need review or restart. Callback panics
+  release the database writer.
+- Keep uploads, downloads, pairing, document saves and Trash actions bound to
+  their original account/system/document. Fix demo startup and hide unavailable
+  account tools; refresh changed avatars. Honor streamed refile options.
 
 ### Security
 
-- Recheck the acting administrator after password hashing so concurrent disable
-  or demotion cannot authorize a replacement account.
-- Honor token scopes in chunked JSON requests instead of silently granting the
-  default read/write scopes.
-- Apply credential and demo rate limits consistently across canonical,
-  trailing-slash and escaped-slash API paths.
-- Enforce explicit/token system, active membership and existing document permissions
-  across document, search, metadata, task, research and blob paths. Administrators
-  bypass membership/ACLs, never explicit or token boundaries. Membership removal
-  revokes system shares/tokens/pairings; re-addition cannot revive credentials.
-- Bind Microsoft OAuth creation handoffs to the authenticated actor and starting
-  system; `sealed_secret_b64` cannot import arbitrary at-rest credential ciphertext.
-- Pairing consumption, current system-entry checks and token issuance share one
-  writer transaction; failed issuance rolls back consumption. Token listings show
-  only the selected system's credentials and identify their binding.
-
-- Pairing creation rejects origins the mobile app cannot use: HTTP requires
-  localhost, loopback or private literal IPs, with an actionable configuration
-  error for named/public HTTP hosts and link-local addresses.
-- Mobile pairing prompts clear and close on session refresh or account changes;
-  stale prompts cannot generate codes or copy the previous account's link.
-- Developer mode binds loopback by default and requires an explicit matching
-  private interface opt-in for physical-device LAN testing. Production startup
-  rejects an enabled account retaining the public development credentials.
-- Version-upload outcomes and version lists check each document's permissions,
-  including duplicate responses and replayed uploads.
+- Enforce system selection, token binding, membership, and document ACLs across
+  reads, counts, search, tasks, research, blobs, versions, and upload replays.
+  Admins bypass membership/ACLs, never explicit/token boundaries. Scoped tokens
+  can permanently delete authorized Trash documents.
+- Bind OAuth handoffs and mobile pairing to the actor/system. Membership
+  removal revokes shares/tokens/pairings without revival on readmission; failed
+  membership/account updates preserve pending sign-ins. Pairing validates usable
+  origins and consumes codes transactionally with token issuance.
+- Prevent self-disable and last-admin removal, normalize role capabilities, and
+  commit dependent revocations with user changes. Recheck admin authority after
+  password hashing; concurrent disable/demotion cannot create replacement accounts.
+- Rate-limit credential/demo routes across plain, trailing-slash, and encoded
+  slash forms. Retain request IDs and security headers on rejections. Honor
+  scopes in chunked token requests and keep batch-decryption diagnostics in logs.
+- Separate browser sessions from headless token exchange. Constrain development
+  credentials to explicitly safe listeners and reject them in production.
 
 ## [0.1.0-beta.2] - 2026-09-05
 
