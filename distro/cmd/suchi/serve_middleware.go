@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/config"
@@ -28,23 +29,37 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 	handler := httpx.Chain(router, middleware...)
 
 	loginLimiter := httpx.NewRateLimit(5, 10, cfg.TrustedProxyCIDRs...)
-	overlay := http.NewServeMux()
-	overlay.Handle("POST /setup", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /bootstrap", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /login", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/login", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/token/", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/mobile/pairing", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/mobile/pairing/", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/mobile/pairing/exchange", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /api/mobile/pairing/exchange/", loginLimiter.Middleware(handler))
-	overlay.Handle("GET /s/{token}", loginLimiter.Middleware(handler))
-	overlay.Handle("POST /s/{token}", loginLimiter.Middleware(handler))
-	overlay.Handle("GET /s/{token}/{doc_id}/download", loginLimiter.Middleware(handler))
+	loginHandler := loginLimiter.Middleware(handler)
+	demoHandler := handler
 	if demoLimiter != nil {
-		overlay.Handle("POST /api/demo/session", demoLimiter.Middleware(handler))
-		overlay.Handle("POST /api/demo/session/upgrade", demoLimiter.Middleware(handler))
+		demoHandler = demoLimiter.Middleware(handler)
 	}
-	overlay.Handle("/", handler)
-	return overlay
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			path := r.URL.Path
+			if strings.HasPrefix(path, "/api/") {
+				// Match the decoded path used by API slash normalization,
+				// including an escaped trailing slash. Keep the request intact.
+				path = strings.TrimSuffix(path, "/")
+			}
+			switch path {
+			case "/setup", "/bootstrap", "/login", "/api/login", "/api/token",
+				"/api/mobile/pairing", "/api/mobile/pairing/exchange":
+				loginHandler.ServeHTTP(w, r)
+				return
+			case "/api/demo/session", "/api/demo/session/upgrade":
+				demoHandler.ServeHTTP(w, r)
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/s/") {
+			_, pattern := mux.Handler(r)
+			switch pattern {
+			case "GET /s/{token}", "POST /s/{token}", "GET /s/{token}/{doc_id}/download":
+				loginHandler.ServeHTTP(w, r)
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
 }

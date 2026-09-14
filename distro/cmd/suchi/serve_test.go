@@ -87,6 +87,93 @@ func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		demo bool
+	}{
+		{path: "/api/login"},
+		{path: "/api/token"},
+		{path: "/api/mobile/pairing"},
+		{path: "/api/mobile/pairing/exchange"},
+		{path: "/api/demo/session", demo: true},
+		{path: "/api/demo/session/upgrade", demo: true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			mux := http.NewServeMux()
+			pattern := "POST " + tc.path
+			if tc.path == "/api/token" {
+				pattern += "/"
+			}
+			mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			var demoLimiter *httpx.RateLimit
+			if tc.demo {
+				demoLimiter = httpx.NewRateLimit(5, 10)
+			}
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, demoLimiter, httpx.NewMetrics(), testLogger())
+			for i := range 12 {
+				path := tc.path
+				switch i % 3 {
+				case 1:
+					path += "/"
+				case 2:
+					path += "%2f"
+				}
+				req := httptest.NewRequest("POST", path, nil)
+				req.RemoteAddr = "192.0.2.1:1234"
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				want := http.StatusNoContent
+				if tc.path == "/api/token" && i%3 == 2 {
+					want = http.StatusTemporaryRedirect
+				}
+				if i >= 10 {
+					want = http.StatusTooManyRequests
+				}
+				if rec.Code != want {
+					t.Fatalf("request %d to %s: status = %d, want %d", i+1, path, rec.Code, want)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildHTTPHandlerRateLimitsShareRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		method  string
+		path    string
+	}{
+		{"GET /s/{token}", "GET", "/s/secret"},
+		{"POST /s/{token}", "POST", "/s/secret"},
+		{"GET /s/{token}/{doc_id}/download", "GET", "/s/secret/1/download"},
+		{"GET /s/{token}/{doc_id}/download", "HEAD", "/s/secret/1/download"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc(tc.pattern, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			handler := buildHTTPHandler(mux, &config.Config{}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+			for i := range 11 {
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				req.RemoteAddr = "192.0.2.1:1234"
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				want := http.StatusNoContent
+				if i == 10 {
+					want = http.StatusTooManyRequests
+				}
+				if rec.Code != want {
+					t.Fatalf("request %d: status = %d, want %d", i+1, rec.Code, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRegisterOperationalRoutesProtectsMetricsAndGatesPprof(t *testing.T) {
 	mux := http.NewServeMux()
 	registerOperationalRoutes(mux, nil, httpx.NewMetrics(), false, testLogger())

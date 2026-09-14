@@ -229,7 +229,7 @@ are also excluded.
 
 Pairing endpoints use `Cache-Control: no-store`, create no browser session,
 and never log the code, link, QR, or token. Creation and exchange share the
-login rate limit, including trailing-slash aliases.
+login rate limit, including trailing-slash and percent-encoded slash aliases.
 
 ### `GET /metrics`
 
@@ -276,6 +276,8 @@ The separate `POST /login` browser form accepts URL-encoded fields and redirects
 after setting the same kind of session cookie.
 
 **401** on bad credentials. One error path covers every failure mode.
+Credential routes and demo session creation share their respective rate-limit
+buckets across canonical, trailing-slash and percent-encoded slash aliases.
 
 ### `GET /api/whoami`
 

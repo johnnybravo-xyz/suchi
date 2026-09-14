@@ -136,6 +136,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Security
 
+- Apply credential and demo rate limits consistently across canonical,
+  trailing-slash and escaped-slash API paths.
 - Enforce explicit/token system, active membership and existing document permissions
   across document, search, metadata, task, research and blob paths. Administrators
   bypass membership/ACLs, never explicit or token boundaries. Membership removal
