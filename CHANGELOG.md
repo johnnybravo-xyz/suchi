@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Honor refile options in streamed requests and clarify that render-only refiling
+  does not run classification.
 - Serialize rendered-link publication with permanent deletion so an in-flight
   render cannot recreate a link after its document is purged.
 - Bind approval jobs and tasks to their originating state revision, preventing

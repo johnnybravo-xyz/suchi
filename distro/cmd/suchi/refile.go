@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
@@ -31,7 +30,7 @@ func runRefile(args []string) int {
 	fs := flag.NewFlagSet("suchi refile", flag.ContinueOnError)
 	var (
 		skipAutomations = fs.Bool("skip-automations", false, "don't re-run automations; enqueue render only")
-		skipRender      = fs.Bool("skip-render", false, "don't enqueue render jobs — re-run classifier only")
+		skipRender      = fs.Bool("skip-render", false, "don't enqueue render jobs; run automations only")
 		ownerID         = fs.Int64("owner-id", 0, "restrict to docs owned by this user id; 0 = every owner")
 		systemCode      = fs.String("system", "", "system code (default: original archive)")
 	)
@@ -67,11 +66,6 @@ func runRefile(args []string) int {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}
-
-	// CAS is not strictly needed by refile itself, but the render
-	// handler dereferences it when the dispatcher picks up the
-	// enqueued jobs. Nothing calls it here.
-	_ = blob.CAS{}
 
 	system, err := resolveCommandSystem(ctx, d, *systemCode)
 	if err != nil {

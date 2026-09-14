@@ -32,7 +32,7 @@ func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
 		OwnerID         int64 `json:"owner_id,omitempty"`
 	}
 	// Empty body is valid — it means "run both passes across all owners".
-	if r.ContentLength > 0 {
+	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &body); err != nil {
 			s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 			return
