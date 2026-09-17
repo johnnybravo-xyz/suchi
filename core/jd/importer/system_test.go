@@ -8,7 +8,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
-	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
 func TestFirstSystemImportRetainsIdentityMembershipAndGrants(t *testing.T) {
@@ -61,7 +61,7 @@ func TestFirstSystemImportRetainsIdentityMembershipAndGrants(t *testing.T) {
 	apply(t, d, pf, importer.Options{})
 	pf.System = ""
 	apply(t, d, pf, importer.Options{})
-	exported, err := taxonomy.BuildExport(t.Context(), d, 1, true)
+	exported, err := exporter.BuildExport(t.Context(), d, 1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRepeatedCodesNamesAndRulesStayInTheirSystem(t *testing.T) {
 	if n := count(t, d, `SELECT COUNT(*) FROM automations WHERE system_id=1 AND enabled=1`); n != 0 {
 		t.Fatal("selected unprefixed reimport resurrected another system rules")
 	}
-	exported, err := taxonomy.BuildExport(t.Context(), d, selected.ID, false)
+	exported, err := exporter.BuildExport(t.Context(), d, selected.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

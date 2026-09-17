@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
@@ -557,6 +558,12 @@ func (s *Server) approvalTasksForUser(r *http.Request, userID int64, role string
 		}
 
 		for _, task := range batch {
+			if task.ApprovalName == approvals.DocumentChangeSlug {
+				task.Vars, err = s.documentChangeReviewVars(ctx, task.DocID, task.Vars)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
 			if task.ApprovalName == rescan.ProposalSlug {
 				needed, err := s.proposalStillNeeded(ctx, task.Vars, eligibility)
 				if err != nil {

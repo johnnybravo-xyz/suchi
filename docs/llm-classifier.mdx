@@ -1,6 +1,6 @@
 ---
 title: "LLM classifier"
-description: "Optional local or hosted model assistance for classification, archive research with citations, and reviewed extracted facts."
+description: "Optional local or hosted model assistance, source-grounded research, and threshold-based suggestions with optional review."
 ---
 
 Suchi ships deterministic automations and local archive matching. The
@@ -28,9 +28,11 @@ setup and choose:
 - **Hosted endpoint** for a provider on the public internet
 
 Configure endpoint, model, optional API key, confidence threshold, and enabled
-state. The same screen controls local archive matching and its review and
-auto-apply thresholds. Hosted mode also requires an explicit egress
-acknowledgement.
+state. The same screen controls local archive matching and its automatic/review
+thresholds. **Automatically apply high-confidence suggestions** is on by default;
+turn it off for review-first behavior. **Save application mode** saves that
+choice independently. Hosted mode still requires an explicit egress
+acknowledgement; the mode does not activate a model or grant egress permission.
 
 API keys are sealed before entering SQLite. Leaving the key field blank keeps
 the stored value; **Clear the stored API key** removes the web-managed value.
@@ -115,20 +117,29 @@ document text in logs or API errors.
 The confidence threshold ranges from `0.50` to `0.95` in `0.05` steps and
 defaults to `0.70`.
 
-At or above the threshold:
+With automatic mode on, eligible model metadata at or above the threshold can
+apply without review. With it off, valid inferred changes go to Approvals even
+at confidence 1.0. Below-threshold changes remain review suggestions. Scores are
+model-reported signals, not calibrated probabilities of correctness.
+An unset correspondent and Inbox-only filing remain eligibility checks. Human
+edits, clears and language locks take precedence over in-flight inference;
+automatic language changes do not create a human language lock.
 
-- a validated suggested title replaces the current title;
-- an unset correspondent can be filled;
-- tags are added; an earlier classifier-owned `needs-review` tag is removed
-  when the new result no longer requests it;
-- the JD category changes only while the document remains in the inbox.
+Local archive matching shares the same mode, with a default automatic threshold
+of `0.90` and minimum review-suggestion score of `0.50`. Explicit user-authored
+rules remain independent.
+Existing custom thresholds are preserved. An older review-only configuration
+with a `0.90` review floor and no saved automatic threshold uses `0.95` for
+automatic application, keeping its review floor valid.
 
-Date extraction uses the same score but has its own automatic-versus-reviewed
-contract. See [Document dates](/document-dates).
+Date extraction shares the request but requires exact target-document evidence
+and evaluates each date's own score against the model/date threshold, independently
+of overall classification confidence. See [Document dates](/document-dates).
 
-Below the threshold, source fields stay unchanged, Suchi adds the
-`needs-review` tag, and a changed title is offered as an approval assigned to
-the document owner.
+Similar-document titles used as naming context are selected under the document
+owner's access, not an administrator's archive-wide bypass. Their identities,
+source snapshots and visibility are rechecked before results are stored and
+again when a metadata suggestion is applied.
 
 Automatic review-tag cleanup depends on a successful classification at or above
 the threshold, not on whether the document has a descriptive title. Failed
@@ -149,9 +160,11 @@ the production parser. It returns latency and sanitized synthetic fields only.
 It does not save settings, send archive content, or reveal raw provider output.
 
 Saving local archive settings or the model's enabled state, endpoint, model,
-key, timeout, acknowledgement, confidence, or automatic Calendar-date option
-applies immediately. No Suchi restart is required. Date-setting effects are
-documented under [Document dates](/document-dates).
+key, timeout, acknowledgement or confidence threshold applies immediately.
+No Suchi restart is required. A provider-configuration change during a model
+call invalidates that result; the current application mode is checked again
+inside the writer before automatic changes. Saving settings never accepts
+pending suggestions.
 
 Other setting changes affect new ingests and explicit rescans; they never start
 an automatic archive-wide model backfill. Select older documents in
@@ -197,10 +210,11 @@ Its citation check verifies format and source numbers, not whether each claim is
 correct. A View is saved or Approvals/Calendar is opened only after a separate
 user action.
 
-The same classification call may propose typed facts for review. Dates are the
-first registered type. They are stored in the generic `document_intelligence`
-ledger and never reach Calendar, rich-query filters, or later answers until a
-person approves them.
+The same classification call may propose typed facts. Dates are the first
+registered type, stored in the generic `document_intelligence` ledger. Only
+accepted dates reach Calendar, rich-query filters or later answers: acceptance
+may be automatic under the current mode and threshold, or explicitly reviewed.
+Automatic acceptance records no human reviewer and does not enable ICS export.
 
 See [Archive research](/archive-chat) for the complete retrieval, prompt,
 grounding, source-view, extracted-fact review, date-format, Calendar, API,
@@ -209,8 +223,8 @@ privacy, rate-limit, and maintainer contracts.
 ## Current scope
 
 The product provides fixed document classification, transient read-only
-archive research, Views made from retrieved documents, confidence-gated facts
-with optional review, and document-date Calendar/query workflows. It does not
+archive research, Views made from retrieved documents, source-backed facts,
+and document-date Calendar/query workflows. It does not
 provide arbitrary model tools, custom code in the ingest pipeline, persistent
 chat, timed calendar events, or implicit rule learning from approvals.
 

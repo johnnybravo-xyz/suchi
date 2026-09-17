@@ -128,11 +128,12 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 		return nil, err
 	}
 	return &pluginapi.Principal{
-		Kind:    "user",
-		UserID:  userID,
-		Email:   claims.Email,
-		Display: display,
-		Role:    role,
+		Kind:          "user",
+		UserID:        userID,
+		Email:         claims.Email,
+		Display:       display,
+		Role:          role,
+		AuthExpiresAt: idTok.Expiry.Unix(),
 	}, nil
 }
 

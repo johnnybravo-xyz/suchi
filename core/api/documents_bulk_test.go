@@ -12,6 +12,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -23,8 +24,10 @@ import (
 
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
@@ -262,5 +265,32 @@ func TestBulkEdit_SetJDCategory(t *testing.T) {
 	_ = d.Read.QueryRow(`SELECT jd_category_id FROM documents WHERE id = ?`, a).Scan(&got)
 	if got != 2 {
 		t.Errorf("jd_category_id = %d, want 2", got)
+	}
+}
+
+func TestBulkRemovingAbsentTagInvalidatesInFlightSuggestion(t *testing.T) {
+	s := newBulkServer(t)
+	docID := seedStatsDoc(t, s.DB, 1, "tag-intent-source", "Source", seedStatsJDInbox(t, s.DB), false, 0)
+	if _, err := s.DB.Write.Exec(`INSERT INTO tags(system_id,id,name,slug,created_at,updated_at) VALUES(1,301,'Suggested','suggested',0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := documentstate.Load(t.Context(), s.DB.Read, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, result := doBulkEdit(t, s, map[string]any{
+		"documents": []int64{docID}, "method": "remove_tag",
+		"parameters": map[string]any{"tag_id": 301},
+	}, adminPrincipal(1))
+	if code != http.StatusOK || result.Applied != 1 {
+		t.Fatalf("remove absent tag: status=%d result=%+v", code, result)
+	}
+	err = s.DB.WriteTx(t.Context(), func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(t.Context(), tx, docID, approvals.DocumentChange{
+			Field: "tag", ValueID: 301, Confidence: 1, Source: "llm", Baseline: &baseline,
+		})
+	})
+	if !errors.Is(err, approvals.ErrStaleProposal) {
+		t.Fatalf("inference survived explicit removal: %v", err)
 	}
 }

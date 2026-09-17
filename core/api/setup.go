@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
-	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
@@ -322,7 +321,6 @@ type llmSettingsInput struct {
 	ClearAPIKey         bool     `json:"clear_api_key"`
 	EgressAck           bool     `json:"egress_ack"`
 	ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
-	DateAutoApply       *bool    `json:"date_auto_apply,omitempty"`
 	ArchiveEnabled      *bool    `json:"archive_enabled,omitempty"`
 	ArchiveAuto         *float64 `json:"archive_auto_threshold,omitempty"`
 	ArchiveReview       *float64 `json:"archive_review_threshold,omitempty"`
@@ -406,8 +404,13 @@ func (s *Server) validateLLMSettings(ctx context.Context, w http.ResponseWriter,
 func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, error) {
 	archive := settings.ResolveArchiveClassifierConfig(ctx, s.DB)
 	researchContextMode := settings.ResolveResearchContextMode(ctx, s.DB)
+	autoApply, err := settings.ResolveAutoApply(ctx, s.DB.Read)
+	if err != nil {
+		return LLMSettingsStatus{}, err
+	}
 	if s.LLMStatusReader != nil {
 		status, err := s.LLMStatusReader(ctx)
+		status.AutoApply = autoApply
 		status.ArchiveEnabled = archive.Enabled
 		status.ArchiveAuto = archive.AutoThreshold
 		status.ArchiveReview = archive.ReviewThreshold
@@ -427,7 +430,7 @@ func (s *Server) loadLLMSettingsStatus(ctx context.Context) (LLMSettingsStatus, 
 		EgressAck:           cfg.EgressAck,
 		HasAPIKey:           cfg.APIKey != "",
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
-		DateAutoApply:       cfg.DateAutoApply,
+		AutoApply:           autoApply,
 		ArchiveEnabled:      archive.Enabled,
 		ArchiveAuto:         archive.AutoThreshold,
 		ArchiveReview:       archive.ReviewThreshold,
@@ -447,33 +450,50 @@ func (s *Server) GetLLMSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, status)
 }
 
-// PatchLLMSettings updates only the independently applied Archive research
-// context preset. It deliberately does not pass through the model save path:
-// changing retrieval depth must not touch credentials, enable a provider,
-// auto-apply dates, or invoke the provider reloader.
+// PatchLLMSettings independently saves one classification policy or research
+// preset without touching model activation, credentials, or existing reviews.
 func (s *Server) PatchLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
 	var body struct {
-		ResearchContextMode settings.ResearchContextMode `json:"research_context_mode"`
+		AutoApply           json.RawMessage `json:"auto_apply"`
+		ResearchContextMode json.RawMessage `json:"research_context_mode"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	if !body.ResearchContextMode.Valid() {
+	if (body.AutoApply == nil) == (body.ResearchContextMode == nil) {
+		s.writeError(w, http.StatusBadRequest, "bad_settings_patch",
+			"provide exactly one of auto_apply or research_context_mode")
+		return
+	}
+	if body.AutoApply != nil {
+		value := strings.TrimSpace(string(body.AutoApply))
+		if value != "true" && value != "false" {
+			s.writeError(w, http.StatusBadRequest, "bad_auto_apply", "auto_apply must be a boolean")
+			return
+		}
+		enabled := value == "true"
+		if err := settings.Set(r.Context(), s.DB, settings.KeyClassificationAutoApply, enabled); err != nil {
+			s.serverErr(w, "settings.classification.auto_apply", err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]bool{"auto_apply": enabled})
+		return
+	}
+	var mode settings.ResearchContextMode
+	if err := json.Unmarshal(body.ResearchContextMode, &mode); err != nil || !mode.Valid() {
 		s.writeError(w, http.StatusBadRequest, "bad_research_context_mode",
 			"research_context_mode must be one of: focused, balanced, detailed")
 		return
 	}
-	if err := settings.SaveResearchContextMode(r.Context(), s.DB, body.ResearchContextMode); err != nil {
+	if err := settings.SaveResearchContextMode(r.Context(), s.DB, mode); err != nil {
 		s.serverErr(w, "settings.llm.research_context", err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]string{
-		"research_context_mode": string(body.ResearchContextMode),
-	})
+	s.writeJSON(w, http.StatusOK, map[string]string{"research_context_mode": string(mode)})
 }
 
 func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
@@ -508,16 +528,11 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if body.ConfidenceThreshold != nil {
 		confidence = *body.ConfidenceThreshold
 	}
-	dateAutoApply := current.DateAutoApply
-	if body.DateAutoApply != nil {
-		dateAutoApply = *body.DateAutoApply
-	}
 	if err := settings.SaveLLMConfig(r.Context(), s.DB, settings.LLMConfig{
 		EndpointURL:         body.EndpointURL,
 		Model:               body.Model,
 		EgressAck:           body.EgressAck,
 		ConfidenceThreshold: confidence,
-		DateAutoApply:       dateAutoApply,
 		Disabled:            !enabled,
 	}, s.LLMAEAD, apiKeyUpdate); err != nil {
 		s.serverErr(w, "settings.llm.save", err)
@@ -536,17 +551,6 @@ func (s *Server) SaveLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if err := settings.SaveArchiveClassifierConfig(r.Context(), s.DB, archive); err != nil {
 		s.serverErr(w, "settings.archive_classifier.save", err)
 		return
-	}
-	if dateAutoApply && enabled {
-		applied, err := intelligence.AutoApplyPendingDates(
-			r.Context(), s.DB.Write, confidence, time.Now().Unix())
-		if err != nil {
-			s.serverErr(w, "settings.llm.date_auto_apply", err)
-			return
-		}
-		if applied > 0 {
-			s.Log.Info("settings.llm.date_auto_apply", "date_count", applied, "threshold", confidence)
-		}
 	}
 	if s.LLMReloader != nil {
 		if err := s.LLMReloader(r.Context()); err != nil {
@@ -608,7 +612,7 @@ func (s *Server) TestLLMSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "message": "Classifier responded with a valid result.", "result": result,
+		"ok": true, "message": "Model connection and response format checked; accuracy was not tested.", "result": result,
 	})
 }
 

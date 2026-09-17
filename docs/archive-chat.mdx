@@ -1,6 +1,6 @@
 ---
 title: "Archive research"
-description: "Document questions with citations, exact source views, and confidence-gated extracted facts."
+description: "Document questions with citations, exact source views, and reviewed extracted facts."
 ---
 
 Archive research is Suchi's read-only retrieval-augmented generation (RAG)
@@ -243,7 +243,7 @@ It does not require a new approval table or state model.
 ### Date extraction, review, and Calendar
 
 Dates use this ledger without adding a second model completion. For the roles,
-validation rules, confidence threshold, automatic and reviewed dates, rescans,
+validation rules, model-score signals, automatic or reviewed dates, legacy facts, rescans,
 Approvals, and Calendar, see
 [Document dates](/document-dates).
 
@@ -430,8 +430,7 @@ the optional `role` filter still applies.
 
 Use a real configured model when changing either prompt contract:
 
-1. Turn automatic Calendar dates off, then classify a long document with a date
-   near the middle.
+1. Classify a long document with a date near the middle.
 2. Confirm the candidate remains pending and includes matching evidence.
 3. Approve it and confirm it appears on Calendar.
 4. Ask a question whose answer uses the Calendar date.

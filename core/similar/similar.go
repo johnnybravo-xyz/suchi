@@ -18,6 +18,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // Doc is one row in the ranked result set.
@@ -65,12 +66,27 @@ type Principal struct {
 // Returns an empty slice (not an error) when the source has no
 // tokens to compare on.
 func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Principal) ([]Doc, error) {
+	return topDocs(ctx, database.Read, id, limit, p, func(principal authz.Principal) error {
+		return (authz.ACLAuthorizer{DB: database}).Can(ctx, principal, authz.KindDocument, id, authz.PermView)
+	})
+}
+
+// TopDocsInTx keeps source tokenization, visibility and neighbour ranking in
+// the caller's read snapshot. Inference callers can capture provenance in that
+// same snapshot without holding the database writer during retrieval.
+func TopDocsInTx(ctx context.Context, tx *sql.Tx, id int64, limit int, p *Principal) ([]Doc, error) {
+	return topDocs(ctx, tx, id, limit, p, func(principal authz.Principal) error {
+		return (authz.ACLAuthorizer{}).CanInTx(ctx, tx, principal, authz.KindDocument, id, authz.PermView)
+	})
+}
+
+func topDocs(ctx context.Context, reader systems.Queryer, id int64, limit int, p *Principal, authorize func(authz.Principal) error) ([]Doc, error) {
 	var (
 		title    sql.NullString
 		content  sql.NullString
 		systemID int64
 	)
-	err := database.Read.QueryRowContext(ctx,
+	err := reader.QueryRowContext(ctx,
 		`SELECT title, substr(COALESCE(content, ''), 1, ?), system_id
 		   FROM documents WHERE id = ? AND trashed_at IS NULL`,
 		MaxContentBytes, id).Scan(&title, &content, &systemID)
@@ -81,7 +97,7 @@ func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Princ
 	if p != nil {
 		principal = authz.Principal{UserID: p.UserID, Role: p.Role, Kind: p.Kind, Groups: p.Groups,
 			SystemID: p.SystemID, TokenSystemID: p.TokenSystemID}
-		if err := (authz.ACLAuthorizer{DB: database}).Can(ctx, principal, authz.KindDocument, id, authz.PermView); err != nil {
+		if err := authorize(principal); err != nil {
 			var denied *authz.ErrDenied
 			if errors.As(err, &denied) {
 				return nil, sql.ErrNoRows
@@ -130,7 +146,7 @@ func TopDocs(ctx context.Context, database *db.DB, id int64, limit int, p *Princ
 	args := append([]any{match, id}, visArgs...)
 	args = append(args, limit)
 
-	rows, err := database.Read.QueryContext(ctx, q, args...)
+	rows, err := reader.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

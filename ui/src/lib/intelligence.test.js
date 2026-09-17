@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatIntelligenceDate, formatIntelligenceValue, groupCalendarEvents, intelligenceDateValue } from './intelligence.js'
+import { canReviewDate, formatIntelligenceDate, formatIntelligenceValue, groupCalendarEvents, intelligenceDateValue, reviewFailure } from './intelligence.js'
 
 test('formats dates only to their recorded precision, including storage placeholders', () => {
   const fullDate = { year: 'numeric', month: 'short', day: 'numeric' }
@@ -40,4 +40,25 @@ test('groups one compact calendar entry per document and exact day, ignoring par
   assert.deepEqual(grouped.get('2026-08-01').map(event => event.id), [20])
   assert.equal(grouped.has('2026-01-01'), false)
   assert.equal(grouped.has('2026-09-01'), false)
+})
+
+test('only fresh known pending dates can be selected, regardless of producer score', () => {
+  const candidate = { type: 'date', role: 'renewal', status: 'pending', source_current: true, reason: 'important_fact', confidence: 1 }
+  assert.equal(canReviewDate(candidate), true)
+  assert.equal(canReviewDate({ ...candidate, confidence: 0.1, reason: 'low_confidence' }), true)
+  assert.equal(canReviewDate({ ...candidate, source_current: false }), false)
+  assert.equal(canReviewDate({ ...candidate, source_current: undefined }), false)
+  assert.equal(canReviewDate({ ...candidate, reason: 'evidence_mismatch' }), false)
+  assert.equal(canReviewDate({ ...candidate, status: 'accepted' }), false)
+  assert.equal(canReviewDate({ ...candidate, type: 'reminder' }), false)
+  assert.equal(canReviewDate({ ...candidate, role: 'transfer' }), false)
+})
+
+test('review failures distinguish changed evidence, hidden sources, revoked access and unconfirmed offline results', () => {
+  assert.match(reviewFailure({ code: 'stale_proposal', status: 409 }), /changed.*Nothing was applied/)
+  assert.match(reviewFailure({ code: 'invalid_evidence', status: 409 }), /evidence cannot be verified/)
+  assert.match(reviewFailure({ code: 'reveal_required', status: 403 }), /hidden.*reveal controls/)
+  assert.match(reviewFailure({ code: 'forbidden', status: 403 }), /access is no longer available/)
+  assert.match(reviewFailure(new TypeError('Failed to fetch')), /unconfirmed.*reconnect/)
+  assert.match(reviewFailure({ code: 'no_task', status: 404 }), /no longer available to you/)
 })

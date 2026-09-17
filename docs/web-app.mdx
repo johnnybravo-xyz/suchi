@@ -232,7 +232,20 @@ admit admins only. Membership and document ACLs remain separate.
 Filing trees, metadata, rules, views, mailboxes/password records and memberships
 use the current system. Accounts/groups, global capabilities, profiles, watched
 folders, OCR/models and backups are server-wide. **Classification** includes
-**Use similar documents for automatic filing and suggestions** for local matching.
+**Offer filing suggestions from similar documents** for model-free matching.
+In **Classification options**, **Automatically apply high-confidence suggestions**
+is checked by default:
+
+- **On:** Add dates to Calendar and apply suggested metadata when they meet your thresholds.
+- **Off:** Review inferred changes in Approvals before they apply.
+
+Use **Save application mode** independently of model activation, matching and
+research settings. The default model/date threshold is `0.70`; local automatic
+and review-suggestion thresholds are `0.90` and `0.50`. Turning the mode off
+disables automatic threshold controls without clearing their saved values.
+The choice does not change explicit rules, grant egress permission, or bulk-accept
+pending suggestions. New ingests and explicit rescans use the current mode.
+
 Admins manage system mailboxes and owners in **Email intake**; capable members
 manage only their own under **My account > Mailboxes**.
 
@@ -296,8 +309,8 @@ use. Calendar's **Document view** applies a saved View through the server; resea
 links use exact documents with **Date role** and **Open full calendar**. Day links
 open exact-day agendas, preserve View/role, and return through **Back to Month YYYY**.
 Month/day/View/role survive history and reload. Partial dates appear in broader
-agendas, not exact-day cells. Expand Automatic/Reviewed status for classifier
-confidence. Reviewed exact-day **Add to calendar** offers a disclosed local `.ics`
+agendas, not exact-day cells. Expand Automatic/Previously accepted/Reviewed status
+for classifier confidence. Reviewed exact-day **Add to calendar** offers a disclosed local `.ics`
 export, not synchronization. [Document dates](/document-dates) owns precision,
 review, filtering and export rules.
 

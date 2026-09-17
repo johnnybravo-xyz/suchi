@@ -22,6 +22,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
+	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/docsplit"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/eml"
 	"github.com/johnnybravo-xyz/suchi/core/pipeline/msg"
@@ -1034,6 +1035,76 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 				if string(got) != item.want {
 					t.Fatal("fanout changed original CAS bytes or published the wrong child content")
 				}
+			}
+		})
+	}
+}
+
+type languageDetectorFunc func(string) ([]lang.Result, error)
+
+func (languageDetectorFunc) Name() string                                { return "review-fixture" }
+func (f languageDetectorFunc) Detect(text string) ([]lang.Result, error) { return f(text) }
+
+func TestDetectedLanguageRequiresReviewEvenAtFullConfidence(t *testing.T) {
+	ctx := context.Background()
+	d, cas := openPostIngestHarness(t)
+	docID := seedPostIngestDocument(t, d, cas, "text/plain", []byte("English source"))
+	if _, err := d.ExecWrite(ctx, `UPDATE documents SET content = 'English source' WHERE id = ?`, docID); err != nil {
+		t.Fatal(err)
+	}
+	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.langChain = lang.NewChain(nil, languageDetectorFunc(func(string) ([]lang.Result, error) {
+		return []lang.Result{{Code: "en", Confidence: 1}}, nil
+	}))
+	h.detectLanguages(ctx, h.log, docID)
+	var current, proposed string
+	if err := d.Read.QueryRowContext(ctx, `SELECT COALESCE(languages, '') FROM documents WHERE id = ?`, docID).Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	if current != "" {
+		t.Fatalf("inferred language applied without review: %q", current)
+	}
+	if err := d.Read.QueryRowContext(ctx, `SELECT json_extract(vars_json, '$.value') FROM approval_runs WHERE doc_id = ? AND state = 'running'`, docID).Scan(&proposed); err != nil {
+		t.Fatal(err)
+	}
+	if proposed != "en" {
+		t.Fatalf("reviewed language proposal = %q, want en", proposed)
+	}
+}
+
+func TestLanguageInferenceCannotOutliveExtractionOrHumanClear(t *testing.T) {
+	for _, mutation := range []struct {
+		name string
+		sql  string
+	}{
+		{"new extraction generation", `UPDATE documents SET content = content WHERE id = ?`},
+		{"same-value human clear", `UPDATE documents SET languages = '', languages_locked = 0 WHERE id = ?`},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			ctx := context.Background()
+			d, cas := openPostIngestHarness(t)
+			docID := seedPostIngestDocument(t, d, cas, "text/plain", []byte("English source"))
+			if _, err := d.ExecWrite(ctx, `UPDATE documents SET content = 'English source', languages = '' WHERE id = ?`, docID); err != nil {
+				t.Fatal(err)
+			}
+			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h.langChain = lang.NewChain(nil, languageDetectorFunc(func(string) ([]lang.Result, error) {
+				if _, err := d.ExecWrite(ctx, mutation.sql, docID); err != nil {
+					t.Fatal(err)
+				}
+				return []lang.Result{{Code: "en", Confidence: 1}}, nil
+			}))
+			h.detectLanguages(ctx, h.log, docID)
+			var current string
+			var pending int
+			if err := d.Read.QueryRowContext(ctx, `SELECT COALESCE(languages, '') FROM documents WHERE id = ?`, docID).Scan(&current); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM approval_runs WHERE doc_id = ?`, docID).Scan(&pending); err != nil {
+				t.Fatal(err)
+			}
+			if current != "" || pending != 0 {
+				t.Fatalf("stale inference survived: language=%q proposals=%d", current, pending)
 			}
 		})
 	}

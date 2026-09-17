@@ -3,6 +3,7 @@ package api
 // Approval state machines are separate from trigger-action automations.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // Approval slugs are stable URL identifiers.
@@ -92,6 +96,10 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, errForbidden) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "admin role required")
+		return
+	}
+	if errors.Is(err, approvals.ErrForbidden) {
+		s.writeError(w, http.StatusForbidden, "reserved_workflow", "Document suggestions require the built-in source-bound review.")
 		return
 	}
 	if err != nil {
@@ -233,6 +241,10 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "not_found", "document not found")
 		return
 	}
+	if errors.Is(err, approvals.ErrForbidden) {
+		s.writeError(w, http.StatusForbidden, "reserved_workflow", "Document suggestions cannot be started through the generic workflow API.")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, approvals.ErrNoDef) {
 			s.writeError(w, http.StatusNotFound, "no_def", err.Error())
@@ -304,6 +316,18 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverErr(w, "approval.getrun.transitions", err)
 		return
+	}
+	var slug string
+	if err := s.DB.Read.QueryRowContext(r.Context(), `SELECT slug FROM approval_defs WHERE id=?`, run.DefID).Scan(&slug); err != nil {
+		s.serverErr(w, "approval.getrun.definition", err)
+		return
+	}
+	if slug == approvals.DocumentChangeSlug && run.DocID != nil {
+		run.Vars, err = s.documentChangeReviewVars(r.Context(), *run.DocID, run.Vars)
+		if err != nil {
+			s.serverErr(w, "approval.getrun.projection", err)
+			return
+		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"run":         run,
@@ -383,6 +407,8 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
 		case errors.Is(err, approvals.ErrNoTask) || errors.Is(err, approvals.ErrTaskUnavailable):
 			s.writeError(w, http.StatusNotFound, "no_task", "task not found")
+		case errors.Is(err, approvals.ErrStaleProposal):
+			s.writeError(w, http.StatusConflict, "stale_proposal", "The source, metadata or supporting authority changed. Request a new suggestion.")
 		case errors.Is(err, approvals.ErrTaskResolved):
 			s.writeError(w, http.StatusConflict, "already_resolved", "task already resolved")
 		case errors.Is(err, approvals.ErrBadChoice):
@@ -474,4 +500,85 @@ func parseID(s string) (int64, error) {
 		return 0, errors.New("bad id")
 	}
 	return id, nil
+}
+
+// Project only target-authorized values and individually authorized supporters.
+// Baselines, principal bindings and raw producer IDs never cross the API.
+func (s *Server) documentChangeReviewVars(ctx context.Context, docID int64, vars map[string]any) (map[string]any, error) {
+	out, err := approvals.DocumentChangeProjection(ctx, s.DB.Read, docID, vars)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(vars)
+	if err != nil {
+		return nil, err
+	}
+	var change approvals.DocumentChange
+	if err := json.Unmarshal(raw, &change); err != nil {
+		return out, nil
+	}
+	sources := make([]map[string]any, 0, min(len(change.Supporters), 16))
+	p := auth.FromContext(ctx)
+	allowed, err := s.authorized(ctx, nil, p, authz.KindDocument, docID, authz.PermChange)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed || p == nil || p.SessionID == "" || p.Kind != "user" || p.TokenID != 0 {
+		out["review_conflict"] = true
+	}
+	var owner *pluginapi.Principal
+	if change.Baseline != nil {
+		owner = &pluginapi.Principal{Kind: "user", UserID: change.Baseline.OwnerID}
+		if err := s.DB.Read.QueryRowContext(ctx, `SELECT role FROM users WHERE id=? AND disabled=0`, owner.UserID).Scan(&owner.Role); err != nil {
+			out["review_conflict"] = true
+			owner = nil
+		} else if change.Source == "archive" {
+			owner.Role = "member"
+		}
+	}
+	for index, ref := range change.Supporters {
+		if index >= 16 {
+			out["review_conflict"] = true
+			break
+		}
+		allowed, err := s.authorized(ctx, nil, p, authz.KindDocument, ref.DocumentID, authz.PermView)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			out["review_conflict"] = true
+			continue
+		}
+		ownerAllowed, err := s.authorized(ctx, nil, owner, authz.KindDocument, ref.DocumentID, authz.PermView)
+		if err != nil {
+			return nil, err
+		}
+		if !ownerAllowed {
+			out["review_conflict"] = true
+			continue
+		}
+		current, err := documentstate.Load(ctx, s.DB.Read, ref.DocumentID)
+		if err != nil || current != ref.Snapshot {
+			out["review_conflict"] = true
+			continue
+		}
+		active, err := systems.CanEnter(ctx, s.DB.Read, current.OwnerID, current.SystemID)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
+			out["review_conflict"] = true
+			continue
+		}
+		var title string
+		if err := s.DB.Read.QueryRowContext(ctx, `SELECT title FROM documents WHERE id=?`, ref.DocumentID).Scan(&title); err != nil {
+			return nil, err
+		}
+		if len(title) > 1024 {
+			title = title[:1024]
+		}
+		sources = append(sources, map[string]any{"document_id": ref.DocumentID, "title": title})
+	}
+	out["sources"] = sources
+	return out, nil
 }

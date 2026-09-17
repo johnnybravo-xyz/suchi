@@ -49,6 +49,52 @@ func setupDB(t *testing.T) *db.DB {
 	return d
 }
 
+func TestAutomaticPolicyMigrationPreservesExplicitOptOut(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := db.Migrate(ctx, d, migs[:2], log); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.SetMany(ctx, d, map[string]any{
+		"llm.date_auto_apply":                   false,
+		"classification.archive_auto_threshold": 0.85,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := settings.ResolveAutoApply(ctx, d.Read)
+	if err != nil || enabled {
+		t.Fatalf("upgrade lost opt-out: enabled=%t err=%v", enabled, err)
+	}
+	if cfg := settings.ResolveArchiveClassifierConfig(ctx, d); cfg.AutoThreshold != 0.85 {
+		t.Fatalf("upgrade lost automatic threshold: %+v", cfg)
+	}
+}
+
+func TestAutomaticPolicyDoesNotTreatInvalidSettingsAsDefault(t *testing.T) {
+	d := setupDB(t)
+	for _, value := range []any{nil, "true"} {
+		if err := settings.Set(t.Context(), d, settings.KeyClassificationAutoApply, value); err != nil {
+			t.Fatal(err)
+		}
+		enabled, err := settings.ResolveAutoApply(t.Context(), d.Read)
+		if err == nil || enabled {
+			t.Fatalf("invalid policy %v enabled automation: enabled=%t err=%v", value, enabled, err)
+		}
+	}
+}
+
 func clearRuntimeConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -255,7 +301,6 @@ func TestResolveLLMConfig_Precedence(t *testing.T) {
 		APIKey:              "env-key",
 		EgressAck:           false,
 		ConfidenceThreshold: 0.7,
-		DateAutoApply:       true,
 	}
 	// No settings written yet: use the boot fallback.
 	got, err := settings.ResolveLLMConfig(ctx, d, envFB, testSecretBox{})
@@ -328,7 +373,7 @@ func TestLLMAPIKey_SealedAndResolved(t *testing.T) {
 	ctx := context.Background()
 	box := testSecretBox{}
 	apiKey := "secret-key"
-	if err := settings.SaveLLMConfig(ctx, d, settings.LLMConfig{DateAutoApply: true}, box, &apiKey); err != nil {
+	if err := settings.SaveLLMConfig(ctx, d, settings.LLMConfig{}, box, &apiKey); err != nil {
 		t.Fatal(err)
 	}
 
@@ -346,52 +391,6 @@ func TestLLMAPIKey_SealedAndResolved(t *testing.T) {
 	}
 	if got.APIKey != "secret-key" {
 		t.Fatalf("APIKey = %q", got.APIKey)
-	}
-	if !got.DateAutoApply {
-		t.Fatal("date auto-apply should default on")
-	}
-}
-
-func TestSaveLLMConfig_UpdatesOneSnapshot(t *testing.T) {
-	d := setupDB(t)
-	ctx := context.Background()
-	want := settings.LLMConfig{
-		EndpointURL:         "http://localhost:11434/v1",
-		Model:               "qwen2.5:7b",
-		EgressAck:           true,
-		ConfidenceThreshold: 0.75,
-	}
-	apiKey := "secret-key"
-	if err := settings.SaveLLMConfig(ctx, d, want, testSecretBox{}, &apiKey); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := settings.ResolveLLMConfig(ctx, d, settings.LLMConfig{}, testSecretBox{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want.APIKey = "secret-key"
-	if got != want {
-		t.Fatalf("resolved config = %#v, want %#v", got, want)
-	}
-}
-
-func TestArchiveClassifierConfigDefaultsAndPersists(t *testing.T) {
-	d := setupDB(t)
-	ctx := context.Background()
-	got := settings.ResolveArchiveClassifierConfig(ctx, d)
-	if !got.Enabled || got.AutoThreshold != 0.9 || got.ReviewThreshold != 0.5 {
-		t.Fatalf("defaults = %#v", got)
-	}
-
-	want := settings.ArchiveClassifierConfig{
-		Enabled: false, AutoThreshold: 0.85, ReviewThreshold: 0.65,
-	}
-	if err := settings.SaveArchiveClassifierConfig(ctx, d, want); err != nil {
-		t.Fatal(err)
-	}
-	if got := settings.ResolveArchiveClassifierConfig(ctx, d); got != want {
-		t.Fatalf("resolved config = %#v, want %#v", got, want)
 	}
 }
 

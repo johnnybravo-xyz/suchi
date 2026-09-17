@@ -290,8 +290,10 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 		s.Content = content.String
 	}
 
+	// Machine-owned review markers are workflow state, not user-authorized
+	// labels. They must not activate rules that can transfer or trash a doc.
 	rows, err := d.Read.QueryContext(ctx,
-		`SELECT tag_id FROM document_tags WHERE document_id = ?`, docID)
+		`SELECT tag_id FROM document_tags WHERE document_id = ? AND classifier_owned = 0`, docID)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +407,12 @@ func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
 				return err
 			}
 		}
-		return nil
+		// A validated rule records removal intent even when no row existed or
+		// only a classifier-owned marker was deleted (neither fires the human
+		// tag trigger). In-flight and queued suggestions must become stale.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE documents SET tags_revision = tags_revision + 1 WHERE id = ?`, docID)
+		return err
 
 	case "remove_document_type":
 		_, err := tx.ExecContext(ctx,
@@ -447,7 +454,10 @@ func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
 				return err
 			}
 		}
-		return nil
+		// A targeted removal is explicit intent even if both links were absent.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE documents SET correspondent_revision = correspondent_revision + 1 WHERE id = ?`, docID)
+		return err
 
 	case "assign_custom_field":
 		fieldID := intVal(a.Params["field_id"])

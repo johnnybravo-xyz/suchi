@@ -15,7 +15,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
-	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
 // Diff describes the exact user-visible effects of this request, not the number
@@ -104,7 +104,7 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 	}
 	current := &presetfile.PresetFile{Areas: []presetfile.Area{}}
 	if !dest.Create {
-		current, err = taxonomy.ReadTree(ctx, tx, dest.Target.ID)
+		current, err = exporter.ReadTree(ctx, tx, dest.Target.ID)
 	}
 	if err != nil {
 		return nil, err

@@ -13,7 +13,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
-	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
 type TaxonomyImportReq struct {
@@ -141,7 +141,7 @@ func (s *Server) ExportTaxonomy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	pf, err := taxonomy.BuildExport(r.Context(), s.DB, systemID, skipSeeds)
+	pf, err := exporter.BuildExport(r.Context(), s.DB, systemID, skipSeeds)
 	if err != nil {
 		s.writeError(w, 409, "taxonomy_export", err.Error())
 		return

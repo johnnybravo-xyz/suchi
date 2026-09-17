@@ -272,6 +272,11 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		for _, id := range ids {
 			args = append(args, id)
 		}
+		// A removal is human intent even when the tag was already absent.
+		// Junction row triggers cannot observe that successful no-op.
+		if _, err = tx.ExecContext(r.Context(), "UPDATE documents SET tags_revision=tags_revision+1 WHERE id IN ("+placeholders+")", args[1:]...); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(r.Context(), "DELETE FROM document_tags WHERE tag_id=? AND document_id IN ("+placeholders+")", args...)
 		return err
 	case "trash", "delete":

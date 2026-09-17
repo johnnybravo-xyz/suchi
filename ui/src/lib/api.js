@@ -253,6 +253,8 @@ export const getLLMSettings = () => api.get('/api/admin/settings/llm')
 export const saveLLMSettings = (b) => api.post('/api/admin/settings/llm', b)
 export const saveResearchContextMode = (research_context_mode) =>
   api.patch('/api/admin/settings/llm', { research_context_mode })
+export const saveClassificationAutoApply = (auto_apply) =>
+  api.patch('/api/admin/settings/llm', { auto_apply })
 export const testLLMSettings = (b) => api.post('/api/admin/settings/llm/test', b)
 export const getPreferences = () => api.get('/api/admin/settings/preferences')
 export const savePreferences = (b) => api.post('/api/admin/settings/preferences', b)

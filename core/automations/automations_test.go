@@ -3,6 +3,7 @@ package automations_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,11 +11,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 // End-to-end: create an automation with a document_added trigger and
@@ -97,6 +101,165 @@ func TestAssignTagsTakesOwnershipOfClassifierReview(t *testing.T) {
 	}
 	if count != 1 || owned != 0 {
 		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
+func TestRemoveTagsInvalidatesOlderProposal(t *testing.T) {
+	for _, existing := range []string{"absent", "classifier marker"} {
+		t.Run(existing, func(t *testing.T) {
+			ctx := t.Context()
+			d, log := setup(t, ctx)
+			seedUser(t, ctx, d)
+			tagID := seedTag(t, ctx, d, "candidate")
+			docID := seedDoc(t, ctx, d, "Review", "Review this document")
+			if existing == "classifier marker" {
+				_, err := d.Write.ExecContext(ctx,
+					`INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, 1)`, docID, tagID)
+				must(t, err)
+			}
+			baseline, err := documentstate.Load(ctx, d.Read, docID)
+			must(t, err)
+			change := approvals.DocumentChange{
+				Field: "tag", ValueID: tagID, Label: "candidate", Confidence: .9,
+				Source: "llm", Baseline: &baseline,
+			}
+			propose := func() error {
+				return d.WriteTx(ctx, func(tx *sql.Tx) error {
+					return approvals.ProposeDocumentChangeInTx(ctx, tx, docID, change)
+				})
+			}
+			must(t, propose())
+			var runID int64
+			must(t, d.Read.QueryRowContext(ctx, `SELECT id FROM approval_runs WHERE doc_id = ?`, docID).Scan(&runID))
+			engine := approvals.New(d, log)
+			must(t, engine.Advance(ctx, runID, ""))
+			_, tasks, err := engine.GetRun(ctx, runID)
+			must(t, err)
+			if len(tasks) != 1 {
+				t.Fatalf("review tasks = %v, want one", tasks)
+			}
+			const sessionID = "tag-removal-review-session"
+			_, err = d.Write.ExecContext(ctx,
+				`INSERT INTO sessions(id,user_id,created_at,expires_at,last_seen_at) VALUES(?,1,0,4102444800,0)`, sessionID)
+			must(t, err)
+			actor := &pluginapi.Principal{
+				Kind: "user", UserID: 1, AuthNBy: "local-auth",
+				SessionID: sessionID, AuthExpiresAt: 4102444800,
+			}
+			must(t, engine.Resolve(ctx, tasks[0].ID, "apply", actor))
+			must(t, engine.Advance(ctx, runID, "apply"))
+
+			_, err = automations.New(d).Create(ctx, 1, automations.Automation{
+				Name: "explicit tag removal", Enabled: true,
+				Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+				Actions: []automations.Action{{
+					Kind: "remove_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}},
+				}},
+			})
+			must(t, err)
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+
+			if err := propose(); !errors.Is(err, approvals.ErrStaleProposal) {
+				t.Fatalf("in-flight inference survived explicit removal: %v", err)
+			}
+			if err := engine.Advance(ctx, runID, ""); !errors.Is(err, approvals.ErrStaleProposal) {
+				t.Fatalf("queued proposal survived explicit removal: %v", err)
+			}
+			var count int
+			must(t, d.Read.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM document_tags WHERE document_id = ?`, docID).Scan(&count))
+			if count != 0 {
+				t.Fatalf("explicit removal left or restored %d tags", count)
+			}
+		})
+	}
+}
+
+func TestTargetedCorrespondentRemovalInvalidatesQueuedProposal(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	correspondentID := seedCorrespondent(t, ctx, d, "candidate")
+	docID := seedDoc(t, ctx, d, "Review", "Review this document")
+	baseline, err := documentstate.Load(ctx, d.Read, docID)
+	must(t, err)
+	change := approvals.DocumentChange{
+		Field: "correspondent", ValueID: correspondentID, Confidence: .9,
+		Source: "llm", Baseline: &baseline,
+	}
+	propose := func() error {
+		return d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return approvals.ProposeDocumentChangeInTx(ctx, tx, docID, change)
+		})
+	}
+	must(t, propose())
+	var runID int64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT id FROM approval_runs WHERE doc_id=?`, docID).Scan(&runID))
+	engine := approvals.New(d, log)
+	must(t, engine.Advance(ctx, runID, ""))
+	_, tasks, err := engine.GetRun(ctx, runID)
+	must(t, err)
+	if len(tasks) != 1 {
+		t.Fatalf("review tasks = %v, want one", tasks)
+	}
+	const sessionID = "correspondent-removal-review-session"
+	_, err = d.Write.ExecContext(ctx,
+		`INSERT INTO sessions(id,user_id,created_at,expires_at,last_seen_at) VALUES(?,1,0,4102444800,0)`, sessionID)
+	must(t, err)
+	must(t, engine.Resolve(ctx, tasks[0].ID, "apply", &pluginapi.Principal{
+		Kind: "user", UserID: 1, SessionID: sessionID, AuthExpiresAt: 4102444800,
+	}))
+	must(t, engine.Advance(ctx, runID, "apply"))
+	_, err = automations.New(d).Create(ctx, 1, automations.Automation{
+		Name: "explicit correspondent removal", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
+		Actions: []automations.Action{{
+			Kind: "remove_correspondents", Params: map[string]any{"correspondent_ids": []any{float64(correspondentID)}},
+		}},
+	})
+	must(t, err)
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	if err := propose(); !errors.Is(err, approvals.ErrStaleProposal) {
+		t.Fatalf("in-flight inference survived explicit removal: %v", err)
+	}
+	if err := engine.Advance(ctx, runID, ""); !errors.Is(err, approvals.ErrStaleProposal) {
+		t.Fatalf("queued correspondent survived explicit removal: %v", err)
+	}
+	var correspondent sql.NullInt64
+	must(t, d.Read.QueryRowContext(ctx, `SELECT correspondent_id FROM documents WHERE id=?`, docID).Scan(&correspondent))
+	if correspondent.Valid {
+		t.Fatalf("explicit removal restored correspondent %d", correspondent.Int64)
+	}
+}
+
+func TestClassifierReviewMarkerCannotActivateDiscard(t *testing.T) {
+	ctx := t.Context()
+	d, log := setup(t, ctx)
+	seedUser(t, ctx, d)
+	tagID := seedTag(t, ctx, d, "needs-review")
+	docID := seedDoc(t, ctx, d, "Review", "Review this document")
+	if _, err := d.Write.ExecContext(ctx, `INSERT INTO document_tags(document_id,tag_id,classifier_owned) VALUES(?,?,1)`, docID, tagID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := automations.New(d).Create(ctx, 1, automations.Automation{
+		Name: "discard tagged documents", Enabled: true,
+		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded, FilterTagID: tagID}},
+		Actions:  []automations.Action{{Kind: "discard"}},
+	})
+	must(t, err)
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	var trashed sql.NullInt64
+	must(t, d.Read.QueryRow(`SELECT trashed_at FROM documents WHERE id = ?`, docID).Scan(&trashed))
+	if trashed.Valid {
+		t.Fatal("machine review marker activated destructive rule")
+	}
+	if _, err := d.Write.ExecContext(ctx, `UPDATE document_tags SET classifier_owned = 0 WHERE document_id = ? AND tag_id = ?`, docID, tagID); err != nil {
+		t.Fatal(err)
+	}
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	must(t, d.Read.QueryRow(`SELECT trashed_at FROM documents WHERE id = ?`, docID).Scan(&trashed))
+	if !trashed.Valid {
+		t.Fatal("explicitly adopted tag did not activate user-authored rule")
 	}
 }
 

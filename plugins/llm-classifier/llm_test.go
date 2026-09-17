@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -376,7 +378,7 @@ func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Changed title\",\"correspondent\":\"Guess\",\"tags\":[\"guess\"],\"jd_category\":0,\"confidence\":0.2,\"dates\":[{\"role\":\"service\",\"value\":\"2026-08-06\",\"precision\":\"day\",\"raw_text\":\"06 Aug 2026\",\"evidence\":\"Date 06 Aug 2026\",\"confidence\":0.91},{\"role\":\"issued\",\"value\":\"2026-08-01\",\"precision\":\"day\",\"raw_text\":\"August 1, 2026\",\"evidence\":\"issued August 1, 2026\",\"confidence\":0.69}]}"}}]}`))
 	}))
 	defer srv.Close()
-	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7, DateAutoApply: true}, silentLog())
+	p, err := New(Config{EndpointURL: srv.URL, Model: "test", ConfidenceThreshold: 0.7}, silentLog())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,35 +408,46 @@ func TestHandlerUsesConfiguredConfidenceForMetadataAndDates(t *testing.T) {
 	if reviewTags != 1 {
 		t.Fatalf("needs-review tags = %d, want 1", reviewTags)
 	}
-	for value, wantStatus := range map[string]string{
-		"2026-08-06": "accepted",
-		"2026-08-01": "pending",
+	for value, want := range map[string]struct {
+		status string
+		reason string
+	}{
+		"2026-08-06": {status: "accepted", reason: "confidence_threshold"},
+		"2026-08-01": {status: "pending", reason: "low_confidence"},
 	} {
-		var status string
+		var status, reason, policy string
+		var reviewedBy, reviewedAt sql.NullInt64
 		if err := d.Read.QueryRowContext(ctx, `
-			SELECT status FROM document_intelligence
+			SELECT status, gate_reason, gate_policy_version, reviewed_by, reviewed_at FROM document_intelligence
 			WHERE document_id = ? AND intelligence_type = 'date' AND sort_value = ?
-		`, docID, value).Scan(&status); err != nil {
+		`, docID, value).Scan(&status, &reason, &policy, &reviewedBy, &reviewedAt); err != nil {
 			t.Fatal(err)
 		}
-		if status != wantStatus {
-			t.Fatalf("date %s status=%q want=%q", value, status, wantStatus)
+		if status != want.status || reason != want.reason {
+			t.Fatalf("date %s status=%q reason=%q want %s/%s", value, status, reason, want.status, want.reason)
+		}
+		if reviewedBy.Valid || reviewedAt.Valid || (status == "accepted" && policy != approvals.AutomaticPolicyVersion) {
+			t.Fatalf("date %s has fabricated review or missing automatic provenance: %s %v %v", value, policy, reviewedBy, reviewedAt)
 		}
 	}
 }
 
-func TestDateAutoApplyCanBeDisabled(t *testing.T) {
+func TestOptedOutDatesRequireReviewEvenAtHighestScore(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Boarding pass", "Date 06 Aug 2026")
 	dates, err := prepareDateCandidates("Date 06 Aug 2026", []DateCandidate{{
 		Role: "service", Value: "2026-08-06", Precision: "day",
-		RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 0.95,
-	}}, false, 0.7)
+		RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 1,
+	}}, 0.7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", dates, time.Now().Unix())
+		source, err := documentstate.Load(ctx, tx, docID)
+		if err != nil {
+			return err
+		}
+		return replaceDateCandidatesInTx(ctx, tx, docID, source, dates, false, time.Now().Unix())
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -455,26 +468,20 @@ func TestDateAutoApplyCanBeDisabled(t *testing.T) {
 	}
 }
 
-func TestPrepareDateCandidatesNormalizesAndComputesOffsets(t *testing.T) {
-	dates, err := prepareDateCandidates("Préface — DATE 06 AUG 2026 total", []DateCandidate{{
-		Role: " Service ", Value: " 2026-08-06 ", Precision: " DAY ",
-		RawText: " 06   Aug 2026 ", Evidence: " DATE\n06 AUG 2026 ", Confidence: 0.9,
-	}}, true, 0.8)
+func TestPrepareDateCandidatesUsesOriginalUTF8Offsets(t *testing.T) {
+	content := "İ Préface — Date 06 Aug 2026 total"
+	dates, err := prepareDateCandidates(content, []DateCandidate{{
+		Role: "service", Value: "2026-08-06", Precision: "day",
+		RawText: "06 Aug 2026", Evidence: "Date 06 Aug 2026", Confidence: 0.9,
+	}}, 0.8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dates) != 1 {
-		t.Fatalf("prepared dates=%d want=1", len(dates))
+	if len(dates) != 1 || !dates[0].evidenceStart.Valid {
+		t.Fatalf("prepared dates=%+v", dates)
 	}
-	got := dates[0]
-	if got.Role != "service" || got.SortValue != "2026-08-06" || got.RawText != "06 Aug 2026" || got.EvidenceText != "DATE 06 AUG 2026" {
-		t.Fatalf("prepared date=%+v", got)
-	}
-	if got.ValueJSON != `{"date":"2026-08-06","precision":"day"}` {
-		t.Fatalf("value_json=%q", got.ValueJSON)
-	}
-	if got.status != "accepted" || !got.evidenceStart.Valid || got.evidenceStart.Int64 != 18 {
-		t.Fatalf("status=%q evidence_start=%v", got.status, got.evidenceStart)
+	if got := content[dates[0].evidenceStart.Int64:][:len(dates[0].RawText)]; got != "06 Aug 2026" {
+		t.Fatalf("offset points to %q", got)
 	}
 }
 
@@ -482,130 +489,99 @@ func TestPrepareDateCandidatesValidatesBeforePersistence(t *testing.T) {
 	_, err := prepareDateCandidates("Due February 30", []DateCandidate{{
 		Role: "due", Value: "2026-02-30", Precision: "day",
 		RawText: "February 30", Evidence: "Due February 30", Confidence: 0.9,
-	}}, true, 0.8)
+	}}, 0.8)
 	if err == nil {
 		t.Fatal("invalid date was prepared")
 	}
 }
 
-func TestSequentialDateClassificationsReplaceAutomaticFactsAndPreserveReviews(t *testing.T) {
+func TestRescanPreservesAllResolvedFactsIncludingLegacyAutomaticDates(t *testing.T) {
 	ctx := context.Background()
-	d, docID := openHandlerDocument(t, "Schedule", "Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7")
-	classify := func(now int64, dates []DateCandidate) {
-		t.Helper()
-		prepared, err := prepareDateCandidates("Old Aug 6 Reviewed Aug 8 Rejected Aug 9 New Aug 7", dates, true, 0.7)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", prepared, now)
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	classify(1, []DateCandidate{
-		{Role: "service", Value: "2026-08-06", Precision: "day", RawText: "Aug 6", Evidence: "Old Aug 6", Confidence: 0.95},
-		{Role: "renewal", Value: "2026-08-08", Precision: "day", RawText: "Aug 8", Evidence: "Reviewed Aug 8", Confidence: 0.5},
-		{Role: "due", Value: "2026-08-09", Precision: "day", RawText: "Aug 9", Evidence: "Rejected Aug 9", Confidence: 0.5},
-	})
-	if _, err := d.Write.ExecContext(ctx, `
-		UPDATE document_intelligence SET status = 'accepted', reviewed_at = 10
-		WHERE document_id = ? AND sort_value = '2026-08-08';
-		UPDATE document_intelligence SET status = 'rejected', reviewed_at = 11
-		WHERE document_id = ? AND sort_value = '2026-08-09'
-	`, docID, docID); err != nil {
-		t.Fatal(err)
-	}
-
-	// The next extraction changes the automatic date and repeats both
-	// reviewed facts exactly. Exact-match conflicts must retain the human
-	// decision rather than reviving the model's proposed status.
-	classify(2, []DateCandidate{
-		{Role: "service", Value: "2026-08-07", Precision: "day", RawText: "Aug 7", Evidence: "New Aug 7", Confidence: 0.96},
-		{Role: "renewal", Value: "2026-08-08", Precision: "day", RawText: "Aug 8", Evidence: "Reviewed Aug 8", Confidence: 0.99},
-		{Role: "due", Value: "2026-08-09", Precision: "day", RawText: "Aug 9", Evidence: "Rejected Aug 9", Confidence: 0.99},
-	})
-	rows, err := d.Read.QueryContext(ctx, `
-		SELECT sort_value, status, reviewed_at, confidence
-		FROM document_intelligence WHERE document_id = ? ORDER BY sort_value
-	`, docID)
+	content := "Old 2026-08-06 Reviewed 2026-08-08 Rejected 2026-08-09 New 2026-08-07"
+	d, docID := openHandlerDocument(t, "Schedule", content)
+	source, err := documentstate.Load(ctx, d.Read, docID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	type factState struct {
-		status     string
-		reviewedAt sql.NullInt64
-		confidence float64
+	candidates := []DateCandidate{
+		{Role: "service", Value: "2026-08-06", Precision: "day", RawText: "2026-08-06", Evidence: "Old 2026-08-06", Confidence: 0.95},
+		{Role: "renewal", Value: "2026-08-08", Precision: "day", RawText: "2026-08-08", Evidence: "Reviewed 2026-08-08", Confidence: 0.5},
+		{Role: "due", Value: "2026-08-09", Precision: "day", RawText: "2026-08-09", Evidence: "Rejected 2026-08-09", Confidence: 0.5},
 	}
-	got := map[string]factState{}
-	for rows.Next() {
-		var value string
-		var state factState
-		if err := rows.Scan(&value, &state.status, &state.reviewedAt, &state.confidence); err != nil {
-			t.Fatal(err)
-		}
-		got[value] = state
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := got["2026-08-06"]; exists {
-		t.Fatal("stale automatically accepted date survived changed extraction")
-	}
-	if state := got["2026-08-07"]; state.status != "accepted" || state.reviewedAt.Valid {
-		t.Fatalf("new automatic fact=%+v", state)
-	}
-	if state := got["2026-08-08"]; state.status != "accepted" || !state.reviewedAt.Valid || state.confidence != 0.5 {
-		t.Fatalf("human-accepted fact was overwritten: %+v", state)
-	}
-	if state := got["2026-08-09"]; state.status != "rejected" || !state.reviewedAt.Valid || state.confidence != 0.5 {
-		t.Fatalf("human-rejected fact was overwritten: %+v", state)
-	}
-
-	classify(3, nil)
-	var automatic, reviewed int
-	if err := d.Read.QueryRowContext(ctx, `
-		SELECT COUNT(*) FILTER (WHERE reviewed_at IS NULL),
-		       COUNT(*) FILTER (WHERE reviewed_at IS NOT NULL)
-		FROM document_intelligence WHERE document_id = ?
-	`, docID).Scan(&automatic, &reviewed); err != nil {
-		t.Fatal(err)
-	}
-	if automatic != 0 || reviewed != 2 {
-		t.Fatalf("after disappeared extraction automatic=%d reviewed=%d", automatic, reviewed)
-	}
-}
-
-func TestSequentialDateClassificationsRecomputeAutomaticStatusFromSettings(t *testing.T) {
-	ctx := context.Background()
-	d, docID := openHandlerDocument(t, "Schedule", "Date Aug 6")
-	candidate := []DateCandidate{{
-		Role: "service", Value: "2026-08-06", Precision: "day",
-		RawText: "Aug 6", Evidence: "Date Aug 6", Confidence: 0.95,
-	}}
-	classify := func(autoApply bool, threshold float64, want string) {
+	autoApply := false
+	classify := func(dates []DateCandidate) {
 		t.Helper()
-		prepared, err := prepareDateCandidates("Date Aug 6", candidate, autoApply, threshold)
+		prepared, err := prepareDateCandidates(content, dates, 0.7)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
-			return replaceDateCandidatesInTx(ctx, tx, docID, "handler-test-sha", prepared, time.Now().Unix())
+			return replaceDateCandidatesInTx(ctx, tx, docID, source, prepared, autoApply, 1)
 		}); err != nil {
 			t.Fatal(err)
 		}
-		var status string
-		if err := d.Read.QueryRowContext(ctx, `SELECT status FROM document_intelligence WHERE document_id = ?`, docID).Scan(&status); err != nil {
+	}
+	classify(candidates)
+	if _, err := d.Write.ExecContext(ctx, `
+		UPDATE document_intelligence SET status='accepted' WHERE sort_value='2026-08-06';
+		UPDATE document_intelligence SET status='accepted', reviewed_at=10 WHERE sort_value='2026-08-08';
+		UPDATE document_intelligence SET status='rejected', reviewed_at=11 WHERE sort_value='2026-08-09';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	// Repeated exact candidates must not revive rejected facts or overwrite
+	// scores/review history. Disappearing candidates preserve all decisions.
+	autoApply = true
+	candidates[1].Confidence, candidates[2].Confidence = 1, 1
+	classify(append(candidates, DateCandidate{Role: "service", Value: "2026-08-07", Precision: "day",
+		RawText: "2026-08-07", Evidence: "New 2026-08-07", Confidence: 1}))
+	classify(nil)
+	var accepted, rejected, pending, legacy, automatic, reviewed int
+	if err := d.Read.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE status='accepted'), COUNT(*) FILTER (WHERE status='rejected'),
+		       COUNT(*) FILTER (WHERE status='pending'),
+		       COUNT(*) FILTER (WHERE status='accepted' AND reviewed_at IS NULL AND gate_policy_version<>?),
+		       COUNT(*) FILTER (WHERE status='accepted' AND reviewed_at IS NULL AND reviewed_by IS NULL AND gate_policy_version=?),
+		       COUNT(*) FILTER (WHERE confidence=0.5 AND ((status='accepted' AND reviewed_at=10) OR (status='rejected' AND reviewed_at=11)))
+		FROM document_intelligence WHERE document_id=?`, approvals.AutomaticPolicyVersion, approvals.AutomaticPolicyVersion, docID).Scan(&accepted, &rejected, &pending, &legacy, &automatic, &reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if accepted != 3 || rejected != 1 || pending != 0 || legacy != 1 || automatic != 1 || reviewed != 2 {
+		t.Fatalf("accepted=%d rejected=%d pending=%d legacy=%d automatic=%d reviewed=%d", accepted, rejected, pending, legacy, automatic, reviewed)
+	}
+}
+
+func TestReplacedDateCannotReuseAnOutstandingReviewIdentity(t *testing.T) {
+	ctx := context.Background()
+	content := "Old 2026-08-06 New 2026-08-07"
+	d, docID := openHandlerDocument(t, "Schedule", content)
+	source, err := documentstate.Load(ctx, d.Read, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := func(dates []DateCandidate) {
+		t.Helper()
+		prepared, err := prepareDateCandidates(content, dates, 0.7)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if status != want {
-			t.Fatalf("autoApply=%t threshold=%v status=%q want=%q", autoApply, threshold, status, want)
+		if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+			return replaceDateCandidatesInTx(ctx, tx, docID, source, prepared, false, 1)
+		}); err != nil {
+			t.Fatal(err)
 		}
 	}
-	classify(true, 0.7, "accepted")
-	classify(false, 0.7, "pending")
-	classify(true, 0.99, "pending")
-	classify(true, 0.9, "accepted")
+	replace([]DateCandidate{{Role: "due", Value: "2026-08-06", Precision: "day", RawText: "2026-08-06", Evidence: "Old 2026-08-06", Confidence: 1}})
+	var selectedID int64
+	if err := d.Read.QueryRow(`SELECT id FROM document_intelligence WHERE document_id=?`, docID).Scan(&selectedID); err != nil {
+		t.Fatal(err)
+	}
+	replace(nil)
+	replace([]DateCandidate{{Role: "due", Value: "2026-08-07", Precision: "day", RawText: "2026-08-07", Evidence: "New 2026-08-07", Confidence: 1}})
+	var selectedValue string
+	if err := d.Read.QueryRow(`SELECT sort_value FROM document_intelligence WHERE id=?`, selectedID).Scan(&selectedValue); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("obsolete review identity resolved to %q: %v", selectedValue, err)
+	}
 }
 
 func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
@@ -658,7 +634,7 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	}
 }
 
-func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
+func TestHandlerPreservesJunctionOnlySenderWithoutModelMutation(t *testing.T) {
 	ctx := context.Background()
 	d, docID := openHandlerDocument(t, "Invoice", "Example supplies invoice")
 	if _, err := d.Write.ExecContext(ctx, `
@@ -686,7 +662,7 @@ func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
 
 	var primaryID, attached, correspondents int64
 	if err := d.Read.QueryRowContext(ctx,
-		`SELECT correspondent_id FROM documents WHERE id = ?`, docID,
+		`SELECT COALESCE(correspondent_id, 0) FROM documents WHERE id = ?`, docID,
 	).Scan(&primaryID); err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +682,7 @@ func TestHandlerRepairsJunctionOnlySenderBeforeModelGuess(t *testing.T) {
 	).Scan(&canonicalUpdated); err != nil {
 		t.Fatal(err)
 	}
-	if primaryID != 1 || attached != 1 || correspondents != 1 || canonicalUpdated != 0 {
+	if primaryID != 0 || attached != 1 || correspondents != 1 || canonicalUpdated != 0 {
 		t.Fatalf("primary=%d attached=%d correspondents=%d canonical updated_at=%d",
 			primaryID, attached, correspondents, canonicalUpdated)
 	}

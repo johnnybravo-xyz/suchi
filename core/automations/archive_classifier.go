@@ -1,10 +1,5 @@
-// Archive classification learns filing metadata from similar documents.
-//
-// Fetches the top-K similar existing documents (FTS5 more-like-this
-// via core/similar), aggregates their core-four metadata
-// (jd_category, correspondent, document_type, tags), applies
-// confident winners, and sends weaker signals to the approvals inbox.
-
+// Archive classification applies high-confidence filing metadata from similar
+// documents when enabled by policy, retaining other candidates for review.
 package automations
 
 import (
@@ -13,287 +8,258 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
-	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/similar"
 )
 
-// ApplyFromArchive runs before user automations and the optional LLM. It reads
-// settings on every call, so changes apply immediately without runtime wiring.
+// ApplyFromArchive runs before user automations and the optional LLM. Current
+// policy and bound evidence determine whether metadata applies or needs review.
 func ApplyFromArchive(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
-	cfg := settings.ResolveArchiveClassifierConfig(ctx, d)
-	if !cfg.Enabled {
+	if !settings.ResolveArchiveClassifierConfig(ctx, d).Enabled {
+		return nil
+	}
+	input, err := readArchiveInput(ctx, d, docID)
+	if err != nil || input == nil {
+		return err
+	}
+	// Retrieval and snapshot capture are complete before opening the writer.
+	log.Info("archive_classifier.considered", "doc_id", docID, "neighbours", len(input.neighbours))
+	if len(input.neighbours) < 3 {
 		return nil
 	}
 	return d.WriteTx(ctx, func(tx *sql.Tx) error {
-		return applyFromArchive(ctx, tx, d, log, docID, cfg)
+		cfg := settings.ResolveArchiveClassifierConfig(ctx, d)
+		if !cfg.Enabled {
+			return nil
+		}
+		return proposeArchiveInput(ctx, tx, log, docID, input, cfg)
 	})
 }
 
-func applyFromArchive(ctx context.Context, tx *sql.Tx, d *db.DB, log *slog.Logger, docID int64, cfg settings.ArchiveClassifierConfig) error {
-	// Load target-doc metadata + ownership. We need owner_id for the
-	// visibility-scoped similar query — the automation runs "as the
-	// document's owner", not the ingest producer.
-	var (
-		ownerID, systemID                        int64
-		inboxCategoryID                          int64
-		jdCategoryID, correspondentID, docTypeID sql.NullInt64
-	)
-	if err := tx.QueryRowContext(ctx, `
-		SELECT owner_id, system_id, jd_category_id, correspondent_id, document_type_id
-		  FROM documents WHERE id = ? AND trashed_at IS NULL
-	`, docID).Scan(&ownerID, &systemID, &jdCategoryID, &correspondentID, &docTypeID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil // doc trashed between enqueue and now — no-op
-		}
-		return fmt.Errorf("archive classifier: load doc: %w", err)
-	}
+type archiveInput struct {
+	baseline   documentstate.Snapshot
+	inboxID    int64
+	target     neighbourMD
+	neighbours []similar.Doc
+	metadata   map[int64]neighbourMD
+	snapshots  map[int64]documentstate.Snapshot
+}
 
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(inbox_category_id, 0) FROM jd_systems WHERE id = ?`, systemID).Scan(&inboxCategoryID); err != nil {
-		return err
-	}
-	if jdCategoryID.Valid && jdCategoryID.Int64 == inboxCategoryID {
-		jdCategoryID = sql.NullInt64{}
-	}
-
-	// Existing tag ids so we skip proposing anything the doc already
-	// carries.
-	existingTags := map[int64]bool{}
-	trows, err := tx.QueryContext(ctx,
-		`SELECT tag_id FROM document_tags WHERE document_id = ?`, docID)
+// readArchiveInput holds one read snapshot, not the write transaction, across
+// ranking, ownership/ACL checks and metadata capture. Otherwise a source change
+// between ranking and snapshot capture could bless evidence we never ranked.
+func readArchiveInput(ctx context.Context, d *db.DB, docID int64) (*archiveInput, error) {
+	tx, err := d.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return fmt.Errorf("archive classifier: load tags: %w", err)
+		return nil, err
 	}
-	for trows.Next() {
-		var id int64
-		if err := trows.Scan(&id); err != nil {
-			trows.Close()
-			return err
-		}
-		existingTags[id] = true
+	defer tx.Rollback()
+	baseline, err := documentstate.Load(ctx, tx, docID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	if err := trows.Err(); err != nil {
-		trows.Close()
-		return fmt.Errorf("archive classifier: iterate tags: %w", err)
-	}
-	trows.Close()
-
-	// Load owner's group memberships for the visibility splice.
-	groups, err := authz.LoadGroups(ctx, d, ownerID)
 	if err != nil {
-		return fmt.Errorf("archive classifier: load groups: %w", err)
+		return nil, err
 	}
-	sp := &similar.Principal{
-		UserID: ownerID,
-		Role:   "user", // scope like the owner, not admin — heuristics must respect ACLs
-		Groups: groups,
+	allowed, err := systems.CanEnter(ctx, tx, baseline.OwnerID, baseline.SystemID)
+	if err != nil || !allowed {
+		return nil, err
 	}
-
-	neighbours, err := similar.TopDocs(ctx, d, docID, 10, sp)
+	groups, err := authz.LoadGroupsInTx(ctx, tx, baseline.OwnerID)
 	if err != nil {
-		return fmt.Errorf("archive classifier: fetch neighbours: %w", err)
+		return nil, err
 	}
-	log.Info("archive_classifier.considered",
-		"doc_id", docID,
-		"neighbours", len(neighbours))
+	neighbours, err := similar.TopDocsInTx(ctx, tx, docID, 10, &similar.Principal{
+		UserID: baseline.OwnerID, Role: "user", Groups: groups, SystemID: baseline.SystemID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("archive classifier: fetch neighbours: %w", err)
+	}
+	input := &archiveInput{baseline: baseline, neighbours: neighbours}
 	if len(neighbours) < 3 {
-		// Not enough signal. The considered log above is the only trace
-		// operators auditing "why didn't heuristics propose?" can grep for.
+		return input, nil
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(inbox_category_id, 0) FROM jd_systems WHERE id = ?`, baseline.SystemID).Scan(&input.inboxID); err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(neighbours)+1)
+	ids = append(ids, docID)
+	for _, n := range neighbours {
+		ids = append(ids, n.ID)
+	}
+	metadata, err := loadNeighbourMetadata(ctx, tx, baseline.SystemID, ids)
+	if err != nil {
+		return nil, err
+	}
+	input.target = metadata[docID]
+	delete(metadata, docID)
+	input.metadata = metadata
+	input.snapshots = make(map[int64]documentstate.Snapshot, len(neighbours))
+	for _, n := range neighbours {
+		snapshot, err := documentstate.Load(ctx, tx, n.ID)
+		if err != nil {
+			return nil, err
+		}
+		input.snapshots[n.ID] = snapshot
+	}
+	return input, nil
+}
+
+func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docID int64, input *archiveInput, cfg settings.ArchiveClassifierConfig) error {
+	current, err := documentstate.Load(ctx, tx, docID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
-
-	// Fetch each neighbour's core-four metadata and tag ids in one
-	// pass. Placeholders live in a small slice we splice into the
-	// SQL — no user input is stringified.
-	ids := make([]int64, len(neighbours))
-	scoreByID := make(map[int64]float64, len(neighbours))
-	for i, n := range neighbours {
-		ids[i] = n.ID
-		scoreByID[n.ID] = n.Score
-	}
-
-	metadata, err := loadNeighbourMetadata(ctx, d, systemID, ids)
 	if err != nil {
-		return fmt.Errorf("archive classifier: load neighbour metadata: %w", err)
+		return err
+	}
+	if current != input.baseline {
+		return nil
+	}
+	allowed, err := systems.CanEnter(ctx, tx, current.OwnerID, current.SystemID)
+	if err != nil || !allowed {
+		return err
+	}
+	groups, err := authz.LoadGroupsInTx(ctx, tx, current.OwnerID)
+	if err != nil {
+		return err
+	}
+	principal := authz.Principal{UserID: current.OwnerID, Role: "user", Groups: groups, SystemID: current.SystemID}
+	// Every ranked neighbour contributes to the denominator. Reject the whole
+	// sample if any source, owner, metadata, membership or permission changed.
+	for _, n := range input.neighbours {
+		snapshot, err := documentstate.Load(ctx, tx, n.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if snapshot != input.snapshots[n.ID] {
+			return nil
+		}
+		if err := (authz.ACLAuthorizer{}).CanInTx(ctx, tx, principal, authz.KindDocument, n.ID, authz.PermView); err != nil {
+			var denied *authz.ErrDenied
+			if errors.As(err, &denied) {
+				return nil
+			}
+			return err
+		}
 	}
 
-	// Aggregate votes. `scalarTally` maps field → value → cumulative score.
-	scalarTally := map[string]map[int64]float64{
-		"jd_category":   {},
-		"correspondent": {},
-		"document_type": {},
-	}
-	scalarSupporters := map[string]map[int64][]int64{
-		"jd_category":   {},
-		"correspondent": {},
-		"document_type": {},
-	}
+	scalarTally := map[string]map[int64]float64{"jd_category": {}, "correspondent": {}, "document_type": {}}
+	scalarSupporters := map[string]map[int64][]int64{"jd_category": {}, "correspondent": {}, "document_type": {}}
 	tagTally := map[int64]float64{}
 	tagSupporters := map[int64][]int64{}
 	var totalScore float64
-	for _, id := range ids {
-		md, ok := metadata[id]
-		if !ok {
-			continue
+	for _, n := range input.neighbours {
+		md := input.metadata[n.ID]
+		totalScore += n.Score
+		for _, value := range []struct {
+			field string
+			id    int64
+		}{
+			{"jd_category", md.JDCategoryID}, {"correspondent", md.CorrespondentID}, {"document_type", md.DocumentTypeID},
+		} {
+			if value.id != 0 {
+				scalarTally[value.field][value.id] += n.Score
+				scalarSupporters[value.field][value.id] = append(scalarSupporters[value.field][value.id], n.ID)
+			}
 		}
-		s := scoreByID[id]
-		totalScore += s
-		if md.JDCategoryID != 0 {
-			scalarTally["jd_category"][md.JDCategoryID] += s
-			scalarSupporters["jd_category"][md.JDCategoryID] = append(scalarSupporters["jd_category"][md.JDCategoryID], id)
-		}
-		if md.CorrespondentID != 0 {
-			scalarTally["correspondent"][md.CorrespondentID] += s
-			scalarSupporters["correspondent"][md.CorrespondentID] = append(scalarSupporters["correspondent"][md.CorrespondentID], id)
-		}
-		if md.DocumentTypeID != 0 {
-			scalarTally["document_type"][md.DocumentTypeID] += s
-			scalarSupporters["document_type"][md.DocumentTypeID] = append(scalarSupporters["document_type"][md.DocumentTypeID], id)
-		}
-		for _, tid := range md.TagIDs {
-			tagTally[tid] += s
-			tagSupporters[tid] = append(tagSupporters[tid], id)
+		for _, tagID := range md.TagIDs {
+			tagTally[tagID] += n.Score
+			tagSupporters[tagID] = append(tagSupporters[tagID], n.ID)
 		}
 	}
 	if totalScore == 0 {
 		return nil
 	}
-
-	// Resolve, per requested field, into (winner, confidence,
-	// supporters). Then bucket into auto-apply / propose / drop.
-	skip := map[string]bool{}
-	if jdCategoryID.Valid {
-		skip["jd_category"] = true
+	applied := 0
+	var pending []approvals.DocumentChange
+	// The immutable retrieval baseline above rejects human/source races. Only
+	// our own successful writes may advance the baseline used for application.
+	applicationBaseline := current
+	applyOrPropose := func(field string, valueID int64, confidence float64, ids []int64) error {
+		label, err := lookupLabel(ctx, tx, current.SystemID, field, valueID)
+		if err != nil {
+			return err
+		}
+		supporters := make([]documentstate.Reference, len(ids))
+		for i, id := range ids {
+			supporters[i] = documentstate.Reference{DocumentID: id, Snapshot: input.snapshots[id]}
+		}
+		change := approvals.DocumentChange{
+			Field: field, ValueID: valueID, Label: label, Confidence: confidence,
+			Threshold: &cfg.AutoThreshold, BasedOn: ids, Source: "archive",
+			Baseline: &applicationBaseline, Supporters: supporters,
+		}
+		didApply, err := approvals.ApplyAutomaticDocumentChangeInTx(ctx, tx, log, docID, change)
+		if err != nil {
+			return fmt.Errorf("archive classifier: apply %s: %w", field, err)
+		}
+		if didApply {
+			applied++
+			applicationBaseline, err = documentstate.Load(ctx, tx, docID)
+			return err
+		}
+		change.Threshold = &cfg.ReviewThreshold
+		pending = append(pending, change)
+		return nil
 	}
-	if correspondentID.Valid {
-		skip["correspondent"] = true
-	}
-	if docTypeID.Valid {
-		skip["document_type"] = true
-	}
-
-	autoapplied, proposed := 0, 0
-
 	for _, field := range []string{"jd_category", "correspondent", "document_type"} {
-		if skip[field] {
+		if (field == "jd_category" && input.target.JDCategoryID != 0 && input.target.JDCategoryID != input.inboxID) ||
+			(field == "correspondent" && input.target.CorrespondentID != 0) ||
+			(field == "document_type" && input.target.DocumentTypeID != 0) {
 			continue
 		}
-		winnerID, winnerScore := topScalar(scalarTally[field])
-		if winnerID == 0 {
+		winnerID, score := topScalar(scalarTally[field])
+		if winnerID == 0 || (field == "jd_category" && winnerID == input.inboxID) {
 			continue
 		}
-		if field == "jd_category" && winnerID == inboxCategoryID {
-			continue
-		}
-		confidence := winnerScore / totalScore
+		confidence := score / totalScore
 		if confidence < cfg.ReviewThreshold {
 			continue
 		}
-		supporters := scalarSupporters[field][winnerID]
-		label, err := lookupLabel(ctx, tx, systemID, field, winnerID)
-		if err != nil {
-			return fmt.Errorf("archive classifier: label %s: %w", field, err)
-		}
-		if confidence >= cfg.AutoThreshold {
-			changed, err := applyScalar(ctx, tx, field, docID, winnerID, inboxCategoryID)
-			if err != nil {
-				return fmt.Errorf("archive classifier: auto-apply %s: %w", field, err)
-			}
-			if !changed {
-				continue
-			}
-			audit.LogInTx(ctx, tx, log, audit.Event{
-				SystemID:   systemID,
-				Actor:      nil, // system actor
-				Action:     "heuristics.autoapply",
-				ObjectKind: "document",
-				ObjectID:   docID,
-				After: map[string]any{
-					"field":      field,
-					"value_id":   winnerID,
-					"label":      label,
-					"confidence": confidence,
-					"based_on":   supporters,
-				},
-			})
-			autoapplied++
-		} else {
-			if err := approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
-				Field: field, ValueID: winnerID, Label: label, Confidence: confidence,
-				BasedOn: supporters, Source: "archive",
-			}); err != nil {
-				return fmt.Errorf("archive classifier: propose %s: %w", field, err)
-			}
-			proposed++
+		if err := applyOrPropose(field, winnerID, confidence, scalarSupporters[field][winnerID]); err != nil {
+			return err
 		}
 	}
-
-	// Tags: emit each candidate that meets the frequency floor.
-	{
-		threshold := 0.3 * float64(len(neighbours))
-		for tagID, weightedScore := range tagTally {
-			supporters := tagSupporters[tagID]
-			if float64(len(supporters)) < threshold {
-				continue
-			}
-			if existingTags[tagID] {
-				continue
-			}
-			confidence := weightedScore / totalScore
-			if confidence < cfg.ReviewThreshold {
-				continue
-			}
-			label, err := lookupLabel(ctx, tx, systemID, "tag", tagID)
-			if err != nil {
-				return fmt.Errorf("archive classifier: label tag: %w", err)
-			}
-			if confidence >= cfg.AutoThreshold {
-				if _, err := tx.ExecContext(ctx,
-					`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
-					 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
-					docID, tagID); err != nil {
-					return fmt.Errorf("archive classifier: auto-apply tag %d: %w", tagID, err)
-				}
-				audit.LogInTx(ctx, tx, log, audit.Event{
-					SystemID:   systemID,
-					Actor:      nil,
-					Action:     "heuristics.autoapply",
-					ObjectKind: "document",
-					ObjectID:   docID,
-					After: map[string]any{
-						"field":      "tag",
-						"value_id":   tagID,
-						"label":      label,
-						"confidence": confidence,
-						"based_on":   supporters,
-					},
-				})
-				autoapplied++
-			} else {
-				if err := approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
-					Field: "tag", ValueID: tagID, Label: label, Confidence: confidence,
-					BasedOn: supporters, Source: "archive",
-				}); err != nil {
-					return fmt.Errorf("archive classifier: propose tag %d: %w", tagID, err)
-				}
-				proposed++
+	for tagID, score := range tagTally {
+		ids := tagSupporters[tagID]
+		if float64(len(ids)) < 0.3*float64(len(input.neighbours)) || score/totalScore < cfg.ReviewThreshold {
+			continue
+		}
+		// Include machine-owned tags here as well: inference must not take over
+		// an existing marker. Neighbour evidence, unlike this existence check,
+		// excludes machine-owned tags.
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM document_tags WHERE document_id = ? AND tag_id = ?)`, docID, tagID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if err := applyOrPropose("tag", tagID, score/totalScore, ids); err != nil {
+				return err
 			}
 		}
 	}
-
-	log.Info("archive_classifier.wrote",
-		"doc_id", docID,
-		"autoapplied", autoapplied,
-		"proposed", proposed)
+	// Defer proposals until automatic writes finish so a later tag addition
+	// cannot immediately invalidate an earlier review candidate from this batch.
+	for _, change := range pending {
+		if err := approvals.ProposeDocumentChangeInTx(ctx, tx, docID, change); err != nil {
+			return fmt.Errorf("archive classifier: propose %s: %w", change.Field, err)
+		}
+	}
+	log.Info("archive_classifier.wrote", "doc_id", docID, "applied", applied, "proposed", len(pending))
 	return nil
 }
 
-// neighbourMD is the metadata bundle for one similar doc.
+// neighbourMD contains persisted metadata, not pending inference proposals.
 type neighbourMD struct {
 	JDCategoryID    int64
 	CorrespondentID int64
@@ -301,18 +267,15 @@ type neighbourMD struct {
 	TagIDs          []int64
 }
 
-func loadNeighbourMetadata(ctx context.Context, d *db.DB, systemID int64, ids []int64) (map[int64]neighbourMD, error) {
+func loadNeighbourMetadata(ctx context.Context, tx *sql.Tx, systemID int64, ids []int64) (map[int64]neighbourMD, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	out := make(map[int64]neighbourMD, len(ids))
-
-	// Scalars in one query.
 	placeholders, args := placeholderList(ids)
 	args = append(args, systemID)
-	q := "SELECT id, COALESCE(jd_category_id,0), COALESCE(correspondent_id,0), COALESCE(document_type_id,0) " +
-		"FROM documents WHERE id IN (" + placeholders + ") AND system_id = ?"
-	rows, err := d.Read.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(jd_category_id,0), COALESCE(correspondent_id,0), COALESCE(document_type_id,0)
+		FROM documents WHERE id IN (`+placeholders+`) AND system_id = ? AND trashed_at IS NULL`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -330,18 +293,17 @@ func loadNeighbourMetadata(ctx context.Context, d *db.DB, systemID int64, ids []
 		return nil, err
 	}
 	rows.Close()
-
-	// Tags in one query.
-	tq := "SELECT document_id, tag_id FROM document_tags WHERE document_id IN (" + placeholders + ") AND EXISTS (SELECT 1 FROM documents WHERE id = document_id AND system_id = ?)"
-	trows, err := d.Read.QueryContext(ctx, tq, args...)
+	trows, err := tx.QueryContext(ctx, `SELECT document_id, tag_id FROM document_tags
+		WHERE document_id IN (`+placeholders+`) AND classifier_owned = 0
+		AND EXISTS (SELECT 1 FROM documents WHERE id = document_id AND system_id = ? AND trashed_at IS NULL)`, args...)
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 	defer trows.Close()
 	for trows.Next() {
 		var docID, tagID int64
 		if err := trows.Scan(&docID, &tagID); err != nil {
-			return out, err
+			return nil, err
 		}
 		md := out[docID]
 		md.TagIDs = append(md.TagIDs, tagID)
@@ -367,51 +329,14 @@ func placeholderList(ids []int64) (string, []any) {
 }
 
 func topScalar(tally map[int64]float64) (int64, float64) {
-	var (
-		winnerID    int64
-		winnerScore float64
-	)
-	for id, s := range tally {
-		if s > winnerScore || (s == winnerScore && id < winnerID) {
-			winnerID = id
-			winnerScore = s
+	var winnerID int64
+	var winnerScore float64
+	for id, score := range tally {
+		if score > winnerScore || (score == winnerScore && id < winnerID) {
+			winnerID, winnerScore = id, score
 		}
 	}
 	return winnerID, winnerScore
-}
-
-func applyScalar(ctx context.Context, tx *sql.Tx, field string, docID, valueID, inboxCategoryID int64) (bool, error) {
-	var (
-		col       string
-		condition string
-		args      []any
-	)
-	switch field {
-	case "jd_category":
-		col = "jd_category_id"
-		if inboxCategoryID != 0 {
-			condition = col + " IS NULL OR " + col + " = ?"
-			args = append(args, inboxCategoryID)
-		}
-	case "correspondent":
-		col = "correspondent_id"
-	case "document_type":
-		col = "document_type_id"
-	default:
-		return false, fmt.Errorf("archive classifier: unknown field %q", field)
-	}
-	if condition == "" {
-		condition = col + " IS NULL"
-	}
-	args = append([]any{valueID, time.Now().Unix(), docID}, args...)
-	res, err := tx.ExecContext(ctx,
-		"UPDATE documents SET "+col+" = ?, updated_at = ? WHERE id = ? AND ("+condition+")",
-		args...)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
 }
 
 func lookupLabel(ctx context.Context, tx *sql.Tx, systemID int64, field string, id int64) (string, error) {
@@ -428,8 +353,7 @@ func lookupLabel(ctx context.Context, tx *sql.Tx, systemID int64, field string, 
 	default:
 		return "", fmt.Errorf("unknown field %q", field)
 	}
-	var s string
-	err := tx.QueryRowContext(ctx,
-		"SELECT "+col+" FROM "+table+" WHERE system_id = ? AND id = ?", systemID, id).Scan(&s)
-	return s, err
+	var label string
+	err := tx.QueryRowContext(ctx, "SELECT "+col+" FROM "+table+" WHERE system_id = ? AND id = ?", systemID, id).Scan(&label)
+	return label, err
 }

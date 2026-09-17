@@ -333,6 +333,7 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 	if sid == "" {
 		return nil, nil
 	}
+	sessionHash := digest(sid)
 	var (
 		userID  int64
 		expires int64
@@ -344,7 +345,7 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 		SELECT s.user_id, s.expires_at, u.email, u.display_name, u.role
 		  FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.id = ? AND u.disabled = 0
-	`, digest(sid)).Scan(&userID, &expires, &email, &display, &role)
+	`, sessionHash).Scan(&userID, &expires, &email, &display, &role)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -354,15 +355,17 @@ func (p *Plugin) authCookie(ctx context.Context, sid string) (*pluginapi.Princip
 	if time.Now().Unix() >= expires {
 		// Authentication has already failed; cleanup is best-effort so a
 		// transient write error cannot turn an expired cookie into a 500.
-		_, _ = p.db.ExecWrite(ctx, "DELETE FROM sessions WHERE id = ?", digest(sid))
+		_, _ = p.db.ExecWrite(ctx, "DELETE FROM sessions WHERE id = ?", sessionHash)
 		return nil, errors.New("session expired")
 	}
 	principal := &pluginapi.Principal{
-		Kind:    "user",
-		UserID:  userID,
-		Email:   email,
-		Display: display,
-		Role:    role,
+		Kind:          "user",
+		UserID:        userID,
+		Email:         email,
+		Display:       display,
+		Role:          role,
+		SessionID:     sessionHash,
+		AuthExpiresAt: expires,
 	}
 	// This reserved identity pattern also owns scratch retention in distro/demo.
 	// A demo cookie must never become an unrestricted member session.

@@ -3,7 +3,7 @@
   import { untrack } from 'svelte'
   import { setupState, saveSetupIntent, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
-           saveResearchContextMode,
+           saveResearchContextMode, saveClassificationAutoApply,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
            listPresets } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
@@ -78,10 +78,11 @@
   let importOpen = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
-    egress_ack: false, confidence_threshold: 0.7, date_auto_apply: true,
-    archive_enabled: true, archive_auto_threshold: 0.9, archive_review_threshold: 0.5,
+    egress_ack: false, confidence_threshold: 0.7,
+    archive_enabled: true, archive_review_threshold: 0.5, archive_auto_threshold: 0.9,
   })
   let researchContextMode = $state('balanced')
+  let autoApply = $state(false)
   let llmStatus = $state(null)
   let llmTesting = $state(false)
   let llmMode = $state('local')
@@ -158,10 +159,10 @@
     llm.model = st?.model || 'qwen2.5:7b'
     llm.egress_ack = !!st?.egress_ack
     llm.confidence_threshold = st?.confidence_threshold ?? 0.7
-    llm.date_auto_apply = st?.date_auto_apply ?? true
     llm.archive_enabled = st?.archive_enabled ?? true
-    llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
     llm.archive_review_threshold = st?.archive_review_threshold ?? 0.5
+    llm.archive_auto_threshold = st?.archive_auto_threshold ?? 0.9
+    autoApply = st?.auto_apply ?? true
     researchContextMode = RESEARCH_CONTEXT_MODES.some(mode => mode.id === st?.research_context_mode)
       ? st.research_context_mode : 'balanced'
     llm.api_key = ''
@@ -238,10 +239,9 @@
       clear_api_key: !!llm.clear_api_key,
       egress_ack: !!llm.egress_ack,
       confidence_threshold: Number(llm.confidence_threshold),
-      date_auto_apply: !!llm.date_auto_apply,
-      archive_enabled: !!llm.archive_enabled,
-      archive_auto_threshold: Number(llm.archive_auto_threshold),
-      archive_review_threshold: Number(llm.archive_review_threshold),
+      archive_enabled: llmStatus?.archive_enabled ?? true,
+      archive_review_threshold: llmStatus?.archive_review_threshold ?? 0.5,
+      archive_auto_threshold: llmStatus?.archive_auto_threshold ?? 0.9,
     }
   }
 
@@ -254,10 +254,9 @@
       clear_api_key: false,
       egress_ack: !!llmStatus?.egress_ack,
       confidence_threshold: llmStatus?.confidence_threshold ?? 0.7,
-      date_auto_apply: llmStatus?.date_auto_apply ?? true,
       archive_enabled: llm.archive_enabled,
-      archive_auto_threshold: Number(llm.archive_auto_threshold),
       archive_review_threshold: Number(llm.archive_review_threshold),
+      archive_auto_threshold: Number(llm.archive_auto_threshold),
     }
   }
 
@@ -287,18 +286,28 @@
 
   async function saveClassifier(enabled) {
     const result = await saveLLMSettings(llmPayload(enabled))
-    await loadLLM()
+    // Refresh saved model state without discarding independent, unsaved options.
+    const st = await getLLMSettings()
+    llmStatus = st
+    llm.enabled = !!st.enabled
+    llm.endpoint_url = st.endpoint_url
+    llm.model = st.model
+    llm.egress_ack = !!st.egress_ack
+    llm.confidence_threshold = st.confidence_threshold ?? 0.7
+    llm.api_key = ''
+    llm.clear_api_key = false
     invalidateLLMTest()
     return result
   }
 
   async function saveMatching() {
-    const result = await saveLLMSettings(matchingPayload())
+    const payload = matchingPayload()
+    const result = await saveLLMSettings(payload)
     llmStatus = {
       ...llmStatus,
-      archive_enabled: llm.archive_enabled,
-      archive_auto_threshold: Number(llm.archive_auto_threshold),
-      archive_review_threshold: Number(llm.archive_review_threshold),
+      archive_enabled: payload.archive_enabled,
+      archive_review_threshold: payload.archive_review_threshold,
+      archive_auto_threshold: payload.archive_auto_threshold,
     }
     return result
   }
@@ -309,12 +318,22 @@
     return result
   }
 
+  async function saveApplicationMode() {
+    const result = await saveClassificationAutoApply(autoApply)
+    llmStatus = { ...llmStatus, auto_apply: result.auto_apply }
+    return result
+  }
+
+  function applicationModeLabel(enabled) {
+    return enabled ? 'High-confidence suggestions apply automatically' : 'New inferred changes require review'
+  }
+
   async function testClassifier() {
     err = ''; llmTesting = true; llmTestResult = null; llmTestError = ''
     try {
       const result = await testLLMSettings(llmPayload(true))
       llmTestResult = result?.result || null
-      notify?.(result?.message || 'Classifier connection passed')
+      notify?.(result?.message || 'Model connection and response format checked')
     } catch (ex) {
       llmTestError = ex.message || 'The classifier did not return a valid response.'
     } finally { llmTesting = false }
@@ -462,8 +481,8 @@
       </div>
 
     {:else if section === 'llm'}
-      <h3>Classification, research, and extracted facts</h3>
-      <p class="wiz-p">Suchi can learn from documents already filed in your archive without a model. An optional model fills unresolved details, extracts dates for Calendar or review, and powers <b>Archive research</b> for authorized users.</p>
+      <h3>Filing suggestions, dates, and research</h3>
+      <p class="wiz-p">Local matching can suggest filing details from documents already in your archive, without a model or sending text elsewhere. An optional model proposes metadata and dates, and powers <b>Archive research</b> for authorized users.</p>
       <div class="side-head" style="padding-left:0;margin-top:20px">Optional model</div>
       <div class="toolbar" style="margin:0 0 12px">
         {#if llmStatus?.active}
@@ -506,7 +525,7 @@
         <button class="btn primary sm" disabled={busy || llmTesting || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                 onclick={testClassifier}>Test connection</button>
         <button class="btn sm" disabled={busy || llmTesting}
-                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching remains active')}>Disable model</button>
+                onclick={() => saveAnd(() => saveClassifier(false), 'Model disabled; local matching settings unchanged')}>Disable model</button>
       </div>
       {#if llmTestError}
         <div class="test-result failed">
@@ -515,11 +534,12 @@
         </div>
       {:else if llmTestResult}
         <div class="test-result">
-          <b>Validated in {llmTestResult.elapsed_ms} ms</b>
-          <span>{llmTestResult.title || 'No title'} · confidence {Number(llmTestResult.confidence).toFixed(2)}</span>
+          <b>Connection responded in {llmTestResult.elapsed_ms} ms</b>
+          <span>{llmTestResult.title || 'No title'} · self-reported score {Number(llmTestResult.confidence).toFixed(2)}</span>
           {#if llmTestResult.tags?.length}<span class="sub">Tags: {llmTestResult.tags.join(', ')}</span>{/if}
         </div>
       {/if}
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:12px">Test connection sends a sample, not your documents. A valid response checks connectivity and response format, not accuracy or permission to apply suggestions. Testing does not enable the model.</p>
 
       <section class="research-context" aria-labelledby="research-context-title">
         <div class="research-context-heading">
@@ -555,29 +575,38 @@
       </section>
 
       <section class="model-options" aria-labelledby="model-options-title">
-        <h4 id="model-options-title">Choose what Suchi can handle automatically</h4>
-        <p class="options-intro">Local matching and model-driven handling are saved separately, so changing archive matching never turns on a model.</p>
+        <h4 id="model-options-title">Classification options</h4>
+        <label class="wiz-check application-mode"><input type="checkbox" bind:checked={autoApply} disabled={busy} aria-describedby="application-mode-help" /> Automatically apply high-confidence suggestions</label>
+        <p id="application-mode-help" class="options-intro"><b>On:</b> Add dates to Calendar and apply suggested metadata when they meet your thresholds.<br /><b>Off:</b> Review inferred changes in Approvals before they apply.</p>
+        <div class="toolbar option-save">
+          <button class="btn primary sm" disabled={busy || llmTesting}
+                  onclick={() => saveAnd(saveApplicationMode, result => applicationModeLabel(result.auto_apply))}>Save application mode</button>
+        </div>
+        <p class="options-intro">Local matching and model activation are separate. This choice does not enable a model or authorize external text sharing. Explicit filing rules still run independently.</p>
 
         <div class="option-group independent">
           <span class="option-kind">Works without a model</span>
           <h5>Similar-document matching</h5>
-          <p>Uses documents already filed in this archive.</p>
-          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Use similar documents for automatic filing and suggestions</label>
+          <p>Uses locally indexed documents already filed in this archive to suggest metadata. Saving these options does not enable a model or authorize external text sharing.</p>
+          <label class="wiz-check"><input type="checkbox" bind:checked={llm.archive_enabled} /> Offer filing suggestions from similar documents</label>
           {#if llm.archive_enabled}
             <div class="field">
-              <label for="archive-auto">Apply a matching document's filing at · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
-              <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
-                     bind:value={llm.archive_auto_threshold}
-                     onchange={() => { if (Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)) llm.archive_review_threshold = Number(llm.archive_auto_threshold) - 0.05 }} />
-            </div>
-            <div class="field">
-              <label for="archive-review">Offer a matching document's filing for review from · {Number(llm.archive_review_threshold).toFixed(2)}</label>
-              <input id="archive-review" class="range" type="range" min="0.5" max={Number(llm.archive_auto_threshold) - 0.05} step="0.05"
+              <label for="archive-review">Minimum similarity score for review suggestions · {Number(llm.archive_review_threshold).toFixed(2)}</label>
+              <input id="archive-review" class="range" type="range" min="0.5" max="0.9" step="0.05"
                      bind:value={llm.archive_review_threshold} />
             </div>
+              <div class="field">
+                <label for="archive-auto">Minimum similarity score to apply automatically · {Number(llm.archive_auto_threshold).toFixed(2)}</label>
+                <input id="archive-auto" class="range" type="range" min="0.55" max="0.95" step="0.05"
+                       bind:value={llm.archive_auto_threshold} disabled={!autoApply} aria-describedby="archive-score-help" />
+              </div>
+              <p id="archive-score-help">Must be above the review floor. Lower-scoring eligible matches remain in Approvals.</p>
+          {/if}
+          {#if Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
+            <p role="alert">The review floor must be below the automatic threshold. Lower the review floor or turn automatic mode on to adjust its threshold.</p>
           {/if}
           <div class="toolbar option-save">
-            <button class="btn primary sm" disabled={busy || llmTesting}
+            <button class="btn primary sm" disabled={busy || llmTesting || Number(llm.archive_review_threshold) >= Number(llm.archive_auto_threshold)}
                     onclick={() => saveAnd(saveMatching, 'Similar-document matching saved')}>Save matching options</button>
           </div>
         </div>
@@ -585,26 +614,26 @@
         <div class="option-group model-driven">
           <span class="option-kind">Uses the configured model</span>
           <h5>Model suggestions</h5>
-          <p>Test the current endpoint, model, and key before saving when model-proposed filing details and dates can skip review.</p>
-          <div class="field">
-            <label for="l-confidence">Apply model suggestions at · {Number(llm.confidence_threshold).toFixed(2)}</label>
-            <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
-                   bind:value={llm.confidence_threshold} />
-          </div>
-          <label class="wiz-check"><input type="checkbox" bind:checked={llm.date_auto_apply} />
-            Add high-confidence dates to Calendar automatically</label>
-          <p class="wiz-p sub" style="font-size:.76rem;margin:4px 0 0">Dates that meet the model score skip review. Turn this off if you want every new date to wait in Approvals. Existing Calendar dates are unchanged.</p>
+          <p>Suggests titles, correspondents, filing details, tags, languages, and dates. Test the connection before enabling the model.</p>
+            <div class="field">
+              <label for="l-confidence">Minimum model score to apply automatically · {Number(llm.confidence_threshold).toFixed(2)}</label>
+              <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
+                     bind:value={llm.confidence_threshold} disabled={!autoApply} aria-describedby="model-score-help" />
+            </div>
+          <p id="model-score-help">Confidence is the model's self-reported score, not measured accuracy. Source and evidence checks still apply. Eligible suggestions that cannot apply automatically stay in Approvals.</p>
+          <h5>Calendar dates</h5>
+          <p>Automatic mode adds eligible high-confidence dates to Calendar. In review-first mode, accept each new date in Approvals first. Existing decisions are preserved; saving settings or restarting Suchi does not accept pending dates.</p>
         </div>
 
         <div class="toolbar option-save">
           <button class="btn primary sm" disabled={busy || llmTesting || !llmTestResult || !llm.endpoint_url || !llm.model || (llmIsRemote && !llm.egress_ack)}
                   onclick={() => saveAnd(
                     () => saveClassifier(true),
-                    'Model and automatic handling saved'
-                  )}>Save model and options</button>
+                    () => `Model enabled; ${applicationModeLabel(llmStatus?.auto_apply ?? true)}`
+                  )}>Enable model and save options</button>
         </div>
       </section>
-      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The model classifies new documents, handles extracted dates using the confidence rules above, and answers authorized research questions on demand. To process older documents, select them in <a href={filingHref("#/documents")}>Documents</a> and use Rescan or Extract dates.</p>
+      <p class="wiz-p sub" style="font-size:.8rem;margin-top:14px">The enabled model proposes metadata and dates for new documents and answers authorized research questions on demand. To request suggestions for older documents, select them in <a href={filingHref("#/documents")}>Documents</a> and use Rescan or Extract dates. Existing review decisions are preserved.</p>
 
     {:else if section === 'automations'}
       <h3>Automations</h3>
@@ -684,6 +713,9 @@
   .model-options { margin-top: 24px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface-2); }
   .model-options h4 { margin: 0; font-size: 1rem; }
   .options-intro { max-width: 54em; margin: 6px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+  .application-mode { margin-top: 14px; align-items: start; }
+  .application-mode input { flex-shrink: 0; }
+  .model-options .option-save .btn { white-space: normal; text-align: left; }
   .option-group { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--r-sm); background: var(--surface); }
   .option-group.independent { border-left-color: var(--ok); }
   .option-group.model-driven { border-left-color: var(--accent); }

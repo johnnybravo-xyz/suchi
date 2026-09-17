@@ -391,9 +391,9 @@ file only when your own relay exposes a TLS listener.
 
 ## Model assistance (optional; egress on)
 
-Off by default. Setting these turns on model-backed classification, authorized
-archive research, and extracted facts for review; non-local endpoints require
-the egress ack.
+The model is off by default. Setting these turns on model-backed classification,
+authorized archive research, and extracted facts; non-local endpoints require
+the egress ack. The separate application mode defaults on without enabling a model.
 
 Archive research sends only the question, bounded transient history, and
 authorized source title, sensitivity, snippet, plus capability-gated extracted
@@ -407,17 +407,23 @@ the bounded source-text depth independently of provider configuration; see
 | `LLM_MODEL`                         | Model identifier passed to the endpoint (e.g. `llama3.1:8b`).                                                                                           |
 | `LLM_API_KEY` or `LLM_API_KEY_FILE` | Optional; blank for local Ollama, required for hosted endpoints.                                                                                        |
 | `LLM_EGRESS_ACK`                    | Must be `true` for non-local endpoints. Loopback, private, link-local, `.local`, and `.localhost` endpoints skip the check.                         |
-| `LLM_CONFIDENCE_THRESHOLD`          | Auto-apply cutoff from `0.50` to `0.95`; default `0.70`. When configured, it wins over the stored web setting.                                            |
+| `LLM_CONFIDENCE_THRESHOLD`          | Model metadata and per-date automatic threshold from `0.50` to `0.95`; default `0.70`. Below-threshold results are flagged for review. Automatic application also requires the shared mode and current guards. When configured, it wins over the stored web setting. |
 
 The setup wizard AEAD-seals API keys before writing them to `settings` and
 never reads plaintext keys back. It exposes masked status, a synthetic
 connection test with validated fields and latency, and an explicit key-clear
-action. Automatic handling appears after the connection controls in two boxes:
-**Works without a model** for local archive matching, and **Uses the configured
-model** for the model confidence slider and automatic Calendar dates. **Save
-matching options** preserves the model's current enabled state. After a
-successful connection test, **Save model and options** saves and enables the
-model settings.
+action. The classification options separate model-free archive matching from
+model/date thresholds. **Save matching options** preserves the model's enabled
+state. After a successful connection test, **Enable model and save options**
+activates the configuration.
+
+**Automatically apply high-confidence suggestions** defaults on and covers new
+dates, model metadata and local matches. Turn it off for review-first behavior.
+**Save application mode** saves only this choice, independently of
+model activation, credentials, egress and explicit user-authored rules. Neither
+startup nor settings saves bulk-accept pending suggestions; new ingests and
+explicit rescans use the current policy.
+
 Compose installs can reach host Ollama at
 `http://host.suchi.local:11434/v1`.
 As described under [Precedence](#precedence), config-file and environment
@@ -456,15 +462,19 @@ reload after a successful save; pinned fields retain their boot value.
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `backup.interval_hours`                                                                               | Backup cadence in hours when `BACKUP_INTERVAL` is not configured.                                            |
 | `ingest.fs_watch_dir` / `ingest.fs_watch_owner` / `ingest.fs_watch_system` | Wizard-written watcher destination values for fields not pinned at boot. |
-| `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local archive-matching controls.                                                    |
+| `classification.auto_apply` | Shared automatic application mode; missing means enabled, malformed values fail closed. Saved independently of model configuration. |
+| `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local matching, automatic threshold (default `0.90`) and minimum review-suggestion score (default `0.50`). Application also requires the shared mode and current guards. |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
-| `llm.date_auto_apply`                                                                                | Add high-confidence dates to Calendar automatically; defaults to `true`. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
 | `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
 | `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |
 
 Filing mode, Inbox and last-import author ID/version/hash/snapshot are stored on
 `jd_systems`, not global `settings.preset` or taxonomy setting aliases.
+
+Migration 0003 converts a retained old date opt-out into the shared application
+mode and preserves a custom local automatic threshold. Already-deleted
+preferences from intermediate development schemas cannot be recovered.
 
 ## Secrets convention
 

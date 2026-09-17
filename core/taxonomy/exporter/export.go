@@ -1,15 +1,15 @@
-package taxonomy
+package exporter
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // BuildExport reads one archive snapshot. Tree-only export intentionally excludes
@@ -187,7 +187,7 @@ func exportActionParams(ctx context.Context, tx *sql.Tx, systemID int64, action 
 		delete(out, "_preset_keywords") // provenance only, not an executable parameter
 	}
 	if value, exists := out["jd_category_id"]; exists {
-		id, ok := numericID(value)
+		id, ok := taxonomy.NumericID(value)
 		if !ok {
 			return nil, fmt.Errorf("invalid category ID")
 		}
@@ -205,7 +205,7 @@ func exportActionParams(ctx context.Context, tx *sql.Tx, systemID int64, action 
 		}
 		names := make([]string, 0, len(ids))
 		for _, value := range ids {
-			id, ok := numericID(value)
+			id, ok := taxonomy.NumericID(value)
 			if !ok {
 				return nil, fmt.Errorf("invalid tag ID")
 			}
@@ -226,7 +226,7 @@ func exportActionParams(ctx context.Context, tx *sql.Tx, systemID int64, action 
 		if !exists {
 			continue
 		}
-		id, ok := numericID(value)
+		id, ok := taxonomy.NumericID(value)
 		if !ok {
 			return nil, fmt.Errorf("invalid %s", ref.key)
 		}
@@ -238,17 +238,4 @@ func exportActionParams(ctx context.Context, tx *sql.Tx, systemID int64, action 
 		out[ref.name] = name
 	}
 	return out, nil
-}
-
-func numericID(value any) (int64, bool) {
-	switch n := value.(type) {
-	case int:
-		return int64(n), n > 0
-	case int64:
-		return n, n > 0
-	case float64:
-		return int64(n), n > 0 && n < math.MaxInt64 && n == math.Trunc(n)
-	default:
-		return 0, false
-	}
 }

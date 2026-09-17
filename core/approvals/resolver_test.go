@@ -11,15 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
-
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 )
-
-// admin is the user created by setupDB (id=1).
-func admin() *pluginapi.Principal {
-	return &pluginapi.Principal{UserID: 1, Email: "admin@example.com", Role: "admin"}
-}
 
 // approveSpec is a minimal 2-state approval flow: an approve state that
 // spawns a task, then an end state. Used by resolver tests as the
@@ -45,10 +38,10 @@ func approveSpec(assignee string) approvals.Spec {
 func startAndAdvance(t *testing.T, e *approvals.Engine, assignee string) error {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := e.Register(ctx, 1, approveSpec(assignee), "test-flow", admin()); err != nil {
+	if _, err := e.Register(ctx, 1, approveSpec(assignee), "test-flow", adminPrincipal()); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	runID, err := e.Start(ctx, 1, "test-flow", 0, nil, admin())
+	runID, err := e.Start(ctx, 1, "test-flow", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -150,10 +143,10 @@ func TestResolver_SkippedOnNonTaskAdvance(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	if _, err := e.Register(ctx, 1, spec, "no-task-flow", admin()); err != nil {
+	if _, err := e.Register(ctx, 1, spec, "no-task-flow", adminPrincipal()); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := e.Start(ctx, 1, "no-task-flow", 0, nil, admin())
+	runID, err := e.Start(ctx, 1, "no-task-flow", 0, nil, adminPrincipal())
 	if err != nil {
 		t.Fatal(err)
 	}

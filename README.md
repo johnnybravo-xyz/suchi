@@ -47,8 +47,9 @@ archives. The API and storage layout are stabilising but not frozen.
 - Browser uploads, watched folders, IMAP intake, portable import/export, and
   versioned documents.
 - Automations, human approval workflows, selective rescans, and optional
-  OpenAI-compatible classification, grounded archive research, and reviewed
-  date intelligence with Calendar.
+  OpenAI-compatible classification, grounded archive research, and source-backed
+  date intelligence with Calendar. High-confidence suggestions apply by default;
+  review-first mode sends inferred changes to Approvals instead.
 - Groups, object ACLs, OIDC, share links, audit events, backups, and restore
   tooling.
 - Svelte SPA, a documented scoped HTTP API, and MCP over stdio or HTTP.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/johnnybravo-xyz/suchi/core/slug"
@@ -71,4 +72,18 @@ func UpsertByName(ctx context.Context, tx *sql.Tx, systemID int64, table NamedTa
 		return 0, err
 	}
 	return id, nil
+}
+
+// NumericID accepts positive integral identifiers from typed or decoded JSON values.
+func NumericID(value any) (int64, bool) {
+	switch n := value.(type) {
+	case int:
+		return int64(n), n > 0
+	case int64:
+		return n, n > 0
+	case float64:
+		return int64(n), n > 0 && n < math.MaxInt64 && n == math.Trunc(n)
+	default:
+		return 0, false
+	}
 }

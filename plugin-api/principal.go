@@ -19,6 +19,10 @@ type Principal struct {
 	Role          string
 	Scopes        []string
 	AuthNBy       string
+	// SessionID is the stored session digest, never the bearer cookie.
+	SessionID string `json:"-"`
+	// AuthExpiresAt bounds deferred use of an authenticated identity.
+	AuthExpiresAt int64 `json:"-"`
 }
 
 // Authenticator is one link in the auth chain. The chain runs in

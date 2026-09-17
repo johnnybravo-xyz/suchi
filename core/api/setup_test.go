@@ -7,8 +7,10 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -172,11 +174,10 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 				EgressAck:           cfg.EgressAck,
 				HasAPIKey:           cfg.APIKey != "",
 				ConfidenceThreshold: cfg.ConfidenceThreshold,
-				DateAutoApply:       cfg.DateAutoApply,
 			}, nil
 		},
 	}
-	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"date_auto_apply":false,"archive_enabled":false,"archive_auto_threshold":0.85,"archive_review_threshold":0.6}`
+	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","api_key":"top-secret","confidence_threshold":0.8,"archive_enabled":false,"archive_review_threshold":0.6}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -218,12 +219,11 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if resolved.APIKey != "top-secret" || resolved.Model != "qwen2.5:7b" {
 		t.Fatalf("resolved config = %#v", resolved)
 	}
-	if resolved.ConfidenceThreshold != 0.8 || resolved.DateAutoApply {
-		t.Fatalf("model controls = threshold:%v date_auto_apply:%t",
-			resolved.ConfidenceThreshold, resolved.DateAutoApply)
+	if resolved.ConfidenceThreshold != 0.8 {
+		t.Fatalf("model score threshold = %v", resolved.ConfidenceThreshold)
 	}
 	archive := settings.ResolveArchiveClassifierConfig(req.Context(), d)
-	if archive.Enabled || archive.AutoThreshold != 0.85 || archive.ReviewThreshold != 0.6 {
+	if archive.Enabled || archive.ReviewThreshold != 0.6 {
 		t.Fatalf("archive config = %#v", archive)
 	}
 	if _, ok := stored["ciphertext"]; !ok {
@@ -246,10 +246,10 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if !status.HasAPIKey || !status.Enabled || !status.Active || status.DateAutoApply {
+	if !status.HasAPIKey || !status.Enabled || !status.Active {
 		t.Fatalf("unexpected masked status: %#v", status)
 	}
-	if status.ArchiveEnabled || status.ArchiveAuto != 0.85 || status.ArchiveReview != 0.6 {
+	if status.ArchiveEnabled || status.ArchiveReview != 0.6 {
 		t.Fatalf("archive status = %#v", status)
 	}
 
@@ -284,10 +284,9 @@ func TestResearchContextSettingsAreAdminOwnedAndIndependent(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 	if err := settings.SetMany(ctx, d, map[string]any{
-		settings.KeyLLMEndpointURL:   "https://models.example.test/v1",
-		settings.KeyLLMModel:         "archive-model",
-		settings.KeyLLMEgressAck:     true,
-		settings.KeyLLMDateAutoApply: false,
+		settings.KeyLLMEndpointURL: "https://models.example.test/v1",
+		settings.KeyLLMModel:       "archive-model",
+		settings.KeyLLMEgressAck:   true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +333,7 @@ func TestResearchContextSettingsAreAdminOwnedAndIndependent(t *testing.T) {
 		t.Fatalf("standalone context save reloaded provider %d times", reloads)
 	}
 	var endpoint, model string
-	var egress, dateAutoApply bool
+	var egress bool
 	if err := settings.Get(ctx, d, settings.KeyLLMEndpointURL, &endpoint); err != nil {
 		t.Fatal(err)
 	}
@@ -344,16 +343,13 @@ func TestResearchContextSettingsAreAdminOwnedAndIndependent(t *testing.T) {
 	if err := settings.Get(ctx, d, settings.KeyLLMEgressAck, &egress); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Get(ctx, d, settings.KeyLLMDateAutoApply, &dateAutoApply); err != nil {
-		t.Fatal(err)
-	}
-	if endpoint != "https://models.example.test/v1" || model != "archive-model" || !egress || dateAutoApply {
-		t.Fatalf("unrelated LLM settings changed: endpoint=%q model=%q egress=%t dates=%t",
-			endpoint, model, egress, dateAutoApply)
+	if endpoint != "https://models.example.test/v1" || model != "archive-model" || !egress {
+		t.Fatalf("unrelated LLM settings changed: endpoint=%q model=%q egress=%t",
+			endpoint, model, egress)
 	}
 }
 
-func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
+func TestSaveLLMSettingsPreservesPendingDates(t *testing.T) {
 	s := newChatTestServer(t)
 	seedChatDoc(t, s, 17, 1, "Boarding pass", "Date 06 Aug 2026", "", false)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
@@ -373,7 +369,7 @@ func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(
-		`{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","confidence_threshold":0.7,"date_auto_apply":true}`,
+		`{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","confidence_threshold":0.7}`,
 	)).WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
 	rec := httptest.NewRecorder()
 	s.SaveLLMSettings(rec, req)
@@ -381,7 +377,7 @@ func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	for value, want := range map[string]string{"2026-08-06": "accepted", "2026-07-01": "pending"} {
+	for value, want := range map[string]string{"2026-08-06": "pending", "2026-07-01": "pending"} {
 		var status string
 		if err := s.DB.Read.QueryRowContext(context.Background(), `
 			SELECT status FROM document_intelligence
@@ -392,6 +388,87 @@ func TestSaveLLMSettingsAutoAppliesExistingDates(t *testing.T) {
 		if status != want {
 			t.Fatalf("date %s status=%q want=%q", value, status, want)
 		}
+	}
+}
+
+func TestApplicationModeIsIndependentAndNeverAcceptsPendingDates(t *testing.T) {
+	s := newChatTestServer(t)
+	ctx := context.Background()
+	seedChatDoc(t, s, 17, 1, "Boarding pass", "Date 2026-08-06", "", false)
+	dateID := seedDateIntelligence(t, s, 17, "pending", "2026-08-06")
+	if err := settings.SetMany(ctx, s.DB, map[string]any{
+		settings.KeyLLMEndpointURL: "https://models.example.test/v1",
+		settings.KeyLLMModel:       "saved-model", settings.KeyLLMEgressAck: true,
+		settings.KeyLLMDisabled: true, settings.KeyResearchContext: settings.ResearchContextDetailed,
+		settings.KeyArchiveAuto: 0.85,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.LLMReloader = func(context.Context) error {
+		t.Fatal("application-mode save reloaded the provider")
+		return nil
+	}
+	patch := func(body string, actor *pluginapi.Principal) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/api/admin/settings/llm", strings.NewReader(body)).
+			WithContext(auth.WithPrincipal(ctx, actor))
+		rec := httptest.NewRecorder()
+		s.PatchLLMSettings(rec, req)
+		return rec
+	}
+	member := &pluginapi.Principal{Kind: "user", UserID: 2, Role: "member"}
+	if rec := patch(`{"auto_apply":false}`, member); rec.Code != http.StatusForbidden {
+		t.Fatalf("member changed application mode: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, body := range []string{`{}`, `{"auto_apply":null}`, `{"auto_apply":"false"}`,
+		`{"auto_apply":false,"research_context_mode":"focused"}`,
+		`{"auto_apply":false,"research_context_mode":null}`, `{"auto_apply":false,"enabled":true}`} {
+		if rec := patch(body, adminPrincipal(1)); rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid policy patch %s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	for _, enabled := range []bool{false, true} {
+		body := fmt.Sprintf(`{"auto_apply":%t}`, enabled)
+		if rec := patch(body, adminPrincipal(1)); rec.Code != http.StatusOK {
+			t.Fatalf("policy patch failed: %d %s", rec.Code, rec.Body.String())
+		}
+		status, err := s.loadLLMSettingsStatus(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.AutoApply != enabled || status.Enabled || status.EndpointURL != "https://models.example.test/v1" ||
+			status.Model != "saved-model" || !status.EgressAck || status.ArchiveAuto != 0.85 ||
+			status.ResearchContextMode != "detailed" {
+			t.Fatalf("policy patch changed unrelated state: %+v", status)
+		}
+		var statusDate string
+		var reviewed sql.NullInt64
+		if err := s.DB.Read.QueryRowContext(ctx, `SELECT status,reviewed_at FROM document_intelligence WHERE id=?`, dateID).Scan(&statusDate, &reviewed); err != nil {
+			t.Fatal(err)
+		}
+		if statusDate != "pending" || reviewed.Valid {
+			t.Fatalf("settings accepted pending date: %s %+v", statusDate, reviewed)
+		}
+	}
+}
+
+func TestModelSettingsCannotChangeApplicationMode(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := settings.Set(ctx, d, settings.KeyClassificationAutoApply, false); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm",
+		strings.NewReader(`{"enabled":false,"auto_apply":true}`)).
+		WithContext(auth.WithPrincipal(ctx, adminPrincipal(1)))
+	rec := httptest.NewRecorder()
+	s.SaveLLMSettings(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("model save accepted policy change: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	enabled, err := settings.ResolveAutoApply(ctx, d.Read)
+	if err != nil || enabled {
+		t.Fatalf("model save changed policy: enabled=%t err=%v", enabled, err)
 	}
 }
 
@@ -520,7 +597,7 @@ func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
 	d := openTestDB(t)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	body := `{"enabled":false,"archive_auto_threshold":0.7,"archive_review_threshold":0.7}`
+	body := `{"enabled":false,"archive_review_threshold":0.95}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -529,6 +606,34 @@ func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
 	s.SaveLLMSettings(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_archive_thresholds") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLegacyReviewCeilingDoesNotBlockUnrelatedModelSave(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := settings.Set(ctx, d, settings.KeyArchiveReview, 0.9); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(`{"enabled":false,"archive_enabled":true}`))
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
+		Kind: "user", UserID: 1, Role: "admin",
+	}))
+	rec := httptest.NewRecorder()
+	s.SaveLLMSettings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("existing review ceiling blocked model save: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var review, automatic float64
+	if err := settings.Get(ctx, d, settings.KeyArchiveReview, &review); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, settings.KeyArchiveAuto, &automatic); err != nil {
+		t.Fatal(err)
+	}
+	if review != 0.9 || automatic <= review || automatic > 0.95 {
+		t.Fatalf("legacy review threshold not preserved with valid automatic range: review=%v automatic=%v", review, automatic)
 	}
 }
 

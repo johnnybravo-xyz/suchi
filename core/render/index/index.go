@@ -20,7 +20,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/render/paths"
-	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -70,7 +70,7 @@ func (h *Handler) Handle(ctx context.Context, event pluginapi.Event) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	pf, err := taxonomy.BuildExport(ctx, h.db, systemID, true)
+	pf, err := exporter.BuildExport(ctx, h.db, systemID, true)
 	if err == nil {
 		var data []byte
 		data, err = presetfile.Marshal(pf, presetfile.FormatHuML)

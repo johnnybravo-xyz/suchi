@@ -103,7 +103,7 @@ func Apply(ctx context.Context, d *db.DB, log *slog.Logger, pf *presetfile.Prese
 		if plan.destination.Create {
 			var actor *pluginapi.Principal
 			if opts.ActorID != 0 {
-				actor = &pluginapi.Principal{UserID: opts.ActorID}
+				actor = &pluginapi.Principal{Kind: "user", UserID: opts.ActorID}
 			}
 			if err := approvals.EnsureDefInTx(ctx, tx, systemID, approvals.DocumentChangeSlug, approvals.DocumentChangeSpec(), actor); err != nil {
 				return err

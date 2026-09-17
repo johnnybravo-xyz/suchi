@@ -9,7 +9,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
-	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
 const portableTaxonomy = `format = "suchi-taxonomy/v1"
@@ -58,7 +58,7 @@ func TestTaxonomyExportPreservesNamedAndTitleFilters(t *testing.T) {
 	if _, err := importer.ImportForDB(ctx, source, log, pf, importer.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	exported, err := taxonomy.BuildExport(ctx, source, 1, false)
+	exported, err := exporter.BuildExport(ctx, source, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +136,10 @@ func TestTaxonomyExportRejectsDisabledAndUnsupportedRules(t *testing.T) {
 		if _, err := d.Write.Exec(mutation); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := taxonomy.BuildExport(t.Context(), d, 1, false); err == nil {
+		if _, err := exporter.BuildExport(t.Context(), d, 1, false); err == nil {
 			t.Fatal("unrepresentable behavior silently exported")
 		}
-		tree, err := taxonomy.BuildExport(t.Context(), d, 1, true)
+		tree, err := exporter.BuildExport(t.Context(), d, 1, true)
 		if err != nil {
 			t.Fatal(err)
 		}

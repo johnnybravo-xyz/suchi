@@ -23,13 +23,18 @@ browser composition; linked feature guides own detailed user and wire behavior.
 | Durable state/work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
 | Filing/review/retrieval | `core/jd/`, `core/automations/`, `core/approvals/`, `core/searchquery/`, `core/intelligence/`; API projections in `core/api/` |
-| Portable taxonomy | `core/jd/presetfile` validates/normalizes HuML/TOML; `core/jd/importer` previews/applies; `core/taxonomy` exports |
+| Portable taxonomy | `core/jd/presetfile` validates/normalizes HuML/TOML; `core/jd/importer` previews/applies; `core/taxonomy/exporter` exports |
 | Filing projections | `core/render/index` writes tree-only indexes; `core/render/view` owns document paths |
 
 Keep behavior with its domain owner. `plugin-api/` provides vocabulary for
 compile-linked authenticators, job subscribers and audit sinks, without a runtime
 Go plugin loader or service framework. The CLI injects integration callbacks into
 the API instead of importing `plugins/*` there. See [Plugins](/plugins).
+
+`core/approvals/document_change.go` owns review eligibility together with source,
+field-generation, access and session validation. The classifier records bounded
+review reasons; Suchi's approval transaction performs the final checks and write.
+See [Review-first mode](/approvals#review-first-mode).
 
 ## Boot and shutdown
 
@@ -320,9 +325,9 @@ and compiles parameterized SQL/FTS. `core/api/search_query.go` keeps ranked Sear
 sortable Documents and saved views on the same document-set contract while
 preserving response shapes. See [Search](/search).
 
-Local matching fills unresolved metadata before deterministic user automations.
-`core/automations` owns triggers/conditions/actions; `core/approvals` owns human
-state machines. Integrations must not add another workflow engine. Advancement
+Local matching proposes unresolved metadata for review before deterministic
+user automations. `core/automations` owns triggers/conditions/actions;
+`core/approvals` owns human state machines. Integrations must not add another workflow engine. Advancement
 jobs carry system/run revision; handlers run outside the writer, then their
 transactional effects/tasks recheck revision/status. Tasks retain originating
 revision so retries cannot reopen resolved visits. Accepted decisions/timeouts
@@ -347,7 +352,7 @@ preserve local/disabled rules and atomically commit systems/tree/provenance/jobs
 Unrelated systems do not stale a plan; only safe initial setup replaces bootstrap,
 later imports merge, and refile stays explicit.
 
-`core/taxonomy` exports consistent `archive` revision-1 snapshots. Tree-only omits
+`core/taxonomy/exporter` exports consistent `archive` revision-1 snapshots. Tree-only omits
 keywords/starters; seeded export rejects unrepresentable/disabled behavior and
 preserves rule identity/order. Import provenance is neither installed-pack state
 nor whole-archive attribution. Preset keywords use literal word/phrase patterns;
@@ -361,6 +366,62 @@ days. [Document dates](/document-dates) owns precision/review. On-demand bounded
 research in `core/api/chat.go` uses explicit callbacks to the configured model;
 it is not background work or a general agent runtime. Preserve evidence bounds,
 review decisions and human edits; see [Archive research](/archive-chat).
+
+### Automatic application and review eligibility
+
+`core/documentstate` captures source and field generations before inference.
+Unreleased migration 0003 adds monotonic counters and triggers, including
+same-value reassertions; explicit no-op junction removals advance intent in their
+domain writer. `core/similar.TopDocsInTx` keeps selection, metadata and supporting
+snapshots in one read transaction. Matching and model naming context use
+owner-level visibility, never an administrator's corpus-wide bypass.
+
+The classifier performs provider work outside the writer. Before committing it
+rechecks runtime identity, target source and naming-context authorization.
+`settings.ResolveAutoApply` reads the shared policy under the writer: a missing
+value enables automatic application; malformed values or errors fail closed.
+`core/approvals.ApplyAutomaticDocumentChangeInTx` checks that policy, the explicit
+threshold and score, and current source, field, supporters and destination guards.
+Only model/archive sources can take this path; explicit rules stay independent.
+Review-required changes use `core/approvals.ProposeDocumentChangeInTx`, which
+invokes shared review eligibility with host-validated checks and atomically
+stores bounded source/human bindings and review jobs. Unsupported, stale or
+contradictory candidates cannot gain mutation authority.
+
+Automatic and reviewed metadata use a shared guarded value writer, not duplicate
+field-update SQL. Machine policy and interactive human authorization remain
+distinct: automatic application never fabricates a reviewer or locks language.
+Within a multi-tag batch, successful automatic writes advance the application
+baseline without discarding the original snapshot checks against human races.
+
+Metadata resolution stores the interactive principal's session digest and expiry,
+not a bearer cookie. `plugin-api.Principal` keeps these fields off the wire;
+local-cookie authentication supplies them, not API/OIDC bearer authentication.
+`core/approvals` rechecks the exact resolved visit, session, current actor,
+membership/ACLs, source/supporters, field generation and destination at the
+eventual write. Expired queued authorization can be retired for a fresh review
+without rebinding the old decision. Mutation, required provenance and render work
+commit together. Existing audit sinks remain best-effort, not that commit boundary.
+
+Dates stay in `document_intelligence`, not workflow runs. The classifier validates
+the raw date's exact UTF-8 span and normalized value against target text; the
+resolve API repeats grounding and authorization under the writer. Each new date's
+own score is checked against the model/date threshold, independently of overall
+classification confidence. Automatic acceptance records `threshold-auto-v1` and
+`confidence_threshold`, with null reviewer/time. In-flight human decisions,
+source generation and exact evidence remain authoritative. Rescans replace pending
+candidates with non-reused IDs while preserving accepted/rejected values and
+original attribution. Legacy pending rows have no fabricated source proof.
+Settings/startup never bulk-accept pending dates. See [Document dates](/document-dates).
+
+Purging a document removes its facts/evidence and document-bound approval state
+through existing domain ownership. Full database backup retains history and
+generations; native takeout remains partial reingestion, not restored review
+authority. No separate evidence archive, automatic eligibility table, promotion
+counter or external-action executor is introduced. Classifier-owned review
+markers are excluded from automation match snapshots; explicit internal rules
+remain independent. [Approvals](/approvals) and [Automations](/automations) own
+the available actions and recovery flow.
 
 Classifier review-tag cleanup is narrowly tracked by `document_tags.classifier_owned`,
 default false including migrated assignments. The LLM handler marks only assignments

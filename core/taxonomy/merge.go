@@ -266,7 +266,7 @@ func rewriteAutomationReferences(ctx context.Context, tx *sql.Tx, systemID int64
 }
 
 func replaceID(params map[string]any, key string, fromID, intoID int64) bool {
-	value, ok := numericID(params[key])
+	value, ok := NumericID(params[key])
 	if !ok || value != fromID {
 		return false
 	}
@@ -281,7 +281,7 @@ func replaceIDList(params map[string]any, key string, fromID, intoID int64) bool
 	}
 	changed := false
 	for index, value := range values {
-		id, ok := numericID(value)
+		id, ok := NumericID(value)
 		if ok && id == fromID {
 			values[index] = intoID
 			changed = true

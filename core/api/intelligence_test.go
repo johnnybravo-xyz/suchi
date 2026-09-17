@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
@@ -17,7 +20,7 @@ import (
 func seedDateIntelligence(t *testing.T, s *Server, documentID int64, status, date string) int64 {
 	t.Helper()
 	candidate, err := intelligence.NewDateCandidate(
-		"renewal", date, "day", date, "Renews on "+date, 0.9,
+		"renewal", date, "day", date, date, 0.9,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -26,16 +29,33 @@ func seedDateIntelligence(t *testing.T, s *Server, documentID int64, status, dat
 		INSERT INTO document_intelligence(
 			document_id, intelligence_type, role, value_json, sort_value,
 			raw_text, evidence_text, confidence, status, extractor,
-			extraction_version, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'test', 1, 0, 0)
+			extraction_version, created_at, updated_at, source_blob, source_revision, evidence_start,
+			gate_reason, gate_policy_version
+		) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'test', 1, 0, 0, original_blob, source_revision,
+		         instr(COALESCE(content, ''), ?)-1, 'important_fact', 'review-first-v1'
+		  FROM documents WHERE id=?
 	`, documentID, candidate.Type, candidate.Role, candidate.ValueJSON,
 		candidate.SortValue, candidate.RawText, candidate.EvidenceText,
-		candidate.Confidence, status)
+		candidate.Confidence, status, date, documentID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, _ := result.LastInsertId()
 	return id
+}
+
+func interactiveIntelligenceReviewer(t *testing.T, s *Server, principal *pluginapi.Principal) *pluginapi.Principal {
+	t.Helper()
+	p := *principal
+	digest := sha256.Sum256([]byte("intelligence-review-" + itoa(p.UserID)))
+	p.SessionID = hex.EncodeToString(digest[:])
+	p.Kind, p.AuthNBy = "user", "local-auth"
+	p.AuthExpiresAt = time.Now().Add(time.Hour).Unix()
+	if _, err := s.DB.Write.Exec(`INSERT INTO sessions(id,user_id,created_at,expires_at,last_seen_at)
+		VALUES(?,?,0,?,0) ON CONFLICT(id) DO NOTHING`, p.SessionID, p.UserID, p.AuthExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	return &p
 }
 
 func doIntelligenceRequest(t *testing.T, s *Server, method, path, body string, p *pluginapi.Principal) *httptest.ResponseRecorder {
@@ -346,7 +366,7 @@ func TestIntelligenceResolveIsPerDocumentAuthorized(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := `{"candidate_ids":[` + itoa(visible) + `,` + itoa(hidden) + `],"decision":"accepted"}`
-	rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve", body, memberPrincipal(3))
+	rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve", body, interactiveIntelligenceReviewer(t, s, memberPrincipal(3)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -402,7 +422,7 @@ func TestIntelligenceResolveReportsOnlyItsOwnTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.Applied != 0 || len(response.Results) != 1 ||
-		response.Results[0].OK || response.Results[0].Code != "already_resolved" {
+		response.Results[0].OK || response.Results[0].Code != "conflict" {
 		t.Fatalf("response=%+v", response)
 	}
 	var status string
@@ -491,5 +511,187 @@ func TestIntelligenceSavedViewAppliesCompleteLegacyScope(t *testing.T) {
 	}
 	if envelope.Count != 1 || envelope.Results[0].DocumentID != 70 {
 		t.Fatalf("shared view ACL scope=%+v", envelope)
+	}
+}
+
+func TestIntelligenceReviewRejectsUnusableOrStaleSource(t *testing.T) {
+	for _, tc := range []struct{ name, mutation, code string }{
+		{"same content reextracted", `UPDATE documents SET content=content WHERE id=60`, "stale_source"},
+		{"legacy unbound", `UPDATE document_intelligence SET source_revision=NULL`, "stale_source"},
+		{"contradictory evidence", `UPDATE document_intelligence SET value_json='{"date":"2026-09-02","precision":"day"}', sort_value='2026-09-02'`, "invalid_evidence"},
+		{"wrong UTF8 offset", `UPDATE document_intelligence SET evidence_start=0`, "invalid_evidence"},
+		{"missing quote", `UPDATE document_intelligence SET evidence_text='Invented 2026-09-01'`, "invalid_evidence"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newIntelligenceTestServer(t)
+			seedChatDoc(t, s, 60, 1, "Policy", "İ Renews 2026-09-01", "internal", false)
+			id := seedDateIntelligence(t, s, 60, "pending", "2026-09-01")
+			if _, err := s.DB.Write.Exec(tc.mutation); err != nil {
+				t.Fatal(err)
+			}
+			rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+				`{"candidate_ids":[`+itoa(id)+`],"decision":"accepted"}`, interactiveIntelligenceReviewer(t, s, adminPrincipal(1)))
+			var response intelligenceMutationResponse
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Applied != 0 || response.Results[0].Code != tc.code {
+				t.Fatalf("response=%+v", response)
+			}
+			var status string
+			if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id=?`, id).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != "pending" {
+				t.Fatalf("invalid fact status=%q", status)
+			}
+			rec = doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+				`{"candidate_ids":[`+itoa(id)+`],"decision":"rejected"}`, adminPrincipal(1))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("reject stale fact: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id=?`, id).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != "rejected" {
+				t.Fatalf("unusable suggestion cannot be dismissed: status=%q", status)
+			}
+		})
+	}
+}
+
+func TestIntelligenceDuplicateReviewReturnsRecordedOutcome(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 61, 1, "Policy", "Renews 2026-09-01", "internal", false)
+	id := seedDateIntelligence(t, s, 61, "pending", "2026-09-01")
+	for i, decision := range []string{"accepted", "accepted", "rejected"} {
+		rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+			`{"candidate_ids":[`+itoa(id)+`],"decision":"`+decision+`"}`, interactiveIntelligenceReviewer(t, s, adminPrincipal(1)))
+		var response intelligenceMutationResponse
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && (response.Applied != 1 || !response.Results[0].OK) {
+			t.Fatalf("first=%+v", response)
+		}
+		if i == 1 && (response.Applied != 0 || !response.Results[0].OK) {
+			t.Fatalf("retry=%+v", response)
+		}
+		if i == 2 && (response.Applied != 0 || response.Results[0].Code != "conflict") {
+			t.Fatalf("conflict=%+v", response)
+		}
+	}
+}
+
+func TestIntelligenceResolutionRechecksSourceAndACLInsideWriter(t *testing.T) {
+	for _, race := range []string{"source", "ACL"} {
+		t.Run(race, func(t *testing.T) {
+			s := newIntelligenceTestServer(t)
+			seedChatDoc(t, s, 62, 2, "Policy", "Renews 2026-09-01", "internal", false)
+			id := seedDateIntelligence(t, s, 62, "pending", "2026-09-01")
+			if _, err := s.DB.Write.Exec(`INSERT INTO object_acls(object_kind,object_id,principal_kind,principal_id,perm_bits,created_at) VALUES('document',62,'user',3,3,0)`); err != nil {
+				t.Fatal(err)
+			}
+			s.Authz = authorizerFunc(func(ctx context.Context, _ authz.Principal, _ authz.Kind, _ int64, _ authz.Perm) error {
+				s.Authz = authz.ACLAuthorizer{DB: s.DB}
+				if race == "source" {
+					_, err := s.DB.ExecWrite(ctx, `UPDATE documents SET content=content WHERE id=62`)
+					return err
+				}
+				_, err := s.DB.ExecWrite(ctx, `DELETE FROM object_acls WHERE object_kind='document' AND object_id=62`)
+				return err
+			})
+			rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+				`{"candidate_ids":[`+itoa(id)+`],"decision":"accepted"}`, interactiveIntelligenceReviewer(t, s, memberPrincipal(3)))
+			var response intelligenceMutationResponse
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			code := "stale_source"
+			if race == "ACL" {
+				code = "forbidden"
+			}
+			if response.Applied != 0 || response.Results[0].Code != code {
+				t.Fatalf("response=%+v", response)
+			}
+			var status string
+			if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id=?`, id).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != "pending" {
+				t.Fatalf("stale review persisted %q", status)
+			}
+		})
+	}
+}
+
+func TestIntelligenceSensitiveEvidenceStaysBehindSourceReveal(t *testing.T) {
+	s := newIntelligenceTestServer(t)
+	seedChatDoc(t, s, 63, 1, "Policy", "Renews 2026-09-01", "restricted", false)
+	seedDateIntelligence(t, s, 63, "pending", "2026-09-01")
+	rec := doIntelligenceRequest(t, s, http.MethodGet, "/api/intelligence/?status=pending", "", adminPrincipal(1))
+	var response struct {
+		Results []IntelligenceRow `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(response.Results) != 1 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	row := response.Results[0]
+	if row.EvidenceText != "" || row.RawText != "" || row.EvidenceStart != nil || !row.SourceCurrent {
+		t.Fatalf("unsafe sensitive projection=%+v", row)
+	}
+}
+
+func TestDateAcceptanceRequiresCurrentInteractiveSession(t *testing.T) {
+	for _, credential := range []string{"bearer", "missing", "expired", "revoked", "other user"} {
+		t.Run(credential, func(t *testing.T) {
+			s := newIntelligenceTestServer(t)
+			seedChatDoc(t, s, 64, 1, "Policy", "Renews 2026-09-01", "internal", false)
+			id := seedDateIntelligence(t, s, 64, "pending", "2026-09-01")
+			p := interactiveIntelligenceReviewer(t, s, adminPrincipal(1))
+			switch credential {
+			case "bearer":
+				p.Kind = "token"
+				p.Scopes = []string{auth.ScopeDocumentsWrite}
+			case "missing":
+				p.SessionID = ""
+			case "expired":
+				if _, err := s.DB.Write.Exec(`UPDATE sessions SET expires_at=0 WHERE id=?`, p.SessionID); err != nil {
+					t.Fatal(err)
+				}
+			case "revoked":
+				if _, err := s.DB.Write.Exec(`DELETE FROM sessions WHERE id=?`, p.SessionID); err != nil {
+					t.Fatal(err)
+				}
+			case "other user":
+				if _, err := s.DB.Write.Exec(`UPDATE sessions SET user_id=2 WHERE id=?`, p.SessionID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec := doIntelligenceRequest(t, s, http.MethodPost, "/api/intelligence/resolve",
+				`{"candidate_ids":[`+itoa(id)+`],"decision":"accepted"}`, p)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var status string
+			if err := s.DB.Read.QueryRow(`SELECT status FROM document_intelligence WHERE id=?`, id).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != "pending" {
+				t.Fatalf("noninteractive fact status=%q", status)
+			}
+		})
 	}
 }

@@ -1054,3 +1054,98 @@ UPDATE jobs SET state='dead',
 WHERE kind='approval:advance' AND state IN ('pending','running')
   AND id NOT IN (SELECT job_id FROM approval_upgrade_resume);
 DROP TABLE approval_upgrade_resume;
+
+-- Proposal generations are independent of timestamps and values: even a
+-- same-value human reassertion or a new extraction of identical bytes is new.
+ALTER TABLE documents ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN title_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN correspondent_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN document_type_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN category_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN tags_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN language_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE approval_tasks ADD COLUMN resolution_principal_json TEXT;
+
+CREATE TRIGGER documents_source_revision AFTER UPDATE OF content,original_blob,owner_id,system_id ON documents
+BEGIN UPDATE documents SET source_revision=source_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER documents_title_revision AFTER UPDATE OF title ON documents
+BEGIN UPDATE documents SET title_revision=title_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER documents_correspondent_revision AFTER UPDATE OF correspondent_id ON documents
+BEGIN UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER documents_document_type_revision AFTER UPDATE OF document_type_id ON documents
+BEGIN UPDATE documents SET document_type_revision=document_type_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER documents_category_revision AFTER UPDATE OF jd_category_id ON documents
+BEGIN UPDATE documents SET category_revision=category_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER documents_language_revision AFTER UPDATE OF languages,languages_locked ON documents
+BEGIN UPDATE documents SET language_revision=language_revision+1 WHERE id=NEW.id; END;
+CREATE TRIGGER document_tags_revision_insert AFTER INSERT ON document_tags WHEN NEW.classifier_owned=0
+BEGIN UPDATE documents SET tags_revision=tags_revision+1 WHERE id=NEW.document_id; END;
+CREATE TRIGGER document_tags_revision_delete AFTER DELETE ON document_tags WHEN OLD.classifier_owned=0
+BEGIN UPDATE documents SET tags_revision=tags_revision+1 WHERE id=OLD.document_id; END;
+CREATE TRIGGER document_tags_revision_update AFTER UPDATE ON document_tags
+BEGIN
+ UPDATE documents SET tags_revision=tags_revision+1 WHERE id=OLD.document_id AND OLD.classifier_owned=0;
+ UPDATE documents SET tags_revision=tags_revision+1 WHERE id=NEW.document_id AND NEW.classifier_owned=0
+   AND (OLD.classifier_owned<>0 OR OLD.document_id<>NEW.document_id);
+END;
+CREATE TRIGGER document_sources_revision_insert AFTER INSERT ON document_sources
+BEGIN UPDATE documents SET source_revision=source_revision+1 WHERE id=NEW.document_id; END;
+CREATE TRIGGER document_sources_revision_delete AFTER DELETE ON document_sources
+BEGIN UPDATE documents SET source_revision=source_revision+1 WHERE id=OLD.document_id; END;
+CREATE TRIGGER document_sources_revision_update AFTER UPDATE ON document_sources
+BEGIN
+ UPDATE documents SET source_revision=source_revision+1 WHERE id=OLD.document_id;
+ UPDATE documents SET source_revision=source_revision+1 WHERE id=NEW.document_id AND NEW.document_id<>OLD.document_id;
+END;
+CREATE TRIGGER document_correspondents_revision_insert AFTER INSERT ON document_correspondents
+BEGIN UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=NEW.document_id; END;
+CREATE TRIGGER document_correspondents_revision_delete AFTER DELETE ON document_correspondents
+BEGIN UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=OLD.document_id; END;
+CREATE TRIGGER document_correspondents_revision_update AFTER UPDATE ON document_correspondents
+BEGIN
+ UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=OLD.document_id;
+ UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=NEW.document_id AND NEW.document_id<>OLD.document_id;
+END;
+-- Public candidate IDs cannot be reused after a rescan deletes pending rows:
+-- an old browser decision must never address a replacement candidate.
+CREATE TABLE document_intelligence_new (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+ intelligence_type TEXT NOT NULL,
+ role TEXT NOT NULL DEFAULT '',
+ value_json TEXT NOT NULL,
+ sort_value TEXT NOT NULL DEFAULT '',
+ raw_text TEXT NOT NULL DEFAULT '',
+ evidence_text TEXT NOT NULL,
+ evidence_start INTEGER,
+ confidence REAL NOT NULL CHECK (confidence>=0.0 AND confidence<=1.0),
+ status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected')),
+ extractor TEXT NOT NULL,
+ source_blob TEXT NOT NULL DEFAULT '',
+ extraction_version INTEGER NOT NULL,
+ reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ reviewed_at INTEGER,
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ source_revision INTEGER,
+ gate_reason TEXT NOT NULL DEFAULT '',
+ gate_policy_version TEXT NOT NULL DEFAULT '',
+ UNIQUE(document_id,intelligence_type,role,value_json,evidence_text,extractor)
+) STRICT;
+INSERT INTO document_intelligence_new(id,document_id,intelligence_type,role,value_json,
+ sort_value,raw_text,evidence_text,evidence_start,confidence,status,extractor,
+ source_blob,extraction_version,reviewed_by,reviewed_at,created_at,updated_at)
+SELECT id,document_id,intelligence_type,role,value_json,sort_value,raw_text,
+ evidence_text,evidence_start,confidence,status,extractor,source_blob,
+ extraction_version,reviewed_by,reviewed_at,created_at,updated_at FROM document_intelligence;
+DROP TABLE document_intelligence;
+ALTER TABLE document_intelligence_new RENAME TO document_intelligence;
+CREATE INDEX idx_document_intelligence_review ON document_intelligence(status,intelligence_type,sort_value,document_id);
+CREATE INDEX idx_document_intelligence_document ON document_intelligence(document_id,status,intelligence_type);
+-- Preserve an explicit date opt-out as the shared inference policy. Local
+-- matching retains its independent score threshold; missing policy defaults on.
+INSERT INTO settings(key,value_json,updated_at)
+SELECT 'classification.auto_apply',value_json,updated_at
+FROM settings WHERE key='llm.date_auto_apply'
+ON CONFLICT(key) DO NOTHING;
+DELETE FROM settings WHERE key='llm.date_auto_apply';

@@ -1,17 +1,16 @@
 ---
 title: "Document dates"
-description: "How Suchi finds dates, decides what reaches Calendar, and asks for review only when needed."
+description: "Source-backed dates, default automatic application, review-first mode, and Calendar."
 ---
 
 Suchi can find important dates in document text and place them on Calendar. Each
 date keeps its source document and the exact text that produced it, so you can
 verify the result instead of trusting an unexplained event.
 
-This workflow is designed to stay out of the way:
-
-- confident dates can go directly to Calendar;
-- uncertain dates wait in Approvals; and
-- you can require review for every date.
+High-confidence new dates reach Calendar automatically by default. Turn off
+**Automatically apply high-confidence suggestions** to review inferred changes
+in Approvals first. Existing accepted and rejected dates retain
+their recorded history.
 
 Calendar, review queues, counts, date queries and local ICS export use the captured
 filing system and visible source documents. Membership and document ACLs remain
@@ -24,10 +23,10 @@ the former Calendar/review context. Date/model policy settings remain instance-w
 flowchart LR
     D[New or rescanned document] --> M[Model extracts dates]
     M --> V[Validate date and source text]
-    V --> C{Automatic dates enabled and confidence high enough?}
-    C -->|Yes| K[Calendar]
-    C -->|No| A[Approvals]
-    A -->|Add to Calendar| K
+    V -->|Automatic mode and date meets threshold| K[Calendar]
+    V -->|Review required| A[Approvals]
+    V -->|Missing or contradictory evidence| U[Unusable result]
+    A -->|Add to Calendar| K[Calendar]
     A -->|Reject| R[Removed from review]
 ```
 
@@ -49,10 +48,10 @@ allowed roles and their intended meanings, not hard-coded classification rules:
 | `service` | When a service was provided |
 | `other` | Another relevant date that does not fit those roles |
 
-Suchi checks date format, allowed roles, and supporting text. Those checks do
-not independently verify the model's interpretation of a role. Read the source
-quote; turn automatic dates off if each new date should need a human decision
-in Approvals before reaching Calendar.
+Suchi checks date format, allowed roles, an exact source quote and a matching
+date spelling in the original extracted text. These checks do not independently
+verify the model's interpretation of a role. Read the quote and open the source
+before relying on a date; even a score of 100% is not a guarantee.
 
 ## Date precision and confidence
 
@@ -74,53 +73,55 @@ not a measured probability of correctness. A model can be highly confident that
 the document names only a year. Percentages are rounded; even **100%** is not a
 guarantee. Check the source text before relying on a date.
 
-## Choose automatic or reviewed dates
+## Configure application mode
 
 Open **Settings → Archive configuration → Classification**.
 
-Keep **Use similar documents for automatic filing and suggestions** on if you
-want local archive matching. It does not require a model.
+**Automatically apply high-confidence suggestions** is checked by default:
 
-Configure the optional model and choose **Test connection**. The **Choose what
-Suchi can handle automatically** section keeps the controls in two boxes:
+- **On:** Add dates to Calendar and apply suggested metadata when they meet your thresholds.
+- **Off:** Review inferred changes in Approvals before they apply.
 
-- **Works without a model** contains archive matching and its own save action.
-- **Uses the configured model** contains **Apply model suggestions at** and
-  **Add high-confidence dates to Calendar automatically**.
+Use **Save application mode** to save this choice independently of matching,
+model activation, credentials and research settings. It covers new inferred
+dates, model metadata and local archive matching, not explicit user-authored rules.
 
-The model suggestion score is the automatic-date threshold. When automatic
-dates are on, dates at or above it go directly to Calendar; everything else
-goes through Approvals. Turn automatic dates off to send every extracted date
-through Approvals.
+The model/date threshold defaults to `0.70`. Each date uses its own score,
+independently of the document's overall classification score. Local matching
+needs no model: its automatic threshold defaults to `0.90`, with a `0.50`
+minimum review-suggestion score. Below-threshold usable dates still need review.
 
-Enabling automatic dates or lowering the score also moves matching pending
-dates to Calendar without another model call. Turning it off or raising the
-score never removes dates already in Calendar.
+Configure the optional model and choose **Test connection**. The test uses
+synthetic text; it checks connectivity and response format, not accuracy, and
+does not enable the model. **Enable model and save options** activates the tested
+configuration. Application mode does not authorize external text sharing.
 
-<Info>
-  Automatic dates are enabled by default. Confidence reduces review work; it is
-  not proof that a date is correct. Every Calendar entry still links to its
-  document and supporting text.
-</Info>
+Saving settings, lowering a threshold or restarting Suchi never promotes existing
+pending dates. The current mode applies to new ingests and explicit rescans.
 
 ## Automatic and reviewed dates
 
 Calendar distinguishes how each date got there:
 
-- An **automatic** date was extracted while automatic dates were enabled and
-  met the configured threshold. It keeps its confidence, extractor, extraction
-  version, source revision, and evidence, but has no reviewer.
+- An **automatic** date was accepted under the current threshold policy, without
+  a human reviewer or review time. Source and exact evidence checks still apply.
+- A **previously accepted** date has no recorded review. This includes dates
+  accepted automatically by older versions. Its value, evidence and original
+  attribution are preserved; Suchi does not invent a reviewer.
 - A **reviewed** date records the person's decision and review time. Rejected
   dates do not appear on Calendar.
 
-Calendar's agenda shows the date role and **Automatic** or **Reviewed** status.
-Expand that status to see **LLM Classifier confidence: N%**. The date itself
-conveys its precision, without a separate `day`, `month`, or `year` label.
+Calendar's agenda shows the date role and **Automatic**, **Previously accepted**
+or **Reviewed** status. Expand it to see the model-reported confidence. Automatic
+means an accepted, unreviewed date with policy version `threshold-auto-v1`, not
+simply any date without a reviewer. The date itself conveys its precision,
+without a separate `day`, `month`, or `year` label.
 
-Rescanning refreshes unreviewed machine output from the current document and
-extractor version. It does not overwrite a person's accepted or rejected
-decision. This prevents stale automatic results from accumulating while keeping
-human decisions durable.
+Rescanning replaces pending machine output, not accepted or rejected facts.
+New candidate IDs are never reused. Old pending candidates without a provable
+source generation cannot be accepted; request fresh extraction instead.
+An older immutable document version retains its own review history: a new
+version does not retarget an earlier fact or copy its authority.
 
 ## Review dates in Approvals
 
@@ -128,15 +129,17 @@ Approvals shows only dates that still need a decision. Dates are grouped by
 source document. When there are more than two document groups, desktop uses a
 two-column grid; mobile remains a single column.
 
-Some pending dates are preselected to reduce repetitive clicking. Before acting:
+Before acting:
 
-1. Read the parsed date, role, confidence, and document text.
-2. Uncheck anything incorrect.
-3. Choose **Add N to Calendar** for the selected dates, or **Reject N** to remove
-   the selected dates from review.
+1. Read the proposed date, role, reason and exact source quote. Producer and
+   score details expand on demand.
+2. Select the dates you have checked.
+3. Choose **Add N to Calendar**, or **Reject N** to dismiss selected suggestions.
 
-The selected-date action bar remains visible while you scroll. Unselected dates
-stay in Approvals for a later decision.
+The action bar remains visible while you scroll. Unselected dates stay pending.
+Stale or unsupported candidates cannot be accepted; supported stale suggestions
+can still be rejected. Sensitive evidence requires Reveal. Refresh after source
+or access changes; a queued extraction is not an accepted date.
 
 See [Approvals](/approvals) for permissions and API behavior.
 
@@ -147,7 +150,7 @@ They are not live model results and do not show classifier confidence. Its
 default Calendar lists all example dates across months and years. Model calls,
 date extraction, and date review remain unavailable to demo visitors.
 
-Calendar shows dates added automatically and dates approved in Approvals. It
+Calendar shows reviewed dates alongside previously accepted dates. It
 supports:
 
 - a month grid, a full-width day agenda, or an all-dates agenda for
@@ -230,8 +233,8 @@ Pending and rejected dates never match these filters.
 
 ## Apply the current settings to older documents
 
-The confidence and automatic-date settings apply to new documents immediately.
-They also govern new machine output from documents you explicitly rescan.
+Model settings affect new documents and explicitly requested extraction.
+They never change the decision on a pending, accepted or rejected date.
 
 To process older documents:
 
@@ -239,11 +242,13 @@ To process older documents:
 2. Select the documents.
 3. Choose **Rescan** or **Extract dates**.
 
-Enabling automatic dates or lowering the confidence score promotes matching
-pending dates immediately. A rescan is only necessary when the document still
-needs extraction run again. During that rescan Suchi replaces stale automatic
-and pending output, while preserving dates a person already accepted or
-rejected.
+New usable results follow the current mode and their own score. Rescanning
+preserves accepted and rejected facts, including legacy automatic acceptance.
+Automatic acceptance and review check current source generation and exact
+evidence inside the database transaction; in-flight human decisions are not
+overwritten. Review also checks current document access. Retrying the same
+recorded decision does not apply it twice; an opposite decision on an already
+resolved candidate is a conflict.
 
 See [Pipeline versions and rescans](/pipeline-versions) for the difference
 between unprocessed, stale, and completed documents.
@@ -256,8 +261,7 @@ Check these in order:
 2. **Calendar filters:** check the date role and document scope. On the full
    calendar, also check the month and Document view.
 3. **Document text:** open the document and confirm extraction captured the date.
-4. **Model settings:** confirm the model is active and automatic dates are set as
-   intended.
+4. **Model settings:** confirm the model is active and check application mode and threshold.
 5. **Processing:** select the document and run **Rescan** or **Extract dates**.
 6. **Access:** confirm you can read the source document and have **Manage document
    dates** permission.

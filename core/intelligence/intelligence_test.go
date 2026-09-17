@@ -33,3 +33,51 @@ func TestIntelligenceRejectsUnknownAndInvalidValues(t *testing.T) {
 		t.Fatal("invalid role was accepted")
 	}
 }
+
+func TestEvidenceRejectsMissingAlteredAndContradictoryQuotes(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, raw, evidence, date string
+		valid                              bool
+	}{
+		{"original UTF8", "İ — Due 06 Aug 2026", "06 Aug 2026", "Due 06 Aug 2026", "2026-08-06", true},
+		{"invented evidence", "06 Aug 2026", "06 Aug 2026", "Due 06 Aug 2026", "2026-08-06", false},
+		{"case altered", "Due 06 AUG 2026", "06 Aug 2026", "Due 06 Aug 2026", "2026-08-06", false},
+		{"contradictory value", "Due 06 Aug 2026", "06 Aug 2026", "Due 06 Aug 2026", "2026-08-07", false},
+		{"missing year", "Due Aug 6", "Aug 6", "Due Aug 6", "2026-08-06", false},
+		{"multiline exact", "Due\n06 Aug 2026", "06 Aug 2026", "Due\n06 Aug 2026", "2026-08-06", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate, err := NewDateCandidate("due", tc.date, "day", tc.raw, tc.evidence, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start, valid := EvidenceStart(tc.content, candidate)
+			if valid != tc.valid {
+				t.Fatalf("evidence valid=%v want=%v", valid, tc.valid)
+			}
+			if valid && tc.content[start:][:len(tc.raw)] != tc.raw {
+				t.Fatal("evidence offset is not in original source")
+			}
+		})
+	}
+}
+
+func TestEvidenceDoesNotInventDatePrecision(t *testing.T) {
+	for _, tc := range []struct {
+		raw, date, precision string
+		valid                bool
+	}{
+		{"2026", "2026-01-01", "year", true},
+		{"2026", "2026-01-01", "day", false},
+		{"August 2026", "2026-08-01", "month", true},
+		{"August 2026", "2026-08-01", "day", false},
+	} {
+		candidate, err := NewDateCandidate("due", tc.date, tc.precision, tc.raw, tc.raw, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, valid := EvidenceStart(tc.raw, candidate); valid != tc.valid {
+			t.Fatalf("%q precision=%s valid=%v", tc.raw, tc.precision, valid)
+		}
+	}
+}

@@ -83,15 +83,22 @@ For a newly extracted document Suchi runs:
 2. user automations in configured order
 3. the optional LLM classifier
 
-Archive matching learns from authorized lexical neighbours and then applies
-review/auto-apply thresholds. Tokenization, BM25, ACLs, and its shared
-similar-document implementation are documented in
-[Search architecture: Similar documents](/search#similar-documents).
+Archive matching uses authorized lexical neighbours. With the shared automatic
+application mode on (the default), eligible matches at or above `0.90` apply;
+the default minimum score for review suggestions is `0.50`. Both thresholds are
+configurable. Turn automatic mode off to review inferred changes before
+application. Tokenization, BM25, ACLs and shared retrieval are
+documented in [Search architecture: Similar documents](/search#similar-documents).
 
-The optional model has one confidence threshold. Confident validated results
-apply directly, while uncertain results keep current metadata, add
-`needs-review`, and can offer a title suggestion. See
-[LLM classifier](/llm-classifier).
+The optional model shares that mode, with a default metadata/date threshold of
+`0.70`; each date uses its own score. Below-threshold changes remain suggestions.
+Current source, access and field-generation checks still protect human changes
+and explicit rule writes, including clears and same-value reassertions.
+Classifier-owned `needs-review` markers are excluded from rule matching and
+templates so a machine-created marker cannot activate a destructive rule.
+Explicitly adopted or rule-assigned tags remain ordinary rule input. This does
+not introduce model-authored external actions or change explicitly configured
+internal automation behavior. See [LLM classifier](/llm-classifier).
 
 ## Preset ownership
 

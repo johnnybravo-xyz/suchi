@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/audit"
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -28,6 +30,9 @@ func (e *Engine) Register(ctx context.Context, systemID int64, spec Spec, slug s
 }
 
 func (e *Engine) RegisterInTx(ctx context.Context, tx *sql.Tx, systemID int64, spec Spec, slug string, actor *pluginapi.Principal) (int64, error) {
+	if slug == DocumentChangeSlug || specUsesDocumentChange(spec) {
+		return 0, ErrForbidden
+	}
 	current, err := currentActor(ctx, tx, actor, systemID)
 	if err != nil {
 		return 0, err
@@ -94,6 +99,9 @@ func startInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string, doc
 	if err != nil {
 		return 0, fmt.Errorf("approvals.start: decode spec: %w", err)
 	}
+	if slug == DocumentChangeSlug || specUsesDocumentChange(spec) {
+		return 0, ErrForbidden
+	}
 	startState, ok := spec.States[spec.Start]
 	if !ok {
 		return 0, fmt.Errorf("approvals.start: start state %q missing", spec.Start)
@@ -135,6 +143,15 @@ func startInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string, doc
 func specUsesDocumentOwner(spec Spec) bool {
 	for _, state := range spec.States {
 		if state.Assignee == "document_owner" {
+			return true
+		}
+	}
+	return false
+}
+
+func specUsesDocumentChange(spec Spec) bool {
+	for _, state := range spec.States {
+		if state.Kind == documentChangeKind {
 			return true
 		}
 	}
@@ -395,7 +412,46 @@ func (e *Engine) ResolveInTx(ctx context.Context, tx *sql.Tx, taskID int64, choi
 	if err := ensureTaskRunActionable(ctx, tx, taskID); err != nil {
 		return err
 	}
+	d, err := defByID(ctx, tx, run.DefID)
+	if err != nil {
+		return err
+	}
+	spec, err := DecodeSpec(d.SpecJSON)
+	if err != nil {
+		return err
+	}
+	if d.Slug == DocumentChangeSlug || specUsesDocumentChange(spec) {
+		// Rejection may close an obsolete proposal; only a bound, canonical
+		// review can authorize an effect.
+		if choice == "apply" {
+			canonical, err := EncodeSpec(DocumentChangeSpec())
+			if err != nil {
+				return err
+			}
+			if d.Slug != DocumentChangeSlug || !specsEqual(d.SpecJSON, canonical) || t.StateKey != "review" || run.DocID == nil {
+				return ErrStaleProposal
+			}
+			change, err := documentChangeFromVars(run.Vars)
+			if err != nil {
+				return err
+			}
+			if _, err := checkDocumentChange(ctx, tx, *run.DocID, change, actor); err != nil {
+				return err
+			}
+		}
+	}
 	if err := markTaskResolved(ctx, tx, taskID, choice, actorTag); err != nil {
+		return err
+	}
+	proof := resolutionPrincipal{
+		Principal: pluginapi.Principal{Kind: actor.Kind, UserID: actor.UserID, TokenID: actor.TokenID, TokenSystemID: actor.TokenSystemID, AuthNBy: actor.AuthNBy},
+		SessionID: actor.SessionID, AuthExpiresAt: actor.AuthExpiresAt,
+	}
+	principalJSON, err := json.Marshal(proof)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE approval_tasks SET resolution_principal_json=? WHERE id=?`, string(principalJSON), taskID); err != nil {
 		return err
 	}
 	// Enqueue advance with trigger=<choice> — the handler picks it up.
@@ -439,6 +495,14 @@ func (e *Engine) CancelInTx(ctx context.Context, tx *sql.Tx, runID int64, reason
 	return finalizeRun(ctx, tx, runID, "cancelled")
 }
 
+// Authentication proof stays in private task provenance, never run vars or API
+// projections. SessionID is the stored one-way digest, not a bearer credential.
+type resolutionPrincipal struct {
+	Principal     pluginapi.Principal `json:"principal"`
+	SessionID     string              `json:"session_id,omitempty"`
+	AuthExpiresAt int64               `json:"auth_expires_at,omitempty"`
+}
+
 func currentActor(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, systemID int64) (*pluginapi.Principal, error) {
 	if actor == nil || (actor.UserID == 0 && actor.Kind == "system") {
 		return actor, nil
@@ -447,17 +511,37 @@ func currentActor(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, s
 	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ? AND disabled = 0`, actor.UserID).Scan(&current.Role); err != nil {
 		return nil, ErrForbidden
 	}
+	if actor.SessionID != "" {
+		var one int
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`, actor.SessionID, actor.UserID, time.Now().Unix()).Scan(&one); err != nil {
+			return nil, ErrForbidden
+		}
+	} else if actor.AuthNBy == "local-auth" && actor.Kind == "user" {
+		return nil, ErrForbidden
+	}
+	if actor.AuthExpiresAt != 0 && actor.AuthExpiresAt <= time.Now().Unix() {
+		return nil, ErrForbidden
+	}
+	if actor.AuthNBy == "oidc" && actor.SessionID == "" && actor.AuthExpiresAt == 0 {
+		return nil, ErrForbidden
+	}
 	bound := actor.TokenSystemID
 	if actor.Kind == "token" || actor.TokenID != 0 {
+		current.Kind = "token"
 		if bound == 0 {
 			bound = systems.DefaultID
 		}
 		if actor.TokenID != 0 {
 			var stored int64
-			if err := tx.QueryRowContext(ctx, `SELECT system_id FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, actor.TokenID, actor.UserID).Scan(&stored); err != nil || stored != bound {
+			var scopes string
+			if err := tx.QueryRowContext(ctx, `SELECT system_id, scopes FROM api_tokens WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, actor.TokenID, actor.UserID).Scan(&stored, &scopes); err != nil || stored != bound {
 				return nil, ErrForbidden
 			}
+			current.Scopes = strings.Split(scopes, ",")
 		}
+	}
+	if !auth.HasScope(&current, auth.ScopeDocumentsWrite) {
+		return nil, ErrForbidden
 	}
 	if bound != 0 && bound != systemID {
 		return nil, ErrForbidden

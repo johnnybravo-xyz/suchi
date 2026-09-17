@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"time"
-
-	"github.com/johnnybravo-xyz/suchi/core/audit"
 )
 
 // SweepInterval is how often the sweeper re-enqueues itself. 30s is a
@@ -14,9 +12,8 @@ import (
 const SweepInterval = 30 * time.Second
 
 // TimeoutSweep is called by the approval:timeout-sweep subscriber. It:
-//  1. Finds running runs whose deadline passed and document suggestions
-//     whose proposed value is already present or whose filing was superseded.
-//  2. Enqueues timeout, apply, or reject advances through the normal state machine.
+//  1. Finds running runs whose deadline passed.
+//  2. Enqueues timeout advances through the normal state machine.
 //  3. Re-enqueues itself with run_after = now + SweepInterval.
 //
 // Deadline_at is cleared as part of the transition so a run can't be
@@ -24,7 +21,6 @@ const SweepInterval = 30 * time.Second
 func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	now := time.Now().Unix()
 	var due []int64
-	settledCount := 0
 	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM approval_runs
@@ -46,11 +42,6 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		settled, err := settledDocumentChanges(ctx, tx)
-		if err != nil {
-			return err
-		}
-		settledCount = len(settled)
 		for _, id := range due {
 			if err := expireOpenTasksForRun(ctx, tx, id); err != nil {
 				return err
@@ -59,100 +50,15 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 				return err
 			}
 		}
-		for _, item := range settled {
-			reason := "satisfied"
-			if item.choice == "reject" {
-				reason = "superseded"
-			}
-			res, err := tx.ExecContext(ctx, `
-				UPDATE approval_tasks
-				SET status = 'resolved', resolved_choice = ?,
-				    resolved_by = ?, resolved_at = ?
-				WHERE id = ? AND status IN ('open', 'claimed')
-			`, item.choice, "system:"+reason, now, item.taskID)
-			if err != nil {
-				return err
-			}
-			changed, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if changed == 0 {
-				continue
-			}
-			if err := enqueueAdvanceWithTrigger(ctx, tx, item.runID, item.choice); err != nil {
-				return err
-			}
-			audit.LogInTx(ctx, tx, e.log, audit.Event{
-				Action: "document.suggestion_" + reason, ObjectKind: "document", ObjectID: item.docID,
-				SystemID: item.systemID,
-				After: map[string]any{
-					"run_id": item.runID, "field": item.field, "label": item.label,
-				},
-			})
-		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if e.log != nil && (len(due) > 0 || settledCount > 0) {
-		e.log.Info("approvals.sweep.fired", "timeouts", len(due), "settled", settledCount)
+	if e.log != nil && len(due) > 0 {
+		e.log.Info("approvals.sweep.fired", "timeouts", len(due))
 	}
 	return e.rescheduleSweep(ctx)
-}
-
-type settledDocumentChange struct {
-	taskID, runID, docID, systemID int64
-	field, label, choice           string
-}
-
-func settledDocumentChanges(ctx context.Context, tx *sql.Tx) ([]settledDocumentChange, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT t.id, r.id, r.doc_id, r.system_id,
-		       COALESCE(json_extract(r.vars_json, '$.field'), ''),
-		       COALESCE(json_extract(r.vars_json, '$.label'), ''),
-		       CASE WHEN json_extract(r.vars_json, '$.field') = 'jd_category'
-		         AND doc.jd_category_id != CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
-		         THEN 'reject' ELSE 'apply' END
-		FROM approval_tasks t
-		JOIN approval_runs r ON r.id = t.run_id
-		JOIN approval_defs def ON def.id = r.def_id
-		JOIN documents doc ON doc.id = r.doc_id
-		WHERE def.slug = ? AND r.state = 'running'
-		  AND t.status IN ('open', 'claimed')
-		  AND (
-		    (json_extract(r.vars_json, '$.field') = 'jd_category'
-		      AND (doc.jd_category_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
-		        OR (doc.jd_category_id IS NOT NULL AND doc.jd_category_id != COALESCE((
-		          SELECT inbox_category_id FROM jd_systems WHERE id = doc.system_id
-		        ), 0))))
-		    OR (json_extract(r.vars_json, '$.field') = 'correspondent'
-		      AND doc.correspondent_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
-		    OR (json_extract(r.vars_json, '$.field') = 'document_type'
-		      AND doc.document_type_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER))
-		    OR (json_extract(r.vars_json, '$.field') = 'title'
-		      AND doc.title = COALESCE(json_extract(r.vars_json, '$.value'), ''))
-		    OR (json_extract(r.vars_json, '$.field') = 'tag' AND EXISTS (
-		      SELECT 1 FROM document_tags dt
-		      WHERE dt.document_id = doc.id
-		        AND dt.tag_id = CAST(json_extract(r.vars_json, '$.value_id') AS INTEGER)
-		    ))
-		  )
-	`, DocumentChangeSlug)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []settledDocumentChange
-	for rows.Next() {
-		var item settledDocumentChange
-		if err := rows.Scan(&item.taskID, &item.runID, &item.docID, &item.systemID, &item.field, &item.label, &item.choice); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
 }
 
 // rescheduleSweep enqueues the next sweep tick. Kept idempotent: if

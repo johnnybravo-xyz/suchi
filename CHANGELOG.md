@@ -22,10 +22,24 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Apply new high-confidence inferred dates, model metadata and local archive
+  matches by default, with a review-first mode that sends inferred changes to
+  Approvals.
+  Default thresholds are 0.70 for model metadata and each date, 0.90 for local
+  application and 0.50 for local review suggestions. Source, evidence, access
+  and human-edit protections still apply; scores are not calibrated certainty.
+  Settings saves and startup never bulk-accept pending suggestions, and resolved
+  date history is preserved without inventing a reviewer.
+- Bind suggestions to source and field generations, including same-value human
+  edits and explicit clears. Recheck current session, permissions and supporting
+  sources at review and queued application; expired authorization needs a new
+  review, not reuse of an old approval.
 - Ship all unreleased schema changes in migration 0003. Published beta.2
   migrations 0001/0002 remain unchanged; fresh installs and beta.2/schema 2
   upgrades are supported, intermediate development schemas are not. Surviving
   IDs/history/credentials are preserved; automatic ID nonreuse begins at upgrade.
+- Migration 0003 carries the date opt-out into the shared application mode
+  and retains a saved local automatic threshold.
 - Define strict offline `suchi-taxonomy/v1` HuML/TOML, with generated reserved
   System/49 structure. YAML and unsupported fields fail validation. Later
   preset/import applications merge additively; refile remains explicit.

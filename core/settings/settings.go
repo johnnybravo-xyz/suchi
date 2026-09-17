@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -24,17 +25,17 @@ const (
 	KeySetupCompletedAt = "setup.completed_at"
 	KeySetupIntent      = "setup.intent"
 
-	KeyLLMEndpointURL   = "llm.endpoint_url"
-	KeyLLMModel         = "llm.model"
-	KeyLLMAPIKeySealed  = "llm.api_key_sealed"
-	KeyLLMEgressAck     = "llm.egress_ack"
-	KeyLLMDisabled      = "llm.disabled"
-	KeyLLMConfidence    = "llm.confidence_threshold"
-	KeyLLMDateAutoApply = "llm.date_auto_apply"
-	KeyResearchContext  = "llm.research_context_mode"
-	KeyArchiveEnabled   = "classification.archive_enabled"
-	KeyArchiveAuto      = "classification.archive_auto_threshold"
-	KeyArchiveReview    = "classification.archive_review_threshold"
+	KeyLLMEndpointURL          = "llm.endpoint_url"
+	KeyLLMModel                = "llm.model"
+	KeyLLMAPIKeySealed         = "llm.api_key_sealed"
+	KeyLLMEgressAck            = "llm.egress_ack"
+	KeyLLMDisabled             = "llm.disabled"
+	KeyLLMConfidence           = "llm.confidence_threshold"
+	KeyResearchContext         = "llm.research_context_mode"
+	KeyArchiveEnabled          = "classification.archive_enabled"
+	KeyArchiveReview           = "classification.archive_review_threshold"
+	KeyClassificationAutoApply = "classification.auto_apply"
+	KeyArchiveAuto             = "classification.archive_auto_threshold"
 
 	KeyBackupIntervalHours = "backup.interval_hours"
 	KeyOCRLanguages        = "ocr.languages" // JSON array of ISO codes
@@ -208,6 +209,29 @@ func MarkSetupComplete(ctx context.Context, database *db.DB) error {
 	return Set(ctx, database, KeySetupCompletedAt, time.Now().Unix())
 }
 
+// ResolveAutoApply reads the host's inference policy from the same database
+// snapshot as its eventual writes. Missing is the default; invalid is not.
+func ResolveAutoApply(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (bool, error) {
+	var payload string
+	err := q.QueryRowContext(ctx, `SELECT value_json FROM settings WHERE key=?`, KeyClassificationAutoApply).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read automatic classification policy: %w", err)
+	}
+	switch strings.TrimSpace(payload) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, errors.New("automatic classification policy must be a boolean")
+	}
+}
+
 // ---------- resolvers — database defaults, explicit boot config wins ----------
 
 // LLMConfig is the shape callers merge into their plugin config. Uses
@@ -218,7 +242,6 @@ type LLMConfig struct {
 	APIKey              string
 	EgressAck           bool
 	ConfidenceThreshold float64
-	DateAutoApply       bool
 	// Disabled is persisted separately from EndpointURL so a web-managed
 	// classifier can be turned off without erasing its setup.
 	Disabled bool
@@ -226,7 +249,7 @@ type LLMConfig struct {
 
 // ArchiveClassifierConfig controls the local similar-document classifier.
 // It is intentionally small: retrieval and supported fields are product
-// behavior, while operators only choose whether and how confidently to apply.
+// behavior, while operators choose the candidate floor and automatic threshold.
 type ArchiveClassifierConfig struct {
 	Enabled         bool
 	AutoThreshold   float64
@@ -239,13 +262,17 @@ func ResolveArchiveClassifierConfig(ctx context.Context, database *db.DB) Archiv
 	if err := Get(ctx, database, KeyArchiveEnabled, &enabled); err == nil {
 		out.Enabled = enabled
 	}
-	var threshold float64
-	if err := Get(ctx, database, KeyArchiveAuto, &threshold); err == nil && threshold > 0 {
-		out.AutoThreshold = threshold
+	var automatic float64
+	if err := Get(ctx, database, KeyArchiveAuto, &automatic); err == nil && automatic > 0 {
+		out.AutoThreshold = automatic
 	}
-	threshold = 0
+	var threshold float64
 	if err := Get(ctx, database, KeyArchiveReview, &threshold); err == nil && threshold > 0 {
 		out.ReviewThreshold = threshold
+	}
+	if automatic <= 0 && out.ReviewThreshold >= out.AutoThreshold {
+		// Review-only installations could previously save a 0.90 floor.
+		out.AutoThreshold = 0.95
 	}
 	return out
 }
@@ -273,12 +300,11 @@ type sealedSecret struct {
 // encrypted empty value. Explicit file and environment keys still win.
 func SaveLLMConfig(ctx context.Context, database *db.DB, cfg LLMConfig, box SecretBox, apiKey *string) error {
 	values := map[string]any{
-		KeyLLMEndpointURL:   cfg.EndpointURL,
-		KeyLLMModel:         cfg.Model,
-		KeyLLMEgressAck:     cfg.EgressAck,
-		KeyLLMDisabled:      cfg.Disabled,
-		KeyLLMConfidence:    cfg.ConfidenceThreshold,
-		KeyLLMDateAutoApply: cfg.DateAutoApply,
+		KeyLLMEndpointURL: cfg.EndpointURL,
+		KeyLLMModel:       cfg.Model,
+		KeyLLMEgressAck:   cfg.EgressAck,
+		KeyLLMDisabled:    cfg.Disabled,
+		KeyLLMConfidence:  cfg.ConfidenceThreshold,
 	}
 	if apiKey != nil {
 		secret, err := sealLLMAPIKey(box, *apiKey)
@@ -310,7 +336,6 @@ func sealLLMAPIKey(box SecretBox, apiKey string) (sealedSecret, error) {
 // remain authoritative.
 func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box SecretBox) (LLMConfig, error) {
 	out := fb
-	out.DateAutoApply = true
 	var s string
 	if !envSet("LLM_ENDPOINT_URL") {
 		if err := Get(ctx, database, KeyLLMEndpointURL, &s); err == nil && s != "" {
@@ -360,10 +385,6 @@ func ResolveLLMConfig(ctx context.Context, database *db.DB, fb LLMConfig, box Se
 		if err := Get(ctx, database, KeyLLMConfidence, &confidence); err == nil && confidence > 0 {
 			out.ConfidenceThreshold = confidence
 		}
-	}
-	var dateAutoApply bool
-	if err := Get(ctx, database, KeyLLMDateAutoApply, &dateAutoApply); err == nil {
-		out.DateAutoApply = dateAutoApply
 	}
 	if out.ConfidenceThreshold == 0 {
 		out.ConfidenceThreshold = 0.7

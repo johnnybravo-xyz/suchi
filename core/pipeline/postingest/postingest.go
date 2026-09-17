@@ -15,12 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	ingestmeta "github.com/johnnybravo-xyz/suchi/core/ingest"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
@@ -1493,15 +1495,12 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	if err := h.db.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
 		return err
 	}
-	// Language detection — runs before the LLM classifier so the
-	// stamped code can hint the prompt. No-op when the chain is
-	// empty (default v1 build) or when the doc's languages are
-	// user-locked. See core/lang for the interface + defaults.
+	// Language detectors propose reviewed metadata; an empty chain or a
+	// human language lock produces no proposal.
 	h.detectLanguages(ctx, log, docID)
 
-	// Archive matching always runs locally before user automations and the
-	// optional model. It only fills unresolved metadata, so explicit
-	// automations remain authoritative when both find a match.
+	// Local archive matching proposes metadata without applying it. Explicit
+	// deterministic automations below remain a separate user-authored path.
 	if err := automations.ApplyFromArchive(ctx, h.db, log, docID); err != nil {
 		log.Warn("post-ingest.archive_classification.error", "err", err.Error())
 	}
@@ -1792,53 +1791,53 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// detectLanguages runs the registered detector chain against the
-// doc's extracted content and, if a candidate clears the
-// confidence threshold, writes it to documents.languages. A nil
-// or empty chain makes this a no-op — the LLM classifier plugin
-// can still write documents.languages independently.
-//
-// Best-effort: every failure path logs and returns. Language
-// stamping is a nicety, never fatal to post-ingest.
+// detectLanguages performs optional detector work outside the writer and records
+// a source-bound suggestion. Errors never prevent preserving the original.
 func (h *Handler) detectLanguages(ctx context.Context, log *slog.Logger, docID int64) {
 	if h.langChain == nil || h.langChain.Len() == 0 {
 		return
 	}
-	var (
-		content sql.NullString
-		locked  int
-	)
-	if err := h.db.Read.QueryRowContext(ctx,
-		`SELECT content, languages_locked FROM documents WHERE id = ?`,
-		docID).Scan(&content, &locked); err != nil {
+	readTx, err := h.db.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		log.Warn("post-ingest.lang.load", "err", err.Error())
 		return
 	}
-	if locked != 0 {
-		// User set the languages via PATCH — never overwrite.
+	var content sql.NullString
+	var locked int
+	err = readTx.QueryRowContext(ctx,
+		`SELECT content, languages_locked FROM documents WHERE id = ? AND trashed_at IS NULL`,
+		docID).Scan(&content, &locked)
+	if err != nil {
+		_ = readTx.Rollback()
+		log.Warn("post-ingest.lang.load", "err", err.Error())
 		return
 	}
-	if !content.Valid || content.String == "" {
-		// No text to detect against (image-only, extraction failed).
+	baseline, err := documentstate.Load(ctx, readTx, docID)
+	_ = readTx.Rollback()
+	if err != nil {
+		log.Warn("post-ingest.lang.load", "err", err.Error())
 		return
 	}
-	r, ok := h.langChain.BestAbove(content.String, 0.5)
+	if locked != 0 || !content.Valid || content.String == "" {
+		return
+	}
+	const threshold = 0.5
+	result, ok := h.langChain.BestAbove(content.String, threshold)
 	if !ok {
 		return
 	}
-	code := lang.Format(r.Code)
+	code := lang.Format(result.Code)
 	if code == "" {
 		return
 	}
+	value := strings.Trim(code, ",")
+	floor := threshold
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET languages = ?, updated_at = ?
-			 WHERE id = ? AND languages_locked = 0`,
-			code, time.Now().Unix(), docID)
-		return err
+		return approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
+			Field: "language", Value: value, Label: value, Confidence: result.Confidence,
+			Threshold: &floor, Source: "language-detector", Baseline: &baseline,
+		})
 	}); err != nil {
-		log.Warn("post-ingest.lang.write", "err", err.Error())
-		return
+		log.Warn("post-ingest.lang.propose", "err", err.Error())
 	}
-	log.Info("post-ingest.lang.detected", "doc_id", docID, "languages", code)
 }

@@ -19,6 +19,14 @@ for document-bound work, document visibility. Applying a suggestion cannot attac
 foreign-system metadata or transfer a document. Instance administrator access
 remains subject to an explicit request or token system boundary.
 
+## Review-first mode
+
+Turn off **Automatically apply high-confidence suggestions** to require review
+of inferred dates, model metadata and local archive matches. Explicit
+user-authored rules remain independent. Suchi checks source freshness, evidence,
+field generations, access and the current session before recording or applying a
+decision.
+
 ## Model
 
 - A **definition** stores a versioned JSON state machine under a stable slug.
@@ -140,19 +148,31 @@ investigating a stalled run. Application logs use `component=approvals`.
 
 ## Document suggestions
 
-Archive matching and low-confidence LLM title classification use the shipped
-`document-change` definition. Each suggestion becomes an approval assigned to
-the document owner with its field, proposed value, confidence, source, and
-supporting document IDs stored in the run variables. Applying a suggestion
-changes the document through the approval transition; rejecting it only closes
-the run. Repeated classifiers do not open a duplicate active review for the
-same document, field, and value.
+Archive matching, model metadata and detected-language suggestions that need
+review use the shipped `document-change` definition, assigned to the document
+owner. By default, eligible high-confidence model and local archive changes
+apply automatically. Turn off **Automatically apply high-confidence suggestions**
+to use review-first mode: valid inferred changes need review even at confidence 1.0.
+Below-threshold or otherwise review-required changes still appear here. The
+card leads with current/proposed values and a reason; producer, score and
+authorized source details expand on demand.
 
-Classification decisions are independent per field. A confident category can
-file a document immediately while lower-confidence correspondent or tag
-suggestions remain in Approvals. The Approvals screen shows the current filing
-category alongside the exact proposed action so those reviews are not mistaken
-for a second filing decision.
+The retained proposal binds the target's immutable source and field generation,
+plus any supporting documents. Human writes and explicit clears invalidate older
+proposals even when the final value is unchanged. Source, membership, document
+ACL, destination and interactive session are checked at resolution and again at
+the queued write. Creating new shared metadata also requires its current
+administrative authority. Hidden supporting documents are never exposed by review.
+
+**Apply** records a decision and queues the effect; it does not promise the field
+already changed. A later revocation, source edit or expired session can block that
+effect. After authorization expiry, a newly requested identical inference can
+create a fresh review without reusing the old session. Duplicate live proposals
+and repeated resolution requests do not create duplicate applications.
+
+**Dismiss** closes the suggestion without applying it. Unknown actions are
+read-only. API tokens may resolve supported generic workflows, but cannot apply
+these built-in inference suggestions as if they were interactive human review.
 
 If a pending suggestion becomes true before it is reviewed, the existing
 approval sweep closes it as `system:satisfied` and records
@@ -185,8 +205,9 @@ scrolling. One bounded API call adds or rejects the selected IDs.
 
 This review does not create approval definitions, runs, transitions, or one
 task row per date. See [Document dates: Automatic and reviewed
-dates](/document-dates#automatic-and-reviewed-dates) for the threshold, review,
-and rescan rules.
+dates](/document-dates#automatic-and-reviewed-dates) for automatic policy,
+legacy facts, review and rescan rules. Automatic acceptance never invents a
+reviewer; startup and settings saves never bulk-accept pending dates.
 
 ## Rescan proposals
 

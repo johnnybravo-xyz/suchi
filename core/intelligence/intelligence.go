@@ -4,8 +4,6 @@
 package intelligence
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,8 +103,8 @@ func DecodeDate(valueJSON string) (DateValue, error) {
 func Validate(candidate Candidate) (Candidate, error) {
 	candidate.Type = strings.ToLower(strings.TrimSpace(candidate.Type))
 	candidate.Role = strings.ToLower(strings.TrimSpace(candidate.Role))
-	candidate.RawText = cleanText(candidate.RawText)
-	candidate.EvidenceText = cleanText(candidate.EvidenceText)
+	candidate.RawText = strings.TrimSpace(candidate.RawText)
+	candidate.EvidenceText = strings.TrimSpace(candidate.EvidenceText)
 	if !KnownType(candidate.Type) {
 		return Candidate{}, fmt.Errorf("unknown intelligence type %q", candidate.Type)
 	}
@@ -154,26 +152,47 @@ func validateDateValue(value DateValue) error {
 	return nil
 }
 
-func cleanText(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+// EvidenceStart validates exact evidence against the original UTF-8 source.
+// Offsets are byte offsets into that source, never into case-folded text.
+func EvidenceStart(content string, candidate Candidate) (int64, bool) {
+	validated, err := Validate(candidate)
+	if err != nil || validated.SortValue != candidate.SortValue || !utf8.ValidString(content) {
+		return 0, false
+	}
+	value, err := DecodeDate(candidate.ValueJSON)
+	if err != nil {
+		return 0, false
+	}
+	start := strings.Index(content, candidate.EvidenceText)
+	raw := strings.Index(candidate.EvidenceText, candidate.RawText)
+	if start < 0 || raw < 0 || !dateTextMatches(candidate.RawText, value) {
+		return 0, false
+	}
+	return int64(start + raw), true
 }
 
-// AutoApplyPendingDates makes existing high-confidence dates available to
-// Calendar when the operator enables automatic date application.
-func AutoApplyPendingDates(ctx context.Context, database *sql.DB, threshold float64, now int64) (int64, error) {
-	if database == nil {
-		return 0, errors.New("date auto-apply database is required")
+// A quote's presence alone does not ground a contradictory normalized date.
+// Unsupported date spellings fail closed rather than authorizing a guessed fact.
+func dateTextMatches(raw string, value DateValue) bool {
+	raw = strings.TrimSpace(raw)
+	layouts := []string{
+		"2006-01-02", "2006/01/02", "2006.01.02", "2006-1-2", "2006/1/2",
+		"02/01/2006", "01/02/2006", "2/1/2006", "1/2/2006",
+		"02-01-2006", "01-02-2006", "2-1-2006", "1-2-2006",
+		"02.01.2006", "2.1.2006", "2 January 2006", "02 January 2006",
+		"January 2, 2006", "January 02, 2006", "January 2 2006",
+		"2 Jan 2006", "02 Jan 2006", "Jan 2, 2006", "Jan 2 2006",
 	}
-	if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 1 {
-		return 0, errors.New("date auto-apply threshold must be between 0 and 1")
+	switch value.Precision {
+	case "month":
+		layouts = []string{"2006-01", "2006/01", "01/2006", "January 2006", "Jan 2006"}
+	case "year":
+		layouts = []string{"2006"}
 	}
-	result, err := database.ExecContext(ctx, `
-		UPDATE document_intelligence
-		SET status = 'accepted', updated_at = ?
-		WHERE intelligence_type = ? AND status = 'pending' AND confidence >= ?
-	`, now, TypeDate, threshold)
-	if err != nil {
-		return 0, err
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, raw); err == nil && parsed.Format("2006-01-02") == value.Date {
+			return true
+		}
 	}
-	return result.RowsAffected()
+	return false
 }

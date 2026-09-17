@@ -31,7 +31,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/ingest/fswatch"
-	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
@@ -393,18 +392,6 @@ func runServe() int {
 		log.Error("main.llm.settings", "err", err.Error())
 		return 1
 	}
-	if resolvedLLM.DateAutoApply && !resolvedLLM.Disabled && resolvedLLM.EndpointURL != "" {
-		applied, err := intelligence.AutoApplyPendingDates(
-			ctx, d.Write, resolvedLLM.ConfidenceThreshold, time.Now().Unix())
-		if err != nil {
-			log.Error("main.llm.date_auto_apply", "err", err.Error())
-			return 1
-		}
-		if applied > 0 {
-			log.Info("main.llm.date_auto_apply", "date_count", applied,
-				"threshold", resolvedLLM.ConfidenceThreshold)
-		}
-	}
 	// Register a disabled shell even when no endpoint is configured. Its stable
 	// handler lets the setup API activate the classifier without a restart.
 	llm := llmclassifier.NewDisabled(log)
@@ -415,7 +402,6 @@ func runServe() int {
 			APIKey:              resolvedLLM.APIKey,
 			EgressAck:           resolvedLLM.EgressAck,
 			ConfidenceThreshold: resolvedLLM.ConfidenceThreshold,
-			DateAutoApply:       resolvedLLM.DateAutoApply,
 		}, log)
 		if err != nil {
 			log.Error("main.llm.new", "err", err.Error())
@@ -651,8 +637,7 @@ func runServe() int {
 			runtimeCfg.Model == fresh.Model &&
 			runtimeCfg.APIKey == fresh.APIKey &&
 			runtimeCfg.EgressAck == fresh.EgressAck &&
-			runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold &&
-			runtimeCfg.DateAutoApply == fresh.DateAutoApply
+			runtimeCfg.ConfidenceThreshold == fresh.ConfidenceThreshold
 		return api.LLMSettingsStatus{
 			Enabled:             enabled,
 			Active:              active,
@@ -661,7 +646,6 @@ func runServe() int {
 			EgressAck:           fresh.EgressAck,
 			HasAPIKey:           fresh.APIKey != "",
 			ConfidenceThreshold: fresh.ConfidenceThreshold,
-			DateAutoApply:       fresh.DateAutoApply,
 		}, nil
 	}
 	apiSrv.LLMTester = func(rctx context.Context, candidate api.LLMTestConfig) (api.LLMTestResult, error) {
@@ -679,7 +663,6 @@ func runServe() int {
 			APIKey:              apiKey,
 			EgressAck:           candidate.EgressAck,
 			ConfidenceThreshold: candidate.ConfidenceThreshold,
-			DateAutoApply:       fresh.DateAutoApply,
 		}, log)
 		if err != nil {
 			return api.LLMTestResult{}, err
@@ -716,7 +699,6 @@ func runServe() int {
 			APIKey:              fresh.APIKey,
 			EgressAck:           fresh.EgressAck,
 			ConfidenceThreshold: fresh.ConfidenceThreshold,
-			DateAutoApply:       fresh.DateAutoApply,
 		}); err != nil {
 			return err
 		}

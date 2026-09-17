@@ -22,6 +22,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
 
 func runTaxonomy(args []string) int {
@@ -232,7 +233,7 @@ func runTaxonomyExport(args []string) int {
 		fmt.Fprintf(os.Stderr, "system: %v\n", err)
 		return 1
 	}
-	pf, err := taxonomy.BuildExport(ctx, d, system.ID, *skipSeeds)
+	pf, err := exporter.BuildExport(ctx, d, system.ID, *skipSeeds)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read: %v\n", err)
 		return 1

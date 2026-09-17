@@ -1577,8 +1577,9 @@ alone cannot admit a nonmember. Resolve actionable work via
 `counts` is the true open-inbox size, unaffected by `limit`. Document-bound
 tasks include the current title and filing category plus a thumbnail-presence
 flag so clients can identify the document without fetching its extracted text.
-API tokens need `documents:read` to list tasks and `documents:write` to resolve
-an approval; browser sessions continue to use the signed-in user's access.
+API tokens need `documents:read` to list tasks and `documents:write` for generic
+approval resolution. Built-in inferred document changes additionally require a
+live interactive browser session; a scoped token is not human-review proof.
 
 Administrator sessions can resolve dead outbox rows directly:
 
@@ -1593,10 +1594,12 @@ response returns the stored provider error.
 
 Document suggestions from archive matching and the optional LLM classifier
 also appear in `approval_tasks`. Their `approval_name` is `document-change`;
-the `vars` object carries the suggested field, value, confidence, source, and
-supporting document IDs. Suggestions are field-specific: a document can be
-filed under a category while a lower-confidence tag, correspondent, title, or
-document-type suggestion still waits for review.
+the `vars` projection includes bounded proposed/current values, confidence,
+reason, policy version, source freshness and authorized supporting documents.
+Raw baselines and session proofs are not exposed. Every inferred field needs
+review regardless of score; unknown actions remain read-only. Source/ACL or
+human-baseline changes prevent application. Resolution records and queues a
+decision, not a completed metadata write; the eventual effect rechecks it.
 
 ### Automations surface: `/api/automations/*`
 
@@ -1892,9 +1895,10 @@ Returns the standard pagination envelope. Filters:
 | `q` | Rich document query applied to source documents |
 | `page`, `page_size` | Standard pagination; max 500 |
 
-`accepted` is the storage status for a date available to Calendar. It may be
-set automatically by the configured model threshold or by a person's decision
-in Approvals; `reviewed_by` is present only for the latter.
+`accepted` is the storage status for a date available to Calendar. New inference
+can reach it through guarded automatic application or interactive review. Older
+accepted facts remain unchanged, including those with no recorded reviewer;
+no reviewer is backfilled.
 
 Stats responses expose the pending extracted-fact count as
 `pending_intelligence`. Browser document-list filters use
@@ -1907,9 +1911,16 @@ tag, correspondent, type, category, and sensitivity fields.
 A nonempty `document_ids` value must contain at least one valid ID; an empty
 CSV list returns `400` instead of widening the scope to all documents.
 
-Rows contain generic `type`, `role`, `value`, `sort_value`, evidence,
-confidence, review state, extractor/version, and source-document presentation
-fields.
+Rows contain generic `type`, `role`, `value`, `sort_value`, evidence, confidence,
+review state, extractor/version and source-document presentation fields. Bounded
+`reason`, `policy_version` and `source_current` explain review eligibility.
+`evidence_start` records the matched raw date's UTF-8 byte offset, not a
+case-folded string offset. Candidate IDs bind immutable proposals and are never
+reused after rescan or deletion.
+New automatic dates have `status=accepted`, null `reviewed_by`/`reviewed_at`,
+`policy_version=threshold-auto-v1` and `reason=confidence_threshold`. Pending
+candidates retain review-first eligibility reasons and policy. Historical
+accepted/rejected rows keep their original provenance.
 
 For `type=date`, `value` contains `date` and `precision`. Exactly three
 precisions are supported:
@@ -1944,8 +1955,10 @@ stored precision are treated as `day` by this filter.
 
 Queues the existing post-ingest pipeline for each authorized document and
 returns `202` with granular per-document results. It does not add another model
-call to the pipeline. The current confidence threshold and `date_auto_apply`
-setting decide whether each extracted date enters Calendar or stays pending.
+call to the pipeline. New dates with usable source evidence follow the current
+application mode and each date's own score; automatic mode defaults on and the
+model/date threshold defaults to `0.70`. Other usable dates remain pending.
+Extraction failure never permits automatic acceptance.
 
 ### `POST /api/intelligence/resolve`
 
@@ -1953,9 +1966,17 @@ setting decide whether each extracted date enters Calendar or stays pending.
 { "candidate_ids": [71, 72], "decision": "accepted" }
 ```
 
-`decision` is `accepted` or `rejected`. Only pending, authorized candidates
-change. The bounded transaction returns granular `not_found`, `forbidden`, and
-`already_resolved` outcomes.
+`decision` is `accepted` or `rejected`. Requires a live interactive browser
+session, the intelligence capability, current system access and document
+change permission. API/OIDC bearer possession is not sufficient.
+
+Acceptance rechecks the current immutable source, extraction generation and
+exact grounded evidence inside the write transaction. Legacy unbound pending
+rows require fresh extraction. Authorized rejection can dismiss a stale or
+unusable pending date without giving it authority. Results are granular:
+`not_found`, `forbidden`, `stale_source`, `invalid_evidence`, or
+`already_resolved`. A retry of the same recorded decision returns `ok: true`
+without increasing `applied`; an opposite decision cannot rewrite history.
 
 ## LLM classifier settings
 
@@ -1976,7 +1997,7 @@ signal; plaintext key material is never returned.
   "egress_ack": false,
   "has_api_key": false,
   "confidence_threshold": 0.7,
-  "date_auto_apply": true,
+  "auto_apply": true,
   "archive_enabled": true,
   "archive_auto_threshold": 0.9,
   "archive_review_threshold": 0.5,
@@ -1986,19 +2007,25 @@ signal; plaintext key material is never returned.
 
 `research_context_mode` is `focused`, `balanced`, or `detailed`. Missing or
 invalid stored values read back as `balanced`.
+`auto_apply` is the shared mode for new dates, model metadata and local matching:
+missing storage defaults to `true`; malformed policy fails closed. It does not
+activate a model, grant egress permission or change explicit user-authored rules.
 
 ### `POST /api/admin/settings/llm`
 
 Body: `{enabled, endpoint_url, model, api_key, clear_api_key, egress_ack,
-confidence_threshold, date_auto_apply, archive_enabled,
-archive_auto_threshold, archive_review_threshold}`. The model threshold must be
-between `0.50` and `0.95`. When `date_auto_apply` is true, extracted dates at or
-above that threshold enter Calendar; other dates remain pending for Approvals.
-Saving an enabled automatic-date configuration also promotes matching pending
-dates without another model call. Turning it off affects new extraction and
-does not remove existing Calendar dates. The archive review threshold must be
-`0.50` to `0.90`; the archive auto-apply threshold must be `0.55` to `0.95` and
-greater than review.
+confidence_threshold, archive_enabled, archive_review_threshold,
+archive_auto_threshold?}`.
+The model/date threshold must be between `0.50` and `0.95`, default `0.70`.
+Each date is evaluated independently of the overall classification score.
+The local automatic threshold defaults to `0.90` and must be `0.55` to `0.95`;
+omitting `archive_auto_threshold` preserves its saved value. The local minimum
+review-suggestion score defaults to `0.50`, must be `0.50` to `0.90`, and must
+be strictly lower than the automatic threshold. Scores do not replace source,
+access, field-generation or evidence checks.
+`auto_apply` is PATCH-only; it and the old `date_auto_apply` are unsupported in
+POST. Saving configuration never promotes pending dates or metadata or starts
+an archive-wide backfill.
 Enabling requires an HTTP(S) endpoint and model. Non-local endpoints require
 `egress_ack=true`. A blank `api_key` preserves any stored key; a non-blank key
 is AEAD-sealed before the settings transaction commits. `clear_api_key=true`
@@ -2013,23 +2040,27 @@ key rotation, disable, and re-enable all apply immediately.
 
 ### `PATCH /api/admin/settings/llm`
 
-Updates only the global Archive research source-text preset:
+Updates exactly one standalone global setting. Choose either application mode:
+
+```json
+{ "auto_apply": false }
+```
+
+or the Archive research source-text preset:
 
 ```json
 { "research_context_mode": "detailed" }
 ```
 
-The body must contain exactly `research_context_mode`, with a value of
-`focused`, `balanced`, or `detailed`. The response returns the saved value:
+The body must contain exactly one of these fields, not both or other fields.
+`auto_apply` must be boolean; `research_context_mode` must be `focused`,
+`balanced`, or `detailed`. The response returns only the saved field and value.
 
-```json
-{ "research_context_mode": "detailed" }
-```
-
-This standalone save applies to the next question. It does not rewrite the
-endpoint, model, API key, egress acknowledgement, confidence thresholds, or
-date settings; enable a model; auto-apply pending dates; or reload the provider.
-See [Archive research: Research context presets](/archive-chat#research-context-presets)
+Application mode is read again under the writer before automatic effects; the
+research preset applies to the next question. Neither standalone save rewrites
+the endpoint, model, API key, egress acknowledgement or thresholds; enables or
+tests a model; reloads the provider; accepts pending suggestions; or starts a
+backfill. See [Archive research: Research context presets](/archive-chat#research-context-presets)
 for passage assembly and exact payload bounds.
 
 ### `POST /api/admin/settings/llm/test`

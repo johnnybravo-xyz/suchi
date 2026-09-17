@@ -229,6 +229,15 @@ gates and writes across setup/Settings. Mailbox editing delegates to
 `EmailAccounts.svelte`, imports to `TaxonomyImport.svelte`, and both automation
 entry points link to the existing `Automations.svelte` editor.
 
+Classification uses one shared **Classification options** block in both shells.
+Its checked-by-default **Automatically apply high-confidence suggestions**
+checkbox saves independently through **Save application mode**, using a standalone
+`auto_apply` PATCH. Turning it off selects review-first behavior.
+Model activation, local matching and research settings retain their own saves;
+one save must not overwrite another form's saved or unsaved state. Automatic-only
+threshold sliders are disabled, not cleared, in review mode. The connection test
+validates a synthetic response without changing application mode.
+
 `PeopleSettings.svelte` owns Users, Groups, Metadata and Taxonomy. Metadata has
 one type selector including custom fields; file operations stay separate.
 `UserCreateForm.svelte` shares creation/validation between setup and Settings;
@@ -289,6 +298,23 @@ becoming authoritative. Reversible optimistic changes restore state on failure.
 Use semantic controls, visible focus, icon labels and stable responsive layouts.
 Approval cards show decision context, not internal IDs; rescan document links live
 under **Affected documents**. [Web app](/web-app) owns remaining interaction detail.
+
+`Tasks.svelte` and `lib/intelligence.js` consume bounded server projections:
+proposed/current values, reasons, source freshness and permitted known actions.
+Producer/score details are disclosures, not authority badges. Hidden supporters
+are omitted server-side; sensitive quotes require local Reveal. Unknown actions
+stay read-only, stale dates cannot be accepted, and supported stale suggestions
+can be dismissed. Metadata resolution reports queued work rather than claiming
+the field changed. Date mutation results clear only successful rows; failures
+remain distinguishable and refreshable.
+
+`Calendar.svelte` preserves accepted facts and distinguishes reviewed, automatic
+and previously accepted legacy values. **Automatic** requires accepted status,
+no human review and `policy_version=threshold-auto-v1`; missing reviewer alone
+is not enough. New inference follows current mode and threshold, never a bulk
+promotion on settings save. Local ICS export remains reviewed-only and exact-day.
+These screens reuse existing tasks, intelligence and document APIs; no trust-status
+or document-history endpoint is added.
 
 ## Security
 

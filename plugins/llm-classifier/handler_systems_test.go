@@ -12,9 +12,10 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-func TestClassifierOffersAndWritesOnlyTheDocumentSystem(t *testing.T) {
+func TestClassifierOffersOnlyDocumentSystemWithoutCreatingVocabulary(t *testing.T) {
 	ctx := context.Background()
 	d, first := openHandlerDocument(t, "Invoice", "invoice supplier payment total 120")
+	setHandlerAutoApply(t, d, false)
 	if _, err := d.Write.Exec(`
 		UPDATE jd_systems SET code='S01' WHERE id=1;
 		INSERT OR IGNORE INTO jd_areas(system_id,code_start,code_end,name,position) VALUES (1,10,19,'First',0);
@@ -55,12 +56,12 @@ func TestClassifierOffersAndWritesOnlyTheDocumentSystem(t *testing.T) {
 	if !strings.Contains(prompt, "FirstOnlyCategory") || strings.Contains(prompt, "SecondOnlyCategory") || strings.Contains(prompt, "ForeignEvidenceTitle") {
 		t.Fatalf("foreign prompt context: %s", prompt)
 	}
-	var categorySystem, correspondentSystem, tagSystem int64
-	if err := d.Read.QueryRow(`SELECT c.system_id,co.system_id,t.system_id FROM documents d JOIN jd_categories c ON c.id=d.jd_category_id JOIN correspondents co ON co.id=d.correspondent_id JOIN document_tags dt ON dt.document_id=d.id JOIN tags t ON t.id=dt.tag_id WHERE d.id=?`, first).Scan(&categorySystem, &correspondentSystem, &tagSystem); err != nil {
+	var categorySystem, guessedVocabulary int64
+	if err := d.Read.QueryRow(`SELECT c.system_id, (SELECT COUNT(*) FROM correspondents WHERE system_id=1 AND name='shared') + (SELECT COUNT(*) FROM tags WHERE system_id=1 AND name='shared') FROM documents d JOIN jd_categories c ON c.id=d.jd_category_id WHERE d.id=?`, first).Scan(&categorySystem, &guessedVocabulary); err != nil {
 		t.Fatal(err)
 	}
-	if categorySystem != 1 || correspondentSystem != 1 || tagSystem != 1 {
-		t.Fatalf("foreign metadata category=%d correspondent=%d tag=%d", categorySystem, correspondentSystem, tagSystem)
+	if categorySystem != 1 || guessedVocabulary != 0 {
+		t.Fatalf("system=%d unreviewed vocabulary=%d", categorySystem, guessedVocabulary)
 	}
 	if err := h.Handle(ctx, pluginapi.Event{Kind: Kind, DocID: 900, SystemID: 2}); err != nil {
 		t.Fatal(err)
@@ -69,12 +70,12 @@ func TestClassifierOffersAndWritesOnlyTheDocumentSystem(t *testing.T) {
 	if !strings.Contains(prompt, "SecondOnlyCategory") || strings.Contains(prompt, "FirstOnlyCategory") {
 		t.Fatalf("wrong second-system offerings: %s", prompt)
 	}
-	var categoryID, correspondentID, tagID int64
-	if err := d.Read.QueryRow(`SELECT d.jd_category_id,d.correspondent_id,dt.tag_id FROM documents d JOIN document_tags dt ON dt.document_id=d.id WHERE d.id=900`).Scan(&categoryID, &correspondentID, &tagID); err != nil {
+	var categoryID, correspondentID, inferredTags int64
+	if err := d.Read.QueryRow(`SELECT d.jd_category_id,COALESCE(d.correspondent_id,0),(SELECT COUNT(*) FROM document_tags WHERE document_id=d.id AND tag_id=900) FROM documents d WHERE d.id=900`).Scan(&categoryID, &correspondentID, &inferredTags); err != nil {
 		t.Fatal(err)
 	}
-	if categoryID != 900 || correspondentID != 900 || tagID != 900 {
-		t.Fatalf("S02 metadata category=%d correspondent=%d tag=%d", categoryID, correspondentID, tagID)
+	if categoryID != 901 || correspondentID != 0 || inferredTags != 0 {
+		t.Fatalf("unreviewed S02 metadata category=%d correspondent=%d tags=%d", categoryID, correspondentID, inferredTags)
 	}
 	if err := h.Handle(ctx, pluginapi.Event{Kind: Kind, DocID: first, SystemID: 2}); err == nil {
 		t.Fatal("accepted mismatched event namespace")

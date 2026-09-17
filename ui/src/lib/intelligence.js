@@ -59,3 +59,57 @@ export function formatIntelligenceValue(candidate) {
   }
   return candidate?.raw_text || candidate?.sort_value || candidate?.type || 'Extracted fact'
 }
+
+// A score never selects or authorizes a candidate. Only the live review
+// projection can make a known date available for explicit selection.
+export function canReviewDate(candidate) {
+  return candidate?.type === 'date' && DATE_ROLES.includes(candidate.role) &&
+    candidate.status === 'pending' && candidate.source_current === true &&
+    ['important_fact', 'low_confidence', 'review_first'].includes(candidate.reason)
+}
+
+export function reviewReason(reason) {
+  return {
+    review_first: 'New inferred metadata needs your review.',
+    important_fact: 'Dates can affect important decisions. Check the source before adding this date.',
+    low_confidence: 'The producer score is below the review score threshold. Check the source carefully.',
+    source_changed: 'The source changed after this suggestion. Extract a fresh suggestion.',
+    source_unavailable: 'The source cannot currently be verified.',
+    human_changed: 'The current value changed after this suggestion. Review a fresh suggestion instead.',
+    human_unverified: 'The current value could not be verified.',
+    evidence_missing: 'Exact source evidence is unavailable.',
+    evidence_mismatch: 'The evidence no longer matches the source.',
+    invalid_candidate: 'This suggestion is not valid for review.',
+    consequential_effect: 'This action is not supported by metadata review.',
+    unsupported: 'This action is not supported here. Read-only.',
+  }[reason] || 'This suggestion could not be verified for review.'
+}
+
+export function reviewFailure(error) {
+  const code = typeof error === 'string' ? error : error?.code
+  if (['stale_source', 'stale_proposal', 'source_changed'].includes(code)) {
+    return 'The source or current value changed. Nothing was applied; refresh and extract a fresh suggestion.'
+  }
+  if (['conflict', 'review_conflict', 'human_changed', 'already_resolved'].includes(code)) {
+    return 'This suggestion or its current value changed. Nothing was applied by this request; refresh before reviewing again.'
+  }
+  if (['invalid_evidence', 'evidence_mismatch', 'evidence_missing'].includes(code)) {
+    return 'The source evidence cannot be verified. Nothing was applied; extract a fresh suggestion.'
+  }
+  if (['hidden', 'reveal_required', 'sensitive_reveal_required'].includes(code)) {
+    return 'The source is hidden. Open the document and use its existing reveal controls before reviewing.'
+  }
+  if (['forbidden', 'unauthorized', 'interactive_required', 'interactive_session_required'].includes(code) || [401, 403].includes(error?.status)) {
+    return 'Review access is no longer available. Sign in with an authorized interactive session and refresh.'
+  }
+  if (['not_found', 'no_task', 'system_unavailable', 'source_unavailable'].includes(code) || error?.status === 404) {
+    return 'This source or suggestion is no longer available to you. Refresh the review list.'
+  }
+  if (['unsupported', 'unknown_action', 'unknown_handler'].includes(code)) {
+    return 'This action is not supported here. It remains read-only.'
+  }
+  if (error?.name === 'TypeError' || error?.status === 503) {
+    return 'The review service could not be reached. The result is unconfirmed; reconnect and refresh before trying again.'
+  }
+  return 'The decision could not be confirmed. Refresh before trying again.'
+}

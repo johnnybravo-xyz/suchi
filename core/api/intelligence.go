@@ -12,6 +12,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
@@ -42,6 +43,9 @@ type IntelligenceRow struct {
 	ReviewedAt           *int64          `json:"reviewed_at,omitempty"`
 	CreatedAt            int64           `json:"created_at"`
 	UpdatedAt            int64           `json:"updated_at"`
+	Reason               string          `json:"reason"`
+	PolicyVersion        string          `json:"policy_version"`
+	SourceCurrent        bool            `json:"source_current"`
 }
 
 type intelligenceExtractRequest struct {
@@ -247,7 +251,9 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		       di.intelligence_type, di.role, di.value_json, di.sort_value,
 		       di.raw_text, di.evidence_text, di.evidence_start, di.confidence,
 		       di.status, di.extractor, di.extraction_version, di.reviewed_by,
-		       di.reviewed_at, di.created_at, di.updated_at
+		       di.reviewed_at, di.created_at, di.updated_at,
+		       di.gate_reason, di.gate_policy_version,
+		       di.source_blob, di.source_revision, d.original_blob, d.source_revision, COALESCE(d.content, '')
 		FROM `+fromSQL+`
 		WHERE `+whereSQL+`
 		ORDER BY di.sort_value, d.title, di.id
@@ -263,18 +269,32 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		var valueJSON string
 		var hasThumbnail int
 		var evidenceStart, reviewedBy, reviewedAt sql.NullInt64
+		var sourceBlob, currentBlob, content string
+		var sourceRevision sql.NullInt64
+		var currentRevision int64
 		if err := rows.Scan(
 			&row.ID, &row.DocumentID, &row.DocumentTitle, &row.DocumentSensitivity,
 			&hasThumbnail, &row.Type, &row.Role, &valueJSON, &row.SortValue,
 			&row.RawText, &row.EvidenceText, &evidenceStart, &row.Confidence,
 			&row.Status, &row.Extractor, &row.ExtractionVersion, &reviewedBy,
 			&reviewedAt, &row.CreatedAt, &row.UpdatedAt,
+			&row.Reason, &row.PolicyVersion, &sourceBlob, &sourceRevision, &currentBlob, &currentRevision, &content,
 		); err != nil {
 			s.serverErr(w, "intelligence.scan", err)
 			return
 		}
 		row.DocumentHasThumbnail = hasThumbnail == 1
 		row.Value = json.RawMessage(valueJSON)
+		row.SourceCurrent = sourceRevision.Valid && sourceRevision.Int64 == currentRevision && sourceBlob == currentBlob
+		candidate := intelligence.Candidate{Type: row.Type, Role: row.Role, ValueJSON: valueJSON,
+			SortValue: row.SortValue, RawText: row.RawText, EvidenceText: row.EvidenceText, Confidence: row.Confidence}
+		start, evidenceValid := intelligence.EvidenceStart(content, candidate)
+		row.SourceCurrent = row.SourceCurrent && evidenceValid && evidenceStart.Valid && start == evidenceStart.Int64
+		if !row.SourceCurrent {
+			row.Reason = "source_changed"
+		} else if row.Reason == "" {
+			row.Reason = "important_fact"
+		}
 		if evidenceStart.Valid {
 			value := evidenceStart.Int64
 			row.EvidenceStart = &value
@@ -286,6 +306,9 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		if reviewedAt.Valid {
 			value := reviewedAt.Int64
 			row.ReviewedAt = &value
+		}
+		if IsHighSensitivity(row.DocumentSensitivity) {
+			row.RawText, row.EvidenceText, row.EvidenceStart = "", "", nil
 		}
 		out = append(out, row)
 	}
@@ -413,94 +436,146 @@ func (s *Server) ResolveIntelligence(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "intelligence.resolve.load", err)
 		return
 	}
-	pendingDocuments := make([]int64, 0, len(ids))
+	documents := make([]int64, 0, len(ids))
 	for _, id := range ids {
-		if state, exists := states[id]; exists && state.status == "pending" {
-			pendingDocuments = append(pendingDocuments, state.documentID)
+		if state, exists := states[id]; exists {
+			documents = append(documents, state.documentID)
 		}
 	}
-	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, pendingDocuments, authz.PermChange)
+	decisions, err := s.documentPermissionDecisions(r.Context(), nil, p, documents, authz.PermChange)
 	if err != nil {
 		s.serverErr(w, "intelligence.resolve.authorize", err)
 		return
 	}
 	results := make([]intelligenceMutationResult, len(ids))
-	authorized := make([]int64, 0, len(ids))
-	for i, id := range ids {
-		results[i].ID = id
-		state, exists := states[id]
-		if !exists {
-			results[i].Code = "not_found"
-			continue
+	transitioned := make([]int64, 0, len(ids))
+	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, p, selectedSystemID(r.Context()))
+		if err != nil {
+			return err
 		}
-		if state.status != "pending" {
-			results[i].Code = "already_resolved"
-			continue
-		}
-		if !decisions[state.documentID] {
-			results[i].Code = "forbidden"
-			continue
-		}
-		authorized = append(authorized, id)
-	}
-	transitioned := make([]int64, 0, len(authorized))
-	if len(authorized) > 0 {
-		now := time.Now().Unix()
-		args := []any{body.Decision, p.UserID, now, now}
-		for _, id := range authorized {
-			args = append(args, id)
-		}
-		if err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			current, err := s.currentWriterPrincipal(r.Context(), tx, p, selectedSystemID(r.Context()))
-			if err != nil {
-				return err
+		if body.Decision == "accepted" {
+			// An inferred fact can become accepted only through an active
+			// interactive review session, never possession of an API bearer.
+			if current.Kind != "user" || current.TokenID != 0 || current.SessionID == "" {
+				return errSystemUnavailable
 			}
-			if current.Role != "admin" {
-				caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
-				if err != nil {
-					return err
-				}
-				if !caps.Has(authz.CapArchiveIntelligence) {
+			now := time.Now().Unix()
+			if current.AuthExpiresAt != 0 && current.AuthExpiresAt <= now {
+				return errSystemUnavailable
+			}
+			var active int
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`,
+				current.SessionID, current.UserID, now).Scan(&active); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
 					return errSystemUnavailable
 				}
+				return err
 			}
-			decisions, err := s.documentPermissionDecisions(r.Context(), tx, current, pendingDocuments, authz.PermChange)
+		}
+		if current.TokenID != 0 {
+			var scopes string
+			if err := tx.QueryRowContext(r.Context(), `SELECT scopes FROM api_tokens WHERE id=?`, current.TokenID).Scan(&scopes); err != nil {
+				return err
+			}
+			current.Scopes = strings.Split(scopes, ",")
+			if !auth.HasScope(current, auth.ScopeDocumentsWrite) {
+				return errSystemUnavailable
+			}
+		}
+		if current.Role != "admin" {
+			caps, err := s.userCapabilitiesInTx(r.Context(), tx, current.UserID)
 			if err != nil {
 				return err
 			}
-			for _, id := range authorized {
-				if !decisions[states[id].documentID] {
-					return errSystemUnavailable
-				}
+			if !caps.Has(authz.CapArchiveIntelligence) {
+				return errSystemUnavailable
 			}
-			// RETURNING makes the response reflect which reviewer won the race.
-			rows, err := tx.QueryContext(r.Context(), `
-				UPDATE document_intelligence
-				SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
-				WHERE status = 'pending' AND id IN (`+placeholders(len(authorized))+`)
-				RETURNING id`, args...)
+		}
+		livePermissions, err := s.documentPermissionDecisions(r.Context(), tx, current, documents, authz.PermChange)
+		if err != nil {
+			return err
+		}
+		for i, id := range ids {
+			results[i].ID = id
+			state, exists := states[id]
+			if !exists {
+				results[i].Code = "not_found"
+				continue
+			}
+			if !decisions[state.documentID] || !livePermissions[state.documentID] {
+				results[i].Code = "forbidden"
+				continue
+			}
+			source, err := documentstate.Load(r.Context(), tx, state.documentID)
+			if errors.Is(err, sql.ErrNoRows) {
+				results[i].Code = "not_found"
+				continue
+			}
 			if err != nil {
 				return err
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var id int64
-				if err := rows.Scan(&id); err != nil {
-					return err
-				}
-				transitioned = append(transitioned, id)
+			if source.SystemID != selectedSystemID(r.Context()) {
+				results[i].Code = "forbidden"
+				continue
 			}
-			return rows.Err()
-		}); err != nil {
-			s.serverErr(w, "intelligence.resolve.update", err)
+			var candidate intelligence.Candidate
+			var status, blob, content string
+			var revision, evidenceStart sql.NullInt64
+			err = tx.QueryRowContext(r.Context(), `
+				SELECT di.status, di.source_blob, di.source_revision, di.intelligence_type, di.role,
+				       di.value_json, di.sort_value, di.raw_text, di.evidence_text, di.confidence,
+				       di.evidence_start, COALESCE(d.content, '')
+				FROM document_intelligence di JOIN documents d ON d.id=di.document_id
+				WHERE di.id=? AND di.document_id=?`, id, state.documentID).Scan(
+				&status, &blob, &revision, &candidate.Type, &candidate.Role, &candidate.ValueJSON,
+				&candidate.SortValue, &candidate.RawText, &candidate.EvidenceText, &candidate.Confidence,
+				&evidenceStart, &content)
+			if errors.Is(err, sql.ErrNoRows) {
+				results[i].Code = "not_found"
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if status != "pending" {
+				if status == body.Decision {
+					results[i].OK = true // Recorded outcome, without a second transition.
+				} else {
+					results[i].Code = "conflict"
+				}
+				continue
+			}
+			if body.Decision == "accepted" {
+				if !revision.Valid || revision.Int64 != source.SourceRevision || blob != source.SourceBlob {
+					results[i].Code = "stale_source"
+					continue
+				}
+				start, valid := intelligence.EvidenceStart(content, candidate)
+				if !valid || !evidenceStart.Valid || start != evidenceStart.Int64 {
+					results[i].Code = "invalid_evidence"
+					continue
+				}
+			}
+			now := time.Now().Unix()
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE document_intelligence SET status=?, reviewed_by=?, reviewed_at=?, updated_at=?
+				WHERE id=? AND status='pending'`, body.Decision, current.UserID, now, now, id); err != nil {
+				return err
+			}
+			results[i].OK = true
+			transitioned = append(transitioned, id)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errSystemUnavailable) {
+			s.writeError(w, http.StatusForbidden, "forbidden", "review authority changed")
 			return
 		}
-	}
-	markMutationResults(results, transitioned)
-	for i := range results {
-		if !results[i].OK && results[i].Code == "" {
-			results[i].Code = "already_resolved"
-		}
+		s.serverErr(w, "intelligence.resolve.update", err)
+		return
 	}
 	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
 		SystemID: selectedSystemID(r.Context()),

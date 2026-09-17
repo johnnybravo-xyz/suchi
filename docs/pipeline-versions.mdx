@@ -21,6 +21,8 @@ document. A failed LLM request therefore remains at `0`. A valid
 low-confidence response is still a completed classification: Suchi adds the
 `needs-review` tag and records the current LLM revision without applying its
 uncertain metadata.
+Dates use their own scores independently: a high-scoring, source-backed date
+may still be accepted in automatic mode even when document metadata needs review.
 
 A later successful classification at or above the configured threshold clears
 an earlier classifier-owned `needs-review` assignment if the new result does not
@@ -44,9 +46,10 @@ affected pipeline and system.
 
 For LLM classification, automatic proposals only include documents with a
 successful earlier revision (`pipeline_version_llm >= 1`). Enabling the LLM or
-changing its endpoint, model, key, timeout, threshold, or egress setting does
-not create a proposal. Those configuration changes require an explicit
-selected rescan.
+changing its endpoint, model, key, timeout, threshold, egress setting or shared
+application mode does not create a proposal. New ingests and explicitly requested
+rescans use the current mode and thresholds. Startup and settings saves never
+bulk-accept pending suggestions; rescans preserve accepted/rejected date history.
 
 Password-protected PDFs waiting for decryption are also excluded. A rescan
 cannot advance them while the password gate is closed; supplying a password

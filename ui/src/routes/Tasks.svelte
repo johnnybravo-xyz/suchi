@@ -3,7 +3,7 @@
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
-  import { formatIntelligenceValue } from '../lib/intelligence.js'
+  import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewReason, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, onCount, canReviewIntelligence = false } = $props()
@@ -15,6 +15,10 @@
   let intelligenceSelection = $state(new Set())
   let intelligenceBusy = $state(false)
   let busyJobs = $state(new Set())
+  let busyTasks = $state(new Set())
+  let taskErrors = $state({})
+  let dateErrors = $state({})
+  let reviewNotice = $state('')
 
   async function load() {
     loading = true; err = ''
@@ -31,21 +35,40 @@
       tasks = wf?.approval_tasks || []
       jobs = jb?.results || jb || []
       intelligence = facts?.results || []
-      intelligenceSelection = new Set(
-        intelligence.filter(candidate => Number(candidate.confidence || 0) >= 0.8).map(candidate => candidate.id),
-      )
+      intelligenceSelection = new Set()
+      taskErrors = {}
+      dateErrors = {}
       onCount?.(tasks.length + jobs.length + intelligence.length)
-    } catch (ex) { err = ex.message || 'Could not load tasks.' }
+    } catch (ex) {
+      tasks = []
+      jobs = []
+      intelligence = []
+      intelligenceSelection = new Set()
+      err = reviewFailure(ex)
+    }
     finally { loading = false }
   }
 
   async function resolve(t, choice) {
+    if (busyTasks.has(t.id) || taskErrors[t.id] || !taskChoices(t).includes(choice)) return
+    busyTasks = new Set([...busyTasks, t.id])
     try {
       await resolveApprovalTask(t.id, { choice })
       tasks = tasks.filter(x => x.id !== t.id)
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      notify?.(`Resolved: ${choice}`)
-    } catch (ex) { notify?.(ex.message || 'Could not resolve the task') }
+      reviewNotice = choice === 'apply'
+        ? 'Decision recorded. The change is queued, not yet applied; its source and current value will be checked again before application.'
+        : choice === 'reject' || choice === 'dismiss'
+          ? 'Suggestion dismissed.'
+          : 'Decision recorded. Any requested processing is queued, not yet complete.'
+      notify?.(reviewNotice)
+    } catch (ex) {
+      taskErrors = { ...taskErrors, [t.id]: reviewFailure(ex) }
+    } finally {
+      const next = new Set(busyTasks)
+      next.delete(t.id)
+      busyTasks = next
+    }
   }
 
   function deadline(t) {
@@ -57,12 +80,18 @@
   }
 
   function taskChoices(t) {
-    const choices = t.choices?.length ? t.choices : ['approve', 'reject']
-    if (categoryAlreadyApplied(t)) return choices.filter(c => c === 'apply')
-    if (t.approval_name === 'rescan-proposal' && Number(t.vars?.stale_count || 0) <= 20) {
-      return choices.filter(c => c !== 'approve_sample')
+    const choices = Array.isArray(t.choices) ? t.choices : []
+    if (t.approval_name === 'document-change') {
+      if (!['jd_category', 'correspondent', 'document_type', 'tag', 'title', 'language'].includes(t.vars?.field)) return []
+      return choices.filter(choice => choice === 'reject' || (choice === 'apply' &&
+        t.vars?.source_current === true && t.vars?.review_conflict === false &&
+        ['review_first', 'low_confidence'].includes(t.vars?.reason)))
     }
-    return choices
+    if (t.approval_name === 'rescan-proposal') {
+      return choices.filter(choice => ['approve_all', 'approve_sample', 'dismiss'].includes(choice) &&
+        (choice !== 'approve_sample' || Number(t.vars?.stale_count || 0) > 20))
+    }
+    return []
   }
 
   function choiceLabel(t, choice) {
@@ -75,13 +104,14 @@
     if (t.approval_name === 'document-change') {
       if (choice === 'reject') return 'Dismiss'
       if (choice === 'apply') {
-        if (categoryAlreadyApplied(t)) return 'Close review'
+        // Recording this choice schedules the existing asynchronous application.
         return {
           jd_category: 'File document',
           correspondent: 'Set correspondent',
           document_type: 'Set document type',
           tag: 'Add tag',
           title: 'Change title',
+          language: 'Set language',
         }[t.vars?.field] || 'Apply change'
       }
     }
@@ -98,7 +128,7 @@
   }
 
   function suggestionValue(vars) {
-    return vars?.label || vars?.value || `#${vars?.value_id}`
+    return typeof vars?.proposed_value === 'string' ? vars.proposed_value : 'Unavailable'
   }
 
   function decisionPrompt(t) {
@@ -106,13 +136,14 @@
       return t.prompt || t.title || `Task #${t.id}`
     }
     const value = suggestionValue(t.vars)
-    if (categoryAlreadyApplied(t)) return `Already filed under “${value}”`
+    if (!['jd_category', 'correspondent', 'document_type', 'tag', 'title', 'language'].includes(t.vars.field)) return 'Unsupported action · read-only'
     return {
       jd_category: `File under “${value}”?`,
       correspondent: `Set correspondent to “${value}”?`,
       document_type: `Set document type to “${value}”?`,
       tag: `Add “${value}” tag?`,
       title: `Change title to “${value}”?`,
+      language: `Set language to “${value}”?`,
     }[t.vars.field] || t.prompt
   }
 
@@ -123,25 +154,6 @@
       : t.doc_jd_category_name
   }
 
-  function categoryAlreadyApplied(t) {
-    return t.vars?.field === 'jd_category' &&
-      Number(t.doc_jd_category_id || 0) === Number(t.vars?.value_id || 0)
-  }
-
-  function reviewContext(t) {
-    if (categoryAlreadyApplied(t)) {
-      return 'The document is already filed there. No metadata change is needed, so this review can close.'
-    }
-    return ''
-  }
-
-  function evidenceLabel(t) {
-    if (t.vars?.source === 'archive' && t.vars.based_on?.length) {
-      return `Based on ${t.vars.based_on.length} similar documents`
-    }
-    if (t.vars?.source === 'llm') return 'Suggested by the configured LLM'
-    return ''
-  }
 
   function approvalGroups(items) {
     const groups = []
@@ -185,8 +197,9 @@
   }
 
   function selectionState(items) {
-    const selected = items.filter(item => intelligenceSelection.has(item.id)).length
-    return { all: selected === items.length && items.length > 0, some: selected > 0 && selected < items.length }
+    const available = items.filter(candidate => canReviewDate(candidate) && !dateErrors[candidate.id])
+    const selected = available.filter(item => intelligenceSelection.has(item.id)).length
+    return { all: selected === available.length && available.length > 0, some: selected > 0 && selected < available.length, available: available.length }
   }
 
   function indeterminate(node, value) {
@@ -195,33 +208,49 @@
   }
 
   function setCandidateSelection(ids, checked) {
+    if (intelligenceBusy) return
     const next = new Set(intelligenceSelection)
-    for (const id of ids) checked ? next.add(id) : next.delete(id)
+    const allowed = new Set(intelligence.filter(candidate => canReviewDate(candidate) && !dateErrors[candidate.id]).map(candidate => candidate.id))
+    for (const id of ids) {
+      if (checked && allowed.has(id)) next.add(id)
+      else next.delete(id)
+    }
     intelligenceSelection = next
   }
 
   function toggleAllIntelligence(checked) {
-    intelligenceSelection = checked
-      ? new Set(intelligence.map(candidate => candidate.id))
-      : new Set()
+    setCandidateSelection(intelligence.map(candidate => candidate.id), checked)
   }
 
 
-  async function resolveSelectedIntelligence(decision) {
-    const ids = [...intelligenceSelection]
+  async function resolveSelectedIntelligence(decision, candidateIDs = null) {
+    const ids = candidateIDs || intelligence.filter(candidate => intelligenceSelection.has(candidate.id) && canReviewDate(candidate) && !dateErrors[candidate.id]).map(candidate => candidate.id)
     if (!ids.length || intelligenceBusy) return
     intelligenceBusy = true
     try {
       const result = await resolveIntelligence({ candidate_ids: ids, decision })
-      const resolved = new Set((result?.results || []).filter(item => item.ok).map(item => item.id))
+      const outcomes = new Map((result?.results || []).map(item => [item.id, item]))
+      const resolved = new Set(ids.filter(id => outcomes.get(id)?.ok === true))
+      const failures = { ...dateErrors }
+      for (const id of ids) {
+        if (!resolved.has(id)) failures[id] = reviewFailure(outcomes.get(id))
+      }
+      dateErrors = failures
       intelligence = intelligence.filter(candidate => !resolved.has(candidate.id))
-      intelligenceSelection = new Set([...intelligenceSelection].filter(id => !resolved.has(id)))
+      intelligenceSelection = new Set()
       onCount?.(tasks.length + jobs.length + intelligence.length)
-      notify?.(decision === 'accepted'
-        ? `Added ${resolved.size} date${resolved.size === 1 ? '' : 's'} to Calendar`
-        : `Rejected ${resolved.size} date${resolved.size === 1 ? '' : 's'}`)
+      reviewNotice = resolved.size
+        ? (decision === 'accepted'
+          ? `Added ${resolved.size} date${resolved.size === 1 ? '' : 's'} to Calendar.`
+          : `Rejected ${resolved.size} date${resolved.size === 1 ? '' : 's'}.`)
+        : 'No dates were changed.'
+      if (resolved.size < ids.length) reviewNotice += ' Some decisions could not be completed; check the messages below and refresh.'
+      notify?.(reviewNotice)
     } catch (ex) {
-      notify?.(ex.message || 'Could not update dates')
+      const failures = { ...dateErrors }
+      for (const id of ids) failures[id] = reviewFailure(ex)
+      dateErrors = failures
+      intelligenceSelection = new Set()
     } finally {
       intelligenceBusy = false
     }
@@ -253,7 +282,8 @@
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && tasks[0]) {
       e.preventDefault()
       const t = tasks[0]
-      resolve(t, taskChoices(t)[0])
+      const choice = taskChoices(t)[0]
+      if (choice) resolve(t, choice)
     }
   }
 
@@ -263,6 +293,10 @@
 <svelte:window onkeydown={onKey} />
 
 {#if err}<div class="err">{err}</div>{/if}
+<div class="review-toolbar">
+  <p role="status">{reviewNotice}</p>
+  <button class="btn sm" disabled={loading || intelligenceBusy || busyTasks.size > 0} onclick={load}>Refresh reviews</button>
+</div>
 
 {#if loading}
   <div class="index">{#each Array(3) as _}<div class="irow"><div class="skel" style="width:55%"></div></div>{/each}</div>
@@ -273,13 +307,13 @@
     <section class="intelligence-review" aria-labelledby="intelligence-review-title">
       <header class="intelligence-head">
         <div>
-          <span class="eyebrow">Dates needing a quick check</span>
+          <span class="eyebrow">Dates needing review</span>
           <h2 id="intelligence-review-title">Check dates before they reach Calendar</h2>
           <p>{intelligence.length} date{intelligence.length === 1 ? '' : 's'} from {reviewGroups.length} document{reviewGroups.length === 1 ? '' : 's'} are waiting for your decision.</p>
-          <p class="review-guidance">Uncheck anything incorrect, then add the selected dates to Calendar. Reject removes selected dates from this review.</p>
+          <p class="review-guidance">Check each proposed date against its source, then select dates to add to Calendar without replacing existing dates. Scores are not measured accuracy and never select dates for you.</p>
         </div>
         <label class="select-all">
-          <input type="checkbox" checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
+          <input type="checkbox" disabled={intelligenceBusy || !allIntelligence.available} checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
                  onchange={(event) => toggleAllIntelligence(event.currentTarget.checked)} />
           Select all dates
         </label>
@@ -301,7 +335,7 @@
           <article class="approval-card intelligence-card">
             <header class="approval-card-header intelligence-document">
               <input type="checkbox" aria-label={`Select every candidate from ${group.title || `document ${group.documentID}`}`}
-                     checked={groupSelection.all} use:indeterminate={groupSelection.some}
+                     disabled={intelligenceBusy || !groupSelection.available} checked={groupSelection.all} use:indeterminate={groupSelection.some}
                      onchange={(event) => setCandidateSelection(group.candidates.map(candidate => candidate.id), event.currentTarget.checked)} />
               <a class="task-thumb intelligence-thumb" class:placeholder={!group.thumbnail}
                  href={filingHref(`#/doc/${group.documentID}`)} aria-label={`Open ${group.title || `document ${group.documentID}`}`}>
@@ -318,19 +352,38 @@
             </header>
             <div class="approval-card-body intelligence-candidates">
               {#each group.candidates as candidate (candidate.id)}
-                <label class="intelligence-candidate">
-                  <input type="checkbox" checked={intelligenceSelection.has(candidate.id)}
+                <div class="intelligence-candidate">
+                  <input type="checkbox" aria-label={`Select proposed ${formatIntelligenceValue(candidate)}`}
+                         checked={intelligenceSelection.has(candidate.id)}
+                         disabled={intelligenceBusy || !canReviewDate(candidate) || !!dateErrors[candidate.id]}
                          onchange={(event) => setCandidateSelection([candidate.id], event.currentTarget.checked)} />
-                  <span class="intelligence-copy">
-                    <span class="intelligence-value">
-                      <strong>{formatIntelligenceValue(candidate)}</strong>
-                      <span class="pill">{candidate.type === 'date' ? 'Date' : candidate.type}</span>
-                      <small>{Math.round(Number(candidate.confidence || 0) * 100)}% confidence</small>
-                    </span>
-                    <span class="intelligence-evidence">Document text: “{candidate.evidence_text}”</span>
-                    <small>Date text: {candidate.raw_text}</small>
-                  </span>
-                </label>
+                  <div class="intelligence-copy">
+                    <div class="intelligence-value">
+                      <strong>Proposed: {formatIntelligenceValue(candidate)}</strong>
+                      <span class="pill">{candidate.type === 'date' ? 'Date' : 'Read-only'}</span>
+                    </div>
+                    <p class="gate-reason">{reviewReason(candidate.type === 'date' ? candidate.reason : 'unsupported')}</p>
+                    <small>{candidate.source_current === true ? 'Source checked at refresh; checked again when saving.' : 'Source is not current or could not be verified. Not available for acceptance.'}</small>
+                    {#if candidate.evidence_text}
+                      <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
+                      <small>{candidate.source_current === true ? 'Exact text from the linked document' : 'Stored extraction quote; not verified against the current document'}{Number.isInteger(candidate.evidence_start) ? ` · UTF-8 byte ${candidate.evidence_start}` : ''}</small>
+                    {:else}
+                      <small>Evidence is unavailable here. Open the source document; sensitive text uses its existing reveal controls.</small>
+                    {/if}
+                    {#if typeof candidate.confidence === 'number'}
+                      <details class="task-details">
+                        <summary>Producer detail</summary>
+                        <p>Score: {candidate.confidence.toFixed(2)} · not measured accuracy.</p>
+                        {#if candidate.extractor}<p>Producer: {candidate.extractor}</p>{/if}
+                      </details>
+                    {/if}
+                    {#if dateErrors[candidate.id]}<p class="review-error" role="alert">{dateErrors[candidate.id]}</p>{/if}
+                    {#if candidate.type === 'date' && DATE_ROLES.includes(candidate.role) && candidate.status === 'pending' && candidate.source_current === false}
+                      <button class="btn sm" disabled={intelligenceBusy}
+                              onclick={() => resolveSelectedIntelligence('rejected', [candidate.id])}>Reject this suggestion</button>
+                    {/if}
+                  </div>
+                </div>
               {/each}
             </div>
           </article>
@@ -389,16 +442,35 @@
                 </div>
               {/if}
               {#if t.approval_name === 'document-change' && t.vars}
-                {#if reviewContext(t)}<div class="review-context">{reviewContext(t)}</div>{/if}
-                <div class="evidence">
-                  <span>{Math.round(Number(t.vars.confidence || 0) * 100)}% confidence</span>
-                  {#if evidenceLabel(t)}<span>{evidenceLabel(t)}</span>{/if}
-                </div>
+                <dl class="metadata-values">
+                  <div><dt>Current</dt><dd>{typeof t.vars.current_value === 'string' ? (t.vars.current_value || 'Not set') : 'Unavailable'}</dd></div>
+                  <div><dt>Proposed</dt><dd>{suggestionValue(t.vars)}</dd></div>
+                </dl>
+                <p class="gate-reason">{reviewReason(t.vars.reason)}</p>
+                <p class="review-context">{t.vars.source_current === true ? 'Source checked at refresh; checked again before application.' : 'Source is not current or could not be verified.'}{t.vars.review_conflict ? ' The current value conflicts with this suggestion.' : ''}</p>
+                {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
+                {#if t.vars.sources?.length}
+                  <ul class="review-sources">
+                    {#each t.vars.sources as source}
+                      <li><a href={filingHref(`#/doc/${source.document_id}`)}>{source.title || 'Open source document'}</a></li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if typeof t.vars.confidence === 'number'}
+                  <details class="task-details">
+                    <summary>Producer detail</summary>
+                    <p>Score: {t.vars.confidence.toFixed(2)} · not measured accuracy.</p>
+                    {#if t.vars.source === 'archive'}<p>Suggested from authorized archive sources.</p>
+                    {:else if t.vars.source === 'llm'}<p>Suggested by the configured model.</p>{/if}
+                  </details>
+                {/if}
               {/if}
+              {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
+              {#if !taskChoices(t).length}<p class="review-context">Read-only: this action is not available for review here.</p>{/if}
               <div class="choices">
                 {#each taskChoices(t) as c, i}
                   <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
-                          onclick={() => resolve(t, c)}>
+                          disabled={busyTasks.has(t.id) || !!taskErrors[t.id]} onclick={() => resolve(t, c)}>
                     {#if i === 0}<Icon name="check" size={13} />{/if}{choiceLabel(t, c)}
                   </button>
                 {/each}
@@ -472,14 +544,13 @@
   .intelligence-document small { color: var(--muted); font-size: .68rem; }
   .intelligence-thumb { width: 38px; flex-basis: 38px; }
   .intelligence-candidates { display: flex; flex-direction: column; }
-  .intelligence-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 13px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .intelligence-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; padding: 13px 14px; border-bottom: 1px solid var(--line); }
   .intelligence-candidate:last-child { border-bottom: 0; }
   .intelligence-candidate:hover { background: var(--tint); }
   .intelligence-candidate > input { margin-top: 3px; }
   .intelligence-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
   .intelligence-value { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .intelligence-value strong { font-size: .87rem; text-transform: capitalize; }
-  .intelligence-value small { color: var(--faint); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .64rem; }
   .intelligence-evidence { color: var(--muted); font-size: .78rem; line-height: 1.5; }
   .intelligence-copy > small { color: var(--faint); font-size: .67rem; }
   .intelligence-actions { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); background: color-mix(in srgb, var(--surface) 96%, transparent); box-shadow: 0 8px 18px color-mix(in srgb, var(--ink) 7%, transparent); backdrop-filter: blur(8px); }
@@ -507,19 +578,30 @@
   .operation-header b { font-size:.82rem }
   .operation-mark { display:grid;place-items:center;width:35px;height:35px;border:1px solid var(--line);border-radius:8px;color:var(--accent);background:var(--bg) }
   .review-context, .rescan-context { color:var(--muted);font-size:.84rem;line-height:1.45;margin-top:10px }
-  .evidence { display:flex;gap:6px 14px;flex-wrap:wrap;color:var(--muted);font-size:.78rem;margin-top:5px }
-  .choices { margin-top:14px }
+  .choices { display:flex;flex-wrap:wrap;gap:8px;margin-top:14px }
   .task-details { margin-top:10px;color:var(--muted);font-size:.75rem }
   .task-details summary { cursor:pointer;width:max-content }
   .rescan-targets { margin-top:9px;max-width:720px }
   .rescan-targets ul { margin:5px 0 3px;padding-left:18px }
   .rescan-targets li { margin:3px 0;overflow-wrap:anywhere }
   .rescan-targets a { color:var(--accent) }
+  .review-toolbar { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0 }
+  .review-toolbar p { min-width:0;font-size:.8rem;color:var(--muted) }
+  .review-toolbar button { flex:none }
+  .metadata-values { display:grid;gap:8px;margin:12px 0 }
+  .metadata-values > div { display:grid;grid-template-columns:65px minmax(0,1fr);gap:10px }
+  .metadata-values dt { color:var(--muted);font-size:.76rem }
+  .metadata-values dd { margin:0;font-size:.84rem;overflow-wrap:anywhere }
+  .gate-reason { margin:6px 0;font-size:.8rem;line-height:1.45 }
+  .intelligence-evidence { margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere }
+  .review-sources { margin:8px 0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
+  .review-error { color:var(--danger);font-size:.8rem;line-height:1.45;overflow-wrap:anywhere }
   @media (max-width: 1050px) {
     .approval-grid.approval-grid-many { grid-template-columns: 1fr; }
   }
   @media (max-width: 560px) {
     .task-thumb { flex-basis:42px;width:42px }
+    .review-toolbar { align-items:flex-start;flex-direction:column }
     .intelligence-head { align-items: flex-start; flex-direction: column; }
     .intelligence-actions { flex-wrap: wrap; }
     .intelligence-actions > span { width: 100%; }

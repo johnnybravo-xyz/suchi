@@ -35,8 +35,8 @@
 //	  }]
 //	}
 //
-// confidence below the threshold (default 0.7) → apply `needs-review`
-// tag + keep the doc in inbox. Above → apply the suggested fields.
+// Valid inferences apply automatically above the configured threshold unless
+// the operator selects review-first mode.
 package llmclassifier
 
 import (
@@ -57,6 +57,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/johnnybravo-xyz/suchi/core/intelligence"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
 	"github.com/johnnybravo-xyz/suchi/core/lang"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
@@ -111,13 +112,9 @@ type Config struct {
 	APIKey      string // optional for local endpoints
 	EgressAck   bool   // must be true when EndpointURL is not local
 
-	// ConfidenceThreshold is the score below which we tag needs-review
-	// instead of applying the suggested classification. Default 0.7.
+	// ConfidenceThreshold is the automatic score floor when application mode
+	// allows it. Metadata and each date are scored independently. Default 0.7.
 	ConfidenceThreshold float64
-
-	// DateAutoApply sends extracted dates at or above ConfidenceThreshold
-	// directly to Calendar. Otherwise every extracted date waits for review.
-	DateAutoApply bool
 
 	// Timeout bounds one classify request. Default 60s — LLMs can be
 	// slow, especially first-token latency on local models.
@@ -152,8 +149,8 @@ type JDCat struct {
 const MaxExtractedDates = 3
 
 // DateCandidate is a typed, source-grounded all-day date proposed during the
-// same completion that classifies the document. Every candidate remains
-// pending until a user accepts it.
+// same completion that classifies the document. Its own confidence determines
+// automatic eligibility independently of the overall metadata score.
 type DateCandidate struct {
 	Role       string  `json:"role"`
 	Value      string  `json:"value"`
@@ -164,7 +161,7 @@ type DateCandidate struct {
 }
 
 // Result is what a classify call returns after parsing the model's JSON.
-// Consumers confidence-gate metadata; Dates are always persisted for review.
+// Consumers apply eligible suggestions or preserve them for review.
 type Result struct {
 	Title         string          `json:"title"`
 	Correspondent string          `json:"correspondent"`
@@ -175,11 +172,8 @@ type Result struct {
 	Dates         []DateCandidate `json:"dates,omitempty"`
 	// Language is the dominant language of the document as the
 	// LLM sees it — an ISO-639-1 code ("de", "en", "kn"), or a
-	// short CSV for genuinely mixed content ("de,en"). Written to
-	// documents.languages when the field is non-empty and the doc
-	// isn't user-locked. LLMs handle language ID trivially, so we
-	// piggyback it onto the classification call rather than adding
-	// a separate round-trip.
+	// short CSV for genuinely mixed content. Only considered when the
+	// document language is not user-locked.
 	Language string `json:"language,omitempty"`
 }
 
@@ -631,7 +625,7 @@ Respond with a JSON object:
          raw_text: the exact date phrase from the document
          evidence: a short exact quote that contains the date phrase
          confidence: 0.0-1.0 for this date
-         Return [] when no date is directly supported by the content.
+         Return [] when no date including its year is directly supported by the content.
 
 Return ONLY the JSON object; no prose, no markdown.`
 
@@ -723,25 +717,17 @@ var validDatePrecisions = map[string]bool{
 }
 
 func groundedDateCandidates(candidates []DateCandidate, content string) []DateCandidate {
-	if len(candidates) == 0 || strings.TrimSpace(content) == "" {
-		return []DateCandidate{}
-	}
-	normalizedContent := normalizedEvidenceText(content)
 	grounded := make([]DateCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		evidence := normalizedEvidenceText(candidate.Evidence)
-		rawText := normalizedEvidenceText(candidate.RawText)
-		if evidence != "" && rawText != "" &&
-			strings.Contains(normalizedContent, evidence) &&
-			strings.Contains(evidence, rawText) {
-			grounded = append(grounded, candidate)
+	for _, date := range candidates {
+		candidate, err := intelligence.NewDateCandidate(date.Role, date.Value, date.Precision, date.RawText, date.Evidence, date.Confidence)
+		if err != nil {
+			continue
+		}
+		if _, ok := intelligence.EvidenceStart(content, candidate); ok {
+			grounded = append(grounded, date)
 		}
 	}
 	return grounded
-}
-
-func normalizedEvidenceText(value string) string {
-	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func validateResult(r *Result) error {
@@ -820,13 +806,10 @@ func validateResult(r *Result) error {
 			candidate.Confidence < 0 || candidate.Confidence > 1 {
 			return errors.New("date confidence must be between 0 and 1")
 		}
-		candidate.RawText, err = cleanResultText(candidate.RawText, 200, "date raw_text")
-		if err != nil {
-			return err
-		}
-		candidate.Evidence, err = cleanResultText(candidate.Evidence, 500, "date evidence")
-		if err != nil {
-			return err
+		candidate.RawText = strings.TrimSpace(candidate.RawText)
+		candidate.Evidence = strings.TrimSpace(candidate.Evidence)
+		if utf8.RuneCountInString(candidate.RawText) > 200 || utf8.RuneCountInString(candidate.Evidence) > 500 {
+			return errors.New("date evidence exceeds maximum length")
 		}
 		if candidate.RawText == "" || candidate.Evidence == "" {
 			return errors.New("date raw_text and evidence are required")
