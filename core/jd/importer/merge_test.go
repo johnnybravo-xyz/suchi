@@ -84,11 +84,11 @@ func TestInvalidRemapsAndRuleFailureRollBackEverything(t *testing.T) {
 }
 
 func TestPreviewBindsRelevantStateAndRequest(t *testing.T) {
-	for _, change := range []string{"content", "seeds", "remaps", "description", "rule toggle", "setup", "filed trash"} {
+	for _, change := range []string{"content", "seeds", "remaps", "description", "rule toggle", "filed trash"} {
 		t.Run(change, func(t *testing.T) {
 			d := openTestDB(t)
 			pf := smallPreset(t)
-			// Keep bootstrap unchosen for the setup/filed-document eligibility cases.
+			// Keep bootstrap unchosen for the filed-document eligibility case.
 			apply(t, d, pf, importer.Options{})
 			opts := importer.Options{ContentSHA256: "submitted-file"}
 			preview, err := importer.Preview(t.Context(), d, pf, opts)
@@ -107,8 +107,6 @@ func TestPreviewBindsRelevantStateAndRequest(t *testing.T) {
 				_, err = d.Write.ExecContext(t.Context(), `UPDATE jd_categories SET description='Local edit' WHERE code=11`)
 			case "rule toggle":
 				_, err = d.Write.ExecContext(t.Context(), `UPDATE automations SET enabled=0 WHERE name='File utility invoices'`)
-			case "setup":
-				_, err = d.Write.ExecContext(t.Context(), `INSERT INTO settings(key,value_json,updated_at) VALUES('setup.completed_at','1',1)`)
 			case "filed trash":
 				id := document(t, d, "Trashed receipt", "")
 				_, err = d.Write.ExecContext(t.Context(), `UPDATE documents SET jd_category_id=(SELECT id FROM jd_categories WHERE code=11),trashed_at=1 WHERE id=?`, id)

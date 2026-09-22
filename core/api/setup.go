@@ -1,6 +1,6 @@
 package api
 
-// Admin-only setup wizard endpoints.
+// Admin-only archive configuration endpoints.
 
 import (
 	"context"
@@ -23,19 +23,9 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
 
-var setupIntentPresets = map[string]string{
-	"personal":       "solo",
-	"household":      "household",
-	"freelance":      "freelance",
-	"small_business": "smb_billing",
-	"custom":         "",
-}
-
-// registerSetup wires the wizard's routes. Called from Register().
-func (s *Server) registerSetup(mux *http.ServeMux) {
+// registerArchiveConfiguration wires the archive administration routes.
+func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/setup/state", s.SetupState)
-	mux.HandleFunc("POST /api/admin/setup/intent", s.SaveSetupIntent)
-	mux.HandleFunc("POST /api/admin/setup/complete", s.SetupComplete)
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
@@ -52,7 +42,7 @@ func (s *Server) registerSetup(mux *http.ServeMux) {
 
 // ---------- state ----------
 
-// SetupState returns the wizard's progress.
+// SetupState returns filing-tree onboarding state for the selected system.
 func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 	actor := s.requireAdmin(w, r)
 	if actor == nil {
@@ -67,64 +57,7 @@ func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "setup.state", err)
 		return
 	}
-	st.RecommendedPreset = setupIntentPresets[st.Intent]
 	s.writeJSON(w, http.StatusOK, st)
-}
-
-// SaveSetupIntent records the operator's onboarding goal. It only guides the
-// filing-tree recommendation; it never hides features or sends telemetry.
-func (s *Server) SaveSetupIntent(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
-		return
-	}
-	var body struct {
-		Intent string `json:"intent"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
-		return
-	}
-	body.Intent = strings.TrimSpace(body.Intent)
-	recommended, ok := setupIntentPresets[body.Intent]
-	if !ok {
-		s.writeError(w, http.StatusBadRequest, "bad_intent",
-			"intent must be one of: personal, household, freelance, small_business, custom")
-		return
-	}
-	if err := settings.Set(r.Context(), s.DB, settings.KeySetupIntent, body.Intent); err != nil {
-		s.serverErr(w, "setup.intent", err)
-		return
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"intent": body.Intent, "recommended_preset": recommended,
-	})
-}
-
-// SetupComplete stamps the wizard-finished timestamp.
-func (s *Server) SetupComplete(w http.ResponseWriter, r *http.Request) {
-	actor := s.requireAdmin(w, r)
-	if actor == nil {
-		return
-	}
-	systemID, ok := s.requireSystem(w, r, actor)
-	if !ok {
-		return
-	}
-	chosen, err := settings.FilingTreeChosen(r.Context(), s.DB, systemID)
-	if err != nil {
-		s.serverErr(w, "setup.complete", err)
-		return
-	}
-	if !chosen {
-		s.writeError(w, http.StatusConflict, "filing_tree_required",
-			"choose a filing tree before finishing setup; choose Blank explicitly to keep Inbox only")
-		return
-	}
-	if err := settings.MarkSetupComplete(r.Context(), s.DB); err != nil {
-		s.serverErr(w, "setup.complete", err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------- user creation ----------
@@ -245,7 +178,7 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// IncludeSeeds is a pointer so we can distinguish "field omitted"
-	// (default true — the wizard's on-by-default toggle state) from
+	// (default true — the filing-tree form's on-by-default toggle state) from
 	// "explicitly false" (operator opted out of starter automations).
 	var body struct {
 		PresetID     string `json:"preset_id"`

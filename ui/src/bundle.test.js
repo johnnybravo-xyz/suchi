@@ -50,7 +50,7 @@ test('production chunks group document controls without pulling lazy screens int
   for (const path of [
     '/routes/Documents.svelte', '/routes/DocumentDetail.svelte', '/routes/Search.svelte',
     '/routes/Calendar.svelte', '/routes/Tasks.svelte', '/routes/Trash.svelte',
-    '/routes/Settings.svelte', '/routes/ArchiveSettings.svelte', '/routes/Setup.svelte',
+    '/routes/Settings.svelte', '/routes/ArchiveSettings.svelte',
     '/lib/EmailAccounts.svelte', '/lib/ArchiveChat.svelte', '/lib/UploadBox.svelte',
   ]) {
     const chunk = owner(path)

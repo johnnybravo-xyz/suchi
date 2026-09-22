@@ -1090,7 +1090,7 @@ Query params (all optional, in addition to the shared `system` context):
 - `?area=<code>` — scope to one area's 10-slot range. `?area=20`
   returns categories 20–29.
 
-DRF envelope. Read-only — tree changes use the admin setup/import endpoints,
+DRF envelope. Read-only — tree changes use the admin preset/import endpoints,
 not per-row insert. Generated 49 Inbox is included; 00–09 System index is not
 an area/category row or picker destination.
 
@@ -1244,8 +1244,8 @@ Remove the value row for one live, change-authorized document and field pair.
 
 ### `GET /api/presets/`
 
-Admin-only preset catalog for the setup wizard. Returns one row per
-built-in preset defined in `core/jd/presets.go`; the wizard renders
+Admin-only preset catalog for Archive Configuration's filing-tree picker. Returns one row per
+built-in preset defined in `core/jd/presets.go`; the picker renders
 the area list as a tree preview so an operator can see what a preset
 actually contains before applying. No envelope — the population is
 bounded (five presets today).
@@ -1267,10 +1267,10 @@ bounded (five presets today).
 ]
 ```
 
-`blank: true` marks the empty preset (no areas), which the wizard
+`blank: true` marks the empty preset (no areas), which the picker
 gates behind an explicit confirm checkbox. Categories aren't included
-per row — they'd bloat the payload, and the wizard doesn't render them
-in the picker step. Once a preset is applied via
+per row — they'd bloat the payload, and the picker doesn't render them.
+Once a preset is applied via
 `POST /api/admin/setup/preset`, the tree becomes visible through
 `/api/jd/categories/`.
 
@@ -1741,36 +1741,19 @@ Request:
 
 ### `GET /api/admin/setup/state`
 
-Admin-only. Onboarding timestamps and `intent` are archive-wide; intent is stored
-locally and only recommends a filing tree. `current_preset` and
-`filing_tree_chosen` describe the selected `?system=Snn`, not the archive's
-default system. The preset identifies the last imported choice, not proof that
-the current merged tree equals that file. `recommended_preset` derives from
-the archive-wide intent. Absent timestamps and empty strings are omitted.
+Admin-only. `started_at` is the first administrator's creation time and supports
+the fresh-install reminder. `current_preset` and `filing_tree_chosen` describe
+the selected `?system=Snn`, not the archive's default system. The preset identifies
+the last imported choice, not proof that the current merged tree equals that file.
+An empty preset string and absent start time are omitted.
 
 ```json
 {
   "started_at": 1789257600,
-  "intent": "household",
-  "recommended_preset": "household",
   "current_preset": "household",
   "filing_tree_chosen": true
 }
 ```
-
-### `POST /api/admin/setup/complete`
-
-Admin-only. Requires an explicitly chosen filing tree in the selected
-`?system=Snn`; an untouched Inbox-only bootstrap returns `409 filing_tree_required`.
-Explicitly choosing Blank counts as a choice. Success stamps the archive-wide
-onboarding completion timestamp and returns `204`.
-
-### `POST /api/admin/setup/intent`
-
-Admin-only. Body: `{"intent":"personal|household|freelance|small_business|custom"}`.
-The response returns the selected intent and mapped preset (`solo`, `household`,
-`freelance`, `smb_billing`, or blank for `custom`). It neither applies a tree
-nor hides setup capabilities.
 
 ## Archive research
 
@@ -2089,7 +2072,7 @@ result that passes production validation.
 The result is the validated synthetic classification only. Raw provider output
 and archive content are never returned.
 
-## Runtime setup settings
+## Runtime archive settings
 
 `GET /api/admin/settings/preferences` returns the effective backup interval and
 OCR language list. `POST` to the same path with

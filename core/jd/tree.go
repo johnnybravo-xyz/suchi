@@ -146,7 +146,7 @@ func EnsureBootstrapTree(ctx context.Context, d *db.DB, log *slog.Logger, mode T
 
 // EnsureTree preserves the established starter taxonomy used by explicit
 // classified imports and demo seeding. Normal server boot should call
-// EnsureBootstrapTree so it does not choose categories before the wizard.
+// EnsureBootstrapTree so it does not choose categories before an administrator.
 // Behavior:
 //
 //   - An empty system receives the caller's tree and its own Inbox pointer.

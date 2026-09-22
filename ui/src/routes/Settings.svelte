@@ -15,12 +15,10 @@
   const isAdmin = session.user?.role === 'admin'
   const archiveSelected = $derived(isAdmin && initialTab === 'archive')
   let setup = $state(undefined)
-  let setupError = $state('')
 
   async function loadSetup() {
-    setupError = ''
     try { setup = await setupState() }
-    catch (ex) { setupError = ex.message || 'Could not load setup state.' }
+    catch { setup = undefined }
   }
 
   async function taxonomyChanged() {
@@ -30,8 +28,7 @@
   if (isAdmin) loadSetup()
 
   const setupNeedsAttention = $derived(
-    isAdmin && setup !== undefined && !setup?.completed_at &&
-    !setup?.filing_tree_chosen && !setupEngaged
+    isAdmin && setup !== undefined && !setup?.filing_tree_chosen && !setupEngaged
   )
 </script>
 
@@ -45,29 +42,17 @@
 
   <div class="settings-body" class:account-body={!archiveSelected}>
   {#if setupNeedsAttention}
-    <section class="setup-row settings-section" aria-label="Setup wizard">
+    <section class="setup-row settings-section" aria-label="Archive setup">
       <div>
-        <b>Setup is incomplete</b>
-        <span>Choose a filing tree to finish the guided archive setup.</span>
+        <b>Archive setup is incomplete</b>
+        <span>Choose a filing tree to finish archive setup.</span>
       </div>
-      <a role="button" class="btn sm primary" href={filingHref("#/setup")} onclick={onSetupEngaged}>Continue setup</a>
+      <a role="button" class="btn sm primary" href={filingHref("#/settings?tab=archive&section=archive")} onclick={onSetupEngaged}>Continue setup</a>
     </section>
   {/if}
 
   {#if archiveSelected}
-    {#if setupError}
-      <div class="err settings-error">
-        <span>{setupError}</span>
-        <button class="btn sm" onclick={loadSetup}>Retry</button>
-      </div>
-    {:else if setup === undefined}
-      <div class="archive-loading" aria-label="Loading archive settings">
-        <div class="skel" style="width:28%"></div>
-        <div class="skel" style="width:76%"></div>
-      </div>
-    {:else if !setupNeedsAttention}
-      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged, setupSnapshot: setup }} />
-    {/if}
+    <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged, setupSnapshot: setup }} />
   {:else}
     <AccountSettings {notify} />
   {/if}
@@ -91,8 +76,6 @@
   .settings-tabs a.on { border-color:var(--accent);color:var(--accent) }
   .settings-body { flex:1;min-height:0;overflow-y:auto }
   .account-body { padding-inline-end:16px;scrollbar-gutter:stable }
-  .archive-loading { display:grid;gap:14px;padding:20px 0 }
-  .settings-error { display:flex;align-items:center;justify-content:space-between;gap:12px }
   .setup-row { display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0 8px }
   .setup-row > div { display:flex;flex-direction:column;gap:3px }
   .setup-row b { font-size:.86rem }

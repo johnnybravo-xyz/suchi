@@ -1,7 +1,7 @@
 <script>
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { untrack } from 'svelte'
-  import { setupState, saveSetupIntent, adminListUsers, applyPreset,
+  import { setupState, adminListUsers, applyPreset,
            getLLMSettings, saveLLMSettings, testLLMSettings,
            saveResearchContextMode, saveClassificationAutoApply,
            getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
@@ -11,18 +11,7 @@
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
 
-  let {
-    section = 'archive', notify, setup = false, onAdvance,
-    onTaxonomyChanged, onFilingTreeChosen, importBusy = $bindable(false),
-  } = $props()
-
-  const INTENTS = [
-    { id: 'personal', label: 'Personal', description: 'IDs, taxes, health, receipts, and everyday administration.', preset: 'solo' },
-    { id: 'household', label: 'Household', description: 'Shared finances, home, school, activities, and family records.', preset: 'household' },
-    { id: 'freelance', label: 'Freelance', description: 'Clients, contracts, projects, invoices, and self-employment tax.', preset: 'freelance' },
-    { id: 'small_business', label: 'Small business', description: 'Customer billing, vendor bills, payroll, and compliance.', preset: 'smb_billing' },
-    { id: 'custom', label: 'Choose myself', description: 'Compare every filing tree before deciding.', preset: '' },
-  ]
+  let { section = 'archive', notify, onTaxonomyChanged } = $props()
   // Server is the source of truth (GET /api/presets/); this list is
   // only the offline fallback so the step never renders empty.
   const FALLBACK_PRESETS = [
@@ -72,10 +61,9 @@
   // step-local form state
   let mailUsers = $state([])
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
-  let intent = $state('')
   let filingTreeChosen = $state(false)
-  let showAllPresets = $state(false)
   let importOpen = $state(false)
+  let importBusy = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
     egress_ack: false, confidence_threshold: 0.7,
@@ -101,12 +89,9 @@
 
   async function loadSetup() {
     const state = await setupState()
-    intent = state?.intent || intent
     filingTreeChosen = !!state?.filing_tree_chosen
-    onFilingTreeChosen?.(filingTreeChosen)
-    const selected = state?.current_preset || state?.recommended_preset
+    const selected = state?.current_preset
     if (selected) preset.preset_id = selected
-    if (setup) showAllPresets = intent === 'custom'
   }
 
   async function loadUsers() {
@@ -117,7 +102,6 @@
 
   async function userCreated() {
     try { await loadUsers() } catch {}
-    if (setup) onAdvance?.()
   }
 
   function seedSourceOwner() {
@@ -126,28 +110,14 @@
     }
   }
 
-  function chooseIntent(option) {
-    intent = option.id
-    showAllPresets = option.id === 'custom'
-    if (option.preset) preset.preset_id = option.preset
-  }
-
-  function saveIntent() {
-    return saveSetupIntent(intent)
-  }
-
   async function saveArchive() {
-    if (intent) await saveIntent()
     const result = await applyPreset(preset)
     filingTreeChosen = true
-    onFilingTreeChosen?.(true)
     await onTaxonomyChanged?.()
     return result
   }
 
   async function importedTree() {
-    filingTreeChosen = true
-    onFilingTreeChosen?.(true)
     await Promise.all([loadSetup(), onTaxonomyChanged?.()])
   }
 
@@ -222,7 +192,6 @@
     try {
       const result = await fn()
       notify?.(typeof label === 'function' ? label(result) : label)
-      if (setup) onAdvance?.()
     }
     catch (ex) { err = ex.message || 'The server rejected that.' }
     finally { busy = false }
@@ -340,11 +309,6 @@
   }
 
   const llmIsRemote = $derived(!!llm.endpoint_url && !isLocalEndpoint(llm.endpoint_url))
-  const recommendedPresetID = $derived(INTENTS.find(x => x.id === intent)?.preset || '')
-  const recommendedPreset = $derived(presets.find(x => x.id === recommendedPresetID))
-  const visiblePresets = $derived(
-    !setup || showAllPresets || !recommendedPreset ? presets : [recommendedPreset]
-  )
 </script>
 
 <div class="configuration-section">
@@ -353,7 +317,6 @@
       <div class="err">{activeLoadFailure.message}</div>
       <div class="toolbar">
         <button class="btn sm" onclick={() => retryLoad(activeLoadFailure.key)}>Retry</button>
-        {#if setup && section !== 'archive'}<button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button>{/if}
       </div>
     </div>
   {:else if activeLoading}
@@ -366,34 +329,14 @@
     {#if err}<div class="err">{err}</div>{/if}
 
     {#if section === 'archive'}
-      {#if setup}
-        <h3>What are you organizing?</h3>
-        <p class="wiz-p">Pick the closest fit, then apply a filing tree to continue. Suchi will recommend one, and every option remains editable.</p>
-        <div class="intent-grid">
-          {#each INTENTS as option (option.id)}
-            <button class="intent-choice" class:on={intent === option.id} disabled={busy || importBusy} onclick={() => chooseIntent(option)}>
-              <b>{option.label}</b><span class="sub">{option.description}</span>
-            </button>
-          {/each}
+      <h3>Filing tree</h3>
+      <p class="wiz-p">Add a filing tree to this archive. Later imports merge without overwriting existing categories or local rule choices.</p>
+      {#if !filingTreeChosen}
+        <div class="setup-requirement" role="note">
+          <b>Required for archive setup.</b>
+          <span>Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup.</span>
         </div>
-      {:else}
-        <h3>Filing tree</h3>
-        <p class="wiz-p">Add a filing tree to this archive. Later imports merge without overwriting existing categories or local rule choices.</p>
       {/if}
-
-      {#if !setup || intent}
-        {#if setup}
-          <h3 class="section-heading">Choose a filing tree
-            {#if !filingTreeChosen}<span class="pill warn" style="margin-left:8px">Required to continue</span>{/if}
-          </h3>
-          <p class="wiz-p">Start with a ready-made tree or import your own file. Later imports add to your current tree.</p>
-          {#if recommendedPreset && !showAllPresets}
-            <div class="toolbar" style="margin:0 0 12px">
-              <span class="pill ok">Recommended for {INTENTS.find(x => x.id === intent)?.label}</span>
-              <button class="btn sm" onclick={() => (showAllPresets = true)}>Compare all filing trees</button>
-            </div>
-          {/if}
-        {/if}
         <div class="toolbar">
           <button class="btn sm" disabled={busy || importBusy} onclick={() => { importOpen = !importOpen }}>{importOpen ? 'Back to presets' : 'Import a file'}</button>
         </div>
@@ -402,7 +345,7 @@
         {:else}
         <fieldset disabled={busy} style="border:0;padding:0;margin:0;min-width:0">
         <div class="preset-grid">
-          {#each visiblePresets as p (p.id)}
+          {#each presets as p (p.id)}
             <label class="preset" class:on={preset.preset_id === p.id}>
               <input type="radio" bind:group={preset.preset_id} value={p.id} hidden />
               <b>{p.name}</b><span class="sub">{p.description}</span>
@@ -424,14 +367,10 @@
           Refile existing documents into the new tree now.</label>
         <div class="toolbar">
           <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
-                  onclick={() => saveAnd(saveArchive, setup ? 'Archive setup saved' : 'Filing tree updated')}>Apply filing tree</button>
-          {#if setup && filingTreeChosen}
-            <button class="btn sm" disabled={busy} onclick={() => saveAnd(saveIntent, 'Archive direction saved')}>Keep the current tree</button>
-          {/if}
+                  onclick={() => saveAnd(saveArchive, 'Filing tree updated')}>Apply filing tree</button>
         </div>
         </fieldset>
         {/if}
-      {/if}
       <p class="migration-note">
         Moving an existing archive? Large export bundles are safer through the CLI.
         <a href="https://docs.suchi.page/importer" target="_blank" rel="noopener">Read the migration guide</a>.
@@ -440,7 +379,7 @@
     {:else if section === 'users'}
       <h3>Add another person</h3>
       <p class="wiz-p">Your admin account is ready. Add a family member or teammate, or continue on your own. You can manage users and groups later in Archive configuration.</p>
-      <UserCreateForm {notify} onCreated={userCreated} onSkip={setup ? onAdvance : undefined} />
+      <UserCreateForm {notify} onCreated={userCreated} />
 
     {:else if section === 'sources'}
       <h3>Watched folder</h3>
@@ -466,19 +405,12 @@
       <div class="toolbar">
         <button class="btn primary sm" disabled={busy || !ingest.fs_watch_dir || !ingest.fs_watch_owner_email}
                 onclick={() => saveAnd(() => saveIngestSettings(ingest), 'Watched folder saved')}>Save folder</button>
-        {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Uploads only</button>{/if}
       </div>
 
     {:else if section === 'mail'}
       <h3>Email intake</h3>
       <p class="wiz-p">Point suchi at one or more mailboxes and forwarded documents file themselves. Credentials stay server-side; the password field never reads back.</p>
       <EmailAccounts {notify} users={mailUsers} />
-      <div class="toolbar" style="margin-top:12px">
-        {#if setup}
-          <button class="btn primary sm" onclick={() => onAdvance?.()}>Continue</button>
-          <button class="btn sm" onclick={() => onAdvance?.()}>Skip for now</button>
-        {/if}
-      </div>
 
     {:else if section === 'llm'}
       <h3>Filing suggestions, dates, and research</h3>
@@ -641,10 +573,6 @@
       <p class="wiz-p">Automations file documents by title, content, sender, tags, and other metadata.</p>
       <div class="toolbar">
         <a role="button" class="btn primary sm" href={filingHref("#/automations")}>Open automations</a>
-        {#if setup}
-          <button class="btn sm" onclick={() => onAdvance?.()}>Done</button>
-          <button class="btn sm" onclick={() => onAdvance?.()}>Skip</button>
-        {/if}
       </div>
 
     {:else if section === 'preferences'}
@@ -660,7 +588,6 @@
                   backup_interval_hours: Number(prefs.backup_interval_hours) || 0,
                   ocr_languages: prefs.ocr_languages.split(',').map(x => x.trim()).filter(Boolean),
                 }), 'Preferences saved')}>Save preferences</button>
-        {#if setup}<button class="btn sm" onclick={() => onAdvance?.()}>Defaults are fine</button>{/if}
       </div>
     {/if}
   {/if}
@@ -670,17 +597,14 @@
   .wiz-p { color: var(--muted); font-size: .92rem; margin: 6px 0 16px; max-width: 46em; }
   .wiz-check { display: flex; gap: 9px; align-items: baseline; font-size: .86rem; color: var(--muted); margin: 0 0 14px; }
   .wiz-check.attn { color: var(--warn); }
-  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  .intent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  .intent-choice {
-    display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px;
-    border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface);
-    color: var(--ink); text-align: left;
+  .setup-requirement {
+    display: grid; gap: 2px; margin: 0 0 14px; padding: 10px 12px;
+    border-left: 3px solid var(--warn); border-radius: var(--r-sm);
+    background: var(--warn-soft); font-size: .82rem; line-height: 1.45;
   }
-  .intent-choice:hover { border-color: var(--accent); }
-  .intent-choice.on { border-color: var(--accent); background: var(--tint); }
-  .intent-choice .sub { color: var(--muted); font-size: .78rem; line-height: 1.35; }
-  .section-heading { margin-top: 22px; }
+  .setup-requirement b { color: var(--warn); }
+  .setup-requirement span { color: var(--muted); }
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .migration-note { margin: 18px 0 0; color: var(--faint); font-size: .76rem; }
   .range { width: 100%; accent-color: var(--accent); }
   .test-result {
@@ -727,7 +651,6 @@
   .configuration-loading { display:grid;gap:12px;padding:8px 0; }
   .configuration-load-error .toolbar { margin-top:10px; }
   @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
-  @media (max-width: 640px) { .intent-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .model-options { padding: 13px; } }
   @media (max-width: 760px) {
     .research-context { padding: 13px; }

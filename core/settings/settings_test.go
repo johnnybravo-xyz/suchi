@@ -208,9 +208,6 @@ func TestSetupState_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.CompletedAt != nil {
-		t.Error("fresh setup should not have completed_at")
-	}
 	if s.StartedAt != nil {
 		t.Error("setup without an admin should not have started_at")
 	}
@@ -239,14 +236,9 @@ func TestSetupState_StartsWithFirstAdmin(t *testing.T) {
 	}
 }
 
-func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
+func TestSetupState_LoadsCurrentPreset(t *testing.T) {
 	d := setupDB(t)
 	ctx := context.Background()
-	if err := settings.SetMany(ctx, d, map[string]any{
-		settings.KeySetupIntent: "household",
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := d.Write.ExecContext(ctx, `UPDATE jd_systems SET preset_id = 'household' WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +246,7 @@ func TestSetupState_LoadsIntentAndCurrentPreset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Intent != "household" || s.CurrentPreset != "household" {
+	if s.CurrentPreset != "household" {
 		t.Fatalf("setup state = %#v", s)
 	}
 	if !s.FilingTreeChosen {
@@ -274,21 +266,6 @@ func TestSetupState_ImportedTaxonomyCountsAsChoice(t *testing.T) {
 	}
 	if !s.FilingTreeChosen {
 		t.Error("an imported taxonomy should count as a filing-tree choice")
-	}
-}
-
-func TestMarkCompleteUpdatesSetupState(t *testing.T) {
-	d := setupDB(t)
-	ctx := context.Background()
-	if err := settings.MarkSetupComplete(ctx, d); err != nil {
-		t.Fatal(err)
-	}
-	state, err := settings.LoadSetupState(ctx, d, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.CompletedAt == nil || *state.CompletedAt == 0 {
-		t.Error("MarkSetupComplete did not stamp the setup state")
 	}
 }
 

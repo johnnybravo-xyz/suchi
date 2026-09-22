@@ -22,9 +22,6 @@ import (
 // Well-known keys. Prefer these constants over raw strings so a rename
 // is one grep away.
 const (
-	KeySetupCompletedAt = "setup.completed_at"
-	KeySetupIntent      = "setup.intent"
-
 	KeyLLMEndpointURL          = "llm.endpoint_url"
 	KeyLLMModel                = "llm.model"
 	KeyLLMAPIKeySealed         = "llm.api_key_sealed"
@@ -145,16 +142,14 @@ func Delete(ctx context.Context, database *db.DB, key string) error {
 	})
 }
 
-// ---------- SetupState — the wizard's specific surface ----------
+// ---------- SetupState — archive filing-tree onboarding ----------
 
-// SetupState is the wizard's view of onboarding progress.
+// SetupState is the minimal state needed by archive setup reminders and the
+// filing-tree configuration surface.
 type SetupState struct {
-	CompletedAt       *int64 `json:"completed_at,omitempty"` // unix seconds
-	StartedAt         *int64 `json:"started_at,omitempty"`   // first admin creation
-	Intent            string `json:"intent,omitempty"`
-	RecommendedPreset string `json:"recommended_preset,omitempty"`
-	CurrentPreset     string `json:"current_preset,omitempty"`
-	FilingTreeChosen  bool   `json:"filing_tree_chosen"`
+	StartedAt        *int64 `json:"started_at,omitempty"` // first admin creation
+	CurrentPreset    string `json:"current_preset,omitempty"`
+	FilingTreeChosen bool   `json:"filing_tree_chosen"`
 }
 
 // LoadSetupState reads global onboarding progress and the selected system's tree.
@@ -168,15 +163,6 @@ func LoadSetupState(ctx context.Context, database *db.DB, systemID int64) (*Setu
 	if startedAt.Valid && startedAt.Int64 > 0 {
 		value := startedAt.Int64
 		s.StartedAt = &value
-	}
-	var completedAt int64
-	if err := Get(ctx, database, KeySetupCompletedAt, &completedAt); err == nil {
-		s.CompletedAt = &completedAt
-	} else if !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-	if err := Get(ctx, database, KeySetupIntent, &s.Intent); err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, err
 	}
 	if err := database.Read.QueryRowContext(ctx, `SELECT COALESCE(preset_id, '') FROM jd_systems WHERE id = ?`, systemID).Scan(&s.CurrentPreset); err != nil {
 		return nil, err
@@ -200,13 +186,6 @@ func FilingTreeChosen(ctx context.Context, database *db.DB, systemID int64) (boo
 		return false, fmt.Errorf("read filing-tree choice: %w", err)
 	}
 	return chosen, nil
-}
-
-// MarkSetupComplete stamps the wizard-finished timestamp. Idempotent —
-// re-runs update the timestamp so admins revisiting see "completed
-// most-recent".
-func MarkSetupComplete(ctx context.Context, database *db.DB) error {
-	return Set(ctx, database, KeySetupCompletedAt, time.Now().Unix())
 }
 
 // ResolveAutoApply reads the host's inference policy from the same database

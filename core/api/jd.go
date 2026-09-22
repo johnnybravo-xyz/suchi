@@ -172,7 +172,7 @@ func (s *Server) ListJDCategories(w http.ResponseWriter, r *http.Request) {
 // conditional import chain.
 var _ = sql.ErrNoRows
 
-// PresetRow is one row of the /api/presets/ listing. The wizard
+// PresetRow is one row of the /api/presets/ listing. Archive Configuration
 // renders the areas + category counts as a tree preview so the
 // operator sees what a Suchi Preset actually looks like before
 // committing to it.
@@ -184,7 +184,7 @@ type PresetRow struct {
 	Areas       []PresetArea `json:"areas"`
 }
 
-// PresetArea is the area-level summary the wizard needs — code
+// PresetArea is the area-level summary the filing-tree picker needs — code
 // range for the header, name for the label, category_count so it
 // can show "12 categories" without hydrating the whole tree.
 type PresetArea struct {
@@ -194,7 +194,7 @@ type PresetArea struct {
 }
 
 // ListPresets — GET /api/presets/. Admin only. Sourced from
-// core/jd.Presets() so a new preset appears in the wizard with no
+// core/jd.Presets() so a new preset appears in Archive Configuration with no
 // SPA release. No envelope — the population is bounded (currently
 // five rows) and pagination would just add noise.
 func (s *Server) ListPresets(w http.ResponseWriter, r *http.Request) {

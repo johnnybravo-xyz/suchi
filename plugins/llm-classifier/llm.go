@@ -243,9 +243,9 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	return p, nil
 }
 
-// SetConfig atomically swaps the plugin's runtime config. Same
-// validation as New(); on failure the old config stays live. Called by
-// the setup wizard's /api/admin/settings/llm handler so an operator
+// SetConfig atomically swaps the plugin's runtime config. Same validation as
+// New(); on failure the old config stays live. Called by Archive configuration
+// so an operator
 // doesn't have to restart to try a different endpoint. The complete runtime,
 // including the request timeout, swaps as one snapshot.
 func (p *Plugin) SetConfig(cfg Config) error {

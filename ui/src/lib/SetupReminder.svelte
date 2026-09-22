@@ -6,7 +6,7 @@
 </script>
 
 <aside class="setup-reminder" class:setup-reminder-side={placement === 'side'}
-       class:setup-reminder-mobile={placement === 'mobile'} aria-label="Setup wizard">
+       class:setup-reminder-mobile={placement === 'mobile'} aria-label="Archive setup">
   <div class="setup-reminder-head">
     <span class="setup-reminder-icon"><Icon name="settings" size={16} /></span>
     <div>
@@ -14,9 +14,9 @@
       <span>Required to finish setup. You can reopen Setup anytime from Settings.</span>
     </div>
     <button class="btn sm setup-reminder-close" onclick={onClose}
-            title="Close setup reminder" aria-label="Close setup reminder">
+            title="Close archive setup reminder" aria-label="Close archive setup reminder">
       <Icon name="x" size={13} />
     </button>
   </div>
-  <a role="button" class="btn primary sm" href={filingHref("#/setup")} onclick={onContinue}>Continue setup</a>
+  <a role="button" class="btn primary sm" href={filingHref("#/settings?tab=archive&section=archive")} onclick={onContinue}>Continue setup</a>
 </aside>

@@ -1,6 +1,6 @@
 package api
 
-// Setup wizard validation tests. Focused on boundary checks that keep
+// Archive configuration validation tests. Focused on boundary checks that keep
 // bad inputs out of SQL / shell / settings — not the happy-path
 // integration flow (that's exercised by hack/local-ingest-test.sh +
 // deploy/mail-mbsync/smoke-test.sh).
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -68,81 +69,41 @@ func TestModelSafe(t *testing.T) {
 	}
 }
 
-func TestSetupIntent_PersistsRecommendation(t *testing.T) {
+func TestSetupStateReturnsOnlyFilingTreeReminderState(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
+	if _, err := d.Write.Exec(`
+		UPDATE users SET created_at=100 WHERE id=1;
+		UPDATE jd_systems SET preset_id='blank' WHERE id=1;
+		INSERT INTO settings(key,value_json,updated_at) VALUES
+			('setup.intent','"household"',1),
+			('setup.completed_at','200',1)
+	`); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/intent",
-		strings.NewReader(`{"intent":"freelance"}`))
-	req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
-	rec := httptest.NewRecorder()
-	s.SaveSetupIntent(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"recommended_preset":"freelance"`) {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	presetReq := httptest.NewRequest(http.MethodPost, "/api/admin/setup/preset", strings.NewReader(`{"preset_id":"solo"}`))
-	presetReq = presetReq.WithContext(auth.WithPrincipal(presetReq.Context(), admin))
-	presetRec := httptest.NewRecorder()
-	s.ApplyPreset(presetRec, presetReq)
-	if presetRec.Code != http.StatusOK {
-		t.Fatalf("preset status=%d body=%s", presetRec.Code, presetRec.Body.String())
-	}
-
-	stateReq := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
-	stateReq = stateReq.WithContext(auth.WithPrincipal(stateReq.Context(), admin))
-	stateRec := httptest.NewRecorder()
-	s.SetupState(stateRec, stateReq)
-	if stateRec.Code != http.StatusOK || !strings.Contains(stateRec.Body.String(), `"intent":"freelance"`) ||
-		!strings.Contains(stateRec.Body.String(), `"recommended_preset":"freelance"`) ||
-		!strings.Contains(stateRec.Body.String(), `"current_preset":"solo"`) ||
-		strings.Contains(stateRec.Body.String(), `"steps"`) {
-		t.Fatalf("state status=%d body=%s", stateRec.Code, stateRec.Body.String())
-	}
-}
-
-func TestSetupIntent_RejectsUnknownValue(t *testing.T) {
-	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/intent",
-		strings.NewReader(`{"intent":"paper-hoard"}`))
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
 	}))
 	rec := httptest.NewRecorder()
-	s.SaveSetupIntent(rec, req)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_intent") {
+
+	s.SetupState(rec, req)
+
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-func TestSetupComplete_RequiresFilingTreeChoice(t *testing.T) {
-	d := openTestDB(t)
-	seedUser(t, d, 1)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	admin := &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
-	complete := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/api/admin/setup/complete", nil)
-		req = req.WithContext(auth.WithPrincipal(req.Context(), admin))
-		rec := httptest.NewRecorder()
-		s.SetupComplete(rec, req)
-		return rec
+	var state map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
 	}
-
-	rec := complete()
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"filing_tree_required"`) {
-		t.Fatalf("without choice status=%d body=%s", rec.Code, rec.Body.String())
+	want := map[string]any{
+		"started_at":         float64(100),
+		"current_preset":     "blank",
+		"filing_tree_chosen": true,
 	}
-	presetReq := httptest.NewRequest(http.MethodPost, "/api/admin/setup/preset", strings.NewReader(`{"preset_id":"blank","confirm_blank":true}`))
-	presetReq = presetReq.WithContext(auth.WithPrincipal(presetReq.Context(), admin))
-	presetRec := httptest.NewRecorder()
-	s.ApplyPreset(presetRec, presetReq)
-	if presetRec.Code != http.StatusOK {
-		t.Fatalf("preset status=%d body=%s", presetRec.Code, presetRec.Body.String())
-	}
-	rec = complete()
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("with explicit blank choice status=%d body=%s", rec.Code, rec.Body.String())
+	if !maps.Equal(state, want) {
+		t.Fatalf("state=%#v want=%#v", state, want)
 	}
 }
 

@@ -146,10 +146,6 @@ func TestSystemsSetupUsesSelectedTreeWithoutBorrowingDefaultChoice(t *testing.T)
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &state) != nil || state.FilingTreeChosen {
 		t.Fatalf("unconfigured S02 borrowed S01's choice: %d %s", w.Code, w.Body.String())
 	}
-	w = systemsBoundaryRequest(mux, "POST", "/api/admin/setup/complete?system=S02", "", adminPrincipal(1))
-	if w.Code != http.StatusConflict {
-		t.Fatalf("completed unconfigured S02: %d %s", w.Code, w.Body.String())
-	}
 }
 
 func TestSystemsBuiltinPresetAppliesOnlyToSelectedSystem(t *testing.T) {

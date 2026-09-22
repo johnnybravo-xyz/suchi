@@ -1,4 +1,4 @@
-// Suchi Presets — the setup-wizard picker's catalog. A Suchi Preset
+// Suchi Presets — the Archive Configuration filing-tree catalog. A Suchi Preset
 // is a preset following Suchi's Johnny.Decimal taxonomy: the starter
 // tree plus its seeded automations.
 //
@@ -6,12 +6,12 @@
 // `core/jd/presets/*.toml`, embedded here via go:embed and parsed at
 // package-init time by core/jd/presetfile. This is what makes the
 // built-ins the reference implementations of the taxonomy file format:
-// the same parser powers the wizard picker and the published-preset
+// the same parser powers the filing-tree picker and the published-preset
 // import path (Archive configuration > People and metadata > Taxonomy) AND
 // the CLI validator.
 //
 // A new built-in is a new file. The order is fixed via presetOrder to
-// guarantee a stable display sequence in the wizard picker (blank
+// guarantee a stable display sequence in the filing-tree picker (blank
 // sits last on purpose).
 
 package jd
@@ -33,7 +33,7 @@ import (
 //go:embed presets/*.toml
 var presetFS embed.FS
 
-// presetOrder is the wizard-display order. Blank sits last on purpose.
+// presetOrder is the picker display order. Blank sits last on purpose.
 var presetOrder = []string{
 	"solo",
 	"household",
@@ -42,8 +42,8 @@ var presetOrder = []string{
 	"blank",
 }
 
-// Preset is one entry in the setup-wizard's JD picker. Blank presets
-// carry an explicit opt-in flag so the wizard can guard them.
+// Preset is one entry in the filing-tree picker. Blank presets carry an
+// explicit opt-in flag so the configuration surface can guard them.
 type Preset struct {
 	ID          string
 	Label       string
@@ -57,7 +57,7 @@ type Preset struct {
 // allocation-free.
 var cachedPresets []Preset
 
-// Presets returns the wizard's preset catalog in display order. Panics
+// Presets returns the filing-tree preset catalog in display order. Panics
 // on parse failure — a corrupt embedded file is a build-time bug that
 // should never survive `make test`.
 func Presets() []Preset {
@@ -148,7 +148,7 @@ type ApplyPresetOpts struct {
 	ActorID  int64
 	// SkipSeeds drops the preset's starter keyword and explicit
 	// automations. Off by default so first-time operators get the
-	// "batteries included" experience; the wizard exposes a toggle
+	// "batteries included" experience; the filing-tree form exposes a toggle
 	// for operators who want to build their taxonomy from scratch.
 	SkipSeeds bool
 }

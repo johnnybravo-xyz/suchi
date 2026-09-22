@@ -1,6 +1,6 @@
 ---
 title: "Web app"
-description: "Navigation, setup, account settings, and everyday document actions in Suchi."
+description: "Navigation, archive configuration, account settings, and everyday document actions in Suchi."
 ---
 
 The web app opens on the working archive. This guide describes its current
@@ -217,7 +217,7 @@ On narrow screens, section navigation becomes a horizontally scrolling rail.
 type selector covers tags, correspondents, document types, storage paths and
 custom fields. Groups expands its members beside the selected group. User
 capabilities are under **Additional access**; hidden member choices are not saved
-when creating an admin. Setup reuses the same user-creation form.
+when creating an admin. Archive Configuration reuses the same user-creation form.
 
 **Taxonomy** imports/exports HuML or TOML filing-tree files. Preview precedes Apply;
 export explicitly offers starter rules or tree only. **What is included?** explains
@@ -252,30 +252,35 @@ manage only their own under **My account > Mailboxes**.
 ## First-run setup
 
 A fresh archive has only System/Inbox, without an implicit preset or filing Index.
-Setup order is **Filing tree → People → Watched folder → Email intake →
-Classification → Automations → OCR and backups**.
+There is no separate setup wizard. Administrators use **Settings > Archive
+configuration**, whose shared sidebar exposes Filing tree, People and metadata,
+Watched folder, Email intake, Classification, Automations, OCR and backups, plus
+Trust Gate when the server enables it. Every section is usable before a tree is
+chosen.
 
-Filing tree is the only required step: apply a preset/import before advancing or
-**Finish setup**. Starting from scratch requires explicitly confirming **Blank**.
-Other steps are optional and remain available in Archive configuration.
+Filing tree is the only setup requirement. Apply a preset or import, or explicitly
+confirm **Blank** to start from scratch. That selection satisfies archive setup;
+all other configuration remains optional.
 
 **Import a file** sits beside preset cards and shares Settings' importer. Choose
 HuML/TOML or paste content, include/exclude starter rules, Preview and Apply.
 Preview separates your tree from generated System/49, explains 00.00 and shows
 additions, preserved rules and collision choices. A blank tree needs confirmation;
-stale previews preserve input and require re-preview. Success refreshes setup and
+stale previews preserve input and require re-preview. Success refreshes archive state and
 the sidebar. Later applications merge, without resetting existing filing.
 Validation checks supported structure, not domain correctness or rule trust.
 See [Filing trees](/jd) for destination, collision and export rules.
 
 For 48 hours after first-admin creation, incomplete setup shows **Choose your
-filing tree** in the sidebar/narrow Dashboard with **Continue setup**. Opening or
-closing the reminder, choosing a tree, finishing setup or expiry dismisses it.
-Browser dismissal is specific to user/installation start; Setup remains in Settings.
+filing tree** in the sidebar/narrow Dashboard with **Continue setup**. The action
+opens **Archive configuration > Filing tree**. Opening or closing the reminder,
+choosing a preset or Blank, importing a tree, or expiry dismisses it. Browser
+dismissal is specific to user/installation start.
 
-Before engagement, Settings shows **Setup is incomplete** and **Continue setup**
-in place of Archive configuration sections. Retiring the prompt exposes all
-sections; optional wizard steps never keep administration locked.
+Before engagement, Settings shows **Archive setup is incomplete** and **Continue
+setup** above the ordinary content. It never replaces or locks Archive
+Configuration sections. `#/setup` is not a screen and has no compatibility
+redirect.
 
 ## Capabilities and sensitive documents
 

@@ -11,7 +11,6 @@ export const ARCHIVE_SETTINGS_GROUPS = [
       },
       {
         name: 'users', label: 'People and metadata', icon: 'shield',
-        setupLabel: 'People',
         description: 'Manage people, document metadata, and filing-tree files.',
         href: '#/settings?tab=archive&section=users',
       },
@@ -66,6 +65,3 @@ export const ARCHIVE_SETTINGS_GROUPS = [
 ]
 
 export const ARCHIVE_SETTINGS_ITEMS = ARCHIVE_SETTINGS_GROUPS.flatMap((group) => group.items)
-export const SETUP_STEPS = ARCHIVE_SETTINGS_ITEMS.map(({ name, label, setupLabel }) => ({
-  name, label: setupLabel || label,
-}))

@@ -27,7 +27,6 @@
     automations: () => import('./routes/Automations.svelte'),
     settings:    () => import('./routes/Settings.svelte'),
     account:     () => import('./routes/AccountSettings.svelte'),
-    setup:       () => import('./routes/Setup.svelte'),
     demo:        () => import('./routes/Demo.svelte'),
   }
 
@@ -97,13 +96,13 @@
   }
   function dismissSetupReminder() {
     acknowledgeSetupReminder()
-    notify('Setup reminder closed. Setup is always available in Settings.')
+    notify('Archive setup reminder closed.')
   }
   function openSetupFromReminder() {
     acknowledgeSetupReminder()
     mobileNavOpen = false
   }
-  function handleSetupTaxonomyChanged() {
+  function handleArchiveTaxonomyChanged() {
     acknowledgeSetupReminder()
     return loadTaxonomy()
   }
@@ -170,7 +169,7 @@
           const startedAt = Number(state?.started_at || 0)
           const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
           setupReminderKey = setupDismissalKey(startedAt)
-          setupNeeded = !state?.completed_at && !state?.filing_tree_chosen && withinWindow && !setupReminderWasDismissed(setupReminderKey)
+          setupNeeded = !state?.filing_tree_chosen && withinWindow && !setupReminderWasDismissed(setupReminderKey)
           setupEngaged = !setupNeeded
         }).catch(() => {})
       : Promise.resolve()
@@ -481,7 +480,6 @@
       upload: 'Upload',
       settings: 'Settings',
       demo: 'Demo',
-      setup: 'Setup',
     })[page] || 'Page not found'
   )
   $effect(() => {
@@ -681,7 +679,7 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify: scopedNotify, jdCategories }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: loadTaxonomy, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: handleArchiveTaxonomyChanged, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}
@@ -689,7 +687,6 @@
             <Lazy load={lazyRoutes.calendar} props={{ query: route.query, demo: demoVisitor }} />
           {/key}
         {:else if page === 'demo'}<Lazy load={lazyRoutes.demo} props={{ jdCategories }} />
-        {:else if page === 'setup' && session.user?.role === 'admin'}<Lazy load={lazyRoutes.setup} props={{ notify: scopedNotify, onTaxonomyChanged: handleSetupTaxonomyChanged, onDone: () => { acknowledgeSetupReminder(); go('#/dashboard') } }} />
         {:else}<div class="empty"><b>Page not found.</b><span>The address does not match a Suchi screen.</span><a href={filingHref("#/dashboard")}>Back to the dashboard</a></div>
         {/if}
       </div>

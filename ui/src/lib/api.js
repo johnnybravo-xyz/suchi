@@ -242,9 +242,7 @@ export const deleteToken = (id) => api.del(`/api/tokens/${id}`)
 export const previewPath = (id, reveal) => scopedURL(`/preview/${id}${reveal ? '?reveal=1' : ''}`)
 export const downloadPath = (id) => scopedURL(`/download/${id}`)
 
-// ---- setup wizard (admin) ----
-export const setupComplete = () => api.post('/api/admin/setup/complete')
-export const saveSetupIntent = (intent) => api.post('/api/admin/setup/intent', { intent })
+// ---- archive configuration (admin) ----
 export const adminCreateUser = (b) => api.post('/api/admin/users', b)
 export const adminListUsers = (params) => api.get(`/api/admin/users${qs(params)}`)
 export const adminPatchUser = (id, b) => api.patch(`/api/admin/users/${id}`, b)

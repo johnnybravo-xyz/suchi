@@ -349,8 +349,14 @@ no YAML fallback, runtime catalog, passthrough fields or separate UI schema.
 destination/first-import choice, memberships, options/remaps and relevant target
 state. Recheck active API admin and plan under the writer, resolve local symbols,
 preserve local/disabled rules and atomically commit systems/tree/provenance/jobs.
-Unrelated systems do not stale a plan; only safe initial setup replaces bootstrap,
-later imports merge, and refile stays explicit.
+Unrelated systems do not stale a plan; only a safe initially unconfigured archive
+replaces bootstrap, later imports merge, and refile stays explicit. Archive setup
+has no completion mutation: `core/settings.LoadSetupState` projects the first-admin
+time plus the selected system's preset and filing-tree choice. Preset selection,
+confirmed Blank and taxonomy Apply satisfy the same filing-tree invariant. Legacy
+`setup.intent` and `setup.completed_at` settings do not participate in eligibility.
+The browser reads this projection through `GET /api/admin/setup/state`; the only
+setup-prefixed write retained is `POST /api/admin/setup/preset`.
 
 `core/taxonomy/exporter` exports consistent `archive` revision-1 snapshots. Tree-only omits
 keywords/starters; seeded export rejects unrepresentable/disabled behavior and

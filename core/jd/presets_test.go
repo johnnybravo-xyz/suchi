@@ -60,7 +60,7 @@ func TestApplyPresetPreservesFiledAndTrashedDocuments(t *testing.T) {
 	}
 
 	// Insert one visible filed doc and one trashed doc. The latter is not
-	// visible in the wizard, but its category FK must survive replacement.
+	// visible in the filing-tree picker, but its category FK must survive replacement.
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO documents(
 			system_id, owner_id, title, original_blob, original_size,

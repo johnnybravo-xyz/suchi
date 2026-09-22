@@ -1,6 +1,6 @@
 package api
 
-// The wizard preset picker reads /api/presets/ and expects
+// The filing-tree picker reads /api/presets/ and expects
 //
 //   - one row per Suchi Preset in core/jd.Presets()
 //   - area_code + name + category_count on each area

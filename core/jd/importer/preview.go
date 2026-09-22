@@ -13,7 +13,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
-	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
 	"github.com/johnnybravo-xyz/suchi/core/taxonomy/exporter"
 )
@@ -141,24 +140,6 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		return nil, err
 	}
 	rows.Close()
-	settings := map[string]string{}
-	rows, err = tx.QueryContext(ctx, `SELECT key,value_json FROM settings WHERE key='setup.completed_at' ORDER BY key`)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		settings[key] = value
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
 	var filed, configured bool
 	if err := tx.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM documents d JOIN jd_categories c ON c.id=d.jd_category_id WHERE d.system_id=? AND c.system=0),
@@ -167,12 +148,7 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		return nil, err
 	}
 	presetChosen := dest.Target.PresetID != ""
-	_, setupComplete := settings["setup.completed_at"]
-	if dest.Target.ID != systems.DefaultID {
-		delete(settings, "setup.completed_at")
-		setupComplete = false
-	}
-	if !filed && !configured && !presetChosen && !setupComplete && len(existing) <= 1 {
+	if !filed && !configured && !presetChosen && len(existing) <= 1 {
 		p.diff.Mode = "replace"
 	}
 	// The neutral bootstrap contains only System/Inbox. Keeping that row avoids
@@ -314,11 +290,10 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		Remaps            map[int]int
 		Tree              *presetfile.PresetFile
 		IDs               map[int]int64
-		Settings          map[string]string
 		Filed, Configured bool
 		Rules             []automations.Automation
 		References        []string
-	}{dest, opts.ContentSHA256, pf, opts.SkipSeeds, opts.Remaps, current, p.categoryIDs, settings, filed, configured, relevantRules, refs}
+	}{dest, opts.ContentSHA256, pf, opts.SkipSeeds, opts.Remaps, current, p.categoryIDs, filed, configured, relevantRules, refs}
 	b, err := json.Marshal(binding)
 	if err != nil {
 		return nil, err

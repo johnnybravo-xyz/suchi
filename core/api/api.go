@@ -106,7 +106,7 @@ type Server struct {
 	// LLMReloader is called after /api/admin/settings/llm writes so the
 	// running classifier picks up the new config without a restart.
 	// Main.go closes over the plugin instance; api/* doesn't import
-	// plugins/*. Nil means the wizard just writes the setting.
+	// plugins/*. Nil means Archive Configuration just writes the setting.
 	LLMReloader func(ctx context.Context) error
 	// LLMStatusReader resolves settings plus live plugin state without
 	// exposing the API key. LLMTester verifies a candidate configuration
@@ -119,9 +119,9 @@ type Server struct {
 	ChatCompletion  func(context.Context, string, []ChatCompletionMessage, int) (string, error)
 	ChatRuntimeInfo func() (host string, local bool)
 	chatGate        *chatGate
-	// LLMAEAD seals API keys written by the setup wizard.
+	// LLMAEAD seals API keys written by Archive Configuration.
 	LLMAEAD *suchicrypto.AEADKey
-	// Setup-owned runtime values use readers for honest revisit forms and
+	// Archive-owned runtime values use readers for honest revisit forms and
 	// reloaders so saves affect future work immediately.
 	RuntimePreferencesReader   func(context.Context) (RuntimePreferencesStatus, error)
 	RuntimePreferencesReloader func(context.Context) error
@@ -346,8 +346,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/email-accounts/oauth/complete", s.CompleteEmailAccountOAuth)
 	mux.HandleFunc("POST /api/email-accounts/{id}/oauth/revoke", s.RevokeEmailAccountOAuth)
 
-	// Setup wizard surface (admin-only).
-	s.registerSetup(mux)
+	// Archive configuration surface (admin-only).
+	s.registerArchiveConfiguration(mux)
 
 	// Approvals engine surface — routing/sign-off state machines at
 	// /api/approvals/*. Distinct from automations below.

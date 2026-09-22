@@ -40,5 +40,5 @@ export function selectSystem(code) {
   window.dispatchEvent(new HashChangeEvent('hashchange'))
 }
 export function isScopedAPI(path) {
-  return /^\/(preview|download)\//.test(path) || /^\/api\/(documents|search|autocomplete|languages|chat|intelligence|jd\/categories|tasks|approvals|automations|share_links|stats|trash|decryption-passwords|acls|custom_fields|tags|correspondents|document_types|storage_paths|email-accounts|saved_views|tokens|mobile\/pairing)(\/|\?|$)/.test(path) || /^\/api\/admin\/(taxonomy\/|setup\/(preset|state|complete))/.test(path)
+  return /^\/(preview|download)\//.test(path) || /^\/api\/(documents|search|autocomplete|languages|chat|intelligence|jd\/categories|tasks|approvals|automations|share_links|stats|trash|decryption-passwords|acls|custom_fields|tags|correspondents|document_types|storage_paths|email-accounts|saved_views|tokens|mobile\/pairing)(\/|\?|$)/.test(path) || /^\/api\/admin\/(taxonomy\/|setup\/(preset|state))/.test(path)
 }
