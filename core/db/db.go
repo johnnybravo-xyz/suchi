@@ -63,7 +63,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	//   the normal page cache path, so lowering this does not affect the
 	//   Write pool's single-writer discipline.
 	// _pragma=temp_store(MEMORY) — temp tables/indexes stay in RAM.
-	dsn := "file:" + abs + "?" + url.Values{
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String() + "?" + url.Values{
 		"_pragma": []string{
 			"journal_mode(WAL)",
 			"synchronous(NORMAL)",

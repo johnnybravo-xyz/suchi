@@ -4,6 +4,9 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+- Preserve literal SQLite database filenames and archive isolation.
+
+
 ### Added
 
 - Import HuML/TOML filing trees with target-aware previews, collision handling,

@@ -62,6 +62,35 @@ func TestWriteTxFailureReleasesWriter(t *testing.T) {
 	}
 }
 
+func TestOpenPreservesLiteralFilenameAndDatabaseIsolation(t *testing.T) {
+	root := t.TempDir()
+	var databases []*db.DB
+	for _, name := range []string{"archive #one%2f.db", "archive #two%2f.db"} {
+		path := filepath.Join(root, name)
+		d, err := db.Open(t.Context(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = d.Close() })
+		if _, err = d.ExecWrite(t.Context(), `CREATE TABLE marker(value TEXT); INSERT INTO marker(value) VALUES(?)`, name); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(path); err != nil {
+			t.Fatalf("database not created at literal filename %q: %v", name, err)
+		}
+		databases = append(databases, d)
+	}
+	for _, d := range databases {
+		var value string
+		if err := d.Read.QueryRowContext(t.Context(), `SELECT value FROM marker`).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		if value != filepath.Base(d.Path) {
+			t.Fatalf("distinct filenames shared a database: %q contains %q", d.Path, value)
+		}
+	}
+}
+
 // Smoke test: open a DB, run migrations, verify pragmas + writer discipline.
 // Fast, hermetic — no external services.
 func TestOpenAndMigrate(t *testing.T) {
