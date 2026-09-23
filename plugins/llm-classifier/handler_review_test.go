@@ -515,7 +515,7 @@ func TestClassifierNamingProvenanceSurvivesUntilApproval(t *testing.T) {
 			if err := json.Unmarshal([]byte(raw), &proposal); err != nil {
 				t.Fatal(err)
 			}
-			if len(proposal.Supporters) != 1 || proposal.Supporters[0] != (documentstate.Reference{DocumentID: 20, Snapshot: snapshot}) || len(proposal.BasedOn) != 1 || proposal.BasedOn[0] != 20 {
+			if len(proposal.Supporters) != 1 || proposal.Supporters[0] != (documentstate.Reference{DocumentID: 20, Snapshot: snapshot}) {
 				t.Fatalf("proposal lost its checked naming source: %+v", proposal.Supporters)
 			}
 			engine := approvals.New(d, silentLog())

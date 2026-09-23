@@ -382,14 +382,16 @@ only built-in discard can revisit Trash. Custom callbacks are trusted compiled
 code, not an authorization or inference interface. Enqueue extension work in the
 same transaction as its state change; keep network/subprocess calls outside it.
 [Automations](/automations#compiled-actions) owns the action contract. Integrations
-must not add another workflow engine. Advancement
-jobs carry system/run revision; handlers run outside the writer, then their
-transactional effects/tasks recheck revision/status. Tasks retain originating
+must not add another workflow engine. Advancement jobs carry system/run revision;
+handlers run outside the writer, then their transactional effects/tasks recheck
+revision/status. Tasks retain originating
 revision so retries cannot reopen resolved visits. Accepted decisions/timeouts
 increment revision and clear deadlines before queued advancement;
-timeout selection, expiration and enqueue are one transaction. Filing-suggestion
-sweeps check/resolve satisfied or superseded proposals transactionally through the
-same state machine without changing documents. See [Approvals](/approvals#timeouts-and-recovery).
+timeout selection, expiration and enqueue are one transaction. The periodic
+sweep handles only due workflow timeouts; it does not resolve filing suggestions.
+Document-change projections and resolutions recheck current source, field and
+access state, leaving stale proposals read-only until dismissed. See
+[Approvals](/approvals#timeouts-and-recovery).
 
 Approval run/task IDs use AUTOINCREMENT; run allocation also skips retained legacy
 job references. Upgrade recovery requires complete entry-job history and a resolved

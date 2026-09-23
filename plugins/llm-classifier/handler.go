@@ -153,7 +153,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			return nil
 		}
 		if res.Title != "" && res.Title != title {
-			if err := propose(approvals.DocumentChange{Field: "title", Value: res.Title, Label: res.Title}); err != nil {
+			if err := propose(approvals.DocumentChange{Field: "title", Value: res.Title}); err != nil {
 				return err
 			}
 		}
@@ -168,16 +168,15 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 			return err
 		}
 		if !hasCorrespondent && res.Correspondent != "" {
-			if err := propose(approvals.DocumentChange{Field: "correspondent", Value: res.Correspondent, Label: res.Correspondent}); err != nil {
+			if err := propose(approvals.DocumentChange{Field: "correspondent", Value: res.Correspondent}); err != nil {
 				return err
 			}
 		}
 		if inInbox && res.JDCategory > 0 {
 			var catID int64
-			var label string
-			err := tx.QueryRowContext(ctx, `SELECT id, name FROM jd_categories WHERE system_id=? AND code=? AND system=0`, baseline.SystemID, res.JDCategory).Scan(&catID, &label)
+			err := tx.QueryRowContext(ctx, `SELECT id FROM jd_categories WHERE system_id=? AND code=? AND system=0`, baseline.SystemID, res.JDCategory).Scan(&catID)
 			if err == nil {
-				if err := propose(approvals.DocumentChange{Field: "jd_category", ValueID: catID, Label: label}); err != nil {
+				if err := propose(approvals.DocumentChange{Field: "jd_category", ValueID: catID}); err != nil {
 					return err
 				}
 			} else if !errors.Is(err, sql.ErrNoRows) {
@@ -198,13 +197,13 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 				return err
 			}
 			if !attached {
-				if err := propose(approvals.DocumentChange{Field: "tag", Value: tag, Label: tag}); err != nil {
+				if err := propose(approvals.DocumentChange{Field: "tag", Value: tag}); err != nil {
 					return err
 				}
 			}
 		}
 		if code := lang.Format(res.Language); !languageLocked && code != "" && code != languages {
-			if err := propose(approvals.DocumentChange{Field: "language", Value: code, Label: code}); err != nil {
+			if err := propose(approvals.DocumentChange{Field: "language", Value: code}); err != nil {
 				return err
 			}
 		}

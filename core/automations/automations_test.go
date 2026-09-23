@@ -120,7 +120,7 @@ func TestRemoveTagsInvalidatesOlderProposal(t *testing.T) {
 			baseline, err := documentstate.Load(ctx, d.Read, docID)
 			must(t, err)
 			change := approvals.DocumentChange{
-				Field: "tag", ValueID: tagID, Label: "candidate", Confidence: .9,
+				Field: "tag", ValueID: tagID, Confidence: .9,
 				Source: "llm", Baseline: &baseline,
 			}
 			propose := func() error {

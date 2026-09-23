@@ -25,7 +25,7 @@ func TestDocumentChangeUsesApprovalLifecycle(t *testing.T) {
 			return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
 				Baseline: baseline,
 				Field:    "title", Value: "Electricity bill, March 2026",
-				Label: "Electricity bill, March 2026", Confidence: 0.65, Source: "llm",
+				Confidence: 0.65, Source: "llm",
 			})
 		}); err != nil {
 			t.Fatal(err)
@@ -150,7 +150,7 @@ func TestApprovedTagTakesOwnershipOfClassifierReview(t *testing.T) {
 	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
 		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
 			Baseline: baseline,
-			Field:    "tag", ValueID: 99, Label: "needs-review", Confidence: 0.65, Source: "archive",
+			Field:    "tag", ValueID: 99, Confidence: 0.65, Source: "archive",
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestDocumentChangeCannotResolveWhileDocumentIsTrashed(t *testing.T) {
 		return approvals.ProposeDocumentChangeInTx(ctx, tx, 10, approvals.DocumentChange{
 			Baseline: baseline,
 			Field:    "title", Value: "Electricity bill, March 2026",
-			Label: "Electricity bill, March 2026", Confidence: 0.65, Source: "llm",
+			Confidence: 0.65, Source: "llm",
 		})
 	}); err != nil {
 		t.Fatal(err)

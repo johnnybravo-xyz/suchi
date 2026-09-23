@@ -186,17 +186,13 @@ func proposeArchiveInput(ctx context.Context, tx *sql.Tx, log *slog.Logger, docI
 	// our own successful writes may advance the baseline used for application.
 	applicationBaseline := current
 	applyOrPropose := func(field string, valueID int64, confidence float64, ids []int64) error {
-		label, err := lookupLabel(ctx, tx, current.SystemID, field, valueID)
-		if err != nil {
-			return err
-		}
 		supporters := make([]documentstate.Reference, len(ids))
 		for i, id := range ids {
 			supporters[i] = documentstate.Reference{DocumentID: id, Snapshot: input.snapshots[id]}
 		}
 		change := approvals.DocumentChange{
-			Field: field, ValueID: valueID, Label: label, Confidence: confidence,
-			Threshold: &cfg.AutoThreshold, BasedOn: ids, Source: "archive",
+			Field: field, ValueID: valueID, Confidence: confidence,
+			Threshold: &cfg.AutoThreshold, Source: "archive",
 			Baseline: &applicationBaseline, Supporters: supporters,
 		}
 		didApply, err := approvals.ApplyAutomaticDocumentChangeInTx(ctx, tx, log, docID, change)
@@ -337,23 +333,4 @@ func topScalar(tally map[int64]float64) (int64, float64) {
 		}
 	}
 	return winnerID, winnerScore
-}
-
-func lookupLabel(ctx context.Context, tx *sql.Tx, systemID int64, field string, id int64) (string, error) {
-	var table, col string
-	switch field {
-	case "jd_category":
-		table, col = "jd_categories", "COALESCE(code || ' ' || name, '')"
-	case "correspondent":
-		table, col = "correspondents", "COALESCE(name, '')"
-	case "document_type":
-		table, col = "document_types", "COALESCE(name, '')"
-	case "tag":
-		table, col = "tags", "COALESCE(name, '')"
-	default:
-		return "", fmt.Errorf("unknown field %q", field)
-	}
-	var label string
-	err := tx.QueryRowContext(ctx, "SELECT "+col+" FROM "+table+" WHERE system_id = ? AND id = ?", systemID, id).Scan(&label)
-	return label, err
 }

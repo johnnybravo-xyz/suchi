@@ -39,10 +39,8 @@ type DocumentChange struct {
 	Field         string                    `json:"field"`
 	ValueID       int64                     `json:"value_id"`
 	Value         string                    `json:"value"`
-	Label         string                    `json:"label"`
 	Confidence    float64                   `json:"confidence"`
 	Threshold     *float64                  `json:"threshold,omitempty"`
-	BasedOn       []int64                   `json:"based_on"`
 	Source        string                    `json:"source"`
 	Baseline      *documentstate.Snapshot   `json:"baseline"`
 	Supporters    []documentstate.Reference `json:"supporters"`
@@ -67,11 +65,6 @@ func ProposeDocumentChangeInTx(ctx context.Context, tx *sql.Tx, docID int64, cha
 		return err
 	}
 	change.Reason, change.PolicyVersion = reason, ReviewPolicyVersion
-	// IDs are derived from checked references, never from an unbound producer list.
-	change.BasedOn = make([]int64, 0, len(change.Supporters))
-	for _, ref := range change.Supporters {
-		change.BasedOn = append(change.BasedOn, ref.DocumentID)
-	}
 	raw, err := EncodeSpec(DocumentChangeSpec())
 	if err != nil {
 		return err
@@ -212,7 +205,7 @@ func documentChangeAuthorizationUnusable(ctx context.Context, tx *sql.Tx, run Ru
 }
 
 func validateDocumentChange(c DocumentChange) error {
-	if len(c.Value) > 1024 || len(c.Label) > 1024 || len(c.Source) > 64 || len(c.Supporters) > 16 || len(c.BasedOn) > 16 || c.ValueID < 0 {
+	if len(c.Value) > 1024 || len(c.Source) > 64 || len(c.Supporters) > 16 || c.ValueID < 0 {
 		return ErrStaleProposal
 	}
 	switch c.Field {
@@ -265,17 +258,11 @@ func checkDocumentChange(ctx context.Context, tx *sql.Tx, docID int64, c Documen
 	}
 	// Inference has owner-level visibility, never an administrator's corpus-wide
 	// bypass. Keep that ceiling for archive matches and model naming context.
-	if c.Source == "archive" || c.Source == "llm" {
-		owner.Role = "member"
-	}
+	owner.Role = "member"
 	if reviewer != nil {
 		// Only an authenticated interactive browser session can turn this review
 		// into a write. Scoped API/OIDC bearer possession is not human review.
 		if reviewer.SessionID == "" || reviewer.Kind != "user" || reviewer.TokenID != 0 {
-			return "", ErrForbidden
-		}
-		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id=? AND user_id=? AND expires_at>?`, reviewer.SessionID, reviewer.UserID, time.Now().Unix()).Scan(&active); err != nil {
 			return "", ErrForbidden
 		}
 		if err := canReviewDocument(ctx, tx, reviewer, current.SystemID, docID, authz.PermChange); err != nil {
@@ -287,9 +274,6 @@ func checkDocumentChange(ctx context.Context, tx *sql.Tx, docID int64, c Documen
 	}
 	if err := validateDestination(ctx, tx, docID, current.SystemID, c); err != nil {
 		return "", err
-	}
-	if len(c.BasedOn) > 0 && len(c.Supporters) == 0 {
-		return "", ErrStaleProposal
 	}
 	seen := make(map[int64]bool, len(c.Supporters))
 	for _, ref := range c.Supporters {
@@ -539,6 +523,10 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 		policy = ""
 	}
 	out["field"], out["reason"], out["policy_version"], out["confidence"] = c.Field, reason, policy, c.Confidence
+	switch c.Source {
+	case "archive", "llm", "language-detector":
+		out["source"] = c.Source
+	}
 	out["threshold"] = c.Threshold
 	current, err := documentstate.Load(ctx, q, docID)
 	if err != nil {

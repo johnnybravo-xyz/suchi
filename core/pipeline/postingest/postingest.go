@@ -1836,7 +1836,7 @@ func (h *Handler) detectLanguages(ctx context.Context, log *slog.Logger, docID i
 	floor := threshold
 	if err := h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		return approvals.ProposeDocumentChangeInTx(ctx, tx, docID, approvals.DocumentChange{
-			Field: "language", Value: value, Label: value, Confidence: result.Confidence,
+			Field: "language", Value: value, Confidence: result.Confidence,
 			Threshold: &floor, Source: "language-detector", Baseline: &baseline,
 		})
 	}); err != nil {

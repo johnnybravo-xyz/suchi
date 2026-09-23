@@ -532,7 +532,7 @@ func (s *Server) documentChangeReviewVars(ctx context.Context, docID int64, vars
 		if err := s.DB.Read.QueryRowContext(ctx, `SELECT role FROM users WHERE id=? AND disabled=0`, owner.UserID).Scan(&owner.Role); err != nil {
 			out["review_conflict"] = true
 			owner = nil
-		} else if change.Source == "archive" {
+		} else {
 			owner.Role = "member"
 		}
 	}

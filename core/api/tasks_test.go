@@ -20,8 +20,10 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
 )
 
@@ -438,6 +440,84 @@ func TestApprovalTasksForUser_ScopedToAssignee(t *testing.T) {
 			!wt.DocHasThumbnail) {
 			t.Errorf("document context not populated: %+v", wt)
 		}
+	}
+}
+
+func TestDocumentChangeReviewProjectionUsesOwnerSourceAccess(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Authz: authz.ACLAuthorizer{DB: d},
+	}
+	seedUser(t, d, 1)
+	seedUser(t, d, 2)
+	if _, err := d.Write.ExecContext(t.Context(), `
+		UPDATE users SET role='member' WHERE id=2;
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position)
+		VALUES(1,40,49,'System',0);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		VALUES(1,49,40,49,'Inbox',1);
+		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,jd_category_id,created_at,updated_at)
+		VALUES(1,101,1,'target-sha',1,'Target',49,0,0),
+		      (1,102,2,'support-sha',1,'Private support',49,0,0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	target, err := documentstate.Load(t.Context(), d.Read, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	support, err := documentstate.Load(t.Context(), d.Read, 102)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := approvals.DocumentChange{
+		Field: "title", Value: "Suggested title", Confidence: 0.9,
+		Source: "llm", Baseline: &target,
+		Supporters: []documentstate.Reference{{DocumentID: 102, Snapshot: support}},
+		Reason:     approvals.ReviewReasonReviewFirst, PolicyVersion: approvals.ReviewPolicyVersion,
+	}
+	raw, err := json.Marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vars map[string]any
+	if err := json.Unmarshal(raw, &vars); err != nil {
+		t.Fatal(err)
+	}
+	principal := adminPrincipal(1)
+	principal.SessionID = "interactive-session"
+	ctx := auth.WithPrincipal(t.Context(), principal)
+
+	projected, err := s.documentChangeReviewVars(ctx, 101, vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected["source"] != "llm" {
+		t.Fatalf("bounded producer source = %v, want llm", projected["source"])
+	}
+	if projected["review_conflict"] != true {
+		t.Fatalf("admin bypass made a private supporter actionable: %+v", projected)
+	}
+	if sources := projected["sources"].([]map[string]any); len(sources) != 0 {
+		t.Fatalf("private supporter leaked through projection: %+v", sources)
+	}
+
+	if _, err := d.Write.ExecContext(t.Context(), `
+		INSERT INTO object_acls(object_kind,object_id,principal_kind,principal_id,perm_bits,created_at)
+		VALUES('document',102,'user',1,1,0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	projected, err = s.documentChangeReviewVars(ctx, 101, vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected["review_conflict"] != false {
+		t.Fatalf("authorized supporter remained conflicted: %+v", projected)
+	}
+	if sources := projected["sources"].([]map[string]any); len(sources) != 1 || sources[0]["document_id"] != int64(102) {
+		t.Fatalf("authorized supporter projection = %+v", sources)
 	}
 }
 
