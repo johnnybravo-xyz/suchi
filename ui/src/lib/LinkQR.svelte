@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   let { url, label = 'Show QR code', open = $bindable(false) } = $props()
   let code = $state(null)

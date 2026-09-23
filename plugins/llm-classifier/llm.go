@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package llmclassifier is the optional AI-driven classifier that
 // covers what the deterministic rules engine can't.
 //

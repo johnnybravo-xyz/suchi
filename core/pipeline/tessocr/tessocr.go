@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package tessocr is the lightweight OCR path: pdftoppm rasterizes
 // each page to a PGM, tesseract reads it back as text, we concatenate.
 // No Python interpreter, no pikepdf, no Pillow — just two C binaries

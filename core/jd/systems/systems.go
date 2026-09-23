@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package systems owns filing-system identity and entry, independently of the
 // taxonomy tree and document permissions. Callers must check both permissions.
 package systems

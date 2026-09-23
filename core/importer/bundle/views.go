@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package bundle: saved-view import path.
 //
 // Paperless-ngx models a saved view as one `documents.savedview` row plus

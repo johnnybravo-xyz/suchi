@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // /api/events/ handler tests. Covers the load-bearing invariants:

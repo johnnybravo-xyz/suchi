@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package localauth is the built-in Authenticator plugin.
 //
 // It handles two kinds of requests:

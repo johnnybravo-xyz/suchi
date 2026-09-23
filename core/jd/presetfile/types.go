@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package presetfile validates raw HuML and TOML taxonomy files before
 // normalizing them into the application's filing tree.
 package presetfile

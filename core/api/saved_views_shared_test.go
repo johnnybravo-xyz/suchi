@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // Shared-view visibility: a `shared = 1` view owned by user A must

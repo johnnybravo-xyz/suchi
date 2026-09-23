@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { systems, resetSystems, selectSystem, captureScope, scopeCurrent, scopedHash as filingHref } from './lib/systems.svelte.js'
   import { untrack } from 'svelte'

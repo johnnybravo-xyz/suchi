@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Apply glue: take a parsed Invoice + a doc id and write the
 // custom-field values. Kept in this package (rather than post-ingest)
 // so post-ingest stays thin and the ZUGFeRD shape stays owned in one

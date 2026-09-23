@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // FTS5 more-like-this "similar documents" endpoint. Load-bearing

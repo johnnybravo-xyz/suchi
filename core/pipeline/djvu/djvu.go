@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package djvu extracts text from DjVu files via djvutxt (from
 // djvulibre-bin on Debian). Same shape as pdfinspector — degrades
 // gracefully when the binary isn't installed, returns HasText true only

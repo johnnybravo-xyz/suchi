@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // Approval state machines are separate from trigger-action automations.

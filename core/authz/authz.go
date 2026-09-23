@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package authz owns the decision layer: "may this user do X to this
 // object?"  The interface lives here so wiring stays boring, and so
 // downstream builds can swap the implementation without touching handlers.

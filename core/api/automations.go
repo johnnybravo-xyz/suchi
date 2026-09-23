@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Automation CRUD. Writes require an admin; PATCH is sparse.
 
 package api

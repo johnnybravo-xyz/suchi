@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package ui
 
 // Root-redirect regression guard. The SPA is the default UI —

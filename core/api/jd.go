@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/jd/categories/ — read-only listing over the Johnny.Decimal
 // taxonomy tree. Every JSON consumer (mobile app, MCP tool, agent,
 // SPA) needs this to render a filing chip or drive a "File under…"

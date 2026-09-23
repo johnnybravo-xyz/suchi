@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Boot-time detector — the discovery half of the rescan-via-
 // approvals feature. Called from main.go after the approvals engine
 // is registered + the rescan-proposal def is seeded.

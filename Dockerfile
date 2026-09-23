@@ -111,6 +111,7 @@ ARG TARGETARCH
 COPY --from=anydoc --chmod=0755 /${TARGETARCH}/anydoc /usr/local/bin/anydoc
 COPY --from=anydoc /${TARGETARCH}/LICENSE /usr/local/share/licenses/anydoc/LICENSE
 COPY LICENSE /usr/local/share/licenses/suchi/LICENSE
+COPY NOTICE /usr/local/share/licenses/suchi/NOTICE
 
 RUN ln -s suchi /usr/local/bin/suchi-mcp
 
@@ -152,6 +153,7 @@ ARG TARGETARCH
 COPY --from=anydoc --chmod=0755 /${TARGETARCH}/anydoc /usr/local/bin/anydoc
 COPY --from=anydoc /${TARGETARCH}/LICENSE /usr/local/share/licenses/anydoc/LICENSE
 COPY LICENSE /usr/local/share/licenses/suchi/LICENSE
+COPY NOTICE /usr/local/share/licenses/suchi/NOTICE
 COPY --from=msgconvert-build /out/Outlook /usr/local/share/perl5/site_perl/Email/Outlook
 COPY packaging/msgconvert/msgconvert /usr/local/bin/msgconvert
 COPY packaging/msgconvert/NOTICE /usr/local/share/doc/suchi-msgconvert/NOTICE

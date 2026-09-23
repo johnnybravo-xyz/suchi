@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package db is suchi's SQLite bootstrap.
 //
 // The rule of the house: **one writer, many readers.** SQLite serializes

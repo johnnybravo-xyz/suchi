@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sidecar is the JSON sidecar spec every ingest producer
 // (fs-watch, email-ingest, third-party scanners, cron scripts) can
 // target.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package approvals is suchi's state-machine engine for routing docs
 // through review/approval chains, sign-offs with deadlines, and
 // timeout-driven escalation.

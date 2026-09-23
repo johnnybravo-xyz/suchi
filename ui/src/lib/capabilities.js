@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 export const USER_CAPABILITIES = Object.freeze([
   Object.freeze({
     key: 'archive_chat',

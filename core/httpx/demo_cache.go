@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Cache-Control policy for demo mode.
 //
 // The demo instance sits behind Cloudflare with grey-cloud DNS. Bytes-heavy

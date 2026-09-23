@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // `suchi demo` materializes a versioned corpus manifest into a dedicated
 // showcase archive. Corpus content and product-story choices live in the
 // sibling suchi-demo repository; this command owns only generic ingestion.

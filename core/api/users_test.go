@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // PATCH /api/users/me covers a narrow but load-bearing surface —

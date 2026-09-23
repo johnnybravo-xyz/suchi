@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package view is the rendered-view projection: the human-browsable
 // file tree at $DATA_DIR/rendered/... that mirrors documents onto
 // storage-path-templated symlink targets in the CAS.

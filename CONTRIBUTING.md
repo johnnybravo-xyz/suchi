@@ -111,5 +111,24 @@ See [the release process](docs/release-process.mdx) for tagging and publishing.
 
 ## License
 
-Contributions are accepted under [AGPL-3.0](LICENSE). Identify third-party
-code or assets and preserve their upstream license notices.
+Suchi is dual-licensed: AGPL-3.0 for everyone, and a commercial license for
+users who cannot accept its terms. So that your work can ship in both, sign
+the [Contributor License Agreement](CLA.md) before your first pull request is
+merged, by adding yourself to `CONTRIBUTORS.md` in that same pull request. You
+keep your copyright; the CLA grants the project the right to license your
+contribution under both licenses.
+
+Identify third-party code or assets, disclose their license, and preserve their
+upstream notices. Record anything newly bundled in [NOTICE](NOTICE).
+
+Source files carry a single SPDX line and no copyright line:
+
+```go
+// SPDX-License-Identifier: AGPL-3.0-or-later
+```
+
+Use that on new files, `Apache-2.0` under `plugin-api/`. Do not add a copyright
+line naming yourself, and do not edit or date-bump an existing header. Copyright
+in your contribution is yours automatically; the CLA is what lets the project
+license it, and authorship is recorded in `CONTRIBUTORS.md` and the git history
+rather than in file headers.

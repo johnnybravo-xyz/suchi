@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package emailwatch is the third canonical ingest path (design
 // principle 9): IMAP polling for "forward it, forget it" archival.
 //

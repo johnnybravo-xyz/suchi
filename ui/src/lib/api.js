@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { systems, captureScope, scopeCurrent, scopedURL, isScopedAPI, unavailableSystem } from './systems.svelte.js'
 
 // All browser credentials are HttpOnly cookies, including demo sessions.

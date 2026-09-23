@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Group and membership CRUD. Writes require an admin.
 
 package api

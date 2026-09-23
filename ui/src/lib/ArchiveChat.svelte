@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { scopedHash as filingHref } from './systems.svelte.js'
   import { onDestroy } from 'svelte'

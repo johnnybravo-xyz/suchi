@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package jd_test
 
 // Built-ins share the additive importer: applying or reapplying a preset must

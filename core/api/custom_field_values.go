@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Custom-field value writer and deleter endpoints. Per-document values
 // have no read projection yet; future reads must recheck document-link
 // target visibility. Typed validation lives in core/customfield.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package barcode extracts QR, DataMatrix, and Aztec values from images.
 //
 // Post-ingest appends each decoded value as `barcode:<value>` tokens

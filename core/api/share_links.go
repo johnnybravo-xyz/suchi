@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Share links — expiring, optionally password-protected pointers to
 // one or more documents. Two personas:
 //

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package pdfinspector routes a PDF between the "text-native shortcut"
 // and the "scanned → OCR" paths.
 //

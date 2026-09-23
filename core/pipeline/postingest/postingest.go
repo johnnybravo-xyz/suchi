@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package postingest runs extraction, classification, and rendering after a
 // document lands. Optional external tools degrade to storing the original.
 package postingest

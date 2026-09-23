@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package authz
 
 // Wire-shape guarantees for the per-user capability set. The wire

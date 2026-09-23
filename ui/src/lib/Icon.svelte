@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   // Hand-drawn 24×24 stroke icons in the brand's line weight.
   // No icon dependency; each is a few path commands.

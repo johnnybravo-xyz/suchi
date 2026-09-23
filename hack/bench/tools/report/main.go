@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // report: aggregate a results dir of scenario JSONL + summary.json pairs into
 // a markdown report with percentile tables.
 package main

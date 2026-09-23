@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 export function isLocalEndpoint(raw) {
   try {
     return isLocalHost(new URL(raw).hostname)

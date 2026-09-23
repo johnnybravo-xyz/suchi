@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Apply — evaluate every automation whose trigger includes the given
 // event type, filter by conditions, and run actions in order.
 //

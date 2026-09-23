@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package audit writes append-only audit_events rows.
 //
 // The rule: every state-changing API call goes through Write. The

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // sampler: poll /proc/<pid>/status and /proc/<pid>/stat at a fixed interval,
 // emit one JSONL row per tick. Exits cleanly on SIGINT/SIGTERM or when the
 // target process disappears.

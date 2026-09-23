@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package bundle imports portable DMS exports and reports lossy conversions.
 package bundle
 

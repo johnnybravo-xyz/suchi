@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package oauth wraps Microsoft's MSAL-Go PublicClient for the IMAP
 // device-code flow. WHY: MSAL's ExportReplace cache interface is a
 // dependency-injected side-channel; every caller would otherwise need

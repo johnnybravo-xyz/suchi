@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package blob is the content-addressed store.
 //
 // One implementation, filesystem-backed, sharded three levels deep:

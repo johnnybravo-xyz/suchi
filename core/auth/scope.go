@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Scope enforcement helpers.
 //
 // Scopes are stored on api_tokens.scopes (comma-separated). A token

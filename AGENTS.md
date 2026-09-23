@@ -21,6 +21,42 @@ Optional integrations must preserve useful local operation.
   directories may be different branches. Preserve local changes; commit only
   when asked, with concise messages and no contribution trailers.
 
+## Licensing
+
+- Suchi is dual-licensed: AGPL-3.0 for everyone, commercial for users who
+  cannot accept it. Every file must stay licensable under both. Never merge
+  outside code unless its author is in `CONTRIBUTORS.md` having agreed to
+  `CLA.md`. A DCO or `Signed-off-by` line is not a substitute: it certifies
+  provenance, not the right to relicense.
+- `plugin-api/` is Apache-2.0, not AGPL, so third-party plugins can carry any
+  license. Keep it dependency-free and stdlib-only: importing anything from
+  `core/` would pull AGPL code into an Apache module and break that promise.
+  Its files carry Apache-2.0 SPDX headers; every other file carries AGPL.
+- Source files carry an SPDX line and no copyright line. The copyright record
+  lives in `NOTICE` and the `README.md` License section — keep it there; with no
+  per-file notices those two are the only places the holder is named, and dual
+  licensing rests on that record.
+- Record every newly bundled or vendored third-party component in `NOTICE` with
+  its upstream URL and license, and reproduce the full text where the license
+  requires it be carried. A vendored asset served to users needs the notice in
+  the served file as well, not only in `NOTICE` — see the banner at the top of
+  `core/ui/assets/vendor/oat.min.css`.
+- Reject GPL and AGPL dependencies. The tree is permissive-only (MIT, BSD,
+  Apache-2.0) and that is what keeps the commercial license possible. Bundle a
+  copyleft tool only as a separate process, never linked, and record the
+  election and the process boundary in `NOTICE` as msgconvert does.
+- The five built-in filing trees in `core/jd/presets/*.toml` are CC0-1.0 and
+  already published. The `suchi-taxonomy` collection is proprietary and private;
+  do not describe it as CC0 and do not link it from public docs.
+- Johnny.Decimal is a trademark of Coruscade Pty Ltd and its documentation is
+  CC BY-NC-SA 4.0, which is incompatible with both of our licenses. Refer to the
+  system by name and link to their pages; never copy their prose into ours, and
+  never name a product, tier, or SKU after it. Keep the independence disclaimer
+  on any page that uses the mark.
+- Keep the License sections of `README.md` and `CONTRIBUTING.md` in agreement
+  when the model changes, and update `NOTICE` in the same commit as the
+  dependency change that motivates it.
+
 ## Verification loop
 
 - Start with affected packages: `go test ./core/<package>`. Use `-race` for

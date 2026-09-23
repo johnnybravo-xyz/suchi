@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package preconsume runs an optional operator script before built-in ingest.
 // The script works on scratch files; the CAS original remains unchanged.
 package preconsume

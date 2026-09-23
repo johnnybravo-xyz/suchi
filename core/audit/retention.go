@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // audit_events retention — a sliding-window prune so the notifications
 // feed doesn't turn the audit log into an unbounded storage growth
 // path. Runs from the backup scheduler's ticker (same interval, same single-

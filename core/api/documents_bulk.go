@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // POST /api/documents/bulk_edit — one-shot metadata mutation across
 // N documents in a single write transaction.
 //

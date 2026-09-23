@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { DATE_ROLES, intelligenceRoleLabel } from './intelligence.js'
 
 function dayBounds(event) {

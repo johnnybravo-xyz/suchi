@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package emailwatch
 
 // Provider presets exist so the UI can drop users into a working

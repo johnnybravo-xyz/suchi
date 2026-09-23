@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // `suchi rescan` — selective, signature-driven re-run of the
 // content-extraction pipeline against originals. Thin wrapper over
 // core/rescan; the same enqueue path also fires from the approvals-

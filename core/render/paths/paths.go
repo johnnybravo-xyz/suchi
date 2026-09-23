@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package paths renders bounded storage-path templates. This turns a
 // documents row into the human-browsable file-tree projection under
 // $DATA_DIR/rendered/... .

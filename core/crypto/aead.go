@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package crypto is the small AEAD envelope suchi uses to seal
 // operator-supplied secrets (password-manager style) before they land
 // in SQLite.

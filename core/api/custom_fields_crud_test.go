@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // Roundtrip test for the field-definition CRUD API. Exercises the four

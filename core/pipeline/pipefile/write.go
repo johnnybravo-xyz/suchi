@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package pipefile holds small filesystem helpers shared by pipeline stages.
 package pipefile
 

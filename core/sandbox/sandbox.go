@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sandbox is the shared subprocess-invocation wrapper.
 //
 // Every child process that parses user-supplied bytes — pdf-inspector,

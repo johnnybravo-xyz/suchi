@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   // List of mailboxes. Each row shows liveness at a glance: last sync
   // recency + a red pill when last_error is set. Add/edit/delete flows

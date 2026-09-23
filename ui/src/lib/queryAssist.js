@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { autocomplete } from './api.js'
 
 export function createQueryAssistant(onSuggestions, { delay = 140, limit = 8 } = {}) {

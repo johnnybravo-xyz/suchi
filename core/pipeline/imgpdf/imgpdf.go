@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package imgpdf wraps raster images in a PDF so the standard OCR
 // path can extract text. Only OCRmyPDF embeds that text in the PDF.
 package imgpdf

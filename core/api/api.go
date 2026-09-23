@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package api owns the JSON HTTP surface — endpoints under /api/*.
 //
 // This is where machine clients (mobile apps, ingest producers,

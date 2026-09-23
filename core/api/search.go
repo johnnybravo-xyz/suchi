@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Ranked search and qualifier-aware autocomplete. Query parsing, metadata
 // resolution, and SQL/FTS compilation live at the shared searchquery boundary
 // used by both ranked search and the document list.

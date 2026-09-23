@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Suchi Presets — the Archive Configuration filing-tree catalog. A Suchi Preset
 // is a preset following Suchi's Johnny.Decimal taxonomy: the starter
 // tree plus its seeded automations.

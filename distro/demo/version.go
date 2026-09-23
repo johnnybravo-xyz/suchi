@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package demo owns the public-showcase seed pipeline consumed by
 // `suchi demo`. It fetches / extracts a corpus tarball produced by
 // github.com/johnnybravo-xyz/suchi-demo and drives seeding via the manifest.

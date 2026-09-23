@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Avatar uploads accept bounded PNG/JPEG input and re-encode pixels as PNG.
 // Original metadata and appended bytes are not stored. UserSelf versions the
 // URL by content hash; reads revalidate and always serve current pixels.

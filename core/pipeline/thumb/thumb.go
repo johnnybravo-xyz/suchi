@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package thumb renders a document's first-page thumbnail via
 // pdftoppm.
 //

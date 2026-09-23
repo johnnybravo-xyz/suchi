@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SQL visibility filters constrain system entry and document permissions before
 // pagination. Administrators use these too: they cannot bypass a selected system
 // or a token's bound system.

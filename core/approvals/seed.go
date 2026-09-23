@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Approval-def seeding — the "ships in the box" primitive for
 // built-in approval flows. Same shape as automations.Seed, adapted
 // for the approval_defs schema (which auto-versions by slug).

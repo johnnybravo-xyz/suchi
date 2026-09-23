@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/events/ — cursor-based activity feed over audit_events.
 //
 // Agents and integrations that want a change stream without polling

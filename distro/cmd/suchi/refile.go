@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // `suchi refile` — the operator-side kick that says "I changed the
 // preset / template / automations, now make it stick." Iterates every live
 // doc, re-runs document-added automations, enqueues a

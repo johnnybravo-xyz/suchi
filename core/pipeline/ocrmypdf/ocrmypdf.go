@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ocrmypdf wraps the ocrmypdf CLI for the ingest pipeline.
 //
 // The post-ingest handler routes here when pdf-inspector says

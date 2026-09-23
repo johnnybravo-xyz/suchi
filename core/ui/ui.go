@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ui is the small browser-side glue the SPA depends on:
 // form-based cookie login, first-boot bootstrap, direct-URL blob
 // serving (preview + download), and a static /assets mount for the

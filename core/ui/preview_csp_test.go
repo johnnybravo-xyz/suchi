@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package ui
 
 // Regression guard for the preview CSP header. The security posture

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // hack/emlfixtures is a synthetic .eml corpus generator for local
 // end-to-end testing of the email ingest chain. Not for CI (that's
 // what core/pipeline/eml/*_test.go covers) — for kicking the tires

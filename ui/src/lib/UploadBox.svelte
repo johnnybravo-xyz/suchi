@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { captureScope, scopeCurrent, scopedHash as filingHref } from './systems.svelte.js'
   import { onMount, onDestroy } from 'svelte'

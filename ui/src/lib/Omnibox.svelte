@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   // Combined command palette and query entry point.
   import { go } from './router.svelte.js'

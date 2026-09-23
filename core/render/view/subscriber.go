@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Subscriber wrapper: expose the Renderer as a durable-outbox handler
 // keyed to the "render" job kind. Every metadata mutator enqueues one
 // job in the same tx as its own write; the dispatcher fires the

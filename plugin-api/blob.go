@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package pluginapi
 
 // BlobRef identifies a stored blob by content hash. All suchi storage

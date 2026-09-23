@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Config-file loader. Optional overlay above the env-var reader.
 //
 // Layered precedence (last wins):

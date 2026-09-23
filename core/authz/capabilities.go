@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Per-user capabilities — orthogonal to role.
 //
 // Roles are coarse (admin / member). Capabilities are the fine-grained,

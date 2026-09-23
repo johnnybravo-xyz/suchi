@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { emptyTrash, listTrash, permanentlyDeleteDocument, restoreDocument } from '../lib/api.js'

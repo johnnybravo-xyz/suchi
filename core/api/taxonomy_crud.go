@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // CRUD for the "matcher"-style taxonomy resources — correspondents,
 // document_types, storage_paths. They share the same table shape:
 //

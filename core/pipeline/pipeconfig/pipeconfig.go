@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package pipeconfig holds tiny helpers that read pipeline knobs from
 // the process environment. Every ingest stage exposes its per-run
 // timeout via SUCHI_<STAGE>_TIMEOUT (see docs/config.mdx) — the shape

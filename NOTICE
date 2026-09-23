@@ -1,0 +1,144 @@
+Suchi
+Copyright (c) 2026 Ritesh Shrivastav
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3, as published by
+the Free Software Foundation. The full text is in the LICENSE file at the root
+of this repository.
+
+The plugin-api/ directory is an exception: it is a separate Go module licensed
+under the Apache License 2.0, with its own LICENSE file, so that third-party
+plugins need not be AGPL. Its source files carry Apache-2.0 SPDX headers.
+
+This file records the third-party material distributed with Suchi and the terms
+that apply to it. Every dependency below is permissively licensed; no GPL or
+AGPL code enters Suchi through its dependency tree.
+
+
+================================================================================
+Oat — vendored CSS
+================================================================================
+
+core/ui/assets/vendor/oat.min.css is a vendored copy of Oat, served directly to
+users from core/ui/templates/login.html and core/ui/templates/bootstrap.html.
+Vendored 2026-08-04. Upstream: https://github.com/knadh/oat
+
+MIT License
+
+Copyright (c) 2026 Kailash Nadh. https://nadh.in
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+================================================================================
+anydoc — bundled document converter
+================================================================================
+
+The standard container image builds and ships anydoc, and Suchi release
+artifacts republish prebuilt anydoc binaries (hack/install-anydoc.sh).
+Upstream: https://github.com/firecrawl/anydoc
+
+anydoc is licensed under the MIT License, Copyright (c) Firecrawl. Its upstream
+license text is built into every image at
+/usr/local/share/licenses/anydoc/LICENSE and ships beside the binary in each
+standalone download.
+
+================================================================================
+Email::Outlook::Message — packaged Perl tool
+================================================================================
+
+The standard container image includes Email::Outlook::Message 0.921 to convert
+Outlook .msg files. See packaging/msgconvert/NOTICE for the archive checksum and
+source.
+
+Upstream distributes it "under the same terms as Perl itself", which is a
+disjunctive dual license: the Artistic License 1.0 OR the GNU General Public
+License version 1 or later, at the recipient's option.
+
+Suchi elects the Artistic License 1.0.
+
+Suchi invokes it as a separate distribution-provided executable across a process
+boundary. It is not linked into, and shares no address space with, the Suchi
+binary. It is aggregated with Suchi, not combined into it.
+
+  Artistic License 1.0: https://opensource.org/license/Artistic-1.0
+  Upstream: https://metacpan.org/dist/Email-Outlook-Message
+
+
+================================================================================
+Model Context Protocol Go SDK
+================================================================================
+
+github.com/modelcontextprotocol/go-sdk is mid-transition from the MIT License to
+the Apache License 2.0, and its LICENSE file carries a mixed grant. Reproduced
+verbatim from the upstream LICENSE:
+
+  The MCP project is undergoing a licensing transition from the MIT License to
+  the Apache License, Version 2.0 ("Apache-2.0"). All new code and specification
+  contributions to the project are licensed under Apache-2.0. Documentation
+  contributions (excluding specifications) are licensed under CC-BY-4.0.
+
+  Contributions for which relicensing consent has been obtained are licensed
+  under Apache-2.0. Contributions made by authors who originally licensed their
+  work under the MIT License and who have not yet granted explicit permission to
+  relicense remain licensed under the MIT License.
+
+  No rights beyond those granted by the applicable original license are conveyed
+  for such contributions.
+
+Both arms are permissive and impose no copyleft obligation on Suchi.
+
+
+================================================================================
+Go module dependencies
+================================================================================
+
+All direct and indirect Go dependencies are licensed under the MIT License, the
+BSD 2-Clause or 3-Clause License, or the Apache License 2.0. The authoritative
+list is go.mod and go.sum; each module's license text ships in the Go module
+cache and in the source archives published by its authors.
+
+Notable direct dependencies and their licenses:
+
+  github.com/AzureAD/microsoft-authentication-library-for-go   MIT
+  github.com/BurntSushi/toml                                   MIT
+  github.com/coreos/go-oidc/v3                                 Apache-2.0
+  github.com/emersion/go-imap                                  MIT
+  github.com/emersion/go-message                               MIT
+  github.com/emersion/go-sasl                                  MIT
+  github.com/fsnotify/fsnotify                                 BSD-3-Clause
+  github.com/huml-lang/go-huml                                 MIT
+  github.com/makiuchi-d/gozxing                                MIT
+  github.com/modelcontextprotocol/go-sdk                       Apache-2.0 / MIT
+  github.com/prometheus/client_golang                          Apache-2.0
+  golang.org/x/crypto, x/image, x/oauth2                       BSD-3-Clause
+  gopkg.in/yaml.v3                                             MIT / Apache-2.0
+  modernc.org/sqlite                                           BSD-3-Clause
+
+
+================================================================================
+Trademarks
+================================================================================
+
+Johnny.Decimal is a trademark of Coruscade Pty Ltd, Australia. Suchi implements
+the Johnny.Decimal area-and-category filing method and refers to it by name for
+identification only. Suchi is independent of, not affiliated with, and not
+endorsed or sponsored by Coruscade Pty Ltd. Suchi's documentation is original
+work and is not adapted from Johnny.Decimal documentation, which is separately
+licensed CC BY-NC-SA 4.0. See https://johnnydecimal.com/support/about-legal/licence

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Password-protected PDF decrypt endpoints. See docs/api.mdx.
 //
 // Three endpoints:

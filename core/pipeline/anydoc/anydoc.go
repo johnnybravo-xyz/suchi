@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package anydoc extracts EPUB and office documents through the anydoc CLI.
 package anydoc
 

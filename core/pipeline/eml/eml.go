@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package eml parses RFC 5322 email messages (message/rfc822) for the
 // ingest pipeline. Consumes .eml files (or bytes from an IMAP fetch),
 // returns headers + the plain-text body + a list of attachments with

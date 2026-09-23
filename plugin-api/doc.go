@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package pluginapi is the ONLY module every suchi module depends on.
 //
 // It carries the small, versioned surface that core and every plugin agree

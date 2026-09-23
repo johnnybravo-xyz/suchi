@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package jobs is the durable outbox dispatcher.
 //
 // Every unit of asynchronous work in suchi is a row in the jobs table.

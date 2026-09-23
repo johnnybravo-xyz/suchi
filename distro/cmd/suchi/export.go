@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // `suchi export` — one-shot portable takeout.
 //
 // Writes a zip containing every document (original bytes + JSON

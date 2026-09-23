@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package docsplit finds separator pages in a scanned PDF and returns
 // the page ranges that make up each sub-document.
 //

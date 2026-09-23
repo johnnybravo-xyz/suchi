@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package automations is the trigger→conditions→actions engine.
 //
 // Automations fire on job events (consumption, document_added,

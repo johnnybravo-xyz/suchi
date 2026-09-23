@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package anydoc
 
 // Focused tests for the MIME allowlist and extension mapper. The

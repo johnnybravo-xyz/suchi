@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <svg viewBox="0 0 64 64" aria-hidden="true">
   <rect x="8" y="8" width="48" height="48" rx="8" fill="var(--manila)" stroke="currentColor" stroke-width="3.5"/>
   <circle cx="17.5" cy="19" r="2.2" fill="currentColor"/>

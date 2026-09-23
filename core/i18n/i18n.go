@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package i18n loads the server-rendered UI string catalogs.
 package i18n
 

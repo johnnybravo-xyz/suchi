@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { scopedHash } from './systems.svelte.js'
 
 // Hash router: #/documents, #/doc/42, #/search?q=tax …

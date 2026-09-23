@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package backup
 
 // Snapshot + retention round-trip. The claim on the landing page +

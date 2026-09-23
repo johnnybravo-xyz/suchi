@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package taxonomy is admin tooling over the reference tables — tags,
 // correspondents, document_types.
 //

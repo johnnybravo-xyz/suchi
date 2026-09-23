@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Saved views persist API filter names. Browser routes keep their shorter,
 // user-facing names and translate back at the Documents boundary.
 export function documentListHash(filters = {}) {

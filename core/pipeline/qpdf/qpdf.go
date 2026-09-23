@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package qpdf is the PDF normalization pre-step.
 //
 // Every ingested PDF passes through qpdf --remove-restrictions --decrypt

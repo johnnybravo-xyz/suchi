@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // CRUD roundtrip for POST/PATCH/DELETE /api/tags/. The list endpoint

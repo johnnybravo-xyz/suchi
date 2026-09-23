@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Saved views: named query + display config. Each user owns their own set and
 // may expose individual views to other users. Client hits POST /api/saved_views/
 // with {name, filter_json, display, position} and later reads them via

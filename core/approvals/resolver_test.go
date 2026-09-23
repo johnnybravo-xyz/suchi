@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package approvals_test
 
 // Tests for the assignee-resolution hook (see handler.go AssigneeResolver

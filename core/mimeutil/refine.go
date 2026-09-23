@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package mimeutil refines generic MIME types using content and filename hints.
 package mimeutil
 

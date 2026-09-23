@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package bundle imports an export bundle from an existing DMS.
 //
 // Bundle shape (default `document_exporter` output):

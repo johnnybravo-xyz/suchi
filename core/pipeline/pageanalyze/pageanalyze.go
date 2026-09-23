@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package pageanalyze rasterizes a PDF's pages to greyscale and
 // computes a per-page whiteness score. Its one job is to distinguish
 // blank pages (feeder back-sides, separator sheets left in a stack)

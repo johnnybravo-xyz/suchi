@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package intelligence defines validated, reviewable facts extracted from
 // documents. Storage and approval stay generic; each intelligence type owns a
 // small explicit value contract.

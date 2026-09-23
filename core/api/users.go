@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // User profile endpoints. Email changes stay disabled until they can
 // require the current password and emit an audit event.
 

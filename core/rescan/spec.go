@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Approval-spec definitions the boot-time seeder registers via
 // approvals.EnsureDef. Kept in this package (not core/approvals)
 // because the spec references our handler kind — the two live

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Language facet endpoint. Small support surface around
 // documents.languages — driven by the SPA's search-page filter
 // and the doc-detail chip. Kept in its own file so the seam is

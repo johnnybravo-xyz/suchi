@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ingest contains the small contracts shared by ingest producers.
 package ingest
 

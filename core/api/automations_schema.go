@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/automations/schema describes the triggers and actions the SPA
 // builder can expose without duplicating server enums.
 

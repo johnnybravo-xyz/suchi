@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Top-level CRUD for custom_fields (definitions, not per-doc values).
 // The per-(doc, field) value handlers live in documents.go as
 // PUT /api/documents/{id}/custom_fields/{field} — that's the write

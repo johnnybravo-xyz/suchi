@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 const localLoginPath = '/login'
 
 export function getLoginPath(root = globalThis.document) {

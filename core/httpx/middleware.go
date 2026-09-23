@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package httpx is the HTTP layer glue: middleware stack, security
 // headers, request-id, auth wiring, rate limiting.
 //

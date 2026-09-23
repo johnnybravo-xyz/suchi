@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package pluginapi
 
 // Plugin kinds. Enum-of-strings on purpose: config files use these and the

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package logx configures the process-wide slog handler.
 //
 // Every log line touching a document carries doc_id; every request-scoped

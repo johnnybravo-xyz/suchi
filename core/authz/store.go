@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // CRUD for groups + group_members + object_acls. Kept in the authz
 // package (not spread across api handlers) so the SQL contract has
 // one home. Handlers marshal/unmarshal; nothing here talks JSON.

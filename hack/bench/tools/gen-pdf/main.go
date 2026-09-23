@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // gen-pdf: generate a deterministic, valid PDF 1.4 of a target size.
 // No external PDF libs — bytes written by hand.
 package main

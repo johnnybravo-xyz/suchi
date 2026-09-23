@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/stats/ — one-shot dashboard counters.
 //
 // Replaces the client-side composition of four page_size=1 list probes

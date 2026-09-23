@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package importer owns preview and atomic application of validated taxonomies.
 // Imports add user structure and starter rules; existing rows always win.
 package importer

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package similar is the FTS5 "documents like this" reader.
 //
 // Extracted from core/api/documents_similar.go so both the HTTP

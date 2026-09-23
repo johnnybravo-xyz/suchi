@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package backup owns the periodic VACUUM INTO snapshot loop. Runs on
 // a boot-spawned goroutine, ticks on cfg.BackupInterval, writes
 // `$DATA_DIR/backups/suchi-<ts>.db`, and prunes anything beyond

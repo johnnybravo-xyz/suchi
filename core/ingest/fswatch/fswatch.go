@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package fswatch is the filesystem-watching ingest producer.
 //
 // Watches a staging directory. Every file that lands (via move,

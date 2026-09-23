@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // DRF-style pagination envelope. List endpoints return
 //
 //	{ "count": <int>, "next": <url|null>, "previous": <url|null>,

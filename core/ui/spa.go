@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SPA handler: mount the Svelte UI (built into core/ui/spa/dist/) at
 // /app/*. Kept in the same package as the server-rendered UI on
 // purpose — both consume the same Server + auth chain, so shared

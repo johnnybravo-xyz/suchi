@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package lang is the extensibility seam for per-document
 // language detection. suchi doesn't bundle any Go-native
 // language detector — the two live candidates are whatlanggo

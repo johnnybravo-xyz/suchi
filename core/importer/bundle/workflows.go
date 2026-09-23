@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package bundle: workflow migration.
 //
 // Decodes documents.workflow / workflowtrigger / workflowaction rows from

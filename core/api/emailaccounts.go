@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // CRUD + OAuth wiring for the email_accounts table.
 //
 // Entry gate is s.requireCapability(..., CapMailboxes): admins see

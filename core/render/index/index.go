@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package index projects the current tree-only taxonomy snapshot into a managed
 // HuML file. The durable job contains no captured tree and never creates documents.
 package index

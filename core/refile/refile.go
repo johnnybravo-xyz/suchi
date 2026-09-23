@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package refile is the "come back and change your mind" primitive.
 //
 // Operators can swap Suchi Presets, edit storage-path templates, add or

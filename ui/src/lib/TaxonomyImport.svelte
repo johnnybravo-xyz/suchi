@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { onDestroy } from 'svelte'
   import { importTaxonomy } from './api.js'

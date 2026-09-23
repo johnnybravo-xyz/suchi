@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Demo-mode reset ticker removes expired visitor records, never CAS bytes.
 // The reserved email pattern excludes real users and seeded corpus owners.
 // Offline GC or the deployment's stopped-volume reset reclaims physical storage.

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   // Create/edit modal for one mailbox. Sealed secrets never come back from
   // the server, so the password field is always write-only and a blank

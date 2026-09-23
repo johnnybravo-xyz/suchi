@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package audit
 
 // Sliding-window retention over audit_events. Verifies:

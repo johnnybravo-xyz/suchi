@@ -165,7 +165,6 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 - [CLI reference](docs/cli.mdx)
 - [HTTP API](docs/api.mdx)
 - [Filing systems and taxonomy imports](docs/jd.mdx)
-- [Normative Suchi JD/taxonomy v1 specification and reference examples](https://git.johnnybravo.xyz/ritesh/suchi-taxonomy-examples/src/branch/main/SPEC.md)
 - [Supported file types](docs/formats.mdx)
 - [Deployment templates](deploy/README.md)
 - [Backup and restore](docs/backup-restore.mdx)
@@ -174,11 +173,29 @@ and selected job, backup, audit, upload-limit, and CAS indicators.
 
 Works with [Johnny.Decimal](https://johnnydecimal.com), a trademark of
 Coruscade Pty Ltd. Suchi is independent and not endorsed by them.
-The reference examples are CC0, unreviewed and not compliance advice. Filing systems
+The built-in filing trees are CC0-1.0, unreviewed and not compliance advice. Filing systems
 share one server, SQLite/FTS and CAS; server administrators and host/backup operators
 remain trusted. A code prefix is not separate infrastructure or a legal-independence
 guarantee. See [Permissions](docs/permissions.mdx) for the application boundary.
 
 ## License
 
-Suchi is available under the [GNU Affero General Public License v3.0](LICENSE).
+Copyright (c) 2026 Ritesh Shrivastav. Suchi is available under two licenses:
+
+- **[GNU Affero General Public License v3.0](LICENSE)** — free for everyone.
+  Note that if you modify Suchi and let others interact with it over a network,
+  AGPL section 13 requires you to offer them its complete corresponding source.
+- **Commercial license** — for embedding Suchi in a proprietary product, or for
+  running a modified instance as a service without that source-offer obligation.
+  Write to contact@suchi.page.
+
+The AGPL offer begins with Suchi's first public release. Before that release,
+its repository and container images were private development artifacts and were
+not distributed to any third party.
+
+The plugin interfaces in [`plugin-api/`](plugin-api/) are a separate module
+licensed under the [Apache License 2.0](plugin-api/LICENSE), so third-party
+plugins may be released under any license, including proprietary ones.
+
+Third-party components and their terms are listed in [NOTICE](NOTICE).
+Contributions are accepted under the [Contributor License Agreement](CLA.md).

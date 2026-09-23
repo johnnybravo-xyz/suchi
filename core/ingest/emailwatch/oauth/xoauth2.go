@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package oauth
 
 // WHY a custom mechanism: go-sasl ships OAUTHBEARER but not XOAUTH2, and

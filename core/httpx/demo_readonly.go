@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Read-only guard for demo-mode instances. Reads always pass. Mutations are
 // denied by default; upgraded scratch identities may only upload and mutate
 // their own documents, with object authorization enforced by the handlers.

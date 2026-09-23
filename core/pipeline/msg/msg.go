@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package msg converts Outlook .msg files to RFC 822 bytes via msgconvert.
 package msg
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package auth is the authenticator chain.
 //
 // One chain, evaluated in config order, first non-nil Principal wins.

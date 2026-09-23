@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 export const DATE_ROLES = Object.freeze([
   'issued', 'due', 'start', 'end', 'expiry', 'renewal', 'service', 'other',
 ])

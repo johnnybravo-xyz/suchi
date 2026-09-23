@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Filing context only: server records remain authoritative, never cached here.
 export const systems = $state({
   user: null, loaded: false, ready: false, introduced: false,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Object-permission grant CRUD. Owners and admins manage grants;
 // receiving a grant never confers delegation rights.
 

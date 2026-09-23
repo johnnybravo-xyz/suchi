@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // Roundtrip tests for the JD taxonomy JSON surface — the endpoint

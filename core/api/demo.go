@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Demo-mode surface. Three endpoints:
 //
 //   - GET  /api/demo/mode              — probe (unauthenticated).

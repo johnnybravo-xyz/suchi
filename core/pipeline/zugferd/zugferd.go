@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package zugferd extracts structured invoice data from ZUGFeRD /
 // Factur-X / XRechnung PDF/A-3 files.
 //

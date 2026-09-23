@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command suchi mcp — MCP server adapter over suchi's REST API.
 //
 // This is a thin adapter, not a second API. Every tool maps 1:1 to

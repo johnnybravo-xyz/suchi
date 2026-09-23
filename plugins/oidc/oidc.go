@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package oidcauth is the generic OpenID Connect authenticator plugin.
 //
 // The configured issuer must provide verified email claims in signed ID tokens.

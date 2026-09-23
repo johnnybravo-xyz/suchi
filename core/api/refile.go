@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/admin/refile — one-shot admin action that re-runs the
 // document-added automations against every live doc and enqueues
 // a render/move job for every live doc. See docs/refile.mdx for the

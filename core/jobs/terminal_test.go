@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package jobs
 
 // Terminal-error short-circuit: a subscriber that wraps ErrTerminal must

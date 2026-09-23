@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // /api/tokens/ — session-only, self-service API-token management. Browser
 // cookie and OIDC sessions can mint, list, and revoke tokens; API-token
 // credentials are rejected at the route boundary.

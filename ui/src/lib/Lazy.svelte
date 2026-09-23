@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   // Awaits a dynamic import and mounts it; keyed on `load` so route
   // switches swap components. Failed fetch (stale deploy) -> reload link.

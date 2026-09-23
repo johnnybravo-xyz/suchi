@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package gc is the blob mark-and-sweep for the CAS.
 //
 // A blob is **live** if any documents row (including trashed ones)

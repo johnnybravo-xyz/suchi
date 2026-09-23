@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Anonymous demo tokens. A stateless authenticator for public-showcase
 // mode: no DB writes on visitor arrival, no scratch user until they try
 // to upload.

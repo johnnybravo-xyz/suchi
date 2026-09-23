@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { adminCreateUser } from './api.js'
   import { USER_CAPABILITIES } from './capabilities.js'

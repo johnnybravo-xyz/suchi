@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package config is the env-var-first config loader.
 //
 // Application settings are resolved from environment variables and an

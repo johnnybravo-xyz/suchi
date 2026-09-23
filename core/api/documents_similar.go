@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // GET /api/documents/{id}/similar — "documents like this" using FTS5
 // more-like-this. Implementation lives in core/similar so the
 // local archive classifier can share the same code

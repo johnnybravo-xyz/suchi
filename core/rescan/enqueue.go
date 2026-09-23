@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package rescan is the shared pipeline-rescan primitive. Callers
 // pick a filter (which docs?) plus a set of current pipeline version
 // constants (whose signature counts as "current?"), and Enqueue lands

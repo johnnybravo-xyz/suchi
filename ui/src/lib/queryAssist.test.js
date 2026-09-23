@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
 // The transport tests do not need Svelte reactivity; compiled browser tests

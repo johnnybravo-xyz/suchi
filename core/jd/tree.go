@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package jd owns the Johnny.Decimal taxonomy: the neutral first-boot
 // baseline, the legacy importer starter tree, and the inbox-category invariant.
 //

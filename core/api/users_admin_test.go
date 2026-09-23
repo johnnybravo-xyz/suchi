@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package api
 
 // Coverage for GET /api/admin/users, PATCH /api/admin/users/{id},

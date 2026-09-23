@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package settings is a thin typed wrapper over the settings
 // key-value table. Every value round-trips as JSON so scalars, lists,
 // and structs share one storage shape.

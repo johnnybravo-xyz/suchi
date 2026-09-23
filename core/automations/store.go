@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Store — CRUD over automations / automation_triggers / automation_actions.
 // All writes happen in the write pool; reads use the read pool.
 
