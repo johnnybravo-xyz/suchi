@@ -8,19 +8,17 @@ const (
 )
 
 type handshakeResponse struct {
-	Product           string `json:"product"`
-	APIVersion        int    `json:"api_version"`
-	MinAppVersion     string `json:"min_app_version"`
-	PairingDeviceName bool   `json:"pairing_device_name"`
+	Product       string `json:"product"`
+	APIVersion    int    `json:"api_version"`
+	MinAppVersion string `json:"min_app_version"`
 }
 
 // GetHandshake reports the public compatibility contract used before a client
 // sends credentials. It intentionally exposes no deployment-specific state.
 func (s *Server) GetHandshake(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, handshakeResponse{
-		Product:           "suchi",
-		APIVersion:        handshakeAPIVersion,
-		MinAppVersion:     handshakeMinAppVersion,
-		PairingDeviceName: true,
+		Product:       "suchi",
+		APIVersion:    handshakeAPIVersion,
+		MinAppVersion: handshakeMinAppVersion,
 	})
 }

@@ -142,6 +142,9 @@ func TestWhoami_ReturnsOnlyTokenScopes(t *testing.T) {
 	if len(self.Scopes) != 2 || self.Scopes[0] != "documents:read" || self.Scopes[1] != "documents:write" {
 		t.Fatalf("token scopes=%v, want principal scopes", self.Scopes)
 	}
+	if self.SystemID == nil || *self.SystemID != 1 || self.SystemName == nil || *self.SystemName != "Archive" || self.SystemCode == nil || *self.SystemCode != "" {
+		t.Fatalf("token system = (%v, %v, %v), want (1, Archive, empty code)", self.SystemID, self.SystemName, self.SystemCode)
+	}
 
 	session := memberPrincipal(1)
 	session.Scopes = []string{"must:not:leak"}
@@ -151,5 +154,8 @@ func TestWhoami_ReturnsOnlyTokenScopes(t *testing.T) {
 	}
 	if self.Scopes == nil || len(self.Scopes) != 0 {
 		t.Fatalf("session scopes=%v, want []", self.Scopes)
+	}
+	if self.SystemID != nil || self.SystemName != nil || self.SystemCode != nil {
+		t.Fatalf("session unexpectedly exposed a token system: (%v, %v, %v)", self.SystemID, self.SystemName, self.SystemCode)
 	}
 }
