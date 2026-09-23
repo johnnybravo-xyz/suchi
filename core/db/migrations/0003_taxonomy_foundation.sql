@@ -1149,3 +1149,14 @@ SELECT 'classification.auto_apply',value_json,updated_at
 FROM settings WHERE key='llm.date_auto_apply'
 ON CONFLICT(key) DO NOTHING;
 DELETE FROM settings WHERE key='llm.date_auto_apply';
+
+-- This release is the only supported bridge from the beta migration epoch to
+-- the stable v1 baseline. user_version alone cannot distinguish this schema
+-- from a future stable schema with the same number.
+CREATE TABLE schema_lineage (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    name TEXT NOT NULL
+) STRICT;
+
+INSERT INTO schema_lineage(singleton, name)
+VALUES (1, 'final-beta-schema-3');

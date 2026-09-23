@@ -239,7 +239,9 @@ whole-directory snapshot; a database-only copy is incomplete.
 
 Migrations are embedded/ordered. Published beta.2 migrations 0001/0002 stay byte-
 identical; unreleased mobile/taxonomy changes reside in
-`0003_taxonomy_foundation.sql`. Supported inputs are fresh databases and published
+`0003_taxonomy_foundation.sql`. The final step creates the one-row
+`schema_lineage = 'final-beta-schema-3'` marker required for guarded v1 adoption;
+`user_version` remains 3. Supported inputs are fresh databases and published
 beta.2/schema 2, not intermediate development schemas. Validate all versions before
 touching the database; reject duplicates/nonpositive versions with names.
 The rebuild marker selects a dedicated writer, disables foreign keys outside the

@@ -22,7 +22,7 @@ func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := migrationVersions(migs); !reflect.DeepEqual(got, []int{1, 2, 3}) {
-		t.Fatalf("embedded migration versions = %v, want released [1 2] and one unreleased 3", got)
+		t.Fatalf("embedded migration versions = %v, want published beta.2 [1 2] and final-beta bridge 3", got)
 	}
 	if !migs[2].RebuildTables {
 		t.Fatal("migration 0003 must use the atomic table-rebuild runner")
@@ -82,6 +82,7 @@ func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSchemaVersion(t, d, 3)
+	assertFinalBetaLineage(t, d)
 	assertBeta2Schema(t, d)
 	var pairingCount int
 	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM mobile_pairings`).Scan(&pairingCount); err != nil || pairingCount != 0 {
@@ -90,6 +91,7 @@ func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatalf("repeat mobile migration: %v", err)
 	}
+	assertFinalBetaLineage(t, d)
 
 	var (
 		contentSource string
@@ -165,6 +167,7 @@ func TestMobileIngestMigrationCreatesFreshSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSchemaVersion(t, d, 3)
+	assertFinalBetaLineage(t, d)
 	execMigrationFixture(t, d, `
 		INSERT INTO users(id,email,display_name,role,created_at,updated_at)
 			VALUES(1,'mobile@example.test','Mobile','member',1,1);
@@ -451,6 +454,7 @@ func TestTaxonomyMigrationFailureRestoresPublishedBeta2(t *testing.T) {
 			assertMigrationScalar(t, d, `SELECT count(*) FROM api_tokens WHERE token_hash='retained-token'`, 1)
 			assertMigrationScalar(t, d, `SELECT count(*) FROM settings WHERE key IN ('taxonomy','jd_inbox_category_id')`, 2)
 			assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE name IN ('jd_systems','mobile_pairings','upload_idempotency')`, 0)
+			assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE name='schema_lineage'`, 0)
 			assertMigrationScalar(t, d, `SELECT count(*) FROM pragma_table_info('documents') WHERE name IN ('system_id','content_source','split_origin_id')`, 0)
 			if got := ftsHits(t, d, "rollbackneedle"); got != 1 {
 				t.Fatalf("rollback lost FTS entry: %d", got)
@@ -465,9 +469,23 @@ func TestTaxonomyMigrationFailureRestoresPublishedBeta2(t *testing.T) {
 				t.Fatalf("retry after failed upgrade: %v", err)
 			}
 			assertSchemaVersion(t, d, 3)
+			assertFinalBetaLineage(t, d)
 			assertMigrationScalar(t, d, `SELECT count(*) FROM documents WHERE system_id=1 AND id=147 AND original_blob='retained'`, 1)
 		})
 	}
+}
+
+func assertFinalBetaLineage(t *testing.T, d *db.DB) {
+	t.Helper()
+	var singleton int
+	var name string
+	if err := d.Read.QueryRow(`SELECT singleton,name FROM schema_lineage`).Scan(&singleton, &name); err != nil {
+		t.Fatal(err)
+	}
+	if singleton != 1 || name != "final-beta-schema-3" {
+		t.Fatalf("schema lineage = (%d, %q), want (1, %q)", singleton, name, "final-beta-schema-3")
+	}
+	assertMigrationScalar(t, d, `SELECT count(*) FROM schema_lineage`, 1)
 }
 
 func execMigrationFixture(t *testing.T, d *db.DB, query string) {

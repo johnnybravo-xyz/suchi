@@ -132,6 +132,14 @@ restore the complete pre-upgrade data directory, install the previous binary or
 image, and verify readiness again. Do not run an older binary against a database
 opened by a newer release.
 
+The stable-v1 transition has an additional bridge. A beta.2 archive must first be
+opened by the tagged final beta named in the release notes; stable v1 refuses a
+direct beta.2 upgrade. Verify the bridge startup and `suchi doctor`, stop every
+archive writer, and take another complete backup before moving to v1. Keep the
+pre-bridge and pre-v1 backups plus the bridge binary or image until a post-upgrade
+restore drill succeeds. The tagged bridge's migrations and schema-lineage marker
+are frozen; never repair this transition by changing `user_version` manually.
+
 ## Retention and garbage collection
 
 Choose retention based on recovery needs and applicable law. Deleting a
