@@ -19,6 +19,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
+	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 var errLastActiveAdmin = errors.New("at least one active administrator is required")
@@ -46,6 +47,9 @@ type UserSelf struct {
 	Role          string   `json:"role"`
 	AuthNBy       string   `json:"authn_by,omitempty"`
 	AvatarURL     string   `json:"avatar_url,omitempty"`
+	SystemID      *int64   `json:"system_id,omitempty"`
+	SystemName    *string  `json:"system_name,omitempty"`
+	SystemCode    *string  `json:"system_code,omitempty"`
 	Capabilities  []string `json:"capabilities"`
 	Scopes        []string `json:"scopes"`
 }
@@ -551,6 +555,13 @@ func loadSelf(ctx context.Context, rdb *sql.DB, p *pluginapi.Principal) (UserSel
 	}
 	if p.Kind == "token" {
 		self.Scopes = append(self.Scopes, p.Scopes...)
+		system, err := systems.Get(ctx, rdb, tokenSystemID(p))
+		if err != nil {
+			return UserSelf{}, err
+		}
+		self.SystemID = &system.ID
+		self.SystemName = &system.Name
+		self.SystemCode = &system.Code
 	}
 	if displayName.Valid {
 		self.DisplayName = displayName.String

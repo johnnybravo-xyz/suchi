@@ -7,6 +7,9 @@
   "role": "member",
   "authn_by": "local-auth",
   "avatar_url": "/api/users/7/avatar",
+  "system_id": 1,
+  "system_name": "Archive",
+  "system_code": "",
   "capabilities": [],
   "scopes": ["documents:read", "documents:write"]
 }

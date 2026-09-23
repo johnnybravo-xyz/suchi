@@ -281,8 +281,9 @@ binding before mutation or replay. Membership removal atomically revokes shares,
 tokens and pairings; re-addition does not revive them. See [Permissions](/permissions).
 
 First-party clients probe public `/api/handshake` before credentials. `/api/whoami`
-reports actual scopes/build identity. `/api/token/` creates tokens, `/api/login`
-creates sessions; mobile reads use existing ACL-filtered API projections.
+reports actual scopes/build identity and, for tokens, the bound filing-system ID,
+name, and possibly-empty code. `/api/token/` creates tokens, `/api/login` creates
+sessions; mobile reads use existing ACL-filtered API projections.
 [HTTP API](/api) owns handshake, payload, scope and mobile-read details.
 
 `core/api/mobile_pairing.go` transfers a browser/OIDC identity to a device.

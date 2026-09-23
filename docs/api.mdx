@@ -229,6 +229,9 @@ read-only fields are not user profile settings.
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
   "avatar_url": "/api/users/1/avatar?v=<sha256>",
+  "system_id": 1,
+  "system_name": "Archive",
+  "system_code": "",
   "capabilities": ["mailboxes"],
   "scopes": ["documents:read", "documents:write"]
 }
@@ -239,7 +242,10 @@ from the configured `PUBLIC_URL` and lets the SPA preview the identity shown on
 public share pages. **401** if anonymous.
 `scopes` copies the authenticated API token's granted scopes. Cookie/OIDC
 sessions return `[]`; clients must not infer token grants from user role or
-capabilities.
+capabilities. Token responses also include the credential's filing-system
+`system_id`, `system_name`, and `system_code`. These fields are omitted for
+cookie/OIDC sessions. `system_code` remains present but may be empty before the
+original archive is assigned a permanent code.
 
 ### `POST /api/mobile/pairing`
 
