@@ -267,16 +267,17 @@ Seed `$DATA_DIR` from the versioned manifest maintained by
 | Flag                   | Purpose                                                                                                                                                                                         |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--data-dir <dir>`     | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`.                                                                                                                  |
-| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/johnnybravo-xyz/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile. |
-| `--corpus-url <url>`   | HTTPS URL of a compatible corpus tarball. Verified against a `.sha256` sidecar if present. Defaults to the release tested with this Suchi build.                                                |
-| `--corpus-dir <path>`  | Use an already extracted corpus directory. Skips download and extraction.                                                                                                                       |
-| `--fetch-only`         | Download, verify, and extract the corpus into the local cache without writing the database.                                                                                                     |
+| `--corpus-file <path>` | Use an operator-trusted local `corpus-vX.tar.gz`. Skips HTTP; the CLI does not authenticate the file.                                                                                         |
+| `--corpus-url <url>`   | Use an operator-selected remote tarball. Its `.sha256` sidecar is checked when available, but absence is allowed. Use HTTPS and verify custom sources independently.                        |
+| `--corpus-dir <path>`  | Use an operator-trusted extracted directory. Skips download, checksum verification, and archive extraction safeguards.                                                                        |
+| `--fetch-only`         | Stop after resolving or fetching the corpus, before database seeding. Checksum verification follows the selected source rules.                                                               |
 
-Without a corpus flag, `suchi demo` downloads the tested corpus release. A
-different manifest version is rejected so showcase images cannot silently run
-against an untested data contract. Corpus input is capped at 256 MiB compressed,
-1 GiB extracted, and 10,000 archive entries; checksum sidecars are capped at
-4 KiB.
+Without a corpus flag, `suchi demo` downloads the tested corpus release and
+requires the SHA-256 digest compiled into this Suchi build. A different manifest
+version is rejected so showcase images cannot silently run against an untested
+data contract. Corpus input is capped at 256 MiB compressed, 1 GiB extracted,
+and 10,000 archive entries; checksum responses are capped at 4 KiB. See
+[Public demo mode](/demo-instance#seed-data) for cache and trust boundaries.
 
 The manifest owns fixtures, metadata, saved views, and symbolic automations.
 Same-name views and automations are preserved on repeat runs, and existing

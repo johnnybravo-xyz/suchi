@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
@@ -150,7 +151,7 @@ func TestDemoManifestReseedingPreservesDocumentTagsAndJobs(t *testing.T) {
 		})
 	}
 	fixtures[0].Dates[0].Date = "2026-02-30"
-	if _, err := opts.FixtureIngest(ctx, fixtures[0], filepath.Join(fixturesDir, fixtures[0].Filename)); err == nil {
+	if _, err := opts.FixtureIngest(ctx, fixtures[0], strings.NewReader("one")); err == nil {
 		t.Fatal("invalid fixture date must fail validation")
 	}
 }

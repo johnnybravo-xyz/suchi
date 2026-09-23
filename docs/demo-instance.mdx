@@ -28,13 +28,28 @@ Useful flags:
 | `--corpus-file <path>` | Seed from a local corpus bundle.            |
 | `--corpus-url <url>`   | Fetch and seed a remote corpus bundle.      |
 | `--corpus-dir <path>`  | Seed from an already extracted corpus.      |
-| `--fetch-only`         | Download and validate without writing rows. |
+| `--fetch-only`         | Stop after source resolution, before database seeding. |
 
 Without a corpus flag, the command fetches the release tested with this build.
-The hosted image embeds that tarball and seeds only when its dedicated data
-volume has no database. Normal `suchi serve` startup never fetches content.
-Local and remote corpus archives share the same limits: 256 MiB compressed,
-1 GiB extracted, 10,000 entries, and a 4 KiB checksum sidecar.
+Its URL and SHA-256 digest are compiled into Suchi. A mismatched download is
+rejected, and a warm built-in cache is reused only when its checksum marker
+matches that compiled digest. An unknown default corpus version without a pinned
+digest is refused. The hosted image embeds the matching tarball and seeds only
+when its dedicated data volume has no database. Normal `suchi serve` startup
+never fetches content.
+
+`--corpus-url`, `--corpus-file`, and `--corpus-dir` are operator-selected trust
+overrides. A custom URL uses its `.sha256` sidecar when available, but remains
+accepted without one; a local archive or extracted directory is not authenticated
+by the CLI. Verify custom inputs independently and use HTTPS for remote sources.
+A checksum proves byte identity, not that a corpus is appropriate or harmless.
+
+Local and remote corpus archives are limited to 256 MiB compressed, 1 GiB
+extracted, and 10,000 entries; remote checksum responses are limited to 4 KiB.
+Extraction rejects absolute and parent-traversal paths and does not materialize
+links. Manifest fixtures must name top-level regular files in `fixtures/`;
+paths cannot escape that directory, and directories or other non-regular files
+fail the seed.
 
 Fixtures may include curated exact-day dates in the manifest:
 

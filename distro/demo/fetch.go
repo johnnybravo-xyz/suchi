@@ -35,9 +35,9 @@ type FetchOptions struct {
 	// Empty => the corpus release tested with this Suchi build.
 	URL string
 
-	// ExpectedSHA256 — hex-encoded sha256. If set, the downloaded /
-	// local tarball is verified against it. If empty and a URL is
-	// given, the fetcher tries to grab <URL>.sha256 as a sidecar.
+	// ExpectedSHA256 — hex-encoded sha256. The built-in release always uses
+	// the checksum compiled into this Suchi build. For an operator-supplied URL,
+	// an empty value falls back to the URL's .sha256 sidecar when available.
 	ExpectedSHA256 string
 
 	// CacheDir — where the extracted corpus lands. Defaults to
@@ -72,19 +72,30 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 	}
 	if opts.LocalFile == "" && opts.URL == "" {
 		opts.URL = DefaultCorpusURL(opts.Version)
-	}
-
-	// Warm cache short-circuit: manifest.json exists AND (no sha
-	// provided OR .sha256 marker matches).
-	manifestPath := filepath.Join(opts.CacheDir, "manifest.json")
-	if _, err := os.Stat(manifestPath); err == nil {
-		markerPath := opts.CacheDir + ".sha256"
-		if opts.ExpectedSHA256 == "" {
-			return opts.CacheDir, nil
+		if opts.Version != DemoCorpusVersion {
+			return "", fmt.Errorf("no built-in checksum for demo corpus %q", opts.Version)
 		}
-		if b, err := os.ReadFile(markerPath); err == nil &&
-			strings.TrimSpace(string(b)) == opts.ExpectedSHA256 {
-			return opts.CacheDir, nil
+		opts.ExpectedSHA256 = DemoCorpusSHA256
+	}
+	if opts.LocalFile == "" && opts.ExpectedSHA256 == "" {
+		// Resolve a custom URL's optional sidecar before considering the cache.
+		// Without a checksum, the source cannot be tied to existing cache bytes.
+		if checksum, err := httpGet(ctx, opts.URL+".sha256", maxChecksumBytes); err == nil {
+			opts.ExpectedSHA256 = firstHexToken(string(checksum))
+		}
+	}
+	opts.ExpectedSHA256 = strings.ToLower(opts.ExpectedSHA256)
+
+	// Only verified content can reuse a warm cache. An unverified custom source
+	// must be fetched again because no identity ties it to the cached corpus.
+	manifestPath := filepath.Join(opts.CacheDir, "manifest.json")
+	markerPath := opts.CacheDir + ".sha256"
+	if opts.ExpectedSHA256 != "" {
+		if _, err := os.Stat(manifestPath); err == nil {
+			if b, err := os.ReadFile(markerPath); err == nil &&
+				strings.EqualFold(strings.TrimSpace(string(b)), opts.ExpectedSHA256) {
+				return opts.CacheDir, nil
+			}
 		}
 	}
 
@@ -110,12 +121,6 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 			return "", fmt.Errorf("fetch %s: %w", opts.URL, err)
 		}
 		tarBytes = b
-		if opts.ExpectedSHA256 == "" {
-			// Try to grab the sidecar; a 404 is not fatal.
-			if s, err := httpGet(ctx, opts.URL+".sha256", maxChecksumBytes); err == nil {
-				opts.ExpectedSHA256 = firstHexToken(string(s))
-			}
-		}
 	}
 
 	// Verify sha if we have one.
@@ -139,6 +144,11 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 	if err := extractTarGz(tarBytes, tmp); err != nil {
 		return "", fmt.Errorf("extract: %w", err)
 	}
+	// Remove verification metadata before installing different content. If the
+	// remaining swap fails, losing a marker only forces a safe refetch.
+	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
 	if err := os.RemoveAll(opts.CacheDir); err != nil {
 		return "", err
 	}
@@ -146,7 +156,7 @@ func Fetch(ctx context.Context, opts FetchOptions) (string, error) {
 		return "", err
 	}
 	if opts.ExpectedSHA256 != "" {
-		if err := os.WriteFile(opts.CacheDir+".sha256", []byte(opts.ExpectedSHA256), 0o644); err != nil {
+		if err := os.WriteFile(markerPath, []byte(opts.ExpectedSHA256), 0o644); err != nil {
 			return "", err
 		}
 	}

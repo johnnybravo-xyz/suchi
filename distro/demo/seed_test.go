@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
@@ -102,7 +103,7 @@ func TestSeedFromManifestDistinguishesNewAndExistingFixtures(t *testing.T) {
 	})
 	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
 		CorpusDir: dir,
-		FixtureIngest: func(_ context.Context, fixture demo.ManifestFixture, _ string) (bool, error) {
+		FixtureIngest: func(_ context.Context, fixture demo.ManifestFixture, _ io.Reader) (bool, error) {
 			return fixture.Filename == "new.pdf", nil
 		},
 	})
@@ -111,6 +112,135 @@ func TestSeedFromManifestDistinguishesNewAndExistingFixtures(t *testing.T) {
 	}
 	if stats.Seeded != 1 || stats.Existing != 1 {
 		t.Fatalf("fixture stats = %+v", stats)
+	}
+}
+
+func TestSeedFromManifestRejectsUnsafeFixtureNamesAndNonRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	fixtures := filepath.Join(dir, "fixtures")
+	if err := os.Mkdir(fixtures, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtures, "safe.txt"), []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(fixtures, "directory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, demo.Manifest{
+		Version: demo.DemoCorpusVersion,
+		Fixtures: []demo.ManifestFixture{
+			{Filename: "../outside.txt"},
+			{Filename: filepath.Join(dir, "outside.txt")},
+			{Filename: "directory"},
+			{Filename: "safe.txt"},
+		},
+	})
+
+	var ingested []string
+	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
+		CorpusDir: dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FixtureIngest: func(_ context.Context, fixture demo.ManifestFixture, content io.Reader) (bool, error) {
+			body, err := io.ReadAll(content)
+			if err != nil {
+				return false, err
+			}
+			ingested = append(ingested, fixture.Filename+":"+string(body))
+			return true, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Seeded != 1 || stats.Failed != 3 || stats.Skipped != 0 {
+		t.Fatalf("fixture stats = %+v", stats)
+	}
+	if len(ingested) != 1 || ingested[0] != "safe.txt:safe" {
+		t.Fatalf("ingested = %q, want only safe fixture", ingested)
+	}
+}
+
+func TestSeedFromManifestRejectsSymlinkFixture(t *testing.T) {
+	dir := t.TempDir()
+	fixtures := filepath.Join(dir, "fixtures")
+	if err := os.Mkdir(fixtures, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(fixtures, "linked.txt")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, demo.Manifest{
+		Version:  demo.DemoCorpusVersion,
+		Fixtures: []demo.ManifestFixture{{Filename: "linked.txt"}},
+	})
+
+	called := false
+	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
+		CorpusDir: dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FixtureIngest: func(context.Context, demo.ManifestFixture, io.Reader) (bool, error) {
+			called = true
+			return true, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called || stats.Failed != 1 || stats.Seeded != 0 {
+		t.Fatalf("called=%v stats=%+v", called, stats)
+	}
+}
+
+func TestSeedFromManifestPassesOpenedFixture(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not permit renaming the open fixture")
+	}
+	dir := t.TempDir()
+	fixtures := filepath.Join(dir, "fixtures")
+	if err := os.Mkdir(fixtures, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixturePath := filepath.Join(fixtures, "fixture.txt")
+	if err := os.WriteFile(fixturePath, []byte("opened content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, demo.Manifest{
+		Version:  demo.DemoCorpusVersion,
+		Fixtures: []demo.ManifestFixture{{Filename: "fixture.txt"}},
+	})
+
+	var got string
+	stats, err := demo.SeedFromManifest(context.Background(), demo.SeedOptions{
+		CorpusDir: dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FixtureIngest: func(_ context.Context, _ demo.ManifestFixture, content io.Reader) (bool, error) {
+			if err := os.Rename(fixturePath, fixturePath+".old"); err != nil {
+				return false, err
+			}
+			if err := os.WriteFile(fixturePath, []byte("replacement"), 0o600); err != nil {
+				return false, err
+			}
+			body, err := io.ReadAll(content)
+			got = string(body)
+			return true, err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Seeded != 1 || stats.Failed != 0 || got != "opened content" {
+		t.Fatalf("stats=%+v content=%q", stats, got)
 	}
 }
 

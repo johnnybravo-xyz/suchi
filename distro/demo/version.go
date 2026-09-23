@@ -11,4 +11,7 @@ package demo
 // against. Bumped in the same PR that lands a corpus-breaking change.
 // Consumers may point at any tarball; the seeder errors clearly on
 // shape mismatch (see seed.go).
-const DemoCorpusVersion = "v0.1.1"
+const (
+	DemoCorpusVersion = "v0.1.1"
+	DemoCorpusSHA256  = "e3bc9a9d340dafbc899ceb3b52eef50f516aeec962babe2f7fb0505958f3ae8e"
+)

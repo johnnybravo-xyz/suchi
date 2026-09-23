@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -44,8 +45,8 @@ type ManifestCluster struct {
 	Language    string `json:"language,omitempty"`
 }
 
-// ManifestFixture is one file in corpus/fixtures/ + its metadata. All
-// filenames are relative to corpus/fixtures/.
+// ManifestFixture is one file in corpus/fixtures/ + its metadata. Filename is
+// a plain file name, not a path.
 type ManifestFixture struct {
 	Filename      string         `json:"filename"`
 	Correspondent string         `json:"correspondent"`
@@ -94,9 +95,11 @@ type SeedOptions struct {
 	// (blob + document row + FTS content extraction + JD assignment).
 	// Left as a callback because the wiring for CAS + DB + pipeline
 	// engines lives in the distro command, not in this package.
+	// The reader is already confined to CorpusDir/fixtures, validated as a
+	// regular file, and remains valid only until the callback returns.
 	//
 	// If nil, fixtures are validated but not stored.
-	FixtureIngest func(ctx context.Context, f ManifestFixture, path string) (bool, error)
+	FixtureIngest func(ctx context.Context, f ManifestFixture, content io.Reader) (bool, error)
 
 	// SavedViewIngest returns true when it inserted a new row and false when
 	// an existing user-edited view was preserved.
@@ -131,19 +134,35 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 		"saved_views", len(m.SavedViews),
 		"automations", len(m.Automations))
 
-	fixDir := filepath.Join(opts.CorpusDir, "fixtures")
+	var fixtureRoot *os.Root
+	if len(m.Fixtures) > 0 {
+		fixtureRoot, err = os.OpenRoot(filepath.Join(opts.CorpusDir, "fixtures"))
+		if err != nil {
+			return s, fmt.Errorf("open corpus fixtures: %w", err)
+		}
+		defer fixtureRoot.Close()
+	}
 	for _, f := range m.Fixtures {
-		p := filepath.Join(fixDir, f.Filename)
-		if _, err := os.Stat(p); err != nil {
+		file, err := openFixture(fixtureRoot, f.Filename)
+		if errors.Is(err, os.ErrNotExist) {
 			log.Warn("demo.seed.fixture.missing", "filename", f.Filename)
 			s.Skipped++
 			continue
 		}
+		if err != nil {
+			log.Warn("demo.seed.fixture.invalid", "filename", f.Filename, "err", err.Error())
+			s.Failed++
+			continue
+		}
 		if opts.FixtureIngest == nil {
+			_ = file.Close()
 			s.WouldSeed++
 			continue
 		}
-		created, err := opts.FixtureIngest(ctx, f, p)
+		created, err := func() (bool, error) {
+			defer file.Close()
+			return opts.FixtureIngest(ctx, f, file)
+		}()
 		if err != nil {
 			log.Warn("demo.seed.fixture.err", "filename", f.Filename, "err", err.Error())
 			s.Failed++
@@ -226,12 +245,34 @@ func SeedFromManifest(ctx context.Context, opts SeedOptions) (Stats, error) {
 	return s, nil
 }
 
+// openFixture confines manifest-controlled names to the flat fixtures directory
+// and returns an opened regular file.
+func openFixture(root *os.Root, name string) (*os.File, error) {
+	if root == nil || name == "" || !filepath.IsLocal(name) || filepath.Base(name) != name || name == "." {
+		return nil, fmt.Errorf("fixture filename %q must be a local file name", name)
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("fixture %q is not a regular file", name)
+	}
+	return file, nil
+}
+
 // Stats summarize a seed run.
 type Stats struct {
 	Seeded               int // fixtures successfully stored
 	Existing             int // fixtures already present
 	Skipped              int // fixture named in manifest but missing on disk
-	Failed               int // ingest callback returned error
+	Failed               int // fixture validation or ingest callback failed
 	WouldSeed            int // FixtureIngest was nil
 	ViewsSeeded          int
 	ViewsExisting        int

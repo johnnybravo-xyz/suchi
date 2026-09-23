@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"os"
@@ -120,7 +121,7 @@ func runDemo(args []string) int {
 	}
 
 	// Look up an owner for corpus fixtures. Prefer an admin; fall back to
-	// the first user. A normal fresh install must complete setup first.
+	// the first user. A normal fresh install must create its administrator first.
 	var demoUser int64
 	err = d.Read.QueryRowContext(ctx, `
 		SELECT id FROM users
@@ -143,7 +144,7 @@ func runDemo(args []string) int {
 	//     in the background once serve starts
 	if corpusDir != "" {
 		if demoUser <= 0 {
-			fmt.Fprintln(os.Stderr, "corpus seed: no admin/owner found — cannot own docs. Complete /setup first or enable SUCHI_DEMO_MODE.")
+			fmt.Fprintln(os.Stderr, "corpus seed: no admin/owner found — cannot own docs. Open /bootstrap first or enable SUCHI_DEMO_MODE.")
 			return 1
 		}
 		cas, err := blob.New(cfg.DataDir)
@@ -193,8 +194,8 @@ func runDemo(args []string) int {
 // on demand; the fixture author doesn't have to pre-populate taxonomy.
 // JD categories are looked up by code and fall back to the JD inbox
 // (code=10) if the manifest names something outside the seeded tree.
-func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(context.Context, demo.ManifestFixture, string) (bool, error) {
-	return func(ctx context.Context, f demo.ManifestFixture, path string) (bool, error) {
+func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(context.Context, demo.ManifestFixture, io.Reader) (bool, error) {
+	return func(ctx context.Context, f demo.ManifestFixture, content io.Reader) (bool, error) {
 		dates := make([]intelligence.Candidate, 0, len(f.Dates))
 		for _, date := range f.Dates {
 			candidate, err := intelligence.NewDateCandidate(date.Role, date.Date, "day", date.Date, date.Evidence, 0)
@@ -203,13 +204,8 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			}
 			dates = append(dates, candidate)
 		}
-		// 1. Stream the file into the CAS.
-		file, err := os.Open(path)
-		if err != nil {
-			return false, fmt.Errorf("open fixture: %w", err)
-		}
-		defer file.Close()
-		ref, err := cas.Put(file)
+		// 1. Stream the already-confined fixture into the CAS.
+		ref, err := cas.Put(content)
 		if err != nil {
 			return false, fmt.Errorf("cas put: %w", err)
 		}
