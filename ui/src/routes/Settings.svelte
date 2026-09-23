@@ -1,35 +1,21 @@
 <script>
-  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
-  import { setupState } from '../lib/api.js'
   import { session } from '../lib/session.svelte.js'
+  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import SetupReminder from '../lib/SetupReminder.svelte'
   import AccountSettings from './AccountSettings.svelte'
   import Lazy from '../lib/Lazy.svelte'
 
   const loadArchive = () => import('./ArchiveSettings.svelte')
 
-  let {
-    notify, initialTab = '', initialSection = '', onTaxonomyChanged,
-    setupEngaged = false, onSetupEngaged,
-  } = $props()
+  let { notify, initialTab = '', initialSection = '', setupNeeded = false, setupError = false, onRetrySetup, onTaxonomyChanged } = $props()
 
-  const isAdmin = session.user?.role === 'admin'
+  const isAdmin = $derived(session.user?.role === 'admin')
   const archiveSelected = $derived(isAdmin && initialTab === 'archive')
-  let setup = $state(undefined)
-
-  async function loadSetup() {
-    try { setup = await setupState() }
-    catch { setup = undefined }
-  }
-
   async function taxonomyChanged() {
-    await Promise.all([loadSetup(), onTaxonomyChanged?.()])
+    await onTaxonomyChanged?.()
   }
 
-  if (isAdmin) loadSetup()
-
-  const setupNeedsAttention = $derived(
-    isAdmin && setup !== undefined && !setup?.filing_tree_chosen && !setupEngaged
-  )
+  const setupNeedsAttention = $derived(isAdmin && setupNeeded)
 </script>
 
 <div class="content-narrow settings-page">
@@ -40,19 +26,15 @@
     </nav>
   {/if}
 
-  <div class="settings-body" class:account-body={!archiveSelected}>
+  <div class="settings-body" class:account-body={!archiveSelected} class:archive-body={archiveSelected}>
   {#if setupNeedsAttention}
-    <section class="setup-row settings-section" aria-label="Archive setup">
-      <div>
-        <b>Archive setup is incomplete</b>
-        <span>Choose a filing tree to finish archive setup.</span>
-      </div>
-      <a role="button" class="btn sm primary" href={filingHref("#/settings?tab=archive&section=archive")} onclick={onSetupEngaged}>Continue setup</a>
-    </section>
+    <SetupReminder placement="settings" error={setupError} onRetry={onRetrySetup} />
   {/if}
 
   {#if archiveSelected}
-    <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged, setupSnapshot: setup }} />
+    <div class="archive-slot">
+      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged }} />
+    </div>
   {:else}
     <AccountSettings {notify} />
   {/if}
@@ -74,15 +56,9 @@
   .settings-tabs a { padding:9px 14px;border-bottom:2px solid transparent;color:var(--muted);font-size:.84rem;font-weight:600;text-decoration:none }
   .settings-tabs a:hover { color:var(--ink) }
   .settings-tabs a.on { border-color:var(--accent);color:var(--accent) }
-  .settings-body { flex:1;min-height:0;overflow-y:auto }
-  .account-body { padding-inline-end:16px;scrollbar-gutter:stable }
-  .setup-row { display:flex;align-items:center;justify-content:space-between;gap:20px;padding:2px 0 8px }
-  .setup-row > div { display:flex;flex-direction:column;gap:3px }
-  .setup-row b { font-size:.86rem }
-  .setup-row span { color:var(--muted);font-size:.8rem }
-  .settings-section { padding:6px 0 28px;margin-bottom:26px;border-bottom:1px solid var(--line) }
+  .settings-body { flex:1;min-height:0 }
+  .account-body { overflow-y:auto;padding-inline-end:28px;scrollbar-gutter:stable }
+  .archive-body { display:flex;flex-direction:column;overflow:hidden;padding-inline-end:20px }
+  .archive-slot { flex:1;min-height:0 }
   .build-info { flex:none;padding:16px 0 0;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere }
-  @media (max-width: 520px) {
-    .setup-row { align-items:flex-start;flex-direction:column }
-  }
 </style>

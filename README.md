@@ -80,6 +80,11 @@ for operators who want editable mounts, networks, and image pins. See [Getting
 started](docs/getting-started.mdx) for direct binary, reverse-proxy, NAS, and
 production deployment paths.
 
+After creating the administrator, choose a filing tree in **Settings > Archive
+configuration > Filing tree**. This is the only required archive setup step;
+the reminder remains until a preset, imported tree, or explicit Blank choice is
+saved.
+
 This quick start is bound to loopback and the moving `beta` tag is for
 evaluation only. A production server, including one reached by the mobile app,
 must use HTTPS and pin the selected release by its published image digest.
@@ -170,7 +175,4 @@ guarantee. See [Permissions](docs/permissions.mdx) for the application boundary.
 
 ## License
 
-Suchi is made available under the [GNU Affero General Public License v3.0](LICENSE)
-beginning with its first public release. Before that release, its repository
-and container images were private development artifacts and were not
-distributed to any third party.
+Suchi is available under the [GNU Affero General Public License v3.0](LICENSE).

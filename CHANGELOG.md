@@ -4,9 +4,6 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
-- Preserve literal SQLite database filenames and archive isolation.
-
-
 ### Added
 
 - Import HuML/TOML filing trees with target-aware previews, collision handling,
@@ -37,10 +34,10 @@ Notable user-visible changes to Suchi are recorded here.
   edits and explicit clears. Recheck current session, permissions and supporting
   sources at review and queued application; expired authorization needs a new
   review, not reuse of an old approval.
-- Ship all unreleased schema changes in migration 0003. Published beta.2
-  migrations 0001/0002 remain unchanged; fresh installs and beta.2/schema 2
-  upgrades are supported, intermediate development schemas are not. Surviving
-  IDs/history/credentials are preserved; automatic ID nonreuse begins at upgrade.
+- Ship the schema changes in migration 0003. Published beta.2 migrations
+  0001/0002 remain unchanged; fresh installs and beta.2/schema 2 upgrades are
+  supported. Surviving IDs, history and credentials are preserved; automatic ID
+  nonreuse begins at upgrade.
 - Migration 0003 carries the date opt-out into the shared application mode
   and retains a saved local automatic threshold.
 - Define strict offline `suchi-taxonomy/v1` HuML/TOML, with generated reserved
@@ -49,8 +46,11 @@ Notable user-visible changes to Suchi are recorded here.
 - Keep projections under immutable `rendered/<SYS>/` roots. First introduction
   queues render-only moves. Native takeout v2 exports one selected system and
   remains partial; complete backups preserve the whole instance.
-- Simplify shared setup and People/metadata forms. Setup requires a saved filing
-  tree; profile email is read-only, and display-name saves use supported fields.
+- Replace the separate setup wizard with Archive Configuration. Filing tree is
+  the only required step; preset, Blank and taxonomy-import choices clear a
+  persistent reminder that links directly to Filing tree. All ordinary archive
+  settings remain usable beforehand, and Settings uses one padded scrollbar.
+  Profile email is read-only, and display-name saves use supported fields.
   Improve saved-view controls, email-rule resizing, and QR alignment.
 - Reuse verified AnyDoc release artifacts in images and skip unnecessary
   thumbnail decoding and document-detail reloads.
@@ -60,6 +60,7 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Preserve literal SQLite database filenames and archive isolation.
 - Preserve local taxonomy descriptions, disabled rules, edited forks, symbolic
   filters, and rule identity; reject conflicting references and unsupported
   seeded exports before changing data.

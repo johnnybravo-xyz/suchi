@@ -402,6 +402,18 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 }
 .setup-reminder-side { margin-bottom: 10px; background: var(--tint); }
 .setup-reminder-mobile { display: none; }
+.setup-reminder-settings {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 26px;
+  padding: 6px 0 28px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
 .setup-reminder-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .setup-reminder-head > div { display: grid; flex: 1; gap: 3px; min-width: 0; }
 .setup-reminder-head b { font-size: .88rem; }
@@ -418,8 +430,8 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
   border: 1px solid var(--line);
   border-radius: 7px;
 }
-.setup-reminder-close { width: 28px; height: 28px; flex: none; padding: 0; justify-content: center; }
 .setup-reminder .btn { justify-self: start; }
+.setup-reminder-actions { display: flex; gap: 8px; }
 @media (max-width: 860px) {
   .setup-reminder-mobile {
     display: flex;
@@ -435,6 +447,7 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 }
 @media (max-width: 620px) {
   .setup-reminder-mobile { align-items: stretch; flex-direction: column; }
+  .setup-reminder-settings { align-items: flex-start; flex-direction: column; }
 }
 
 /* ---------- bulk selection ---------- */

@@ -74,10 +74,7 @@ func TestSetupStateReturnsOnlyFilingTreeReminderState(t *testing.T) {
 	seedUser(t, d, 1)
 	if _, err := d.Write.Exec(`
 		UPDATE users SET created_at=100 WHERE id=1;
-		UPDATE jd_systems SET preset_id='blank' WHERE id=1;
-		INSERT INTO settings(key,value_json,updated_at) VALUES
-			('setup.intent','"household"',1),
-			('setup.completed_at','200',1)
+		UPDATE jd_systems SET preset_id='blank' WHERE id=1
 	`); err != nil {
 		t.Fatal(err)
 	}

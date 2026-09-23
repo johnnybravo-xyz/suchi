@@ -23,7 +23,7 @@ test('shows password-unlocked status in lists, grids and detail', async ({ page 
 test('clears account data and rejects late reads after signing in as another user', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 731,
-    setupCompletedAt: 1,
+
     filingTreeChosen: true,
     jdCategories: [{ id: 4, code: 11, name: 'Private estate plan', area_code: 10, area_name: 'Private affairs', system: false }],
   })
@@ -150,7 +150,7 @@ for (const switchAccount of [false, true]) {
 
 for (const target of ['page', 'modal']) {
   test(`uploads each ${target} drop once and refreshes the document list`, async ({ page }) => {
-    const options = { setupCompletedAt: 1, filingTreeChosen: true, documents: [] }
+    const options = { filingTreeChosen: true, documents: [] }
     await mockAPI(page, options)
     let uploads = 0
     await page.route('**/api/documents/', async route => {
@@ -182,7 +182,7 @@ for (const target of ['page', 'modal']) {
 
 for (const input of ['drop', 'picker']) {
   test('stops queued ' + input + ' uploads when the account changes', async ({ page }) => {
-    await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+    await mockAPI(page, { filingTreeChosen: true })
     let actor = 1
     let firstUpload
     const uploadActors = []
@@ -282,8 +282,7 @@ function taxonomyPreview(overrides = {}) {
 }
 
 async function openTaxonomyImport(page) {
-  await page.goto('/#/setup')
-  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.goto('/#/settings?tab=archive&section=archive')
   await page.getByRole('button', { name: 'Import a file' }).click()
   return page.getByRole('region', { name: 'Import taxonomy', exact: true })
 }
@@ -311,12 +310,10 @@ test('taxonomy import previews a named tree and refreshes setup and sidebar afte
   await expect(importer.getByText('00–09 System index', { exact: true })).toBeVisible()
   await expect(importer.getByText('49 Inbox', { exact: true })).toBeVisible()
   await expect(importer.getByText('Local starter — disabled (stays disabled)', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeDisabled()
+  await expect(page.getByRole('note').getByText('Required for archive setup.')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeEnabled()
-  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeEnabled()
+  await expect(page.getByRole('note').getByText('Required for archive setup.')).toHaveCount(0)
   await expect(importer.getByRole('status')).toContainText('Filing-index refresh queued')
   expect(requests[0]).toMatchObject({ content: taxonomyContent, format: 'toml', apply: false, skip_seeds: false, remaps: {} })
   expect(requests[1]).toMatchObject({ expected_state_hash: 'preview-state', apply: true, format: 'toml' })
@@ -652,12 +649,9 @@ async function mockAPI(page, options = {}) {
       body = { applied: true }
     }
     else if (path === '/api/admin/setup/state') body = {
-      intent: '',
-      recommended_preset: '',
       current_preset: options.currentPreset || '',
       filing_tree_chosen: taxonomyApplied || (options.filingTreeChosen ?? false),
       started_at: options.setupStartedAt ?? Math.floor(Date.now() / 1000),
-      completed_at: options.setupCompletedAt ?? null,
     }
     else if (path === '/api/admin/users') body = {
       results: [
@@ -969,7 +963,7 @@ test('guides first-time demo visitors and keeps the help launcher available', as
     demoSession: 'anon',
     capabilities: [],
     chatEnabled: true,
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
@@ -998,7 +992,7 @@ for (const demoSession of ['anon', 'scratch']) {
     const intelligenceQueries = []
     await mockAPI(page, {
       demoMode: true, demoSession, capabilities: [], chatEnabled: true,
-      setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+      filingTreeChosen: true, intelligenceQueries,
       intelligence: ['2026-10-31', '2027-11-30'].map((date, index) => ({
         id: index + 1, document_id: 42, document_title: 'Northstar renewal',
         type: 'date', role: 'renewal', status: 'accepted', extractor: 'demo-corpus',
@@ -1021,14 +1015,16 @@ for (const demoSession of ['anon', 'scratch']) {
   })
 }
 
-test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) => {
+test('keeps incomplete archive setup visible across navigation and reloads', async ({ page }) => {
   await mockAPI(page, { setupStartedAt: Math.floor(Date.now() / 1000) })
   await page.goto('/#/dashboard')
 
-  const reminder = page.getByRole('complementary', { name: 'Setup wizard' })
+  const reminder = (page.viewportSize()?.width || 0) > 860
+    ? page.locator('.sidebar .setup-reminder')
+    : page.locator('.main > .setup-reminder-mobile')
   await expect(reminder.getByText('Choose your filing tree')).toBeVisible()
-  await expect(reminder.getByText(/reopen Setup anytime from Settings/)).toBeVisible()
-  await expect(reminder.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/setup')
+  await expect(reminder.getByText('Choose how documents are organized to finish archive setup.')).toBeVisible()
+  await expect(reminder.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=archive')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 
   if ((page.viewportSize()?.width || 0) > 860) {
@@ -1040,29 +1036,39 @@ test('keeps fresh incomplete setup visible on the dashboard', async ({ page }) =
   }
 
   await page.goto('/#/settings')
-  const setupRow = page.getByRole('region', { name: 'Setup wizard' })
-  await expect(setupRow.getByText('Setup is incomplete')).toBeVisible()
-  await expect(setupRow.getByText('Choose a filing tree to finish the guided archive setup.')).toBeVisible()
-  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/setup')
+  const setupRow = page.locator('.settings-body .setup-reminder-settings')
+  await expect(setupRow.getByText('Choose your filing tree')).toBeVisible()
+  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=archive')
+  const setupActionClearance = await setupRow.evaluate(element => {
+    const body = element.closest('.settings-body').getBoundingClientRect()
+    const action = element.querySelector('[role="button"]').getBoundingClientRect()
+    return body.right - action.right
+  })
+  expect(setupActionClearance).toBeGreaterThanOrEqual(20)
+  await setupRow.getByRole('button', { name: 'Continue setup' }).click()
+  await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
+  const archiveLayout = await page.locator('.settings-body').evaluate(element => {
+    const body = element.getBoundingClientRect()
+    const slot = element.querySelector('.archive-slot').getBoundingClientRect()
+    return { overflowY: getComputedStyle(element).overflowY, bodyBottom: body.bottom, slotBottom: slot.bottom }
+  })
+  expect(archiveLayout.overflowY).toBe('hidden')
+  expect(archiveLayout.slotBottom).toBeLessThanOrEqual(archiveLayout.bodyBottom + 1)
   await page.goto('/#/dashboard')
 
-  await reminder.getByRole('button', { name: 'Close setup reminder' }).click()
-  await expect(reminder).toHaveCount(0)
-  await expect(page.getByText('Setup reminder closed. Setup is always available in Settings.')).toBeVisible()
+  await expect(reminder).toBeVisible()
   await page.reload()
-  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+  await expect(reminder).toBeVisible()
 
   await page.goto('/#/settings')
-  await expect(setupRow).toHaveCount(0)
+  await expect(setupRow).toBeVisible()
   await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
 })
 
-test('shows the dashboard setup reminder only to fresh incomplete admins', async ({ browser }) => {
+test('shows the dashboard setup reminder only to incomplete admins', async ({ browser }) => {
   const cases = [
-    { setupCompletedAt: Math.floor(Date.now() / 1000) },
     { filingTreeChosen: true },
-    { setupStartedAt: Math.floor(Date.now() / 1000) - 49 * 60 * 60 },
     { userRole: 'member' },
   ]
   for (const options of cases) {
@@ -1070,40 +1076,43 @@ test('shows the dashboard setup reminder only to fresh incomplete admins', async
     const page = await context.newPage()
     await mockAPI(page, options)
     await page.goto('/#/dashboard')
-    await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+    await expect(page.locator('.setup-reminder')).toHaveCount(0)
     await context.close()
   }
 })
 
-test('acknowledges the setup reminder when setup is opened', async ({ page }) => {
-  await mockAPI(page, { setupStartedAt: Math.floor(Date.now() / 1000) })
+test('keeps setup-state failures visible and retries them', async ({ page }) => {
+  const options = { failPaths: ['/api/admin/setup/state'], failureMessage: 'Setup status unavailable.' }
+  await mockAPI(page, options)
   await page.goto('/#/dashboard')
 
-  const reminder = page.getByRole('complementary', { name: 'Setup wizard' })
-  await reminder.getByRole('button', { name: 'Continue setup' }).click()
-  await expect(page).toHaveURL(/#\/setup$/)
-  await expect(reminder).toHaveCount(0)
+  const reminder = (page.viewportSize()?.width || 0) > 860
+    ? page.locator('.sidebar .setup-reminder')
+    : page.locator('.main > .setup-reminder-mobile')
+  await expect(reminder.getByText('Archive setup status unavailable')).toBeVisible()
+  await expect(reminder.getByRole('button', { name: 'Continue setup' })).toBeVisible()
 
-  await page.goto('/#/dashboard')
-  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
-  await page.reload()
-  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+  options.failPaths.length = 0
+  await reminder.getByRole('button', { name: 'Retry' }).click()
+  await expect(reminder.getByText('Choose your filing tree')).toBeVisible()
+})
 
-  await page.goto('/#/settings')
-  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
-  await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
-  await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
+test('does not recognize the removed setup route', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.goto('/#/setup')
+
+  await expect(page.getByText('Page not found.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Archive configuration' })).toHaveCount(0)
 })
 
 test('opens Archive configuration after choosing a filing tree', async ({ page }) => {
   await mockAPI(page, {
     filingTreeChosen: true,
     currentPreset: 'solo',
-    setupCompletedAt: null,
   })
   await page.goto('/#/settings?tab=archive')
 
-  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
+  await expect(page.locator('.setup-reminder')).toHaveCount(0)
   const configuration = page.getByRole('region', { name: 'Archive configuration' })
   await expect(configuration).toBeVisible()
   await expect(configuration.getByRole('link', { name: /Filing tree/ }).last()).toBeVisible()
@@ -1116,7 +1125,7 @@ for (const userRole of ['admin', 'member']) {
   test(`shows the running build in ${userRole} settings`, async ({ page }) => {
     await mockAPI(page, {
       userRole, buildVersion: 'v0.1.0-beta.2', buildRevision: '1234567890ab',
-      setupCompletedAt: 1, filingTreeChosen: true,
+      filingTreeChosen: true,
     })
     await page.goto('/#/settings')
     await expect(page.getByRole('contentinfo', { name: 'Suchi build' }))
@@ -1133,7 +1142,7 @@ for (const userRole of ['admin', 'member']) {
 test('keeps the running revision in Settings only', async ({ page }) => {
   await mockAPI(page, {
     buildVersion: 'v0.1.0-beta.2-dev', buildRevision: '1234567890ab.dirty',
-    setupCompletedAt: 1, filingTreeChosen: true,
+    filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
@@ -1146,7 +1155,7 @@ test('keeps the running revision in Settings only', async ({ page }) => {
 })
 
 test('keeps archive layout and version footer fixed while scrolling', async ({ page }) => {
-  await mockAPI(page, { buildVersion: 'dev', setupCompletedAt: 1, filingTreeChosen: true })
+  await mockAPI(page, { buildVersion: 'dev', filingTreeChosen: true })
   const users = Array.from({ length: 12 }, (_, index) => ({
     id: index + 2, email: `layout-${index + 1}@example.test`,
     display_name: `Layout user ${index + 1}`, role: 'member', capabilities: [],
@@ -1203,7 +1212,7 @@ test('keeps archive layout and version footer fixed while scrolling', async ({ p
 
 test('separates completed archive administration from account settings', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     currentPreset: 'household',
   })
@@ -1246,8 +1255,6 @@ test('separates completed archive administration from account settings', async (
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=llm$/)
   await expect(page.getByRole('heading', { name: 'Classification' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Hosted endpoint' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /Skip|Done|Defaults are fine/ })).toHaveCount(0)
   const overviewReload = page.waitForRequest((request) =>
     new URL(request.url()).pathname === '/api/admin/settings/preferences'
   )
@@ -1261,7 +1268,7 @@ test('saves application mode independently and retains only saved choices after 
   const llmSettingsRequests = []
   const llmTestRequests = []
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true,
+    filingTreeChosen: true,
     applicationModeRequests, llmSettingsRequests, llmTestRequests,
   })
   await page.goto('/#/settings?tab=archive&section=llm')
@@ -1306,7 +1313,7 @@ test('saves application mode independently and retains only saved choices after 
 test('keeps application mode editable after a failed save without changing persisted behavior', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 })
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, autoApply: false,
+    filingTreeChosen: true, autoApply: false,
     applicationModeSaveFailure: true, failureMessage: 'application mode unavailable',
   })
   await page.goto('/#/settings?tab=archive&section=llm')
@@ -1324,7 +1331,7 @@ test('keeps application mode editable after a failed save without changing persi
 
 test('model and matching saves preserve independent drafts and the persisted application mode', async ({ page }) => {
   const llmSettingsRequests = []
-  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true, llmSettingsRequests })
+  await mockAPI(page, { filingTreeChosen: true, llmSettingsRequests })
   await page.goto('/#/settings?tab=archive&section=llm')
   const automatic = page.getByRole('checkbox', { name: 'Automatically apply high-confidence suggestions' })
   const localThreshold = page.getByLabel(/Minimum similarity score to apply automatically/)
@@ -1361,7 +1368,7 @@ test('model and matching saves preserve independent drafts and the persisted app
 test('separates model-free matching saves from validated model settings', async ({ page }) => {
   const llmSettingsRequests = []
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     llmSettingsRequests,
     llmHasAPIKey: true,
@@ -1412,7 +1419,7 @@ test('separates model-free matching saves from validated model settings', async 
 test('preserves an enabled model when saving archive matching', async ({ page }) => {
   const llmSettingsRequests = []
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     llmSettingsRequests,
     llmEnabled: true,
@@ -1441,7 +1448,7 @@ test('persists research context independently without enabling the model', async
   const researchContextRequests = []
   const llmSettingsRequests = []
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     researchContextRequests,
     llmSettingsRequests,
@@ -1464,7 +1471,7 @@ test('keeps research context out of model test, save, and disable payloads', asy
   const llmSettingsRequests = []
   const llmTestRequests = []
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     llmSettingsRequests,
     llmTestRequests,
@@ -1496,7 +1503,7 @@ test('keeps research context out of model test, save, and disable payloads', asy
 
 test('keeps research context editable when its standalone save fails', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     researchContextMode: 'unexpected',
     researchContextSaveFailure: true,
@@ -1516,7 +1523,7 @@ test('mounts only the selected settings surface', async ({ page }) => {
   const requestedPaths = []
   page.on('request', request => requestedPaths.push(new URL(request.url()).pathname))
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.goto('/#/settings?tab=archive&section=users')
@@ -1536,7 +1543,7 @@ test('mounts only the selected settings surface', async ({ page }) => {
   expect(requestedPaths).not.toContain('/api/tags/')
 })
 
-test('refreshes intake owners after user creation from a revisited People step', async ({ page }) => {
+test('refreshes intake owners after user creation in Archive configuration', async ({ page }) => {
   await mockAPI(page, { filingTreeChosen: true })
   const users = [{ id: 1, email: 'admin@example.test', display_name: 'Admin', role: 'admin' }]
   await page.route('**/api/admin/users', async route => {
@@ -1546,23 +1553,23 @@ test('refreshes intake owners after user creation from a revisited People step',
     }
     return route.fulfill({ json: { results: users } })
   })
-  await page.goto('/#/setup')
-  await page.getByRole('button', { name: 'Watched folder', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=sources')
   const owner = page.getByRole('combobox', { name: 'Documents from it belong to', exact: true })
   await expect(owner).toHaveValue('admin@example.test')
-  await page.getByRole('button', { name: 'People', exact: true }).click()
+  await page.getByRole('link', { name: 'People and metadata', exact: true }).click()
   const form = page.getByRole('form', { name: 'Create a user', exact: true })
   await form.getByLabel('Email', { exact: true }).fill('morgan@example.test')
   await form.getByLabel('Display name', { exact: true }).fill('Morgan')
   await form.getByLabel('Password', { exact: true }).fill('safe-test-password')
   await form.getByRole('button', { name: 'Create user', exact: true }).click()
+  await page.getByRole('link', { name: 'Watched folder', exact: true }).click()
   await expect(owner.locator('option[value="morgan@example.test"]')).toHaveCount(1)
   await expect(owner).toHaveValue('admin@example.test')
 })
 
 test('keeps failed configuration reads out of editable forms', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     failPaths: ['/api/admin/settings/llm'],
     failureMessage: 'classification settings unavailable',
@@ -1582,8 +1589,7 @@ test('distinguishes mailbox and saved-view failures from empty data', async ({ p
     failPaths: ['/api/email-accounts', '/api/saved_views/'],
     failureMessage: 'archive data unavailable',
   })
-  await page.goto('/#/setup')
-  await page.getByRole('button', { name: 'Email intake' }).click()
+  await page.goto('/#/settings?tab=archive&section=mail')
   await expect(page.getByText('archive data unavailable')).toBeVisible()
   await expect(page.getByText('No mailboxes connected.')).toHaveCount(0)
 
@@ -1621,95 +1627,72 @@ test('keeps capable member mailboxes in account settings', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Mailboxes' })).toBeVisible()
 })
 
-test('guides intent, filing tree, and LLM mode', async ({ page }) => {
+test('shows every filing-tree option and keeps ordinary configuration available before selection', async ({ page }) => {
   await mockAPI(page)
-  await page.goto('/#/setup')
+  await page.goto('/#/settings?tab=archive&section=archive')
 
-  await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Classification', exact: true })).toBeDisabled()
-  await page.getByRole('button', { name: /Personal/ }).click()
-  await expect(page.getByText('Recommended for Personal')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
+  const requirement = page.getByRole('note')
+  await expect(requirement.getByText('Required for archive setup.')).toBeVisible()
+  await expect(requirement).toContainText('Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup.')
+  await expect(requirement).toContainText('Users, groups, and other settings can be managed later.')
   await expect(page.getByRole('button', { name: 'Import a file' })).toBeVisible()
   const filingTrees = page.locator('.preset-grid')
-  await expect(filingTrees.getByText('Household', { exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Compare all filing trees' }).click()
   await expect(filingTrees.getByText('Household', { exact: true })).toBeVisible()
-
-  await expect(page.getByRole('button', { name: 'Classification', exact: true })).toBeDisabled()
-  await page.getByRole('button', { name: 'Apply filing tree' }).click()
-  await expect(page.getByRole('heading', { name: 'Add another person' })).toBeVisible()
-  await page.getByRole('button', { name: 'Classification' }).click()
+  await expect(filingTrees.getByText('Blank', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Classification', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
   const automatic = page.getByRole('checkbox', { name: 'Automatically apply high-confidence suggestions' })
   await expect(automatic).toBeChecked()
   await automatic.uncheck()
   await expect(page.getByLabel(/Minimum model score to apply automatically/)).toBeDisabled()
   await page.getByRole('button', { name: 'Save application mode' }).click()
-  await expect(automatic).toHaveCount(0)
-  await page.getByRole('button', { name: 'Classification', exact: true }).click()
   await expect(automatic).not.toBeChecked()
   await page.getByRole('button', { name: 'Hosted endpoint' }).click()
   await page.locator('#l-url').fill('https://llm.example.test/v1')
   await expect(page.getByText(/I acknowledge document text will leave this machine/)).toBeVisible()
 })
 
-test('requires a confirmed and successfully applied Blank choice before advancing setup', async ({ page }) => {
+test('requires confirmation and a successful apply before Blank satisfies archive setup', async ({ page }) => {
   const options = {
     failPaths: ['/api/admin/setup/preset'],
     failureMessage: 'Could not apply the filing tree.',
   }
   await mockAPI(page, options)
-  await page.goto('/#/setup')
+  await page.goto('/#/settings?tab=archive&section=archive')
 
-  const laterSteps = page.getByRole('complementary', { name: 'Setup steps' })
-    .getByRole('button').filter({ hasNotText: /Filing tree|Finish setup/ })
-  await expect(laterSteps).toHaveCount(6)
-  for (const step of await laterSteps.all()) await expect(step).toBeDisabled()
-  const finish = page.getByRole('button', { name: 'Finish setup' })
-  await expect(finish).toBeDisabled()
-  await page.getByRole('button', { name: /Choose myself/ }).click()
   await page.locator('.preset-grid').getByText('Blank', { exact: true }).click()
   const apply = page.getByRole('button', { name: 'Apply filing tree' })
   await expect(apply).toBeDisabled()
   await page.getByLabel('I understand documents will pile up in the inbox until I build categories.').check()
   await apply.click()
   await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
-  await expect(finish).toBeDisabled()
-  for (const step of await laterSteps.all()) await expect(step).toBeDisabled()
+  await expect(page.getByRole('note').getByText('Required for archive setup.')).toBeVisible()
+  await page.goto('/#/dashboard')
+  await expect(page.locator('.setup-reminder').filter({ visible: true })).toHaveCount(1)
+  await page.goto('/#/settings?tab=archive&section=archive')
 
   options.failPaths.length = 0
   await apply.click()
-  await expect(page.getByRole('heading', { name: 'Add another person' })).toBeVisible()
-  await expect(finish).toBeEnabled()
-  for (const step of await laterSteps.all()) await expect(step).toBeEnabled()
-  await page.getByRole('button', { name: 'Just me for now' }).click()
-  await expect(page.getByRole('button', { name: 'Uploads only' })).toBeVisible()
-
-  await page.reload()
-  await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
-  await expect(finish).toBeEnabled()
-  for (const step of await laterSteps.all()) await expect(step).toBeEnabled()
+  await expect(page.getByRole('note').getByText('Required for archive setup.')).toHaveCount(0)
+  await page.goto('/#/dashboard')
+  await expect(page.locator('.setup-reminder')).toHaveCount(0)
 })
 
-test('retries filing-tree setup loading without offering a skip', async ({ page }) => {
+test('retries filing-tree configuration loading without hiding other sections', async ({ page }) => {
   const options = {
     failPaths: ['/api/admin/setup/state'],
     failureMessage: 'Filing-tree settings unavailable.',
   }
   await mockAPI(page, options)
-  await page.goto('/#/setup')
+  await page.goto('/#/settings?tab=archive&section=archive')
   await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeDisabled()
+  await expect(page.getByRole('link', { name: 'People and metadata', exact: true })).toBeVisible()
 
   options.failPaths.length = 0
-  await page.getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'What are you organizing?' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Skip for now' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'People', exact: true })).toBeDisabled()
+  await page.getByRole('region', { name: 'Configuration content' })
+    .getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
 })
 
 test('keeps the filing index neutral until a preset is applied', async ({ page }) => {
@@ -1729,15 +1712,11 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await expect(indexHeading).toHaveCount(0)
   await expect(page.locator('.nav a[href="#/inbox"]')).toHaveCount(1)
 
-  await page.goto('/#/setup')
-  const finish = page.getByRole('button', { name: 'Finish setup' })
-  await expect(finish).toBeDisabled()
-  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.goto('/#/settings?tab=archive&section=archive')
   await page.getByRole('button', { name: 'Apply filing tree' }).click()
 
-  await expect(finish).toBeEnabled()
   await page.goto('/#/dashboard')
-  await expect(page.getByRole('complementary', { name: 'Setup wizard' })).toHaveCount(0)
+  await expect(page.locator('.setup-reminder')).toHaveCount(0)
   await expect(indexHeading).toHaveCount(1)
   if ((page.viewportSize()?.width || 0) <= 860) {
     await page.getByRole('button', { name: 'Open navigation' }).click()
@@ -1747,7 +1726,7 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await expect(page.locator('.jd-tree a[href="#/documents?jd=49"]')).toHaveCount(0)
 
   await page.goto('/#/settings')
-  await expect(page.getByText('Setup is incomplete')).toHaveCount(0)
+  await expect(page.locator('.setup-reminder')).toHaveCount(0)
   await page.getByRole('link', { name: 'Archive configuration', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Archive configuration' })).toBeVisible()
 })
@@ -2292,7 +2271,7 @@ test('loads recent dashboard documents once per navigation', async ({ page }) =>
 test('keeps recent dashboard documents inside the mobile content column', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'mobile layout regression')
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     documents: [{
       id: 42,
@@ -2435,7 +2414,7 @@ test('shows shared views without offering to change another users view', async (
 
 test('lets admins grant saved-view sharing to members without showing failed grants', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   let rejectGrant = true
@@ -2457,7 +2436,7 @@ test('lets admins grant saved-view sharing to members without showing failed gra
 })
 
 test('prevents self-disable while allowing other users to be disabled and enabled', async ({ page }) => {
-  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+  await mockAPI(page, { filingTreeChosen: true })
   const changes = []
   await page.route('**/api/admin/users/*', route => {
     changes.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() })
@@ -2480,7 +2459,7 @@ test('prevents self-disable while allowing other users to be disabled and enable
 })
 
 test('does not store hidden member grants when creating an administrator', async ({ page }) => {
-  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+  await mockAPI(page, { filingTreeChosen: true })
   await page.goto('/#/settings?tab=archive&section=users')
   const form = page.getByRole('form', { name: 'Create a user', exact: true })
   await form.getByLabel('Email', { exact: true }).fill('new-admin@example.test')
@@ -2501,9 +2480,8 @@ test('does not store hidden member grants when creating an administrator', async
 
 test('offers Microsoft sign-in without exposing registration controls', async ({ page }) => {
   await mockAPI(page, { filingTreeChosen: true })
-  await page.goto('/#/setup')
+  await page.goto('/#/settings?tab=archive&section=mail')
 
-  await page.getByRole('button', { name: 'Email intake' }).click()
   await page.getByRole('button', { name: 'Add mailbox' }).click()
   await page.locator('#ma-provider').selectOption('microsoft')
   await expect(page.getByText('Auth method', { exact: true })).toHaveCount(0)
@@ -3551,7 +3529,7 @@ test('shows affected document titles in rescan details', async ({ page }) => {
 
 test('persists user and automation switches', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
 
@@ -3576,7 +3554,7 @@ test('persists user and automation switches', async ({ page }) => {
 
 test('edits mailbox intake on a narrow screen', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
 
@@ -3634,7 +3612,7 @@ test('keeps search separate from scoped archive research and saves exact sources
     chatEnabled: true,
     chatRequests,
     autocompleteQueries,
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     chatResponse: {
       answer: 'The lease renews in September [1].',
@@ -3739,7 +3717,7 @@ test('supports cancellation, focus return, and the full-screen mobile research d
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests: [],
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     chatResponse: { delay: 5000, answer: 'Too late', sources: [] },
   })
@@ -3767,7 +3745,7 @@ test('supports cancellation, focus return, and the full-screen mobile research d
 test('closes archive research outside without reopening the Omnibox menu', async ({ page }) => {
   await mockAPI(page, {
     chatEnabled: true,
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -3794,7 +3772,7 @@ for (const [code, message] of Object.entries({
       failureStatus: 502,
       failureCode: code,
       failureMessage: 'upstream service error',
-      setupCompletedAt: Math.floor(Date.now() / 1000),
+
       filingTreeChosen: true,
     })
     await page.goto('/#/dashboard')
@@ -3813,7 +3791,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
     chatEnabled: true,
     chatRequests,
     jdCategories: [inbox],
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
 
@@ -3864,7 +3842,7 @@ test('keeps modified research anchors in the current drawer session', async ({ p
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests: [],
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
@@ -3895,7 +3873,7 @@ test('bounds long archive research transcripts', async ({ page }) => {
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests,
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
@@ -3917,7 +3895,7 @@ test('resets research boundaries and carries only bounded cited follow-up contex
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests,
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     chatResponse: (_payload, call) => call === 1 ? {
       answer: `${'界'.repeat(4200)} [2]`,
@@ -3965,7 +3943,7 @@ test('clearing an active research request invalidates it without restoring text'
   await mockAPI(page, {
     chatEnabled: true,
     chatRequests: [],
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     chatResponse: { delay: 1000, answer: 'late answer', sources: [], citations: [], grounded: false },
   })
@@ -3983,7 +3961,7 @@ test('clearing an active research request invalidates it without restoring text'
 })
 
 test('makes the upload modal inert, focused, trapped, and dismissible', async ({ page }) => {
-  await mockAPI(page, { setupCompletedAt: Math.floor(Date.now() / 1000), filingTreeChosen: true })
+  await mockAPI(page, { filingTreeChosen: true })
   await page.goto('/#/dashboard')
   const opener = page.getByRole('button', { name: 'Upload documents' })
   await opener.focus()
@@ -4013,7 +3991,7 @@ test('reviews dates in a responsive grid with visible actions', async ({ page },
   await mockAPI(page, {
     intelligenceRequests,
     approvalTasks: [],
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     intelligence: [
       {
@@ -4079,7 +4057,7 @@ test('does not select stale or unknown facts and preserves failed date decisions
     reason: 'important_fact', confidence: 1,
   }
   await mockAPI(page, {
-    approvalTasks: [], setupCompletedAt: 1, filingTreeChosen: true,
+    approvalTasks: [], filingTreeChosen: true,
     intelligence: [
       candidate,
       { ...candidate, id: 82, source_current: false, reason: 'source_changed' },
@@ -4109,7 +4087,7 @@ test('distinguishes automatic dates from reviewed and previously accepted histor
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const date = `${year}-${month}-14`
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     intelligenceQueries,
     intelligenceCount: 650,
@@ -4170,7 +4148,7 @@ test('downloads a reviewed exact-day calendar event only after disclosing its co
     value: { date: '2028-02-29', precision: 'day' }, evidence_text: 'Private policy quote',
   }
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, apiRequests,
+    filingTreeChosen: true, apiRequests,
     intelligence: [
       event,
       { ...event, id: 82, document_title: 'Automatic policy', reviewed_at: null, policy_version: 'threshold-auto-v1' },
@@ -4227,7 +4205,7 @@ test('opens research calendar links across all years and replaces stale calendar
     evidence_text: event.evidence_text || `Recorded date: ${event.value.date}.`,
   }))
   await mockAPI(page, {
-    chatEnabled: true, setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+    chatEnabled: true, filingTreeChosen: true, intelligenceQueries,
     savedViews: [{ id: 4, name: 'Current insurance', filter_json: '{"document_ids":"99"}' }],
     intelligence: query => {
       const ids = query.document_ids?.split(',').map(Number)
@@ -4316,7 +4294,7 @@ test('keeps calendar date precision and explains model confidence without naviga
       confidence: 0.88, evidence_text: 'Coverage renews in 2028; no month or day is specified.',
     },
   ].map(event => ({ ...event, type: 'date', status: 'accepted' }))
-  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true, intelligence: dates })
+  await mockAPI(page, { filingTreeChosen: true, intelligence: dates })
   await page.goto('/#/calendar?document_ids=17,18,19')
   await expect(page.locator('.agenda-event')).toHaveCount(3)
   const day = page.locator('.agenda-event').filter({ hasText: 'Archived lease' })
@@ -4350,7 +4328,7 @@ test('keeps month-only and year-only dates out of calendar day cells', async ({ 
   await page.clock.setFixedTime(new Date('2026-01-15T12:00:00Z'))
   const intelligenceQueries = []
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+    filingTreeChosen: true, intelligenceQueries,
     intelligence: [
       { id: 94, document_id: 20, document_title: 'Day-specific notice', value: { date: '2026-01-14', precision: 'day' } },
       { id: 95, document_id: 21, document_title: 'Monthly service plan', value: { date: '2026-01-01', precision: 'month' } },
@@ -4386,7 +4364,7 @@ test('opens a full day agenda and preserves its month and filters across navigat
     confidence: 0.92, reviewed_at: null, value: { date: '2026-01-01', precision: 'day' }, ...event,
   }))
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+    filingTreeChosen: true, intelligenceQueries,
     savedViews: [{ id: 4, name: 'Household policies', filter_json: '{"q":"policy"}' }],
     intelligence: query => {
       const results = dates.filter(event =>
@@ -4456,7 +4434,7 @@ test('pages a directly linked day agenda and resets its page when the role chang
     value: { date: '2026-01-01', precision: 'day' }, evidence_text: `Policy ${index + 1} changes on 1 January 2026.`,
   }))
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+    filingTreeChosen: true, intelligenceQueries,
     intelligence: query => {
       const rows = dates.filter(event => (!query.role || event.role === query.role) &&
         (!query.sort_from || event.value.date >= query.sort_from) &&
@@ -4497,7 +4475,7 @@ test('pages all scoped calendar dates and resets pagination when the role change
     evidence_text: `Date occurrence ${index + 1}.`,
   }))
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, intelligenceQueries,
+    filingTreeChosen: true, intelligenceQueries,
     intelligence: query => {
       let rows = dates.filter(event => !query.role || event.role === query.role)
       if (shrinkCount) rows = rows.slice(0, 1)
@@ -4537,7 +4515,7 @@ test('pages all scoped calendar dates and resets pagination when the role change
 })
 
 test('shows scoped calendar loading and retry before its empty state', async ({ page }) => {
-  await mockAPI(page, { setupCompletedAt: 1, filingTreeChosen: true })
+  await mockAPI(page, { filingTreeChosen: true })
   let pending
   await page.route('**/api/intelligence/?*', route => { pending = route })
   await page.goto('/#/calendar?document_ids=17')
@@ -4563,7 +4541,7 @@ test('opens a readable Trash document without overlapping actions and restores i
   const apiRequests = []
   const restoreRequests = []
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, userID: 7, userRole: 'member', capabilities: ['share_links'],
+    filingTreeChosen: true, userID: 7, userRole: 'member', capabilities: ['share_links'],
     apiRequests, restoreRequests,
     documentContent: 'Policy number 1234. Equipment and household cover renewal schedule.',
     trashDocuments: [{
@@ -4632,7 +4610,7 @@ test('confirms permanent deletion from Trash detail and retains the document aft
   const failPaths = ['/api/trash/31']
   const now = Math.floor(Date.now() / 1000)
   await mockAPI(page, {
-    setupCompletedAt: 1, filingTreeChosen: true, apiRequests, permanentDeleteRequests,
+    filingTreeChosen: true, apiRequests, permanentDeleteRequests,
     failPaths, failureMessage: 'Storage is unavailable; try again.',
     trashDocuments: [{ id: 31, owner_id: 2, title: 'Old insurance notice', mime_type: 'application/pdf', trashed_at: now - 86400, deletes_at: now + 86400 }],
   })
@@ -4665,7 +4643,7 @@ for (const scenario of [
   test(`does not offer Restore in Trash detail when ${scenario.name}`, async ({ page }) => {
     const now = Math.floor(Date.now() / 1000)
     await mockAPI(page, {
-      setupCompletedAt: 1, filingTreeChosen: true, userID: 7, userRole: scenario.userRole,
+      filingTreeChosen: true, userID: 7, userRole: scenario.userRole,
       trashDocuments: [{ id: 31, owner_id: scenario.ownerID, title: 'Read-only trashed document', mime_type: 'application/pdf', trashed_at: now - 31 * 86400, deletes_at: now + scenario.expiresIn }],
     })
     await page.goto('/#/doc/31')
@@ -4680,7 +4658,7 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
   const emptyTrashRequests = []
   const trashedAt = Math.floor(Date.now() / 1000) - (2 * 24 * 60 * 60)
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
     permanentDeleteRequests,
     emptyTrashRequests,
@@ -4753,7 +4731,7 @@ test('confirms permanent Trash deletion before removing rows', async ({ page }) 
 
 test('navigation button toggles the sidebar at each breakpoint', async ({ page }) => {
   await mockAPI(page, {
-    setupCompletedAt: Math.floor(Date.now() / 1000),
+
     filingTreeChosen: true,
   })
   await page.goto('/#/dashboard')
@@ -4790,7 +4768,7 @@ const filingCabinets = [
 
 async function mockFilingSystems(page, overrides = {}) {
   const options = {
-    setupCompletedAt: 1, filingTreeChosen: true,
+    filingTreeChosen: true,
     systems: { introduced: true, default_system_code: 'S01', results: filingCabinets },
     documentDetails: {
       147: { document: { system_code: 'S01', jd_address: 'S01.13.147', title: 'First private record' } },
@@ -5019,8 +4997,7 @@ test('filing systems first named Apply invalidates unnamed reads and selects the
   await page.goto('/#/dashboard')
   await expect.poll(() => !!oldRecent).toBe(true)
   await expect(page.getByRole('combobox', { name: 'Current filing system' })).toHaveCount(0)
-  await page.evaluate(() => { location.hash = '#/setup' })
-  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=archive' })
   await page.getByRole('button', { name: 'Import a file' }).click()
   const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
   await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
@@ -5151,18 +5128,16 @@ for (const completed of [false, true]) {
       submitted.push({ body: route.request().postDataJSON(), system: new URL(route.request().url()).searchParams.get('system') })
       return route.fulfill({ json: { id: 12 } })
     })
-    await page.goto('/#/setup?system=S01')
-    await page.getByRole('button', { name: 'Email intake', exact: true }).click()
+    await page.goto('/#/settings?tab=archive&section=mail&system=S01')
     await page.getByRole('button', { name: 'Add mailbox', exact: true }).click()
     await page.locator('#ma-provider').selectOption('microsoft')
     await page.locator('#ma-oauth-btn').click()
     await expect.poll(() => !!completion).toBe(true)
     expect(new URL(completion.request().url()).searchParams.get('system')).toBe('S01')
     if (completed) await expect(page.getByText('Signed in as first-flow@example.test', { exact: true })).toBeVisible()
-    await page.evaluate(() => { location.hash = '#/setup?system=S02' })
+    await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=mail&system=S02' })
     await expect(page.getByRole('dialog', { name: 'Sign in with Microsoft', exact: true })).toHaveCount(0)
     if (!completed) await completion.fulfill({ json: { ok: true, username: 'late@example.test', sealed_secret_b64: 'late-handoff' } }).catch(() => {})
-    await page.getByRole('button', { name: 'Email intake', exact: true }).click()
     await page.getByRole('button', { name: 'Add mailbox', exact: true }).click()
     await expect(page.locator('#ma-user')).toHaveValue('')
     await expect(page.getByText(/Signed in as first-flow|late@example/)).toHaveCount(0)
@@ -5213,8 +5188,7 @@ test('filing systems does not copy the selected system into a prefixed import bo
     calls.push(payload)
     return taxonomyPreview({ system_code: 'S02', system_name: 'Second cabinet', system_created: false, systems_introduced: false })
   } })
-  await page.goto('/#/setup?system=S01')
-  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.goto('/#/settings?tab=archive&section=archive&system=S01')
   await page.getByRole('button', { name: 'Import a file', exact: true }).click()
   const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
   await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
@@ -5224,8 +5198,7 @@ test('filing systems does not copy the selected system into a prefixed import bo
   await expect(importer.getByRole('group', { name: 'First system import destination' })).toHaveCount(0)
   await chooseFilingSystem(page, 'S02')
   await expect(importer).toHaveCount(0)
-  await page.evaluate(() => { location.hash = '#/setup?system=S01' })
-  await page.getByRole('button', { name: /Personal/ }).click()
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=archive&system=S01' })
   await page.getByRole('button', { name: 'Import a file', exact: true }).click()
   await expect(importer.getByLabel('Paste content', { exact: true })).toHaveValue('')
   await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()

@@ -9,11 +9,10 @@
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
-  import UserCreateForm from '../lib/UserCreateForm.svelte'
 
   let { section = 'archive', notify, onTaxonomyChanged } = $props()
   // Server is the source of truth (GET /api/presets/); this list is
-  // only the offline fallback so the step never renders empty.
+  // only the offline fallback so the section never renders empty.
   const FALLBACK_PRESETS = [
     { id: 'solo', name: 'Solo', description: 'One person: life admin, money, health, home.', areas: [] },
     { id: 'household', name: 'Household', description: 'A family: shared areas plus per-person categories.', areas: [] },
@@ -58,7 +57,7 @@
   let busy = $state(false)
   let err = $state('')
 
-  // step-local form state
+  // Section form state.
   let mailUsers = $state([])
   let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
   let filingTreeChosen = $state(false)
@@ -98,10 +97,6 @@
     const result = await adminListUsers()
     mailUsers = result?.results || result || []
     seedSourceOwner()
-  }
-
-  async function userCreated() {
-    try { await loadUsers() } catch {}
   }
 
   function seedSourceOwner() {
@@ -334,7 +329,7 @@
       {#if !filingTreeChosen}
         <div class="setup-requirement" role="note">
           <b>Required for archive setup.</b>
-          <span>Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup.</span>
+          <span>Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup. Users, groups, and other settings can be managed later.</span>
         </div>
       {/if}
         <div class="toolbar">
@@ -373,13 +368,8 @@
         {/if}
       <p class="migration-note">
         Moving an existing archive? Large export bundles are safer through the CLI.
-        <a href="https://docs.suchi.page/importer" target="_blank" rel="noopener">Read the migration guide</a>.
+        <a href="https://docs.suchi.page/guides/importer" target="_blank" rel="noopener">Read the migration guide</a>.
       </p>
-
-    {:else if section === 'users'}
-      <h3>Add another person</h3>
-      <p class="wiz-p">Your admin account is ready. Add a family member or teammate, or continue on your own. You can manage users and groups later in Archive configuration.</p>
-      <UserCreateForm {notify} onCreated={userCreated} />
 
     {:else if section === 'sources'}
       <h3>Watched folder</h3>

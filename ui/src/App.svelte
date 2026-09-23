@@ -69,9 +69,7 @@
     .filter((area) => area.categories.length))
   const hasFilingIndex = $derived(filingTree.length > 0)
   let setupNeeded = $state(false)
-  let setupEngaged = $state(false)
-  let setupReminderKey = ''
-  const setupReminderSeconds = 48 * 60 * 60
+  let setupError = $state(false)
   let demoMode = $state(false)
   let demoBannerDismissed = $state(loadDemoDismissed())
   function loadDemoDismissed() {
@@ -81,30 +79,28 @@
     demoBannerDismissed = true
     try { sessionStorage.setItem('suchi.demo.bannerDismissed', '1') } catch {}
   }
-  function setupDismissalKey(startedAt) {
-    const userID = Number(session.user?.user_id || 0)
-    return userID && startedAt ? `suchi.setup.reminder.dismissed.${userID}.${startedAt}` : ''
-  }
-  function setupReminderWasDismissed(key) {
-    if (!key) return false
-    try { return localStorage.getItem(key) === '1' } catch { return false }
-  }
-  function acknowledgeSetupReminder() {
-    setupNeeded = false
-    setupEngaged = true
-    try { if (setupReminderKey) localStorage.setItem(setupReminderKey, '1') } catch {}
-  }
-  function dismissSetupReminder() {
-    acknowledgeSetupReminder()
-    notify('Archive setup reminder closed.')
-  }
   function openSetupFromReminder() {
-    acknowledgeSetupReminder()
     mobileNavOpen = false
   }
-  function handleArchiveTaxonomyChanged() {
-    acknowledgeSetupReminder()
-    return loadTaxonomy()
+  async function refreshSetupState(scope = captureScope()) {
+    if (session.user?.role !== 'admin') {
+      setupNeeded = false
+      setupError = false
+      return
+    }
+    try {
+      const state = await setupState()
+      if (!scopeCurrent(scope)) return
+      setupNeeded = !state?.filing_tree_chosen
+      setupError = false
+    } catch {
+      if (!scopeCurrent(scope)) return
+      setupNeeded = true
+      setupError = true
+    }
+  }
+  async function handleArchiveTaxonomyChanged() {
+    await Promise.all([refreshSetupState(), loadTaxonomy()])
   }
   let toast = $state('')
   let toastTimer
@@ -160,19 +156,9 @@
     const scope = captureScope()
     clearInterval(pollTimer)
     const categories = loadTaxonomy()
-    // Keep a fresh-install reminder for 48 hours, until the admin opens it,
-    // dismisses it, or chooses a filing tree. Server time prevents an old
-    // browser-local acknowledgement leaking into a new installation.
-    const setup = session.user?.role === 'admin'
-      ? setupState().then(state => {
-          if (!scopeCurrent(scope)) return
-          const startedAt = Number(state?.started_at || 0)
-          const withinWindow = !startedAt || Math.floor(Date.now() / 1000) < startedAt + setupReminderSeconds
-          setupReminderKey = setupDismissalKey(startedAt)
-          setupNeeded = !state?.filing_tree_chosen && withinWindow && !setupReminderWasDismissed(setupReminderKey)
-          setupEngaged = !setupNeeded
-        }).catch(() => {})
-      : Promise.resolve()
+    // Filing-tree selection is the only setup requirement. Keep its reminder
+    // visible across navigation and reloads until the server reports a choice.
+    const setup = refreshSetupState(scope)
     const chat = pollChatStatus()
     await Promise.all([pollStats(), categories, setup, chat])
     if (!scopeCurrent(scope)) return
@@ -400,8 +386,7 @@
     recentDocs = undefined
     recentError = ''
     setupNeeded = false
-    setupEngaged = false
-    setupReminderKey = ''
+    setupError = false
     mobileNavOpen = false
     uploadOpen = false
     uploadFiles = []
@@ -546,7 +531,7 @@
         </div>
       {/if}
       {#if setupNeeded}
-        <Lazy load={lazyRoutes.setupReminder} props={{ onClose: dismissSetupReminder, onContinue: openSetupFromReminder }} />
+        <Lazy load={lazyRoutes.setupReminder} props={{ error: setupError, onRetry: refreshSetupState, onContinue: openSetupFromReminder }} />
       {/if}
 
       {#if scopeReady}
@@ -642,7 +627,7 @@
       </div>
 
       {#if setupNeeded && page === 'dashboard'}
-        <Lazy load={lazyRoutes.setupReminder} props={{ placement: 'mobile', onClose: dismissSetupReminder, onContinue: openSetupFromReminder }} />
+        <Lazy load={lazyRoutes.setupReminder} props={{ placement: 'mobile', error: setupError, onRetry: refreshSetupState, onContinue: openSetupFromReminder }} />
       {/if}
 
       {#if demoMode && !demoBannerDismissed}
@@ -679,7 +664,7 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify: scopedNotify, jdCategories }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), onTaxonomyChanged: handleArchiveTaxonomyChanged, setupEngaged, onSetupEngaged: acknowledgeSetupReminder }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}

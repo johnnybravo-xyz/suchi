@@ -8,7 +8,7 @@
   import PeopleSettings from './PeopleSettings.svelte'
   import SystemSettings from '../lib/SystemSettings.svelte'
 
-  let { notify, initialSection = '', onTaxonomyChanged, setupSnapshot = null } = $props()
+  let { notify, initialSection = '', onTaxonomyChanged } = $props()
 
   const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.map((item) => item.name))
   const current = $derived(configurableSections.has(initialSection) ? initialSection : 'overview')
@@ -28,9 +28,8 @@
   }
 
   async function loadOverview() {
-    const setupRequest = setupSnapshot ? Promise.resolve(setupSnapshot) : setupState()
     const [setup, users, ingest, llm, preferences, mail, automations] = await Promise.allSettled([
-      setupRequest, adminListUsers(), getIngestSettings(), getLLMSettings(),
+      setupState(), adminListUsers(), getIngestSettings(), getLLMSettings(),
       getPreferences(), listEmailAccounts(), listAutomations(),
     ])
     const next = Object.fromEntries(ARCHIVE_SETTINGS_ITEMS.map((item) => [
@@ -162,7 +161,7 @@
   .archive-rail a :global(svg) { flex: none; }
   .archive-rail a:hover { background: var(--surface-2); color: var(--ink); }
   .archive-rail a.on { background: var(--tint); color: var(--accent); font-weight: 650; }
-  .archive-content { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 22px; }
+  .archive-content { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 22px; padding-inline-end: 34px; }
   .archive-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
   .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: ui-monospace, monospace; font-size: .64rem; font-weight: 700; letter-spacing: .07em; }
   .archive-intro h2 { font-size: 1.35rem; line-height: 1.2; }
@@ -203,7 +202,7 @@
     .archive-rail a { flex: none; min-height: 40px; white-space: nowrap; }
   }
   @media (max-width: 680px) {
-    .archive-content { padding: 16px; }
+    .archive-content { padding: 16px; padding-inline-end: 28px; }
     .configuration-groups { grid-template-columns: 1fr; }
     .archive-intro { align-items: flex-start; flex-direction: column; }
     .configuration-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
