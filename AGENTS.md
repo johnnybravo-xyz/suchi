@@ -47,6 +47,9 @@ Optional integrations must preserve useful local operation.
 - Preserve immutable original blobs, explicit egress consent, and human edits.
 - Keep schema changes in the current unreleased migration; never edit a
   migration already included in a published release.
+- Always choose the simplest complete design. Reuse direct existing paths,
+  delete obsolete code, and do not add abstractions, compatibility layers, or
+  general frameworks without a current concrete need.
 - Delete unused code before adding abstractions. Keep ACL, recovery, retry,
   and wire-contract tests; prefer observable assertions over source-text checks.
 - Update the relevant public guide and changelog for user-visible changes.
@@ -55,5 +58,4 @@ Optional integrations must preserve useful local operation.
   trust/egress boundaries, extension contracts, and verification commands.
   Follow their links to the affected pipeline/plugin/workflow guides rather
   than duplicating those designs. Before handoff, compare docs to the actual
-  diff; if architecture is unchanged, say so in the commit or PR. The hook is
-  only a reminder, not semantic validation.
+  diff. The hook is only a reminder, not semantic validation.
