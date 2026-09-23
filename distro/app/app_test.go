@@ -271,10 +271,12 @@ func TestExternalAssemblyMigrationsActionsAndCommunityIsolation(t *testing.T) {
 		if target.SystemID != 1 || target.DocID <= 0 {
 			t.Fatalf("target=%+v", target)
 		}
-		document := extended.request(t, "GET", fmt.Sprintf("/api/documents/%d", target.DocID), "", 200)
-		if !bytes.Contains(document, []byte("Filed by shared assembly")) {
-			t.Fatalf("built-in title action missing: %s", document)
-		}
+		// Execute hooks run inside the automation transaction, so the custom
+		// action can signal just before the built-in title change commits.
+		until(t, func() bool {
+			document := extended.request(t, "GET", fmt.Sprintf("/api/documents/%d", target.DocID), "", 200)
+			return bytes.Contains(document, []byte("Filed by shared assembly"))
+		})
 	case <-time.After(15 * time.Second):
 		t.Fatal("post-ingest did not execute supplied action")
 	}
