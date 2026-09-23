@@ -1,0 +1,99 @@
+---
+title: "Suchi Companion"
+description: "Pair the pre-release mobile app, capture documents, and work with your archive safely."
+---
+
+**Suchi Companion** is the pre-release Android and iOS client for a Suchi
+archive. **Capture on your phone. Keep it in your archive.** It supports document
+capture, foreground uploads, Inbox filing, browsing, search, privacy-gated
+previews, and Trash recovery. It is not yet approved for public distribution.
+
+## Pair one filing system
+
+In the web app, open **Settings > My account > Mobile app** and choose
+**Pair mobile app**. In Companion, choose **Scan QR code**, or use **Paste pairing
+link** when the camera is unavailable. Confirm the displayed server address and
+device name before connecting. The code expires after five minutes and works
+once. See [Web app pairing](/web-app#settings) and the
+[pairing API](/api#post-apimobilepairing) for the complete contract.
+
+One Companion installation keeps one active pairing. The account screen displays
+the filing system bound to it. Captures, shared files, uploads, saved searches,
+and responses remain inside that server, user, and filing system. To use another
+filing system, sign out and pair again from that system in the web app. Removing
+membership or revoking the Mobile app entry stops access.
+
+Companion verifies the server without credentials before exchanging the code,
+refuses redirects, and stores the resulting token in device secure storage. Use
+HTTPS outside explicit loopback or private-network development. The current
+[identity response](/api#get-apiwhoami) must identify the token's filing system;
+its code can be empty until the original archive receives a permanent code.
+
+## Scanner and Photo
+
+Tap the centre capture control to open the saved mode. Touch and hold its icon or
+label, then choose:
+
+- **Scanner — Clean up pages:** detects edges, corrects perspective and rotation,
+  improves lighting, and supports crop, filter, retake, or page removal.
+- **Photo — Keep full frame:** keeps the whole camera frame as a one-page PDF,
+  without document cropping or cleanup.
+
+The chevron beside **Scan / Photo** opens the same picker. **More > Camera mode**
+changes the preference without opening the camera. Both modes use the protected
+queue and the server's ordinary document-processing pipeline. Neither writes a
+capture to the photo library. Review glare, curvature, and hidden text before
+saving; the scanner cannot reconstruct pixels the camera did not capture.
+
+## Upload activity and recovery
+
+The activity strip distinguishes share checking, secure staging, file-byte
+transfer, and server processing. **View** opens **Scan > Uploads** without starting
+the camera. Accepted rows open their document; split uploads list the remaining
+child documents rather than the superseded parent.
+
+Uploads make progress while Companion is in the foreground and the archive is
+reachable. Closing or backgrounding the app does not guarantee progress. Failed
+items and files awaiting account assignment stay visible until you retry, assign,
+or explicitly discard them. A retry cannot silently move a file to another
+pairing. Current-format queue recovery preserves staged files and resumes safely
+after restart.
+
+Because Companion has not been released, it supports only its current local
+storage format. An unsupported development build's storage fails with an explicit
+reset/reinstall message and remains untouched; Companion never erases it
+automatically.
+
+## Inbox, documents, and search
+
+**Inbox** shows documents still awaiting filing. **Documents** browses the
+archive with filing-category and sort controls. Returning from a document keeps
+the list's loaded pages, scroll position, category, and sort order. Filing,
+editing, restoration, or Trash actions refresh the affected lists.
+
+**Search** uses the server's archive search and opens results in the same detail
+view. Saved searches, when available in the build, stay in device secure storage
+for the current server, user, and filing system; they are not sent to a purchase
+service. See [Search](/search) and [query syntax](/query-language).
+
+## Privacy and sensitive documents
+
+Companion does not include analytics, remote crash reporting, or a document
+relay. Archive requests go to the paired Suchi server. Lists avoid fetching full
+text unnecessarily; thumbnails are held in bounded memory. Sensitive previews
+and extracted text require an explicit reveal and are concealed again when you
+leave or background the app.
+
+Opening or sharing a file creates a protected temporary copy. Signing out or the
+next cold launch removes temporary copies, with older exports pruned later as an
+additional safeguard. Downloaded or copied content can outlive Companion in the
+receiving viewer, share target, or system clipboard. See [Privacy](/privacy) for
+the server boundary.
+
+## Trash
+
+Open **More > Trash** to restore recently deleted documents. The server retains
+Trash for 30 days, subject to permission, and shows the deletion deadline.
+Restoring refreshes Documents and Inbox. Permanent deletion and expiry cannot be
+undone. See [document lifecycle](/api#document-capture-and-lifecycle) for the API
+rules.

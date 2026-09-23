@@ -169,14 +169,12 @@ Metrics include:
 Public compatibility probe for first-party clients. Call it before sending
 credentials. The response contains no deployment or user state:
 
-**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0","pairing_device_name":true}`
+**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0"}`
 
 Clients must require `product` to equal `suchi`, require an API version they
 support, and compare `min_app_version` as numeric semantic-version components.
 Redirects are not compatibility responses and must not receive credentials.
-`pairing_device_name: true` advertises support for naming a connection during
-code exchange. Clients omit `device_name` unless this flag is true; older
-servers may reject unknown request fields.
+Pairing clients use the current exchange shape, including `device_name`.
 
 ## Authentication and accounts
 

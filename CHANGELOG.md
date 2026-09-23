@@ -16,6 +16,8 @@ Notable user-visible changes to Suchi are recorded here.
   connected devices by their app-confirmed names, activity dates, and revocation.
 - Include the bound filing-system ID, name, and code in token-authenticated
   identity responses so paired clients can retain the exact archive boundary.
+- Document the pre-release Suchi Companion workflow and remove its obsolete
+  pairing-capability handshake flag.
 - Add mobile compatibility/scopes discovery, timestamped PDF OCR provenance,
   idempotent document/version uploads, split-origin lookup, bounded thumbnails,
   and metadata-only reads.
