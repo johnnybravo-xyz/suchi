@@ -42,7 +42,7 @@ test('groups one compact calendar entry per document and exact day, ignoring par
   assert.equal(grouped.has('2026-09-01'), false)
 })
 
-test('only fresh known pending dates can be selected, regardless of producer score', () => {
+test('only fresh known pending dates can be selected, regardless of classifier confidence', () => {
   const candidate = { type: 'date', role: 'renewal', status: 'pending', source_current: true, reason: 'important_fact', confidence: 1 }
   assert.equal(canReviewDate(candidate), true)
   assert.equal(canReviewDate({ ...candidate, confidence: 0.1, reason: 'low_confidence' }), true)

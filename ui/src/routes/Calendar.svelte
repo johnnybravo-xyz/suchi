@@ -274,7 +274,7 @@
                   {#if typeof event.confidence === 'number'}
                   <details class="date-details">
                     <summary class="date-origin">{dateOriginLabel(event)}</summary>
-                    <p>Producer score: {event.confidence.toFixed(2)} · not measured accuracy.</p>
+                    <p>LLM Classifier confidence: {Math.round(event.confidence * 100)}%</p>
                   </details>
                   {:else}
                     <span class="date-origin">{dateOriginLabel(event)}</span>

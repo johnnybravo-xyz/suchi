@@ -72,7 +72,7 @@ export function reviewReason(reason) {
   return {
     review_first: 'New inferred metadata needs your review.',
     important_fact: 'Dates can affect important decisions. Check the source before adding this date.',
-    low_confidence: 'The producer score is below the review score threshold. Check the source carefully.',
+    low_confidence: 'The classifier confidence is below the review threshold. Check the source carefully.',
     source_changed: 'The source changed after this suggestion. Extract a fresh suggestion.',
     source_unavailable: 'The source cannot currently be verified.',
     human_changed: 'The current value changed after this suggestion. Review a fresh suggestion instead.',
