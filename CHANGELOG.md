@@ -6,108 +6,94 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
-- Compose compiled distributions through `distro/app.Run` with independently
-  versioned, checksummed extension migrations and instance-owned automation
-  actions and approvals engines. One boot-time callback can register native HTTP
-  routes and durable job subscribers against concrete instance services before
-  workers or the listener start. Unlisted routes remain session-only; approval
-  behavior, community startup, built-in actions, and HTTP policy remain shared.
-
-- Import HuML/TOML filing trees with target-aware previews, collision handling,
-  and stale-preview protection. First prefixed Apply introduces permanent
-  A00–Z99 systems, names, direct memberships, and `SYS.AC.documentID` addresses;
-  existing unprefixed archives retain their presentation until then.
-- Generate a recoverable `00.00 archive.huml` tree index per system; offer
-  tree-only export without keywords or starter rules.
-- Pair mobile apps through five-minute, single-use QR codes. Settings lists
-  connected devices by their app-confirmed names, activity dates, and revocation.
-- Include the bound filing-system ID, name, and code in token-authenticated
-  identity responses so paired clients can retain the exact archive boundary.
-- Document the pre-release Suchi Companion workflow and remove its obsolete
-  pairing-capability handshake flag.
-- Add mobile compatibility/scopes discovery, timestamped PDF OCR provenance,
-  idempotent document/version uploads, split-origin lookup, bounded thumbnails,
-  and metadata-only reads.
-- Edit document tags and existing saved views; show password-unlocked status
-  in document lists and detail.
+- Add HuML/TOML filing-tree preview, import, merge, and tree-only export. The first
+  prefixed import creates permanent A00–Z99 filing systems, memberships,
+  `SYS.AC.documentID` addresses, and a recoverable `00.00 archive.huml` index.
+- Add the pre-release Companion contract: five-minute single-use pairing, bound
+  filing-system identity, compatibility/scopes discovery, idempotent document
+  and version uploads, device OCR provenance, split-origin lookup, metadata reads,
+  bounded thumbnails, and device revocation.
+- Add document-tag editing, saved-view editing, and password-unlocked state in
+  document lists and detail.
+- Add explicit application assembly through `distro/app.Run`, independently
+  checksummed extension migrations, and an instance-owned automation-action
+  registry. Compiled distributions can register native routes and durable
+  subscribers before workers or the listener start; unlisted routes remain
+  session-only.
 
 ### Changed
 
-- Apply new high-confidence inferred dates, model metadata and local archive
-  matches by default, with a review-first mode that sends inferred changes to
-  Approvals.
-  Default thresholds are 0.70 for model metadata and each date, 0.90 for local
-  application and 0.50 for local review suggestions. Source, evidence, access
-  and human-edit protections still apply; scores are not calibrated certainty.
-  Settings saves and startup never bulk-accept pending suggestions, and resolved
-  date history is preserved without inventing a reviewer.
-- Bind suggestions to source and field generations, including same-value human
-  edits and explicit clears. Recheck current session, permissions and supporting
-  sources at review and queued application; expired authorization needs a new
-  review, not reuse of an old approval.
-- Ship the schema changes in migration 0003. Published beta.2 migrations
-  0001/0002 remain unchanged; fresh installs and beta.2/schema 2 upgrades are
-  supported. Surviving IDs, history and credentials are preserved; automatic ID
-  nonreuse begins at upgrade.
-- Migration 0003 carries the date opt-out into the shared application mode
-  and retains a saved local automatic threshold.
-- Define strict offline `suchi-taxonomy/v1` HuML/TOML, with generated reserved
-  System/49 structure. YAML and unsupported fields fail validation. Later
-  preset/import applications merge additively; refile remains explicit.
-- Keep projections under immutable `rendered/<SYS>/` roots. First introduction
-  queues render-only moves. Native takeout v2 exports one selected system and
-  remains partial; complete backups preserve the whole instance.
-- Replace the separate setup wizard with Archive Configuration. Filing tree is
-  the only required step; preset, Blank and taxonomy-import choices clear a
-  persistent reminder that links directly to Filing tree. All ordinary archive
-  settings remain usable beforehand, and Settings uses one padded scrollbar.
-  Profile email is read-only, and display-name saves use supported fields.
-  Improve saved-view controls, email-rule resizing, and QR alignment.
-- Reuse verified AnyDoc release artifacts in images and skip unnecessary
-  thumbnail decoding and document-detail reloads.
-- Consolidate guides and release notes; clarify backup, matching, mobile OCR,
-  and API behavior. Per-document custom-field values still have no read API/UI.
-  Legacy tokens without pairing provenance remain under API tokens.
+- Apply high-confidence inferred dates, model metadata, and local archive matches
+  by default, with review-first mode available. Suggestions remain bound to
+  source and field generations; review and queued application recheck the current
+  session, permissions, supporting documents, human edits, and explicit clears.
+- Make Archive Configuration the sole administration surface. Selecting a preset,
+  importing a tree, or explicitly choosing Blank is the only required archive
+  setup step; the Filing tree reminder persists across navigation and reloads,
+  while every ordinary setting remains available beforehand.
+- Ship all unreleased database work in migration 0003 without changing published
+  beta.2 migrations 0001/0002. Fresh and populated schema-2 archives advance to
+  schema 3 with preserved IDs, history, credentials, and a one-row
+  `final-beta-schema-3` marker. This release is the required bridge to stable v1.
+- Define strict offline `suchi-taxonomy/v1`; reject YAML and unsupported fields,
+  merge later presets/imports additively, keep refile explicit, and place rendered
+  projections under immutable per-system roots. Native takeout v2 remains a
+  selected-system export rather than a complete backup.
+- Publish versioned images without moving aliases, then promote stable/beta/RC
+  aliases only after signing, SBOM collection, and the GitHub release succeed.
+  Release runs are serialized, and dispatch verifies that the GitHub annotated
+  tag peels to the local commit.
+- Reuse verified AnyDoc artifacts and avoid unnecessary thumbnail decoding and
+  document-detail reloads.
 
 ### Fixed
 
-- Preserve literal SQLite database filenames and archive isolation.
-- Preserve local taxonomy descriptions, disabled rules, edited forks, symbolic
-  filters, and rule identity; reject conflicting references and unsupported
-  seeded exports before changing data.
-- Recover rendered links after archive changes/restarts without overwriting
-  unrelated artifacts. Coordinate publication with purge so deleted links cannot
-  reappear; retain and report links whose ownership cannot be proven.
+- Preserve literal SQLite filenames, archive isolation, taxonomy descriptions,
+  disabled or forked rules, symbolic filters, filing identity, and existing
+  Trash timestamps. Conflicts fail before partial taxonomy or seed changes.
+- Recover owned rendered links after archive changes and restarts without
+  overwriting unrelated files or letting purged links reappear.
 - Preserve sensitivity in new versions and current parent metadata in split
-  scans. Trashing during extraction prevents new split children.
-- Enforce the 30-day bulk-restore limit, preserve existing Trash timestamps,
-  and reject custom-field edits on trashed documents.
-- Bind approval decisions and retries to their original review. Prevent duplicate
-  effects, reused run/task IDs, and reopened expired reviews. Recover proven
-  beta.2 work; ambiguous legacy jobs need review or restart. Callback panics
-  release the database writer.
-- Keep uploads, downloads, pairing, document saves and Trash actions bound to
-  their original account/system/document. Fix demo startup and hide unavailable
-  account tools; refresh changed avatars. Honor streamed refile options.
+  scans; stop extraction-created children after Trash; enforce restore limits and
+  reject custom-field edits on trashed documents.
+- Bind approval decisions and retries to their originating review, prevent
+  duplicate effects and reopened expired reviews, recover only provable beta.2
+  work, release the writer after callback panics, and expose only bounded producer
+  provenance with the same owner-level source checks used at application.
+- Keep upload, download, pairing, document-save, and Trash operations bound to
+  their original actor and filing system. Fix demo startup, streamed refile
+  options, account-tool visibility, avatar refresh, settings scrollbar clearance,
+  email-rule resizing, and QR alignment.
 
 ### Security
 
-- Enforce system selection, token binding, membership, and document ACLs across
-  reads, counts, search, tasks, research, blobs, versions, and upload replays.
-  Admins bypass membership/ACLs, never explicit/token boundaries. Scoped tokens
-  can permanently delete authorized Trash documents.
-- Bind OAuth handoffs and mobile pairing to the actor/system. Membership
-  removal revokes shares/tokens/pairings without revival on readmission; failed
-  membership/account updates preserve pending sign-ins. Pairing validates usable
-  origins and consumes codes transactionally with token issuance.
-- Prevent self-disable and last-admin removal, normalize role capabilities, and
-  commit dependent revocations with user changes. Recheck admin authority after
-  password hashing; concurrent disable/demotion cannot create replacement accounts.
-- Rate-limit credential/demo routes across plain, trailing-slash, and encoded
-  slash forms. Retain request IDs and security headers on rejections. Honor
-  scopes in chunked token requests and keep batch-decryption diagnostics in logs.
-- Separate browser sessions from headless token exchange. Constrain development
-  credentials to explicitly safe listeners and reject them in production.
+- Enforce filing-system selection, token binding, membership, scopes, and document
+  ACLs across reads, counts, search, tasks, research, blobs, versions, uploads,
+  and Trash. Administrator privilege never bypasses an explicit token boundary.
+- Bind OAuth and mobile pairing to the actor and filing system. Membership removal
+  atomically revokes shares, tokens, and pairings; pairing validates public origins
+  and consumes each code with token issuance.
+- Prevent self-disable and last-administrator removal, recheck authority after
+  password hashing, normalize role capabilities, and commit dependent revocations
+  with account changes.
+- Rate-limit every credential alias and cap all concurrent Argon2 hashing and
+  verification across account creation, shares, login, and token checks.
+  Cross-site anonymous session creation, including headerless form posts and
+  decoded API slash aliases, is refused before routing.
+- Revalidate authenticated blobs and thumbnails on every browser reuse so logout,
+  account changes, ACL revocation, document state, and sensitivity gates take
+  effect before a cached response is reused. Public share metadata, unlock
+  responses, and downloads are `no-store` so revocation, expiry, and password
+  changes cannot be bypassed by a browser or intermediary cache.
+- Pin the built-in demo corpus to its compiled SHA-256, resolve custom sidecars
+  before reuse, and never retain a verified marker across unverified replacements.
+  Confine manifest fixtures to already-opened regular files under `fixtures/`,
+  rejecting path traversal and non-regular files.
+- Keep extension migrations in separate checksummed ledgers and reject steps that
+  change core `PRAGMA user_version`.
+- Separate browser sessions from headless token exchange, constrain development
+  credentials to explicitly safe listeners, and retain request IDs and security
+  headers on rejections.
 
 ## [0.1.0-beta.2] - 2026-09-05
 
