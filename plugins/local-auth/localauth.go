@@ -40,6 +40,13 @@ const (
 	CookieName    = "suchi_session"
 	SessionTTL    = 30 * 24 * time.Hour
 	SetupTokenTTL = 24 * time.Hour
+
+	maxConcurrentPasswordWork = 2
+)
+
+var (
+	errPasswordWorkBusy = errors.New("password work is busy")
+	passwordWorkSlots   = make(chan struct{}, maxConcurrentPasswordWork)
 )
 
 // Plugin is the runtime handle. Zero value not useful; construct with New.
@@ -406,6 +413,10 @@ func releaseArgon2Memory() { debug.FreeOSMemory() }
 // idle RSS forever. releaseArgon2Memory forces a GC + madvise so the
 // working set returns to the kernel promptly.
 func HashPassword(pw string) (string, error) {
+	if !startPasswordWork() {
+		return "", errPasswordWorkBusy
+	}
+	defer finishPasswordWork()
 	salt := make([]byte, a2SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -419,8 +430,28 @@ func HashPassword(pw string) (string, error) {
 }
 
 // VerifyPassword returns nil on match, an error otherwise. Uses a
-// constant-time compare on the raw key bytes.
+// constant-time compare on the raw key bytes. Hashing and every real or dummy
+// verification share the same process-wide Argon2 memory bound.
 func VerifyPassword(encoded, pw string) error {
+	if !startPasswordWork() {
+		return errPasswordWorkBusy
+	}
+	defer finishPasswordWork()
+	return verifyPassword(encoded, pw)
+}
+
+func startPasswordWork() bool {
+	select {
+	case passwordWorkSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func finishPasswordWork() { <-passwordWorkSlots }
+
+func verifyPassword(encoded, pw string) error {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return errors.New("unrecognized hash format")

@@ -276,6 +276,10 @@ the normalized mux. Credential/pairing and demo POST limiters classify the
 **decoded URL path** consistently with API trailing-slash normalization: ordinary,
 slash and escaped aliases receive the same policy without rewriting the request.
 Share routes use matched mux patterns. Test the assembled handler.
+Local password hashing and verification share a process-wide two-slot bound
+across account creation, shares, login, and token exchange. Login takes a slot
+before the account lookup, so overload fails quickly and identically for known
+and unknown accounts while limiting Argon2 working memory.
 
 These gates remain distinct:
 
@@ -309,8 +313,10 @@ These gates remain distinct:
   membership/ACL only. Lists/counts/search/similarity filter system and visibility
   in SQL before pagination.
 - **Browser origin:** cookie mutations reject sibling-origin `same-site` and
-  `cross-site` Fetch Metadata requests. Same-origin/headerless compatibility remains;
-  explicit token/bearer integrations are exempt. CORS alone is insufficient.
+  `cross-site` Fetch Metadata requests. Headerless anonymous form logins require a
+  same-host `Origin`; headerless JSON credential routes require
+  `application/json`. Authenticated headerless compatibility remains, and explicit
+  token/bearer integrations are exempt. CORS alone is insufficient.
 
 Sessions select `?system=CODE`, defaulting to original system 1; token binding is
 its default and ceiling. Unqualified numeric objects resolve their actual system.

@@ -96,3 +96,39 @@ func TestSecFetchSiteDemoHeaderDoesNotExemptOtherCookies(t *testing.T) {
 		}
 	}
 }
+
+func TestSecFetchSiteRejectsAnonymousCrossSiteSessionCreation(t *testing.T) {
+	h := SecFetchSite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	for _, tc := range []struct {
+		name, path, site, origin, contentType string
+		want                                  int
+	}{
+		{"cross-site form", "/login", "cross-site", "", "", http.StatusForbidden},
+		{"same-site bootstrap", "/bootstrap", "same-site", "", "", http.StatusForbidden},
+		{"cross-site JSON", "/api/login", "cross-site", "", "application/json", http.StatusForbidden},
+		{"trailing slash", "/api/login/", "cross-site", "", "application/json", http.StatusForbidden},
+		{"encoded slash", "/api/login%2f", "cross-site", "", "application/json", http.StatusForbidden},
+		{"same-site setup", "/setup", "same-site", "", "application/json", http.StatusForbidden},
+		{"same-origin metadata", "/login", "same-origin", "", "", http.StatusNoContent},
+		{"headerless form", "/login", "", "", "application/x-www-form-urlencoded", http.StatusForbidden},
+		{"headerless same-origin form", "/login", "", "http://example.com", "application/x-www-form-urlencoded", http.StatusNoContent},
+		{"headerless cross-origin form", "/login", "", "https://evil.example", "application/x-www-form-urlencoded", http.StatusForbidden},
+		{"headerless JSON login", "/api/login", "", "", "application/json; charset=utf-8", http.StatusNoContent},
+		{"headerless form login API", "/api/login", "", "", "application/x-www-form-urlencoded", http.StatusForbidden},
+		{"headerless JSON setup", "/setup", "", "", "application/json", http.StatusNoContent},
+		{"token exchange", "/api/token", "cross-site", "", "application/json", http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			req.Header.Set("Origin", tc.origin)
+			req.Header.Set("Content-Type", tc.contentType)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("path=%s site=%s origin=%s content-type=%s: status=%d want=%d",
+					tc.path, tc.site, tc.origin, tc.contentType, rec.Code, tc.want)
+			}
+		})
+	}
+}

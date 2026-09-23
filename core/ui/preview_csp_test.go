@@ -1,8 +1,8 @@
 package ui
 
 // Regression guard for the preview CSP header. The security posture
-// documented in SECURITY.md and docs/architecture.mdx.
-// claims two things about the preview response:
+// documented in SECURITY.md and docs/architecture.mdx claims two things
+// about the preview response:
 //
 //   - `sandbox` is applied so previewed hostile HTML runs in an opaque
 //     origin (no allow-same-origin) — script execution is structurally
@@ -92,10 +92,13 @@ func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
 	}
 	for _, path := range []string{"/preview/1", "/download/1"} {
 		t.Run(path, func(t *testing.T) {
-			request := func(scopes []string) *httptest.ResponseRecorder {
+			request := func(scopes []string, etag string) *httptest.ResponseRecorder {
 				rec := httptest.NewRecorder()
 				req := httptest.NewRequest(http.MethodGet, path, nil)
 				req.SetPathValue("id", strconv.FormatInt(id, 10))
+				if etag != "" {
+					req.Header.Set("If-None-Match", etag)
+				}
 				req = req.WithContext(auth.WithPrincipal(context.Background(), &pluginapi.Principal{
 					Kind: "token", UserID: 1, Role: "admin", Scopes: scopes,
 				}))
@@ -107,13 +110,26 @@ func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
 				return rec
 			}
 
-			denied := request(nil)
+			denied := request(nil, "")
 			if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), `"code":"insufficient_scope"`) {
 				t.Fatalf("missing-scope response = %d %q", denied.Code, denied.Body.String())
 			}
-			allowed := request([]string{auth.ScopeDocumentsRead})
+			allowed := request([]string{auth.ScopeDocumentsRead}, "")
 			if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), "Scope-protected") {
 				t.Fatalf("read-scoped token did not receive its document: %d %q", allowed.Code, allowed.Body.String())
+			}
+			wantCacheControl := "private, no-cache"
+			if strings.HasPrefix(path, "/preview/") {
+				wantCacheControl = "private, max-age=0, must-revalidate"
+			}
+			if got := allowed.Header().Get("Cache-Control"); got != wantCacheControl {
+				t.Fatalf("authenticated blob Cache-Control = %q, want %q", got, wantCacheControl)
+			}
+			if etag := allowed.Header().Get("ETag"); etag != "" {
+				revoked := request(nil, etag)
+				if revoked.Code != http.StatusForbidden {
+					t.Fatalf("cached response bypassed current scope check: status=%d", revoked.Code)
+				}
 			}
 		})
 	}

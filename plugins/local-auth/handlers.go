@@ -40,7 +40,12 @@ func (p *Plugin) SetupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := p.applySetup(r.Context(), req); err != nil {
-		http.Error(w, err.Error(), setupErrStatus(err))
+		status := setupErrStatus(err)
+		if status == http.StatusServiceUnavailable {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Retry-After", "1")
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -71,6 +76,12 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := p.applySetup(r.Context(), req)
 	if err != nil {
+		if setupErrStatus(err) == http.StatusServiceUnavailable {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		http.Redirect(w, r, "/bootstrap?error="+url.QueryEscape(err.Error()),
 			http.StatusFound)
 		return
@@ -117,6 +128,9 @@ func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error
 	}
 	hash, err := HashPassword(req.Password)
 	if err != nil {
+		if errors.Is(err, errPasswordWorkBusy) {
+			return 0, errSetupHashBusy
+		}
 		return 0, errSetupHash
 	}
 	displayName := req.DisplayName
@@ -159,9 +173,10 @@ var (
 	errSetupWeakPassword = &setupErr{
 		msg: "password must be at least 8 characters", code: http.StatusBadRequest,
 	}
-	errSetupMint   = &setupErr{msg: "token generation failed", code: http.StatusInternalServerError}
-	errSetupHash   = &setupErr{msg: "password hashing failed", code: http.StatusInternalServerError}
-	errSetupInsert = &setupErr{msg: "account creation failed", code: http.StatusInternalServerError}
+	errSetupMint     = &setupErr{msg: "token generation failed", code: http.StatusInternalServerError}
+	errSetupHashBusy = &setupErr{msg: "password hashing temporarily busy", code: http.StatusServiceUnavailable}
+	errSetupHash     = &setupErr{msg: "password hashing failed", code: http.StatusInternalServerError}
+	errSetupInsert   = &setupErr{msg: "account creation failed", code: http.StatusInternalServerError}
 )
 
 type setupErr struct {
@@ -253,6 +268,12 @@ func (p *Plugin) authenticateCredentials(w http.ResponseWriter, r *http.Request)
 	}
 
 	userID, err := p.verifyCredentials(r.Context(), req.Email, req.Password)
+	if errors.Is(err, errPasswordWorkBusy) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
+		return 0, false
+	}
 	if errors.Is(err, errInvalidCredentials) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return 0, false
@@ -283,6 +304,12 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, err := p.verifyCredentials(r.Context(), email, password)
+	if errors.Is(err, errPasswordWorkBusy) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "authentication temporarily busy", http.StatusServiceUnavailable)
+		return
+	}
 	if errors.Is(err, errInvalidCredentials) {
 		http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
 		return
@@ -336,6 +363,13 @@ var errInvalidCredentials = errors.New("local-auth: invalid credentials")
 const dummyPasswordHash = "$argon2id$v=19$m=65536,t=2,p=2$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000"
 
 func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) (int64, error) {
+	// Take capacity before looking up the account so overload behavior and timing
+	// do not reveal whether the submitted email exists.
+	if !startPasswordWork() {
+		return 0, errPasswordWorkBusy
+	}
+	defer finishPasswordWork()
+
 	email = strings.ToLower(strings.TrimSpace(email))
 	var (
 		userID int64
@@ -352,7 +386,10 @@ func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) 
 	if found {
 		encoded = hash.String
 	}
-	if VerifyPassword(encoded, password) != nil || !found {
+	if err := verifyPassword(encoded, password); err != nil {
+		return 0, errInvalidCredentials
+	}
+	if !found {
 		return 0, errInvalidCredentials
 	}
 	return userID, nil

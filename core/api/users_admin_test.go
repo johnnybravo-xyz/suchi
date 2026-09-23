@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -140,6 +141,26 @@ func TestCreateUserRechecksAdministratorAfterPasswordHashing(t *testing.T) {
 				t.Fatalf("replacement accounts=%d, error=%v", created, err)
 			}
 		})
+	}
+}
+
+func TestCreateUserReturnsRetryableErrorWhenPasswordHashingIsUnavailable(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PasswordHasher: func(string) (string, error) {
+			return "", errors.New("password work is busy")
+		},
+	}
+	rec := doAdmin(t, s, http.MethodPost, "/api/admin/users",
+		`{"email":"new@example.test","password":"password","role":"member"}`, adminPrincipal(1))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+		rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"password_hash_unavailable"`) {
+		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
 

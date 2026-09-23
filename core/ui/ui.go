@@ -586,16 +586,16 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	// ETag = content SHA-256 — blobs are content-addressed and
-	// immutable by construction, so the strong-validator is safe.
-	// Serves 304 Not Modified when the client re-requests, saving
-	// re-transfer on every list scroll and repeat preview.
+	// ETag = content SHA-256 — blobs are content-addressed and immutable by
+	// construction, so the strong validator is safe. Authenticated bytes must
+	// revalidate on every use so logout, account changes and ACL revocation take
+	// effect before a browser reuses its private cache.
 	// Sensitivity-gated 202 responses take a different branch above
 	// and stay Cache-Control: no-store so a later reveal isn't
 	// masked by a stale cached gate.
 	etag := `"` + pick + `"`
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return

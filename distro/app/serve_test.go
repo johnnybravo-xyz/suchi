@@ -31,6 +31,7 @@ func TestBuildHTTPHandlerPreservesRoutingAndLimiterBoundaries(t *testing.T) {
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)
+		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "192.0.2.1:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -55,6 +56,31 @@ func TestBuildHTTPHandlerPreservesRoutingAndLimiterBoundaries(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPHandlerRejectsCrossSiteAnonymousLogin(t *testing.T) {
+	mux := http.NewServeMux()
+	called := 0
+	credentialHandler := func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	}
+	mux.HandleFunc("POST /login", credentialHandler)
+	mux.HandleFunc("POST /api/login", credentialHandler)
+	handler := buildHTTPHandler(mux, &config.Config{BodyLimit: 1024}, &auth.Chain{}, nil, httpx.NewMetrics(), testLogger())
+	for _, path := range []string{"/login", "/api/login", "/api/login/", "/api/login%2f"} {
+		called = 0
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"email":"attacker@example.test","password":"secret"}`))
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden || called != 0 {
+			t.Errorf("path=%s: cross-site login status=%d handler_calls=%d", path, rec.Code, called)
+		}
+	}
+}
+
 func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, _ *http.Request) {
@@ -67,6 +93,7 @@ func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 
 	for i := 0; i < 11; i++ {
 		req := httptest.NewRequest("POST", "/api/login", nil)
+		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "10.0.0.2:1234"
 		req.Header.Set("X-Forwarded-For", "192.0.2.1")
 		rec := httptest.NewRecorder()
@@ -81,6 +108,7 @@ func TestBuildHTTPHandlerSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("POST", "/api/login", nil)
+	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.0.0.2:1234"
 	req.Header.Set("X-Forwarded-For", "192.0.2.2")
 	rec := httptest.NewRecorder()
@@ -125,6 +153,9 @@ func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
 					path += "%2f"
 				}
 				req := httptest.NewRequest("POST", path, nil)
+				if tc.path == "/api/login" {
+					req.Header.Set("Content-Type", "application/json")
+				}
 				req.RemoteAddr = "192.0.2.1:1234"
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, req)
@@ -205,6 +236,9 @@ func TestBuildHTTPHandlerObservesRateLimitRejections(t *testing.T) {
 			var rec *httptest.ResponseRecorder
 			for range 11 {
 				req := httptest.NewRequest(tc.method, tc.path, nil)
+				if strings.HasPrefix(tc.path, "/api/login") {
+					req.Header.Set("Content-Type", "application/json")
+				}
 				req.RemoteAddr = "192.0.2.1:1234"
 				rec = httptest.NewRecorder()
 				handler.ServeHTTP(rec, req)

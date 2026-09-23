@@ -10,9 +10,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -162,13 +164,12 @@ func Authenticate(chain *auth.Chain, log *slog.Logger) Middleware {
 }
 
 // SecFetchSite rejects non-same-origin state-changing requests where the
-// caller is authenticated by a session cookie. It's the modern
-// browser-shipped CSRF signal — every browser Google can see stamps
-// `Sec-Fetch-Site: same-origin | same-site | cross-site | none` on
-// every request. `SameSite=Lax` on the session cookie already blocks
-// most cross-site forms; this middleware also rejects sibling origins and closes edge cases
-// (older engines with lax defaults, opaque origins, javascript:
-// redirect chains, subdomain takeovers).
+// caller is authenticated by a session cookie, plus anonymous requests to
+// endpoints that create a browser session. It's the modern
+// browser-shipped CSRF signal. Headerless anonymous form posts must carry a
+// same-host Origin; headerless JSON credential endpoints require application/json,
+// which browsers cannot submit cross-origin without a successful preflight.
+// `SameSite=Lax` on the session cookie also blocks most cross-site forms.
 //
 // Token-authenticated calls (`Authorization: Token …` / `Bearer …`)
 // are exempt — a cross-site attacker cannot forge an Authorization
@@ -196,12 +197,21 @@ func SecFetchSite(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		site := r.Header.Get("Sec-Fetch-Site")
+		if p == nil {
+			if !createsBrowserCredential(r.URL.Path) || site == "same-origin" || site == "none" ||
+				(site == "" && allowsHeaderlessCredentialCreation(r)) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "cross-site request refused", http.StatusForbidden)
+			return
+		}
 		// Demo identities also use ambient cookies in the browser.
-		if p == nil || (p.Kind != "user" && p.Kind != "demo-anon" && p.Kind != "demo-scratch") {
+		if p.Kind != "user" && p.Kind != "demo-anon" && p.Kind != "demo-scratch" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		site := r.Header.Get("Sec-Fetch-Site")
 		// Older browsers that don't send the header at all get a
 		// pass — turning them into 403 across the board would break
 		// curl + integration scripts that don't set the header. The
@@ -212,6 +222,36 @@ func SecFetchSite(next http.Handler) http.Handler {
 		}
 		http.Error(w, "cross-site request refused", http.StatusForbidden)
 	})
+}
+
+func allowsHeaderlessCredentialCreation(r *http.Request) bool {
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		u, err := url.Parse(origin)
+		return err == nil && (u.Scheme == "http" || u.Scheme == "https") &&
+			u.User == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host) &&
+			u.Path == "" && u.RawQuery == "" && u.Fragment == ""
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path != "/api/login" && path != "/setup" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "application/json"
+}
+
+func createsBrowserCredential(path string) bool {
+	if strings.HasPrefix(path, "/api/") {
+		// NormalizeAPITrailingSlash runs inside this middleware and accepts one
+		// decoded trailing slash. Classify the same route aliases here so they
+		// cannot reach a credential-creating handler before CSRF rejection.
+		path = strings.TrimSuffix(path, "/")
+	}
+	switch path {
+	case "/login", "/bootstrap", "/api/login", "/setup":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasTokenAuthorization(header string) bool {

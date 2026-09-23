@@ -62,6 +62,9 @@ func TestSystemsMemberReadmissionDoesNotReviveDelegatedCredentials(t *testing.T)
 		if w.Code != 200 || w.Body.String() != want {
 			t.Fatalf("live share bytes: %d %q", w.Code, w.Body.String())
 		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("live share Cache-Control = %q, want no-store", got)
+		}
 	}
 	w := systemsBoundaryRequest(mux, "POST", "/api/mobile/pairing?system=S02", `{}`, memberPrincipal(5))
 	var pairing mobilePairingResponse

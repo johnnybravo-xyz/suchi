@@ -30,6 +30,9 @@ func TestDocumentThumbnailWidthNegotiation(t *testing.T) {
 	if got := originalResponse.Header().Get("ETag"); got != `"`+thumbSHA+`"` {
 		t.Fatalf("original ETag=%q", got)
 	}
+	if got := originalResponse.Header().Get("Cache-Control"); got != "private, no-cache" {
+		t.Fatalf("original Cache-Control=%q", got)
+	}
 
 	scaled := getThumbnail(t, s, principal, documentID, "?width=160", "")
 	if scaled.Code != http.StatusOK {
@@ -40,7 +43,7 @@ func TestDocumentThumbnailWidthNegotiation(t *testing.T) {
 	if got := scaled.Header().Get("ETag"); got != scaledETag {
 		t.Fatalf("scaled ETag=%q, want %q", got, scaledETag)
 	}
-	if got := scaled.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+	if got := scaled.Header().Get("Cache-Control"); got != "private, no-cache" {
 		t.Fatalf("scaled Cache-Control=%q", got)
 	}
 
@@ -86,6 +89,9 @@ func TestSensitiveThumbnailGatePreservesWidth(t *testing.T) {
 	revealed := getThumbnail(t, s, principal, documentID, "?width=160&reveal=1", "")
 	if revealed.Code != http.StatusOK {
 		t.Fatalf("revealed status=%d body=%s", revealed.Code, revealed.Body.String())
+	}
+	if revealed.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("revealed Cache-Control=%q", revealed.Header().Get("Cache-Control"))
 	}
 	assertPNGDimensions(t, revealed.Body.Bytes(), 160, 80)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -401,6 +402,86 @@ func TestLoginHandlerCreatesOnlyBrowserSession(t *testing.T) {
 	}
 	if principal, err := p.Authenticate(cookieReq); err != nil || principal != nil {
 		t.Fatalf("disabled user's cookie accepted: principal=%v err=%v", principal, err)
+	}
+}
+
+func TestPasswordWorkBoundRejectsBusyLoginAndHashing(t *testing.T) {
+	p := openTestPlugin(t)
+	if _, err := p.db.ExecWrite(t.Context(), `
+		INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
+		VALUES ('known@example.test', 'Known', 'member', ?, 0, 0)
+	`, dummyPasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(passwordWorkSlots) != 0 {
+		t.Fatalf("password work slots in use before test: %d", len(passwordWorkSlots))
+	}
+	for range cap(passwordWorkSlots) {
+		passwordWorkSlots <- struct{}{}
+	}
+	defer func() {
+		for range cap(passwordWorkSlots) {
+			<-passwordWorkSlots
+		}
+	}()
+	if _, err := (&Plugin{}).verifyCredentials(t.Context(), "any@example.test", "password"); !errors.Is(err, errPasswordWorkBusy) {
+		t.Fatalf("busy verification reached account lookup: %v", err)
+	}
+	if err := VerifyPassword(dummyPasswordHash, "password"); !errors.Is(err, errPasswordWorkBusy) {
+		t.Fatalf("shared password verifier did not enforce the global bound: %v", err)
+	}
+	if _, err := HashPassword("password"); !errors.Is(err, errPasswordWorkBusy) {
+		t.Fatalf("shared password hasher did not enforce the global bound: %v", err)
+	}
+	setupBody, err := json.Marshal(SetupRequest{
+		Token: p.SetupToken(), Email: "admin@example.test", Password: "password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupReq := httptest.NewRequest(http.MethodPost, "/setup", bytes.NewReader(setupBody))
+	setupRec := httptest.NewRecorder()
+	p.SetupHandler(setupRec, setupReq)
+	if setupRec.Code != http.StatusServiceUnavailable || setupRec.Header().Get("Retry-After") != "1" ||
+		setupRec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("setup response = %d headers=%v body=%q", setupRec.Code, setupRec.Header(), setupRec.Body.String())
+	}
+
+	var firstBody string
+	for _, email := range []string{"known@example.test", "missing@example.test"} {
+		body, err := json.Marshal(LoginRequest{Email: email, Password: "wrong-password"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		p.LoginHandler(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+			rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s response = %d headers=%v body=%q", email, rec.Code, rec.Header(), rec.Body.String())
+		}
+		if firstBody == "" {
+			firstBody = rec.Body.String()
+		} else if rec.Body.String() != firstBody {
+			t.Fatalf("busy response leaked account existence: known=%q missing=%q", firstBody, rec.Body.String())
+		}
+	}
+	form := url.Values{"email": {"known@example.test"}, "password": {"wrong-password"}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	p.LoginFormHandler(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+		rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("form response = %d headers=%v body=%q", rec.Code, rec.Header(), rec.Body.String())
+	}
+
+	var sessions int
+	if err := p.db.Read.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("busy verification created %d sessions", sessions)
 	}
 }
 

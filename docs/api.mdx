@@ -191,6 +191,10 @@ The separate `POST /login` browser form accepts URL-encoded fields and redirects
 after setting the same kind of session cookie.
 
 **401** on bad credentials. One error path covers every failure mode.
+When the bounded Argon2 worker is already at capacity, local-password login and
+token exchange fail quickly with **503**, `Retry-After: 1`, and the same response
+for known and unknown accounts. Password hashing for account and protected-share
+creation uses the same bound and returns a retryable **503** when unavailable.
 Credential routes and demo session creation share their respective rate-limit
 buckets across plain, trailing-slash and percent-encoded slash paths.
 
@@ -675,12 +679,14 @@ can iterate them safely.
 
 Page-1 thumbnail rendered at ingest time from the archive PDF via
 `pdftoppm -f 1 -l 1 -r 40 -png`. Omit `width` to preserve the stored PNG
-bytes and immutable ETag `"documents.thumb_sha"`. Optional integer
+bytes and use ETag `"documents.thumb_sha"`. Optional integer
 `width=64..512` downscales with Catmull-Rom while preserving aspect ratio and
 never upscales. Its ETag is `"<thumb_sha>-w<actual-width>"`, where actual width
 may be smaller than requested. Invalid, duplicate, or out-of-range width values
-return `400 bad_width`. Both forms use
-`Cache-Control: private, max-age=31536000, immutable`.
+return `400 bad_width`. Both forms use `Cache-Control: private, no-cache` and
+support conditional requests with their ETag. Every reuse therefore revalidates
+authorization, document state, and sensitivity before a matching request can
+return `304 Not Modified`.
 
 Scope: `documents:read`. ACL rule matches `GET /api/documents/{id}`.
 
@@ -1696,6 +1702,9 @@ one landing page with every doc listed. API tokens need `documents:write`.
 - `expires_in_sec`: seconds from creation, from `0` (no expiry) through one
   year.
 
+If password hashing is temporarily unavailable, creation returns **503** with
+`Retry-After: 1`; no share row is written.
+
 **Response** carries the fresh `token`, the absolute `public_url` resolved from
 `PUBLIC_URL`, and the `shared_by` + `instance_host` identity recipients see.
 
@@ -1705,6 +1714,8 @@ The bearer is deliberate public access, not permanent authority. Every request
 rechecks that its creator remains active and can enter the share's system; only
 still-shareable live documents from that system are exposed. Removing membership
 revokes that member's shares, and re-admission does not reactivate them.
+Metadata, password responses, and downloads use `Cache-Control: no-store` so
+revocation, expiry, or a password change cannot be bypassed by cached content.
 
 - `GET /s/{token}` — content-negotiated on the `Accept` header. A
   browser (`Accept: text/html`) gets a small landing page with the

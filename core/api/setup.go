@@ -125,7 +125,7 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := s.PasswordHasher(body.Password)
 	if err != nil {
-		s.serverErr(w, "createuser.hash", err)
+		s.passwordHashUnavailable(w, "createuser.hash", err)
 		return
 	}
 	var newID int64
@@ -810,6 +810,16 @@ func (s *Server) serverErr(w http.ResponseWriter, tag string, err error) {
 	s.Log.Error("api."+tag, "err", err.Error())
 	s.writeJSON(w, http.StatusInternalServerError,
 		errBody{Code: "internal", Error: "server error"})
+}
+
+func (s *Server) passwordHashUnavailable(w http.ResponseWriter, tag string, err error) {
+	if s.Log != nil {
+		s.Log.Error("api."+tag, "err", err.Error())
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Retry-After", "1")
+	s.writeError(w, http.StatusServiceUnavailable, "password_hash_unavailable",
+		"password hashing temporarily unavailable")
 }
 
 // isUniqueViolation checks the modernc.org/sqlite error surface for

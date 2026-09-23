@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -113,6 +114,25 @@ func TestShareLinkAuditOmitsBearerCredential(t *testing.T) {
 	}
 }
 
+func TestCreateShareLinkReturnsRetryableErrorWhenPasswordHashingIsUnavailable(t *testing.T) {
+	s := newStatsServer(t)
+	category := seedStatsJDInbox(t, s.DB)
+	docID := seedStatsDoc(t, s.DB, 1, "share-hash-busy", "Share hash busy", category, false, 0)
+	s.PasswordHasher = func(string) (string, error) {
+		return "", errors.New("password work is busy")
+	}
+	rec := shareCall(t, s, http.MethodPost, "/api/share_links/",
+		`{"doc_ids":[`+itoa(docID)+`],"password":"secret"}`,
+		&pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"})
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+		rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"password_hash_unavailable"`) {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
 func TestRenderShareHTMLIncludesFavicon(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderShareHTML(rec, http.StatusOK, shareHTMLData{
@@ -164,6 +184,9 @@ func TestPublicShareUsesCurrentCreatorName(t *testing.T) {
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("Cache-Control = %q, want no-store", got)
 		}
 		return rec.Body.String()
 	}

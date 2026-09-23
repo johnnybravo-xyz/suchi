@@ -200,7 +200,7 @@ func (s *Server) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		}
 		hashed, err := s.PasswordHasher(in.Password)
 		if err != nil {
-			s.serverErr(w, "share_links.hash", err)
+			s.passwordHashUnavailable(w, "share_links.hash", err)
 			return
 		}
 		pwHash.String = hashed
@@ -368,6 +368,7 @@ type ShareLinkPubDoc struct {
 // below. That way a recipient who just clicks the link in an email
 // gets a page they can actually use, not a JSON dump.
 func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	token := r.PathValue("token")
 	link, err := s.loadShareByToken(r, token)
 	if err != nil {
@@ -451,6 +452,7 @@ func (s *Server) GetSharePublic(w http.ResponseWriter, r *http.Request) {
 // downloads) authenticate without the password ever appearing in a URL.
 // Wrong password re-renders the form with a message.
 func (s *Server) PostSharePublic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	token := r.PathValue("token")
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
@@ -687,6 +689,7 @@ const shareHTMLFoot = `<footer>Powered by <a href="https://suchi.page" target="_
 // Streams the original blob if the share link covers doc_id and the
 // password (if any) matches.
 func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	token := r.PathValue("token")
 	docID, err := strconv.ParseInt(r.PathValue("doc_id"), 10, 64)
 	if err != nil {
