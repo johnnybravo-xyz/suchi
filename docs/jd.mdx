@@ -112,7 +112,7 @@ bounded to 1 MiB. The entire file is checked even when seeds are skipped.
 
 ```toml
 format = "suchi-taxonomy/v1"
-id = "personal-records"
+id = "home-records"
 version = 1
 name = "Household records"
 market = "global"
@@ -174,8 +174,8 @@ names first, then canonical slugs; Preview and Apply use the same normalization.
 
 No instance row IDs or arbitrary action parameters. Sensitivity defaults,
 `review_after_days`, custom fields, standalone tag/type/correspondent seeds,
-link vocabulary/endpoints, access grants, secrets, provider configuration and
-trust state are unsupported. New schema capabilities require a new format;
+link vocabulary/endpoints, access grants, secrets and provider configuration are
+unsupported. New schema capabilities require a new format;
 adding a runtime action does not automatically make it portable in v1.
 
 ## Export and provenance

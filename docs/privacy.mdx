@@ -110,9 +110,11 @@ each written claim is correct.
 
 Extracted fact candidates are persistent archive metadata rather than chat
 history. They retain bounded evidence, extractor version, review state, and a
-reviewer when a person made the decision. New dates require explicit review
-before feeding Calendar, rich queries or later research context. Legacy accepted
-facts remain unchanged; a high score or settings save cannot accept new ones.
+reviewer when a person made the decision. With automatic application enabled,
+new dates at or above the configured threshold can feed Calendar, rich queries,
+and later research context without human review; review-first mode leaves them
+pending. Existing decisions remain unchanged, and saving settings does not bulk
+accept pending dates.
 
 Logs never include questions, answers, snippets, or extracted evidence. The
 archive-evidence assembly event contains only the selected context mode,

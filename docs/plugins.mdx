@@ -209,11 +209,9 @@ document content or plaintext credentials to an audit event.
 
 ## Package and build wiring
 
-Shipped plugins live in the root module. An external plugin normally has its
-own `go.mod`, depends on `plugin-api`, and may depend on narrowly required
-`core` packages when it needs database or sandbox helpers. Construct it from a
-private distribution entry point; add its module to `go.work` only while
-developing it beside Suchi.
+Shipped plugins live in the root module. A compiled distribution assembles the
+plugins it includes through `app.Options`; integrations may use `plugin-api` and
+narrowly required `core` packages for explicit database or sandbox behavior.
 
 Rebuild and test the final binary after changing plugins. Dependencies become
 part of that binary, so prefer the standard library and existing helpers.

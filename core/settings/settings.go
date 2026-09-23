@@ -380,7 +380,7 @@ func envSet(keys ...string) bool {
 	return false
 }
 
-// FSWatchConfig mirrors the fs-watch runtime knobs the setup wizard
+// FSWatchConfig mirrors the fs-watch runtime knobs Archive Configuration
 // can override.
 type FSWatchConfig struct {
 	Dir        string

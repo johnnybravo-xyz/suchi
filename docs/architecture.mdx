@@ -71,10 +71,10 @@ create extension ledger state. This is compiled composition, with no dynamic
 loader, service lookup, CAS/API exposure or registration framework.
 [Plugins](/plugins#application-assembly) documents the Go contract and example.
 
-The existing approvals engine is also passed explicitly to `api.Server.Approvals`
-and its subscriber. This replaces the former process-global default solely to
-keep independently assembled instances isolated; state-machine handlers, review
-validation, audit and retry logic remain with `core/approvals`.
+Each assembled instance passes its approvals engine explicitly to
+`api.Server.Approvals` and the approval subscriber. State-machine handlers,
+review validation, audit and retry logic remain with `core/approvals`, while
+independently assembled instances remain isolated.
 
 One server process owns an archive. The writer pool and startup reclamation do
 not coordinate multiple servers sharing SQLite.
@@ -180,6 +180,13 @@ Original/derived bytes are SHA-256-addressed:
 ```text
 $DATA_DIR/blobs/sha256/ab/cd/ef/<full-hash>
 ```
+
+The hash identifies stored bytes, not a document, owner or permission boundary.
+Documents and versions can reference the same immutable object, which avoids
+duplicate storage and makes retries idempotent; SQLite retains document identity,
+provenance and authorization, while rendered filing paths remain rebuildable
+projections. CAS does not encrypt content. `suchi doctor --scrub-cas` explicitly
+rehashes stored objects when an operator wants an integrity check.
 
 `CAS.Put` streams to a temporary file at the CAS root, then renames on the same
 filesystem. A failed subsequent database transaction may leave an unreferenced
@@ -481,11 +488,9 @@ Settings/startup never bulk-accept pending dates. See [Document dates](/document
 Purging a document removes its facts/evidence and document-bound approval state
 through existing domain ownership. Full database backup retains history and
 generations; native takeout remains partial reingestion, not restored review
-authority. No separate evidence archive, automatic eligibility table, promotion
-counter or external-action executor is introduced. Classifier-owned review
-markers are excluded from automation match snapshots; explicit internal rules
-remain independent. [Approvals](/approvals) and [Automations](/automations) own
-the available actions and recovery flow.
+authority. Classifier-owned review markers are excluded from automation match
+snapshots; explicit internal rules remain independent. [Approvals](/approvals)
+and [Automations](/automations) own the available actions and recovery flow.
 
 Classifier review-tag cleanup is narrowly tracked by `document_tags.classifier_owned`,
 default false including migrated assignments. The LLM handler marks only assignments

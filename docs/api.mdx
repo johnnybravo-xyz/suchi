@@ -1268,11 +1268,12 @@ bounded (five presets today).
 [
   {
     "id": "solo",
-    "name": "Solo",
-    "description": "Individual filing, no business.",
+    "name": "Solo filing",
+    "description": "One person's admin: ID, taxes, health, receipts. Compact 3-area tree.",
     "areas": [
-      { "code": 10, "name": "Life",  "category_count": 6 },
-      { "code": 20, "name": "Money", "category_count": 4 }
+      { "code": 10, "name": "Life admin", "category_count": 4 },
+      { "code": 20, "name": "Money", "category_count": 4 },
+      { "code": 30, "name": "Health", "category_count": 3 }
     ]
   },
   ...
@@ -1285,6 +1286,40 @@ per row — they'd bloat the payload, and the picker doesn't render them.
 Once a preset is applied via
 `POST /api/admin/setup/preset`, the tree becomes visible through
 `/api/jd/categories/`.
+
+### `POST /api/admin/setup/preset`
+
+Session-admin-only. Applies one built-in preset additively to the selected filing
+system; API tokens cannot use it. Existing filing and locally edited rules are
+preserved according to the same merge rules as taxonomy import.
+
+**Request body**
+
+```json
+{
+  "preset_id": "solo",
+  "confirm_blank": false,
+  "include_seeds": true,
+  "refile": false
+}
+```
+
+`preset_id` is one of `solo`, `household`, `smb_billing`, `freelance`, or
+`blank`. `confirm_blank` must be true for `blank`. `include_seeds` defaults to
+true when omitted; false skips the preset's starter automations. `refile` runs
+the existing explicit refile sweep after the preset is applied.
+
+**200 OK**
+
+```json
+{
+  "preset_id": "solo",
+  "index_refresh_pending": true
+}
+```
+
+Unknown presets and unconfirmed Blank return `400`; unresolved merge collisions
+return `409` without a partial application.
 
 ### `POST /api/admin/taxonomy/import`
 
@@ -2215,8 +2250,8 @@ A `matching` rule accepts `from`, `recipients` (To or Cc), case-insensitive
 `subject_terms`, and case-insensitive `attachment_names` globs. Populated
 criteria inside that rule are ANDed; comma- or newline-separated values inside
 one criterion are ORed. A matching rule requires at least one criterion. `all`
-and `files` rules do not accept matching criteria. The pre-v0.1 API accepts only
-the `rules` shape; the former flat policy shape is not supported.
+and `files` rules do not accept matching criteria. The API accepts only the
+`rules` shape; the former flat policy shape is not supported.
 
 Returns `201 {"id": <int>}` on success.
 

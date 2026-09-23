@@ -1,11 +1,11 @@
 format = "suchi-taxonomy/v1"
 id = "solo"
 version = 1
-name = "Personal filing"
+name = "Solo filing"
 license = "CC0-1.0"
 market = "global"
 language = "en"
-story = "One person's admin: ID, taxes, health, receipts. Compact 4-area tree."
+story = "One person's admin: ID, taxes, health, receipts. Compact 3-area tree."
 
 [[areas]]
 code = 10

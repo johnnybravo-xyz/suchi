@@ -21,6 +21,12 @@ Suchi combines SQLite, content-addressed storage, a Svelte interface, and an
 integration-friendly HTTP API. It needs no database server, queue, cache, or
 telemetry service.
 
+The content-addressed store keeps immutable original and derived bytes under
+their SHA-256 digest. Identical bytes can share one stored object, retries do not
+create another copy, and database rows can retain stable content while filing
+paths are rebuilt as views. It is not encryption or an access-control boundary;
+SQLite metadata and the API still decide who can see each document.
+
 Status: **v0.1.0-beta.2**, suitable for evaluation but not yet critical
 archives. The API and storage layout are stabilising but not frozen.
 
