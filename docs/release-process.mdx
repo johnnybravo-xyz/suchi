@@ -24,6 +24,13 @@ interface.
 
 Keep subjects brief and bodies focused.
 
+## Repository and tag authority
+
+GitHub `gh` hosts the release workflow, artifacts, images, and release notes. A
+release is not ready to dispatch until the signed annotated tag resolves to the
+same commit locally and on GitHub. Push the release commit and that exact tag;
+never recreate a tag independently after pushing it.
+
 ## Changelog and versions
 
 User-visible changes update the `[Unreleased]` section of
@@ -32,22 +39,24 @@ in the same pull request. Write for operators and call out required migration
 steps directly.
 
 A release normally adds at most one numbered database migration; never rewrite a
-published migration. For this taxonomy cutover, beta.2 at schema 0002 is the published
-upgrade baseline. Published 0001/0002 are unchanged; all unreleased mobile and
-taxonomy changes are consolidated in `0003_taxonomy_foundation.sql`. Verify fresh
-initialization and populated **0002 → 0003** upgrades, restart idempotence, preserved
-data and failed-upgrade rollback. Intermediate development schemas are not supported
-upgrade inputs. The rebuild marker must remain the first line of 0003.
-See [Architecture](/architecture#storage-and-transaction-invariants) for the runner.
+published migration. The current release target is the **final bridge beta**, not
+stable v1.0. Beta.2 at schema 0002 is its published upgrade baseline. Published
+0001/0002 remain unchanged; all unreleased mobile and taxonomy changes stay
+consolidated in `0003_taxonomy_foundation.sql`, whose rebuild marker remains its
+first line. Migration 0003 creates exactly one `schema_lineage` row named
+`final-beta-schema-3` and leaves `user_version = 3`.
 
-Before v1.0, plan a fresh-schema baseline and a final beta upgrade bridge. The final
-beta must bring supported older archives to the baseline's schema version. v1.0
-can then create that schema directly for a new database, accept an archive already
-at that version, and direct older archives to the tagged final beta first. Keep
-schema versions increasing independently of release versions. Remove the old
-upgrade SQL from the active runner only after testing exact schema equivalence
-and the complete upgrade path. This transition requires migration-runner support;
-renaming branches or resetting schema version numbers cannot implement it.
+Before tagging the bridge, verify fresh initialization, a populated **0002 →
+0003** upgrade, restart idempotence, preserved data, atomic failed-upgrade
+rollback, and restoration of a complete backup containing SQLite, blobs,
+credential key, and configuration. Release notes must identify this beta as the
+required bridge for existing beta archives and require a complete pre-upgrade
+backup. Retain its binaries, images, checksums, release notes, and exact migration
+hashes. Once tagged, migrations 0001–0003, the lineage value, and their release
+artifacts are frozen; any later database change requires another beta or belongs
+to the stable baseline. Intermediate development schemas are not supported
+upgrade inputs. See [Architecture](/architecture#storage-and-transaction-invariants)
+and [Backup and restore](/backup-restore#upgrade-and-rollback).
 
 Suchi follows SemVer:
 
@@ -90,20 +99,25 @@ Only the current pre-1.0 release is supported.
    affected by the release.
 6. Recheck public size, memory, startup, network, and feature claims against
    the accepted benchmark and the final build.
-7. Commit the release metadata, then create and push a signed annotated tag:
+7. Commit the release metadata on `main`, create a signed annotated tag, and push
+   the exact commit and tag to GitHub:
 
    ```sh
-   git tag -s v0.1.0 -m "suchi 0.1.0"
-   git push origin v0.1.0
+   export VERSION=v0.1.0-beta.3
+   git tag -s "$VERSION" -m "suchi ${VERSION#v}"
+   git tag -v "$VERSION"
+   git push gh main
+   git push gh "refs/tags/$VERSION"
    ```
 
 8. Dispatch the manual release workflow:
 
    ```sh
-   make release VERSION=v0.1.0
+   make release VERSION="$VERSION"
    ```
 
-   Use `PUBLISH=false` for an artifacts-only run.
+   This verifies that the local and GitHub tags resolve to the same commit. Use
+   `PUBLISH=false` for an artifacts-only run.
 
 The workflow builds standard and full multi-architecture images, cross-platform
 binaries, checksums, SBOMs, signatures, and GitHub release notes derived from
@@ -123,7 +137,7 @@ Plain local Docker builds omit that context and still compile from pinned source
 Release builds inject the version and source revision into the Go binary.
 Settings reads the identity from `/api/whoami`, showing only the version for
 tagged production releases. Unversioned builds use the source's
-`developmentVersion` (currently `v0.1.0-beta.2-dev`) and append the short revision
+`developmentVersion` and append the short revision
 when available. `suchi version` likewise retains an injected release version and
 adds the revision for development builds. Docker has no `.git` directory, so
 manual builds must pass `REVISION` to retain source identification and `VERSION`
@@ -140,7 +154,7 @@ injected: the image contents must agree with the Git tag.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.1.0-beta.1
+export VERSION=v0.1.0-beta.3
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"
@@ -212,14 +226,11 @@ docker buildx build \
   --push .
 ```
 
-After both builds are present in GHCR, create the versioned and moving beta
-manifests:
+After both builds are present in GHCR, create only the versioned manifest:
 
 ```sh
 docker buildx imagetools create \
   --tag "$IMAGE:$VERSION" \
-  --tag "$IMAGE:beta" \
-  --tag "$IMAGE:beta-standard" \
   "$IMAGE:$VERSION-amd64" \
   "$IMAGE:$VERSION-arm64"
 ```
@@ -232,6 +243,25 @@ docker pull --platform linux/amd64 "$IMAGE:$VERSION"
 docker pull --platform linux/arm64 "$IMAGE:$VERSION"
 ```
 
+Build and verify the full image the same way under `$IMAGE:$VERSION-full`.
+Complete image signing, checksums, SBOMs, release artifacts, and the GitHub
+Release before changing a moving channel. Only then promote the versioned
+manifests; for a beta:
+
+```sh
+docker buildx imagetools create \
+  --tag "$IMAGE:beta" \
+  --tag "$IMAGE:beta-standard" \
+  "$IMAGE:$VERSION"
+docker buildx imagetools create \
+  --tag "$IMAGE:beta-full" \
+  "$IMAGE:$VERSION-full"
+```
+
+Stable releases promote `latest` / `latest-full`; release candidates promote
+`rc` / `rc-full`. Never create a moving alias in the same command that first
+publishes the version manifest.
+
 The first successful native build seeds its architecture's registry cache.
 Later local releases import those caches, while the release workflow imports
 both native caches for runtime layers and maintains its own GitHub Actions cache.
@@ -242,9 +272,8 @@ until that pin or recipe changes. Cargo registry and target cache mounts also
 retain incremental work in the local BuildKit builder when a compile is
 interrupted before its image layer can be exported.
 
-The `full` image follows the same process with `--target full` and temporary
-tags ending in `-full-amd64` and `-full-arm64`; publish the final tags as
-`$VERSION-full` and `beta-full`. `beta-standard` is an explicit alias for the
+The `full` image uses `--target full` and temporary tags ending in
+`-full-amd64` and `-full-arm64`. `beta-standard` is an explicit alias for the
 standard `beta` image and is useful where the selected image variant should be
 obvious from configuration alone.
 
@@ -268,6 +297,8 @@ before calling the release complete.
   Its preflight runs fresh Go/UI checks, embedded bundle parity, and dependency
   advisory scans. Images wait for both binary matrices before publication and
   reuse the AnyDoc matrix's verified binaries rather than rebuilding them.
+  Release runs are serialized because moving image channels are shared mutable
+  state.
   Artifacts-only branch runs use `snapshot-<commit>` names and skip signing
   and publication; they still produce ordinary workflow artifacts and GHA caches.
 

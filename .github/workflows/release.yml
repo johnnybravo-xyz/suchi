@@ -4,11 +4,11 @@ name: release
 # a human still has to click "Run workflow" in the GitHub UI or run
 # `make release VERSION=vX.Y.Z` locally. The two-step cut:
 #
-#   1. git tag -s vX.Y.Z -m "suchi X.Y.Z"; git push origin vX.Y.Z
+#   1. git tag -s vX.Y.Z -m "suchi X.Y.Z"; git push gh vX.Y.Z
 #   2. click "Run workflow" against ref=vX.Y.Z (or `make release
 #      VERSION=vX.Y.Z`)
 #
-# The tag has to exist on origin first — the dispatch uses `ref` to
+# The tag has to exist on GitHub first — the dispatch uses `ref` to
 # check out the commit so every step downstream sees `github.ref_name
 # = vX.Y.Z`. See docs/release-process.mdx for the full runbook.
 
@@ -19,6 +19,12 @@ on:
         description: 'Publish a GitHub Release (true) or artifacts-only smoke test (false)'
         required: false
         default: 'true'
+
+# Image-channel aliases are shared mutable state. Serialize the entire workflow
+# so an older run cannot finish promotion after a newer release.
+concurrency:
+  group: suchi-release-publication
+  cancel-in-progress: false
 
 permissions:
   contents: write   # write to the GitHub release
@@ -55,16 +61,15 @@ jobs:
             exit 1
           fi
 
-          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           if [[ ! "$REF_NAME" =~ $semver ]]; then
             echo "publishing requires a SemVer tag such as v0.1.0 or v0.1.0-beta.1" >&2
             exit 1
           fi
 
           version=${REF_NAME#v}
-          without_build=${version%%+*}
-          if [[ "$without_build" == *-* ]]; then
-            prerelease=${without_build#*-}
+          if [[ "$version" == *-* ]]; then
+            prerelease=${version#*-}
             IFS=. read -ra identifiers <<< "$prerelease"
             for identifier in "${identifiers[@]}"; do
               if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != 0 ]]; then
@@ -193,20 +198,8 @@ jobs:
         with:
           syft-version: v1.51.0
 
-      # The standard image owns the unsuffixed tags.
-      - id: standard_tags
-        run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}"
-          if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.channel }}"
-            if [ "${{ needs.notes.outputs.channel }}" = "beta" ]; then
-              tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:beta-standard"
-            fi
-          fi
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
-
+      # Publish version tags first. Moving channel aliases are
+      # promoted only after the complete GitHub release succeeds.
       - name: build + push standard
         id: standard
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -227,21 +220,11 @@ jobs:
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-arm64
           cache-to: type=gha,scope=suchi-images,mode=max
-          tags: ${{ steps.standard_tags.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.notes.outputs.artifact_version }}
             org.opencontainers.image.licenses=AGPL-3.0
-
-      - id: full_tags
-        run: |
-          tags="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}-full"
-          if [ "${{ needs.notes.outputs.prerelease }}" = "false" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-full"
-          elif [ "${{ needs.notes.outputs.channel }}" != "stable" ]; then
-            tags="$tags,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.channel }}-full"
-          fi
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       - name: build + push full
         id: full
@@ -263,7 +246,7 @@ jobs:
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-amd64
             type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-arm64
           cache-to: type=gha,scope=suchi-images,mode=max
-          tags: ${{ steps.full_tags.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.notes.outputs.artifact_version }}-full
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.notes.outputs.artifact_version }}
@@ -463,6 +446,63 @@ jobs:
             /tmp/artifacts/suchi-standard.cyclonedx.json
             /tmp/artifacts/suchi-full.spdx.json
             /tmp/artifacts/suchi-full.cyclonedx.json
+
+  # -------------------------------------------------------------------
+  # promote: update moving channels only after the versioned images are
+  # signed, their artifacts are collected, and the GitHub release exists.
+  # A failed release therefore leaves the previous channel untouched.
+  # -------------------------------------------------------------------
+  promote:
+    if: inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    needs: [notes, images, collect]
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: promote image channels
+        env:
+          CHANNEL: ${{ needs.notes.outputs.channel }}
+          PRERELEASE: ${{ needs.notes.outputs.prerelease }}
+          STANDARD_DIGEST: ${{ needs.images.outputs.standard_digest }}
+          FULL_DIGEST: ${{ needs.images.outputs.full_digest }}
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          standard_tags=()
+          full_tags=()
+
+          if [ "$PRERELEASE" = "false" ]; then
+            standard_tags=(latest)
+            full_tags=(latest-full)
+          elif [ "$CHANNEL" = "beta" ]; then
+            standard_tags=(beta beta-standard)
+            full_tags=(beta-full)
+          elif [ "$CHANNEL" = "rc" ]; then
+            standard_tags=(rc)
+            full_tags=(rc-full)
+          else
+            echo "no moving image channel for prerelease '$GITHUB_REF_NAME'"
+            exit 0
+          fi
+
+          test -n "$STANDARD_DIGEST"
+          test -n "$FULL_DIGEST"
+          standard_args=()
+          for tag in "${standard_tags[@]}"; do
+            standard_args+=(--tag "$image:$tag")
+          done
+          full_args=()
+          for tag in "${full_tags[@]}"; do
+            full_args+=(--tag "$image:$tag")
+          done
+          docker buildx imagetools create --prefer-index=false \
+            "${standard_args[@]}" "$image@$STANDARD_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            "${full_args[@]}" "$image@$FULL_DIGEST"
 
 # ---- Verification recipe (copied into the release notes footer by hand
 # when we're happy with the shape; automate once it stabilizes) --------

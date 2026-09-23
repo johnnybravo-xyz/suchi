@@ -9,6 +9,8 @@ GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune 
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.874
+GITHUB_REMOTE ?= gh
+GITHUB_REPO ?= johnnybravo-xyz/suchi
 
 help:
 	@printf '%s\n' \
@@ -114,18 +116,30 @@ run: build
 clean:
 	rm -rf dist
 
-# Manually trigger the release workflow. Requires `gh` and an existing
-# origin tag (create with `git tag -s v0.1.0 && git push origin v0.1.0`).
+# Manually trigger the release workflow. Requires `gh` and an existing tag on
+# the GitHub remote (create with `git tag -s v0.1.0 && git push gh v0.1.0`).
 # `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` runs
 # the artifacts-only smoke path.
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)
-	@git rev-parse --verify "refs/tags/$(VERSION)" >/dev/null 2>&1 || \
-	  (echo "tag $(VERSION) not found locally — create it first: git tag -s $(VERSION) && git push origin $(VERSION)"; exit 1)
-	gh workflow run release.yml --ref $(VERSION) -f publish=$(or $(PUBLISH),true)
+	@set -eu; \
+	  local_commit="$$(git rev-parse --verify "refs/tags/$(VERSION)^{}" 2>/dev/null)" || { \
+	    echo "tag $(VERSION) not found locally — create it first: git tag -s $(VERSION)"; exit 1; \
+	  }; \
+	  remote_refs="$$(git ls-remote "$(GITHUB_REMOTE)" "refs/tags/$(VERSION)" "refs/tags/$(VERSION)^{}")" || { \
+	    echo "could not read tag $(VERSION) from GitHub remote $(GITHUB_REMOTE)"; exit 1; \
+	  }; \
+	  remote_commit="$$(printf '%s\n' "$$remote_refs" | awk -v ref="refs/tags/$(VERSION)^{}" '$$2 == ref { print $$1; exit }')"; \
+	  test -n "$$remote_commit" || { \
+	    echo "annotated tag $(VERSION) is not on GitHub — run: git push $(GITHUB_REMOTE) $(VERSION)"; exit 1; \
+	  }; \
+	  test "$$remote_commit" = "$$local_commit" || { \
+	    echo "GitHub tag $(VERSION) resolves to $$remote_commit, local tag resolves to $$local_commit"; exit 1; \
+	  }
+	gh workflow run release.yml --repo "$(GITHUB_REPO)" --ref "$(VERSION)" -f "publish=$(or $(PUBLISH),true)"
 	@echo "dispatched release.yml at $(VERSION) (publish=$(or $(PUBLISH),true))"
-	@echo "watch: gh run watch --workflow release.yml"
+	@echo "watch: gh run watch --repo $(GITHUB_REPO)"
 
 # Build the Svelte SPA and refresh core/ui/spa/dist (embedded into the
 # Go binary). Contributors who don't touch the UI do not need Bun; the
