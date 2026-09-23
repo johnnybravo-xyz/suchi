@@ -80,8 +80,19 @@ func MigrateSet(ctx context.Context, d *DB, set MigrationSet, log *slog.Logger) 
 			if err != sql.ErrNoRows {
 				return err
 			}
+			var coreVersion int
+			if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&coreVersion); err != nil {
+				return fmt.Errorf("read core user_version: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
 				return err
+			}
+			var afterCoreVersion int
+			if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&afterCoreVersion); err != nil {
+				return fmt.Errorf("re-read core user_version: %w", err)
+			}
+			if afterCoreVersion != coreVersion {
+				return fmt.Errorf("changed core user_version from %d to %d", coreVersion, afterCoreVersion)
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO _suchi_extension_migrations(component, version, checksum, applied_at) VALUES (?, ?, ?, ?)`, set.Component, migration.Version, migrationChecksum(migration), time.Now().Unix()); err != nil {
 				return err

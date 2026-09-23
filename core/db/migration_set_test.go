@@ -145,6 +145,29 @@ func TestMigrationSetRejectsDefinitionsBeforeChanges(t *testing.T) {
 	}
 }
 
+func TestMigrationSetCannotChangeCoreSchemaVersion(t *testing.T) {
+	for _, rebuild := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "rebuild"}[rebuild], func(t *testing.T) {
+			d, log := openSetDB(t)
+			if _, err := d.ExecWrite(t.Context(), `PRAGMA user_version = 7`); err != nil {
+				t.Fatal(err)
+			}
+			set := db.MigrationSet{Component: "example", Migrations: []db.Migration{{
+				Version:       1,
+				Name:          "bad_core_version",
+				SQL:           `CREATE TABLE must_rollback(id INTEGER); PRAGMA user_version = 99;`,
+				RebuildTables: rebuild,
+			}}}
+			if err := db.MigrateSet(t.Context(), d, set, log); err == nil || !strings.Contains(err.Error(), "changed core user_version") {
+				t.Fatalf("core version mutation error = %v", err)
+			}
+			assertSchemaVersion(t, d, 7)
+			assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE name='must_rollback'`, 0)
+			assertMigrationScalar(t, d, `SELECT count(*) FROM _suchi_extension_migrations WHERE component='example'`, 0)
+		})
+	}
+}
+
 func TestPublishedCoreOnlyDatabaseUpgradesWithMigrationSet(t *testing.T) {
 	d, log := openSetDB(t)
 	core, err := db.LoadMigrations(migrations.FS, ".")
