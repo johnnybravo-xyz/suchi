@@ -104,7 +104,7 @@ func TestTaxonomyExportPreservesNamedAndTitleFilters(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := automations.ApplyOnDocumentAdded(ctx, dest, log, id); err != nil {
+				if err := automations.ApplyOnDocumentAdded(ctx, dest, testActions(t), log, id); err != nil {
 					t.Fatal(err)
 				}
 				var title string

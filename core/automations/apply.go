@@ -62,15 +62,15 @@ type docSnapshot struct {
 //
 // Action failures roll back that automation and return to the caller so the
 // surrounding job or request can report the failure accurately.
-func ApplyOnDocumentAdded(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
-	_, err := ApplyOnDocumentAddedCount(ctx, d, log, docID, 0)
+func ApplyOnDocumentAdded(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger, docID int64) error {
+	_, err := ApplyOnDocumentAddedCount(ctx, d, actions, log, docID, 0)
 	return err
 }
 
 // ApplyOnDocumentAddedCount is used by explicit refiles, where callers need
 // to report how many automations matched the document.
-func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, log *slog.Logger, docID, actorID int64) (int, error) {
-	s := &Store{DB: d}
+func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger, docID, actorID int64) (int, error) {
+	s := New(d, actions)
 	var systemID int64
 	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
 		return 0, err
@@ -87,13 +87,13 @@ func ApplyOnDocumentAddedCount(ctx context.Context, d *db.DB, log *slog.Logger, 
 		return 0, fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx := Context{DocID: docID}
-	return runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentAdded, actorID)
+	return runMatching(ctx, d, actions, log, atms, evCtx, snap, TriggerDocumentAdded, actorID)
 }
 
 // ApplyOnDocumentUpdated mirrors the above for the update trigger.
 // Called from PATCH /api/documents/{id} handlers after the write lands.
-func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, docID int64) error {
-	s := &Store{DB: d}
+func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger, docID int64) error {
+	s := New(d, actions)
 	var systemID int64
 	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
 		return err
@@ -110,7 +110,7 @@ func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, doc
 		return fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx := Context{DocID: docID}
-	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerDocumentUpdated, 0)
+	_, err = runMatching(ctx, d, actions, log, atms, evCtx, snap, TriggerDocumentUpdated, 0)
 	return err
 }
 
@@ -119,8 +119,8 @@ func ApplyOnDocumentUpdated(ctx context.Context, d *db.DB, log *slog.Logger, doc
 // post-ingest handler with whatever context they have — filename,
 // source path, mail-rule id. Any missing field disables the
 // corresponding filter without erroring.
-func ApplyOnConsumption(ctx context.Context, d *db.DB, log *slog.Logger, docID int64, evCtx Context) error {
-	s := &Store{DB: d}
+func ApplyOnConsumption(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger, docID int64, evCtx Context) error {
+	s := New(d, actions)
 	var systemID int64
 	if err := d.Read.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ?`, docID).Scan(&systemID); err != nil {
 		return err
@@ -137,11 +137,11 @@ func ApplyOnConsumption(ctx context.Context, d *db.DB, log *slog.Logger, docID i
 		return fmt.Errorf("automations: snapshot: %w", err)
 	}
 	evCtx.DocID = docID
-	_, err = runMatching(ctx, d, log, atms, evCtx, snap, TriggerConsumption, 0)
+	_, err = runMatching(ctx, d, actions, log, atms, evCtx, snap, TriggerConsumption, 0)
 	return err
 }
 
-func runMatching(ctx context.Context, d *db.DB, log *slog.Logger,
+func runMatching(ctx context.Context, d *db.DB, actions *Registry, log *slog.Logger,
 	atms []Automation, evCtx Context, snap *docSnapshot, t TriggerType, actorID int64) (int, error) {
 
 	matchedCount := 0
@@ -173,7 +173,7 @@ func runMatching(ctx context.Context, d *db.DB, log *slog.Logger,
 				}
 			}
 			for _, a := range atm.Actions {
-				if err := runAction(ctx, tx, evCtx.DocID, a); err != nil {
+				if err := actions.execute(ctx, tx, evCtx.DocID, a); err != nil {
 					return fmt.Errorf("action %q: %w", a.Kind, err)
 				}
 			}
@@ -307,189 +307,6 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 		s.TagIDs[id] = true
 	}
 	return &s, rows.Err()
-}
-
-// runAction dispatches on Kind. Metadata actions converge when rerun.
-func runAction(ctx context.Context, tx *sql.Tx, docID int64, a Action) error {
-	var systemID int64
-	// Discard may revisit a trashed document, but metadata actions still require
-	// a live one. Keep both admission and reference validation in this writer.
-	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM documents WHERE id = ? AND (trashed_at IS NULL OR ? = 'discard')`, docID, a.Kind).Scan(&systemID); err != nil {
-		return err
-	}
-	if err := validateAction(ctx, tx, systemID, a); err != nil {
-		return err
-	}
-	switch a.Kind {
-	case "assign_title":
-		tpl, _ := a.Params["template"].(string)
-		if tpl == "" {
-			return errors.New("assign_title: template required")
-		}
-		title, err := expandTitle(ctx, tx, docID, tpl)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx,
-			`UPDATE documents SET title = ? WHERE id = ?`, title, docID)
-		return err
-
-	case "assign_tags":
-		ids := intList(a.Params["tag_ids"])
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO document_tags(document_id, tag_id) VALUES (?, ?)
-				 ON CONFLICT(document_id, tag_id) DO UPDATE SET classifier_owned = 0`,
-				docID, id); err != nil {
-				return err
-			}
-		}
-		return nil
-
-	case "assign_correspondent":
-		id := intVal(a.Params["correspondent_id"])
-		if id == 0 {
-			return errors.New("assign_correspondent: correspondent_id required")
-		}
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET correspondent_id = ? WHERE id = ?`, id, docID)
-		return err
-
-	case "assign_document_type":
-		id := intVal(a.Params["document_type_id"])
-		if id == 0 {
-			return errors.New("assign_document_type: document_type_id required")
-		}
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET document_type_id = ? WHERE id = ?`, id, docID)
-		return err
-
-	case "assign_jd_category":
-		id := intVal(a.Params["jd_category_id"])
-		if id == 0 {
-			return errors.New("assign_jd_category: jd_category_id required")
-		}
-		// Verify the category exists so a stale automation doesn't
-		// silently move docs to a deleted category id and dangle the FK.
-		var exists int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT 1 FROM jd_categories WHERE system_id = ? AND id = ?`, systemID, id).Scan(&exists); err != nil {
-			return fmt.Errorf("assign_jd_category: unknown category id %d", id)
-		}
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET jd_category_id = ? WHERE id = ?`, id, docID)
-		return err
-
-	case "assign_storage_path":
-		id := intVal(a.Params["storage_path_id"])
-		if id == 0 {
-			return errors.New("assign_storage_path: storage_path_id required")
-		}
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET storage_path_id = ? WHERE id = ?`, id, docID)
-		return err
-
-	case "assign_owner":
-		id := intVal(a.Params["owner_id"])
-		if id == 0 {
-			return errors.New("assign_owner: owner_id required")
-		}
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET owner_id = ? WHERE id = ?`, id, docID)
-		return err
-
-	case "remove_tags":
-		ids := intList(a.Params["tag_ids"])
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?`,
-				docID, id); err != nil {
-				return err
-			}
-		}
-		// A validated rule records removal intent even when no row existed or
-		// only a classifier-owned marker was deleted (neither fires the human
-		// tag trigger). In-flight and queued suggestions must become stale.
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET tags_revision = tags_revision + 1 WHERE id = ?`, docID)
-		return err
-
-	case "remove_document_type":
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET document_type_id = NULL WHERE id = ?`, docID)
-		return err
-
-	case "remove_storage_path":
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET storage_path_id = NULL WHERE id = ?`, docID)
-		return err
-
-	case "remove_correspondents":
-		// The doc has one primary correspondent_id column and, via
-		// document_correspondents, zero or more secondary correspondents
-		// with roles. This action clears both — matches the "remove all"
-		// intent the config typically wants.
-		ids := intList(a.Params["correspondent_ids"])
-		if len(ids) == 0 {
-			// No ids given → clear the primary and every junction row.
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE documents SET correspondent_id = NULL WHERE id = ?`, docID); err != nil {
-				return err
-			}
-			_, err := tx.ExecContext(ctx,
-				`DELETE FROM document_correspondents WHERE document_id = ?`, docID)
-			return err
-		}
-		// With ids: unset primary if it matches; drop junction rows for
-		// those correspondent ids.
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE documents SET correspondent_id = NULL WHERE id = ? AND correspondent_id = ?`,
-				docID, id); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM document_correspondents WHERE document_id = ? AND correspondent_id = ?`,
-				docID, id); err != nil {
-				return err
-			}
-		}
-		// A targeted removal is explicit intent even if both links were absent.
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET correspondent_revision = correspondent_revision + 1 WHERE id = ?`, docID)
-		return err
-
-	case "assign_custom_field":
-		fieldID := intVal(a.Params["field_id"])
-		if fieldID == 0 {
-			return errors.New("assign_custom_field: field_id required")
-		}
-		return upsertCustomField(ctx, tx, docID, fieldID, a.Params["value"])
-
-	case "remove_custom_field":
-		fieldID := intVal(a.Params["field_id"])
-		if fieldID == 0 {
-			return errors.New("remove_custom_field: field_id required")
-		}
-		_, err := tx.ExecContext(ctx,
-			`DELETE FROM document_custom_field_values WHERE document_id = ? AND field_id = ?`,
-			docID, fieldID)
-		return err
-
-	case "discard":
-		// Same soft-trash the SPA's POST /api/documents/{id}/trash uses:
-		// set trashed_at; the blob stays in the CAS for `suchi gc`. No
-		// shared helper today — the HTTP handler does the UPDATE inline
-		// and we can't import core/api from here. Guarded by trashed_at
-		// IS NULL so re-firing on an already-trashed doc is a no-op.
-		now := time.Now().Unix()
-		_, err := tx.ExecContext(ctx,
-			`UPDATE documents SET trashed_at = ?, updated_at = ?
-			 WHERE id = ? AND trashed_at IS NULL`,
-			now, now, docID)
-		return err
-	}
-	return fmt.Errorf("unknown action kind %q", a.Kind)
 }
 
 // upsertCustomField uses the same validation and typed writer as the document

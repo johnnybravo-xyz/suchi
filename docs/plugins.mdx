@@ -25,6 +25,82 @@ instance-wide work. A documentless index refresh or approval proposal is still
 system-owned. `Principal.TokenSystemID` is the authenticated token's binding, not
 the browser's selected context; session principals leave it zero.
 
+## Application assembly
+
+Compiled distributions can import `github.com/johnnybravo-xyz/suchi/distro/app`
+and call `app.Run(ctx, options)`. The caller resolves `config.Config` (normally
+with `config.LoadFile` then `config.Load`), supplies its logger/build identity,
+and owns signal cancellation and process exit codes. The community command uses
+this same entry point. No copy of the command's server wiring is required.
+
+```go
+err := app.Run(ctx, app.Options{
+    Config: *cfg,
+    Log: log,
+    BuildVersion: version,
+    BuildRevision: revision,
+    MigrationSets: []db.MigrationSet{{
+        Component: "example",
+        Migrations: []db.Migration{{
+            Version: 1,
+            Name: "receipts",
+            SQL: `CREATE TABLE example_receipts (
+                document_id INTEGER PRIMARY KEY REFERENCES documents(id)
+            )`,
+        }},
+    }},
+    Actions: []automations.ActionDefinition{receiptAction},
+    Configure: func(services *app.Services) error {
+        services.Mux.Handle("POST /api/example/run", exampleHandler{
+            DB: services.DB,
+            Jobs: services.Jobs,
+        })
+        services.Jobs.Register(exampleSubscriber{DB: services.DB})
+        return nil
+    },
+})
+```
+
+Here `receiptAction` is a compiled definition as described in
+[Automations](/automations#compiled-actions). Options add to the built-ins;
+duplicate kinds fail rather than replacing them. Migrations finish before the
+registry is built. Core routes and subscribers are then assembled before
+`Configure` runs exactly once. No dispatcher, watcher, scheduler, retention
+loop, mail supervisor or HTTP listener has started at that point. A callback
+error aborts startup and closes the database without starting runtime work. No
+extension options are needed for a complete local archive.
+
+`Services` contains only the instance's `DB`, HTTP `Mux`, durable `Jobs`
+dispatcher, `Approvals` engine, immutable `Actions` registry and `Log`. Compiled
+distributions use it to add native routes and register durable subscribers.
+The fields are instance-owned; registration in one assembled application does
+not affect another. Configure routes pass through the normal middleware, but
+they are absent from the explicit token allowlist and therefore remain
+session-only. Route handlers still own their role, ACL and system checks.
+
+`MigrationSet` holds a stable component name and the complete ordered
+`[]db.Migration` history, starting at version 1 without gaps. Names match
+`[a-z][a-z0-9_-]{0,63}`; `core` is reserved. SQL cannot be empty. Keep applied
+SQL and `RebuildTables` unchanged; add a new version for changes. Each component
+advances independently in `_suchi_extension_migrations`, with checksums and
+application timestamps. Public core versions remain in `PRAGMA user_version`;
+never append or renumber extension steps into that sequence. An unchanged rerun
+is a no-op; drift or a binary missing an applied version fails before new steps
+in that set. Omitting a component does not remove its stored schema/history.
+
+Migration SQL and callbacks are trusted compiled code. Migration SQL must not
+manage transactions, write `user_version`, or alter the reserved `_suchi_` ledger
+namespace. Each step uses the sole writer and records its ledger row atomically.
+Rebuild migrations retain core's foreign-key checking/restoration convention.
+A failed step leaves earlier completed versions intact and rolls back its own
+schema, data and applied record. See [Backend architecture](/architecture) for
+storage and boot ownership.
+
+This is one compile-time composition callback, not runtime plugin loading or a
+general registration framework. It does not expose the CAS, API server or a
+service lookup mechanism. The lower-level subscriber/authenticator/sink
+contracts below remain explicit code dependencies.
+
 ## Subscriber contract
 
 ```go

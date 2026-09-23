@@ -14,7 +14,7 @@ import (
 
 func TestRenderOnlyRefileSelectsOneSystemAcrossOwners(t *testing.T) {
 	d, log := refileTestDB(t)
-	stats, err := All(t.Context(), d, log, Options{SystemID: 2, SkipAutomations: true})
+	stats, err := All(t.Context(), d, testActions(t), log, Options{SystemID: 2, SkipAutomations: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestRenderOnlyRefileSelectsOneSystemAcrossOwners(t *testing.T) {
 	if len(ids) != 2 || ids[0] != 2 || ids[1] != 3 {
 		t.Fatalf("foreign or missing documents: %v", ids)
 	}
-	if _, err := All(t.Context(), d, log, Options{SkipAutomations: true}); err == nil {
+	if _, err := All(t.Context(), d, testActions(t), log, Options{SkipAutomations: true}); err == nil {
 		t.Fatal("unqualified refile admitted")
 	}
 }
@@ -94,7 +94,7 @@ func TestRefileRejectsActorLosingAdminBeforeWriterTurn(t *testing.T) {
 			pause := refilePauseWriter{make(chan struct{}), make(chan struct{})}
 			result := make(chan error, 1)
 			go func() {
-				_, err := All(t.Context(), d, slog.New(slog.NewTextHandler(pause, nil)), Options{SystemID: 2, ActorID: 1, SkipAutomations: true})
+				_, err := All(t.Context(), d, testActions(t), slog.New(slog.NewTextHandler(pause, nil)), Options{SystemID: 2, ActorID: 1, SkipAutomations: true})
 				result <- err
 			}()
 			<-pause.reached
@@ -114,7 +114,7 @@ func TestRefileRejectsActorLosingAdminBeforeWriterTurn(t *testing.T) {
 				t.Fatalf("rejected refile left %d jobs", jobs)
 			}
 			// Trusted local CLI remains an explicit separate actor, not a stale API role.
-			stats, err := All(t.Context(), d, log, Options{SystemID: 2, SkipAutomations: true})
+			stats, err := All(t.Context(), d, testActions(t), log, Options{SystemID: 2, SkipAutomations: true})
 			if err != nil || stats.RenderEnqueued != 2 {
 				t.Fatalf("trusted CLI refile failed: %+v %v", stats, err)
 			}

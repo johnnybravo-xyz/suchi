@@ -23,13 +23,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"time"
 
@@ -38,13 +36,12 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
-	"github.com/johnnybravo-xyz/suchi/core/emailaccounts"
 	"github.com/johnnybravo-xyz/suchi/core/gc"
-	"github.com/johnnybravo-xyz/suchi/core/ingest/emailwatch/oauth"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/distro/internal/diagnostics"
 )
 
 func runDoctor(args []string) int {
@@ -96,7 +93,7 @@ func runDoctor(args []string) int {
 
 	// Egress surface
 	fmt.Println("== egress ==")
-	egress, egressErr := enumerateEgress(ctx, d, cfg, resolveDoctorLLMEndpoint(ctx, d, cfg))
+	egress, egressErr := diagnostics.EnumerateEgress(ctx, d, cfg, resolveDoctorLLMEndpoint(ctx, d, cfg))
 	if len(egress) == 0 {
 		fmt.Println("  outbound: none")
 	} else {
@@ -157,7 +154,7 @@ func runDoctor(args []string) int {
 
 	// Last imported file is provenance, not a claim about the merged archive.
 	fmt.Println("== taxonomy ==")
-	ids, terr := filingSystemIDs(ctx, d.Read)
+	ids, terr := systems.IDs(ctx, d.Read)
 	if terr != nil {
 		fmt.Printf("  read systems: %v\n", terr)
 	}
@@ -373,43 +370,6 @@ func humanBytes(n int64) string {
 	}
 }
 
-// enumerateEgress is shared by the boot log and doctor so both report the
-// same effective, redacted surface, including integrations saved in SQLite.
-func enumerateEgress(ctx context.Context, d *db.DB, cfg *config.Config, llmEndpointURL string) ([]string, error) {
-	seen := map[string]bool{}
-	var out []string
-	add := func(value string) {
-		if value != "" && !seen[value] {
-			seen[value] = true
-			out = append(out, value)
-		}
-	}
-	if cfg.OIDCIssuerURL != "" {
-		add("oidc.discovery " + redactURL(cfg.OIDCIssuerURL, true))
-	}
-	var queryErrs []error
-	accounts, err := emailaccounts.ListEnabled(ctx, d)
-	if err != nil {
-		queryErrs = append(queryErrs, fmt.Errorf("mailboxes: %w", err))
-	} else {
-		for _, account := range accounts {
-			add(fmt.Sprintf("imap %s (%s)", net.JoinHostPort(account.Host, fmt.Sprint(account.Port)), account.Name))
-		}
-	}
-	clientID := strings.TrimSpace(cfg.IngestIMAPOAuthClientIDMicrosoft)
-	if !oauth.UsableClientID(clientID) {
-		clientID = oauth.DefaultClientID
-	}
-	if oauth.UsableClientID(clientID) {
-		add("oauth.microsoft " + oauth.Authority)
-	}
-	if llmEndpointURL != "" {
-		add("llm-classifier " + redactURL(llmEndpointURL, false))
-	}
-	sort.Strings(out)
-	return out, errors.Join(queryErrs...)
-}
-
 func resolveDoctorLLMEndpoint(ctx context.Context, d *db.DB, cfg *config.Config) string {
 	endpoint, ack, disabled := cfg.LLMEndpointURL, cfg.LLMEgressAck, false
 	var storedEndpoint string
@@ -426,25 +386,6 @@ func resolveDoctorLLMEndpoint(ctx context.Context, d *db.DB, cfg *config.Config)
 		return ""
 	}
 	return endpoint
-}
-
-// redactURL removes credentials, query strings, and fragments. keepPath is
-// useful for tenant-scoped OIDC issuers; integration destinations only need
-// their origin in logs and diagnostics.
-func redactURL(raw string, keepPath bool) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "<invalid-url>"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	u.ForceQuery = false
-	u.Fragment = ""
-	if !keepPath {
-		u.Path = ""
-		u.RawPath = ""
-	}
-	return u.String()
 }
 
 func checkWritable(dir string) error {

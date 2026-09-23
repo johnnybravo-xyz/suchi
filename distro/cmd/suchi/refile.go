@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
@@ -72,7 +73,12 @@ func runRefile(args []string) int {
 		fmt.Fprintf(os.Stderr, "system: %v\n", err)
 		return 1
 	}
-	stats, err := refile.All(ctx, d, log, refile.Options{
+	actions, err := automations.NewRegistry(automations.BuiltinActions())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	stats, err := refile.All(ctx, d, actions, log, refile.Options{
 		SystemID:        system.ID,
 		SkipAutomations: *skipAutomations,
 		SkipRender:      *skipRender,

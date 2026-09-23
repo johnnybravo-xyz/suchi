@@ -1,7 +1,6 @@
-package main
+package app
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -16,7 +15,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/distro/demo"
 )
 
-func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, apiServer *api.Server, anon *demo.AnonAuthenticator, issueSession func(http.ResponseWriter, *http.Request, int64, time.Duration) error, log *slog.Logger) (*httpx.RateLimit, error) {
+func configureDemo(cfg *config.Config, d *db.DB, apiServer *api.Server, anon *demo.AnonAuthenticator, issueSession func(http.ResponseWriter, *http.Request, int64, time.Duration) error, log *slog.Logger) (*httpx.RateLimit, error) {
 	apiServer.SetDemo(api.DemoConfig{
 		Enabled:      cfg.DemoMode,
 		CookieSecure: strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://"),
@@ -43,10 +42,6 @@ func configureDemo(ctx context.Context, cfg *config.Config, d *db.DB, apiServer 
 		"global_rps", cfg.DemoGlobalRPS,
 		"body_limit_bytes", cfg.BodyLimit,
 		"scratch_ttl_minutes", cfg.DemoScratchTTLMinutes)
-	go demo.Loop(ctx, demo.TickerOptions{
-		DB: d, Log: log,
-		TTL: time.Duration(cfg.DemoScratchTTLMinutes) * time.Minute,
-	})
 	apiServer.SetDemoMinter(anon.Mint)
 	apiServer.SetDemoScratchProvisioner(func(w http.ResponseWriter, r *http.Request, email, displayName string) (int64, error) {
 		rctx := r.Context()

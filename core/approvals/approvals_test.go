@@ -392,16 +392,6 @@ func TestEngineCancel_UnknownRun(t *testing.T) {
 	}
 }
 
-func TestDefault_UnsetErrors(t *testing.T) {
-	// Ensure any prior test that ran SetDefault is cleared. Package
-	// singleton is deliberate — see approvals.SetDefault docstring.
-	approvals.SetDefault(nil)
-	_, err := approvals.Start(context.Background(), 1, "x", 0, nil, adminPrincipal())
-	if err != approvals.ErrEngineNotConfigured {
-		t.Fatalf("want ErrEngineNotConfigured, got %v", err)
-	}
-}
-
 func adminPrincipal() *pluginapi.Principal {
 	return &pluginapi.Principal{Kind: "user", UserID: 1, Role: "admin"}
 }

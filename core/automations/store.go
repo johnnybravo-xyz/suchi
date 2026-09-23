@@ -14,17 +14,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/johnnybravo-xyz/suchi/core/customfield"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 // Store is the DB façade. Constructed once at boot.
 type Store struct {
-	DB *db.DB
+	DB      *db.DB
+	actions *Registry
 }
 
-func New(d *db.DB) *Store { return &Store{DB: d} }
+func New(d *db.DB, actions *Registry) *Store { return &Store{DB: d, actions: actions} }
 
 // List returns every automation with its triggers and actions inlined.
 func (s *Store) List(ctx context.Context, systemID int64) ([]Automation, error) {
@@ -210,7 +210,7 @@ func (s *Store) CreateInTx(ctx context.Context, tx *sql.Tx, systemID int64, a Au
 	if err := ValidateTriggers(a.Triggers); err != nil {
 		return 0, err
 	}
-	if err := s.validateActions(ctx, systemID, a.Actions); err != nil {
+	if err := s.validateActions(ctx, tx, systemID, a.Actions); err != nil {
 		return 0, err
 	}
 	if match, err := s.findMatching(ctx, systemID, &a, 0); err != nil {
@@ -233,7 +233,7 @@ func (s *Store) CreateInTx(ctx context.Context, tx *sql.Tx, systemID int64, a Au
 	if err := writeTriggers(ctx, tx, newID, a.Triggers, now); err != nil {
 		return 0, err
 	}
-	if err := writeActions(ctx, tx, newID, a.Actions, now); err != nil {
+	if err := s.writeActions(ctx, tx, newID, a.Actions, now); err != nil {
 		return 0, err
 	}
 	return newID, nil
@@ -280,7 +280,7 @@ func (s *Store) UpdateInTx(ctx context.Context, tx *sql.Tx, systemID, id int64, 
 	if err := ValidateTriggers(post.Triggers); err != nil {
 		return 0, err
 	}
-	if err := s.validateActions(ctx, systemID, post.Actions); err != nil {
+	if err := s.validateActions(ctx, tx, systemID, post.Actions); err != nil {
 		return 0, err
 	}
 	if match, err := s.findMatching(ctx, systemID, post, id); err != nil {
@@ -353,7 +353,7 @@ func (s *Store) applyFieldUpdate(ctx context.Context, tx *sql.Tx, id int64, p Au
 			`DELETE FROM automation_actions WHERE automation_id = ?`, id); err != nil {
 			return err
 		}
-		if err := writeActions(ctx, tx, id, *p.Actions, now); err != nil {
+		if err := s.writeActions(ctx, tx, id, *p.Actions, now); err != nil {
 			return err
 		}
 	}
@@ -416,7 +416,7 @@ func (s *Store) forkPresetRow(ctx context.Context, tx *sql.Tx, systemID int64, o
 	if err := writeTriggers(ctx, tx, newID, post.Triggers, now); err != nil {
 		return 0, err
 	}
-	if err := writeActions(ctx, tx, newID, post.Actions, now); err != nil {
+	if err := s.writeActions(ctx, tx, newID, post.Actions, now); err != nil {
 		return 0, err
 	}
 	// Soft-disable the preset original — the operator's edit
@@ -623,13 +623,13 @@ func normalizedTriggerType(trigger Trigger) TriggerType {
 	return TriggerFromCode(trigger.TypeCode)
 }
 
-func writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts []Action, now int64) error {
+func (s *Store) writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts []Action, now int64) error {
 	var systemID int64
 	if err := tx.QueryRowContext(ctx, `SELECT system_id FROM automations WHERE id = ?`, atmID).Scan(&systemID); err != nil {
 		return err
 	}
 	for i, a := range acts {
-		if err := validateAction(ctx, tx, systemID, a); err != nil {
+		if err := s.actions.validate(ctx, tx, systemID, a); err != nil {
 			return err
 		}
 		if a.Kind == "" {
@@ -657,87 +657,11 @@ func writeActions(ctx context.Context, tx *sql.Tx, atmID int64, acts []Action, n
 	return nil
 }
 
-func (s *Store) validateActions(ctx context.Context, systemID int64, actions []Action) error {
+func (s *Store) validateActions(ctx context.Context, tx *sql.Tx, systemID int64, actions []Action) error {
 	for i, action := range actions {
-		if err := validateAction(ctx, s.DB.Read, systemID, action); err != nil {
+		if err := s.actions.validate(ctx, tx, systemID, action); err != nil {
 			return fmt.Errorf("automations: action %d (%q): %w", i+1, action.Kind, err)
 		}
-	}
-	return nil
-}
-
-func validateAction(ctx context.Context, d systems.Queryer, systemID int64, action Action) error {
-	params := action.Params
-	if params == nil {
-		params = map[string]any{}
-	}
-
-	switch action.Kind {
-	case "assign_title":
-		template, _ := params["template"].(string)
-		if strings.TrimSpace(template) == "" {
-			return errors.New("template required")
-		}
-	case "assign_tags", "remove_tags":
-		ids, err := requiredActionIDs(params, "tag_ids")
-		if err != nil {
-			return err
-		}
-		return validateReferences(ctx, d, systemID, "tags", ids)
-	case "assign_correspondent":
-		return validateActionReference(ctx, d, systemID, params, "correspondent_id", "correspondents")
-	case "assign_document_type":
-		return validateActionReference(ctx, d, systemID, params, "document_type_id", "document_types")
-	case "assign_jd_category":
-		return validateActionReference(ctx, d, systemID, params, "jd_category_id", "jd_categories")
-	case "assign_storage_path":
-		return validateActionReference(ctx, d, systemID, params, "storage_path_id", "storage_paths")
-	case "assign_owner":
-		return validateActionReference(ctx, d, systemID, params, "owner_id", "users")
-	case "assign_custom_field":
-		value, ok := params["value"]
-		if !ok || value == nil {
-			return errors.New("value required")
-		}
-		fieldID, err := requiredActionID(params, "field_id")
-		if err != nil {
-			return err
-		}
-		var dataType, extra string
-		if err := d.QueryRowContext(ctx,
-			`SELECT data_type, extra_data FROM custom_fields WHERE system_id = ? AND id = ?`, systemID, fieldID).
-			Scan(&dataType, &extra); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("unknown custom_fields id %d", fieldID)
-			}
-			return err
-		}
-		typed, err := customfield.Lookup(dataType).Validate(json.RawMessage(extra), value)
-		if err != nil {
-			return fmt.Errorf("value: %w", err)
-		}
-		if dataType == "documentlink" && typed.(int64) != 0 {
-			return validateReferences(ctx, d, systemID, "documents", []int64{typed.(int64)})
-		}
-		return nil
-	case "remove_correspondents":
-		value, ok := params["correspondent_ids"]
-		if !ok || value == nil {
-			return nil
-		}
-		ids, err := actionIDs(value)
-		if err != nil {
-			return fmt.Errorf("correspondent_ids: %w", err)
-		}
-		return validateReferences(ctx, d, systemID, "correspondents", ids)
-	case "remove_custom_field":
-		return validateActionReference(ctx, d, systemID, params, "field_id", "custom_fields")
-	case "remove_document_type", "remove_storage_path", "discard":
-		return nil
-	case "":
-		return errors.New("kind required")
-	default:
-		return fmt.Errorf("unsupported kind %q", action.Kind)
 	}
 	return nil
 }

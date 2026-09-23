@@ -141,9 +141,40 @@ payload and error contracts live in [API](/api).
 Every successful metadata mutation is audited. Failures include the document
 and action kind in structured logs without document content.
 
+## Compiled actions
+
+`core/automations.ActionDefinition` pairs a unique `Kind`, `Validate` callback and
+`Execute` callback. `NewRegistry` copies definitions into an immutable instance;
+there is no default registry or runtime registration method. Assembly explicitly
+combines `BuiltinActions()` with `app.Options.Actions`, then passes the same
+registry to rule storage, API document updates, ingestion and refiles. Standalone
+callers must supply their registry too; unknown kinds retain `unsupported kind`
+errors. The existing builder schema continues to advertise the community visual
+builder's subset; compiled actions can be configured through the JSON API.
+
+`Validate(ctx, tx, systemID, params)` reads configuration/references in the
+caller's transaction, both on save and immediately before execution.
+`Execute(ctx, tx, ActionTarget{DocID, SystemID}, params)` receives the current
+live document's system and the same writer transaction as every action in that
+rule. Only the built-in idempotent discard may revisit Trash. A failure rolls
+back the entire rule, including extension state and enqueued jobs. Preserve
+idempotence with domain constraints/receipts because jobs and refiles can retry.
+Callbacks must be concurrency-safe, and validation must only read. Do not commit
+or roll back the supplied transaction, re-enter the writer, or call network or
+subprocess services while holding it.
+
+Callbacks are trusted code compiled by the distribution, not scripts supplied by
+an API user. Rule CRUD still requires the existing administrator boundary;
+document admission, system ownership, ACLs, approvals and audit remain Suchi's
+responsibility. A target is not a principal or permission to operate on other
+documents. New actions must validate their references within that system and
+preserve the callers' authority. This registry does not add inferred actions,
+external workers, or a new approval path. See [Plugins](/plugins#application-assembly).
+
 ## Current limits
 
 - Filters are structural plus title/content regexes, not an arbitrary
   expression language.
 - There are no scheduled triggers or built-in user-notification actions.
-- Custom code cannot run as an automation action. Use a typed plugin instead.
+- Runtime scripts cannot be installed as actions; additional handlers require
+  a compiled distribution.

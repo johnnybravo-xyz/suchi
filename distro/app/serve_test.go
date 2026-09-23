@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -238,7 +238,7 @@ func TestBuildHTTPHandlerObservesRateLimitRejections(t *testing.T) {
 
 func TestRegisterOperationalRoutesProtectsMetricsAndGatesPprof(t *testing.T) {
 	mux := http.NewServeMux()
-	registerOperationalRoutes(mux, nil, httpx.NewMetrics(), false, testLogger())
+	registerOperationalRoutes(mux, nil, httpx.NewMetrics(), false, 0, testLogger())
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))

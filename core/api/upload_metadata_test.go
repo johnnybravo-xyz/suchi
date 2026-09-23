@@ -31,7 +31,7 @@ func newUploadTestServer(t *testing.T, d *db.DB, cas *blob.CAS) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(d, cas, retention, log)
+	s, err := New(d, cas, retention, testActions(t), log)
 	if err != nil {
 		t.Fatal(err)
 	}

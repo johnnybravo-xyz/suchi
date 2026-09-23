@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -49,7 +49,7 @@ func TestBlobRouteFamiliesEnforceSystemAndDocumentBoundaries(t *testing.T) {
 			}
 			cfg := &config.Config{UIDisabled: headless, BodyLimit: 1024}
 			mux := http.NewServeMux()
-			if err := registerBaseRoutes(mux, cfg, d, cas, httpx.NewMetrics(), local, nil, log); err != nil {
+			if err := registerBaseRoutes(mux, cfg, d, cas, httpx.NewMetrics(), local, nil, 3, log); err != nil {
 				t.Fatal(err)
 			}
 			handler := buildHTTPHandler(mux, cfg, &auth.Chain{}, nil, httpx.NewMetrics(), log)

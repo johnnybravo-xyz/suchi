@@ -13,7 +13,7 @@ func TestSplitChildUsesCurrentParentState(t *testing.T) {
 		t.Run(map[bool]string{false: "edited", true: "trashed"}[retired], func(t *testing.T) {
 			d, cas := openPostIngestHarness(t)
 			parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source scan"))
-			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if _, err := d.ExecWrite(t.Context(), `
 				INSERT INTO users(id,email,display_name,role,created_at,updated_at)
 				VALUES(2,'other@example.test','Other','member',1,1);
@@ -62,7 +62,7 @@ func TestSplitChildUsesCurrentParentState(t *testing.T) {
 func TestSplitRetryPreservesTrashRetention(t *testing.T) {
 	d, cas := openPostIngestHarness(t)
 	parentID := seedPostIngestDocument(t, d, cas, "application/pdf", []byte("source scan"))
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if _, err := d.ExecWrite(t.Context(), `UPDATE documents SET trashed_at=1,updated_at=2 WHERE id=?`, parentID); err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func (s *Server) ListAutomations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	store := automations.New(s.DB)
+	store := automations.New(s.DB, s.Actions)
 	atms, err := store.List(r.Context(), systemID)
 	if err != nil {
 		s.serverErr(w, "automations.list", err)
@@ -46,7 +46,7 @@ func (s *Server) GetAutomation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	store := automations.New(s.DB)
+	store := automations.New(s.DB, s.Actions)
 	atm, err := store.Get(r.Context(), systemID, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "automation not found")
@@ -72,7 +72,7 @@ func (s *Server) CreateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
-	store := automations.New(s.DB)
+	store := automations.New(s.DB, s.Actions)
 	var id int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, auth.FromContext(r.Context()), systemID)
@@ -150,7 +150,7 @@ func (s *Server) UpdateAutomation(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_body", "invalid JSON")
 		return
 	}
-	store := automations.New(s.DB)
+	store := automations.New(s.DB, s.Actions)
 	var resultID int64
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, auth.FromContext(r.Context()), systemID)
@@ -205,7 +205,7 @@ func (s *Server) DeleteAutomation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	store := automations.New(s.DB)
+	store := automations.New(s.DB, s.Actions)
 	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		current, err := s.currentWriterPrincipal(r.Context(), tx, auth.FromContext(r.Context()), systemID)
 		if err != nil {

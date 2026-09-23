@@ -218,7 +218,7 @@ func TestRepeatedCodesNamesAndRulesStayInTheirSystem(t *testing.T) {
 	if _, err := d.ExecWrite(t.Context(), `UPDATE automations SET enabled=0 WHERE system_id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(t.Context(), d, logger(), id); err != nil {
+	if err := automations.ApplyOnDocumentAdded(t.Context(), d, testActions(t), logger(), id); err != nil {
 		t.Fatal(err)
 	}
 	if code := count(t, d, `SELECT c.code FROM documents d JOIN jd_categories c ON c.id=d.jd_category_id WHERE d.id=?`, id); code != 49 {

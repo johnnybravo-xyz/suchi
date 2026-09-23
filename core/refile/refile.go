@@ -78,7 +78,7 @@ var ErrActorUnavailable = errors.New("refile: active administrator required")
 //     If you deleted an automation that previously added tag X, tag X
 //     stays on every doc it touched. The classifier is additive
 //     by design; manual cleanup is the intended path for removals.
-func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, error) {
+func All(ctx context.Context, d *db.DB, actions *automations.Registry, log *slog.Logger, opts Options) (Stats, error) {
 	log = log.With("component", "refile")
 	started := time.Now()
 	var s Stats
@@ -102,7 +102,7 @@ func All(ctx context.Context, d *db.DB, log *slog.Logger, opts Options) (Stats, 
 			return s, err
 		}
 		if !opts.SkipAutomations {
-			applied, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, id, opts.ActorID)
+			applied, err := automations.ApplyOnDocumentAddedCount(ctx, d, actions, log, id, opts.ActorID)
 			if err != nil {
 				if opts.ActorID != 0 {
 					return s, err

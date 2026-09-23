@@ -38,7 +38,7 @@ func workflowSystemsFixture(t *testing.T) (*Server, *db.DB) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)), Authz: authz.ACLAuthorizer{DB: d}}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)), Authz: authz.ACLAuthorizer{DB: d}}
 	return s, d
 }
 

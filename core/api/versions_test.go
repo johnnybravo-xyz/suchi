@@ -32,7 +32,7 @@ func TestUploadNewVersionCopiesDocumentACLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB: d, CAS: cas,
 		Log:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		Authz: authz.ACLAuthorizer{DB: d},
@@ -191,7 +191,7 @@ func TestListVersionsAuthorizesEveryReturnedNode(t *testing.T) {
 	if rootGrant != int(authz.PermView) {
 		t.Fatalf("root grant=%d, want view", rootGrant)
 	}
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		Authz: authz.ACLAuthorizer{DB: d},
 	}

@@ -606,7 +606,7 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 	})
 	// Fire document_updated automations. Fail-soft: never blocks the
 	// PATCH response.
-	if err := automations.ApplyOnDocumentUpdated(r.Context(), s.DB, s.Log, id); err != nil {
+	if err := automations.ApplyOnDocumentUpdated(r.Context(), s.DB, s.Actions, s.Log, id); err != nil {
 		s.Log.Warn("api.patch.automations", "err", err.Error(), "doc_id", id)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})

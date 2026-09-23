@@ -116,7 +116,7 @@ func TestImportedRulesExecuteLiteralBoundariesAndActions(t *testing.T) {
 		{"Invoice", "electricity", 11, true},
 	} {
 		id := document(t, d, tc.title, tc.content)
-		if err := automations.ApplyOnDocumentAdded(t.Context(), d, logger(), id); err != nil {
+		if err := automations.ApplyOnDocumentAdded(t.Context(), d, testActions(t), logger(), id); err != nil {
 			t.Fatal(err)
 		}
 		code := count(t, d, `SELECT c.code FROM documents d JOIN jd_categories c ON c.id=d.jd_category_id WHERE d.id=?`, id)
@@ -134,7 +134,7 @@ func TestReimportPreservesDisabledOriginalsAndUserFork(t *testing.T) {
 	d := openTestDB(t)
 	pf := smallPreset(t)
 	apply(t, d, pf, importer.Options{})
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	rules, err := store.List(t.Context(), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestReimportPreservesDisabledOriginalsAndUserFork(t *testing.T) {
 		}
 	}
 	id := document(t, d, "Invoice", "electricity bill")
-	if err := automations.ApplyOnDocumentAdded(t.Context(), d, logger(), id); err != nil {
+	if err := automations.ApplyOnDocumentAdded(t.Context(), d, testActions(t), logger(), id); err != nil {
 		t.Fatal(err)
 	}
 	var title, description string

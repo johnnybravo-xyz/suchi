@@ -11,7 +11,8 @@ Optional integrations must preserve useful local operation.
 - Read `docs/architecture.mdx` for the product/backend map and
   `docs/spa-architecture.mdx` for browser ownership before changing a boundary.
 - `core/` owns application behavior; `plugins/` contains compiled integrations;
-  `plugin-api/` is the extension vocabulary; `distro/cmd/suchi/` wires it.
+  `plugin-api/` is the extension vocabulary; `distro/app/` assembles the server
+  and `distro/cmd/suchi/` owns command parsing and process behavior.
 - `ui/src/` owns the web app. Commit its generated `core/ui/spa/dist/` bundle
   with source changes so Go builds do not need Bun.
 - `hack/` owns fixtures, smoke tests, and benchmarks. Standalone benchmark
@@ -38,7 +39,7 @@ Optional integrations must preserve useful local operation.
 
 ## Invariants
 
-- Register HTTP token access in `distro/cmd/suchi/serve_token_policy.go`;
+- Register HTTP token access in `distro/app/serve_token_policy.go`;
   unlisted routes stay session-only. Scopes do not replace role or document ACLs.
 - Put document visibility inside list/search SQL, including counts and pages.
 - Use the single write pool and enqueue work with its state mutation. Keep

@@ -227,7 +227,7 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 		// Kick off the sweep synchronously so operators see the counters
 		// in the response. Long-running installs can hit the dedicated
 		// /api/admin/refile endpoint instead for the background flavor.
-		stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{SystemID: systemID, ActorID: principal.UserID})
+		stats, err := refile.All(r.Context(), s.DB, s.Actions, s.Log, refile.Options{SystemID: systemID, ActorID: principal.UserID})
 		if err != nil {
 			s.Log.Warn("preset.refile.err", "err", err.Error())
 		}

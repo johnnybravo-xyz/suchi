@@ -78,7 +78,7 @@ func TestSetupStateReturnsOnlyFilingTreeReminderState(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/setup/state", nil)
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -111,7 +111,7 @@ func TestSaveLLMSettings_SealsKeyAndActivatesLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := false
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB:      d,
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		LLMAEAD: key,
@@ -249,7 +249,7 @@ func TestResearchContextSettingsAreAdminOwnedAndIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	reloads := 0
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		LLMReloader: func(context.Context) error { reloads++; return nil },
 	}
@@ -415,7 +415,7 @@ func TestModelSettingsCannotChangeApplicationMode(t *testing.T) {
 	if err := settings.Set(ctx, d, settings.KeyClassificationAutoApply, false); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm",
 		strings.NewReader(`{"enabled":false,"auto_apply":true}`)).
 		WithContext(auth.WithPrincipal(ctx, adminPrincipal(1)))
@@ -432,7 +432,7 @@ func TestModelSettingsCannotChangeApplicationMode(t *testing.T) {
 
 func TestSaveLLMSettings_Disables(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	body := `{"enabled":false,"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
@@ -461,7 +461,7 @@ func TestSaveLLMSettings_Disables(t *testing.T) {
 
 func TestSaveLLMSettings_RejectsEndpointQuery(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	body := `{"endpoint_url":"http://127.0.0.1:11434/v1?key=secret","model":"qwen2.5:7b"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
@@ -477,7 +477,7 @@ func TestSaveLLMSettings_RejectsEndpointQuery(t *testing.T) {
 func TestLLMSettingsTest_UsesCandidateWithoutSaving(t *testing.T) {
 	d := openTestDB(t)
 	called := false
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB:  d,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		LLMTester: func(_ context.Context, cfg LLMTestConfig) (LLMTestResult, error) {
@@ -515,7 +515,7 @@ func (e testUpstreamError) UpstreamStatusCode() int { return e.status }
 
 func TestLLMSettingsTest_ExplainsMissingModelWithoutProviderDetails(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB:  d,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		LLMTester: func(context.Context, LLMTestConfig) (LLMTestResult, error) {
@@ -539,7 +539,7 @@ func TestLLMSettingsTest_ExplainsMissingModelWithoutProviderDetails(t *testing.T
 
 func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	body := `{"endpoint_url":"http://127.0.0.1:11434/v1","model":"qwen2.5:7b","confidence_threshold":0.2}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
@@ -554,7 +554,7 @@ func TestSaveLLMSettings_RejectsConfidenceOutsideWebBounds(t *testing.T) {
 
 func TestSaveLLMSettingsRejectsInvalidArchiveThresholds(t *testing.T) {
 	d := openTestDB(t)
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	body := `{"enabled":false,"archive_review_threshold":0.95}`
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(body))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
@@ -573,7 +573,7 @@ func TestLegacyReviewCeilingDoesNotBlockUnrelatedModelSave(t *testing.T) {
 	if err := settings.Set(ctx, d, settings.KeyArchiveReview, 0.9); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{Actions: testActions(t), DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/settings/llm", strings.NewReader(`{"enabled":false,"archive_enabled":true}`))
 	req = req.WithContext(auth.WithPrincipal(req.Context(), &pluginapi.Principal{
 		Kind: "user", UserID: 1, Role: "admin",
@@ -599,7 +599,7 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	preferenceReloads, fsReloads := 0, 0
-	s := &Server{
+	s := &Server{Actions: testActions(t),
 		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RuntimePreferencesReloader: func(context.Context) error {
 			preferenceReloads++

@@ -282,7 +282,7 @@ func TestNamedMergePreservesRuleBehaviorWithoutTouchingAnotherSystem(t *testing.
 	}))
 	_, err := taxonomy.Merge(ctx, d, taxonomy.Options{SystemID: 1, Kind: taxonomy.KindTag, FromName: "old-name", IntoName: "new-name", Apply: true})
 	must(t, err)
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, slog.New(slog.NewTextHandler(os.Stderr, nil)), doc))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), slog.New(slog.NewTextHandler(os.Stderr, nil)), doc))
 	var name string
 	must(t, d.Read.QueryRowContext(ctx, `SELECT t.name FROM document_tags dt JOIN tags t ON t.id=dt.tag_id WHERE dt.document_id=?`, doc).Scan(&name))
 	if name != "new-name" {

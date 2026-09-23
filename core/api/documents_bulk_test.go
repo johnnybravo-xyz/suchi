@@ -34,7 +34,7 @@ import (
 func newBulkServer(t *testing.T) *Server {
 	t.Helper()
 	d := openTestDB(t)
-	return &Server{
+	return &Server{Actions: testActions(t),
 		DB:    d,
 		Log:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		Authz: authz.ACLAuthorizer{DB: d},

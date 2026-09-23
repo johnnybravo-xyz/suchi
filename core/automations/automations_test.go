@@ -34,7 +34,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 	tag2 := seedTag(t, ctx, d, "housing")
 	docID := seedDocWithCorr(t, ctx, d, "March rent", "please pay by the 5th", corrID)
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "route landlord",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -52,7 +52,7 @@ func TestApplyDocumentAdded(t *testing.T) {
 		t.Fatalf("create automation: %v", err)
 	}
 
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 
@@ -83,13 +83,13 @@ func TestAssignTagsTakesOwnershipOfClassifierReview(t *testing.T) {
 		`INSERT INTO document_tags(document_id, tag_id, classifier_owned) VALUES (?, ?, 1)`, docID, tagID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: "always review", Enabled: true,
+	if _, err := automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{Name: "always review", Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
 		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+		if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,7 +149,7 @@ func TestRemoveTagsInvalidatesOlderProposal(t *testing.T) {
 			must(t, engine.Resolve(ctx, tasks[0].ID, "apply", actor))
 			must(t, engine.Advance(ctx, runID, "apply"))
 
-			_, err = automations.New(d).Create(ctx, 1, automations.Automation{
+			_, err = automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{
 				Name: "explicit tag removal", Enabled: true,
 				Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
 				Actions: []automations.Action{{
@@ -157,7 +157,7 @@ func TestRemoveTagsInvalidatesOlderProposal(t *testing.T) {
 				}},
 			})
 			must(t, err)
-			must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID))
 
 			if err := propose(); !errors.Is(err, approvals.ErrStaleProposal) {
 				t.Fatalf("in-flight inference survived explicit removal: %v", err)
@@ -210,7 +210,7 @@ func TestTargetedCorrespondentRemovalInvalidatesQueuedProposal(t *testing.T) {
 		Kind: "user", UserID: 1, SessionID: sessionID, AuthExpiresAt: 4102444800,
 	}))
 	must(t, engine.Advance(ctx, runID, "apply"))
-	_, err = automations.New(d).Create(ctx, 1, automations.Automation{
+	_, err = automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{
 		Name: "explicit correspondent removal", Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
 		Actions: []automations.Action{{
@@ -218,7 +218,7 @@ func TestTargetedCorrespondentRemovalInvalidatesQueuedProposal(t *testing.T) {
 		}},
 	})
 	must(t, err)
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID))
 	if err := propose(); !errors.Is(err, approvals.ErrStaleProposal) {
 		t.Fatalf("in-flight inference survived explicit removal: %v", err)
 	}
@@ -241,13 +241,13 @@ func TestClassifierReviewMarkerCannotActivateDiscard(t *testing.T) {
 	if _, err := d.Write.ExecContext(ctx, `INSERT INTO document_tags(document_id,tag_id,classifier_owned) VALUES(?,?,1)`, docID, tagID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := automations.New(d).Create(ctx, 1, automations.Automation{
+	_, err := automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{
 		Name: "discard tagged documents", Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded, FilterTagID: tagID}},
 		Actions:  []automations.Action{{Kind: "discard"}},
 	})
 	must(t, err)
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID))
 	var trashed sql.NullInt64
 	must(t, d.Read.QueryRow(`SELECT trashed_at FROM documents WHERE id = ?`, docID).Scan(&trashed))
 	if trashed.Valid {
@@ -256,7 +256,7 @@ func TestClassifierReviewMarkerCannotActivateDiscard(t *testing.T) {
 	if _, err := d.Write.ExecContext(ctx, `UPDATE document_tags SET classifier_owned = 0 WHERE document_id = ? AND tag_id = ?`, docID, tagID); err != nil {
 		t.Fatal(err)
 	}
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID))
 	must(t, d.Read.QueryRow(`SELECT trashed_at FROM documents WHERE id = ?`, docID).Scan(&trashed))
 	if !trashed.Valid {
 		t.Fatal("explicitly adopted tag did not activate user-authored rule")
@@ -272,7 +272,7 @@ func TestApplySkipsWhenFilterMisses(t *testing.T) {
 	filterTag := seedTag(t, ctx, d, "required-filter-tag")
 	docID := seedDoc(t, ctx, d, "unrelated doc", "")
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "narrow tag rule",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -284,7 +284,7 @@ func TestApplySkipsWhenFilterMisses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -304,7 +304,7 @@ func TestApplyMatchesTitle(t *testing.T) {
 	tag := seedTag(t, ctx, d, "invoice")
 	docID := seedDoc(t, ctx, d, "August INVOICE", "")
 
-	_, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: "invoice titles",
+	_, err := automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{Name: "invoice titles",
 		Enabled: true,
 		Triggers: []automations.Trigger{{
 			Type: automations.TriggerDocumentAdded, FilterTitleRE: `invoice`,
@@ -315,7 +315,7 @@ func TestApplyMatchesTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	matched, err := automations.ApplyOnDocumentAddedCount(ctx, d, log, docID, 0)
+	matched, err := automations.ApplyOnDocumentAddedCount(ctx, d, testActions(t), log, docID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestApplyConsumption(t *testing.T) {
 	tag := seedTag(t, ctx, d, "receipts")
 	docID := seedDoc(t, ctx, d, "amazon-receipt-2026-03.pdf", "irrelevant content")
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "consumption filename",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -353,7 +353,7 @@ func TestApplyConsumption(t *testing.T) {
 	}
 
 	// Fire consumption with a matching filename — action must land.
-	if err := automations.ApplyOnConsumption(ctx, d, log, docID, automations.Context{
+	if err := automations.ApplyOnConsumption(ctx, d, testActions(t), log, docID, automations.Context{
 		Filename: "amazon-receipt-2026-03.pdf",
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -370,7 +370,7 @@ func TestApplyConsumption(t *testing.T) {
 
 	// Same automation, non-matching filename — no new tag rows.
 	docID2 := seedDoc(t, ctx, d, "invoice.pdf", "")
-	if err := automations.ApplyOnConsumption(ctx, d, log, docID2, automations.Context{
+	if err := automations.ApplyOnConsumption(ctx, d, testActions(t), log, docID2, automations.Context{
 		Filename: "invoice.pdf",
 	}); err != nil {
 		t.Fatalf("apply miss: %v", err)
@@ -392,7 +392,7 @@ func TestApplyCustomField(t *testing.T) {
 	docID := seedDoc(t, ctx, d, "any doc", "any content")
 	fieldID := seedCustomField(t, ctx, d, "Vendor Ref", "text")
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "annotate",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -407,7 +407,7 @@ func TestApplyCustomField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentUpdated(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentUpdated(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -448,7 +448,7 @@ func TestStoreRejectsInvalidRules(t *testing.T) {
 			if trigger.Type == "" && trigger.TypeCode == 0 {
 				trigger.Type = automations.TriggerDocumentAdded
 			}
-			_, err := automations.New(d).Create(ctx, 1, automations.Automation{Name: tc.name,
+			_, err := automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{Name: tc.name,
 				Triggers: []automations.Trigger{trigger},
 				Actions:  []automations.Action{tc.action}})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -489,7 +489,7 @@ func TestApplyPropagatesActionFailureAndRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = automations.ApplyOnDocumentAdded(ctx, d, log, docID)
+	err = automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID)
 	if err == nil || !strings.Contains(err.Error(), "unknown_action") {
 		t.Fatalf("Apply error = %v, want unknown_action", err)
 	}
@@ -524,7 +524,7 @@ func TestRulesAndDocumentLinksStayInTheirSystem(t *testing.T) {
 		`)
 		return err
 	}))
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	rule := automations.Automation{Name: "Review", Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}},
 		Actions:  []automations.Action{{Kind: "assign_tags", Params: map[string]any{"tag_ids": []any{float64(tagID)}}}},
@@ -534,13 +534,13 @@ func TestRulesAndDocumentLinksStayInTheirSystem(t *testing.T) {
 	rule.Actions[0].Params["tag_ids"] = []any{float64(900)}
 	_, err = store.Create(ctx, 2, rule)
 	must(t, err)
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, docID))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID))
 	var gotTag int64
 	must(t, d.Read.QueryRowContext(ctx, `SELECT tag_id FROM document_tags WHERE document_id = ?`, docID).Scan(&gotTag))
 	if gotTag != tagID {
 		t.Fatalf("S01 rule applied foreign tag %d", gotTag)
 	}
-	must(t, automations.ApplyOnDocumentAdded(ctx, d, log, 900))
+	must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, 900))
 	must(t, d.Read.QueryRowContext(ctx, `SELECT tag_id FROM document_tags WHERE document_id = 900`).Scan(&gotTag))
 	if gotTag != 900 {
 		t.Fatalf("S02 rule applied wrong tag %d", gotTag)

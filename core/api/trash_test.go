@@ -38,7 +38,7 @@ func newTrashAPIServer(t *testing.T) (*Server, *http.ServeMux, *blob.CAS) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(database, cas, retention, log)
+	server, err := New(database, cas, retention, testActions(t), log)
 	if err != nil {
 		t.Fatal(err)
 	}

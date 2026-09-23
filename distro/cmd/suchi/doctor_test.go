@@ -14,6 +14,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/distro/internal/diagnostics"
 )
 
 func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
@@ -51,7 +52,7 @@ func TestEnumerateEgressIncludesDatabaseRowsAndRedactsSecrets(t *testing.T) {
 		IngestIMAPOAuthClientIDMicrosoft: "11111111-1111-1111-1111-111111111111",
 		IngestIMAPOAuthScopesMicrosoft:   "offline_access",
 	}
-	got, err := enumerateEgress(ctx, d, cfg, "https://api.openai.com/v1?key=secret")
+	got, err := diagnostics.EnumerateEgress(ctx, d, cfg, "https://api.openai.com/v1?key=secret")
 	if err != nil {
 		t.Fatal(err)
 	}

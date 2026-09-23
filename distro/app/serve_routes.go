@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -17,8 +17,8 @@ import (
 	oidcauth "github.com/johnnybravo-xyz/suchi/plugins/oidc"
 )
 
-func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *blob.CAS, metrics *httpx.Metrics, la *localauth.Plugin, oa *oidcauth.Plugin, log *slog.Logger) error {
-	registerOperationalRoutes(mux, d, metrics, cfg.PprofEnabled, log)
+func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *blob.CAS, metrics *httpx.Metrics, la *localauth.Plugin, oa *oidcauth.Plugin, targetSchemaVersion int, log *slog.Logger) error {
+	registerOperationalRoutes(mux, d, metrics, cfg.PprofEnabled, targetSchemaVersion, log)
 	oidcEnabled := cfg.OIDCIssuerURL != ""
 
 	mux.HandleFunc("POST /api/logout", la.LogoutHandler)
@@ -71,7 +71,7 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 	return nil
 }
 
-func registerOperationalRoutes(mux *http.ServeMux, d *db.DB, metrics *httpx.Metrics, pprofEnabled bool, log *slog.Logger) {
+func registerOperationalRoutes(mux *http.ServeMux, d *db.DB, metrics *httpx.Metrics, pprofEnabled bool, targetSchemaVersion int, log *slog.Logger) {
 	livez, readyz := httpx.Health(d, targetSchemaVersion)
 	mux.Handle("GET /healthz", livez)
 	mux.Handle("GET /readyz", readyz)

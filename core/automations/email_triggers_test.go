@@ -108,7 +108,7 @@ func TestEmailFilterMatcher(t *testing.T) {
 			tag := seedTag(t, ctx, d, "matched")
 			docID := seedDoc(t, ctx, d, "any", "")
 
-			store := automations.New(d)
+			store := automations.New(d, testActions(t))
 			_, err := store.Create(ctx, 1, automations.Automation{Name: tc.name,
 				Enabled:  true,
 				Triggers: []automations.Trigger{tc.trigger},
@@ -120,7 +120,7 @@ func TestEmailFilterMatcher(t *testing.T) {
 			}
 
 			evCtx := tc.evCtx
-			if err := automations.ApplyOnConsumption(ctx, d, log, docID, evCtx); err != nil {
+			if err := automations.ApplyOnConsumption(ctx, d, testActions(t), log, docID, evCtx); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			var n int
@@ -145,7 +145,7 @@ func TestEmailFilterPersistence(t *testing.T) {
 	d, _ := setup(t, ctx)
 	seedUser(t, ctx, d)
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	created, err := store.Create(ctx, 1, automations.Automation{Name: "persist round-trip",
 		Enabled: true,
 		Triggers: []automations.Trigger{{
@@ -191,7 +191,7 @@ func TestDiscardAction(t *testing.T) {
 	seedUser(t, ctx, d)
 	docID := seedDoc(t, ctx, d, "spam.pdf", "unwanted")
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "drop spam",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -202,7 +202,7 @@ func TestDiscardAction(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := automations.ApplyOnConsumption(ctx, d, log, docID, automations.Context{
+	if err := automations.ApplyOnConsumption(ctx, d, testActions(t), log, docID, automations.Context{
 		Filename: "spam.pdf",
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -225,7 +225,7 @@ func TestDiscardIdempotent(t *testing.T) {
 	seedUser(t, ctx, d)
 	docID := seedDoc(t, ctx, d, "junk", "")
 
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "drop all",
 		Enabled: true,
 		Triggers: []automations.Trigger{
@@ -235,7 +235,7 @@ func TestDiscardIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatal(err)
 	}
 	var first sql.NullInt64
@@ -246,7 +246,7 @@ func TestDiscardIdempotent(t *testing.T) {
 	if !first.Valid {
 		t.Fatal("first apply should have trashed the doc")
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatal(err)
 	}
 	var second sql.NullInt64

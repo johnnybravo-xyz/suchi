@@ -16,9 +16,9 @@ browser composition; linked feature guides own detailed user and wire behavior.
 
 | Concern | Entry point and owner |
 | --- | --- |
-| Lifecycle and wiring | `distro/cmd/suchi/main.go: runServe`; `serve_*.go` assembles services and HTTP policy |
+| Lifecycle and wiring | `distro/cmd/suchi/main.go` parses configuration/signals; `distro/app/app.go: Run` and `serve_*.go` assemble services and HTTP policy |
 | JSON contracts | `core/api/api.go: Server.Register`; feature handlers in `core/api/` |
-| Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; CLI wires API preview/download mirrors |
+| Browser/blob delivery | `core/ui/ui.go`, `core/ui/spa.go`; `distro/app` wires API preview/download mirrors |
 | Identity/access | `core/auth/`, `core/authz/`, `core/httpx/`; credentials in `plugins/local-auth/`, `plugins/oidc/` |
 | Durable state/work | `core/db/db.go`, `core/db/migrations/`, `core/blob/cas.go`, `core/jobs/jobs.go` |
 | Capture/processing | `core/api/documents.go: UploadDocument`, `core/ingest/`, `core/importer/bundle/`, `core/pipeline/postingest/` |
@@ -28,8 +28,10 @@ browser composition; linked feature guides own detailed user and wire behavior.
 
 Keep behavior with its domain owner. `plugin-api/` provides vocabulary for
 compile-linked authenticators, job subscribers and audit sinks, without a runtime
-Go plugin loader or service framework. The CLI injects integration callbacks into
-the API instead of importing `plugins/*` there. See [Plugins](/plugins).
+Go plugin loader or service framework. The shared assembly injects integration
+callbacks into the API instead of importing `plugins/*` there and provides one
+boot-time callback for compiled native routes and durable subscribers. See
+[Plugins](/plugins).
 
 `core/approvals/document_change.go` owns review eligibility together with source,
 field-generation, access and session validation. The classifier records bounded
@@ -38,17 +40,41 @@ See [Review-first mode](/approvals#review-first-mode).
 
 ## Boot and shutdown
 
-Follow `runServe` to diagnose missing runtime wiring:
+The command resolves configuration, configures logging/build identity and signal
+cancellation, then calls `app.Run(ctx, app.Options{...})`. The importable package
+returns errors; it neither parses command arguments nor exits the process.
+Follow `distro/app.Run` to diagnose runtime wiring:
 
-1. Validate configuration, create `DATA_DIR`, open/migrate SQLite and establish
-   Johnny.Decimal Inbox invariants.
-2. Construct auth, CAS, rendering, retention, keys and configured integrations.
-   Report unavailable optional parsers without failing startup.
-3. Register durable subscribers before job reclamation/dispatcher startup; start
-   configured intake, backup and retention loops.
-4. Inject API/browser dependencies, register routes and wrap the mux in middleware.
-5. On termination, cancel the shared context and give HTTP bounded shutdown grace.
-   Subscribers and subprocesses honor cancellation.
+1. Create `DATA_DIR`, open SQLite and apply public core migrations.
+2. Apply supplied `MigrationSets` in declaration order, each with its own ledger.
+3. Construct one immutable automation registry from explicit `BuiltinActions()`
+   plus supplied `Actions`; duplicate or incomplete definitions stop startup.
+4. Establish Johnny.Decimal Inbox invariants; construct auth, CAS, rendering,
+   retention, keys and configured integrations. Report unavailable optional parsers.
+5. Construct the durable dispatcher, core subscribers, intake supervisors,
+   schedulers and API routes without starting their loops.
+6. Invoke `Options.Configure` once with the instance DB, mux, dispatcher,
+   approvals engine, action registry and logger. Callback failure closes startup
+   before any worker or listener starts.
+7. Reclaim durable work; start dispatch, configured intake, backup and retention
+   loops; wrap the mux in middleware and begin listening.
+8. On context cancellation, give HTTP bounded shutdown grace and stop dispatch.
+   Subscribers and subprocesses honor cancellation; errors release the database.
+
+`app.Options` contains resolved `config.Config`, logger, build identity, migration
+sets, additional action definitions and one optional `Configure` callback. Its
+concrete `Services` value exposes only `DB`, `Mux`, `Jobs`, `Approvals`, `Actions`
+and `Log`, allowing a compiled distribution to register native HTTP routes and
+durable subscribers. Unlisted routes remain session-only under the shared token
+policy. Zero extension options preserve the community vocabulary and do not
+create extension ledger state. This is compiled composition, with no dynamic
+loader, service lookup, CAS/API exposure or registration framework.
+[Plugins](/plugins#application-assembly) documents the Go contract and example.
+
+The existing approvals engine is also passed explicitly to `api.Server.Approvals`
+and its subscriber. This replaces the former process-global default solely to
+keep independently assembled instances isolated; state-machine handlers, review
+validation, audit and retry logic remain with `core/approvals`.
 
 One server process owns an archive. The writer pool and startup reclamation do
 not coordinate multiple servers sharing SQLite.
@@ -220,6 +246,20 @@ The rebuild marker selects a dedicated writer, disables foreign keys outside the
 transaction, then uses an immediate transaction for rebuilds, foreign-key validation
 and version update. Restore enforcement even on failure.
 
+Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
+`PRAGMA user_version`. Each component supplies its complete ordered history from
+version 1. The reserved `_suchi_extension_migrations` table stores
+`(component, version)` as its primary key, a SHA-256 checksum of exact SQL plus
+rebuild mode, and Unix-second `applied_at`. Component names are bound data, never
+SQL identifiers. Invalid names, duplicates/gaps/out-of-order versions, empty SQL,
+missing applied history and checksum drift fail explicitly. Unchanged reruns do
+not rewrite ledger rows. Each migration and its ledger record commit together
+through the sole writer; SQL and foreign-key failures roll back DDL/data as well
+as the record. `RebuildTables` uses the same foreign-key restoration/checking
+boundary as core migrations. Extension SQL is trusted compiled code and must not
+control transactions, core `user_version`, or the reserved `_suchi_` namespace.
+Core migrations and published SQL retain their existing versioning and behavior.
+
 Device OCR provenance, split origins, idempotency, pairing/token provenance precede
 taxonomy rebuilds. Existing credential hashes remain; unknown pairing provenance
 stays empty; default memberships/token bindings move to system 1 without issuing
@@ -229,7 +269,7 @@ see [Release process](/release-process).
 
 ## HTTP and security boundaries
 
-`serve_middleware.go: buildHTTPHandler` wraps all requests, including rate-limit
+`distro/app/serve_middleware.go: buildHTTPHandler` wraps all requests, including rate-limit
 rejections, with request IDs, security headers, access logs and metrics. Limiters
 run before body limits, authentication, token policy, Fetch Metadata checks and
 the normalized mux. Credential/pairing and demo POST limiters classify the
@@ -244,7 +284,7 @@ These gates remain distinct:
   credentials cannot fall back to session cookies. Both OIDC login paths require
   signed verified-email claims. The issuer remains trusted for email assignment;
   email is not a stable subject identifier.
-- **Token authority:** `serve_token_policy.go` lists routes/scopes for local API
+- **Token authority:** `distro/app/serve_token_policy.go` lists routes/scopes for local API
   tokens and restricted demo scratch identities. Unlisted routes stay session-only,
   including for admins. Public `documents:read`, `documents:write` and `events:read`
   are separate grants; feed-only tokens cannot read documents. Token management
@@ -328,7 +368,15 @@ preserving response shapes. See [Search](/search).
 
 Local matching proposes unresolved metadata for review before deterministic
 user automations. `core/automations` owns triggers/conditions/actions;
-`core/approvals` owns human state machines. Integrations must not add another workflow engine. Advancement
+`core/approvals` owns human state machines. Each automation action definition
+pairs validation and execution in one instance registry. Save-time validation and
+execution-time validation use that definition in the caller's transaction.
+Document/system admission and refile admin rechecks remain outside the handler;
+only built-in discard can revisit Trash. Custom callbacks are trusted compiled
+code, not an authorization or inference interface. Enqueue extension work in the
+same transaction as its state change; keep network/subprocess calls outside it.
+[Automations](/automations#compiled-actions) owns the action contract. Integrations
+must not add another workflow engine. Advancement
 jobs carry system/run revision; handlers run outside the writer, then their
 transactional effects/tasks recheck revision/status. Tasks retain originating
 revision so retries cannot reopen resolved visits. Accepted decisions/timeouts
@@ -485,16 +533,18 @@ Start at the affected boundary, then run the aggregate loop.
 
 | Change | Focused verification |
 | --- | --- |
-| Routes, scopes, credentials, ACLs | `go test ./core/auth/... ./core/authz/... ./core/httpx/... ./core/api/... ./core/ui/... ./distro/cmd/suchi/...`; denied principals, aliases, counts, direct blobs |
+| Routes, scopes, credentials, ACLs | `go test ./core/auth/... ./core/authz/... ./core/httpx/... ./core/api/... ./core/ui/... ./distro/app/... ./distro/cmd/suchi/...`; denied principals, aliases, counts, direct blobs |
 | Query/filter semantics | `go test ./core/searchquery/... ./core/api/...`; Search/Documents parity and hidden-document exclusion |
 | Ingest/format tools | `go test ./core/ingest/... ./core/pipeline/... ./core/sandbox/...`; originals, retries and affected real-tool smoke tests |
-| Queue/concurrency | `go test -race ./core/jobs/... ./distro/cmd/suchi/...`; backlog, cancellation, restart recovery |
+| Queue/concurrency | `go test -race ./core/jobs/... ./distro/app/... ./distro/cmd/suchi/...`; backlog, cancellation, restart recovery |
 | Schema/blobs/deletion | `go test ./core/db/... ./core/blob/... ./core/trash/... ./core/gc/... ./core/importer/bundle/...`; migrations/shared blobs |
 | Filing/model/review | `go test ./core/automations/... ./core/approvals/... ./core/intelligence/... ./plugins/llm-classifier/...`; human decisions/no-model operation |
 
 ```sh
-make check        # Go formatting/vet/tests/staticcheck; UI and embedded parity
-make smoke        # build and disposable-server health/readiness
+GOCACHE=/tmp/suchi-go-cache go test ./core/db ./core/automations ./distro/app ./distro/cmd/suchi
+GOCACHE=/tmp/suchi-go-cache go test -race ./core/automations ./core/approvals ./core/api ./distro/app ./distro/cmd/suchi
+GOCACHE=/tmp/suchi-go-cache make check        # Go formatting/vet/tests/staticcheck; UI and embedded parity
+GOCACHE=/tmp/suchi-go-cache make smoke        # build and disposable-server health/readiness
 make docs-check   # documentation links
 ```
 

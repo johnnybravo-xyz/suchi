@@ -6,6 +6,13 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Added
 
+- Compose compiled distributions through `distro/app.Run` with independently
+  versioned, checksummed extension migrations and instance-owned automation
+  actions and approvals engines. One boot-time callback can register native HTTP
+  routes and durable job subscribers against concrete instance services before
+  workers or the listener start. Unlisted routes remain session-only; approval
+  behavior, community startup, built-in actions, and HTTP policy remain shared.
+
 - Import HuML/TOML filing trees with target-aware previews, collision handling,
   and stale-preview protection. First prefixed Apply introduces permanent
   A00–Z99 systems, names, direct memberships, and `SYS.AC.documentID` addresses;

@@ -68,7 +68,13 @@ func Migrate(ctx context.Context, d *DB, migs []Migration, log *slog.Logger) err
 
 func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
 	if m.RebuildTables {
-		return applyRebuild(ctx, db, m)
+		return rebuildTx(ctx, db, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(m.Version))
+			return err
+		})
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -91,7 +97,7 @@ func applyOne(ctx context.Context, db *sql.DB, m Migration) error {
 // Rebuild migrations hold the sole writer connection while enforcement is
 // disabled. Child tables continue to refer to the original parent names;
 // the migration copies into new tables, drops originals, then renames.
-func applyRebuild(ctx context.Context, db *sql.DB, m Migration) (err error) {
+func rebuildTx(ctx context.Context, db *sql.DB, apply func(*sql.Tx) error) (err error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
@@ -127,7 +133,7 @@ func applyRebuild(ctx context.Context, db *sql.DB, m Migration) (err error) {
 	if _, err = tx.ExecContext(ctx, "ROLLBACK; BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, m.SQL); err != nil {
+	if err = apply(tx); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
@@ -146,9 +152,6 @@ func applyRebuild(ctx context.Context, db *sql.DB, m Migration) (err error) {
 		return fmt.Errorf("foreign key violation: table=%s row=%v parent=%s constraint=%d", table, rowID, parent, constraint)
 	}
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "PRAGMA user_version = "+strconv.Itoa(m.Version)); err != nil {
 		return err
 	}
 	return tx.Commit()

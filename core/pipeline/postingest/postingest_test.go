@@ -45,7 +45,7 @@ const msgConvertedEmail = "From: sender@example.com\r\n" +
 
 func TestLanguageStateAppliesWithoutRebuildingHandler(t *testing.T) {
 	languages := []string{"eng"}
-	h := New(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)),
+	h := New(nil, nil, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WithLanguageState(func() []string { return languages }))
 	if got := h.ocrLanguages(); len(got) != 1 || got[0] != "eng" {
 		t.Fatalf("initial languages = %#v", got)
@@ -61,7 +61,7 @@ func TestPostContentUsesOneClassifierStateSnapshot(t *testing.T) {
 	d, cas := openPostIngestHarness(t)
 	docID := seedPostIngestDocument(t, d, cas, "application/octet-stream", []byte("opaque"))
 	calls := 0
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)),
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WithLLMClassifierState(func() bool {
 			calls++
 			return true
@@ -93,7 +93,7 @@ func TestPreConsumeTagsTakeOwnershipOfClassifierReview(t *testing.T) {
 	`, docID); err != nil {
 		t.Fatal(err)
 	}
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for range 2 {
 		if err := h.applyPreConsumeMetadata(ctx, docID, []string{"needs-review"}, nil); err != nil {
 			t.Fatal(err)
@@ -163,7 +163,7 @@ func TestHandleRoutingContracts(t *testing.T) {
 			t.Setenv("PATH", binDir)
 
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			h := New(d, cas, log, WithLLMClassifier(true))
+			h := New(d, cas, testActions(t), log, WithLLMClassifier(true))
 			if tc.msgSkipped {
 				h.convertMSG = func(context.Context, io.Reader, *slog.Logger, msg.Options) (*msg.Result, error) {
 					return &msg.Result{Skipped: true, StderrTail: "test skip"}, nil
@@ -243,7 +243,7 @@ func TestPDFContentAuthority(t *testing.T) {
 
 			h := New(
 				d,
-				cas,
+				cas, testActions(t),
 				slog.New(slog.NewTextHandler(io.Discard, nil)),
 				WithOCREngine(OCREngineTesseract),
 			)
@@ -297,7 +297,7 @@ func TestEmptyServerOutputPreservesAcceptedDeviceText(t *testing.T) {
 	`, docID); err != nil {
 		t.Fatal(err)
 	}
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := h.updateDoc(ctx, docID, "", "", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 	ctx := context.Background()
 	d, cas := openPostIngestHarness(t)
 	parentID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(msgConvertedEmail))
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	retired, err := h.handleEmail(ctx, h.log, parentID, []byte(msgConvertedEmail), true)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestHandleEmailRefinesGenericAttachmentMIME(t *testing.T) {
 			raw = strings.ReplaceAll(raw, "invoice.pdf", "statement.bin")
 			raw = strings.ReplaceAll(raw, "SGVsbG8gd29ybGQK", base64.StdEncoding.EncodeToString(source))
 			parentID := seedPostIngestDocument(t, d, cas, "message/rfc822", []byte(raw))
-			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err := h.Handle(ctx, pluginapi.Event{DocID: parentID}); err != nil {
 				t.Fatal(err)
 			}
@@ -437,7 +437,7 @@ func TestRescanRepairsGenericPDFMIMEAndPreview(t *testing.T) {
 	writeExecutable(t, filepath.Join(binDir, "qpdf"), "#!/bin/sh\necho 'invalid password' >&2\nexit 2\n")
 	t.Setenv("PATH", binDir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(d, cas, log)
+	h := New(d, cas, testActions(t), log)
 	if err := h.Handle(ctx, event); err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ printf 'segment-%%s' "$4"
 `, failMarker, failMarker))
 	t.Setenv("PATH", binDir)
 
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	segments := []docsplit.Segment{{Start: 1, End: 1}, {Start: 3, End: 3}}
 	fanOut, err := h.fanOutSegments(ctx, h.log, parentID, []byte("source pdf"), segments)
 	if err == nil || fanOut {
@@ -661,7 +661,7 @@ func TestHandleMSGPreservesOriginalBlobAndMIME(t *testing.T) {
 	}
 	docID := seedPostIngestDocument(t, d, cas, "application/vnd.ms-outlook", source)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(d, cas, log)
+	h := New(d, cas, testActions(t), log)
 	h.convertMSG = func(_ context.Context, r io.Reader, _ *slog.Logger, _ msg.Options) (*msg.Result, error) {
 		got, err := io.ReadAll(r)
 		if err != nil {
@@ -888,7 +888,7 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			// Reject the final outbox insert after the child and provenance
 			// writes. Retrying must not encounter a half-created split/attachment.
 			if _, err := d.Write.ExecContext(ctx, `
@@ -1052,7 +1052,7 @@ func TestDetectedLanguageRequiresReviewEvenAtFullConfidence(t *testing.T) {
 	if _, err := d.ExecWrite(ctx, `UPDATE documents SET content = 'English source' WHERE id = ?`, docID); err != nil {
 		t.Fatal(err)
 	}
-	h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h.langChain = lang.NewChain(nil, languageDetectorFunc(func(string) ([]lang.Result, error) {
 		return []lang.Result{{Code: "en", Confidence: 1}}, nil
 	}))
@@ -1087,7 +1087,7 @@ func TestLanguageInferenceCannotOutliveExtractionOrHumanClear(t *testing.T) {
 			if _, err := d.ExecWrite(ctx, `UPDATE documents SET content = 'English source', languages = '' WHERE id = ?`, docID); err != nil {
 				t.Fatal(err)
 			}
-			h := New(d, cas, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(d, cas, testActions(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			h.langChain = lang.NewChain(nil, languageDetectorFunc(func(string) ([]lang.Result, error) {
 				if _, err := d.ExecWrite(ctx, mutation.sql, docID); err != nil {
 					t.Fatal(err)

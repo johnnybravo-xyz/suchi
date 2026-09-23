@@ -38,7 +38,7 @@ func TestForeignAutomationReferencesFailConfigurationAndExecution(t *testing.T) 
 			`); err != nil {
 				t.Fatal(err)
 			}
-			store := automations.New(d)
+			store := automations.New(d, testActions(t))
 			if _, err := store.Create(ctx, 1, automations.Automation{Name: "Unsafe", Enabled: true, Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}}, Actions: []automations.Action{action}}); err == nil {
 				t.Fatal("configuration accepted foreign reference")
 			}
@@ -53,7 +53,7 @@ func TestForeignAutomationReferencesFailConfigurationAndExecution(t *testing.T) 
 			`, action.Kind, string(raw)); err != nil {
 				t.Fatal(err)
 			}
-			if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err == nil {
+			if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err == nil {
 				t.Fatal("runtime accepted foreign reference")
 			}
 			var title string
@@ -75,7 +75,7 @@ func TestOwnerAssignmentRequiresCurrentActiveSystemEntry(t *testing.T) {
 	if _, err := d.Write.Exec(`INSERT INTO users(id,email,display_name,role,created_at,updated_at) VALUES (2,'assignee@test','Assignee','member',0,0)`); err != nil {
 		t.Fatal(err)
 	}
-	store := automations.New(d)
+	store := automations.New(d, testActions(t))
 	_, err := store.Create(ctx, 1, automations.Automation{Name: "Assign", Enabled: true, Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded}}, Actions: []automations.Action{{Kind: "assign_owner", Params: map[string]any{"owner_id": float64(2)}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -83,19 +83,19 @@ func TestOwnerAssignmentRequiresCurrentActiveSystemEntry(t *testing.T) {
 	if _, err := d.Write.Exec(`UPDATE users SET disabled=1 WHERE id=2`); err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err == nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err == nil {
 		t.Fatal("disabled owner assigned")
 	}
 	if _, err := d.Write.Exec(`UPDATE users SET disabled=0 WHERE id=2; DELETE FROM jd_system_members WHERE system_id=1 AND user_id=2`); err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err == nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err == nil {
 		t.Fatal("removed owner assigned")
 	}
 	if _, err := d.Write.Exec(`INSERT INTO jd_system_members(system_id,user_id,created_at) VALUES (1,2,0)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := automations.ApplyOnDocumentAdded(ctx, d, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, docID); err != nil {
 		t.Fatal(err)
 	}
 	var owner int64

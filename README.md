@@ -138,7 +138,7 @@ OCR and Outlook MSG ingestion.
 plugin-api/   shared extension interfaces and types
 core/         API, database, ingest pipeline, jobs, auth, and embedded UI
 plugins/      local auth, OIDC, and LLM classifier modules
-distro/       shipped suchi and suchi-mcp entry points
+distro/       importable app assembly and shipped suchi / suchi-mcp entry points
 ui/           Svelte SPA source
 deploy/       self-hosting templates and mail intake sidecar
 docs/         published documentation source

@@ -62,7 +62,7 @@ func TestStore_Update_TogglePresetIsIdempotent(t *testing.T) {
 	d, _ := setup(t, ctx)
 	origID := seedPresetRow(t, ctx, d, "Tag utility bills", "solo")
 
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 	off := false
 	on := true
 
@@ -102,7 +102,7 @@ func TestStore_Update_SubstantiveEditForksPreset(t *testing.T) {
 	d, _ := setup(t, ctx)
 	origID := seedPresetRow(t, ctx, d, "File tax documents", "household")
 
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 	newName := "File tax + insurance docs"
 	patched, err := s.Update(ctx, 1, origID, automations.AutomationPatch{Name: &newName})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestStore_Delete_PresetRowDisablesInPlace(t *testing.T) {
 	d, _ := setup(t, ctx)
 	origID := seedPresetRow(t, ctx, d, "File tax documents", "household")
 
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 	if err := s.Delete(ctx, 1, origID); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestStore_Update_UserOwnedIsNormalUpdate(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setup(t, ctx)
 
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 	created, err := s.Create(ctx, 1, automations.Automation{Name: "user-owned",
 		Enabled: true,
 		Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded,
@@ -203,7 +203,7 @@ func TestStore_Update_UserOwnedIsNormalUpdate(t *testing.T) {
 func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setup(t, ctx)
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 
 	firstA, err := s.Create(ctx, 1, automations.Automation{Name: "first",
 		Enabled: true,
@@ -248,7 +248,7 @@ func TestStore_Create_DuplicateRule_Refused(t *testing.T) {
 func TestStore_Update_DuplicateRule_Refused(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setup(t, ctx)
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 
 	a, err := s.Create(ctx, 1, automations.Automation{Name: "rule A",
 		Triggers: []automations.Trigger{{
@@ -284,7 +284,7 @@ func TestStore_Update_DuplicateRule_Refused(t *testing.T) {
 func TestStore_Update_SelfMatchAllowed(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setup(t, ctx)
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 
 	created, err := s.Create(ctx, 1, automations.Automation{Name: "same shape",
 		Triggers: []automations.Trigger{{
@@ -313,7 +313,7 @@ func TestStore_Update_SelfMatchAllowed(t *testing.T) {
 func TestStore_Create_ParamsMapOrderIndependent(t *testing.T) {
 	ctx := context.Background()
 	d, _ := setup(t, ctx)
-	s := automations.New(d)
+	s := automations.New(d, testActions(t))
 
 	if _, err := s.Create(ctx, 1, automations.Automation{Name: "params-a",
 		Triggers: []automations.Trigger{{

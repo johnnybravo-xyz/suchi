@@ -41,7 +41,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
-	if approvals.Default() == nil {
+	if s.Approvals == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
@@ -87,7 +87,7 @@ func (s *Server) ApprovalRegister(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errForbidden
 		}
-		id, err = approvals.Default().RegisterInTx(r.Context(), tx, systemID, spec, body.Slug, current)
+		id, err = s.Approvals.RegisterInTx(r.Context(), tx, systemID, spec, body.Slug, current)
 		return err
 	})
 	if errors.Is(err, errSystemUnavailable) {
@@ -177,7 +177,7 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	if approvals.Default() == nil {
+	if s.Approvals == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
@@ -230,7 +230,7 @@ func (s *Server) ApprovalStart(w http.ResponseWriter, r *http.Request) {
 		} else if !ok {
 			return errForbidden
 		}
-		runID, err = approvals.Default().StartInTx(r.Context(), tx, systemID, slug, body.DocID, body.Vars, current)
+		runID, err = s.Approvals.StartInTx(r.Context(), tx, systemID, slug, body.DocID, body.Vars, current)
 		return err
 	})
 	if errors.Is(err, errSystemUnavailable) {
@@ -268,7 +268,7 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	if s.requireAuth(w, r) == nil {
 		return
 	}
-	if approvals.Default() == nil {
+	if s.Approvals == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
@@ -281,7 +281,7 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireNamespaceObject(w, r, auth.FromContext(r.Context()), "approval_runs", id); !ok {
 		return
 	}
-	run, tasks, err := approvals.GetRun(r.Context(), id)
+	run, tasks, err := s.Approvals.GetRun(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, approvals.ErrNoRun) {
 			s.writeError(w, http.StatusNotFound, "no_run", "run not found")
@@ -312,7 +312,7 @@ func (s *Server) ApprovalGetRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tasks = visibleTasks
-	transitions, err := approvals.Default().ListTransitions(r.Context(), id)
+	transitions, err := s.Approvals.ListTransitions(r.Context(), id)
 	if err != nil {
 		s.serverErr(w, "approval.getrun.transitions", err)
 		return
@@ -343,7 +343,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := auth.FromContext(r.Context())
-	if approvals.Default() == nil {
+	if s.Approvals == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
@@ -399,7 +399,7 @@ func (s *Server) ApprovalResolveTask(w http.ResponseWriter, r *http.Request) {
 				return errForbidden
 			}
 		}
-		return approvals.Default().ResolveInTx(r.Context(), tx, taskID, body.Choice, current)
+		return s.Approvals.ResolveInTx(r.Context(), tx, taskID, body.Choice, current)
 	})
 	if err != nil {
 		switch {
@@ -435,7 +435,7 @@ func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
 	}
-	if approvals.Default() == nil {
+	if s.Approvals == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "approvals_disabled",
 			"approvals engine not configured")
 		return
@@ -473,7 +473,7 @@ func (s *Server) ApprovalCancel(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errForbidden
 		}
-		return approvals.Default().CancelInTx(r.Context(), tx, id, body.Reason, current)
+		return s.Approvals.CancelInTx(r.Context(), tx, id, body.Reason, current)
 	})
 	if err != nil {
 		switch {

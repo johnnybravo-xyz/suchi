@@ -18,7 +18,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
+	"github.com/johnnybravo-xyz/suchi/core/automations"
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	suchicrypto "github.com/johnnybravo-xyz/suchi/core/crypto"
 	"github.com/johnnybravo-xyz/suchi/core/db"
@@ -85,6 +87,8 @@ type ChatCompletionMessage struct {
 // Jobs is optional — when set, the upload handler nudges the
 // dispatcher after enqueuing post-ingest work. Tests can leave it nil.
 type Server struct {
+	Actions   *automations.Registry
+	Approvals *approvals.Engine
 	DB        *db.DB
 	CAS       *blob.CAS
 	Log       *slog.Logger
@@ -95,11 +99,11 @@ type Server struct {
 	BuildVersion  string
 	BuildRevision string
 	decrypt       DecryptDeps
-	// PasswordHasher is set at boot by main.go from the local-auth
+	// PasswordHasher is set at boot by distro/app from the local-auth
 	// plugin so /api/admin/users can hash new passwords without this
 	// package importing plugins/*. Nil-check in handlers.
 	PasswordHasher func(pw string) (string, error)
-	// PasswordVerifier is set at boot by main.go from the local-auth
+	// PasswordVerifier is set at boot by distro/app from the local-auth
 	// plugin so /api/share_links/ can check password-protected shares
 	// without a separate hashing lib.
 	PasswordVerifier func(encoded, pw string) error
@@ -166,12 +170,13 @@ type Server struct {
 //
 // Authz defaults to ACLAuthorizer: owners and admins retain full access, while
 // explicit user or group grants can add narrower permissions.
-func New(d *db.DB, cas *blob.CAS, retention *trash.Service, log *slog.Logger) (*Server, error) {
-	if d == nil || cas == nil || retention == nil || log == nil {
-		return nil, errors.New("api.New: DB, CAS, trash, and Log are required")
+func New(d *db.DB, cas *blob.CAS, retention *trash.Service, actions *automations.Registry, log *slog.Logger) (*Server, error) {
+	if d == nil || cas == nil || retention == nil || actions == nil || log == nil {
+		return nil, errors.New("api.New: DB, CAS, trash, Actions, and Log are required")
 	}
 	return &Server{
 		DB:                     d,
+		Actions:                actions,
 		CAS:                    cas,
 		Log:                    log.With("component", "api"),
 		deviceOCRMinConfidence: 0.65,
@@ -196,12 +201,12 @@ func (s *Server) WithDeviceOCRMinConfidence(confidence float64) *Server {
 }
 
 // Register attaches every /api route this package owns to mux. Called
-// from main.go after the auth chain is wired — httpx.Authenticate runs
+// from distro/app after the auth chain is wired — httpx.Authenticate runs
 // upstream, so handlers here can rely on auth.FromContext.
 //
 // Not every /api route lives here: blob mirrors
 // (GET /api/documents/{id}/preview, .../download) are registered in
-// distro/cmd/suchi/main.go because they reuse the ui.Server's
+// distro/app/serve_routes.go because they reuse the ui.Server's
 // serveBlob (sensitivity gate, ETag, sandbox CSP). A grep for those
 // routes finds them there, not in this file.
 func (s *Server) Register(mux *http.ServeMux) {

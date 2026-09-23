@@ -65,16 +65,6 @@ func EnsureDefInTx(ctx context.Context, tx *sql.Tx, systemID int64, slug string,
 	return err
 }
 
-// EnsureDef is the top-level convenience. Uses the package-level
-// engine — main.go's SetDefault must have run first.
-func EnsureDef(ctx context.Context, systemID int64, slug string, spec Spec, actor *pluginapi.Principal) error {
-	e := Default()
-	if e == nil {
-		return ErrEngineNotConfigured
-	}
-	return e.EnsureDef(ctx, systemID, slug, spec, actor)
-}
-
 // specsEqual compares two spec JSON blobs by round-tripping through
 // map[string]any so key ordering + whitespace differences don't
 // trigger a version bump. Cheap for the ~few-hundred-byte payloads

@@ -608,9 +608,7 @@ func TestApprovalResolveTask_TerminalConflictAndUnavailableNotFound(t *testing.T
 	d := openTestDB(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	s := &Server{DB: d, Log: logger}
-	previousEngine := approvals.Default()
-	approvals.SetDefault(approvals.New(d, logger))
-	t.Cleanup(func() { approvals.SetDefault(previousEngine) })
+	s.Approvals = approvals.New(d, logger)
 
 	trashedDoc := seedApprovalDocument(t, d, "sha-resolve-trashed", 2, true)
 	_, _, resolvedID := seedApprovalTask(t, d, "user:5", "resolved")

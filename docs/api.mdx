@@ -56,7 +56,7 @@ This applies to direct Bearer authentication and browser sign-in; see
 an existing browser session.
 
 API tokens are limited by an explicit route allowlist in
-`distro/cmd/suchi/serve_token_policy.go`. Document reads (including search,
+`distro/app/serve_token_policy.go`. Document reads (including search,
 chat, previews, and shared vocabulary) require `documents:read`; document
 mutations require `documents:write`; the activity feed requires `events:read`.
 Write scope does not imply read scope, and scopes never bypass ownership,
@@ -67,7 +67,9 @@ taxonomy administration, profile management, raw-original downloads (`raw=1`), a
 browser/OIDC session. Unlisted routes fail closed for API tokens with
 `403 token_route_forbidden`; a listed route with a missing scope returns
 `403 insufficient_scope`. `/metrics` retains admin-token support. New HTTP routes
-must explicitly declare their token access at the assembly boundary.
+must explicitly declare their token access in the public assembly policy.
+Compiled routes added through `app.Options.Configure` cannot extend that policy
+and remain session-only.
 
 ## Filing-system request context
 

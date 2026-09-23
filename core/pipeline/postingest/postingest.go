@@ -116,6 +116,7 @@ const (
 // post-classify job.
 type Handler struct {
 	db              *db.DB
+	actions         *automations.Registry
 	cas             *blob.CAS
 	log             *slog.Logger
 	langs           []string
@@ -269,12 +270,13 @@ func WithScanSplit(cfg ScanSplit) Option {
 }
 
 // New builds a Handler ready to register with a Dispatcher. The
-// mandatory triple (db, cas, log) covers what every branch needs; every
+// required dependencies (db, cas, actions, log) covers what every branch needs; every
 // other knob is an Option. Zero options → English OCR, no renderer,
 // no LLM handoff, extractor defaults, OCR engine "auto".
-func New(d *db.DB, cas *blob.CAS, log *slog.Logger, opts ...Option) *Handler {
+func New(d *db.DB, cas *blob.CAS, actions *automations.Registry, log *slog.Logger, opts ...Option) *Handler {
 	h := &Handler{
 		db:         d,
+		actions:    actions,
 		cas:        cas,
 		log:        log.With("component", "post-ingest"),
 		langs:      []string{"eng"},
@@ -300,7 +302,7 @@ func (h *Handler) Handle(ctx context.Context, e pluginapi.Event) error {
 	// processing so filters that key on filename/source_path/mail_rule
 	// can tag or route the doc up-front.
 	consCtx := consumptionContextFromPayload(e.Payload)
-	if err := automations.ApplyOnConsumption(ctx, h.db, log, e.DocID, consCtx); err != nil {
+	if err := automations.ApplyOnConsumption(ctx, h.db, h.actions, log, e.DocID, consCtx); err != nil {
 		return fmt.Errorf("consumption automations: %w", err)
 	}
 
@@ -1508,7 +1510,7 @@ func (h *Handler) postContentSteps(ctx context.Context, log *slog.Logger, docID 
 	// Automations — trigger→conditions→actions on document_added.
 	// Fail-soft: an automation error logs a warning and never blocks the
 	// rest of the post-ingest chain. See core/automations for the shape.
-	if err := automations.ApplyOnDocumentAdded(ctx, h.db, log, docID); err != nil {
+	if err := automations.ApplyOnDocumentAdded(ctx, h.db, h.actions, log, docID); err != nil {
 		log.Warn("post-ingest.automations.error", "err", err.Error())
 	}
 

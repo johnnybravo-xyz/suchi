@@ -38,7 +38,7 @@ func (s *Server) Refile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	stats, err := refile.All(r.Context(), s.DB, s.Log, refile.Options{
+	stats, err := refile.All(r.Context(), s.DB, s.Actions, s.Log, refile.Options{
 		SystemID:        systemID,
 		ActorID:         p.UserID,
 		SkipAutomations: body.SkipAutomations,

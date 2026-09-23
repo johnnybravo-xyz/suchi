@@ -381,7 +381,7 @@ func TestArchiveProposalCannotActivateConsequentialRules(t *testing.T) {
 			}
 			corrID := seedCorrespondent(t, ctx, d, "Insurance")
 			seedSimilarCluster(t, ctx, d, corrID, 3)
-			_, err := automations.New(d).Create(ctx, 1, automations.Automation{
+			_, err := automations.New(d, testActions(t)).Create(ctx, 1, automations.Automation{
 				Name: "explicit correspondent rule", Enabled: true,
 				Triggers: []automations.Trigger{{Type: automations.TriggerDocumentAdded, FilterCorrID: corrID}},
 				Actions:  []automations.Action{action},
@@ -389,7 +389,7 @@ func TestArchiveProposalCannotActivateConsequentialRules(t *testing.T) {
 			must(t, err)
 			targetID := seedDoc(t, ctx, d, "Policy renewal", "policy renewal premium insurance annual coverage")
 			must(t, automations.ApplyFromArchive(ctx, d, log, targetID))
-			must(t, automations.ApplyOnDocumentAdded(ctx, d, log, targetID))
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, targetID))
 			assertArchiveProposals(t, d, targetID, "correspondent", corrID, 1)
 			var ownerID int64
 			var trashed sql.NullInt64
@@ -402,7 +402,7 @@ func TestArchiveProposalCannotActivateConsequentialRules(t *testing.T) {
 			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = ? WHERE id = ?`, corrID, targetID); err != nil {
 				t.Fatal(err)
 			}
-			must(t, automations.ApplyOnDocumentAdded(ctx, d, log, targetID))
+			must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, targetID))
 			must(t, d.Read.QueryRow(`SELECT owner_id, trashed_at FROM documents WHERE id = ?`, targetID).Scan(&ownerID, &trashed))
 			if (action.Kind == "discard" && !trashed.Valid) || (action.Kind == "assign_owner" && ownerID != 2) {
 				t.Fatalf("explicit rule lost effect: owner=%d trash=%v", ownerID, trashed)
