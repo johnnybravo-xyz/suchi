@@ -5,8 +5,6 @@
 # copies fixtures into INGEST_FS_DIR, waits for the outbox to drain,
 # and asserts per-fixture outcomes via curl.
 #
-# Reset: rm -rf /tmp/suchi-eml-test /tmp/eml-fixtures
-#
 # Requirements: go, curl, jq, and (optionally) pdftotext + tesseract
 # on PATH — attachment OCR is skipped if they're absent, other
 # assertions still pass.
@@ -14,12 +12,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DATA_DIR="${DATA_DIR:-/tmp/suchi-eml-test/data}"
-INGEST_DIR="${INGEST_DIR:-/tmp/suchi-eml-test/ingest}"
-FIXTURES="${FIXTURES:-/tmp/eml-fixtures}"
+SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/suchi-eml-test.XXXXXX")"
+DATA_DIR="${DATA_DIR:-$SCRATCH_DIR/data}"
+INGEST_DIR="${INGEST_DIR:-$SCRATCH_DIR/ingest}"
+FIXTURES="${FIXTURES:-$SCRATCH_DIR/fixtures}"
 PORT="${PORT:-8765}"
 ADMIN_EMAIL="you@example.com"
 ADMIN_PASSWORD="local-test-passwd"
+SUCHI_PID=""
+
+cleanup() {
+    if [ -n "$SUCHI_PID" ]; then
+        kill "$SUCHI_PID" 2>/dev/null || true
+        wait "$SUCHI_PID" 2>/dev/null || true
+    fi
+    rm -rf -- "$SCRATCH_DIR"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mkdir -p "$DATA_DIR" "$INGEST_DIR"
 
@@ -45,7 +56,6 @@ INGEST_FS_OWNER_EMAIL="$ADMIN_EMAIL" \
 LOG_LEVEL=info \
 "$ROOT/dist/suchi" serve > "$DATA_DIR/suchi.log" 2>&1 &
 SUCHI_PID=$!
-trap 'kill $SUCHI_PID 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 
 # Wait for /healthz.
 for i in $(seq 1 40); do
