@@ -34,7 +34,9 @@ Notable user-visible changes to Suchi are recorded here.
 - Ship all unreleased database work in migration 0003 without changing published
   beta.2 migrations 0001/0002. Fresh and populated schema-2 archives advance to
   schema 3 with preserved IDs, history, credentials, and a one-row
-  `final-beta-schema-3` marker. This release is the required bridge to stable v1.
+  `final-beta-schema-3` marker. Stable v1 uses a squashed fresh-install baseline
+  and guarded compatibility paths so users can upgrade directly from beta.2 or
+  beta.3 without installing an intermediate release.
 - Define strict offline `suchi-taxonomy/v1`; reject YAML and unsupported fields,
   merge later presets/imports additively, keep refile explicit, and place rendered
   projections under immutable per-system roots. Native takeout v2 remains a

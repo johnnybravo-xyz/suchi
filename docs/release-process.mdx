@@ -39,24 +39,29 @@ in the same pull request. Write for operators and call out required migration
 steps directly.
 
 A release normally adds at most one numbered database migration; never rewrite a
-published migration. The current release target is the **final bridge beta**, not
-stable v1.0. Beta.2 at schema 0002 is its published upgrade baseline. Published
+published migration. The current release target is **beta.3**, the final beta
+before stable v1.0. Beta.2 at schema 0002 is its published upgrade baseline. Published
 0001/0002 remain unchanged; all unreleased mobile and taxonomy changes stay
 consolidated in `0003_taxonomy_foundation.sql`, whose rebuild marker remains its
 first line. Migration 0003 creates exactly one `schema_lineage` row named
 `final-beta-schema-3` and leaves `user_version = 3`.
 
-Before tagging the bridge, verify fresh initialization, a populated **0002 →
+Before tagging beta.3, verify fresh initialization, a populated **0002 →
 0003** upgrade, restart idempotence, preserved data, atomic failed-upgrade
 rollback, and restoration of a complete backup containing SQLite, blobs,
-credential key, and configuration. Release notes must identify this beta as the
-required bridge for existing beta archives and require a complete pre-upgrade
-backup. Retain its binaries, images, checksums, release notes, and exact migration
-hashes. Once tagged, migrations 0001–0003, the lineage value, and their release
-artifacts are frozen; any later database change requires another beta or belongs
-to the stable baseline. Intermediate development schemas are not supported
-upgrade inputs. See [Architecture](/architecture#storage-and-transaction-invariants)
-and [Backup and restore](/backup-restore#upgrade-and-rollback).
+credential key, and configuration. Release notes must state that beta.3 and
+stable v1 both accept beta.2 archives directly and require a complete pre-upgrade
+backup. Retain the beta.3 binaries, images, checksums, release notes, and exact
+migration hashes. Once tagged, migrations 0001–0003, the lineage value, and their
+release artifacts are frozen. Stable v1 replaces the active beta catalog with one
+declarative `0001_baseline.sql` for fresh databases and starts a new migration
+epoch at `user_version = 1`. It retains the exact frozen 0003 SQL only in a guarded
+beta.2 compatibility path; beta.3 uses the guarded adoption path directly. Both
+paths verify the expected source schema and finish at the same `stable-v1` lineage
+as a fresh install. Intermediate development schemas are not supported upgrade
+inputs. See
+[Architecture](/architecture#storage-and-transaction-invariants) and
+[Backup and restore](/backup-restore#upgrade-and-rollback).
 
 Suchi follows SemVer:
 

@@ -22,7 +22,7 @@ func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := migrationVersions(migs); !reflect.DeepEqual(got, []int{1, 2, 3}) {
-		t.Fatalf("embedded migration versions = %v, want published beta.2 [1 2] and final-beta bridge 3", got)
+		t.Fatalf("embedded migration versions = %v, want published beta.2 [1 2] and beta.3 transition 3", got)
 	}
 	if !migs[2].RebuildTables {
 		t.Fatal("migration 0003 must use the atomic table-rebuild runner")
