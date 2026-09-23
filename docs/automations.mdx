@@ -18,11 +18,11 @@ Disabled originals and edited forks survive reimport independently in each syste
 
 ## Triggers
 
-| Trigger | Timing |
-| --- | --- |
-| `consumption` | When source context is available, before extraction |
-| `document_added` | After extraction and local archive matching |
-| `document_updated` | After an explicit metadata update |
+| Trigger            | Timing                                              |
+| ------------------ | --------------------------------------------------- |
+| `consumption`      | When source context is available, before extraction |
+| `document_added`   | After extraction and local archive matching         |
+| `document_updated` | After an explicit metadata update                   |
 
 Triggers can filter by source path, filename, mail rule, tag, correspondent,
 document type, title or content regex, sender, subject, mailbox folder, and
@@ -63,9 +63,12 @@ Example:
     }
   ],
   "actions": [
-    {"type": "assign_document_type", "params": {"document_type_id": 3}},
-    {"type": "assign_tags", "params": {"tag_ids": [7]}},
-    {"type": "assign_title", "params": {"template": "Acme invoice {{date}}"}}
+    { "type": "assign_document_type", "params": { "document_type_id": 3 } },
+    { "type": "assign_tags", "params": { "tag_ids": [7] } },
+    {
+      "type": "assign_title",
+      "params": { "template": "Acme invoice {{date}}" }
+    }
   ]
 }
 ```

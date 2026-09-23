@@ -99,20 +99,20 @@ Negation applies only to the following clause. There is no grouped negation.
 
 ## Filters
 
-| Filter | Values and behavior |
-| --- | --- |
-| `jd:` | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax. |
-| `tag:` | Exact tag name. Multiple positive tag clauses require every tag. |
-| `from:` | Exact correspondent name. Matches the primary or any linked correspondent. |
-| `type:` | Exact document-type name. |
-| `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`. |
-| `lang:` | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`. |
-| `title:` | Prefix or quoted phrase restricted to title. |
-| `content:` | Prefix or quoted phrase restricted to extracted content. |
-| `added:` | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`. |
-| `date:` | Date available to Calendar using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match. |
-| `date-role:` | Calendar date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`. |
-| `is:` | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires a date available to Calendar. |
+| Filter         | Values and behavior                                                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jd:`          | Johnny.Decimal category by visible code or exact category name, for example `jd:22` or `jd:"22 Investments"`. Database row IDs are not query syntax. |
+| `tag:`         | Exact tag name. Multiple positive tag clauses require every tag.                                                                                     |
+| `from:`        | Exact correspondent name. Matches the primary or any linked correspondent.                                                                           |
+| `type:`        | Exact document-type name.                                                                                                                            |
+| `sensitivity:` | `public`, `internal`, `confidential`, or `restricted`.                                                                                               |
+| `lang:`        | Assigned or detected two- or three-letter language code, such as `en`, `de`, or `hin`.                                                               |
+| `title:`       | Prefix or quoted phrase restricted to title.                                                                                                         |
+| `content:`     | Prefix or quoted phrase restricted to extracted content.                                                                                             |
+| `added:`       | Added date in UTC using `YYYY-MM-DD`. Supports `=`, `>`, `>=`, `<`, and `<=`.                                                                        |
+| `date:`        | Date available to Calendar using `YYYY-MM-DD`. Supports the same comparisons. Pending and rejected dates never match.                                |
+| `date-role:`   | Calendar date role: `issued`, `due`, `start`, `end`, `expiry`, `renewal`, `service`, or `other`.                                                     |
+| `is:`          | `inbox`, `trash`, `encrypted`, or `dated`. `is:dated` requires a date available to Calendar.                                                         |
 
 See [Document dates](/document-dates) for extraction, confidence, review, and
 Calendar behavior.
@@ -191,11 +191,11 @@ states. Selecting one replaces the active token but does not run the search.
 
 ## Limits
 
-| Limit | Value |
-| --- | --- |
-| Complete query | 1,024 bytes |
-| Parsed tokens | 64 |
-| One bare or quoted value | 256 bytes |
+| Limit                    | Value       |
+| ------------------------ | ----------- |
+| Complete query           | 1,024 bytes |
+| Parsed tokens            | 64          |
+| One bare or quoted value | 256 bytes   |
 
 These are API contracts, not only browser limits.
 
@@ -218,16 +218,16 @@ the failing qualifier. `suggestions` contains closed-vocabulary or ambiguity
 help when available. The web app keeps the active form visible rather than
 turning a failed query into an empty result.
 
-| Input | Result |
-| --- | --- |
-| `corr:bank` | Unknown filter; use `from:`. |
-| `tag:` | Filter requires a value. |
-| `tag:>=tax` | Comparisons unsupported for `tag`. |
-| `"unfinished` | Unterminated quote. |
-| `(annual report)` | Grouping unsupported. |
-| `annual OR report` | `OR` unsupported. |
-| `annual*` | Raw FTS syntax unsupported. |
-| `date:2026-02-30` | Invalid calendar date. |
+| Input              | Result                             |
+| ------------------ | ---------------------------------- |
+| `corr:bank`        | Unknown filter; use `from:`.       |
+| `tag:`             | Filter requires a value.           |
+| `tag:>=tax`        | Comparisons unsupported for `tag`. |
+| `"unfinished`      | Unterminated quote.                |
+| `(annual report)`  | Grouping unsupported.              |
+| `annual OR report` | `OR` unsupported.                  |
+| `annual*`          | Raw FTS syntax unsupported.        |
+| `date:2026-02-30`  | Invalid calendar date.             |
 
 ## URLs and MCP
 

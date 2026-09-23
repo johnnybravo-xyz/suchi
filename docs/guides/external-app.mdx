@@ -129,11 +129,11 @@ generate a wider token.
 
 The closed scope vocabulary:
 
-| Scope             | Grants                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- |
-| `documents:read`  | Document/search reads and the visible approvals inbox                                                         |
-| `documents:write` | Document mutations, approval resolution, and share-link creation; pair with `documents:read` for both       |
-| `events:read`     | Read the activity-event feed                                                                                  |
+| Scope             | Grants                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `documents:read`  | Document/search reads and the visible approvals inbox                                                 |
+| `documents:write` | Document mutations, approval resolution, and share-link creation; pair with `documents:read` for both |
+| `events:read`     | Read the activity-event feed                                                                          |
 
 Browser and OIDC sessions can mint any scope in this vocabulary. API tokens
 cannot call the token-management endpoints.
@@ -181,7 +181,7 @@ curl -sS -X DELETE "$SUCHI_URL/api/tokens/7" \
 
 Recommended cadence:
 
-- **Personal integrations**: rotate yearly.
+- **Individual integrations**: rotate yearly.
 - **Service accounts**: rotate on team turnover or every 90 days,
   whichever comes first.
 - **After a suspected leak**: revoke immediately, generate a new one,

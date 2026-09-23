@@ -114,7 +114,7 @@ bounded to 1 MiB. The entire file is checked even when seeds are skipped.
 format = "suchi-taxonomy/v1"
 id = "personal-records"
 version = 1
-name = "Personal records"
+name = "Household records"
 market = "global"
 language = "en"
 story = "Keep identity paperwork in a stable filing tree. Unclassified documents remain in Suchi's generated Inbox until filed."
@@ -157,13 +157,13 @@ Only `seeds.automations` is supported. Existing trigger types and filters use
 the runtime's glob/regex validation; category keywords remain literal matching,
 not regex. Starters need unique names, nonempty actions and exact parameters:
 
-| Action | Portable parameters |
-| --- | --- |
-| `assign_title` | `template` |
-| `assign_tags` | `tags` list or single `tag`, never both |
-| `assign_correspondent` | `correspondent` name |
-| `assign_document_type` | `document_type` name |
-| `assign_jd_category` | Integer `jd_category_code` declared in the user tree |
+| Action                 | Portable parameters                                  |
+| ---------------------- | ---------------------------------------------------- |
+| `assign_title`         | `template`                                           |
+| `assign_tags`          | `tags` list or single `tag`, never both              |
+| `assign_correspondent` | `correspondent` name                                 |
+| `assign_document_type` | `document_type` name                                 |
+| `assign_jd_category`   | Integer `jd_category_code` declared in the user tree |
 
 Keyword-generated names include the authoring ID and effective category code/name.
 If two rules to be added have the same name, Preview rejects the proposal with the

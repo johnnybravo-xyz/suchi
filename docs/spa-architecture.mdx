@@ -199,7 +199,7 @@ Components call named `api.js` operations, which own fetch and error parsing;
 before using them in a screen. API field names may stay technical; visible labels
 follow [Web app](/web-app).
 
-`TaxonomyImport.svelte` is shared by setup and Settings. It owns file/paste reads,
+`TaxonomyImport.svelte` is shared by the Filing tree and Taxonomy sections. It owns file/paste reads,
 HuML/TOML choice, seed/remap/destination choices and preview freshness; schema
 validation stays server-side. Late FileReader/network responses cannot replace
 new input, and conflicting actions are disabled in flight.
@@ -215,8 +215,7 @@ returned system and invalidates old requests. Blank confirmation and explicit
 full/tree-only exports stay in this shared flow. Taxonomy administration requires
 a web admin session; mobile tokens cannot use it. See [Filing trees](/jd).
 
-`lib/configuration.js` owns one section inventory; setup derives its order/labels
-with the shorter People label. `Setup.svelte` owns navigation/completion;
+`lib/configuration.js` owns the Archive Configuration section inventory.
 `ArchiveSettings.svelte` owns overview and section navigation.
 `Settings.svelte` fills the shell's remaining dynamic viewport height, keeping
 Settings tabs and the build footer outside its scrolling content row.
@@ -224,8 +223,13 @@ The archive frame fills that row: its right pane scrolls independently with a
 stable scrollbar gutter. The sidebar can scroll in shorter windows and becomes
 a horizontal section rail on narrow screens.
 
+`App.svelte` owns the administrator's filing-tree reminder state.
+`SetupReminder.svelte` renders it in the sidebar, narrow Dashboard and Settings.
+Failures remain visible with Retry. Choosing a preset, confirmed Blank, or an
+imported tree refreshes the state; visiting Filing tree alone does not dismiss it.
+
 `ConfigurationSection.svelte` shares form state, validation, required-load/retry
-gates and writes across setup/Settings. Mailbox editing delegates to
+gates and writes across Archive Configuration sections. Mailbox editing delegates to
 `EmailAccounts.svelte`, imports to `TaxonomyImport.svelte`, and both automation
 entry points link to the existing `Automations.svelte` editor.
 
@@ -240,11 +244,11 @@ validates a synthetic response without changing application mode.
 
 `PeopleSettings.svelte` owns Users, Groups, Metadata and Taxonomy. Metadata has
 one type selector including custom fields; file operations stay separate.
-`UserCreateForm.svelte` shares creation/validation between setup and Settings;
-it submits no hidden member capabilities for admins. Self-disable checks use
+`UserCreateForm.svelte` owns user creation there and submits no hidden member
+capabilities for admins. Self-disable checks use
 `session.user.user_id`; the API owns self-disable, last-admin and capability
 normalization safeguards. Verify shared configuration with:
-`cd ui && bun run e2e --grep 'separates completed archive administration|keeps archive layout|refreshes intake owners|failed configuration reads'`.
+`cd ui && bun run e2e --grep 'archive setup|filing-tree|refreshes intake owners|failed configuration reads'`.
 
 `AccountSettings.svelte` sends only `display_name` for profile saves; sign-in email
 is read-only. One token list separates owned `mobile_pairing` rows from manual/
@@ -259,7 +263,7 @@ without token, vault, mailbox or pairing controls or requests.
 | Vocabulary | Source |
 | --- | --- |
 | Navigation and titles | `App.svelte` |
-| Setup/settings sections | `lib/configuration.js` |
+| Archive Configuration sections | `lib/configuration.js` |
 | Capabilities | `lib/capabilities.js` |
 | Dates, sizes, sensitivity | `lib/format.js` |
 | Saved-view filters and browser parameters | `lib/documentFilters.js` |

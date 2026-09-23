@@ -41,14 +41,14 @@ docker compose --profile proton run --rm -it bridge init
 
 ## Persistent paths
 
-| Path | Contents |
-| --- | --- |
-| `config/.env` | IMAP and Suchi settings; contains credentials |
-| `.env` | Compose profile, port, and UID/GID |
-| `maildir/` | mbsync state and local message mirror |
-| `ingest/` | Temporary handoff to Suchi |
-| `suchi-data/` | Database, blobs, keys, and snapshots |
-| `bridge-data/` | Proton Bridge state when enabled |
+| Path           | Contents                                      |
+| -------------- | --------------------------------------------- |
+| `config/.env`  | IMAP and Suchi settings; contains credentials |
+| `.env`         | Compose profile, port, and UID/GID            |
+| `maildir/`     | mbsync state and local message mirror         |
+| `ingest/`      | Temporary handoff to Suchi                    |
+| `suchi-data/`  | Database, blobs, keys, and snapshots          |
+| `bridge-data/` | Proton Bridge state when enabled              |
 
 Back up `config/.env`, `.env`, Maildir state when needed, and the complete
 `suchi-data/` directory. Restrict credentials to the deployment user.

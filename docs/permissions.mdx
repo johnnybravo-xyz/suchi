@@ -50,12 +50,12 @@ removal cannot retract bytes already delivered. Shared server admins, host and
 backup operators remain trusted; these are not separate databases, encryption
 keys or a regulatory/professional-independence guarantee.
 
-| Bit | Permission |
-| ---: | --- |
-| `1` | view |
-| `2` | change |
-| `4` | delete |
-| `3` | view and change |
+| Bit | Permission               |
+| --: | ------------------------ |
+| `1` | view                     |
+| `2` | change                   |
+| `4` | delete                   |
+| `3` | view and change          |
 | `7` | view, change, and delete |
 
 `object_acls` supports `document`, `tag`, `correspondent`, `document_type`, and
@@ -108,13 +108,13 @@ resources. When demoting an administrator, explicitly grant the member
 capabilities they should retain; omitted capabilities do not restore legacy
 hidden grants. Normal revocation cascades apply to the access they lose.
 
-| Capability | Allows a member to |
-| --- | --- |
-| `archive_chat` | Ask grounded questions across documents they can read. |
+| Capability             | Allows a member to                                         |
+| ---------------------- | ---------------------------------------------------------- |
+| `archive_chat`         | Ask grounded questions across documents they can read.     |
 | `archive_intelligence` | Extract, review, use in chat, and calendar document facts. |
-| `mailboxes` | Connect and manage their own mail intake. |
-| `share_links` | Create revocable document share links. |
-| `share_views` | Publish saved views to other users in the selected system. |
+| `mailboxes`            | Connect and manage their own mail intake.                  |
+| `share_links`          | Create revocable document share links.                     |
+| `share_views`          | Publish saved views to other users in the selected system. |
 
 The web app labels these capabilities **Ask the archive**, **Manage document
 dates**, **Manage mailboxes**, **Create share links**, and **Share saved views**.
@@ -122,6 +122,7 @@ Removing `archive_chat` removes the Ask action; its conversations are already
 transient browser memory and create no server-side records.
 
 Removing a capability also closes the access it granted:
+
 - Removing `archive_intelligence` hides extraction, extracted-fact review, and
   Calendar. Existing pending facts and dates already in Calendar remain stored
   and auditable. Dates already available to Calendar remain readable document

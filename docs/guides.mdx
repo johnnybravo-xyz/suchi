@@ -13,6 +13,9 @@ provider configuration.
   document export, target-tree preparation and captured filesystem-watch intake.
   It is partial; [Backup and restore](/backup-restore) covers exact whole-instance
   recovery of IDs, memberships, ACLs and relationships.
+- [Import a Paperless-ngx export bundle](/guides/importer) consumes a Paperless-ngx
+  export in its JSON-manifest + `originals/` + `archive/` layout. The import is
+  idempotent and safe to re-run against a nightly export during a shadow window.
 
 ## Email intake
 

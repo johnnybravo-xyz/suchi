@@ -9,11 +9,11 @@ runtime dependency graph and executable code visible at build time.
 
 `plugin-api/` contains the small set of interfaces shared by core and plugins:
 
-| Interface | Purpose | Registration |
-| --- | --- | --- |
+| Interface       | Purpose                                   | Registration                    |
+| --------------- | ----------------------------------------- | ------------------------------- |
 | `Authenticator` | Establish a principal for an HTTP request | Add to the authentication chain |
-| `Subscriber` | Consume one or more durable job kinds | `dispatcher.Register` |
-| `AuditSink` | Receive committed audit events | `audit.RegisterSink` |
+| `Subscriber`    | Consume one or more durable job kinds     | `dispatcher.Register`           |
+| `AuditSink`     | Receive committed audit events            | `audit.RegisterSink`            |
 
 `Principal`, `Event`, `AuditEvent`, and `BlobRef` are boundary value types.
 Business services, database helpers, and format-specific contracts remain in

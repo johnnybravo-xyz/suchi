@@ -35,7 +35,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
 | Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
 | Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
-| Admin                   | `/api/admin/users`, `/api/admin/setup/*`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}`                                                |
+| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}`          |
 
 ## Auth
 
@@ -625,7 +625,7 @@ The normal sensitivity-reveal and raw-original download restrictions still apply
   "sources": [
     {
       "kind": "mailbox",
-      "label": "Personal Outlook",
+      "label": "Outlook account",
       "detail": "ritesh@example.com / INBOX",
       "observed_at": 1793494800
     }
@@ -1261,7 +1261,7 @@ bounded (five presets today).
   {
     "id": "solo",
     "name": "Solo",
-    "description": "Personal filing, no business.",
+    "description": "Individual filing, no business.",
     "areas": [
       { "code": 10, "name": "Life",  "category_count": 6 },
       { "code": 20, "name": "Money", "category_count": 4 }
@@ -1745,8 +1745,8 @@ Request:
 
 ### `GET /api/admin/setup/state`
 
-Admin-only. `started_at` is the first administrator's creation time and supports
-the fresh-install reminder. `current_preset` and `filing_tree_chosen` describe
+Admin-only. `started_at` is the first administrator's creation time.
+`current_preset` and `filing_tree_chosen` describe
 the selected `?system=Snn`, not the archive's default system. The preset identifies
 the last imported choice, not proof that the current merged tree equals that file.
 An empty preset string and absent start time are omitted.

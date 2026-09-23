@@ -16,12 +16,12 @@ choosing; all four projects are active.
 
 ## At a glance
 
-| Project | Default operational shape | License |
-| --- | --- | --- |
-| **suchi** | One Go process, SQLite, filesystem CAS; document converters are optional | AGPL-3.0 |
-| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker | GPL-3.0 |
-| **Papra** | Packaged Node application with SQLite and filesystem storage by default | AGPL-3.0 |
-| **Docspell** | Separate REST and joex processes; embedded H2 by default; full-text search is optional | AGPL-3.0 |
+| Project           | Default operational shape                                                                           | License  |
+| ----------------- | --------------------------------------------------------------------------------------------------- | -------- |
+| **suchi**         | One Go process, SQLite, filesystem CAS; document converters are optional                            | AGPL-3.0 |
+| **Paperless-ngx** | Web, consumer, task worker, and scheduler processes; SQLite plus a required Redis-compatible broker | GPL-3.0  |
+| **Papra**         | Packaged Node application with SQLite and filesystem storage by default                             | AGPL-3.0 |
+| **Docspell**      | Separate REST and joex processes; embedded H2 by default; full-text search is optional              | AGPL-3.0 |
 
 Sources: [Paperless-ngx configuration](https://docs.paperless-ngx.com/configuration/),
 [Papra configuration](https://docs.papra.app/self-hosting/configuration/), and
@@ -34,15 +34,15 @@ documented as shipped
 
 ### Ingest and extraction
 
-| Feature | suchi | Paperless-ngx | Papra | Docspell |
-| --- | :---: | :---: | :---: | :---: |
-| Upload API | ✅ | ✅ | ✅ | ✅ |
-| Watched folder | ✅ | ✅ | ✅ | ✅ (CLI watcher) |
-| Mail intake | ✅ (IMAP) | ✅ (IMAP) | ◐ (intake address/relay) | ✅ (IMAP) |
-| OCR | ✅ | ✅ | ✅ | ✅ |
-| Office-document extraction | ✅ | ✅ (optional Tika) | ✅ | ✅ |
-| Pre-consume script hook | ✅ | ✅ | ➖ | ➖ |
-| Scan splitting and blank-page removal | ✅ | ✅ | ➖ | ➖ |
+| Feature                               |   suchi   |   Paperless-ngx    |          Papra           |     Docspell     |
+| ------------------------------------- | :-------: | :----------------: | :----------------------: | :--------------: |
+| Upload API                            |    ✅     |         ✅         |            ✅            |        ✅        |
+| Watched folder                        |    ✅     |         ✅         |            ✅            | ✅ (CLI watcher) |
+| Mail intake                           | ✅ (IMAP) |     ✅ (IMAP)      | ◐ (intake address/relay) |    ✅ (IMAP)     |
+| OCR                                   |    ✅     |         ✅         |            ✅            |        ✅        |
+| Office-document extraction            |    ✅     | ✅ (optional Tika) |            ✅            |        ✅        |
+| Pre-consume script hook               |    ✅     |         ✅         |            ➖            |        ➖        |
+| Scan splitting and blank-page removal |    ✅     |         ✅         |            ➖            |        ➖        |
 
 Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
 [Papra features](https://docs.papra.app/),
@@ -51,15 +51,15 @@ Sources: [Paperless-ngx usage](https://docs.paperless-ngx.com/usage/),
 
 ### Organization and automation
 
-| Feature | suchi | Paperless-ngx | Papra | Docspell |
-| --- | :---: | :---: | :---: | :---: |
-| Tags | ✅ | ✅ | ✅ | ✅ |
-| Correspondent metadata | ✅ (multiple roles) | ✅ (one per document) | ➖ | ✅ |
-| Document types | ✅ | ✅ | ➖ | ◐ (tag categories/folders) |
-| Typed custom fields/properties | ✅ | ✅ | ✅ | ✅ |
-| Deterministic classification | ✅ | ✅ | ✅ | ◐ (metadata analysis) |
-| Optional LLM assistance | ✅ (fixed classification) | ✅ (suggestions/chat) | ✅ (auto-tagging) | ➖ |
-| Human approval tasks | ✅ | ➖ | ➖ | ➖ |
+| Feature                        |           suchi           |     Paperless-ngx     |       Papra       |          Docspell          |
+| ------------------------------ | :-----------------------: | :-------------------: | :---------------: | :------------------------: |
+| Tags                           |            ✅             |          ✅           |        ✅         |             ✅             |
+| Correspondent metadata         |    ✅ (multiple roles)    | ✅ (one per document) |        ➖         |             ✅             |
+| Document types                 |            ✅             |          ✅           |        ➖         | ◐ (tag categories/folders) |
+| Typed custom fields/properties |            ✅             |          ✅           |        ✅         |             ✅             |
+| Deterministic classification   |            ✅             |          ✅           |        ✅         |   ◐ (metadata analysis)    |
+| Optional LLM assistance        | ✅ (fixed classification) | ✅ (suggestions/chat) | ✅ (auto-tagging) |             ➖             |
+| Human approval tasks           |            ✅             |          ➖           |        ➖         |             ➖             |
 
 Paperless and Papra have broader AI surfaces than earlier versions of this
 page stated. See the [Paperless-ngx FAQ](https://docs.paperless-ngx.com/faq/)
@@ -67,13 +67,13 @@ and [Papra auto-tagging guide](https://docs.papra.app/guides/auto-tagging/).
 
 ### API and access
 
-| Feature | suchi | Paperless-ngx | Papra | Docspell |
-| --- | :---: | :---: | :---: | :---: |
-| Documented REST API | ✅ | ✅ | ✅ | ✅ |
-| Public share links | ✅ (expiry/password) | ✅ (expiry) | ✅ (expiry/password) | ✅ (optional password) |
-| Multi-user ownership | ✅ | ✅ | ✅ (organizations) | ✅ (collectives) |
-| Fine-grained object permissions | ✅ | ✅ | ◐ (organization roles) | ➖ |
-| MCP server | ✅ | ➖ | ➖ | ➖ |
+| Feature                         |        suchi         | Paperless-ngx |         Papra          |        Docspell        |
+| ------------------------------- | :------------------: | :-----------: | :--------------------: | :--------------------: |
+| Documented REST API             |          ✅          |      ✅       |           ✅           |           ✅           |
+| Public share links              | ✅ (expiry/password) |  ✅ (expiry)  |  ✅ (expiry/password)  | ✅ (optional password) |
+| Multi-user ownership            |          ✅          |      ✅       |   ✅ (organizations)   |    ✅ (collectives)    |
+| Fine-grained object permissions |          ✅          |      ✅       | ◐ (organization roles) |           ➖           |
+| MCP server                      |          ✅          |      ➖       |           ➖           |           ➖           |
 
 Sources: [Paperless-ngx API](https://docs.paperless-ngx.com/api/),
 [Papra API reference](https://docs.papra.app/resources/api-endpoints/),

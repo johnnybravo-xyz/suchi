@@ -76,11 +76,11 @@ configuration → Classification**. A missing or invalid stored value resolves t
 not reload or enable the model, change credentials, apply dates, clear an open
 research drawer, or require a server restart.
 
-| Preset | Matching passages per document | Source-text limit per document | Maximum across six sources |
-| --- | ---: | ---: | ---: |
-| Focused | 1 | 1,600 Unicode characters | 9,600 characters |
-| Balanced (default) | 2 | 3,200 Unicode characters | 19,200 characters |
-| Detailed | 3 | 4,800 Unicode characters | 28,800 characters |
+| Preset             | Matching passages per document | Source-text limit per document | Maximum across six sources |
+| ------------------ | -----------------------------: | -----------------------------: | -------------------------: |
+| Focused            |                              1 |       1,600 Unicode characters |           9,600 characters |
+| Balanced (default) |                              2 |       3,200 Unicode characters |          19,200 characters |
+| Detailed           |                              3 |       4,800 Unicode characters |          28,800 characters |
 
 The passage column counts matching FTS windows, not the optional distinct
 document ending. That ending and Suchi's passage separators still count toward
@@ -412,19 +412,19 @@ the optional `role` filter still applies.
 
 ## Maintainer file map
 
-| Concern | Location |
-| --- | --- |
-| Chat request, retrieval, grounding | `core/api/chat.go` |
-| Chat rate and concurrency gate | `core/api/chat_gate.go` |
-| Generic intelligence API | `core/api/intelligence.go` |
-| Intelligence value contracts | `core/intelligence/intelligence.go` |
-| Intelligence schema | `core/db/migrations/0002_document_intelligence.sql` |
-| Single-call model contract | `plugins/llm-classifier/llm.go` |
-| Candidate persistence | `plugins/llm-classifier/handler.go` |
-| Rich query date predicates | `core/searchquery/` |
-| Research drawer | `ui/src/lib/ArchiveChat.svelte` |
-| Review workspace | `ui/src/routes/Tasks.svelte` |
-| Calendar | `ui/src/routes/Calendar.svelte` |
+| Concern                            | Location                                            |
+| ---------------------------------- | --------------------------------------------------- |
+| Chat request, retrieval, grounding | `core/api/chat.go`                                  |
+| Chat rate and concurrency gate     | `core/api/chat_gate.go`                             |
+| Generic intelligence API           | `core/api/intelligence.go`                          |
+| Intelligence value contracts       | `core/intelligence/intelligence.go`                 |
+| Intelligence schema                | `core/db/migrations/0002_document_intelligence.sql` |
+| Single-call model contract         | `plugins/llm-classifier/llm.go`                     |
+| Candidate persistence              | `plugins/llm-classifier/handler.go`                 |
+| Rich query date predicates         | `core/searchquery/`                                 |
+| Research drawer                    | `ui/src/lib/ArchiveChat.svelte`                     |
+| Review workspace                   | `ui/src/routes/Tasks.svelte`                        |
+| Calendar                           | `ui/src/routes/Calendar.svelte`                     |
 
 ## Operational checks
 

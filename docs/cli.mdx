@@ -37,7 +37,7 @@ image does not depend on `wget` or `curl` for readiness checks.
 ## `suchi import [flags]`
 
 Point `--from` at your existing DMS's export bundle. See
-[importer](/importer) for the full walkthrough.
+[importer](/guides/importer) for the full walkthrough.
 
 ### Flags
 
@@ -50,8 +50,8 @@ Point `--from` at your existing DMS's export bundle. See
 | `--map-jd <path>`       | no                      | HuML or TOML rules: source metadata → JD code.                                                             |
 | `--auto-jd`             | no                      | Apply built-in JD heuristics (deterministic keyword matches). Off by default — inbox is the safe fallback. |
 | `--verify`              | no                      | Dry-diff the bundle against the live DB. No writes.                                                        |
-| `--report <path>`       | no                      | Write the import report. Defaults to `./import-report.md`.                                                |
-| `--system <CODE>` | no | Existing destination for import and `--verify`; omission uses original system 1. |
+| `--report <path>`       | no                      | Write the import report. Defaults to `./import-report.md`.                                                 |
+| `--system <CODE>`       | no                      | Existing destination for import and `--verify`; omission uses original system 1.                           |
 
 <Info>
   Category-resolution flags (`--flat`, `--map-jd`, `--auto-jd`) are mutually
@@ -74,11 +74,11 @@ is copying the blob tree.
 
 ### Flags
 
-| Flag                      | Default          | Purpose                                             |
-| ------------------------- | ---------------- | --------------------------------------------------- |
+| Flag                      | Default          | Purpose                                                  |
+| ------------------------- | ---------------- | -------------------------------------------------------- |
 | `--older-than <duration>` | `720h` (30 days) | Skip blobs newer than this; not a concurrency guarantee. |
 | `--apply`                 | off              | Delete candidate blobs with all archive writers stopped. |
-| `--verbose`               | off              | Log every kept and every candidate blob.            |
+| `--verbose`               | off              | Log every kept and every candidate blob.                 |
 
 Trash and its automatic retention remove document rows and rendered files,
 but retain CAS blobs for this offline collection. Run GC during a planned
@@ -109,14 +109,14 @@ recheck as the HTTP importer. Skipping seeds still validates the whole file.
 
 ### Flags
 
-| Flag             | Required | Purpose                                                         |
-| ---------------- | -------- | --------------------------------------------------------------- |
-| `--apply`        | no       | Actually write. Default is dry-run.                             |
-| `--skip-seeds`   | no       | Only touch the JD tree — no preset automations. |
-| `--format <fmt>` | no       | Override extension-based detection: `huml` or `toml`.           |
-| `--remap <a:b>`  | no       | Merge collision: move incoming code `a` to `b`, or use `a:skip`. Repeatable. |
-| `--system <CODE>` | no | Target an existing system for unprefixed input; must agree with a prefixed file. |
-| `--existing-system-code <CODE>` | no | On first prefixed import only, preserve the original under this distinct code and create the incoming system separately. |
+| Flag                            | Required | Purpose                                                                                                                  |
+| ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `--apply`                       | no       | Actually write. Default is dry-run.                                                                                      |
+| `--skip-seeds`                  | no       | Only touch the JD tree — no preset automations.                                                                          |
+| `--format <fmt>`                | no       | Override extension-based detection: `huml` or `toml`.                                                                    |
+| `--remap <a:b>`                 | no       | Merge collision: move incoming code `a` to `b`, or use `a:skip`. Repeatable.                                             |
+| `--system <CODE>`               | no       | Target an existing system for unprefixed input; must agree with a prefixed file.                                         |
+| `--existing-system-code <CODE>` | no       | On first prefixed import only, preserve the original under this distinct code and create the incoming system separately. |
 
 Only safe initial unconfigured setup can replace the bootstrap tree. Filed
 documents (including recoverable Trash) and dependent user configuration prevent
@@ -148,11 +148,11 @@ unrepresentable starters fail rather than being re-enabled or silently lost.
 Explicit tree-only export omits both keywords and starters. Legacy incompatible
 reserved rows fail export without repairing or hiding database contents.
 
-| Flag             | Purpose                              |
-| ---------------- | ------------------------------------ |
-| `--format <fmt>` | Output `huml` (default) or `toml`.   |
-| `--skip-seeds` | Tree and descriptions only; omit keywords and starters. |
-| `--system <CODE>` | Select one system; omission uses the original. |
+| Flag              | Purpose                                                 |
+| ----------------- | ------------------------------------------------------- |
+| `--format <fmt>`  | Output `huml` (default) or `toml`.                      |
+| `--skip-seeds`    | Tree and descriptions only; omit keywords and starters. |
+| `--system <CODE>` | Select one system; omission uses the original.          |
 
 ```bash
 suchi taxonomy export --format toml > my-tree.toml
@@ -172,13 +172,13 @@ commit.
 
 ### Flags
 
-| Flag                 | Required | Purpose                                               |
-| -------------------- | -------- | ----------------------------------------------------- |
-| `--kind <k>`         | yes      | One of `tag`, `correspondent`, `document_type`.       |
-| `--from-name <name>` | yes      | The row to delete. Every reference moves to `--into`. |
-| `--into-name <name>` | yes      | The row that absorbs the references.                  |
-| `--apply`            | no       | Actually merge. Default is dry-run.                   |
-| `--system <CODE>` | no | Resolve names and merge references only within this system. |
+| Flag                 | Required | Purpose                                                     |
+| -------------------- | -------- | ----------------------------------------------------------- |
+| `--kind <k>`         | yes      | One of `tag`, `correspondent`, `document_type`.             |
+| `--from-name <name>` | yes      | The row to delete. Every reference moves to `--into`.       |
+| `--into-name <name>` | yes      | The row that absorbs the references.                        |
+| `--apply`            | no       | Actually merge. Default is dry-run.                         |
+| `--system <CODE>`    | no       | Resolve names and merge references only within this system. |
 
 Example:
 
@@ -212,9 +212,9 @@ walk.
 
 ### Flags
 
-| Flag                   | Purpose                                                                                   |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| `--scrub-cas`          | Stream and hash every CAS blob; report corrupt content and database references that are missing on disk. |
+| Flag                   | Purpose                                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--scrub-cas`          | Stream and hash every CAS blob; report corrupt content and database references that are missing on disk.       |
 | `--quarantine-corrupt` | Move corrupt files to `$DATA_DIR/blobs/quarantine/`. Requires `--scrub-cas`; missing blobs are never modified. |
 
 Non-zero exit only on hard errors. Missing optional binaries print but
@@ -244,11 +244,11 @@ setup + tool reference.
 
 ### Flags
 
-| Flag            | Purpose                                                                                  |
-| --------------- | ---------------------------------------------------------------------------------------- |
+| Flag            | Purpose                                                                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--http <addr>` | Streamable HTTP listener address (for example `127.0.0.1:7000`). The listener has no separate auth; protect any non-loopback binding. Omit for stdio. |
-| `--url <url>`   | suchi API base URL. Overrides `SUCHI_URL` env.                                           |
-| `--token <hex>` | Scoped API token. Overrides `SUCHI_TOKEN` env.                                           |
+| `--url <url>`   | suchi API base URL. Overrides `SUCHI_URL` env.                                                                                                        |
+| `--token <hex>` | Scoped API token. Overrides `SUCHI_TOKEN` env.                                                                                                        |
 
 The binary also responds to `suchi-mcp` when invoked via symlink — the
 argv[0] dispatcher rewrites the command so `command: "suchi-mcp"` in a
@@ -264,13 +264,13 @@ Seed `$DATA_DIR` from the versioned manifest maintained by
 
 ### Flags
 
-| Flag                   | Purpose                                                                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--data-dir <dir>`     | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`.                                                                                                               |
-| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/johnnybravo-xyz/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile.    |
-| `--corpus-url <url>`   | HTTPS URL of a compatible corpus tarball. Verified against a `.sha256` sidecar if present. Defaults to the release tested with this Suchi build.                                             |
-| `--corpus-dir <path>`  | Use an already extracted corpus directory. Skips download and extraction.                                                                                                                   |
-| `--fetch-only`         | Download, verify, and extract the corpus into the local cache without writing the database.                                                                                                 |
+| Flag                   | Purpose                                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-dir <dir>`     | Override `$DATA_DIR` for this seed only. Defaults to the env value or `/data`.                                                                                                                  |
+| `--corpus-file <path>` | Point at a local `corpus-vX.tar.gz` tarball (from [suchi-demo](https://github.com/johnnybravo-xyz/suchi-demo)). Skips HTTP fetch entirely — the common path in the demo container's Dockerfile. |
+| `--corpus-url <url>`   | HTTPS URL of a compatible corpus tarball. Verified against a `.sha256` sidecar if present. Defaults to the release tested with this Suchi build.                                                |
+| `--corpus-dir <path>`  | Use an already extracted corpus directory. Skips download and extraction.                                                                                                                       |
+| `--fetch-only`         | Download, verify, and extract the corpus into the local cache without writing the database.                                                                                                     |
 
 Without a corpus flag, `suchi demo` downloads the tested corpus release. A
 different manifest version is rejected so showcase images cannot silently run
@@ -291,12 +291,12 @@ Full walkthrough at [Refile](/refile).
 
 ### Flags
 
-| Flag | Purpose |
-| --- | --- |
-| `--skip-automations` | Enqueue render only. Use when only the storage-path template changed. |
-| `--skip-render` | Rerun automations only. |
-| `--owner-id <id>` | Restrict to documents owned by this user. `0` means every owner. |
-| `--system <CODE>` | Select one system; `--owner-id 0` means all owners there, not all systems. |
+| Flag                 | Purpose                                                                    |
+| -------------------- | -------------------------------------------------------------------------- |
+| `--skip-automations` | Enqueue render only. Use when only the storage-path template changed.      |
+| `--skip-render`      | Rerun automations only.                                                    |
+| `--owner-id <id>`    | Restrict to documents owned by this user. `0` means every owner.           |
+| `--system <CODE>`    | Select one system; `--owner-id 0` means all owners there, not all systems. |
 
 Safe against a live server — uploads that arrive mid-sweep use the
 normal postingest chain and land under the new tree automatically.
@@ -323,7 +323,7 @@ picks the set every time.
 
 | Flag                          | Purpose                                                                                                                                                                                               |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--system <CODE>` | Select one system before resolving filters; omission uses the original. |
+| `--system <CODE>`             | Select one system before resolving filters; omission uses the original.                                                                                                                               |
 | `--stale <ocr\|llm\|content>` | Signature-driven. Docs whose `pipeline_version_<kind>` lags the current binary's constant. Bump the constant in code when the pipeline output shape changes; only the affected docs rescan next time. |
 | `--jd <code>`                 | Restrict to a single JD category id.                                                                                                                                                                  |
 | `--tag <name>`                | Docs carrying this tag.                                                                                                                                                                               |

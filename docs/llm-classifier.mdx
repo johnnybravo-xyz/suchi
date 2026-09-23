@@ -65,12 +65,12 @@ LLM_CONFIDENCE_THRESHOLD=0.70
 
 Hosted endpoints require `LLM_EGRESS_ACK=true` or the matching web checkbox.
 
-| Provider | Base URL | Model value |
-| --- | --- | --- |
-| OpenAI | `https://api.openai.com/v1` | Provider model name |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini model name |
-| Azure OpenAI | `https://<resource>.openai.azure.com/openai/v1` | Deployment name |
-| llama.cpp | `http://127.0.0.1:8080/v1` | Descriptive label accepted by the server |
+| Provider      | Base URL                                                  | Model value                              |
+| ------------- | --------------------------------------------------------- | ---------------------------------------- |
+| OpenAI        | `https://api.openai.com/v1`                               | Provider model name                      |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini model name                        |
+| Azure OpenAI  | `https://<resource>.openai.azure.com/openai/v1`           | Deployment name                          |
+| llama.cpp     | `http://127.0.0.1:8080/v1`                                | Descriptive label accepted by the server |
 
 Gemini must use its OpenAI-compatible endpoint. Azure uses the deployment name
 as the model. Set `LLM_API_KEY` or mount a key file through

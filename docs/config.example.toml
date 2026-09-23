@@ -78,8 +78,8 @@ audit_retention_days = 20
 # OCR + ingest limits
 # --------------------------------------------------------------------
 
-ocr_languages = ["eng"]        # array; CSV form ("eng,deu") also works
-ocr_engine = "auto"            # auto | tesseract | ocrmypdf
+ocr_languages = ["eng"]          # array; CSV form ("eng,deu") also works
+ocr_engine = "auto"              # auto | tesseract | ocrmypdf
 device_ocr_min_confidence = 0.65 # finite 0..1; provisional mobile OCR threshold
 pdf_max_content_bytes = "8M"
 anydoc_max_content_bytes = "32M"

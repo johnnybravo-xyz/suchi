@@ -11,13 +11,13 @@ cloud OCR, or cloud search dependency.
 
 Outbound traffic occurs only when an operator configures or uses an integration:
 
-| Integration | Data sent |
-| --- | --- |
-| OIDC | Discovery, authorization, and token requests to the configured issuer |
-| IMAP intake | Mailbox credentials or OAuth tokens and mailbox reads |
-| Microsoft mailbox sign-in | Device-code and token requests to Microsoft |
-| Hosted model assistance | Extracted text and bounded classification context from the document's filing system; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
-| Operator pre-consume script | Whatever the operator's executable chooses to send |
+| Integration                 | Data sent                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OIDC                        | Discovery, authorization, and token requests to the configured issuer                                                                                                                                                                                                                                                                           |
+| IMAP intake                 | Mailbox credentials or OAuth tokens and mailbox reads                                                                                                                                                                                                                                                                                           |
+| Microsoft mailbox sign-in   | Device-code and token requests to Microsoft                                                                                                                                                                                                                                                                                                     |
+| Hosted model assistance     | Extracted text and bounded classification context from the document's filing system; for an authorized archive question, the question, newest complete history pairs within four messages/12 KB, and up to six system/membership/ACL-filtered sources containing title, sensitivity, snippet, and capability-gated accepted fact value/evidence |
+| Operator pre-consume script | Whatever the operator's executable chooses to send                                                                                                                                                                                                                                                                                              |
 
 Hosted LLM use requires an explicit egress acknowledgement. Local LLM endpoints
 do not require that acknowledgement, but they are still network destinations

@@ -22,13 +22,13 @@ suchi demo
 
 Useful flags:
 
-| Flag | Purpose |
-| --- | --- |
-| `--data-dir <path>` | Override `DATA_DIR` for this command. |
-| `--corpus-file <path>` | Seed from a local corpus bundle. |
-| `--corpus-url <url>` | Fetch and seed a remote corpus bundle. |
-| `--corpus-dir <path>` | Seed from an already extracted corpus. |
-| `--fetch-only` | Download and validate without writing rows. |
+| Flag                   | Purpose                                     |
+| ---------------------- | ------------------------------------------- |
+| `--data-dir <path>`    | Override `DATA_DIR` for this command.       |
+| `--corpus-file <path>` | Seed from a local corpus bundle.            |
+| `--corpus-url <url>`   | Fetch and seed a remote corpus bundle.      |
+| `--corpus-dir <path>`  | Seed from an already extracted corpus.      |
+| `--fetch-only`         | Download and validate without writing rows. |
 
 Without a corpus flag, the command fetches the release tested with this build.
 The hosted image embeds that tarball and seeds only when its dedicated data
@@ -62,11 +62,11 @@ returns to the guide after the visitor explores Search or another screen.
 
 ## Runtime controls
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SUCHI_DEMO_MODE` | off | Enables the demo API, SPA banner, guards, and reset ticker. |
-| `SUCHI_DEMO_GLOBAL_RPS` | `5` | Per-IP rate for session mint and upgrade; `0` disables it. |
-| `SUCHI_DEMO_SCRATCH_TTL_MINUTES` | `30` | Lifetime of writable visitor accounts and their uploads. |
+| Variable                         | Default | Purpose                                                     |
+| -------------------------------- | ------- | ----------------------------------------------------------- |
+| `SUCHI_DEMO_MODE`                | off     | Enables the demo API, SPA banner, guards, and reset ticker. |
+| `SUCHI_DEMO_GLOBAL_RPS`          | `5`     | Per-IP rate for session mint and upgrade; `0` disables it.  |
+| `SUCHI_DEMO_SCRATCH_TTL_MINUTES` | `30`    | Lifetime of writable visitor accounts and their uploads.    |
 
 Demo mode refuses to start alongside `SUCHI_DEV=1` or OIDC. Use a dedicated
 `DATA_DIR`; demo credentials and retention rules are intentionally unsuitable

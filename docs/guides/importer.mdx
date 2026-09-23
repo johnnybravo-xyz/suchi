@@ -258,14 +258,14 @@ table.
 
 **Action type mapping** (source `workflowaction.type`):
 
-| Source             | Target action(s)                                                                                                                                                                | Outcome                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| 1 ASSIGNMENT       | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field | Full                                                                                |
-| 2 REMOVAL          | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_custom_field`; `remove_owner` is reported and dropped because Suchi documents require an owner | Full except reported partial mappings and truncated multi-value inputs |
-| 3 EMAIL            | —                                                                                                                                                                               | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
-| 4 WEBHOOK          | —                                                                                                                                                                               | Partial — no `webhook` verb yet                                                     |
-| 5 PASSWORD_REMOVAL | —                                                                                                                                                                               | Partial — no analog                                                                 |
-| 6 MOVE_TO_TRASH    | `discard`                                                                                                                                                                       | Partial — `discard` skips the doc rather than soft-deleting                         |
+| Source             | Target action(s)                                                                                                                                                                                             | Outcome                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| 1 ASSIGNMENT       | fan-out to `assign_title` / `assign_tags` / `assign_correspondent` / `assign_document_type` / `assign_storage_path` / `assign_owner` / `assign_custom_field` per non-null field                              | Full                                                                                |
+| 2 REMOVAL          | fan-out to `remove_tags` / `remove_correspondents` / `remove_document_type` / `remove_storage_path` / `remove_custom_field`; `remove_owner` is reported and dropped because Suchi documents require an owner | Full except reported partial mappings and truncated multi-value inputs              |
+| 3 EMAIL            | —                                                                                                                                                                                                            | Partial — suchi has no `notify_email` verb yet; the report queues it as a follow-up |
+| 4 WEBHOOK          | —                                                                                                                                                                                                            | Partial — no `webhook` verb yet                                                     |
+| 5 PASSWORD_REMOVAL | —                                                                                                                                                                                                            | Partial — no analog                                                                 |
+| 6 MOVE_TO_TRASH    | `discard`                                                                                                                                                                                                    | Partial — `discard` skips the doc rather than soft-deleting                         |
 
 **Trigger filter mapping**:
 
@@ -298,29 +298,29 @@ zero rules map — the view row is skipped and reported.
 
 **Rule-type mapping** (source `rule_type` int → target filter_json):
 
-| Source enum                                                          | Target                    | Outcome                                    |
-| -------------------------------------------------------------------- | ------------------------- | ------------------------------------------ |
-| 0 title contains                                                     | `q`                       | Full                                       |
-| 1 content contains                                                   | `q`                       | Partial (q matches title+content combined) |
-| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt | — | Failed — the importer does not translate ASN filters, although document ASN identity is retained within the target system |
-| 3 correspondent is                                                   | `correspondents__id__in`  | Full                                       |
-| 4 document type is                                                   | `document_type__id`       | Full (multi → last wins, Partial)          |
-| 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively    |
-| 6 has tag                                                            | `tags__id__in`            | Full                                       |
-| 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                       |
+| Source enum                                                          | Target                    | Outcome                                                                                                                                  |
+| -------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 title contains                                                     | `q`                       | Full                                                                                                                                     |
+| 1 content contains                                                   | `q`                       | Partial (q matches title+content combined)                                                                                               |
+| 2 ASN is / 18 not-has ASN / 23-24 ASN gt/lt                          | —                         | Failed — the importer does not translate ASN filters, although document ASN identity is retained within the target system                |
+| 3 correspondent is                                                   | `correspondents__id__in`  | Full                                                                                                                                     |
+| 4 document type is                                                   | `document_type__id`       | Full (multi → last wins, Partial)                                                                                                        |
+| 5 is in inbox                                                        | —                         | Partial — suchi surfaces Inbox natively                                                                                                  |
+| 6 has tag                                                            | `tags__id__in`            | Full                                                                                                                                     |
+| 7 has any tag / 22 has tags in                                       | `tags__id__in`            | Full                                                                                                                                     |
 | 8-16 date filters (created/added/modified before/after)              | —                         | Failed — importer does not translate source-system date rules; Suchi rich queries support `added:` and approved extracted `date:` values |
-| 17 does not have tag                                                 | —                         | Failed — importer does not translate this rule to `-tag:` |
-| 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q`                       | Full                                       |
-| 21 more like this                                                    | —                         | Failed                                     |
-| 25 storage path is / 30 has storage path in                          | `q` text search           | Partial                                    |
-| 26 has correspondent in                                              | `correspondents__id__in`  | Full                                       |
-| 27, 29, 31 negative "in" filters                                     | —                         | Failed — importer does not translate negative metadata rules |
-| 28 has document type in                                              | `document_type__id` first | Partial                                    |
-| 32-35 owner filters                                                  | —                         | Failed                                     |
-| 36, 38-42 custom-field filters                                       | —                         | Failed                                     |
-| 37 is shared by me                                                   | —                         | Failed                                     |
-| 43-46 created/added to/from                                          | —                         | Failed                                     |
-| 47 mime type is                                                      | —                         | Failed                                     |
+| 17 does not have tag                                                 | —                         | Failed — importer does not translate this rule to `-tag:`                                                                                |
+| 19 title or content / 20 fulltext / 48 simple title / 49 simple text | `q`                       | Full                                                                                                                                     |
+| 21 more like this                                                    | —                         | Failed                                                                                                                                   |
+| 25 storage path is / 30 has storage path in                          | `q` text search           | Partial                                                                                                                                  |
+| 26 has correspondent in                                              | `correspondents__id__in`  | Full                                                                                                                                     |
+| 27, 29, 31 negative "in" filters                                     | —                         | Failed — importer does not translate negative metadata rules                                                                             |
+| 28 has document type in                                              | `document_type__id` first | Partial                                                                                                                                  |
+| 32-35 owner filters                                                  | —                         | Failed                                                                                                                                   |
+| 36, 38-42 custom-field filters                                       | —                         | Failed                                                                                                                                   |
+| 37 is shared by me                                                   | —                         | Failed                                                                                                                                   |
+| 43-46 created/added to/from                                          | —                         | Failed                                                                                                                                   |
+| 47 mime type is                                                      | —                         | Failed                                                                                                                                   |
 
 Display mode: `TABLE` → `table`, `SMALL_CARDS` and `LARGE_CARDS` →
 `card`. Icons are dropped (suchi doesn't render view icons).

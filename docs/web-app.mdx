@@ -26,16 +26,16 @@ new system. [Permissions](/permissions) explains the server-enforced boundary.
 
 ## Main navigation
 
-| Label | Opens |
-| --- | --- |
-| **Dashboard** | Archive totals, Inbox/Approvals counts, failed jobs, recent documents, and saved views. |
-| **Documents** | Search, filters, list/grid display, selections, bulk actions and filing. |
-| **Inbox** | Documents awaiting filing in the protected system Inbox. |
-| **Views** | Saved document searches and shortcuts. |
-| **Calendar** | Document dates for admins, members with **Manage document dates**, and demo visitors. |
-| **Approvals** | Human decisions, rescan proposals and **Dead jobs — needs attention**. |
-| **Automations** | Filing/metadata rules; admins can edit, members have read-only access. |
-| **Trash** | Deleted documents, restoration and confirmed permanent deletion. |
+| Label           | Opens                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------- |
+| **Dashboard**   | Archive totals, Inbox/Approvals counts, failed jobs, recent documents, and saved views. |
+| **Documents**   | Search, filters, list/grid display, selections, bulk actions and filing.                |
+| **Inbox**       | Documents awaiting filing in the protected system Inbox.                                |
+| **Views**       | Saved document searches and shortcuts.                                                  |
+| **Calendar**    | Document dates for admins, members with **Manage document dates**, and demo visitors.   |
+| **Approvals**   | Human decisions, rescan proposals and **Dead jobs — needs attention**.                  |
+| **Automations** | Filing/metadata rules; admins can edit, members have read-only access.                  |
+| **Trash**       | Deleted documents, restoration and confirmed permanent deletion.                        |
 
 The **Index** lists normal filing areas/categories after a tree is chosen. The
 protected Inbox appears only in its dedicated navigation item. Password-unlocked
@@ -87,19 +87,19 @@ failures show **Retry** rather than an empty archive.
 
 ## Document URLs and filters
 
-| Filter | Browser parameter | Example |
-| --- | --- | --- |
-| Filing system | `system` | `#/documents?system=S01` |
-| Text | `q` | `#/documents?q=paris` |
-| Filing category database ID | `jd` | `#/documents?jd=6` |
-| Tag | `tags__id__in` | `#/documents?tags__id__in=4` |
-| Correspondent | `correspondents__id__in` | `#/documents?correspondents__id__in=3` |
-| Document type | `document_type__id` | `#/documents?document_type__id=2` |
-| Sensitivity | `sensitivity` | `#/documents?sensitivity=confidential` |
-| Sort order | `ordering` | `#/documents?ordering=title` |
-| Page | `page` | `#/documents?page=3` |
-| Added on/after (Unix seconds) | `created_at__gte` | `#/documents?created_at__gte=1788220800` |
-| Added on/before (inclusive Unix seconds) | `created_at__lte` | `#/documents?created_at__lte=1790812799` |
+| Filter                                   | Browser parameter        | Example                                  |
+| ---------------------------------------- | ------------------------ | ---------------------------------------- |
+| Filing system                            | `system`                 | `#/documents?system=S01`                 |
+| Text                                     | `q`                      | `#/documents?q=paris`                    |
+| Filing category database ID              | `jd`                     | `#/documents?jd=6`                       |
+| Tag                                      | `tags__id__in`           | `#/documents?tags__id__in=4`             |
+| Correspondent                            | `correspondents__id__in` | `#/documents?correspondents__id__in=3`   |
+| Document type                            | `document_type__id`      | `#/documents?document_type__id=2`        |
+| Sensitivity                              | `sensitivity`            | `#/documents?sensitivity=confidential`   |
+| Sort order                               | `ordering`               | `#/documents?ordering=title`             |
+| Page                                     | `page`                   | `#/documents?page=3`                     |
+| Added on/after (Unix seconds)            | `created_at__gte`        | `#/documents?created_at__gte=1788220800` |
+| Added on/before (inclusive Unix seconds) | `created_at__lte`        | `#/documents?created_at__lte=1790812799` |
 
 Combine `system=CODE` with other filters after introduction. Reload, Back/Forward,
 copied links and new tabs retain it. An old unqualified numeric document URL first
@@ -201,12 +201,12 @@ connections stay under **API tokens**.
 
 Admins also have **Settings > Archive configuration**:
 
-| Group | Sections |
-| --- | --- |
+| Group                    | Sections                                 |
+| ------------------------ | ---------------------------------------- |
 | **Structure and access** | **Filing tree**, **People and metadata** |
-| **Document intake** | **Watched folder**, **Email intake** |
-| **Processing** | **Classification**, **Automations** |
-| **Maintenance** | **OCR and backups** |
+| **Document intake**      | **Watched folder**, **Email intake**     |
+| **Processing**           | **Classification**, **Automations**      |
+| **Maintenance**          | **OCR and backups**                      |
 
 The configuration frame fills the available screen height. Long sections scroll
 inside the right pane without moving section navigation or the version footer.
@@ -254,8 +254,7 @@ A fresh archive has only System/Inbox, without an implicit preset or filing Inde
 There is no separate setup wizard. Administrators use **Settings > Archive
 configuration**, whose shared sidebar exposes Filing tree, People and metadata,
 Watched folder, Email intake, Classification, Automations, OCR and backups, plus
-Trust Gate when the server enables it. Every section is usable before a tree is
-chosen.
+every other enabled option. Every section is usable before a tree is chosen.
 
 Filing tree is the only setup requirement. Apply a preset or import, or explicitly
 confirm **Blank** to start from scratch. That selection satisfies archive setup;
@@ -270,29 +269,29 @@ the sidebar. Later applications merge, without resetting existing filing.
 Validation checks supported structure, not domain correctness or rule trust.
 See [Filing trees](/jd) for destination, collision and export rules.
 
-For 48 hours after first-admin creation, incomplete setup shows **Choose your
-filing tree** in the sidebar/narrow Dashboard with **Continue setup**. The action
-opens **Archive configuration > Filing tree**. Opening or closing the reminder,
-choosing a preset or Blank, importing a tree, or expiry dismisses it. Browser
-dismissal is specific to user/installation start.
+Incomplete setup shows **Choose your filing tree** in the sidebar/narrow Dashboard
+with **Continue setup**. The action opens **Archive configuration > Filing tree**.
+The reminder has no dismissal control and remains visible across navigation and
+browser reloads until an administrator chooses a preset, confirmed Blank, or
+imports a tree. If setup status cannot be verified, the reminder remains visible
+and offers **Retry**.
 
-Before engagement, Settings shows **Archive setup is incomplete** and **Continue
-setup** above the ordinary content. It never replaces or locks Archive
-Configuration sections. `#/setup` is not a screen and has no compatibility
-redirect.
+While setup is incomplete, Settings shows the same reminder and **Continue setup**
+above the ordinary content. It never replaces or locks Archive
+Configuration sections. `#/setup` is not a screen and has no compatibility redirect.
 
 ## Capabilities and sensitive documents
 
 Admins have all capabilities. Grant members additional access in
 **People and metadata > Users**:
 
-| Interface label | Stored key |
-| --- | --- |
-| **Ask the archive** | `archive_chat` |
+| Interface label           | Stored key             |
+| ------------------------- | ---------------------- |
+| **Ask the archive**       | `archive_chat`         |
 | **Manage document dates** | `archive_intelligence` |
-| **Manage mailboxes** | `mailboxes` |
-| **Create share links** | `share_links` |
-| **Share saved views** | `share_views` |
+| **Manage mailboxes**      | `mailboxes`            |
+| **Create share links**    | `share_links`          |
+| **Share saved views**     | `share_views`          |
 
 [Permissions](/permissions) owns revocation and object-access rules.
 
@@ -314,9 +313,9 @@ links use exact documents with **Date role** and **Open full calendar**. Day lin
 open exact-day agendas, preserve View/role, and return through **Back to Month YYYY**.
 Month/day/View/role survive history and reload. Partial dates appear in broader
 agendas, not exact-day cells. Expand Automatic/Previously accepted/Reviewed status
-for classifier confidence. Reviewed exact-day **Add to calendar** offers a disclosed local `.ics`
-export, not synchronization. [Document dates](/document-dates) owns precision,
-review, filtering and export rules.
+for classifier confidence. Reviewed exact-day **Add to calendar** offers a disclosed
+local `.ics` export, not synchronization. [Document dates](/document-dates) owns
+precision, review, filtering and export rules.
 
 Sensitivity choices are Public, Internal, Confidential and Restricted; absent
 values show **Unset**. Confidential/Restricted thumbnails blur and previews/text

@@ -56,8 +56,8 @@ Runs are `running`, `done`, `failed`, or `cancelled`. Tasks are `open`,
         "timeout": "rejected"
       }
     },
-    "approved": {"kind": "end"},
-    "rejected": {"kind": "end"}
+    "approved": { "kind": "end" },
+    "rejected": { "kind": "end" }
   }
 }
 ```
@@ -83,14 +83,14 @@ human-approved write retry-safe when the durable job is redelivered.
 
 ## API flow
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/approvals/definitions` | Register a new definition version |
-| `GET` | `/api/approvals/definitions/{slug}` | Read the active definition |
+| Method | Path                                      | Purpose                                                                |
+| ------ | ----------------------------------------- | ---------------------------------------------------------------------- |
+| `POST` | `/api/approvals/definitions`              | Register a new definition version                                      |
+| `GET`  | `/api/approvals/definitions/{slug}`       | Read the active definition                                             |
 | `POST` | `/api/approvals/definitions/{slug}/start` | Start a run with document change access; admin-only without a document |
-| `GET` | `/api/approvals/runs/{id}` | Read a run with document view access; admin-only without a document |
-| `POST` | `/api/approvals/tasks/{id}/resolve` | Submit a declared choice |
-| `POST` | `/api/approvals/runs/{id}/cancel` | Cancel a running run |
+| `GET`  | `/api/approvals/runs/{id}`                | Read a run with document view access; admin-only without a document    |
+| `POST` | `/api/approvals/tasks/{id}/resolve`       | Submit a declared choice                                               |
+| `POST` | `/api/approvals/runs/{id}/cancel`         | Cancel a running run                                                   |
 
 Register the example under `invoice-approval` from an administrator's browser
 or OIDC session:

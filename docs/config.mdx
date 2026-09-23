@@ -337,7 +337,7 @@ ID tokens. Invalid credentials never fall back to a browser session.
 | `INGEST_FS_DIR`         | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
 | `INGEST_FS_SYSTEM` | (unset = original system 1) | Existing target code, for example S02. Does not create a system. The owner must be active and able to enter it. |
 
-The setup wizard exposes the same values as database-backed overrides. Saving a
+Archive Configuration exposes the same values as database-backed overrides. Saving a
 new directory, owner or system validates the destination, stops the old watcher,
 drains the new directory, and starts watching immediately. Intake rechecks owner
 entry; sidecars cannot redirect the configured system. Optional sidecar `jd_system`
@@ -409,7 +409,7 @@ the bounded source-text depth independently of provider configuration; see
 | `LLM_EGRESS_ACK`                    | Must be `true` for non-local endpoints. Loopback, private, link-local, `.local`, and `.localhost` endpoints skip the check.                         |
 | `LLM_CONFIDENCE_THRESHOLD`          | Model metadata and per-date automatic threshold from `0.50` to `0.95`; default `0.70`. Below-threshold results are flagged for review. Automatic application also requires the shared mode and current guards. When configured, it wins over the stored web setting. |
 
-The setup wizard AEAD-seals API keys before writing them to `settings` and
+Archive Configuration AEAD-seals API keys before writing them to `settings` and
 never reads plaintext keys back. It exposes masked status, a synthetic
 connection test with validated fields and latency, and an explicit key-clear
 action. The classification options separate model-free archive matching from
@@ -452,7 +452,7 @@ these tell it how to reach the API. Flags override env.
 ## Live database settings
 
 The operator-facing settings below live in the `settings` table and are set via
-the setup wizard or **Archive configuration**. This is the complete list of
+**Archive configuration**. This is the complete list of
 stored values that participate in runtime configuration. A stored value fills
 a field only when that field is absent from the config file and process environment.
 The running LLM, filesystem watcher, OCR configuration, and backup schedule
@@ -461,20 +461,17 @@ reload after a successful save; pinned fields retain their boot value.
 | Key                                                                                                   | Purpose                                                                                                      |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `backup.interval_hours`                                                                               | Backup cadence in hours when `BACKUP_INTERVAL` is not configured.                                            |
-| `ingest.fs_watch_dir` / `ingest.fs_watch_owner` / `ingest.fs_watch_system` | Wizard-written watcher destination values for fields not pinned at boot. |
+| `ingest.fs_watch_dir` / `ingest.fs_watch_owner` / `ingest.fs_watch_system` | Archive Configuration watcher destination values for fields not pinned at boot. |
 | `classification.auto_apply` | Shared automatic application mode; missing means enabled, malformed values fail closed. Saved independently of model configuration. |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local matching, automatic threshold (default `0.90`) and minimum review-suggestion score (default `0.50`). Application also requires the shared mode and current guards. |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |
 | `ocr.languages`                                                                                       | JSON array form of `OCR_LANGUAGES`.                                                                          |
-| `setup.intent`                                                                                        | Local onboarding choice used only to recommend a filing tree.                                                |
-| `setup.completed_at`                                                                                  | Records that onboarding was completed.                                                                       |
 
 Filing mode, Inbox and last-import author ID/version/hash/snapshot are stored on
 `jd_systems`, not global `settings.preset` or taxonomy setting aliases.
 
 Migration 0003 converts a retained old date opt-out into the shared application
-mode and preserves a custom local automatic threshold. Already-deleted
-preferences from intermediate development schemas cannot be recovered.
+mode and preserves a custom local automatic threshold.
 
 ## Secrets convention
 

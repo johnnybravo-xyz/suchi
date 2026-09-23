@@ -24,11 +24,11 @@
           },
           {
             "group": "Getting started",
-            "pages": ["getting-started", "web-app", "companion", "document-dates"]
+            "pages": ["getting-started", "web-app", "companion"]
           },
           {
             "group": "Reference",
-            "pages": ["config", "cli", "api", "importer", "formats"]
+            "pages": ["config", "cli", "api", "formats"]
           },
           {
             "group": "Concepts",
@@ -37,6 +37,7 @@
               "search",
               "query-language",
               "llm-classifier",
+              "document-dates",
               "archive-chat",
               "pipeline-versions",
               "privacy",
@@ -56,6 +57,7 @@
             "pages": [
               "guides",
               "guides/export-import",
+              "guides/importer",
               "guides/mcp-connect",
               "guides/mail-intake",
               "guides/mail-intake-oauth",
@@ -65,11 +67,7 @@
           },
           {
             "group": "Development",
-            "pages": [
-              "architecture",
-              "spa-architecture",
-              "release-process"
-            ]
+            "pages": ["architecture", "spa-architecture", "release-process"]
           },
           {
             "group": "Alternatives",
