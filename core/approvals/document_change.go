@@ -58,7 +58,7 @@ func DocumentChangeSpec() Spec {
 	}}
 }
 
-// ProposeDocumentChangeInTx records gate provenance atomically with the review.
+// ProposeDocumentChangeInTx records review provenance atomically with the review.
 // Generic workflows cannot mint a source/human binding or replace the
 // mandatory review state of a queued proposal.
 func ProposeDocumentChangeInTx(ctx context.Context, tx *sql.Tx, docID int64, change DocumentChange) error {

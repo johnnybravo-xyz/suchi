@@ -186,8 +186,8 @@ type CompletionMessage struct {
 	Content string `json:"content"`
 }
 
-// Plugin holds an atomic runtime snapshot so live reload from the setup
-// wizard (see SetConfig) never races an in-flight Classify.
+// Plugin holds an atomic runtime snapshot so configuration reloads never race
+// an in-flight Classify call.
 type Plugin struct {
 	rt  atomic.Pointer[runtime]
 	log *slog.Logger
@@ -243,11 +243,8 @@ func New(cfg Config, log *slog.Logger) (*Plugin, error) {
 	return p, nil
 }
 
-// SetConfig atomically swaps the plugin's runtime config. Same validation as
-// New(); on failure the old config stays live. Called by Archive configuration
-// so an operator
-// doesn't have to restart to try a different endpoint. The complete runtime,
-// including the request timeout, swaps as one snapshot.
+// SetConfig validates and atomically replaces the complete runtime snapshot.
+// On failure the previous configuration stays active.
 func (p *Plugin) SetConfig(cfg Config) error {
 	rt, err := runtimeFromConfig(cfg)
 	if err != nil {
