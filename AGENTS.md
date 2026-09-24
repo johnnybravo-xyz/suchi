@@ -32,10 +32,11 @@ Optional integrations must preserve useful local operation.
   license. Keep it dependency-free and stdlib-only: importing anything from
   `core/` would pull AGPL code into an Apache module and break that promise.
   Its files carry Apache-2.0 SPDX headers; every other file carries AGPL.
-- Source files carry an SPDX line and no copyright line. The copyright record
-  lives in `NOTICE` and the `README.md` License section — keep it there; with no
-  per-file notices those two are the only places the holder is named, and dual
-  licensing rests on that record.
+- Source files carry an SPDX line and no copyright line, enforced by
+  `make license-check` (wired into `make check`, the CI lint job, and the
+  pre-commit hook). The copyright record lives in `NOTICE` and the `README.md`
+  License section — keep it there; with no per-file notices those two are the
+  only places the holder is named, and dual licensing rests on that record.
 - Record every newly bundled or vendored third-party component in `NOTICE` with
   its upstream URL and license, and reproduce the full text where the license
   requires it be carried. A vendored asset served to users needs the notice in

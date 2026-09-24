@@ -73,6 +73,7 @@ make test         # all Go modules
 make ui-check     # Svelte checks, tests, build, and embedded bundle diff
 make smoke        # build and probe a running server
 make bench-check  # binary, startup, memory, and goroutine guardrails
+make license-check  # every source file declares its licence
 make security-check # release-time Go and frontend advisory scan
 ```
 

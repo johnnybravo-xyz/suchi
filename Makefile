@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -6,6 +6,7 @@ BIN := $(CURDIR)/dist/suchi
 MODULES := . plugin-api hack/emlfixtures hack/bench/tools/sampler hack/bench/tools/gen-pdf hack/bench/tools/report
 TEST_FLAGS ?= -timeout 180s
 GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f -name '*.go' -print0
+UI_SRC_FILES = find ui/src -type f \( -name '*.js' -o -name '*.svelte' -o -name '*.css' \) -print0
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
 MINT_VERSION := 4.2.874
@@ -37,6 +38,7 @@ help:
 	  '  ui-clean        Remove UI dependencies and generated assets.' \
 	  '  docs-dev        Run the Mintlify documentation server.' \
 	  '  docs-check      Check documentation for broken links.' \
+	  '  license-check   Verify every source file declares its licence.' \
 	  '  install-hooks   Install the tracked Git hooks.' \
 	  '  bench-check     Run benchmark scenarios against hard limits.' \
 	  '  release         Dispatch the release workflow for VERSION.' 
@@ -71,7 +73,22 @@ fmt-check:
 tidy:
 	@for m in $(MODULES); do echo "=== tidy $$m ==="; ( cd "$$m" && GOWORK=off go mod tidy ) || exit 1; done
 
-check: fmt-check vet test lint ui-check
+# Every source file declares its licence. plugin-api/ is Apache-2.0 so third-party
+# plugins need not be AGPL; everything else is AGPL-3.0-or-later. Headers carry no
+# copyright line — the holder is named in NOTICE and the README License section.
+license-check:
+	@set -e; \
+	  missing="$$( $(GO_FILES) | xargs -0 grep -L 'SPDX-License-Identifier' || true )"; \
+	  test -z "$$missing" || { printf '%s\n' "$$missing" '' 'Add: // SPDX-License-Identifier: AGPL-3.0-or-later' >&2; exit 1; }; \
+	  missing="$$( $(UI_SRC_FILES) | xargs -0 grep -L 'SPDX-License-Identifier' || true )"; \
+	  test -z "$$missing" || { printf '%s\n' "$$missing" '' 'Add an SPDX-License-Identifier header.' >&2; exit 1; }; \
+	  wrong="$$( grep -rl 'SPDX-License-Identifier: AGPL' --include='*.go' plugin-api || true )"; \
+	  test -z "$$wrong" || { printf '%s\n' "$$wrong" '' 'plugin-api/ must be Apache-2.0, or third-party plugins inherit AGPL.' >&2; exit 1; }; \
+	  wrong="$$( grep -rl 'SPDX-License-Identifier: Apache' --include='*.go' core distro plugins hack || true )"; \
+	  test -z "$$wrong" || { printf '%s\n' "$$wrong" '' 'Only plugin-api/ is Apache-2.0; the rest is AGPL-3.0-or-later.' >&2; exit 1; }; \
+	  printf 'license-check: every source file declares a licence\n'
+
+check: fmt-check license-check vet test lint ui-check
 
 # Release-time advisory scan. Kept separate from `check` because it queries
 # external vulnerability databases and may install the pinned scanner.

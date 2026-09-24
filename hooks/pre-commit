@@ -2,6 +2,7 @@
 set -eu
 
 make --no-print-directory fmt-check
+make --no-print-directory license-check
 
 # This is a review reminder, not a claim that file paths reveal semantic changes.
 if ! git diff --cached --quiet -- docs/architecture.mdx docs/spa-architecture.mdx docs/plugins.mdx docs/pipeline-versions.mdx; then
