@@ -27,7 +27,7 @@ create another copy, and database rows can retain stable content while filing
 paths are rebuilt as views. It is not encryption or an access-control boundary;
 SQLite metadata and the API still decide who can see each document.
 
-Status: **v0.1.0-beta.2**, suitable for evaluation but not yet critical
+Status: **v0.1.0-beta.3**, suitable for evaluation but not yet critical
 archives. The API and storage layout are stabilising but not frozen.
 
 [Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·
@@ -97,10 +97,10 @@ must use HTTPS and pin the selected release by its published image digest.
 
 ## Images
 
-- `v0.1.0-beta.2` / `beta` / `beta-standard`: Alpine. Supports all listed formats
+- `v0.1.0-beta.3` / `beta` / `beta-standard`: Alpine. Supports all listed formats
   and indexes scanned PDFs with Tesseract. The beta channel tags resolve to the
   current beta's standard image.
-- `v0.1.0-beta.2-full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned
+- `v0.1.0-beta.3-full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned
   PDFs can retain a searchable text layer.
 
 Both images include anydoc, DjVu, HEIC/HEIF, and Outlook MSG support. The full

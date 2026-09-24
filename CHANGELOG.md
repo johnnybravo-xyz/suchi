@@ -4,6 +4,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-09-24
+
 ### Added
 
 - Add HuML/TOML filing-tree preview, import, merge, and tree-only export. The first
@@ -29,6 +31,10 @@ Notable user-visible changes to Suchi are recorded here.
   metadata through PATCH or bulk metadata/tag actions. The removal commits
   with the edit; manual review tags and explicit reassertions remain, while
   Trash, restore and rescan alone do not clear review.
+- Upgrade beta.2 archives directly to beta.3/schema 3 after taking a complete
+  backup of SQLite, blobs, the credential key, and configuration. Stable v1 will
+  accept both beta.2 and beta.3 archives directly; retain the backup and beta.3
+  release artifacts until that upgrade is verified.
 - Apply high-confidence inferred dates, model metadata, and local archive matches
   by default, with review-first mode available. Suggestions remain bound to
   source and field generations; review and queued application recheck the current
@@ -365,6 +371,7 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.3...HEAD
+[0.1.0-beta.3]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/johnnybravo-xyz/suchi/releases/tag/v0.1.0-beta.1
