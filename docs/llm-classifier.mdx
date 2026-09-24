@@ -179,9 +179,10 @@ about.
 ## Pipeline versions and rescans
 
 Each classification records `pipeline_version_llm`. A code, output-schema, or
-prompt revision can bump that version and create a stale-results proposal.
-Changing endpoint, model, key, timeout, or threshold does not mark the archive
-stale.
+prompt revision can bump that version. Maintainers separately raise the tagged
+LLM recommendation when existing successful results should receive a
+stale-results proposal. Changing endpoint, model, key, timeout, or threshold
+does not mark the archive stale.
 
 Version `0` means classification never completed. Valid low-confidence results
 receive the current version plus `needs-review`; they are completed results,

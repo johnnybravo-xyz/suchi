@@ -28,7 +28,7 @@ func detectorEngine(t *testing.T, d *db.DB) *approvals.Engine {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	e := approvals.New(d, log)
-	e.RegisterHandler(rescan.NewHandler(d, rescan.Versions{OCR: 2}))
+	e.RegisterHandler(rescan.NewHandler(d))
 	e.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: e, Log: log})
 	if err := e.EnsureDef(context.Background(), 1, rescan.ProposalSlug, rescan.ProposalSpec(), sysActor()); err != nil {
 		t.Fatalf("seed proposal def: %v", err)
@@ -55,6 +55,28 @@ func countProposalRuns(t *testing.T, ctx context.Context, d *db.DB, state string
 		t.Fatal(err)
 	}
 	return n
+}
+
+func TestValidateProposalVersions(t *testing.T) {
+	current := rescan.Versions{OCR: 2, LLM: 3, Content: 2}
+	for _, tc := range []struct {
+		name     string
+		proposal rescan.Versions
+		wantErr  bool
+	}{
+		{name: "default off"},
+		{name: "earlier recommendation", proposal: rescan.Versions{OCR: 1}},
+		{name: "current recommendations", proposal: current},
+		{name: "negative", proposal: rescan.Versions{LLM: -1}, wantErr: true},
+		{name: "future", proposal: rescan.Versions{Content: 3}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rescan.ValidateProposalVersions(tc.proposal, current)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ValidateProposalVersions(%+v, %+v) error = %v, wantErr %t", tc.proposal, current, err, tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestDetect_StartsRun_WhenStaleFound(t *testing.T) {
@@ -356,6 +378,29 @@ func TestDetect_SupersedesOnVersionBump(t *testing.T) {
 	}
 	if currentVersion != 3 {
 		t.Fatalf("new run current_version: got %d, want 3", currentVersion)
+	}
+}
+
+func TestDetect_LowerPolicyPreservesNewerProposal(t *testing.T) {
+	ctx := context.Background()
+	e, d, owner := newDetectorEngine(t)
+	doc := seedDoc(t, ctx, d, owner, "sha-newer-proposal", 0)
+
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write.ExecContext(ctx,
+		`UPDATE documents SET pipeline_version_ocr = 2 WHERE id = ?`, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := rescan.EnsureProposals(ctx, d, 1, e, rescan.Versions{OCR: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countProposalRuns(t, ctx, d, "running"); got != 1 {
+		t.Fatalf("lower policy left %d newer proposals running, want 1", got)
+	}
+	if got := countProposalRuns(t, ctx, d, "cancelled"); got != 0 {
+		t.Fatalf("lower policy cancelled %d newer proposals, want 0", got)
 	}
 }
 

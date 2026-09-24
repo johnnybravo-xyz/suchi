@@ -37,12 +37,28 @@ and use **Rescan** when you want to classify them.
 
 ## Automatic proposals
 
-On boot, Suchi compares stored revisions with the binary's current revisions.
-Detection, eligibility and documentless approval runs are scoped independently to
-each filing system. Global pipeline/OCR/LLM configuration does not make a proposal
-or `--system S02` rescan apply to another system.
-When previously processed results are older, it opens one admin approval per
-affected pipeline and system.
+Automatic proposal detection follows the per-pipeline recommendation thresholds
+committed in `distro/cmd/suchi/pipeline_proposals.go`. Zero, the default, creates
+no new reminder for that pipeline. When a processing revision is worth offering
+to existing archives, maintainers set that pipeline's threshold to the current
+revision before creating the release tag. The tag therefore determines the
+behavior of source builds, release binaries and both container images; there is
+no workflow input or runtime setting that can produce two policies for one tag.
+
+On boot, Suchi compares stored revisions with each positive recommendation.
+Detection, eligibility and documentless approval runs are scoped independently
+to each filing system. Global pipeline/OCR/LLM configuration does not make a
+proposal or `--system S02` rescan apply to another system. When previously
+processed results are older, the detector opens one admin approval per affected
+pipeline and system. A zero threshold does not create a new reminder.
+
+The recommendation may remain at an earlier revision when a later processing
+change is not itself worth prompting. In that case only documents below the
+committed threshold are offered; approving the proposal runs those documents
+through the binary's current pipeline. A recommendation cannot exceed the
+current processing revision, and invalid tagged policy stops startup with an
+explicit error. The `main.rescan.policy` startup log records all three effective
+thresholds.
 
 For LLM classification, automatic proposals only include documents with a
 successful earlier revision (`pipeline_version_llm >= 1`). Enabling the LLM or
@@ -68,12 +84,14 @@ The underlying approval choices remain `approve_all`, `approve_sample`, and
 `post-ingest` path as new uploads, so a process interruption does not lose the
 work.
 
-Dismissed proposals stay closed for that pipeline's target revision across
-restarts. Startup honors saved dismissals and closes duplicate proposals left
-by older builds; explicitly approved work still runs. A later code revision
-can create a new proposal, and other pipelines are unaffected.
-If another rescan brings the matching count to zero,
-the detector cancels the obsolete open proposal on the next boot.
+Dismissed proposals stay closed for that pipeline's recommended revision across
+restarts. The detector honors saved dismissals and closes duplicate proposals
+left by older builds; explicitly approved work still runs. Raising one committed
+recommendation can create a fresh proposal for that pipeline without opting in
+the other pipelines. Setting a threshold to zero, or lowering it, does not cancel
+or hide a newer unresolved reminder. If another rescan brings the matching count
+to zero, a later boot with the same or a higher positive threshold cancels the
+obsolete open proposal.
 
 ## Explicit rescans
 

@@ -5,6 +5,10 @@ package main
 import (
 	"runtime/debug"
 	"testing"
+
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
+	llmclassifier "github.com/johnnybravo-xyz/suchi/plugins/llm-classifier"
 )
 
 func TestBuildIdentity(t *testing.T) {
@@ -58,5 +62,16 @@ func TestBuildIdentity(t *testing.T) {
 				t.Fatalf("CLI version = %q; want %q", got, tc.wantCLI)
 			}
 		})
+	}
+}
+
+func TestConfiguredPipelineProposalVersionsAreWithinCurrentRevisions(t *testing.T) {
+	current := rescan.Versions{
+		OCR:     postingest.PipelineVersionOCR,
+		LLM:     llmclassifier.PipelineVersionLLM,
+		Content: postingest.PipelineVersionContent,
+	}
+	if err := rescan.ValidateProposalVersions(configuredPipelineProposalVersions(), current); err != nil {
+		t.Fatal(err)
 	}
 }

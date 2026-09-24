@@ -174,7 +174,13 @@ func runServe() int {
 	defer stop()
 	info, _ := debug.ReadBuildInfo()
 	buildVersion, buildRevision := buildIdentity(info)
-	if err := app.Run(ctx, app.Options{Config: *cfg, Log: log, BuildVersion: buildVersion, BuildRevision: buildRevision}); err != nil {
+	if err := app.Run(ctx, app.Options{
+		Config:                   *cfg,
+		Log:                      log,
+		BuildVersion:             buildVersion,
+		BuildRevision:            buildRevision,
+		PipelineProposalVersions: configuredPipelineProposalVersions(),
+	}); err != nil {
 		return 1
 	}
 	return 0

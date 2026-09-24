@@ -45,6 +45,10 @@ Notable user-visible changes to Suchi are recorded here.
   aliases only after signing, SBOM collection, and the GitHub release succeed.
   Release runs are serialized, and dispatch verifies that the GitHub annotated
   tag peels to the local commit.
+- Make automatic **Processing update** approval reminders a checked-in,
+  per-pipeline release policy. New proposal revisions are default-off and fully
+  determined by the release tag; existing reminders and explicit rescans remain
+  available.
 - Reuse verified AnyDoc artifacts and avoid unnecessary thumbnail decoding and
   document-detail reloads.
 

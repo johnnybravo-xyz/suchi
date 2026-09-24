@@ -4,14 +4,14 @@
 // approvals feature. Called from main.go after the approvals engine
 // is registered + the rescan-proposal def is seeded.
 //
-// For each pipeline kind (ocr / llm / content), the detector:
-//   1. Counts docs whose pipeline_version_<kind> lags the current
-//      binary's constant.
+// For each configured pipeline kind (ocr / llm / content), the detector:
+//   1. Counts docs whose pipeline_version_<kind> lags the release's
+//      recommended proposal revision.
 //   2. If count > 0 and no pending run or dismissal exists for that kind+version,
 //      Start()s a rescan-proposal run. The engine's approve state
 //      creates a task in the tasks feed automatically.
-//   3. If a pending run exists for an OLDER version (constant bumped
-//      since last boot), Cancel()s it — the fresh run supersedes.
+//   3. If a pending run exists for an OLDER recommended revision,
+//      Cancel()s it — the fresh run supersedes.
 //   4. If count == 0 and a pending run exists, Cancel()s it —
 //      whatever the state was, the archive caught up externally and
 //      nagging the operator is stale.
@@ -32,8 +32,8 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-// kindsToCheck is the fixed set of pipeline versions the detector
-// walks each boot. Order is stable so the log lines are readable.
+// kindsToCheck is the fixed set of proposal revisions the detector walks each
+// boot. Order is stable so the log lines are readable.
 var kindsToCheck = []string{"ocr", "llm", "content"}
 
 const proposalTargetPreview = 10
@@ -47,29 +47,9 @@ func ProposalStillNeeded(ctx context.Context, d *db.DB, systemID int64, vars map
 	if !ok || kind == "" {
 		return false, errMalformedProposalVars
 	}
-
-	var currentVersion int
-	switch value := vars["current_version"].(type) {
-	case float64:
-		if value <= 0 || math.Trunc(value) != value {
-			return false, errMalformedProposalVars
-		}
-		currentVersion = int(value)
-		if currentVersion <= 0 || float64(currentVersion) != value {
-			return false, errMalformedProposalVars
-		}
-	case int:
-		currentVersion = value
-	case int64:
-		currentVersion = int(value)
-		if int64(currentVersion) != value {
-			return false, errMalformedProposalVars
-		}
-	default:
-		return false, errMalformedProposalVars
-	}
-	if currentVersion <= 0 {
-		return false, errMalformedProposalVars
+	currentVersion, err := proposalTargetVersion(vars)
+	if err != nil {
+		return false, err
 	}
 
 	count, err := CountProposalStale(ctx, d, systemID, kind, currentVersion)
@@ -79,42 +59,59 @@ func ProposalStillNeeded(ctx context.Context, d *db.DB, systemID int64, vars map
 	return count > 0, nil
 }
 
+func proposalTargetVersion(vars map[string]any) (int, error) {
+	var version int
+	switch value := vars["current_version"].(type) {
+	case float64:
+		if value <= 0 || math.Trunc(value) != value {
+			return 0, errMalformedProposalVars
+		}
+		version = int(value)
+		if version <= 0 || float64(version) != value {
+			return 0, errMalformedProposalVars
+		}
+	case int:
+		version = value
+	case int64:
+		version = int(value)
+		if int64(version) != value {
+			return 0, errMalformedProposalVars
+		}
+	default:
+		return 0, errMalformedProposalVars
+	}
+	if version <= 0 {
+		return 0, errMalformedProposalVars
+	}
+	return version, nil
+}
+
 // EnsureProposals is the boot-time entrypoint. Idempotent.
 //
 // `engine` is the approvals engine (already Set-Default'd by main.go).
-// `versions` is the pipeline snapshot from main.go (postingest.PipelineVersion*
-// + llmclassifier.PipelineVersionLLM).
+// `versions` is checked-in release policy. Zero skips that kind without changing
+// an existing reminder. A positive value is the minimum processing revision the
+// release recommends; it may lag the runtime's current processing revision.
 func EnsureProposals(ctx context.Context, d *db.DB, systemID int64, engine *approvals.Engine, versions Versions) error {
 	for _, kind := range kindsToCheck {
-		current := versionFor(kind, versions)
-		if current <= 0 {
-			// Kind is disabled (e.g. llm with no classifier wired).
-			// Cancel any pending run left over from when the kind
-			// WAS wired; the archive can never advance those rows,
-			// so nagging the operator to approve a rescan is stale.
-			pending, err := findPendingRun(ctx, d, systemID, kind)
-			if err != nil {
-				return fmt.Errorf("rescan.detect: find pending %s: %w", kind, err)
-			}
-			if pending != nil {
-				if err := engine.Cancel(ctx, pending.ID, "detect: kind disabled", systemActor()); err != nil {
-					return fmt.Errorf("rescan.detect: cancel %s: %w", kind, err)
-				}
-			}
+		recommended := versionFor(kind, versions)
+		if recommended <= 0 {
+			// No new proposal policy for this kind. Existing reminders remain
+			// visible until resolved or reconciled by a later positive policy.
 			continue
 		}
-		stale, err := CountProposalStale(ctx, d, systemID, kind, current)
+		stale, err := CountProposalStale(ctx, d, systemID, kind, recommended)
 		if err != nil {
 			return fmt.Errorf("rescan.detect: count stale %s: %w", kind, err)
 		}
-		if err := reconcile(ctx, d, systemID, engine, kind, current, stale); err != nil {
+		if err := reconcile(ctx, d, systemID, engine, kind, recommended, stale); err != nil {
 			return fmt.Errorf("rescan.detect: reconcile %s: %w", kind, err)
 		}
 	}
 	return nil
 }
 
-// versionFor picks the current constant from Versions by kind.
+// versionFor picks one configured revision from Versions by kind.
 func versionFor(kind string, v Versions) int {
 	switch kind {
 	case "ocr":
@@ -129,10 +126,22 @@ func versionFor(kind string, v Versions) int {
 
 // reconcile is the per-kind decision: cancel stale pending runs,
 // start a new one if warranted, or leave things be.
-func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.Engine, kind string, current, stale int) error {
+func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.Engine, kind string, recommended, stale int) error {
 	pending, err := findPendingRun(ctx, d, systemID, kind)
 	if err != nil {
 		return err
+	}
+	var pendingVersion int
+	if pending != nil {
+		pendingVersion, err = proposalTargetVersion(pending.Vars)
+		if err != nil {
+			return fmt.Errorf("decode pending proposal revision: %w", err)
+		}
+		if pendingVersion > recommended {
+			// A lower recommendation must not hide a newer reminder that was
+			// already offered by an earlier tagged release.
+			return nil
+		}
 	}
 	// Case 1: no stale docs. Any pending run is now obsolete.
 	if stale == 0 {
@@ -143,11 +152,7 @@ func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.
 	}
 	// Case 2: pending run exists at a stale version. Supersede.
 	if pending != nil {
-		pendingVer, _ := pending.Vars["current_version"].(float64)
-		if int(pendingVer) > current {
-			return nil
-		}
-		if int(pendingVer) < current {
+		if pendingVersion < recommended {
 			if err := engine.Cancel(ctx, pending.ID, "detect: superseded by newer version", systemActor()); err != nil {
 				return err
 			}
@@ -176,7 +181,7 @@ func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.
 			WHERE run_id = ? AND status = 'resolved'
 			  AND resolved_choice IN ('approve_all', 'approve_sample')
 		)
-	`, systemID, ProposalSlug, kind, current, pendingID).Scan(&dismissed)
+	`, systemID, ProposalSlug, kind, recommended, pendingID).Scan(&dismissed)
 	if err != nil {
 		return fmt.Errorf("check rescan dismissal for %s: %w", kind, err)
 	}
@@ -193,13 +198,15 @@ func reconcile(ctx context.Context, d *db.DB, systemID int64, engine *approvals.
 		return nil
 	}
 	// Case 4: no pending run, but stale > 0. Start one.
-	targets, err := ProposalTargets(ctx, d, systemID, kind, current, proposalTargetPreview)
+	targets, err := ProposalTargets(ctx, d, systemID, kind, recommended, proposalTargetPreview)
 	if err != nil {
 		return fmt.Errorf("load rescan-proposal targets for %s: %w", kind, err)
 	}
 	vars := map[string]any{
-		"kind":             kind,
-		"current_version":  current,
+		"kind": kind,
+		// Retain the persisted field name for proposals created by older
+		// builds; it now carries the tagged recommendation threshold.
+		"current_version":  recommended,
 		"stale_count":      stale,
 		"target_documents": targets,
 	}

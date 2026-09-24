@@ -56,9 +56,12 @@ type Options struct {
 	Log           *slog.Logger
 	BuildVersion  string
 	BuildRevision string
-	MigrationSets []db.MigrationSet
-	Actions       []automations.ActionDefinition
-	Configure     func(*Services) error
+	// PipelineProposalVersions is tagged release policy; zero per kind creates
+	// no new reminder and positive values must not exceed compiled revisions.
+	PipelineProposalVersions rescan.Versions
+	MigrationSets            []db.MigrationSet
+	Actions                  []automations.ActionDefinition
+	Configure                func(*Services) error
 }
 
 // Services is the small boot-time surface available to a compiled
@@ -82,6 +85,19 @@ func Run(ctx context.Context, opts Options) error {
 	cfgValue := opts.Config
 	cfg := &cfgValue
 	log := opts.Log
+	pipelineVersions := rescan.Versions{
+		OCR:     postingest.PipelineVersionOCR,
+		LLM:     llmclassifier.PipelineVersionLLM,
+		Content: postingest.PipelineVersionContent,
+	}
+	if err := rescan.ValidateProposalVersions(opts.PipelineProposalVersions, pipelineVersions); err != nil {
+		return fmt.Errorf("app.Run: pipeline proposal policy: %w", err)
+	}
+	log.Info("main.rescan.policy",
+		"ocr_version", opts.PipelineProposalVersions.OCR,
+		"llm_version", opts.PipelineProposalVersions.LLM,
+		"content_version", opts.PipelineProposalVersions.Content,
+	)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	seen := make(map[string]bool, len(opts.MigrationSets))
@@ -379,12 +395,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := apvEngine.EnsureSweepScheduled(ctx); err != nil {
 		log.Warn("approvals.sweep.schedule_failed", "err", err.Error())
 	}
-	pipelineVersions := rescan.Versions{
-		OCR:     postingest.PipelineVersionOCR,
-		LLM:     llmclassifier.PipelineVersionLLM,
-		Content: postingest.PipelineVersionContent,
-	}
-	apvEngine.RegisterHandler(rescan.NewHandler(d, pipelineVersions))
+	apvEngine.RegisterHandler(rescan.NewHandler(d))
 	apvEngine.SetAssigneeResolver(approvals.AdminAssigneeResolver{Engine: apvEngine, Log: log})
 	for _, systemID := range systemIDs {
 		if err := apvEngine.EnsureDef(ctx, systemID, approvals.DocumentChangeSlug, approvals.DocumentChangeSpec(), nil); err != nil {
@@ -392,7 +403,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		if err := apvEngine.EnsureDef(ctx, systemID, rescan.ProposalSlug, rescan.ProposalSpec(), nil); err != nil {
 			log.Warn("main.rescan.seed", "system_id", systemID, "err", err)
-		} else if err := rescan.EnsureProposals(ctx, d, systemID, apvEngine, pipelineVersions); err != nil {
+		} else if err := rescan.EnsureProposals(ctx, d, systemID, apvEngine, opts.PipelineProposalVersions); err != nil {
 			log.Warn("main.rescan.detect", "system_id", systemID, "err", err)
 		}
 	}

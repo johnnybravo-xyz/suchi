@@ -70,6 +70,13 @@ loop, mail supervisor or HTTP listener has started at that point. A callback
 error aborts startup and closes the database without starting runtime work. No
 extension options are needed for a complete local archive.
 
+`PipelineProposalVersions` is distribution release policy rather than mutable
+server configuration. Zero fields create no new processing-update reminders.
+A compiled distribution that opts in supplies checked-in per-pipeline
+recommendation thresholds no greater than the pipeline revisions in that build;
+invalid future thresholds stop startup. Keep this policy in the tagged source so
+the same tag cannot produce artifacts with different proposal behavior.
+
 `Services` contains only the instance's `DB`, HTTP `Mux`, durable `Jobs`
 dispatcher, `Approvals` engine, immutable `Actions` registry and `Log`. Compiled
 distributions use it to add native routes and register durable subscribers.

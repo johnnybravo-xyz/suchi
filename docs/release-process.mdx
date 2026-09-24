@@ -84,9 +84,24 @@ Only the current pre-1.0 release is supported.
 2. Move the `[Unreleased]` entries under the new version and date. Update
    `developmentVersion` in `distro/cmd/suchi/main.go` to the current source version
    line with a `-dev` suffix.
-3. Confirm the shipped Microsoft OAuth registration still permits personal and
+3. Review every OCR, content and LLM pipeline revision changed since the previous
+   release. `distro/cmd/suchi/pipeline_proposals.go` is the tagged automatic
+   reminder policy:
+
+   - Keep `0` when that pipeline has no recommended automatic upgrade.
+   - Set a field to the current pipeline revision when existing successful
+     results should receive a **Processing update** reminder.
+   - Leave an earlier positive recommendation unchanged when a newer processing
+     change is not worth prompting. This preserves the earlier recommendation
+     for archives that skipped releases without opting in the newer revision.
+
+   Each field is independent and cannot exceed its compiled pipeline revision.
+   Commit this file with the release metadata; never inject or override the
+   policy in the build workflow.
+
+4. Confirm the shipped Microsoft OAuth registration still permits personal and
    work/school device-code sign-in.
-4. Run the local verification suite:
+5. Run the local verification suite:
 
    ```sh
    make check
@@ -99,12 +114,12 @@ Only the current pre-1.0 release is supported.
    git diff --check
    ```
 
-5. Manually exercise behavior that depends on external services or accounts,
+6. Manually exercise behavior that depends on external services or accounts,
    including Microsoft sign-in, configured email providers, and hosted LLMs
    affected by the release.
-6. Recheck public size, memory, startup, network, and feature claims against
+7. Recheck public size, memory, startup, network, and feature claims against
    the accepted benchmark and the final build.
-7. Commit the release metadata on `main`, create a signed annotated tag, and push
+8. Commit the release metadata on `main`, create a signed annotated tag, and push
    the exact commit and tag to GitHub:
 
    ```sh
@@ -115,14 +130,16 @@ Only the current pre-1.0 release is supported.
    git push gh "refs/tags/$VERSION"
    ```
 
-8. Dispatch the manual release workflow:
+9. Dispatch the manual release workflow:
 
    ```sh
    make release VERSION="$VERSION"
    ```
 
    This verifies that the local and GitHub tags resolve to the same commit. Use
-   `PUBLISH=false` for an artifacts-only run.
+   `PUBLISH=false` for an artifacts-only run. The checked-in proposal policy is
+   identical across every binary and image built from the tag. Zero thresholds
+   do not cancel existing reminders, and explicit rescans remain available.
 
 The workflow builds standard and full multi-architecture images, cross-platform
 binaries, checksums, SBOMs, signatures, and GitHub release notes derived from

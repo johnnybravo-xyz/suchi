@@ -204,9 +204,10 @@ reviewer; startup and settings saves never bulk-accept pending dates.
 
 ## Rescan proposals
 
-Suchi ships a `rescan-proposal` definition. When a code, extraction schema, or
-prompt version makes stored processing results stale, Suchi creates one admin
-review task per affected pipeline kind. The choices are:
+Suchi ships a `rescan-proposal` definition. A tagged release also carries
+independent OCR, content and LLM recommendation thresholds, defaulting to zero.
+When a positive recommendation makes stored processing results stale, Suchi
+creates one admin review task per affected pipeline kind. The choices are:
 
 - rescan every stale document
 - rescan a random sample of 20 when more than 20 documents match
@@ -217,7 +218,9 @@ the archive. LLM documents that have never completed classification are also
 excluded from automatic upgrade proposals. Documents already queued for
 post-ingest work, already surfaced as failed jobs, or waiting for a PDF
 password do not create a second rescan prompt. Operators can always select
-documents and run an explicit rescan.
+documents and run an explicit rescan. See [Pipeline versions and
+rescans](/pipeline-versions) for tagged recommendation policy and dismissal
+behavior.
 
 ## Current limits
 

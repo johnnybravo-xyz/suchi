@@ -25,6 +25,8 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/pipeline/postingest"
+	"github.com/johnnybravo-xyz/suchi/core/rescan"
 	"github.com/johnnybravo-xyz/suchi/distro/app"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
@@ -377,6 +379,90 @@ func TestAssemblyRejectsBootExtensionErrors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPipelineProposalVersionsControlKindsIndependently(t *testing.T) {
+	opts := options(t)
+	stop := errors.New("stop after pipeline proposal inspection")
+	opts.Configure = func(services *app.Services) error {
+		_, err := services.DB.Write.ExecContext(t.Context(), `
+			INSERT INTO documents(
+				system_id, owner_id, original_blob, original_size, title, jd_category_id,
+				added_at, created_at, updated_at, pipeline_version_ocr,
+				pipeline_version_llm, pipeline_version_content
+			)
+			VALUES (
+				1,
+				(SELECT id FROM users WHERE email = 'dev@suchi.local'),
+				'pipeline-proposal-stale', 1, 'Pipeline proposal fixture',
+				(SELECT inbox_category_id FROM jd_systems WHERE id = 1),
+				0, 0, 0, ?, 0, ?
+			)
+		`, postingest.PipelineVersionOCR-1, postingest.PipelineVersionContent-1)
+		if err != nil {
+			return err
+		}
+		return stop
+	}
+	if err := app.Run(t.Context(), opts); !errors.Is(err, stop) {
+		t.Fatalf("seed archive: %v", err)
+	}
+
+	type proposalCounts struct {
+		total   int
+		ocr     int
+		llm     int
+		content int
+	}
+	bootAndCount := func(policy rescan.Versions) proposalCounts {
+		t.Helper()
+		bootOpts := opts
+		bootOpts.PipelineProposalVersions = policy
+		counts := proposalCounts{}
+		bootOpts.Configure = func(services *app.Services) error {
+			if err := services.DB.Read.QueryRowContext(t.Context(), `
+				SELECT
+					COUNT(*),
+					COALESCE(SUM(json_extract(r.vars_json, '$.kind') = 'ocr'), 0),
+					COALESCE(SUM(json_extract(r.vars_json, '$.kind') = 'llm'), 0),
+					COALESCE(SUM(json_extract(r.vars_json, '$.kind') = 'content'), 0)
+				FROM approval_runs r
+				JOIN approval_defs def ON def.id = r.def_id
+				WHERE def.slug = ?
+			`, rescan.ProposalSlug).Scan(&counts.total, &counts.ocr, &counts.llm, &counts.content); err != nil {
+				return err
+			}
+			return stop
+		}
+		if err := app.Run(t.Context(), bootOpts); !errors.Is(err, stop) {
+			t.Fatalf("boot with pipeline proposal policy %+v: %v", policy, err)
+		}
+		return counts
+	}
+
+	if got := bootAndCount(rescan.Versions{}); got.total != 0 {
+		t.Fatalf("zero proposal policy created %+v runs, want none", got)
+	}
+	ocrPolicy := rescan.Versions{OCR: postingest.PipelineVersionOCR}
+	if got := bootAndCount(ocrPolicy); got != (proposalCounts{total: 1, ocr: 1}) {
+		t.Fatalf("OCR-only proposal policy created %+v runs", got)
+	}
+	if got := bootAndCount(rescan.Versions{}); got != (proposalCounts{total: 1, ocr: 1}) {
+		t.Fatalf("zero proposal policy changed existing runs to %+v", got)
+	}
+	contentPolicy := rescan.Versions{Content: postingest.PipelineVersionContent}
+	if got := bootAndCount(contentPolicy); got != (proposalCounts{total: 2, ocr: 1, content: 1}) {
+		t.Fatalf("content-only proposal policy created %+v runs", got)
+	}
+}
+
+func TestPipelineProposalVersionsRejectFutureRevisions(t *testing.T) {
+	opts := options(t)
+	opts.PipelineProposalVersions = rescan.Versions{OCR: postingest.PipelineVersionOCR + 1}
+	err := app.Run(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "ocr revision") || !strings.Contains(err.Error(), "exceeds current") {
+		t.Fatalf("future proposal revision error = %v", err)
 	}
 }
 

@@ -387,22 +387,23 @@ suchi rescan --only-failed
 ### Discovery in Approvals
 
 The CLI is the surgical path: you pick filters, run the command, and own the
-outcome. **Approvals** discovers older successful pipeline results after a code
-revision bump. Its proposal offers **Rescan all**, **Try 20 first** when more
-than 20 documents match, and **Dismiss**. Both surfaces route through
-`core/rescan.Enqueue`.
+outcome. **Approvals** discovers older successful pipeline results only when the
+tagged release policy carries a positive recommendation for that pipeline. Its
+proposal offers **Rescan all**, **Try 20 first** when more than 20 documents
+match, and **Dismiss**. Both surfaces route through `core/rescan.Enqueue`.
 
-Dismiss cleanly closes the run; the card doesn't come back until
-the next version bump. If someone rescans out-of-band and the stale
-count hits zero, the detector cancels the pending run on the next
-boot.
+Dismiss cleanly closes the run; the card does not come back until the committed
+recommendation increases. If someone rescans out-of-band and the stale count
+hits zero, the detector cancels the pending run on a later boot carrying that
+recommendation.
 
-A kind whose current version reports as `0` is disabled, and any pending
-proposal for it is cancelled. Automatic LLM proposals also exclude stored
-version `0`, which means classification never completed. Enabling a classifier
-therefore affects new ingests without turning the existing archive into an
-upgrade proposal. An explicit `--stale llm` command still includes those
-documents. See [Pipeline versions](/pipeline-versions) for the full boundary.
+A recommendation threshold of `0` creates no new proposal for that kind and
+does not cancel an existing reminder. Automatic LLM proposals also exclude
+stored version `0`, which means classification never completed. Enabling a
+classifier therefore affects new ingests without turning the existing archive
+into an upgrade proposal. An explicit `--stale llm` command still includes
+those documents. See [Pipeline versions](/pipeline-versions) for the tagged
+policy and full boundary.
 
 ## `suchi export --out FILE.zip`
 

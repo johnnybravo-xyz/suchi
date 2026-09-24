@@ -41,8 +41,9 @@ See [Review-first mode](/approvals#review-first-mode).
 ## Boot and shutdown
 
 The command resolves configuration, configures logging/build identity and signal
-cancellation, then calls `app.Run(ctx, app.Options{...})`. The importable package
-returns errors; it neither parses command arguments nor exits the process.
+cancellation, loads the tagged pipeline-proposal policy, then calls
+`app.Run(ctx, app.Options{...})`. The importable package returns errors; it
+neither parses command arguments nor exits the process.
 Follow `distro/app.Run` to diagnose runtime wiring:
 
 1. Create `DATA_DIR`, open SQLite and apply public core migrations.
@@ -52,7 +53,8 @@ Follow `distro/app.Run` to diagnose runtime wiring:
 4. Establish Johnny.Decimal Inbox invariants; construct auth, CAS, rendering,
    retention, keys and configured integrations. Report unavailable optional parsers.
 5. Construct the durable dispatcher, core subscribers, intake supervisors,
-   schedulers and API routes without starting their loops.
+   schedulers and API routes without starting their loops. Seed approval
+   definitions and reconcile only the positive tagged pipeline recommendations.
 6. Invoke `Options.Configure` once with the instance DB, mux, dispatcher,
    approvals engine, action registry and logger. Callback failure closes startup
    before any worker or listener starts.
@@ -61,14 +63,17 @@ Follow `distro/app.Run` to diagnose runtime wiring:
 8. On context cancellation, give HTTP bounded shutdown grace and stop dispatch.
    Subscribers and subprocesses honor cancellation; errors release the database.
 
-`app.Options` contains resolved `config.Config`, logger, build identity, migration
-sets, additional action definitions and one optional `Configure` callback. Its
-concrete `Services` value exposes only `DB`, `Mux`, `Jobs`, `Approvals`, `Actions`
-and `Log`, allowing a compiled distribution to register native HTTP routes and
-durable subscribers. Unlisted routes remain session-only under the shared token
-policy. Zero extension options preserve the community vocabulary and do not
-create extension ledger state. This is compiled composition, with no dynamic
-loader, service lookup, CAS/API exposure or registration framework.
+`app.Options` contains resolved `config.Config`, logger, build identity, tagged
+`PipelineProposalVersions`, migration sets, additional action definitions and
+one optional `Configure` callback. Proposal values are recommendation thresholds:
+zero creates no new reminder, and a positive value cannot exceed the compiled
+pipeline revision. Its concrete `Services` value exposes only `DB`, `Mux`,
+`Jobs`, `Approvals`, `Actions` and `Log`, allowing a compiled distribution to
+register native HTTP routes and durable subscribers. Unlisted routes remain
+session-only under the shared token policy. Zero extension options preserve the
+community vocabulary and do not create extension ledger state. This is compiled
+composition, with no dynamic loader, service lookup, CAS/API exposure or
+registration framework.
 [Plugins](/plugins#application-assembly) documents the Go contract and example.
 
 Each assembled instance passes its approvals engine explicitly to
@@ -515,7 +520,9 @@ A crash can replay completed side effects, so subscribers are idempotent,
 cancellation-aware and keep payload contracts with their owner. Register before
 `Run`; the registry is not dynamically synchronized. Unknown/terminal work becomes
 `dead`; other failures have bounded attempts/backoff. Processing-owner versions
-enable targeted rescans.
+enable targeted rescans. Separately committed proposal thresholds decide which
+older successful results merit an automatic **Processing update** reminder;
+approval still enqueues the current processing implementation.
 
 Document/namespace jobs and audit retain system ownership even after a document
 disappears; instance-wide work uses NULL. Documentless `taxonomy_index` carries

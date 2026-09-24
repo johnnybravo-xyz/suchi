@@ -136,7 +136,8 @@ clean:
 # Manually trigger the release workflow. Requires `gh` and an existing tag on
 # the GitHub remote (create with `git tag -s v0.1.0 && git push gh v0.1.0`).
 # `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` runs
-# the artifacts-only smoke path.
+# the artifacts-only smoke path. Pipeline proposal policy is committed in
+# distro/cmd/suchi/pipeline_proposals.go before the release tag is created.
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)

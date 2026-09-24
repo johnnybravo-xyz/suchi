@@ -20,35 +20,25 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 )
 
-// Versions is the pipeline-version snapshot captured by main.go at
-// boot and handed to the handler. Kept as a plain-value struct
-// (not read from constants at Handle time) so tests can inject
-// mocked versions cheanly.
-type Versions struct {
-	OCR     int
-	LLM     int
-	Content int
-}
-
 // Handler implements approvals.Handler. Kind() returns HandlerKind
 // so the engine's registry routes rescan_enqueue states here.
 type Handler struct {
-	db       *db.DB
-	versions Versions
+	db *db.DB
 }
 
-// NewHandler constructs a handler bound to the given DB and
-// version snapshot. Register with `engine.RegisterHandler(h)`.
-func NewHandler(d *db.DB, v Versions) Handler {
-	return Handler{db: d, versions: v}
+// NewHandler constructs a handler bound to the given DB. Register with
+// `engine.RegisterHandler(h)`.
+func NewHandler(d *db.DB) Handler {
+	return Handler{db: d}
 }
 
 // Kind implements approvals.Handler.
 func (Handler) Kind() string { return HandlerKind }
 
 // Handle runs the enqueue. Reads:
-//   - run.Vars["kind"]              — "ocr" | "llm" | "content"
-//   - state.With["sample_size"]     — 0 = no cap, N = cap
+//   - run.Vars["kind"] — "ocr" | "llm" | "content"
+//   - run.Vars["current_version"] — persisted proposal threshold
+//   - state.With["sample_size"] — 0 = no cap, N = cap
 //
 // Emits "success" with enqueued-count in Vars on the happy path,
 // "fail" with error string on the error path. Both branches
@@ -63,6 +53,13 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 			Vars:  map[string]any{"error": "rescan handler: run.Vars is missing kind"},
 		}, nil
 	}
+	proposalVersion, err := proposalTargetVersion(run.Vars)
+	if err != nil {
+		return approvals.HandlerResult{
+			Event: "fail",
+			Vars:  map[string]any{"error": "rescan handler: malformed proposal version"},
+		}, nil
+	}
 	sampleSize := 0
 	if v, ok := state.With["sample_size"]; ok {
 		switch n := v.(type) {
@@ -73,16 +70,24 @@ func (h Handler) Handle(ctx context.Context, run approvals.Run, state approvals.
 		}
 	}
 	opts := Options{
-		SystemID:       run.SystemID,
-		Stale:          kind,
-		SampleSize:     sampleSize,
-		OnlyRunnable:   true,
-		OCRVersion:     h.versions.OCR,
-		LLMVersion:     h.versions.LLM,
-		ContentVersion: h.versions.Content,
+		SystemID:     run.SystemID,
+		Stale:        kind,
+		SampleSize:   sampleSize,
+		OnlyRunnable: true,
 	}
-	if kind == "llm" {
+	switch kind {
+	case "ocr":
+		opts.OCRVersion = proposalVersion
+	case "llm":
+		opts.LLMVersion = proposalVersion
 		opts.MinimumVersion = 1
+	case "content":
+		opts.ContentVersion = proposalVersion
+	default:
+		return approvals.HandlerResult{
+			Event: "fail",
+			Vars:  map[string]any{"error": fmt.Sprintf("rescan handler: unknown pipeline kind %q", kind)},
+		}, nil
 	}
 	enqueued, err := Enqueue(ctx, h.db, opts)
 	if err != nil {

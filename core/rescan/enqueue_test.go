@@ -499,14 +499,15 @@ func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
 	d, owner := setupDB(t)
 	encrypted := seedDoc(t, ctx, d, owner, "sha-encrypted", 0)
 	runnable := seedDoc(t, ctx, d, owner, "sha-runnable", 0)
+	current := seedDoc(t, ctx, d, owner, "sha-current", 1)
 	if _, err := d.Write.ExecContext(ctx,
 		`UPDATE documents SET encryption_state = 'encrypted' WHERE id = ?`, encrypted); err != nil {
 		t.Fatal(err)
 	}
 
-	h := rescan.NewHandler(d, rescan.Versions{OCR: 1})
+	h := rescan.NewHandler(d)
 	result, err := h.Handle(ctx,
-		approvals.Run{SystemID: 1, Vars: map[string]any{"kind": "ocr"}},
+		approvals.Run{SystemID: 1, Vars: map[string]any{"kind": "ocr", "current_version": 1}},
 		approvals.State{}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -521,5 +522,13 @@ func TestHandler_EnqueuesOnlyRunnableDocuments(t *testing.T) {
 	}
 	if docID != runnable {
 		t.Fatalf("enqueued doc %d, want runnable doc %d", docID, runnable)
+	}
+	var currentJobs int
+	if err := d.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE kind = 'post-ingest' AND doc_id = ?`, current).Scan(&currentJobs); err != nil {
+		t.Fatal(err)
+	}
+	if currentJobs != 0 {
+		t.Fatalf("handler enqueued %d jobs for a document already at the proposal revision", currentJobs)
 	}
 }
