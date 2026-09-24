@@ -122,10 +122,26 @@ remain visible with their error. [Search architecture](/search) covers retrieval
 
 ## Document tags
 
-Select **Edit** beside **Tags** to add an existing tag or remove one with ×.
-Changes save immediately; **Done** closes the editor. Failures preserve current
-tags and show an error; Trash remains read-only. Create tags under
-**Settings > Archive configuration > People and metadata > Metadata**.
+Select **Edit** beside **Tags**, type a name or slug to narrow existing tags,
+then click a suggestion or use Arrow Down and Enter to add it immediately. Remove
+a tag with ×; **Done** closes the editor. Failed additions keep the typed query
+for retry, and failures never change the visible tags. Trash remains read-only.
+In **Documents**, select rows and choose **Add tags** to apply an existing tag
+to the selection; a partial failure keeps the selection for retry. Inbox has no
+bulk tag action.
+
+After a successful document metadata or tag edit, Suchi removes a
+classifier-created **needs-review** tag automatically. A tag added by a person,
+rule, import or older version stays until explicitly removed; Trash, restore and
+rescan do not count as review.
+
+Admins can open **Manage tags** beside either Tags or the Documents tag filter.
+This links directly to **Settings > Archive configuration > People and metadata
+> Metadata > Tags**, the only catalog editor. There, search names or slugs,
+select matching tags (at most 500), and confirm **Delete selected**. A row's
+Delete action uses the same confirmation. Deleting removes document-tag links,
+re-roots surviving child tags, and cannot be undone. Creating and renaming tags
+also happen there; document screens only assign existing tags.
 
 ## Approvals
 
@@ -217,6 +233,9 @@ type selector covers tags, correspondents, document types, storage paths and
 custom fields. Groups expands its members beside the selected group. User
 capabilities are under **Additional access**; hidden member choices are not saved
 when creating an admin. Archive Configuration reuses the same user-creation form.
+People and Metadata tabs and metadata types have navigable URLs: reload and
+Back/Forward restore the selected panel. The Tags catalog is scoped to the
+current filing system, while Users remains the default People and metadata tab.
 
 **Taxonomy** imports/exports HuML or TOML filing-tree files. Preview precedes Apply;
 export explicitly offers starter rules or tree only. **What is included?** explains

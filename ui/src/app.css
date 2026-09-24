@@ -455,11 +455,19 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 /* ---------- bulk selection ---------- */
 .bulkbar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; gap: 10px; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; min-width: 0; max-width: 100%;
   background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
   border-radius: var(--r-sm); padding: 8px 14px; margin-bottom: 12px;
   box-shadow: var(--shadow); font-size: .86rem;
 }
+.bulkbar > select { min-width: 0; max-width: 100%; }
+.bulk-tag-editor {
+  display: flex; flex: 0 0 100%; align-items: center; flex-wrap: wrap;
+  gap: 8px; min-width: 0; max-width: 100%;
+}
+.bulk-tag-editor .tag-picker { flex: 0 1 260px; max-width: 100%; }
+.bulk-tag-editor .omni-drop { max-width: min(100%, calc(100vw - 48px)); }
+.bulk-tag-editor .err { margin: 0; max-width: 100%; overflow-wrap: anywhere; }
 .rowcheck { accent-color: var(--accent); width: 15px; height: 15px; flex: none; cursor: pointer; }
 .irow.selected { background: var(--tint); }
 .irow.cursor { box-shadow: inset 3px 0 0 var(--accent); }

@@ -153,6 +153,12 @@ independent of the classifier. Renaming its name or slug also preserves existing
 assignments. Tags from imports and older versions have no classifier ownership
 and are not automatically cleared. They can be removed explicitly after review.
 
+An authorized human metadata PATCH or bulk metadata/tag edit resolves a
+classifier-owned `needs-review` assignment in the same write transaction.
+Manual, imported, rule-owned and legacy review tags remain; explicitly adding
+`needs-review` takes human ownership before cleanup rather than removing it.
+Trash, restore and rescan alone do not count as review.
+
 ## Test and live reload
 
 **Test connection** sends fixed synthetic text and validates the response with

@@ -3,12 +3,14 @@
   import { scopedHash as filingHref } from '../lib/systems.svelte.js'
   import { captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy, untrack } from 'svelte'
-  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listTags, bulkEdit } from '../lib/api.js'
+  import { getDocument, patchDocument, deleteDocument, restoreDocument, permanentlyDeleteDocument, documentVersions, createShareLink, listShareLinks, deleteShareLink, previewPath, downloadPath, similarDocs, listGrants, putGrant, deleteGrant, listAllTags, bulkEdit } from '../lib/api.js'
   import { go } from '../lib/router.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, fmtBytes, isHighSensitivity, sensDot, sensitivityLabel } from '../lib/format.js'
   import { session } from '../lib/session.svelte.js'
   import { hasCapability } from '../lib/capabilities.js'
+  import { TAGS_SETTINGS_HASH } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
+  import TagPicker from '../lib/TagPicker.svelte'
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import { copyText } from '../lib/clipboard.js'
@@ -33,7 +35,7 @@
   let tagOptions = $state([])
   let tagsBusy = $state(false)
   let tagsError = $state('')
-  let tagToAdd = $state('')
+  let tagLoadError = $state('')
   let shareURL = $state('')
   let shareBusy = $state(false)
   let documentLinkOpen = $state(false)
@@ -47,6 +49,7 @@
   let deleteOpen = $state(false)
   let recoveryBusy = $state(false)
   let loadVersion = 0
+  let tagRefreshVersion = 0
   let loadedID
   let disposed = false
   onDestroy(() => { disposed = true; loadVersion++ })
@@ -91,6 +94,7 @@
 
   async function load() {
     const version = ++loadVersion
+    tagRefreshVersion++
     const documentID = id
     loading = true
     err = ''
@@ -108,7 +112,7 @@
     tagOptions = []
     tagsBusy = false
     tagsError = ''
-    tagToAdd = ''
+    tagLoadError = ''
     shareOpen = false
     shareLinks = []
     documentLinkOpen = false
@@ -226,6 +230,21 @@
     } catch (ex) { notify?.(ex.message || 'Could not revoke access') }
   }
 
+  async function refreshReviewTags(version, documentID) {
+    const refresh = ++tagRefreshVersion
+    if (!doc?.tags?.includes('needs-review')) return
+    try {
+      const latest = await getDocument(documentID)
+      if (!disposed && version === loadVersion && refresh === tagRefreshVersion) {
+        doc = { ...doc, tags: latest.tags || [] }
+      }
+    } catch (ex) {
+      if (!disposed && version === loadVersion && refresh === tagRefreshVersion) {
+        notify?.('Saved, but tags could not be refreshed. Reload to see their current state.')
+      }
+    }
+  }
+
   async function save(patch, label) {
     const version = loadVersion
     try {
@@ -233,6 +252,8 @@
       if (disposed || version !== loadVersion) return
       doc = { ...doc, ...patch }
       if ('languages' in patch) doc.languages_locked = patch.languages !== ''
+      await refreshReviewTags(version, id)
+      if (disposed || version !== loadVersion) return
       notify?.(label || 'Saved')
     } catch (ex) {
       if (!disposed && version === loadVersion) notify?.(ex.message || 'Could not save')
@@ -242,34 +263,33 @@
   async function startEditTags() {
     if (tagsBusy || trashed) return
     const version = loadVersion
+    const scope = captureScope()
     editingTags = true
     tagsBusy = true
+    tagOptions = []
+    tagLoadError = ''
     tagsError = ''
     try {
-      const options = []
-      for (let page = 1; ; page++) {
-        const result = await listTags({ page })
-        if (disposed || version !== loadVersion) return
-        options.push(...(result.results || []))
-        if (!result.next) break
-      }
+      const options = await listAllTags()
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return
       tagOptions = options
     } catch (ex) {
-      if (!disposed && version === loadVersion) tagsError = ex.message || 'Could not load tags'
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) tagLoadError = ex.message || 'Could not load tags'
     } finally {
-      if (!disposed && version === loadVersion) tagsBusy = false
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) tagsBusy = false
     }
   }
 
   async function changeTag(tag, method) {
-    if (!tag || tagsBusy || trashed) return
+    if (!tag || tagsBusy || trashed) return false
     const version = loadVersion
+    const scope = captureScope()
     const documentID = Number(id)
     tagsBusy = true
     tagsError = ''
     try {
       const result = await bulkEdit([documentID], method, { tag_id: tag.id })
-      if (disposed || version !== loadVersion) return
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return false
       const outcome = result?.results?.find(item => item.id === documentID)
       if (!outcome?.ok) {
         throw new Error(outcome?.code === 'forbidden' ? 'You do not have permission to edit this document.' : 'Could not update tags')
@@ -277,12 +297,15 @@
       doc = { ...doc, tags: method === 'add_tag'
         ? [...new Set([...(doc.tags || []), tag.slug])].sort()
         : (doc.tags || []).filter(slug => slug !== tag.slug) }
-      tagToAdd = ''
+      await refreshReviewTags(version, documentID)
+      if (disposed || version !== loadVersion || !scopeCurrent(scope)) return false
       notify?.(method === 'add_tag' ? 'Tag added' : 'Tag removed')
+      return true
     } catch (ex) {
-      if (!disposed && version === loadVersion) tagsError = ex.message || 'Could not update tags'
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) tagsError = ex.message || 'Could not update tags'
+      return false
     } finally {
-      if (!disposed && version === loadVersion) tagsBusy = false
+      if (!disposed && version === loadVersion && scopeCurrent(scope)) tagsBusy = false
     }
   }
 
@@ -611,23 +634,24 @@
                 </span>
               {:else}<span class="sub">No tags</span>{/each}
               {#if !trashed && !editingTags}<button class="btn sm" aria-label="Edit tags" type="button" onclick={startEditTags}>Edit</button>{/if}
+              {#if session.user?.role === 'admin'}<a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a>{/if}
             </div>
             {#if editingTags}
-              <form class="tag-actions" onsubmit={(event) => { event.preventDefault(); changeTag(tagOptions.find(tag => tag.id === Number(tagToAdd)), 'add_tag') }}>
-                <select class="input" aria-label="Tag to add" bind:value={tagToAdd} disabled={tagsBusy}>
-                  <option value="">Choose a tag</option>
-                  {#each tagOptions.filter(tag => !doc.tags?.includes(tag.slug)) as tag}
-                    <option value={tag.id}>{tag.name}</option>
-                  {/each}
-                </select>
-                <button class="btn sm" type="submit" disabled={tagsBusy || !tagToAdd}>Add</button>
-                <button class="btn sm" type="button" disabled={tagsBusy} onclick={() => { editingTags = false; tagsError = ''; tagToAdd = '' }}>Done</button>
-              </form>
+              <div class="tag-actions">
+                {#if tagLoadError}
+                  <p class="err" role="alert">{tagLoadError}</p>
+                  <button class="btn sm" type="button" disabled={tagsBusy} onclick={startEditTags}>Reload tags</button>
+                {:else if tagsBusy && !tagOptions.length}
+                  <span class="sub">Loading tags…</span>
+                {:else}
+                  <TagPicker tags={tagOptions} excludedSlugs={doc.tags || []} disabled={tagsBusy}
+                             label="Tag to add" menuId="document-tag-options"
+                             onChoose={(tag) => changeTag(tag, 'add_tag')} />
+                {/if}
+                <button class="btn sm" type="button" disabled={tagsBusy} onclick={() => { editingTags = false; tagsError = ''; tagLoadError = '' }}>Done</button>
+              </div>
               <span class="sub">Changes save immediately.</span>
-              {#if tagsError}
-                <p class="err" role="alert">{tagsError}</p>
-                <button class="btn sm" type="button" disabled={tagsBusy} onclick={startEditTags}>Reload tags</button>
-              {/if}
+              {#if tagsError}<p class="err" role="alert">{tagsError}</p>{/if}
             {/if}
           </dd>
           {#if doc.correspondents?.length}
@@ -879,7 +903,7 @@
   .tag-remove { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; background:transparent; color:inherit; cursor:pointer }
   .tag-remove:disabled { cursor:default; opacity:.5 }
   .tag-actions { margin:8px 0 4px }
-  .tag-actions select { flex:1 1 140px; min-width:0; width:100% }
+  .tag-actions :global(.tag-picker) { flex:1 1 140px }
   .extracted { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8rem; color: var(--muted); margin: 0; }
   .extracted.expanded { max-height: 65vh; }
   .extracted-copy { width: 100%; max-width: none; font-size: .8rem; }

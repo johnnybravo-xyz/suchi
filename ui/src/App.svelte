@@ -665,7 +665,7 @@
         {:else if page === 'tasks'}<Lazy load={lazyRoutes.tasks} props={{ notify: scopedNotify, onCount: pollStats, canReviewIntelligence }} />
         {:else if page === 'automations'}<Lazy load={lazyRoutes.automations} props={{ notify: scopedNotify, readOnly: session.user?.role !== 'admin', jdCategories }} />
         {:else if page === 'upload'}<Lazy load={lazyRoutes.upload} props={{ notify: scopedNotify, jdCategories }} />
-        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
+        {:else if page === 'settings'}<Lazy load={lazyRoutes.settings} props={{ notify: scopedNotify, initialTab: route.query.get('tab'), initialSection: route.query.get('section'), initialPeople: route.query.get('people'), initialMetadata: route.query.get('metadata'), setupNeeded, setupError, onRetrySetup: refreshSetupState, onTaxonomyChanged: handleArchiveTaxonomyChanged }} />
         {:else if page === 'trash'}<Lazy load={lazyRoutes.trash} props={{ notify: scopedNotify }} />
         {:else if page === 'views'}<Lazy load={lazyRoutes.views} props={{ notify: scopedNotify, canShare: canShareViews, startCreate: route.query.get('new') === '1', createQuery: route.query.get('q') || '', createDocumentIDs: route.query.get('ids') || '', jdCategories }} />
         {:else if page === 'calendar'}

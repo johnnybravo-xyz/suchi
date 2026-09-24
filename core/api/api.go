@@ -258,6 +258,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Tags — read + parent-hierarchy operations.
 	mux.HandleFunc("GET /api/tags/", s.ListTags)
 	mux.HandleFunc("POST /api/tags/", s.CreateTag)
+	mux.HandleFunc("DELETE /api/tags/", s.DeleteTags)
 	mux.HandleFunc("PATCH /api/tags/{id}", s.UpdateTag)
 	mux.HandleFunc("DELETE /api/tags/{id}", s.DeleteTag)
 	mux.HandleFunc("PATCH /api/tags/{id}/parent", s.SetTagParent)

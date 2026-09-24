@@ -27,7 +27,7 @@ export default defineConfig({
             includeDependenciesRecursively: true,
           }, {
             name: 'document-controls',
-            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|LinkQR|DocumentUnlockStatus)\.svelte(?:\?|$)|clipboard\.js$|queryAssist\.js$|upload_bus\.svelte\.js$|format\.js$)/,
+            test: /[\\/]src[\\/]lib[\\/](?:(?:ConfirmDialog|LinkQR|DocumentUnlockStatus|TagPicker)\.svelte(?:\?|$)|(?:clipboard|queryAssist|upload_bus\.svelte|format|configuration)\.js$)/,
             // Shared controls stay lazy; their shell dependencies keep their existing owner.
             includeDependenciesRecursively: false,
           }],

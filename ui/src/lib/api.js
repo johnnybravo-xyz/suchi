@@ -146,6 +146,16 @@ export const exportTaxonomy = (format = 'huml', skipSeeds = false) =>
 export const listJDCategories = (params) => singleFlightGet(`/api/jd/categories/${qs({ page_size: 500, ...params })}`)
 
 export const listTags = (params) => api.get(`/api/tags/${qs({ page_size: 500, ...params })}`)
+export async function listAllTags() {
+  const tags = []
+  let page = 1
+  while (true) {
+    const result = await listTags({ page })
+    tags.push(...(result.results || []))
+    if (!result.next) return tags
+    page++
+  }
+}
 export const listCorrespondents = () => api.get(`/api/correspondents/${qs({ page_size: 500 })}`)
 export const listDocumentTypes = () => api.get(`/api/document_types/${qs({ page_size: 500 })}`)
 
@@ -204,6 +214,7 @@ export const deleteCustomField = (id) => api.del(`/api/custom_fields/${id}`)
 export const createTaxon = (kind, b) => api.post(`/api/${kind}/`, b)
 export const patchTaxon = (kind, id, b) => api.patch(`/api/${kind}/${id}`, b)
 export const deleteTaxon = (kind, id) => api.del(`/api/${kind}/${id}`)
+export const deleteTags = (ids) => req('DELETE', '/api/tags/', { ids })
 export const listStoragePaths = () => api.get(`/api/storage_paths/${qs({ page_size: 500 })}`)
 
 // Mailbox secrets remain sealed server-side; list visibility is capability-scoped.

@@ -44,6 +44,61 @@ func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
 	}
 }
 
+func TestTagParentDeleteReroots(t *testing.T) {
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, upgrade := range []bool{false, true} {
+		name := "fresh"
+		if upgrade {
+			name = "beta2-upgrade"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "tags.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = d.Close() })
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			if upgrade {
+				if err := db.Migrate(ctx, d, migs[:2], log); err != nil {
+					t.Fatal(err)
+				}
+				execMigrationFixture(t, d, `
+					INSERT INTO tags(id,name,slug,created_at,updated_at) VALUES
+						(10,'Parent','parent',0,0),
+						(11,'Child','child',0,0);
+					UPDATE tags SET parent_id=10 WHERE id=11;
+				`)
+			}
+			if err := db.Migrate(ctx, d, migs, log); err != nil {
+				t.Fatal(err)
+			}
+			if !upgrade {
+				execMigrationFixture(t, d, `
+					INSERT INTO tags(id,system_id,name,slug,created_at,updated_at) VALUES
+						(10,1,'Parent','parent',0,0),
+						(11,1,'Child','child',0,0);
+					UPDATE tags SET parent_id=10 WHERE id=11;
+				`)
+			}
+			var parent sql.NullInt64
+			if err := d.Read.QueryRowContext(ctx, `SELECT parent_id FROM tags WHERE id=11`).Scan(&parent); err != nil || !parent.Valid || parent.Int64 != 10 {
+				t.Fatalf("seeded child parent=%v err=%v", parent, err)
+			}
+			if _, err := d.ExecWrite(ctx, `DELETE FROM tags WHERE id=10`); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Read.QueryRowContext(ctx, `SELECT parent_id FROM tags WHERE id=11`).Scan(&parent); err != nil || parent.Valid {
+				t.Fatalf("deleting parent must re-root surviving child, parent=%v err=%v", parent, err)
+			}
+			assertMigrationScalar(t, d, `SELECT COUNT(*) FROM tags WHERE id=10`, 0)
+		})
+	}
+}
+
 func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	ctx := context.Background()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "upgrade.db"))

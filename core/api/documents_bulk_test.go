@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -174,6 +175,82 @@ func TestBulkEditAddTagTakesOwnershipOfClassifierReview(t *testing.T) {
 	}
 	if count != 1 || owned != 0 {
 		t.Fatalf("tags=%d classifier_owned=%d, want 1/0", count, owned)
+	}
+}
+
+func TestPatchDocumentClearsOnlyClassifierReviewTag(t *testing.T) {
+	s := newBulkServer(t)
+	category := seedStatsJDInbox(t, s.DB)
+	automatic := seedStatsDoc(t, s.DB, 1, "review-auto-sha", "Automatic", category, false, 0)
+	manual := seedStatsDoc(t, s.DB, 1, "review-manual-sha", "Manual", category, false, 0)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 99, 'needs-review', 'needs-review', 0, 0);
+		INSERT INTO document_tags(document_id, tag_id, classifier_owned)
+		VALUES (?, 99, 1), (?, 99, 0)
+	`, automatic, manual); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{automatic, manual} {
+		req := httptest.NewRequest(http.MethodPatch, "/api/documents/"+strconv.FormatInt(id, 10),
+			bytes.NewBufferString(`{"title":"Reviewed"}`)).
+			WithContext(auth.WithPrincipal(context.Background(), adminPrincipal(1)))
+		req.SetPathValue("id", strconv.FormatInt(id, 10))
+		rec := httptest.NewRecorder()
+		s.PatchDocument(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch document %d: status=%d body=%s", id, rec.Code, rec.Body.String())
+		}
+	}
+	var remaining, owned int64
+	if err := s.DB.Read.QueryRow(`
+		SELECT document_id, classifier_owned FROM document_tags WHERE tag_id=99
+	`).Scan(&remaining, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != manual || owned != 0 {
+		t.Fatalf("review tag remains on document %d with classifier_owned=%d, want only manual document %d", remaining, owned, manual)
+	}
+}
+
+func TestBulkMetadataAndTagEditsClearOnlyClassifierReviewTag(t *testing.T) {
+	s := newBulkServer(t)
+	category := seedStatsJDInbox(t, s.DB)
+	metadata := seedStatsDoc(t, s.DB, 1, "bulk-review-metadata", "Metadata", category, false, 0)
+	tagged := seedStatsDoc(t, s.DB, 1, "bulk-review-tagged", "Tagged", category, false, 0)
+	manual := seedStatsDoc(t, s.DB, 1, "bulk-review-manual", "Manual", category, false, 0)
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at)
+		VALUES (1, 99, 'needs-review', 'needs-review', 0, 0),
+		       (1, 100, 'Travel', 'travel', 0, 0);
+		INSERT INTO document_tags(document_id, tag_id, classifier_owned)
+		VALUES (?, 99, 1), (?, 99, 1), (?, 99, 0)
+	`, metadata, tagged, manual); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []struct {
+		ids    []int64
+		method string
+		params map[string]any
+	}{
+		{[]int64{metadata, manual}, "set_sensitivity", map[string]any{"sensitivity": "restricted"}},
+		{[]int64{tagged}, "add_tag", map[string]any{"tag_id": 100}},
+	} {
+		code, result := doBulkEdit(t, s, map[string]any{
+			"documents": edit.ids, "method": edit.method, "parameters": edit.params,
+		}, adminPrincipal(1))
+		if code != http.StatusOK || result.Applied != len(edit.ids) {
+			t.Fatalf("%s: status=%d response=%+v", edit.method, code, result)
+		}
+	}
+	var remaining, owned int64
+	if err := s.DB.Read.QueryRow(`
+		SELECT document_id, classifier_owned FROM document_tags WHERE tag_id=99
+	`).Scan(&remaining, &owned); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != manual || owned != 0 {
+		t.Fatalf("review tag remains on document %d with classifier_owned=%d, want only manual document %d", remaining, owned, manual)
 	}
 }
 

@@ -9,7 +9,7 @@
   import PeopleSettings from './PeopleSettings.svelte'
   import SystemSettings from '../lib/SystemSettings.svelte'
 
-  let { notify, initialSection = '', onTaxonomyChanged } = $props()
+  let { notify, initialSection = '', initialPeople = '', initialMetadata = '', onTaxonomyChanged } = $props()
 
   const configurableSections = new Set(ARCHIVE_SETTINGS_ITEMS.map((item) => item.name))
   const current = $derived(configurableSections.has(initialSection) ? initialSection : 'overview')
@@ -133,7 +133,7 @@
         <span>{currentItem.description}</span>
       </header>
       {#if current === 'users'}
-        <PeopleSettings {notify} {onTaxonomyChanged} />
+        <PeopleSettings {notify} {onTaxonomyChanged} {initialPeople} {initialMetadata} />
       {:else if current === 'automations'}
         <div class="card handoff-card">
           <span class="handoff-icon"><Icon name="zap" size={20} /></span>

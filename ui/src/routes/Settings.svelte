@@ -8,7 +8,7 @@
 
   const loadArchive = () => import('./ArchiveSettings.svelte')
 
-  let { notify, initialTab = '', initialSection = '', setupNeeded = false, setupError = false, onRetrySetup, onTaxonomyChanged } = $props()
+  let { notify, initialTab = '', initialSection = '', initialPeople = '', initialMetadata = '', setupNeeded = false, setupError = false, onRetrySetup, onTaxonomyChanged } = $props()
 
   const isAdmin = $derived(session.user?.role === 'admin')
   const archiveSelected = $derived(isAdmin && initialTab === 'archive')
@@ -34,7 +34,7 @@
 
   {#if archiveSelected}
     <div class="archive-slot">
-      <Lazy load={loadArchive} props={{ notify, initialSection, onTaxonomyChanged: taxonomyChanged }} />
+      <Lazy load={loadArchive} props={{ notify, initialSection, initialPeople, initialMetadata, onTaxonomyChanged: taxonomyChanged }} />
     </div>
   {:else}
     <AccountSettings {notify} />

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=users&people=metadata&metadata=tags'
+
 export const ARCHIVE_SETTINGS_GROUPS = [
   {
     name: 'structure',

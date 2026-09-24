@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { scopedHash as filingHref } from '../lib/systems.svelte.js'
+  import { scopedHash as filingHref, systems, captureScope, scopeCurrent } from '../lib/systems.svelte.js'
   import { onDestroy } from 'svelte'
-  import { listDocuments, listTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
+  import { listDocuments, listTags, listAllTags, listCorrespondents, listDocumentTypes, patchDocument, deleteDocument, bulkEdit, createShareLink, thumbPath, decryptDocument, decryptBatch, extractIntelligence } from '../lib/api.js'
   import { route, go } from '../lib/router.svelte.js'
   import { uploadBus } from '../lib/upload_bus.svelte.js'
   import { SENSITIVITY_OPTIONS, fmtDate, isHighSensitivity, sensDot } from '../lib/format.js'
@@ -11,6 +11,8 @@
   import Icon from '../lib/Icon.svelte'
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import TagPicker from '../lib/TagPicker.svelte'
+  import { TAGS_SETTINGS_HASH } from '../lib/configuration.js'
   import { createQueryAssistant } from '../lib/queryAssist.js'
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
@@ -49,6 +51,7 @@
   onDestroy(() => {
     disposed = true
     loadVersion++
+    bulkTagVersion++
     queryAssistant.dispose()
     activeController?.abort()
   })
@@ -142,7 +145,9 @@
         return
       }
       const visibleIDs = new Set(docs.map((document) => document.id))
-      sel = new Set([...sel].filter((id) => visibleIDs.has(id)))
+      const visibleSelection = new Set([...sel].filter((id) => visibleIDs.has(id)))
+      if (sel.size && !visibleSelection.size) clearSel()
+      else sel = visibleSelection
     } catch (ex) {
       if (version === loadVersion) err = ex.message || 'Could not load documents.'
     } finally {
@@ -184,8 +189,87 @@
   let lastIdx = $state(-1)      // anchor for shift-range and j/k cursor
   let bulkBusy = $state(false)
   let shareURL = $state('')
+  let bulkTagOpen = $state(false)
+  let bulkTags = $state([])
+  let bulkTagLoading = $state(false)
+  let bulkTagLoadError = $state('')
+  let bulkTagError = $state('')
+  let bulkTagVersion = 0
+  let bulkTagSaving = false
+
+  function closeBulkTags() {
+    bulkTagVersion++
+    if (bulkTagSaving) { bulkTagSaving = false; bulkBusy = false }
+    bulkTagOpen = false
+    bulkTagLoading = false
+    bulkTagLoadError = ''
+    bulkTagError = ''
+    bulkTags = []
+  }
+
+  function bulkTagCurrent(version, scope, path, query, user) {
+    return !disposed && version === bulkTagVersion && bulkTagOpen &&
+      scopeCurrent(scope) && route.path === path && route.query.toString() === query &&
+      session.user === user
+  }
+
+  async function openBulkTags() {
+    if (bulkBusy || !sel.size || isInbox) return
+    if (bulkTagOpen && !bulkTagLoadError) { closeBulkTags(); return }
+    bulkTagOpen = true
+    bulkTagLoading = true
+    bulkTagLoadError = ''
+    bulkTagError = ''
+    const version = ++bulkTagVersion
+    const scope = captureScope(), path = route.path, query = route.query.toString(), user = session.user
+    try {
+      const available = await listAllTags()
+      if (bulkTagCurrent(version, scope, path, query, user)) bulkTags = available
+    } catch (ex) {
+      if (bulkTagCurrent(version, scope, path, query, user))
+        bulkTagLoadError = ex.message || 'Could not load tags.'
+    } finally {
+      if (bulkTagCurrent(version, scope, path, query, user)) bulkTagLoading = false
+    }
+  }
+
+  async function chooseBulkTag(tag) {
+    if (bulkBusy || !bulkTagOpen || !sel.size) return false
+    const ids = [...sel]
+    const version = bulkTagVersion
+    const scope = captureScope(), path = route.path, query = route.query.toString(), user = session.user
+    bulkTagError = ''
+    bulkTagSaving = true
+    bulkBusy = true
+    try {
+      const res = await bulkEdit(ids, 'add_tag', { tag_id: tag.id })
+      if (!bulkTagCurrent(version, scope, path, query, user)) return false
+      const successful = new Set((res?.results || []).filter(row => row.ok).map(row => row.id))
+      const applied = ids.filter(id => successful.has(id)).length
+      const failed = ids.length - applied
+      if (failed) {
+        bulkTagError = `Added "${tag.name}" to ${applied} document${applied === 1 ? '' : 's'}; ${failed} failed. Retry to add it to the selection.`
+        await load({ background: true })
+        return false
+      }
+      clearSel()
+      notify?.(`Added "${tag.name}" to ${applied} document${applied === 1 ? '' : 's'}`)
+      await load({ background: true })
+      return true
+    } catch (ex) {
+      if (bulkTagCurrent(version, scope, path, query, user))
+        bulkTagError = ex.message || 'Could not add the tag. Retry the selection.'
+      return false
+    } finally {
+      if (version === bulkTagVersion && bulkTagSaving) {
+        bulkTagSaving = false
+        bulkBusy = false
+      }
+    }
+  }
 
   function toggleSel(i, ev) {
+    if (bulkBusy) return
     const d = docs[i]
     if (!d) return
     const next = new Set(sel)
@@ -195,10 +279,10 @@
     } else {
       next.has(d.id) ? next.delete(d.id) : next.add(d.id)
     }
-    sel = next
-    lastIdx = i
+    if (!next.size) clearSel()
+    else { sel = next; lastIdx = i }
   }
-  function clearSel() { sel = new Set(); lastIdx = -1 }
+  function clearSel() { sel = new Set(); lastIdx = -1; closeBulkTags() }
 
   async function bulk(label, method, parameters) {
     bulkBusy = true
@@ -318,7 +402,9 @@
   loadFacets()
   $effect(() => {
     uploadBus.revision
-    route.query.get('page')
+    systems.generation
+    route.path
+    route.query.toString()
     clearSel()
     load()
   })
@@ -354,6 +440,10 @@
         <option value={option.value}>{option.label}</option>
       {/each}
     </select>
+    {#if !isInbox}
+      <button class="btn sm" disabled={bulkBusy} aria-expanded={bulkTagOpen}
+              onclick={openBulkTags}>Add tags</button>
+    {/if}
     {#if canAskArchive}
       <button class="btn sm" disabled={bulkBusy} onclick={() => onAskDocuments?.([...sel])}>
         <Icon name="ask" size={12} /> Ask selection
@@ -379,7 +469,21 @@
     <button class="btn sm" disabled={bulkBusy} onclick={bulkRescan} title="Re-run the extraction pipeline on the selected documents">
       <Icon name="zap" size={12} /> Rescan
     </button>
-    <button class="btn sm" onclick={clearSel}>Clear</button>
+    <button class="btn sm" disabled={bulkBusy} onclick={clearSel}>Clear</button>
+    {#if bulkTagOpen && !isInbox}
+      <div class="bulk-tag-editor" role="group" aria-label="Add tags to selected documents">
+        {#if bulkTagLoading}
+          <span class="sub">Loading tags…</span>
+        {:else if bulkTagLoadError}
+          <span class="err" role="alert">{bulkTagLoadError}</span>
+          <button class="btn sm" disabled={bulkBusy} onclick={openBulkTags}>Retry tags</button>
+        {:else}
+          <TagPicker tags={bulkTags} disabled={bulkBusy} label="Tag for selection"
+                     menuId="bulk-tag-options" onChoose={chooseBulkTag} />
+        {/if}
+        {#if bulkTagError}<span class="err" role="alert">{bulkTagError}</span>{/if}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -414,6 +518,9 @@
       <option value="">All tags</option>
       {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
     </select>
+    {#if session.user?.role === 'admin'}
+      <a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a>
+    {/if}
     <select class="input" value={fCorr} onchange={(e) => setRouteFilter('correspondents__id__in', e.target.value)}>
       <option value="">All correspondents</option>
       {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
@@ -477,7 +584,7 @@
         <a class="card gcard" href={filingHref(`#/doc/${d.id}`)} class:selected={sel.has(d.id)}>
           <span class="gthumb" class:blurred={isHighSensitivity(d.sensitivity)}><img src={thumbPath(d.id, isHighSensitivity(d.sensitivity))} alt="" loading="lazy" onerror={(e) => e.target.closest('.gthumb').classList.add('none')} /></span>
           <span class="gmeta">
-            <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
+            <input type="checkbox" class="rowcheck" checked={sel.has(d.id)} disabled={bulkBusy}
                    onclick={(e) => e.stopPropagation()}
                    onchange={(e) => toggleSel(i, e)} aria-label="Select" />
             {#if d.jd_address || d.jd_category_code}<span class="chip">{d.jd_address || d.jd_category_code}</span>{/if}
@@ -492,7 +599,7 @@
   <div class="index">
     {#each docs as d, i (d.id)}
       <a class="irow hoverable" href={filingHref(`#/doc/${d.id}`)} data-row={i} class:cursor={i === lastIdx} class:selected={sel.has(d.id)}>
-        <input type="checkbox" class="rowcheck" checked={sel.has(d.id)}
+        <input type="checkbox" class="rowcheck" checked={sel.has(d.id)} disabled={bulkBusy}
                onclick={(e) => e.stopPropagation()}
                onchange={(e) => toggleSel(i, e)}
                aria-label={`Select ${d.title || 'document ' + d.id}`} />

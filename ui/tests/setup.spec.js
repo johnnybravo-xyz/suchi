@@ -2700,8 +2700,12 @@ test('edits document tags inline and preserves tags when a change is refused', a
   await row.getByRole('button', { name: 'Edit tags' }).click()
   await expect(row.getByRole('button', { name: 'Remove tag airtel' })).toBeEnabled()
   expect(pages).toEqual([1, 2])
-  await row.getByLabel('Tag to add').selectOption('3')
-  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  const picker = row.getByRole('combobox', { name: 'Tag to add' })
+  await picker.fill('pay')
+  await expect(row.getByRole('listbox', { name: 'Tag to add' }).getByRole('option')).toHaveCount(1)
+  await picker.press('ArrowDown')
+  await expect(picker).toHaveAttribute('aria-activedescendant', 'document-tag-options-0')
+  await picker.press('Enter')
   await expect(row.getByRole('button', { name: 'Remove tag payment' })).toBeEnabled()
   await row.getByRole('button', { name: 'Remove tag receipt' }).click()
   await expect(row.getByRole('button', { name: 'Remove tag receipt' })).toHaveCount(0)
@@ -2800,8 +2804,9 @@ test('adds the first document tag and recovers from a tag-list error', async ({ 
   await expect(row.getByRole('alert')).toHaveText('Tags temporarily unavailable')
   fail = false
   await row.getByRole('button', { name: 'Reload tags' }).click()
-  await row.getByLabel('Tag to add').selectOption('3')
-  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  const picker = row.getByRole('combobox', { name: 'Tag to add' })
+  await picker.fill('payment')
+  await row.getByRole('option', { name: /Payment/ }).click()
   await expect(row.locator('.pill')).toHaveText(['payment'])
   await expect(row.getByText('No tags', { exact: true })).toHaveCount(0)
   expect(writes).toEqual([{ documents: [42], method: 'add_tag', parameters: { tag_id: 3 } }])
@@ -2817,19 +2822,292 @@ test('ignores a late document tag save after navigating to another document', as
   await page.goto('/#/doc/42')
   const row = page.locator('.document-tags')
   await row.getByRole('button', { name: 'Edit tags' }).click()
-  await row.getByLabel('Tag to add').selectOption('3')
-  await row.getByRole('button', { name: 'Add', exact: true }).click()
+  const picker = row.getByRole('combobox', { name: 'Tag to add' })
+  await picker.fill('payment')
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
   await expect.poll(() => !!pending).toBe(true)
-  await expect(row.getByRole('button', { name: 'Add', exact: true })).toBeDisabled()
+  await expect(picker).toBeDisabled()
   await page.evaluate(() => { location.hash = '#/doc/41' })
   await expect(page.getByTitle('Rename')).toContainText('Document 41')
   const finished = page.waitForEvent('requestfinished', request => request === pending.request())
   await pending.fulfill({ json: { results: [{ id: 42, ok: true }] } })
   await finished
   await row.getByRole('button', { name: 'Edit tags' }).click()
-  await expect(row.getByLabel('Tag to add')).toBeEnabled()
+  await expect(row.getByRole('combobox', { name: 'Tag to add' })).toBeEnabled()
   await expect(row).toContainText('No tags')
   await expect(row.locator('.pill')).toHaveCount(0)
+})
+
+test('document tag picker preserves a refused add for retry and closes without a write', async ({ page }) => {
+  await mockAPI(page)
+  await page.route('**/api/tags/**', route => route.fulfill({ json: {
+    results: [{ id: 3, name: 'Payment', slug: 'payment' }], next: null,
+  } }))
+  const writes = []
+  let refuse = true
+  await page.route('**/api/documents/bulk_edit', route => {
+    writes.push(route.request().postDataJSON())
+    return route.fulfill({ json: { results: [{ id: 42, ok: !refuse, code: refuse ? 'forbidden' : '' }] } })
+  })
+  await page.goto('/#/doc/42')
+  const row = page.locator('.document-tags')
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  const picker = row.getByRole('combobox', { name: 'Tag to add' })
+  await picker.fill('pay')
+  await picker.press('Escape')
+  await expect(picker).toHaveAttribute('aria-expanded', 'false')
+  expect(writes).toHaveLength(0)
+  await picker.click()
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
+  await expect(row.getByRole('alert')).toContainText('permission')
+  await expect(picker).toHaveValue('pay')
+  await expect(row.locator('.pill')).toHaveCount(0)
+  refuse = false
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
+  await expect(row.locator('.pill')).toHaveText(['payment'])
+  expect(writes).toHaveLength(2)
+})
+
+test('document edit refreshes a classifier review tag after metadata and tag writes', async ({ page }) => {
+  await mockAPI(page)
+  let tags = ['needs-review']
+  const edits = []
+  const reads = []
+  await page.route('**/api/documents/42', route => {
+    if (route.request().method() === 'PATCH') {
+      edits.push(route.request().postDataJSON())
+      tags = []
+      return route.fulfill({ json: { id: 42 } })
+    }
+    reads.push(tags.slice())
+    return route.fulfill({ json: {
+      id: 42, title: 'Review document', tags, mime_type: 'application/pdf', original_size: 20,
+      created_at: 1780000000,
+    } })
+  })
+  await page.route('**/api/tags/**', route => route.fulfill({ json: {
+    results: [{ id: 9, name: 'Other label', slug: 'other' }], next: null,
+  } }))
+  const writes = []
+  await page.route('**/api/documents/bulk_edit', route => {
+    writes.push(route.request().postDataJSON())
+    tags = ['other']
+    return route.fulfill({ json: { results: [{ id: 42, ok: true }] } })
+  })
+  await page.goto('/#/doc/42')
+  const row = page.locator('.document-tags')
+  await expect(row.locator('.pill')).toHaveText(['needs-review'])
+  await page.getByRole('combobox', { name: 'Sensitivity' }).selectOption('internal')
+  await expect(row.locator('.pill')).toHaveCount(0)
+  expect(edits).toEqual([{ sensitivity: 'internal' }])
+  expect(reads).toEqual([['needs-review'], []])
+
+  tags = ['needs-review']
+  await page.reload()
+  await row.getByRole('button', { name: 'Edit tags' }).click()
+  const picker = row.getByRole('combobox', { name: 'Tag to add' })
+  await picker.fill('other')
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
+  await expect(row.locator('.pill')).toHaveText(['other'])
+  expect(writes).toEqual([{ documents: [42], method: 'add_tag', parameters: { tag_id: 9 } }])
+})
+
+test('bulk tag assignment retries partial failure without dropping the selection', async ({ page }) => {
+  const documents = [
+    { id: 42, title: 'First invoice', created_at: 1780000000, tags: [] },
+    { id: 43, title: 'Second invoice', created_at: 1780000000, tags: [] },
+  ]
+  await mockAPI(page, { documents })
+  const pages = []
+  await page.route('**/api/tags/**', route => {
+    const number = Number(new URL(route.request().url()).searchParams.get('page') || 1)
+    pages.push(number)
+    return route.fulfill({ json: { results: number === 1
+      ? [{ id: 1, name: 'First', slug: 'first' }]
+      : [{ id: 9, name: 'Later Page Tag', slug: 'later' }],
+    next: number === 1 ? '/api/tags/?page=2' : null } })
+  })
+  const writes = []
+  await page.route('**/api/documents/bulk_edit', route => {
+    writes.push(route.request().postDataJSON())
+    if (writes.length === 1) {
+      documents[0].tags = ['later']
+      return route.fulfill({ json: { applied: 1, results: [{ id: 42, ok: true }, { id: 43, ok: false, code: 'forbidden' }] } })
+    }
+    documents[1].tags = ['later']
+    return route.fulfill({ json: { applied: 2, results: [{ id: 42, ok: true }, { id: 43, ok: true }] } })
+  })
+  await page.goto('/#/documents')
+  await expect(page.getByRole('link', { name: 'Manage tags' })).toBeVisible()
+  await page.getByLabel('Select First invoice').check()
+  await page.getByLabel('Select Second invoice').check()
+  const bar = page.locator('.bulkbar')
+  await bar.getByRole('button', { name: 'Add tags' }).click()
+  const picker = bar.getByRole('combobox', { name: 'Tag for selection' })
+  await picker.fill('later')
+  await expect(picker).toHaveAttribute('aria-expanded', 'true')
+  await expect(bar.getByRole('option', { name: /Later Page Tag/ })).toBeVisible()
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
+  await expect(bar).toContainText(/1.*failed/)
+  await expect(picker).toHaveValue('later')
+  await expect(bar).toContainText('2 selected')
+  expect(writes[0]).toEqual({ documents: [42, 43], method: 'add_tag', parameters: { tag_id: 9 } })
+  expect(pages).toContain(2)
+  await expect(page.getByText('later', { exact: true }).first()).toBeVisible()
+  await picker.press('ArrowDown')
+  await picker.press('Enter')
+  await expect(bar).toHaveCount(0)
+  expect(writes).toHaveLength(2)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('bulk tag assignment is available to members but not in Inbox', async ({ page }) => {
+  await mockAPI(page, { userRole: 'member', documents: [{ id: 42, title: 'Member document', created_at: 1780000000 }] })
+  await page.goto('/#/documents')
+  await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
+  await page.getByLabel('Select Member document').check()
+  await expect(page.locator('.bulkbar').getByRole('button', { name: 'Add tags' })).toBeVisible()
+  await page.goto('/#/inbox')
+  await expect(page.locator('.bulkbar').getByRole('button', { name: 'Add tags' })).toHaveCount(0)
+})
+
+test('tag management links navigate to the searchable Settings catalog', async ({ page }) => {
+  await mockAPI(page)
+  await page.route('**/api/tags/**', route => route.fulfill({ json: {
+    results: [{ id: 5, name: 'Receipt', slug: 'receipt' }], next: null,
+  } }))
+  await page.goto('/#/doc/42')
+  await page.locator('.document-tags').getByRole('link', { name: 'Manage tags' }).click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags$/)
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
+  await expect(page.getByRole('textbox', { name: 'Rename Receipt' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
+  const nav = page.getByRole('navigation', { name: 'People and metadata' })
+  await nav.getByRole('button', { name: 'Users' }).click()
+  await expect(page).toHaveURL(/people=users$/)
+  await nav.getByRole('button', { name: 'Metadata' }).click()
+  await page.getByRole('combobox', { name: 'Metadata type' }).selectOption('correspondents')
+  await expect(page).toHaveURL(/people=metadata&metadata=correspondents$/)
+  await page.goBack()
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
+  await page.goto('/#/documents')
+  await page.getByRole('link', { name: 'Manage tags' }).click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags$/)
+})
+
+test('settings tag management confirms atomic selection across searches', async ({ page }) => {
+  await mockAPI(page)
+  let tags = Array.from({ length: 501 }, (_, index) => ({
+    id: index + 1, name: `Generic tag ${index + 1}`, slug: `generic-${index + 1}`,
+  }))
+  tags[0] = { id: 1, name: 'Parent Filing Tag', slug: 'parent-filing', child_count: 1 }
+  tags[500] = { id: 501, name: 'Child Later Tag', slug: 'archived-later', parent_id: 1 }
+  const pages = []
+  const deletes = []
+  let fail = true
+  await page.route('**/api/tags/**', route => {
+    const request = route.request()
+    if (request.method() === 'DELETE') {
+      deletes.push(request.postDataJSON())
+      if (fail) return route.fulfill({ status: 503, json: { error: 'Catalog temporarily unavailable' } })
+      tags = tags.filter(tag => !request.postDataJSON().ids.includes(tag.id))
+      return route.fulfill({ status: 204 })
+    }
+    const number = Number(new URL(request.url()).searchParams.get('page') || 1)
+    pages.push(number)
+    return route.fulfill({ json: {
+      results: tags.slice((number - 1) * 500, number * 500),
+      next: number * 500 < tags.length ? `/api/tags/?page=${number + 1}` : null,
+    } })
+  })
+  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await expect(page.getByRole('textbox', { name: 'Rename Child Later Tag' })).toBeVisible()
+  expect(pages).toContain(2)
+  const search = page.getByRole('searchbox', { name: 'Search tags' })
+  await expect(page.getByRole('button', { name: 'Select matching' })).toBeDisabled()
+  await search.fill('Parent Filing')
+  await page.getByRole('button', { name: 'Select matching' }).click()
+  await search.fill('archived-later')
+  await page.getByRole('button', { name: 'Select matching' }).click()
+  await expect(page.getByRole('button', { name: 'Delete selected' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Delete selected' }).click()
+  let dialog = page.getByRole('alertdialog')
+  await expect(dialog).toContainText(/2 tags/)
+  await expect(dialog).toContainText(/child tags/)
+  await expect(dialog).toContainText(/cannot be undone/)
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  expect(deletes).toHaveLength(0)
+  await page.getByRole('button', { name: 'Delete selected' }).click()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  expect(deletes).toHaveLength(0)
+  await page.getByRole('button', { name: 'Delete selected' }).click()
+  dialog = page.getByRole('alertdialog')
+  await dialog.getByRole('button', { name: 'Delete tags' }).click()
+  await expect(page.getByRole('alert')).toContainText('Catalog temporarily unavailable')
+  await expect(page.getByRole('textbox', { name: 'Rename Child Later Tag' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Delete selected' })).toBeEnabled()
+  expect(deletes).toEqual([{ ids: [1, 501] }])
+  fail = false
+  await page.getByRole('button', { name: 'Delete selected' }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete tags' }).click()
+  await expect(page.getByRole('textbox', { name: 'Rename Child Later Tag' })).toHaveCount(0)
+  await search.fill('parent-filing')
+  await expect(page.getByRole('textbox', { name: 'Rename Parent Filing Tag' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Delete selected' })).toBeDisabled()
+  expect(deletes).toEqual([{ ids: [1, 501] }, { ids: [1, 501] }])
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.getByRole('combobox', { name: 'Metadata type' }).selectOption('correspondents')
+  await expect(page.getByRole('button', { name: 'Delete selected' })).toHaveCount(0)
+})
+
+test('settings tag row deletion uses the confirmed catalog endpoint', async ({ page }) => {
+  await mockAPI(page)
+  const deletes = []
+  let exists = true
+  await page.route('**/api/tags/**', route => {
+    if (route.request().method() === 'DELETE') {
+      deletes.push(route.request().postDataJSON())
+      exists = false
+      return route.fulfill({ status: 204 })
+    }
+    return route.fulfill({ json: {
+      results: exists ? [{ id: 9, name: 'Individual tag', slug: 'individual' }] : [], next: null,
+    } })
+  })
+  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await page.getByRole('button', { name: 'Delete Individual tag' }).click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toContainText('document')
+  await dialog.getByRole('button', { name: 'Delete tags' }).click()
+  await expect(page.getByRole('textbox', { name: 'Rename Individual tag' })).toHaveCount(0)
+  expect(deletes).toEqual([{ ids: [9] }])
+})
+
+test('settings tag management ignores a late delete after switching metadata', async ({ page }) => {
+  await mockAPI(page)
+  let pending
+  await page.route('**/api/tags/**', route => route.request().method() === 'DELETE'
+    ? (pending = route)
+    : route.fulfill({ json: { results: [{ id: 7, name: 'Old tag', slug: 'old' }], next: null } }))
+  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await page.getByRole('button', { name: 'Delete Old tag' }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete tags' }).click()
+  await expect.poll(() => !!pending).toBe(true)
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=users&people=metadata&metadata=correspondents' })
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('correspondents')
+  const finished = page.waitForEvent('requestfinished', request => request === pending.request())
+  await pending.fulfill({ status: 204 })
+  await finished
+  await paintSettled(page)
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('correspondents')
+  await expect(page.getByText(/1 tag deleted/)).toHaveCount(0)
 })
 
 test('shows share controls only with the share-links capability', async ({ page }) => {
@@ -4811,6 +5089,24 @@ async function chooseFilingSystem(page, code) {
 async function paintSettled(page) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
+
+test('tag management preserves the selected filing system on entry and reload', async ({ page }) => {
+  await mockFilingSystems(page)
+  const tagSystems = []
+  await page.route('**/api/tags/**', route => {
+    tagSystems.push(new URL(route.request().url()).searchParams.get('system'))
+    return route.fulfill({ json: {
+      results: [{ id: 7, name: 'Scoped tag', slug: 'scoped' }], next: null,
+    } })
+  })
+  await page.goto('/#/doc/148?system=S02')
+  await page.locator('.document-tags').getByRole('link', { name: 'Manage tags' }).click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags&system=S02$/)
+  await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
+  await page.reload()
+  await expect(page.getByRole('textbox', { name: 'Rename Scoped tag' })).toBeVisible()
+  expect(tagSystems).toEqual(['S02', 'S02'])
+})
 
 test('filing systems selects an S02-only member before any collection reads and retains it on reload', async ({ page }) => {
   const { requests } = await mockFilingSystems(page, {

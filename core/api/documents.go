@@ -585,7 +585,7 @@ func (s *Server) PatchDocument(w http.ResponseWriter, r *http.Request) {
 		if n == 0 {
 			return errNotFound
 		}
-		return nil
+		return clearClassifierReviewTag(r.Context(), tx, []int64{id})
 	})
 	if err != nil {
 		if errors.Is(err, errBadParams) {

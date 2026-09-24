@@ -196,7 +196,7 @@ CREATE TABLE tags_new (
     is_inbox_tag         INTEGER NOT NULL DEFAULT 0,
     created_at           INTEGER NOT NULL,
     updated_at           INTEGER NOT NULL,
-    parent_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
     system_id INTEGER NOT NULL REFERENCES jd_systems(id),
     UNIQUE(system_id,name),
     UNIQUE(system_id,slug)

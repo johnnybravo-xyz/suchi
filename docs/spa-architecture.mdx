@@ -63,8 +63,9 @@ source version line when no release version was injected.
 `App.svelte` loads every route, including login and dashboard, through the existing
 `Lazy.svelte` component. There are no route re-export wrappers. A native Rolldown
 group keeps the shell, API client, filing context and their static dependencies
-together. A separate group combines small document controls, link display,
-clipboard/query helpers, and upload-list refresh state; other shared dependencies
+together. A separate group combines small document controls (including the
+shared tag picker), link display, clipboard/query helpers, upload-list refresh
+state and the shared configuration link inventory; other shared dependencies
 use normal chunking.
 The shared password-unlock indicator belongs to this group and reads the
 existing encryption state exposed by document list and detail responses.
@@ -201,6 +202,18 @@ Components call named `api.js` operations, which own fetch and error parsing;
 before using them in a screen. API field names may stay technical; visible labels
 follow [Web app](/web-app).
 
+`lib/TagPicker.svelte` is a local existing-tag combobox for document detail and
+Documents selection; it filters the complete catalog by name/slug and calls a
+screen-owned assignment callback on Enter/click. `api.js:listAllTags` follows
+paginated tag results rather than borrowing the first-page-only Documents
+filter. Detail edits one document immediately and keeps a refused query; when
+`needs-review` is visible, a successful edit refreshes tags from the server
+because the client cannot infer classifier ownership from slugs alone. Documents
+snapshots selected IDs for one `bulk_edit add_tag`, refreshes server-backed pills,
+and retains the selection on partial/total failure. Both invalidate late UI
+updates on route or system changes. Only admins see **Manage tags** links;
+document screens do not mutate the catalog.
+
 `TaxonomyImport.svelte` is shared by the Filing tree and Taxonomy sections. It owns file/paste reads,
 HuML/TOML choice, seed/remap/destination choices and preview freshness; schema
 validation stays server-side. Late FileReader/network responses cannot replace
@@ -224,6 +237,12 @@ Settings tabs and the build footer outside its scrolling content row.
 The archive frame fills that row: its right pane scrolls independently with a
 stable scrollbar gutter. The sidebar can scroll in shorter windows and becomes
 a horizontal section rail on narrow screens.
+
+`App.svelte` passes URL `people` and `metadata` through Settings and Archive
+Configuration to `PeopleSettings.svelte`; `lib/configuration.js` owns the Tags
+deep-link hash. People tabs and metadata type changes update the scoped hash,
+so reload and history restore the selected panel. Other archive sections ignore
+these query keys.
 
 `App.svelte` owns the administrator's filing-tree reminder state.
 `SetupReminder.svelte` renders it in the sidebar, narrow Dashboard and Settings.
@@ -251,6 +270,16 @@ capabilities for admins. Self-disable checks use
 `session.user.user_id`; the API owns self-disable, last-admin and capability
 normalization safeguards. Verify shared configuration with:
 `cd ui && bun run e2e --grep 'archive setup|filing-tree|refreshes intake owners|failed configuration reads'`.
+
+`PeopleSettings.svelte` alone creates, renames and deletes catalog tags. It loads
+every tag page, keeps a searched multi-selection across filters, and prunes
+selected IDs after a successful refresh. Single-row and bounded bulk deletion
+share one native `ConfirmDialog` and `api.js:deleteTags`; cancel sends no request,
+failures keep rows/selection for retry, and a late response cannot replace a
+different metadata type or filing system. The server's admin/session-only,
+transactional `/api/tags/` DELETE enforces ownership and child re-rooting; UI
+selection is not an authorization boundary. Verify with
+`cd ui && bun run e2e --grep 'document tag|bulk tag|tag management|settings tag'`.
 
 `AccountSettings.svelte` sends only `display_name` for profile saves; sign-in email
 is read-only. One token list separates owned `mobile_pairing` rows from manual/

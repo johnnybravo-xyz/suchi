@@ -301,11 +301,9 @@ func (s *Server) UpdateTag(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
-// DeleteTag — DELETE /api/tags/{id}. Admin-only. document_tags
-// rows cascade via ON DELETE CASCADE on the FK. Children (tags
-// with this row as parent_id) are re-rooted implicitly by
-// ON DELETE SET NULL — the nested-tag migration set that up so a
-// deleted parent doesn't orphan its subtree.
+// DeleteTag — DELETE /api/tags/{id}. Admin-only. Document links cascade;
+// detach children explicitly before deleting for databases whose applied
+// parent FK still has ON DELETE CASCADE.
 func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	principal := s.requireAdmin(w, r)
 	if principal == nil {
@@ -328,8 +326,12 @@ func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		if current.Role != "admin" {
 			return errNotFound
 		}
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE tags SET parent_id = NULL WHERE parent_id = ?`, id); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(r.Context(),
-			`DELETE FROM tags WHERE id = ?`, id)
+			`DELETE FROM tags WHERE id = ? AND system_id = ?`, id, systemID)
 		if err != nil {
 			return err
 		}
@@ -354,6 +356,91 @@ func (s *Server) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		SystemID: systemID,
 		Actor:    auth.FromContext(r.Context()), Action: "tag.delete",
 		ObjectKind: "tag", ObjectID: id,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteTags — DELETE /api/tags/. The entire requested set is checked and
+// removed in one writer transaction; no missing or foreign-system ID can
+// cause a partial deletion.
+func (s *Server) DeleteTags(w http.ResponseWriter, r *http.Request) {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
+	if !ok {
+		return
+	}
+	var in struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if len(in.IDs) == 0 {
+		s.writeError(w, http.StatusBadRequest, "no_ids", "ids must contain at least one tag")
+		return
+	}
+	if len(in.IDs) > 500 {
+		s.writeError(w, http.StatusRequestEntityTooLarge, "too_many_tags", "at most 500 tags per request")
+		return
+	}
+	seen := make(map[int64]struct{}, len(in.IDs))
+	args := make([]any, 0, len(in.IDs)+1)
+	args = append(args, systemID)
+	for _, id := range in.IDs {
+		if id <= 0 {
+			s.writeError(w, http.StatusBadRequest, "bad_ids", "ids must be distinct positive integers")
+			return
+		}
+		if _, exists := seen[id]; exists {
+			s.writeError(w, http.StatusBadRequest, "bad_ids", "ids must be distinct positive integers")
+			return
+		}
+		seen[id] = struct{}{}
+		args = append(args, id)
+	}
+	placeholders := strings.Repeat("?,", len(in.IDs)-1) + "?"
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		current, err := s.currentWriterPrincipal(r.Context(), tx, principal, systemID)
+		if err != nil {
+			return err
+		}
+		if current.Role != "admin" {
+			return errSystemUnavailable
+		}
+		var count int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM tags WHERE system_id = ? AND id IN (`+placeholders+`)`, args...).Scan(&count); err != nil {
+			return err
+		}
+		if count != len(in.IDs) {
+			return errNotFound
+		}
+		// Detach descendants before DELETE even on already-migrated databases
+		// whose parent FK still cascades. Selected children are removed below.
+		if _, err := tx.ExecContext(r.Context(),
+			`UPDATE tags SET parent_id = NULL WHERE parent_id IN (`+placeholders+`)`, args[1:]...); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(r.Context(),
+			`DELETE FROM tags WHERE system_id = ? AND id IN (`+placeholders+`)`, args...)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			s.writeError(w, http.StatusNotFound, "not_found", "no such tag")
+			return
+		}
+		s.serverErr(w, "tags.delete.batch", err)
+		return
+	}
+	audit.Log(r.Context(), s.DB, s.Log, audit.Event{
+		SystemID: systemID, Actor: auth.FromContext(r.Context()),
+		Action: "tags.delete.batch", ObjectKind: "tags",
+		After: map[string]any{"ids": in.IDs, "deleted": len(in.IDs)},
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

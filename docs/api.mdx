@@ -672,6 +672,12 @@ overwrite it. Set `languages` (as CSV string or JSON array) via
 `PATCH /api/documents/{id}` to correct the detection; passing an
 empty value clears both the value and the lock.
 
+Successful metadata PATCH and bulk metadata/tag edits remove only the
+classifier-owned `needs-review` assignment in the same transaction. Manually
+assigned, imported and rule-assigned review tags remain. Explicitly adding
+`needs-review` takes human ownership before cleanup; Trash, restore and rescan
+alone do not resolve a review marker.
+
 Empty lists always serialize as `[]` (never `null`) so mobile clients
 can iterate them safely.
 
@@ -1174,11 +1180,23 @@ endpoint owns the cycle-check invariant and is not duplicated here.
 
 ### `DELETE /api/tags/{id}`
 
-Admin-only. Returns `204 No Content` on success, `404 not_found`
-otherwise. `document_tags` rows cascade via ON DELETE CASCADE;
-children of the deleted tag re-root via ON DELETE SET NULL (the
-nested-tag migration set that up so a deleted parent doesn't
-orphan its subtree).
+Admin browser-session only. Returns `204 No Content` on success,
+`404 not_found` otherwise. Document-tag junction rows are removed; surviving
+direct children are detached from the deleted parent and become roots. The
+handler explicitly detaches them within the deletion transaction, including
+on databases with an already-applied schema-3 `ON DELETE CASCADE` parent FK.
+
+### `DELETE /api/tags/`
+
+Admin browser-session only. Body: `{"ids":[1,2]}` with 1–500 distinct positive
+tag IDs. Returns `204 No Content` after one atomic selected-system transaction.
+Every ID must exist in that system: a missing or foreign-system ID returns
+`404 not_found` without deleting any tags or links. Malformed JSON returns
+`400 bad_json`, an empty set `400 no_ids`, duplicate or nonpositive IDs
+`400 bad_ids`, and more than 500 IDs `413 too_many_tags`. A non-admin receives
+`403 forbidden`; API tokens cannot use this route even with write scope.
+Document-tag links to deleted tags are removed. Any surviving children of
+deleted parents become roots, including when both parent and child are selected.
 
 ### `PATCH /api/tags/{id}/parent`
 

@@ -1,19 +1,29 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { captureScope, systems } from '../lib/systems.svelte.js'
+  import { captureScope, scopeCurrent, systems } from '../lib/systems.svelte.js'
+  import { go } from '../lib/router.svelte.js'
   import { adminListUsers, adminPatchUser,
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
-           listTags, listCorrespondents, listDocumentTypes, listStoragePaths,
-           createTaxon, patchTaxon, deleteTaxon, exportTaxonomy } from '../lib/api.js'
+           listAllTags, listCorrespondents, listDocumentTypes, listStoragePaths,
+           createTaxon, patchTaxon, deleteTaxon, deleteTags, exportTaxonomy } from '../lib/api.js'
   import TaxonomyImport from '../lib/TaxonomyImport.svelte'
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
   import Icon from '../lib/Icon.svelte'
   import { USER_CAPABILITIES } from '../lib/capabilities.js'
   import { session } from '../lib/session.svelte.js'
 
-  let { notify, onTaxonomyChanged } = $props()
-  let tab = $state('users')
+  let { notify, onTaxonomyChanged, initialPeople = '', initialMetadata = '' } = $props()
+  const PEOPLE_TABS = ['users', 'groups', 'metadata', 'files']
+  const tab = $derived(PEOPLE_TABS.includes(initialPeople) ? initialPeople : 'users')
+
+  function navigatePeople(nextTab, nextMetadata = 'tags') {
+    if (tagDeleteBusy || taxMutationBusy || tagDeleteRequest) return
+    const params = new URLSearchParams({ tab: 'archive', section: 'users', people: nextTab })
+    if (nextTab === 'metadata') params.set('metadata', nextMetadata)
+    go(`#/settings?${params}`)
+  }
 
   // ---------- users ----------
   let users = $state([])
@@ -25,16 +35,17 @@
 
   async function loadUsers() {
     const version = ++usersLoadVersion
+    const scope = captureScope()
     usersLoading = true
     usersError = ''
     try {
       const r = await adminListUsers()
-      if (version !== usersLoadVersion) return
+      if (version !== usersLoadVersion || !scopeCurrent(scope) || (tab !== 'users' && tab !== 'groups')) return
       users = r?.results || []
     } catch (ex) {
-      if (version === usersLoadVersion) usersError = ex.message || 'Could not load users.'
+      if (version === usersLoadVersion && scopeCurrent(scope) && (tab === 'users' || tab === 'groups')) usersError = ex.message || 'Could not load users.'
     } finally {
-      if (version === usersLoadVersion) {
+      if (version === usersLoadVersion && scopeCurrent(scope) && (tab === 'users' || tab === 'groups')) {
         usersLoaded = true
         usersLoading = false
       }
@@ -71,6 +82,7 @@
   let groups = $state([])
   let groupsLoaded = $state(false)
   let groupsLoading = $state(false)
+  let groupsLoadVersion = 0
   let groupsError = $state('')
   let ngName = $state('')
   let openGroup = $state(null)      // {id, members: []}
@@ -81,15 +93,20 @@
     return users.filter(u => !memberIDs.has(Number(u.id)))
   }
   async function loadGroups() {
+    const version = ++groupsLoadVersion
+    const scope = captureScope()
     groupsLoading = true
     groupsError = ''
     try {
       const r = await listGroups()
+      if (version !== groupsLoadVersion || !scopeCurrent(scope) || tab !== 'groups') return
       groups = r?.results || r || []
       groupsLoaded = true
     } catch (ex) {
-      groupsError = ex.message || 'Could not load groups.'
-    } finally { groupsLoading = false }
+      if (version === groupsLoadVersion && scopeCurrent(scope) && tab === 'groups') groupsError = ex.message || 'Could not load groups.'
+    } finally {
+      if (version === groupsLoadVersion && scopeCurrent(scope) && tab === 'groups') groupsLoading = false
+    }
   }
   async function addGroup(e) {
     e.preventDefault()
@@ -137,15 +154,21 @@
     monetary: 'Money', documentlink: 'Document link',
   }
   async function loadFields() {
+    const version = ++fieldsLoadVersion
+    const scope = captureScope()
     fieldsLoading = true
+    fieldsLoaded = false
     fieldsError = ''
     try {
       const r = await listCustomFields()
+      if (version !== fieldsLoadVersion || !scopeCurrent(scope) || tab !== 'metadata' || taxon !== 'custom_fields') return
       fields = r?.results || r || []
       fieldsLoaded = true
     } catch (ex) {
-      fieldsError = ex.message || 'Could not load custom fields.'
-    } finally { fieldsLoading = false }
+      if (version === fieldsLoadVersion && scopeCurrent(scope) && tab === 'metadata' && taxon === 'custom_fields') fieldsError = ex.message || 'Could not load custom fields.'
+    } finally {
+      if (version === fieldsLoadVersion && scopeCurrent(scope) && tab === 'metadata' && taxon === 'custom_fields') fieldsLoading = false
+    }
   }
   async function addField(e) {
     e.preventDefault()
@@ -166,13 +189,13 @@
 
   // ---------- taxonomy ----------
   const TAXA = [
-    { kind: 'tags', label: 'Tags', singular: 'tag', description: 'Labels for finding and grouping documents across your filing tree.', load: listTags },
+    { kind: 'tags', label: 'Tags', singular: 'tag', description: 'Labels for finding and grouping documents across your filing tree.', load: listAllTags },
     { kind: 'correspondents', label: 'Correspondents', singular: 'correspondent', description: 'People and organizations you send documents to or receive them from.', load: listCorrespondents },
     { kind: 'document_types', label: 'Document types', singular: 'document type', description: 'Describe what a document is, such as an invoice, contract, or statement.', load: listDocumentTypes },
     { kind: 'storage_paths', label: 'Storage paths', singular: 'storage path', description: 'Named storage paths used when filing documents.', load: listStoragePaths },
     { kind: 'custom_fields', label: 'Custom fields', description: 'Extra document details, such as an invoice number, renewal date, or web link.' },
   ]
-  let taxon = $state('tags')
+  const taxon = $derived(TAXA.some(t => t.kind === initialMetadata) ? initialMetadata : 'tags')
   const selectedTaxon = $derived(TAXA.find(t => t.kind === taxon))
   let taxImpOpen = $state(false)
   let taxImportBusy = $state(false)
@@ -201,67 +224,169 @@
   let taxRowsLoading = $state(false)
   let taxRowsError = $state('')
   let taxLoadVersion = 0
+  let fieldsLoadVersion = 0
+  let tagSearch = $state('')
+  let selectedTagIDs = $state(new Set())
+  let tagDeleteRequest = $state(null)
+  let tagDeleteBusy = $state(false)
+  let activeTagDelete = null
+  let tagDeleteError = $state('')
+  let tagDeleteSuccess = $state('')
+  let taxMutationBusy = $state(false)
+  const matchingTags = $derived.by(() => {
+    if (taxon !== 'tags' || taxRowsKind !== 'tags') return []
+    const query = tagSearch.trim().toLowerCase()
+    return query
+      ? taxRows.filter(row => row.name?.toLowerCase().includes(query) || row.slug?.toLowerCase().includes(query))
+      : taxRows
+  })
+
+  function toggleTag(id, checked) {
+    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy) return
+    const next = new Set(selectedTagIDs)
+    if (checked) next.add(id)
+    else next.delete(id)
+    selectedTagIDs = next
+  }
+  function selectMatchingTags() {
+    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy || !matchingTags.length || matchingTags.length > 500) return
+    selectedTagIDs = new Set([...selectedTagIDs, ...matchingTags.map(row => row.id)])
+  }
+  function requestTagDelete(ids, name = '') {
+    if (tagDeleteBusy || tagDeleteRequest || taxMutationBusy || !ids.length || ids.length > 500) return
+    tagDeleteError = ''
+    tagDeleteSuccess = ''
+    tagDeleteRequest = { ids: [...ids], name, scope: captureScope() }
+  }
+  async function confirmTagDelete() {
+    const request = tagDeleteRequest
+    if (!request || tagDeleteBusy || taxMutationBusy || !scopeCurrent(request.scope) ||
+        request.scope.code !== systems.code || tab !== 'metadata' || taxon !== 'tags') return
+    const version = taxLoadVersion
+    tagDeleteBusy = true
+    activeTagDelete = request
+    tagDeleteError = ''
+    try {
+      await deleteTags(request.ids)
+      if (tagDeleteRequest !== request || version !== taxLoadVersion ||
+          !scopeCurrent(request.scope) || request.scope.code !== systems.code ||
+          tab !== 'metadata' || taxon !== 'tags') return
+      const deleted = new Set(request.ids)
+      taxRows = taxRows.filter(row => !deleted.has(row.id))
+      selectedTagIDs = new Set([...selectedTagIDs].filter(id => !deleted.has(id)))
+      tagDeleteSuccess = `Deleted ${request.ids.length} tag${request.ids.length === 1 ? '' : 's'}.`
+      tagDeleteRequest = null
+      await loadTaxa()
+    } catch (ex) {
+      if (tagDeleteRequest === request && version === taxLoadVersion &&
+          scopeCurrent(request.scope) && request.scope.code === systems.code &&
+          tab === 'metadata' && taxon === 'tags') {
+        tagDeleteError = ex.message || 'Could not delete tags. Please try again.'
+        tagDeleteRequest = null
+      }
+    } finally {
+      if (activeTagDelete === request) {
+        activeTagDelete = null
+        tagDeleteBusy = false
+      }
+    }
+  }
   let ntName = $state('')
   async function loadTaxa() {
     if (taxon === 'custom_fields') { await loadFields(); return }
     const version = ++taxLoadVersion
     const kind = taxon
-    const spec = TAXA.find(t => t.kind === taxon)
+    const scope = captureScope()
+    const spec = TAXA.find(t => t.kind === kind)
     taxRowsLoading = true
     taxRowsLoaded = false
     taxRowsError = ''
     try {
       const r = await spec.load()
-      if (version !== taxLoadVersion || kind !== taxon) return
+      if (version !== taxLoadVersion || !scopeCurrent(scope) || tab !== 'metadata' || kind !== taxon) return
       taxRows = r?.results || r || []
       taxRowsKind = kind
       taxRowsLoaded = true
+      if (kind === 'tags') {
+        const available = new Set(taxRows.map(row => row.id))
+        selectedTagIDs = new Set([...selectedTagIDs].filter(id => available.has(id)))
+      }
     } catch (ex) {
-      if (version === taxLoadVersion) taxRowsError = ex.message || `Could not load ${spec.label.toLowerCase()}.`
+      if (version === taxLoadVersion && scopeCurrent(scope) && tab === 'metadata' && kind === taxon) taxRowsError = ex.message || `Could not load ${spec.label.toLowerCase()}.`
     } finally {
-      if (version === taxLoadVersion) taxRowsLoading = false
+      if (version === taxLoadVersion && scopeCurrent(scope) && tab === 'metadata' && kind === taxon) taxRowsLoading = false
     }
   }
   async function addTaxon(e) {
     e.preventDefault()
-    if (!ntName.trim()) return
-    try { await createTaxon(taxon, { name: ntName.trim() }); ntName = ''; notify?.('Created'); loadTaxa() }
-    catch (ex) { notify?.(ex.message || 'Could not create') }
+    if (!ntName.trim() || taxMutationBusy || tagDeleteBusy || tagDeleteRequest) return
+    const kind = taxon
+    const scope = captureScope()
+    taxMutationBusy = true
+    try {
+      await createTaxon(kind, { name: ntName.trim() })
+      if (scopeCurrent(scope) && scope.code === systems.code && kind === taxon) {
+        ntName = ''
+        notify?.('Created')
+        await loadTaxa()
+      }
+    } catch (ex) { if (scopeCurrent(scope) && kind === taxon) notify?.(ex.message || 'Could not create') }
+    finally { taxMutationBusy = false }
   }
   async function renameTaxon(row, name) {
-    if (!name.trim() || name === row.name) return
-    try { await patchTaxon(taxon, row.id, { name: name.trim() }); row.name = name.trim(); notify?.('Renamed') }
-    catch (ex) { notify?.(ex.message || 'Could not rename') }
+    if (!name.trim() || name === row.name || taxMutationBusy || tagDeleteBusy || tagDeleteRequest) return
+    const kind = taxon
+    const scope = captureScope()
+    taxMutationBusy = true
+    try {
+      await patchTaxon(kind, row.id, { name: name.trim() })
+      if (scopeCurrent(scope) && scope.code === systems.code && kind === taxon) {
+        row.name = name.trim()
+        notify?.('Renamed')
+      }
+    } catch (ex) { if (scopeCurrent(scope) && kind === taxon) notify?.(ex.message || 'Could not rename') }
+    finally { taxMutationBusy = false }
   }
   async function rmTaxon(row) {
+    if (taxon === 'tags') { requestTagDelete([row.id], row.name); return }
     if (!confirm(`Delete “${row.name}”? Documents keep working; the label goes away.`)) return
     try { await deleteTaxon(taxon, row.id); taxRows = taxRows.filter(x => x.id !== row.id); notify?.('Deleted') }
     catch (ex) { notify?.(ex.message || 'Could not delete (in use?)') }
   }
 
-  let loadedTab = ''
-  let loadedTaxon = ''
   $effect(() => {
-    const selected = tab
-    if (selected === loadedTab) return
-    loadedTab = selected
-    if (selected === 'users') loadUsers()
-    else if (selected === 'groups') { loadGroups(); loadUsers() }
+    const context = `${tab === 'metadata' ? taxon : ''}:${systems.generation}:${systems.code}`
+    // A pending request keeps its captured scope; a new panel must not receive its result.
+    if (context) {
+      selectedTagIDs = new Set()
+      tagSearch = ''
+      tagDeleteError = ''
+      tagDeleteSuccess = ''
+      tagDeleteRequest = null
+      activeTagDelete = null
+      tagDeleteBusy = false
+    }
   })
   $effect(() => {
     const selected = tab === 'metadata' ? taxon : ''
-    if (!selected) { loadedTaxon = ''; return }
-    if (selected === loadedTaxon) return
-    loadedTaxon = selected
-    loadTaxa()
+    if (selected) {
+      ntName = ''
+      loadTaxa()
+    }
+    return () => { taxLoadVersion++; fieldsLoadVersion++ }
+  })
+  $effect(() => {
+    if (tab === 'users') loadUsers()
+    else if (tab === 'groups') { loadGroups(); loadUsers() }
+    return () => { usersLoadVersion++; groupsLoadVersion++ }
   })
 </script>
 
 <nav class="people-nav" aria-label="People and metadata">
-  <button class:on={tab === 'users'} aria-pressed={tab === 'users'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'users')}>Users</button>
-  <button class:on={tab === 'groups'} aria-pressed={tab === 'groups'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'groups')}>Groups</button>
-  <button class:on={tab === 'metadata'} aria-pressed={tab === 'metadata'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'metadata')}>Metadata</button>
-  <button class:on={tab === 'files'} aria-pressed={tab === 'files'} disabled={taxImportBusy || exportBusy} onclick={() => (tab = 'files')}>Taxonomy</button>
+  <button class:on={tab === 'users'} aria-pressed={tab === 'users'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('users')}>Users</button>
+  <button class:on={tab === 'groups'} aria-pressed={tab === 'groups'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('groups')}>Groups</button>
+  <button class:on={tab === 'metadata'} aria-pressed={tab === 'metadata'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('metadata')}>Metadata</button>
+  <button class:on={tab === 'files'} aria-pressed={tab === 'files'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('files')}>Taxonomy</button>
 </nav>
 
 <div class="people-content">
@@ -393,7 +518,7 @@
   <header class="panel-heading metadata-heading">
     <div><h3>Metadata</h3><p>Manage the labels and extra details used on documents in this filing system.</p></div>
     <label class="field">Metadata type
-      <select class="input" bind:value={taxon} onchange={() => { ntName = '' }}>
+      <select class="input" value={taxon} disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onchange={(event) => navigatePeople('metadata', event.currentTarget.value)}>
         {#each TAXA as t}<option value={t.kind}>{t.label}</option>{/each}
       </select>
     </label>
@@ -418,14 +543,35 @@
     {:else}
       <form onsubmit={addTaxon}>
         <label class="field">Name
-          <input class="input" placeholder={`New ${selectedTaxon.singular} name`} bind:value={ntName} required />
+          <input class="input" placeholder={`New ${selectedTaxon.singular} name`} bind:value={ntName} disabled={taxMutationBusy || tagDeleteBusy || !!tagDeleteRequest} required />
         </label>
-        <div class="form-actions"><button class="btn primary" disabled={!ntName.trim()}><Icon name="plus" size={14} />Create {selectedTaxon.singular}</button></div>
+        <div class="form-actions"><button class="btn primary" disabled={!ntName.trim() || taxMutationBusy || tagDeleteBusy || !!tagDeleteRequest}><Icon name="plus" size={14} />Create {selectedTaxon.singular}</button></div>
       </form>
     {/if}
   </section>
   <section aria-labelledby="metadata-list-heading">
     <h4 class="list-heading" id="metadata-list-heading">Existing {selectedTaxon.label.toLowerCase()}</h4>
+    {#if taxon === 'tags'}
+      <div class="tag-management">
+        <label class="field tag-search">Search tags
+          <input class="input" type="search" bind:value={tagSearch} placeholder="Filter by name or slug" />
+        </label>
+        <div class="tag-selection">
+          <span role="status">{selectedTagIDs.size} selected</span>
+          <button class="btn sm" type="button" disabled={!taxRowsLoaded || taxRowsKind !== 'tags' || taxRowsLoading || matchingTags.length === 0 || matchingTags.length > 500 || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={selectMatchingTags}>Select matching</button>
+          <button class="btn sm danger" type="button" disabled={!selectedTagIDs.size || selectedTagIDs.size > 500 || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => requestTagDelete([...selectedTagIDs])}>Delete selected</button>
+          <button class="btn sm" type="button" disabled={!selectedTagIDs.size || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => (selectedTagIDs = new Set())}>Clear selection</button>
+        </div>
+        {#if taxRowsLoaded && taxRowsKind === 'tags' && matchingTags.length > 500}
+          <p class="quiet">More than 500 tags match. Narrow the filter to select matching tags.</p>
+        {/if}
+        {#if selectedTagIDs.size > 500}
+          <p class="quiet">Narrow your selection to 500 tags or fewer before deleting.</p>
+        {/if}
+        {#if tagDeleteError}<p class="err" role="alert">{tagDeleteError}</p>{/if}
+        {#if tagDeleteSuccess}<p role="status">{tagDeleteSuccess}</p>{/if}
+      </div>
+    {/if}
     {#if taxon === 'custom_fields'}
       {#if fieldsError}
         <div class="settings-load-state err"><span>{fieldsError}</span><button class="btn sm" onclick={loadFields}>Retry</button></div>
@@ -450,16 +596,24 @@
       <p class="quiet" role="status">Loading {selectedTaxon.label.toLowerCase()}…</p>
     {:else}
       <div class="index">
-        {#each taxRows as row (row.id)}
-          <div class="irow">
+        {#each taxon === 'tags' ? matchingTags : taxRows as row (row.id)}
+          <div class="irow tag-row">
+            {#if taxon === 'tags'}
+              <input type="checkbox" class="tag-checkbox" aria-label={`Select tag ${row.name}`}
+                     checked={selectedTagIDs.has(row.id)} disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest}
+                     onchange={(e) => toggleTag(row.id, e.currentTarget.checked)} />
+            {/if}
             <span class="dot" style={row.color ? `background:${row.color}` : ''}></span>
-            <span class="grow"><input class="inline-edit" aria-label={`Rename ${row.name}`} value={row.name} onchange={(e) => renameTaxon(row, e.target.value)} /></span>
+            <span class="grow"><input class="inline-edit" aria-label={`Rename ${row.name}`} value={row.name}
+                                    disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest}
+                                    onchange={(e) => renameTaxon(row, e.target.value)} /></span>
             {#if row.child_count}<span class="quiet">{row.child_count} children</span>{/if}
             {#if row.document_count != null}<span class="quiet">{row.document_count} docs</span>{/if}
-            <button class="btn sm danger" onclick={() => rmTaxon(row)} title="Delete entry" aria-label={`Delete ${row.name}`}><Icon name="trash" size={13} /></button>
+            <button class="btn sm danger" disabled={tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest}
+                    onclick={() => rmTaxon(row)} title="Delete entry" aria-label={`Delete ${row.name}`}><Icon name="trash" size={13} /></button>
           </div>
         {:else}
-          <p class="empty">No {selectedTaxon.label.toLowerCase()} yet. Create your first {selectedTaxon.singular} above.</p>
+          <p class="empty">{taxon === 'tags' && tagSearch.trim() ? 'No matching tags.' : `No ${selectedTaxon.label.toLowerCase()} yet. Create your first ${selectedTaxon.singular} above.`}</p>
         {/each}
       </div>
     {/if}
@@ -504,6 +658,17 @@
   </section>
 {/if}
 </div>
+
+{#if tagDeleteRequest}
+  <ConfirmDialog
+    title={`Delete ${tagDeleteRequest.ids.length} tag${tagDeleteRequest.ids.length === 1 ? '' : 's'}?`}
+    message={`${tagDeleteRequest.name ? `“${tagDeleteRequest.name}” and its` : 'The selected tags and their'} document-tag links will be removed. Surviving child tags become roots. This cannot be undone.`}
+    confirmLabel="Delete tags"
+    busyLabel="Deleting…"
+    busy={tagDeleteBusy}
+    onConfirm={confirmTagDelete}
+    onCancel={() => (tagDeleteRequest = null)} />
+{/if}
 
 <style>
   .people-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 22px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
@@ -553,6 +718,15 @@
   .export-note p { margin: 0 0 8px; max-width: 65em; }
   .export-note details p { margin: 10px 0 0; }
   .settings-load-state { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .tag-management { display: grid; gap: 9px; margin: 0 0 14px; }
+  .tag-search { display: grid; gap: 6px; max-width: 390px; }
+  .tag-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .tag-selection > span { color: var(--muted); font-size: .8rem; margin-right: 4px; }
+  .tag-management p { margin: 0; font-size: .8rem; }
+  .tag-checkbox { flex: none; accent-color: var(--accent); }
+  .tag-row { flex-wrap: wrap; gap: 8px; }
+  .tag-row .grow { min-width: min(100%, 160px); }
+  .tag-row .inline-edit { max-width: 100%; }
   @media (max-width: 600px) {
     .people-nav { gap: 2px; }
     .people-nav button { flex: 1 1 auto; padding: 9px 10px; }
@@ -563,5 +737,6 @@
     .user-row { flex-wrap: wrap; gap: 10px; }
     .user-row > .grow { flex-basis: 100%; }
     .export-format { max-width: none; }
+    .tag-selection .btn { flex: 1 1 auto; }
   }
 </style>

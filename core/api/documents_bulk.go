@@ -25,6 +25,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -143,7 +144,15 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 				return errSystemUnavailable
 			}
 		}
-		return s.applyBulkEdit(r, tx, systemID, body.Method, body.Parameters, authorized)
+		if err := s.applyBulkEdit(r, tx, systemID, body.Method, body.Parameters, authorized); err != nil {
+			return err
+		}
+		switch body.Method {
+		case "trash", "delete", "restore", "rescan_enqueue":
+			return nil
+		default:
+			return clearClassifierReviewTag(r.Context(), tx, authorized)
+		}
 	})
 	if err != nil {
 		if errors.Is(err, errBadMethod) {
@@ -312,6 +321,22 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 		return err
 	}
 	return errBadMethod
+}
+
+// clearClassifierReviewTag resolves only classifier-owned needs-review
+// assignments after a human metadata edit, in the edit's transaction.
+func clearClassifierReviewTag(ctx context.Context, tx *sql.Tx, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM document_tags
+		WHERE classifier_owned=1 AND document_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
+		  AND tag_id IN (SELECT id FROM tags WHERE slug='needs-review')`, args...)
+	return err
 }
 
 // paramInt64 coerces a JSON number or numeric string into int64. JSON numbers

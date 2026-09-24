@@ -173,6 +173,22 @@ view-target checks cover both systems; actorless writes stay local. There is no
 per-document custom-field value read projection yet; one must recheck/redact
 inaccessible targets before exposing links.
 
+`core/api/tags.go` owns tag catalog writes, independently of document
+assignment via `core/api/documents_bulk.go`. A document assignment uses an
+existing tag ID and document change permission; it neither creates catalog
+entries nor grants catalog administration. Catalog single/batch deletion
+requires an admin browser session in the selected system. The batch handler
+validates every ID inside one `DB.WriteTx`, detaches surviving children, then
+deletes the selected IDs in a bounded statement; missing/foreign IDs roll back
+without deleting document-tag links. Foreign keys remove only links to deleted
+tags. One post-commit batch audit records IDs/count; no background job, network
+egress, or plugin contract is involved. Unreleased migration 0003 uses
+`ON DELETE SET NULL` for new tag parents, while the handlers explicitly detach
+children for already-applied schema-3 databases with the older CASCADE FK.
+Verify database and wire behavior with `go test ./core/api -run
+TestDeleteTagsAtomicAndReroots` and `go test ./core/db -run
+TestTagParentDeleteReroots`; [API reference](/api) owns status/body details.
+
 SQLite/FTS/CAS remain shared. Document deduplication is system/owner scoped;
 user-global idempotency keys bind fingerprints to the system and never exempt
 receipt replay from authorization. Users/groups, roles/capabilities, sessions,
@@ -312,6 +328,11 @@ These gates remain distinct:
   including for admins. Public `documents:read`, `documents:write` and `events:read`
   are separate grants; feed-only tokens cannot read documents. Token management
   requires browser/OIDC identity; admin-token metrics is an explicit exception.
+  Catalog `DELETE /api/tags/` is deliberately absent from the token allowlist:
+  an admin-role write token cannot use it. The registered handler rechecks the
+  current writer principal and selected system before deleting. Verify the
+  assembled policy with `go test ./distro/app -run
+  TestTokenPolicyProtectsDocumentAndAccountHandlers`.
 - **Roles/capabilities:** scopes grant neither admin status nor feature capabilities.
   User creation rechecks admin authority under the writer after password hashing.
   Updates read current role/capabilities there, reject self-disable/last-admin loss,
@@ -510,6 +531,13 @@ adds, approved suggestions, rules, source metadata and user renames/merges clear
 ownership in their own transactions; human reassertions during model calls survive.
 Other model tags remain additive. This is not a general provenance ledger; see
 [LLM classifier](/llm-classifier).
+
+Human document metadata PATCH and bulk metadata/tag writers remove only
+classifier-owned `needs-review` after successful ACL checks, in the edit's write
+transaction. Explicitly adding the tag first transfers ownership to the human;
+Trash, restore and rescan do not resolve it. Document detail refreshes its
+displayed tag pills after a successful edit while the marker is visible; the
+server owns the provenance decision.
 
 ## Durable work and optional integrations
 

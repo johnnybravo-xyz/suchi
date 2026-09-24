@@ -45,7 +45,9 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,content,jd_category_id,created_at,updated_at)
 		VALUES(1,1,2,'fixture',0,'Private fixture','PRIVATE_OCR_MARKER',(SELECT id FROM jd_categories WHERE system_id=1 LIMIT 1),0,0);
 		INSERT INTO api_tokens(system_id,id,user_id,name,token_hash,scopes,created_at)
-		VALUES(1,2,2,'member-device','fixture-token-hash','documents:read',0)`)
+		VALUES(1,2,2,'member-device','fixture-token-hash','documents:read',0);
+		INSERT INTO tags(system_id,id,name,slug,created_at,updated_at)
+		VALUES(1,99,'Delete by session','delete-by-session',0,0)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +81,8 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 		{name: "admin session can list credentials", method: "GET", path: "/api/tokens/", role: "admin", kind: "user", userID: 1, want: 200},
 		{name: "admin session can revoke member credential", method: "DELETE", path: "/api/tokens/2", role: "admin", kind: "user", userID: 1, want: 204},
 		{name: "admin token cannot preview taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, scope: auth.ScopeDocumentsWrite, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "admin write token cannot delete tag catalog", method: "DELETE", path: "/api/tags/", body: `{"ids":[99]}`, scope: auth.ScopeDocumentsWrite, role: "admin", kind: "token", userID: 1, want: 403},
+		{name: "admin session can delete tag catalog", method: "DELETE", path: "/api/tags/", body: `{"ids":[99]}`, role: "admin", kind: "user", userID: 1, want: 204},
 		{name: "admin token cannot export taxonomy", method: "GET", path: "/api/admin/taxonomy/export", scope: auth.ScopeDocumentsRead, role: "admin", kind: "token", userID: 1, want: 403},
 		{name: "scratch cannot import taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, role: "admin", kind: "demo-scratch", userID: 2, want: 403},
 		{name: "member cannot import taxonomy", method: "POST", path: "/api/admin/taxonomy/import", body: `{"content":"invalid","format":"toml"}`, role: "member", kind: "user", userID: 2, want: 403},
@@ -117,6 +121,10 @@ func TestTokenPolicyProtectsDocumentAndAccountHandlers(t *testing.T) {
 	}
 	if blocked != 0 || allowed != 1 {
 		t.Fatalf("persisted tokens: blocked=%d allowed=%d", blocked, allowed)
+	}
+	var survivingTags int
+	if err := d.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM tags WHERE id=99`).Scan(&survivingTags); err != nil || survivingTags != 0 {
+		t.Fatalf("tag after session delete=%d err=%v", survivingTags, err)
 	}
 }
 

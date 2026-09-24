@@ -13,8 +13,10 @@ Notable user-visible changes to Suchi are recorded here.
   filing-system identity, compatibility/scopes discovery, idempotent document
   and version uploads, device OCR provenance, split-origin lookup, metadata reads,
   bounded thumbnails, and device revocation.
-- Add document-tag editing, saved-view editing, and password-unlocked state in
-  document lists and detail.
+- Add type-to-select existing tags in document detail and bulk assignment on
+  Documents. Admin **Manage tags** links open one searchable Settings catalog,
+  with confirmed multi-tag deletion; saved-view editing and password-unlocked
+  state also appear in document lists and detail.
 - Add explicit application assembly through `distro/app.Run`, independently
   checksummed extension migrations, and an instance-owned automation-action
   registry. Compiled distributions can register native routes and durable
@@ -23,6 +25,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Changed
 
+- Resolve classifier-created `needs-review` when a person edits document
+  metadata through PATCH or bulk metadata/tag actions. The removal commits
+  with the edit; manual review tags and explicit reassertions remain, while
+  Trash, restore and rescan alone do not clear review.
 - Apply high-confidence inferred dates, model metadata, and local archive matches
   by default, with review-first mode available. Suggestions remain bound to
   source and field generations; review and queued application recheck the current
@@ -70,6 +76,8 @@ Notable user-visible changes to Suchi are recorded here.
   their original actor and filing system. Fix demo startup, streamed refile
   options, account-tool visibility, avatar refresh, settings scrollbar clearance,
   email-rule resizing, and QR alignment.
+- Keep child tags when deleting their parent (including on already-applied
+  schema-3 archives), and make selected-system multi-tag deletion atomic.
 
 ### Security
 
