@@ -171,12 +171,45 @@ Metrics include:
 Public compatibility probe for first-party clients. Call it before sending
 credentials. The response contains no deployment or user state:
 
-**200** `{"product":"suchi","api_version":1,"min_app_version":"0.1.0"}`
+**200** `{"product":"suchi","api_version":1,"mobile_contracts":["suchi-companion-v1"]}`
 
-Clients must require `product` to equal `suchi`, require an API version they
-support, and compare `min_app_version` as numeric semantic-version components.
-Redirects are not compatibility responses and must not receive credentials.
-Pairing clients use the current exchange shape, including `device_name`.
+Clients must require `product` to equal `suchi`. `mobile_contracts` advertises
+wire-behavior profiles independently of server and app release numbers. The
+`suchi-companion-v1` profile means the mobile-v1 endpoint and fixture behavior
+remains available. Servers may advertise additional profiles alongside it; they
+must omit v1 if they deliberately drop that behavior. A client that understands
+v1 rejects an explicit list without v1. When a server makes no declaration, the
+client may proceed to authenticated scope and system checks instead of inferring
+incompatibility from release numbers. Redirects are not compatibility responses
+and must not receive credentials. Pairing clients use the current exchange shape,
+including `device_name`.
+
+`api_version` remains available for future general API consumers. It does not
+determine Companion compatibility; mobile clients use the declared wire profile
+instead of requiring an exact API or app release number.
+
+Managing the mobile wire contract:
+
+- Treat a profile as a promise about the endpoints, payloads, authentication
+  requirements, and error behavior used by that mobile client—not a Suchi release
+  number or a token lifetime. Keep advertising `suchi-companion-v1` while its
+  mobile-v1 requests and responses remain usable. Compatible server releases do
+  not need a new profile or a mobile release.
+- When a change would break that promise (for example, removing a required
+  endpoint/field or changing a response or scope requirement), define a new
+  profile and its canonical fixtures under `core/api/testdata/mobile/`, document
+  the changed wire behavior here, and advertise **both** profiles only if the
+  server actually implements both. Update `core/api/handshake.go`, the exact
+  response assertion in `handshake_test.go`, and the fixture registry in
+  `mobile_contract_fixtures_test.go`; check them with
+  `go test ./core/api -run 'TestGetHandshake|TestMobileContractFixturesMatchWireTypes'`.
+- Release a Companion that understands the new profile before withdrawing v1.
+  Remove v1 from `mobile_contracts` only when its behavior is intentionally
+  unavailable and rejecting existing v1-only clients is acceptable. A present
+  empty or nonmatching list is an explicit refusal; omitting the field is **not**
+  a way to retire a profile because clients treat omission as no declaration.
+  Coordinate the mobile fixture mirror and exact server-commit pin with that
+  change. Neither adding nor withdrawing a profile rotates existing API tokens.
 
 ## Authentication and accounts
 
