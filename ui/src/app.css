@@ -266,18 +266,6 @@ textarea.input { resize: vertical; font-family: ui-monospace, monospace; font-si
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .toolbar select { max-width: 190px; }
 .spacer { flex: 1; }
-.document-date-filter { position: relative; display: inline-flex; flex: 0 1 150px; width: 150px; max-width: 100%; }
-.document-date-filter > .input { max-width: none; }
-.date-format-hint { display: none; }
-
-@media (max-width: 700px) {
-  .date-format-hint {
-    position: absolute; inset: 1px 34px 1px 1px;
-    display: flex; align-items: center; padding-left: 11px;
-    border-radius: 8px 0 0 8px; background: var(--surface);
-    color: var(--faint); font-size: .9rem; pointer-events: none;
-  }
-}
 
 /* ---------- cards / detail ---------- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }

@@ -1979,8 +1979,12 @@ test('document pagination preserves dates and resets on filter or sort changes',
     documents: [{ id: 42, title: 'Receipt', created_at: 1780000000, tags: [] }],
   })
   await page.goto('/#/documents?page=3')
-  await page.getByLabel('Added on or after', { exact: true }).fill('2026-09-01')
-  await page.getByLabel('Added on or after', { exact: true }).press('Tab')
+  const dateFrom = page.getByLabel('Added on or after', { exact: true })
+  await expect(dateFrom).toHaveAttribute('type', 'text')
+  await expect(dateFrom).toHaveAttribute('placeholder', 'yyyy-mm-dd')
+  await expect(page.getByRole('button', { name: 'Choose added on or after' })).toBeVisible()
+  await dateFrom.fill('2026-09-01')
+  await dateFrom.press('Tab')
   await expect(page).toHaveURL(/#\/documents\?created_at__gte=1788220800$/)
   await page.getByLabel('Added on or before', { exact: true }).fill('2026-09-30')
   await page.getByLabel('Added on or before', { exact: true }).press('Tab')
@@ -2117,6 +2121,11 @@ test('stores new saved views as one canonical query', async ({ page }) => {
   await dialog.getByLabel('Query').fill('"distribution advice"')
   await dialog.getByLabel('Filing category').selectOption('6')
   await dialog.getByLabel('Sensitivity').selectOption('confidential')
+  await expect(dialog.getByLabel('Document date from', { exact: true })).toHaveAttribute('placeholder', 'yyyy-mm-dd')
+  await dialog.getByLabel('Document date from', { exact: true }).fill('2026-01-01')
+  await dialog.getByLabel('Document date from', { exact: true }).press('Tab')
+  await dialog.getByLabel('Document date to', { exact: true }).fill('2026-12-31')
+  await dialog.getByLabel('Document date to', { exact: true }).press('Tab')
 
   const saveRequest = page.waitForRequest(request => {
     return new URL(request.url()).pathname === '/api/saved_views/' && request.method() === 'POST'
@@ -2124,7 +2133,7 @@ test('stores new saved views as one canonical query', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Save view' }).click()
   const payload = (await saveRequest).postDataJSON()
   expect(JSON.parse(payload.filter_json)).toEqual({
-    q: '"distribution advice" jd:22 sensitivity:confidential',
+    q: '"distribution advice" jd:22 sensitivity:confidential date:>=2026-01-01 date:<=2026-12-31',
   })
 })
 
@@ -2483,6 +2492,7 @@ test('offers Microsoft sign-in without exposing registration controls', async ({
   await page.goto('/#/settings?tab=archive&section=mail')
 
   await page.getByRole('button', { name: 'Add mailbox' }).click()
+  await expect(page.getByLabel('Sync mail from', { exact: true })).toHaveAttribute('placeholder', 'yyyy-mm-ddThh:mm')
   await page.locator('#ma-provider').selectOption('microsoft')
   await expect(page.getByText('Auth method', { exact: true })).toHaveCount(0)
   await expect(page.getByLabel('Password')).toHaveCount(0)

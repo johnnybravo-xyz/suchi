@@ -6,6 +6,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Display every date picker with stable ISO `yyyy-mm-dd` input, including the
+  date portion of mailbox sync timestamps.
 - Cancel superseded document-change approvals when metadata changes and during
   the existing approval sweep, so obsolete suggestions leave the review queue.
 - Remove repetitive review guidance and score disclaimers from approval cards.

@@ -46,6 +46,8 @@ Suchi uses an unlocked working copy while preserving the protected original.
 The top bar provides search, **Upload** and theme controls. The search menu matches
 **Commands** and **Pages**; **Search everything for** submits its complete text.
 Query suggestions appear in Search/Documents fields, separately from this menu.
+Date controls use the locale-independent ISO `yyyy-mm-dd` format. Controls that
+also capture a time append `Thh:mm`.
 
 Drop files on Upload or anywhere on an available archive page to open per-file
 results. New uploads wait until the selected system is available. Each drop
@@ -167,8 +169,9 @@ sit above **Restore** and **Delete permanently**.
 
 **New view** opens **Create a view** with optional Query, category, tag,
 correspondent, document type, sensitivity and date filters. Empty choices mean all
-values. Select a view's name to open its documents; **Edit** is available only for
-your views. **Save changes** updates in place; **Cancel**/Escape discards the draft.
+values. Date ranges use `yyyy-mm-dd`. Select a view's name to open its documents;
+**Edit** is available only for your views. **Save changes** updates in place;
+**Cancel**/Escape discards the draft.
 
 Rich filters appear in **Query** for editing/removal. Older flat filters retain
 selections, multi-value scopes and ordering; exact research snapshots can be

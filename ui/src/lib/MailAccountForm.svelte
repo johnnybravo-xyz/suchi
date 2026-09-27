@@ -9,6 +9,7 @@
   import { session } from './session.svelte.js'
   import { captureScope, scopeCurrent } from './systems.svelte.js'
   import Icon from './Icon.svelte'
+  import ISODateInput from './ISODateInput.svelte'
   import OAuthDeviceCodeModal from './OAuthDeviceCodeModal.svelte'
 
   let { mode, account, onClose, notify, viewerRole = 'admin', users = [],
@@ -597,7 +598,7 @@
 
         <div class="field">
           <label for="ma-since">Sync mail from</label>
-          <input id="ma-since" class="input" type="datetime-local" bind:value={form.sync_since} />
+          <ISODateInput id="ma-since" bind:value={form.sync_since} label="Sync mail from" includeTime />
         </div>
       </div>
     </details>

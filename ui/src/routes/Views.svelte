@@ -7,6 +7,7 @@
   import { SENSITIVITY_OPTIONS, sensitivityLabel } from '../lib/format.js'
   import { DATE_ROLES, intelligenceRoleLabel } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
+  import ISODateInput from '../lib/ISODateInput.svelte'
   import { go } from '../lib/router.svelte.js'
 
   let { notify, canShare = false, startCreate = false, createQuery = '', createDocumentIDs = '', jdCategories = [] } = $props()
@@ -379,11 +380,11 @@
           </div>
           <div class="field">
             <label for="view-date-from">Document date from</label>
-            <input id="view-date-from" class="input" type="date" bind:value={nv.dateFrom} />
+            <ISODateInput id="view-date-from" bind:value={nv.dateFrom} label="Document date from" />
           </div>
           <div class="field">
             <label for="view-date-to">Document date to</label>
-            <input id="view-date-to" class="input" type="date" bind:value={nv.dateTo} />
+            <ISODateInput id="view-date-to" bind:value={nv.dateTo} label="Document date to" />
           </div>
           <div class="field">
             <label for="view-date-role">Document date role</label>

@@ -16,6 +16,7 @@
   import { createQueryAssistant } from '../lib/queryAssist.js'
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
+  import ISODateInput from '../lib/ISODateInput.svelte'
 
   let { notify, inbox = null, inboxMode = false, taxonomyLoaded = true, jdCategories = [],
         canAskArchive = false, canReviewIntelligence = false, onAskDocuments, onScopeChange } = $props()
@@ -502,7 +503,7 @@
 {#if err}<div class="err">{err}</div>{/if}
 
 {#if !isInbox}
-  <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select, input[type="date"]')) e.target.blur() }}>
+  <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select')) e.target.blur() }}>
     <input class="input" type="search" value={fQuery} placeholder="Search or use jd:, tag:, from:…"
            list="documents-query-suggestions"
            oninput={(event) => queryAssistant.update(event.currentTarget.value)}
@@ -535,16 +536,10 @@
         <option value={option.value}>{option.label}</option>
       {/each}
     </select>
-    <span class="document-date-filter">
-      <input class="input" type="date" value={dateFrom} onchange={(e) => setDateFilter('created_at__gte', e.currentTarget.value)} title="Added on or after"
-             aria-label="Added on or after" placeholder="dd/mm/yyyy" />
-      {#if !dateFrom}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
-    </span>
-    <span class="document-date-filter">
-      <input class="input" type="date" value={dateTo} onchange={(e) => setDateFilter('created_at__lte', e.currentTarget.value)} title="Added on or before"
-             aria-label="Added on or before" placeholder="dd/mm/yyyy" />
-      {#if !dateTo}<span class="date-format-hint" aria-hidden="true">dd/mm/yyyy</span>{/if}
-    </span>
+    <ISODateInput compact value={dateFrom} label="Added on or after"
+                  onchange={(value) => setDateFilter('created_at__gte', value)} />
+    <ISODateInput compact value={dateTo} label="Added on or before"
+                  onchange={(value) => setDateFilter('created_at__lte', value)} />
     <span class="spacer"></span>
     <span class="seg">
       <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
