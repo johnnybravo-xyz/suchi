@@ -78,6 +78,17 @@ See the [configuration](docs/config.mdx),
 [backup and restore](docs/backup-restore.mdx), and
 [privacy](docs/privacy.mdx) guides for operational details.
 
+## Dependency advisory exceptions
+
+Release scans use `govulncheck ./...`. Reachable findings block release. A
+module-only finding is recorded here only when no fixed compatible release
+exists and the affected package is absent from Suchi's call graph.
+
+- **GO-2026-5932 — `golang.org/x/crypto/openpgp`:** no fixed release exists.
+  Suchi does not import `openpgp`; its direct `x/crypto` use is `argon2`, and
+  `govulncheck` reports the advisory only at module level. Remove this exception
+  if a fixed release becomes available or the package becomes reachable.
+
 ## Compliance
 
 Suchi is not certified for HIPAA, PCI DSS, SOC 2, or similar regimes. Operators

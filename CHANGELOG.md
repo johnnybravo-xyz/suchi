@@ -59,6 +59,9 @@ Notable user-visible changes to Suchi are recorded here.
   existing destinations unless `--force` is explicit, reject outputs inside
   `DATA_DIR`, require unambiguous owner scope, and fail on missing originals
   unless recovery uses `--allow-incomplete`.
+- Upgrade `golang.org/x/crypto` to 0.56.0, which fixes the SSH channel
+  deadlock advisories. Record the sole remaining module-only advisory for the
+  unimported, unmaintained `openpgp` package.
 
 ## [0.1.0-beta.3] - 2026-09-24
 
