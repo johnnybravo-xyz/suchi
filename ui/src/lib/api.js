@@ -233,6 +233,7 @@ export const revokeEmailOAuth = (id) => api.post(`/api/email-accounts/${id}/oaut
 export const thumbPath = (id, reveal) => scopedURL(`/api/documents/${id}/thumb${reveal ? '?reveal=1' : ''}`)
 export const automationsSchema = () => api.get('/api/automations/schema')
 export const listPresets = () => api.get('/api/presets/')
+export const listFilingSets = () => api.get('/api/filing-sets/')
 
 export const listSavedViews = (params, signal) => api.get(`/api/saved_views/${qs(params)}`, { signal })
 export const createSavedView = (b) => api.post('/api/saved_views/', b)
@@ -259,7 +260,8 @@ export const downloadPath = (id) => scopedURL(`/download/${id}`)
 export const adminCreateUser = (b) => api.post('/api/admin/users', b)
 export const adminListUsers = (params) => api.get(`/api/admin/users${qs(params)}`)
 export const adminPatchUser = (id, b) => api.patch(`/api/admin/users/${id}`, b)
-export const applyPreset = (b) => api.post('/api/admin/setup/preset', b)
+export const previewPresetChange = (b) => api.post('/api/admin/setup/preset/preview', b)
+export const applyPresetChange = (b) => api.post('/api/admin/setup/preset/apply', b)
 export const getLLMSettings = () => api.get('/api/admin/settings/llm')
 export const saveLLMSettings = (b) => api.post('/api/admin/settings/llm', b)
 export const saveResearchContextMode = (research_context_mode) =>

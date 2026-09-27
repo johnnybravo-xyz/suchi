@@ -215,21 +215,24 @@ updates on route or system changes. Only admins see the **Manage tags** link
 beside a document's Tags; the Documents list stays limited to search, display and
 filter controls, and document screens do not mutate the catalog.
 
-`TaxonomyImport.svelte` is shared by the Filing tree and Taxonomy sections. It owns file/paste reads,
-HuML/TOML choice, seed/remap/destination choices and preview freshness; schema
-validation stays server-side. Late FileReader/network responses cannot replace
-new input, and conflicting actions are disabled in flight.
+`routes/FilingTreeSettings.svelte` owns the standalone Filing tree workspace:
+ready-made selection, the one-set-per-lane composer, reviewed category mappings,
+Blank confirmation, optional post-Apply Refile, and taxonomy import/export.
+`TaxonomyImport.svelte` owns file/paste reads, HuML/TOML choice,
+seed/remap/destination choices and preview freshness within that workspace;
+schema validation stays server-side. Late FileReader/network responses cannot
+replace new input, and conflicting actions are disabled in flight.
 
-Preview renders the declared schema/content revision, source story, destination,
-`user_areas`, separate System/49 `generated_areas`, additions, preserved disabled
-rules and dependency skips. 00–09 is explanatory, not a row. First prefixed import
-offers using the original archive or preserving it under an explicit other code.
-Changing content/format/seeds/remaps/destination invalidates preview. Apply sends
-`expected_state_hash`, never a body target copied from current browser scope;
-stale previews preserve input. Named success refreshes the catalog, selects the
-returned system and invalidates old requests. Blank confirmation and explicit
-full/tree-only exports stay in this shared flow. Taxonomy administration requires
-a web admin session; mobile tokens cannot use it. See [Filing trees](/jd).
+Preset/composer Preview renders the complete target tree and document counts for
+each collision. The screen proposes replacement, free same-decade remap or skip,
+then re-previews changed choices before Apply sends `expected_state_hash`.
+Taxonomy-file Preview renders the declared schema/content revision, source story,
+destination, `user_areas`, separate System/49 `generated_areas`, additions,
+preserved disabled rules and dependency skips. 00–09 is explanatory, not a row.
+First prefixed import offers using the original archive or preserving it under an
+explicit other code. Named success refreshes the catalog, selects the returned
+system and invalidates old requests. Taxonomy administration requires a web admin
+session; mobile tokens cannot use it. See [Filing trees](/jd).
 
 `lib/configuration.js` owns the Archive Configuration section inventory.
 `ArchiveSettings.svelte` owns overview and section navigation.
@@ -241,19 +244,19 @@ a horizontal section rail on narrow screens.
 
 `App.svelte` passes URL `people` and `metadata` through Settings and Archive
 Configuration to `PeopleSettings.svelte`; `lib/configuration.js` owns the Tags
-deep-link hash. People tabs and metadata type changes update the scoped hash,
-so reload and history restore the selected panel. Other archive sections ignore
-these query keys.
+deep-link hash. Archive navigation exposes People and Metadata as separate
+sections. User/Group tabs update `people`; metadata type changes update
+`metadata`, so reload and history restore the selected panel.
 
 `App.svelte` owns the administrator's filing-tree reminder state.
 `SetupReminder.svelte` renders it in the sidebar, narrow Dashboard and Settings.
 Failures remain visible with Retry. Choosing a preset, confirmed Blank, or an
 imported tree refreshes the state; visiting Filing tree alone does not dismiss it.
 
-`ConfigurationSection.svelte` shares form state, validation, required-load/retry
-gates and writes across Archive Configuration sections. Mailbox editing delegates to
-`EmailAccounts.svelte`, imports to `TaxonomyImport.svelte`, and both automation
-entry points link to the existing `Automations.svelte` editor.
+`ConfigurationSection.svelte` owns the remaining direct Archive Configuration
+forms and their required-load/retry gates. Mailbox editing delegates to
+`EmailAccounts.svelte`; both automation entry points link to the existing
+`Automations.svelte` editor.
 
 Classification uses one shared **Classification options** block in both shells.
 Its checked-by-default **Automatically apply high-confidence suggestions**
@@ -264,9 +267,10 @@ one save must not overwrite another form's saved or unsaved state. Automatic-onl
 threshold sliders are disabled, not cleared, in review mode. The connection test
 validates a synthetic response without changing application mode.
 
-`PeopleSettings.svelte` owns Users, Groups, Metadata and Taxonomy. Metadata has
-one type selector including custom fields; file operations stay separate.
-`UserCreateForm.svelte` owns user creation there and submits no hidden member
+`PeopleSettings.svelte` owns the separate People and Metadata destinations.
+People contains Users and Groups; Metadata has one type selector including custom
+fields. Filing-tree files belong only to `FilingTreeSettings.svelte`.
+`UserCreateForm.svelte` owns user creation in People and submits no hidden member
 capabilities for admins. Self-disable checks use
 `session.user.user_id`; the API owns self-disable, last-admin and capability
 normalization safeguards. Verify shared configuration with:

@@ -8,10 +8,18 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Add a Documents filter for files currently available through an active share
   link created by the signed-in user.
-
+- Add a standalone Filing tree workspace with canonical Solo, Household,
+  Freelance, and Small business trees; a five-lane set composer; reviewed
+  category mappings with document counts; and in-place preset transitions that
+  preserve filing IDs and local rule forks. Solo and Household use four focused
+  lanes; all four trees call their money-management lane Money and omit generic
+  Banking and broad “records” catch-alls. Purpose-specific names distinguish
+  Collections & aging, Briefs & plans, Approvals & sign-off, and Medical billing.
 
 ### Fixed
 
+- Bring a completed filing-tree review into view with focus and a brief visual
+  cue, and remove the internal preview hash from the review header.
 - Preview filing-tree transitions against the categories actually present, so
   archives created with older preset revisions do not submit invalid
   replacement codes.

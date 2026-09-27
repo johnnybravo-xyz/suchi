@@ -18,6 +18,6 @@
   </div>
   <div class="setup-reminder-actions">
     {#if error}<button class="btn sm" onclick={() => onRetry?.()}>Retry</button>{/if}
-    <a role="button" class="btn primary sm" href={filingHref("#/settings?tab=archive&section=archive")} onclick={onContinue}>Continue setup</a>
+    <a role="button" class="btn primary sm" href={filingHref("#/settings?tab=archive&section=filing-tree")} onclick={onContinue}>Continue setup</a>
   </div>
 </aside>

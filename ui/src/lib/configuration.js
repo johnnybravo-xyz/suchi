@@ -1,22 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=users&people=metadata&metadata=tags'
+export const TAGS_SETTINGS_HASH = '#/settings?tab=archive&section=metadata&metadata=tags'
+
+export const FILING_TREE_SETTINGS_ITEM = {
+  name: 'filing-tree', label: 'Filing tree', icon: 'docs',
+  description: 'Choose, compose, review, import, or export the structure used to file documents.',
+  href: '#/settings?tab=archive&section=filing-tree',
+}
 
 export const ARCHIVE_SETTINGS_GROUPS = [
   {
     name: 'structure',
-    label: 'Structure and access',
-    description: 'How documents are organized and administered.',
+    label: 'People and access',
+    description: 'Who can use the archive and how document metadata is managed.',
     items: [
       {
-        name: 'archive', label: 'Filing tree', icon: 'docs',
-        description: 'Choose or replace the structure used to file documents.',
-        href: '#/settings?tab=archive&section=archive',
+        name: 'users', label: 'People', icon: 'shield',
+        description: 'Manage users, groups, roles, and archive access.',
+        href: '#/settings?tab=archive&section=users',
       },
       {
-        name: 'users', label: 'People and metadata', icon: 'shield',
-        description: 'Manage people, document metadata, and filing-tree files.',
-        href: '#/settings?tab=archive&section=users',
+        name: 'metadata', label: 'Metadata', icon: 'settings',
+        description: 'Manage document labels, types, storage paths, and custom fields.',
+        href: '#/settings?tab=archive&section=metadata',
       },
     ],
   },
@@ -68,4 +74,4 @@ export const ARCHIVE_SETTINGS_GROUPS = [
   },
 ]
 
-export const ARCHIVE_SETTINGS_ITEMS = ARCHIVE_SETTINGS_GROUPS.flatMap((group) => group.items)
+export const ARCHIVE_SETTINGS_ITEMS = [FILING_TREE_SETTINGS_ITEM, ...ARCHIVE_SETTINGS_GROUPS.flatMap((group) => group.items)]

@@ -64,18 +64,61 @@ application isolation over shared SQLite/CAS/FTS, not independent infrastructure
 per-system encryption or evidence of professional independence. See
 [Permissions](/permissions) for membership and delegated credentials.
 
-## Choose a tree
+## Choose or change a tree
 
-In **Settings > Archive configuration > Filing tree**, compare `solo`,
-`household`, `freelance`, `smb_billing` and `blank`, or choose **Import a file**.
-`blank` contains no user categories and needs explicit confirmation. Selecting
-any preset or applying an import satisfies first-run archive setup.
+**Settings > Archive configuration > Filing tree** is a standalone workspace:
+
+- **Ready-made** compares `solo`, `household`, `freelance`, `smb_billing` and
+  `blank`.
+- **Build your own** combines at most one focused set in each available decade.
+  Solo and Household use 10–19, 20–29, 30–39 and 50–59; business sets may also
+  use 60–69.
+- **Import or export** owns advanced HuML/TOML file operations.
+
+Built-in trees deliberately stop at 60–69. Suchi reserves 40–49 for its generated
+System/49 Inbox and leaves 70–99 free for later operator additions. `blank`
+contains no user categories and needs explicit confirmation. Applying any reviewed
+tree or taxonomy import satisfies first-run archive setup.
+
+Solo and Household deliberately use only four user lanes. Solo keeps
+**Education & memberships** at 14 in Life admin; Household keeps
+**Memberships** at 14 in Family admin.
+
+Freelance and Small business likewise omit generic **Banking** and
+client/customer/vendor/project “records” buckets. Their categories describe a
+specific document purpose or workflow stage instead.
+All four ready-made trees call their money-management lane **Money**. The plain
+label covers personal investments and borrowing as well as business expenses,
+tax working papers and payroll without suggesting a separate financial system.
+
+The category names make their boundaries explicit:
+
+- **Collections & aging** is for follow-up after an invoice is issued, including
+  overdue notices and remittance records. The invoice itself stays in
+  **Invoices out**.
+- Freelance **Briefs & plans** is for project scope and planning. Signed legal
+  terms stay in client **Quotes & contracts**.
+- Freelance **Approvals & sign-off** is for acceptance and completion evidence.
+  Payment evidence stays with collections or the relevant **Money** category.
+- Personal **Medical billing** is for provider charges, insurance claims and
+  reimbursement records. Diagnoses and clinical reports stay in
+  **Medical records**; medication instructions stay in **Prescriptions**.
+
+Ready-made and composed changes always preview first. After Preview completes,
+the workspace moves focus to the review and scrolls it into view. The review
+shows the complete target tree, starter-rule changes, every category-name
+collision, and the number of live and recoverable documents using that category.
+A same-meaning built-in mapping updates the existing category row in place,
+preserving its ID and document references. Other mappings require a reviewed
+choice: replace the meaning in place, add the incoming category at the proposed
+free code in the same decade, or skip it. Apply is rejected if relevant state
+changed after Preview.
 
 Choose a `.huml` or `.toml` file, or paste content and select its serialization.
 Custom files can contain starter automations and category-keyword filing rules;
-**Include starter rules from this file** applies only to those supplied by the file. A tree-only
-file adds no rules. Preview shows the name, story, content revision, user tree,
-generated structure, category/rule additions, preserved
+**Include starter rules from this file** applies only to those supplied by the file.
+A tree-only file adds no rules. File Preview shows the name, story, content
+revision, user tree, generated structure, category/rule additions, preserved
 rules, skips and collisions. Changing input, format, seed choice or remaps
 requires another preview. If relevant destination state changes before Apply,
 Suchi preserves your input and asks you to preview again; unrelated system edits
@@ -100,8 +143,16 @@ not permission to reset a chosen tree.
 - System destination, tree, supported starters, last-import provenance and required
   jobs commit together; unresolved references leave no partial import.
 
-Use [Refile](/refile) explicitly to rerun current automations or rebuild paths.
-Ordinary taxonomy import is not a reset or document-version operation.
+Built-in and composed transitions additionally support reviewed in-place
+replacement. Preset-owned rules from the previous tree are suspended before a
+Refile; identical surviving rules are transferred to the target and its rules are
+activated. Disabled choices stay disabled. User-owned rules and copy-on-write
+forks are never suspended by a preset change.
+
+Use [Refile](/refile) explicitly, or select it in the reviewed tree change, to
+run the target tree's active automations and rebuild paths after Apply. Refile is
+not the taxonomy migration itself. Ordinary custom taxonomy import remains an
+additive merge and is not a document-version operation.
 
 ## Authoring v1
 

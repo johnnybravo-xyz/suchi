@@ -3,11 +3,12 @@
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { setupState, adminListUsers, getIngestSettings, getLLMSettings,
            getPreferences, listEmailAccounts, listAutomations } from '../lib/api.js'
-  import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS } from '../lib/configuration.js'
+  import { ARCHIVE_SETTINGS_GROUPS, ARCHIVE_SETTINGS_ITEMS, FILING_TREE_SETTINGS_ITEM } from '../lib/configuration.js'
   import Icon from '../lib/Icon.svelte'
-  import ConfigurationSection from './ConfigurationSection.svelte'
-  import PeopleSettings from './PeopleSettings.svelte'
   import SystemSettings from '../lib/SystemSettings.svelte'
+  import ConfigurationSection from './ConfigurationSection.svelte'
+  import FilingTreeSettings from './FilingTreeSettings.svelte'
+  import PeopleSettings from './PeopleSettings.svelte'
 
   let { notify, initialSection = '', initialPeople = '', initialMetadata = '', onTaxonomyChanged } = $props()
 
@@ -39,12 +40,13 @@
 
     if (setup.status === 'fulfilled') {
       const preset = setup.value?.current_preset
-      next.archive = status(setup.value?.filing_tree_chosen ? 'Configured' : 'Not set', preset ? `${titleCase(preset)} filing tree` : 'Custom filing tree', setup.value?.filing_tree_chosen ? 'ok' : 'warn')
+      next['filing-tree'] = status(setup.value?.filing_tree_chosen ? 'Configured' : 'Not set', preset ? `${titleCase(preset)} filing tree` : 'Custom filing tree', setup.value?.filing_tree_chosen ? 'ok' : 'warn')
     }
     if (users.status === 'fulfilled') {
       const count = rows(users.value).length
       next.users = status(`${count} ${count === 1 ? 'user' : 'users'}`, 'Roles and archive capabilities')
     }
+    next.metadata = status('5 types', 'Tags, correspondents, document types, storage paths, and fields')
     if (ingest.status === 'fulfilled') {
       const directory = ingest.value?.fs_watch_dir || ''
       next.sources = status(directory ? 'Active' : 'Not set', directory || 'Uploads and API remain available', directory ? 'ok' : 'warn')
@@ -78,6 +80,8 @@
     <nav class="archive-rail" aria-label="Archive settings sections">
       <a class:on={current === 'overview'} aria-current={current === 'overview' ? 'page' : undefined}
          href={filingHref("#/settings?tab=archive")}><Icon name="settings" size={15} /><span>Overview</span></a>
+      <a class:on={current === FILING_TREE_SETTINGS_ITEM.name} aria-current={current === FILING_TREE_SETTINGS_ITEM.name ? 'page' : undefined}
+         href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={15} /><span>{FILING_TREE_SETTINGS_ITEM.label}</span></a>
       {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
         <div class="rail-group">
           <span class="rail-group-label">{group.label}</span>
@@ -91,7 +95,7 @@
   </aside>
 
   <div class="archive-content" role="region" aria-label="Configuration content">
-    {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'archive')}
+    {#if systems.introduced && (current === 'overview' || current === 'users' || current === 'metadata' || current === 'filing-tree')}
       <SystemSettings {notify} />
     {/if}
     {#if current === 'overview'}
@@ -104,6 +108,16 @@
         <span class="admin-pill"><Icon name="shield" size={13} /> Administrators</span>
       </header>
 
+      {@const filingStatus = statuses[FILING_TREE_SETTINGS_ITEM.name]}
+      <a class="configuration-row filing-row" href={filingHref(FILING_TREE_SETTINGS_ITEM.href)}>
+        <span class="configuration-icon"><Icon name={FILING_TREE_SETTINGS_ITEM.icon} size={15} /></span>
+        <span class="configuration-copy">
+          <b>{FILING_TREE_SETTINGS_ITEM.label}</b>
+          <small>{filingStatus?.detail || FILING_TREE_SETTINGS_ITEM.description}</small>
+        </span>
+        {#if filingStatus}<span class="status" class:ok={filingStatus.tone === 'ok'} class:warn={filingStatus.tone === 'warn'}>{filingStatus.label}</span>{/if}
+        <Icon name="chev" size={13} />
+      </a>
       <div class="configuration-groups">
         {#each ARCHIVE_SETTINGS_GROUPS as group (group.name)}
           <section class="configuration-group" aria-labelledby={`group-${group.name}`}>
@@ -132,8 +146,12 @@
         <a href={filingHref("#/settings?tab=archive")}><Icon name="left" size={13} /> Archive overview</a>
         <span>{currentItem.description}</span>
       </header>
-      {#if current === 'users'}
-        <PeopleSettings {notify} {onTaxonomyChanged} {initialPeople} {initialMetadata} />
+      {#if current === 'filing-tree'}
+        <FilingTreeSettings {notify} {onTaxonomyChanged} />
+      {:else if current === 'users'}
+        <PeopleSettings view="people" {notify} {initialPeople} {initialMetadata} />
+      {:else if current === 'metadata'}
+        <PeopleSettings view="metadata" {notify} {initialPeople} {initialMetadata} />
       {:else if current === 'automations'}
         <div class="card handoff-card">
           <span class="handoff-icon"><Icon name="zap" size={20} /></span>
@@ -145,7 +163,7 @@
         </div>
       {:else}
         <div class="card section-card">
-          <ConfigurationSection section={current} {notify} {onTaxonomyChanged} />
+          <ConfigurationSection section={current} {notify} />
         </div>
       {/if}
     {/if}
@@ -168,6 +186,7 @@
   .archive-intro h2 { font-size: 1.35rem; line-height: 1.2; }
   .archive-intro p { max-width: 590px; margin: 6px 0 0; color: var(--muted); font-size: .82rem; }
   .admin-pill { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 9px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .68rem; font-weight: 600; }
+  .filing-row { margin-bottom: 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r); background: var(--tint); }
   .configuration-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .configuration-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
   .configuration-group > header { padding: 14px 15px 12px; border-top: 3px solid var(--accent); border-bottom: 1px solid var(--line); background: var(--bg); cursor: default; }

@@ -253,12 +253,23 @@ for (const input of ['drop', 'picker']) {
 
 
 const presets = [
-  { id: 'solo', name: 'Solo', description: 'One person', areas: [] },
-  { id: 'household', name: 'Household', description: 'A family', areas: [] },
-  { id: 'freelance', name: 'Freelance', description: 'Client work', areas: [] },
-  { id: 'smb_billing', name: 'Small business', description: 'Billing', areas: [] },
-  { id: 'blank', name: 'Blank', description: 'Build your own', blank: true, areas: [] },
+  { id: 'solo', name: 'Solo', description: 'One person', set_ids: ['life-admin', 'finance', 'health', 'home'], areas: [{ code: 10, name: 'Life admin', category_count: 2, categories: [{ code: 11, name: 'Identity' }, { code: 14, name: 'Education & memberships' }] }] },
+  { id: 'household', name: 'Household', description: 'A family', set_ids: ['family-admin', 'finance', 'health', 'home'], areas: [{ code: 10, name: 'Family admin', category_count: 2, categories: [{ code: 11, name: 'Family IDs' }, { code: 14, name: 'Memberships' }] }] },
+  { id: 'freelance', name: 'Freelance', description: 'Client work', set_ids: ['clients', 'projects', 'business-finance', 'compliance', 'portfolio-marketing'], areas: [] },
+  { id: 'smb_billing', name: 'Small business', description: 'Billing', set_ids: ['customers', 'vendors', 'finance-payroll', 'compliance', 'portfolio-marketing'], areas: [] },
+  { id: 'blank', name: 'Blank', description: 'Build your own', blank: true, set_ids: [], areas: [] },
 ]
+
+const filingSetCatalog = {
+  max_sets: 5,
+  sets: [
+    { id: 'life-admin', name: 'Life admin', description: 'Identity, insurance, vehicles, education, and memberships', lane: 10, categories: [{ code: 11, name: 'Identity' }, { code: 14, name: 'Education & memberships' }] },
+    { id: 'finance', name: 'Money', description: 'Investments, tax, credit, and receipts', lane: 20, categories: [{ code: 22, name: 'Investments' }] },
+    { id: 'health', name: 'Health', description: 'Medical records', lane: 30, categories: [{ code: 31, name: 'Medical records' }] },
+    { id: 'home', name: 'Home', description: 'Utilities, housing, and warranties', lane: 50, categories: [{ code: 51, name: 'Utilities' }, { code: 52, name: 'Housing' }] },
+  ],
+  recipes: Object.fromEntries(presets.map(preset => [preset.id, preset.set_ids])),
+}
 
 const taxonomyContent = `format = "suchi-taxonomy/v1"
 id = "personal-records"
@@ -291,9 +302,34 @@ function taxonomyPreview(overrides = {}) {
   }
 }
 
+function presetChangePreview(payload, overrides = {}) {
+  const preset = presets.find(candidate => candidate.id === payload.preset_id)
+  const setIDs = payload.set_ids ?? preset?.set_ids ?? []
+  const areas = payload.set_ids
+    ? filingSetCatalog.sets.filter(set => setIDs.includes(set.id)).map(set => ({ code: set.lane, name: set.name, categories: set.categories }))
+    : (preset?.areas || []).map(area => ({ code: area.code, name: area.name, categories: area.categories }))
+  const collisions = (overrides.collisions || []).map(collision => ({
+    ...collision,
+    resolved: collision.resolved || !!payload.replacements?.[collision.code] ||
+      Object.prototype.hasOwnProperty.call(payload.remaps || {}, collision.code),
+    replace: collision.replace || !!payload.replacements?.[collision.code],
+  }))
+  return taxonomyPreview({
+    ...overrides,
+    preset_id: preset?.id || 'composed-v1-test',
+    name: preset?.name || 'Custom filing tree',
+    story: preset?.description || 'A filing tree composed from focused sets.',
+    set_ids: setIDs,
+    current_set_ids: overrides.current_set_ids || [],
+    user_areas: areas,
+    collisions,
+  })
+}
+
 async function openTaxonomyImport(page) {
-  await page.goto('/#/settings?tab=archive&section=archive')
-  await page.getByRole('button', { name: 'Import a file' }).click()
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+  await page.getByRole('button', { name: 'Import or export' }).click()
+  await page.getByRole('button', { name: 'Import file' }).click()
   return page.getByRole('region', { name: 'Import taxonomy', exact: true })
 }
 
@@ -320,11 +356,10 @@ test('taxonomy import previews a named tree and refreshes setup and sidebar afte
   await expect(importer.getByText('00–09 System index', { exact: true })).toBeVisible()
   await expect(importer.getByText('49 Inbox', { exact: true })).toBeVisible()
   await expect(importer.getByText('Local starter — disabled (stays disabled)', { exact: true })).toBeVisible()
-  await expect(page.getByRole('note').getByText('Required for archive setup.')).toBeVisible()
+  await expect(page.locator('.setup-reminder-settings')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await importer.getByRole('button', { name: 'Apply import', exact: true }).click()
-  await expect(page.getByRole('note').getByText('Required for archive setup.')).toHaveCount(0)
-  await expect(importer.getByRole('status')).toContainText('Filing-index refresh queued')
+  await expect(page.locator('.setup-reminder-settings')).toHaveCount(0)
   expect(requests[0]).toMatchObject({ content: taxonomyContent, format: 'toml', apply: false, skip_seeds: false, remaps: {} })
   expect(requests[1]).toMatchObject({ expected_state_hash: 'preview-state', apply: true, format: 'toml' })
   await page.goto('/#/dashboard')
@@ -487,7 +522,7 @@ test('taxonomy import disables conflicting requests and discards a preview after
   await expect(importer.getByLabel('Paste content')).toBeDisabled()
   await expect(importer.getByRole('combobox', { name: 'Serialization', exact: true })).toBeDisabled()
   await expect(importer.getByLabel('Include starter rules')).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Back to presets' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeDisabled()
   await page.goto('/#/dashboard')
   await pending.fulfill({ json: taxonomyPreview() }).catch(() => {})
   const nextImporter = await openTaxonomyImport(page)
@@ -507,8 +542,8 @@ test('taxonomy settings offers explicit starter and tree-only exports without si
       await route.fulfill({ contentType: 'text/plain', body: taxonomyContent })
     }
   })
-  await page.goto('/#/settings?tab=archive&section=users')
-  await page.getByRole('button', { name: 'Taxonomy', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+  await page.getByRole('button', { name: 'Import or export' }).click()
   await page.getByRole('combobox', { name: 'File format', exact: true }).selectOption('toml')
   await page.getByRole('button', { name: 'Export with starter rules' }).click()
   await expect(page.getByText('Disabled starter cannot be exported. Use tree-only export.', { exact: true })).toBeVisible()
@@ -517,7 +552,7 @@ test('taxonomy settings offers explicit starter and tree-only exports without si
   await page.getByRole('button', { name: 'Export tree only' }).click()
   expect((await download).suggestedFilename()).toBe('archive-tree.toml')
   expect(exports[1]).toEqual({ format: 'toml', skip_seeds: 'true' })
-  await page.getByRole('button', { name: 'Import a file' }).click()
+  await page.getByRole('button', { name: 'Import file' }).click()
   await expect(page.getByRole('region', { name: 'Import taxonomy', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
@@ -646,6 +681,7 @@ async function mockAPI(page, options = {}) {
         : (options.jdCategories || []),
     }
     else if (path === '/api/presets/') body = { results: presets }
+    else if (path === '/api/filing-sets/') body = filingSetCatalog
     else if (path === '/api/admin/taxonomy/import' && options.taxonomyImport) {
       const payload = request.postDataJSON()
       const result = await options.taxonomyImport(payload, route)
@@ -654,12 +690,21 @@ async function mockAPI(page, options = {}) {
       await route.fulfill({ json: result })
       return
     }
-    else if (path === '/api/admin/setup/preset' && request.method() === 'POST') {
+    else if (path === '/api/admin/setup/preset/preview' && request.method() === 'POST') {
+      body = presetChangePreview(request.postDataJSON(), {
+        collisions: options.presetCollisions || [],
+        current_set_ids: options.currentSetIDs || [],
+      })
+    }
+    else if (path === '/api/admin/setup/preset/apply' && request.method() === 'POST') {
       taxonomyApplied = true
-      body = { applied: true }
+      body = presetChangePreview(request.postDataJSON(), {
+        collisions: options.presetCollisions || [], applied: true, index_refresh_pending: true,
+      })
     }
     else if (path === '/api/admin/setup/state') body = {
       current_preset: options.currentPreset || '',
+      current_set_ids: options.currentSetIDs || filingSetCatalog.recipes[options.currentPreset] || [],
       filing_tree_chosen: taxonomyApplied || (options.filingTreeChosen ?? false),
       started_at: options.setupStartedAt ?? Math.floor(Date.now() / 1000),
     }
@@ -1034,7 +1079,7 @@ test('keeps incomplete archive setup visible across navigation and reloads', asy
     : page.locator('.main > .setup-reminder-mobile')
   await expect(reminder.getByText('Choose your filing tree')).toBeVisible()
   await expect(reminder.getByText('Choose how documents are organized to finish archive setup.')).toBeVisible()
-  await expect(reminder.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=archive')
+  await expect(reminder.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=filing-tree')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 
   if ((page.viewportSize()?.width || 0) > 860) {
@@ -1048,7 +1093,7 @@ test('keeps incomplete archive setup visible across navigation and reloads', asy
   await page.goto('/#/settings')
   const setupRow = page.locator('.settings-body .setup-reminder-settings')
   await expect(setupRow.getByText('Choose your filing tree')).toBeVisible()
-  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=archive')
+  await expect(setupRow.getByRole('button', { name: 'Continue setup' })).toHaveAttribute('href', '#/settings?tab=archive&section=filing-tree')
   const setupActionClearance = await setupRow.evaluate(element => {
     const body = element.closest('.settings-body').getBoundingClientRect()
     const action = element.querySelector('[role="button"]').getBoundingClientRect()
@@ -1197,7 +1242,7 @@ test('keeps archive layout and version footer fixed while scrolling', async ({ p
   })
   const short = await measure()
   await frame.getByRole('navigation', { name: 'Archive settings sections' })
-    .getByRole('link', { name: /People and metadata/ }).click()
+    .getByRole('link', { name: 'People', exact: true }).click()
   await expect(frame.getByText('Layout user 12', { exact: true })).toBeVisible()
   const long = await measure()
   expect(long.frameHeight).toBeCloseTo(short.frameHeight, 0)
@@ -1238,15 +1283,18 @@ test('separates completed archive administration from account settings', async (
   const configuration = page.getByRole('region', { name: 'Archive configuration' })
   await expect(configuration).toBeVisible()
   await expect(configuration.getByRole('heading', { name: 'Processing' })).toBeVisible()
-  const administration = configuration.getByRole('link', { name: /People and metadata/ }).last()
-  await expect(administration).toHaveAttribute('href', '#/settings?tab=archive&section=users')
+  const filingTree = configuration.getByRole('link', { name: /Filing tree/ }).last()
+  await expect(filingTree).toHaveAttribute('href', '#/settings?tab=archive&section=filing-tree')
+  await filingTree.click()
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=filing-tree$/)
+  await expect(configuration.getByRole('button', { name: 'Ready-made', exact: true })).toBeVisible()
+  const administration = configuration.getByRole('link', { name: 'People', exact: true }).last()
   await administration.click()
   await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users$/)
   await expect(configuration.getByRole('button', { name: 'Users', exact: true })).toBeVisible()
   await expect(configuration.getByRole('button', { name: 'Groups', exact: true })).toBeVisible()
-  await expect(configuration.getByRole('button', { name: 'Metadata', exact: true })).toBeVisible()
-  await configuration.getByRole('button', { name: 'Taxonomy', exact: true }).click()
-  await expect(configuration.getByRole('combobox', { name: 'File format', exact: true })).toBeVisible()
+  await expect(configuration.getByRole('button', { name: 'Metadata', exact: true })).toHaveCount(0)
+  await expect(configuration.getByRole('link', { name: 'Metadata', exact: true }).last()).toHaveAttribute('href', '#/settings?tab=archive&section=metadata')
   await configuration.getByRole('link', { name: 'Archive overview' }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=archive$/)
   const automations = configuration.getByRole('link', { name: /Automations/ }).last()
@@ -1566,7 +1614,7 @@ test('refreshes intake owners after user creation in Archive configuration', asy
   await page.goto('/#/settings?tab=archive&section=sources')
   const owner = page.getByRole('combobox', { name: 'Documents from it belong to', exact: true })
   await expect(owner).toHaveValue('admin@example.test')
-  await page.getByRole('link', { name: 'People and metadata', exact: true }).click()
+  await page.getByRole('link', { name: 'People', exact: true }).click()
   const form = page.getByRole('form', { name: 'Create a user', exact: true })
   await form.getByLabel('Email', { exact: true }).fill('morgan@example.test')
   await form.getByLabel('Display name', { exact: true }).fill('Morgan')
@@ -1637,72 +1685,106 @@ test('keeps capable member mailboxes in account settings', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Mailboxes' })).toBeVisible()
 })
 
-test('shows every filing-tree option and keeps ordinary configuration available before selection', async ({ page }) => {
+test('offers ready-made trees, focused sets, and file tools without blocking other settings', async ({ page }) => {
   await mockAPI(page)
-  await page.goto('/#/settings?tab=archive&section=archive')
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
 
   await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
-  const requirement = page.getByRole('note')
-  await expect(requirement.getByText('Required for archive setup.')).toBeVisible()
-  await expect(requirement).toContainText('Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup.')
-  await expect(requirement).toContainText('Users, groups, and other settings can be managed later.')
-  await expect(page.getByRole('button', { name: 'Import a file' })).toBeVisible()
   const filingTrees = page.locator('.preset-grid')
   await expect(filingTrees.getByText('Household', { exact: true })).toBeVisible()
   await expect(filingTrees.getByText('Blank', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Build your own' }).click()
+  await expect(page.getByRole('button', { name: /Life admin/ })).toBeVisible()
+  await expect(page.getByText('Choose at most one set in each numbered lane.')).toBeVisible()
+  await page.getByRole('button', { name: 'Import or export' }).click()
+  await expect(page.getByRole('heading', { name: 'Import a taxonomy file' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Export this filing tree' })).toBeVisible()
   await page.getByRole('link', { name: 'Classification', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Local model' })).toBeVisible()
-  const automatic = page.getByRole('checkbox', { name: 'Automatically apply high-confidence suggestions' })
-  await expect(automatic).toBeChecked()
-  await automatic.uncheck()
-  await expect(page.getByLabel(/Minimum model score to apply automatically/)).toBeDisabled()
-  await page.getByRole('button', { name: 'Save application mode' }).click()
-  await expect(automatic).not.toBeChecked()
-  await page.getByRole('button', { name: 'Hosted endpoint' }).click()
-  await page.locator('#l-url').fill('https://llm.example.test/v1')
-  await expect(page.getByText(/I acknowledge document text will leave this machine/)).toBeVisible()
 })
 
-test('requires confirmation and a successful apply before Blank satisfies archive setup', async ({ page }) => {
+test('reviews category mappings and applies the operator choice', async ({ page }) => {
+  const requests = []
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/admin/setup/preset/')) requests.push({ path, body: request.postDataJSON() })
+  })
+  await mockAPI(page, {
+    filingTreeChosen: true,
+    currentPreset: 'freelance',
+    currentSetIDs: presets.find(preset => preset.id === 'freelance').set_ids,
+    presetCollisions: [{
+      code: 22, existing: 'Briefs & plans', incoming: 'Orders & contracts',
+      proposed_code: 26, resolved: false, suggested_replace: true,
+      live_documents: 4, trashed_documents: 1,
+    }],
+  })
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+  await page.locator('.preset-grid').getByText('Small business', { exact: true }).click()
+  await page.getByRole('button', { name: 'Review change' }).click()
+
+  const review = page.locator('.review')
+  await expect(review).toBeFocused()
+  await expect(review.locator('.hash')).toHaveCount(0)
+  await expect.poll(() => review.evaluate(element => {
+    const top = element.getBoundingClientRect().top
+    return top >= 0 && top < window.innerHeight
+  })).toBe(true)
+
+  const mapping = page.getByRole('group', { name: /22.*Briefs & plans.*Orders & contracts/ })
+  await expect(mapping.getByText('4 live · 1 in Trash')).toBeVisible()
+  await expect(mapping.getByRole('radio', { name: /Replace meaning in place.*recommended/ })).toBeChecked()
+  await mapping.getByRole('radio', { name: /Add as 26/ }).check()
+  await page.getByRole('button', { name: 'Apply reviewed change' }).click()
+  await expect(page.getByText('Filing tree updated.', { exact: false })).toBeVisible()
+
+  const apply = requests.find(request => request.path.endsWith('/apply'))
+  expect(apply.body.remaps).toEqual({ 22: 26 })
+})
+
+test('requires review and a successful apply before Blank satisfies archive setup', async ({ page }) => {
   const options = {
-    failPaths: ['/api/admin/setup/preset'],
+    failPaths: ['/api/admin/setup/preset/apply'],
     failureMessage: 'Could not apply the filing tree.',
   }
   await mockAPI(page, options)
-  await page.goto('/#/settings?tab=archive&section=archive')
+  const openBlankReview = async () => {
+    await page.goto('/#/settings?tab=archive&section=filing-tree')
+    await page.locator('.preset-grid').getByText('Blank', { exact: true }).click()
+    const review = page.getByRole('button', { name: 'Review change' })
+    await expect(review).toBeDisabled()
+    await page.getByLabel('I understand that documents will remain in Inbox until I add categories.').check()
+    await review.click()
+    return page.getByRole('button', { name: 'Apply reviewed change' })
+  }
 
-  await page.locator('.preset-grid').getByText('Blank', { exact: true }).click()
-  const apply = page.getByRole('button', { name: 'Apply filing tree' })
-  await expect(apply).toBeDisabled()
-  await page.getByLabel('I understand documents will pile up in the inbox until I build categories.').check()
-  await apply.click()
+  await (await openBlankReview()).click()
   await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
-  await expect(page.getByRole('note').getByText('Required for archive setup.')).toBeVisible()
   await page.goto('/#/dashboard')
   await expect(page.locator('.setup-reminder').filter({ visible: true })).toHaveCount(1)
-  await page.goto('/#/settings?tab=archive&section=archive')
 
   options.failPaths.length = 0
-  await apply.click()
-  await expect(page.getByRole('note').getByText('Required for archive setup.')).toHaveCount(0)
+  await (await openBlankReview()).click()
+  await expect(page.getByText('Filing tree updated.', { exact: false })).toBeVisible()
   await page.goto('/#/dashboard')
   await expect(page.locator('.setup-reminder')).toHaveCount(0)
 })
 
-test('retries filing-tree configuration loading without hiding other sections', async ({ page }) => {
+test('retries filing-tree workspace loading without hiding other sections', async ({ page }) => {
   const options = {
     failPaths: ['/api/admin/setup/state'],
     failureMessage: 'Filing-tree settings unavailable.',
   }
   await mockAPI(page, options)
-  await page.goto('/#/settings?tab=archive&section=archive')
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
   await expect(page.getByText(options.failureMessage, { exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'People and metadata', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'People', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Metadata', exact: true })).toBeVisible()
 
   options.failPaths.length = 0
   await page.getByRole('region', { name: 'Configuration content' })
     .getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Filing tree', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Ready-made', exact: true })).toBeVisible()
 })
 
 test('keeps the filing index neutral until a preset is applied', async ({ page }) => {
@@ -1722,8 +1804,9 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
   await expect(indexHeading).toHaveCount(0)
   await expect(page.locator('.nav a[href="#/inbox"]')).toHaveCount(1)
 
-  await page.goto('/#/settings?tab=archive&section=archive')
-  await page.getByRole('button', { name: 'Apply filing tree' }).click()
+  await page.goto('/#/settings?tab=archive&section=filing-tree')
+  await page.getByRole('button', { name: 'Review change' }).click()
+  await page.getByRole('button', { name: 'Apply reviewed change' }).click()
 
   await page.goto('/#/dashboard')
   await expect(page.locator('.setup-reminder')).toHaveCount(0)
@@ -1744,7 +1827,7 @@ test('keeps the filing index neutral until a preset is applied', async ({ page }
 test('uses the demo category database id in document links', async ({ page }) => {
   await mockAPI(page, {
     jdCategories: [{
-      id: 6, code: 22, name: 'Finance and tax', area_code: 20, area_name: 'Money',
+      id: 6, code: 22, name: 'Money and tax', area_code: 20, area_name: 'Money',
     }],
   })
   await page.goto('/#/demo')
@@ -1785,7 +1868,7 @@ test('loads the filing tree once for every archive screen', async ({ page }) => 
     if (new URL(request.url()).pathname === '/api/jd/categories/') taxonomyRequests++
   })
   await mockAPI(page, {
-    jdCategories: [{ id: 6, area_code: 20, area_name: 'Finance', code: 22, name: 'Investments' }],
+    jdCategories: [{ id: 6, area_code: 20, area_name: 'Money', code: 22, name: 'Investments' }],
   })
 
   await page.goto('/#/documents')
@@ -2191,7 +2274,7 @@ test('starts view creation from the dashboard action', async ({ page }) => {
 
 test('stores new saved views as one canonical query', async ({ page }) => {
   await mockAPI(page, {
-    jdCategories: [{ id: 6, code: 22, name: 'Investments', area_code: 20, area_name: 'Finance', is_area: false }],
+    jdCategories: [{ id: 6, code: 22, name: 'Investments', area_code: 20, area_name: 'Money', is_area: false }],
   })
   await page.goto('/#/views')
   await page.getByRole('button', { name: 'New view' }).click()
@@ -3070,17 +3153,20 @@ test('tag management link navigates to the searchable Settings catalog', async (
   } }))
   await page.goto('/#/doc/42')
   await page.locator('.document-tags').getByRole('link', { name: 'Manage tags' }).click()
-  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags$/)
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=metadata&metadata=tags$/)
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
   await expect(page.getByRole('textbox', { name: 'Rename Receipt' })).toBeVisible()
   await page.reload()
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
-  const nav = page.getByRole('navigation', { name: 'People and metadata' })
-  await nav.getByRole('button', { name: 'Users' }).click()
-  await expect(page).toHaveURL(/people=users$/)
-  await nav.getByRole('button', { name: 'Metadata' }).click()
+  const archiveNavigation = page.getByRole('navigation', { name: 'Archive settings sections' })
+  await archiveNavigation.getByRole('link', { name: 'People', exact: true }).click()
+  await expect(page).toHaveURL(/section=users$/)
+  const peopleNav = page.getByRole('navigation', { name: 'People' })
+  await expect(peopleNav.getByRole('button', { name: 'Users' })).toBeVisible()
+  await expect(peopleNav.getByRole('button', { name: 'Groups' })).toBeVisible()
+  await archiveNavigation.getByRole('link', { name: 'Metadata', exact: true }).click()
   await page.getByRole('combobox', { name: 'Metadata type' }).selectOption('correspondents')
-  await expect(page).toHaveURL(/people=metadata&metadata=correspondents$/)
+  await expect(page).toHaveURL(/section=metadata&metadata=correspondents$/)
   await page.goBack()
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
 })
@@ -3110,7 +3196,7 @@ test('settings tag management confirms atomic selection across searches', async 
       next: number * 500 < tags.length ? `/api/tags/?page=${number + 1}` : null,
     } })
   })
-  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await page.goto('/#/settings?tab=archive&section=metadata&metadata=tags')
   await expect(page.getByRole('textbox', { name: 'Rename Child Later Tag' })).toBeVisible()
   expect(pages).toContain(2)
   const search = page.getByRole('searchbox', { name: 'Search tags' })
@@ -3165,7 +3251,7 @@ test('settings tag row deletion uses the confirmed catalog endpoint', async ({ p
       results: exists ? [{ id: 9, name: 'Individual tag', slug: 'individual' }] : [], next: null,
     } })
   })
-  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await page.goto('/#/settings?tab=archive&section=metadata&metadata=tags')
   await page.getByRole('button', { name: 'Delete Individual tag' }).click()
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toContainText('document')
@@ -3180,11 +3266,11 @@ test('settings tag management ignores a late delete after switching metadata', a
   await page.route('**/api/tags/**', route => route.request().method() === 'DELETE'
     ? (pending = route)
     : route.fulfill({ json: { results: [{ id: 7, name: 'Old tag', slug: 'old' }], next: null } }))
-  await page.goto('/#/settings?tab=archive&section=users&people=metadata&metadata=tags')
+  await page.goto('/#/settings?tab=archive&section=metadata&metadata=tags')
   await page.getByRole('button', { name: 'Delete Old tag' }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete tags' }).click()
   await expect.poll(() => !!pending).toBe(true)
-  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=users&people=metadata&metadata=correspondents' })
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=metadata&metadata=correspondents' })
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('correspondents')
   const finished = page.waitForEvent('requestfinished', request => request === pending.request())
   await pending.fulfill({ status: 204 })
@@ -5187,7 +5273,7 @@ test('tag management preserves the selected filing system on entry and reload', 
   })
   await page.goto('/#/doc/148?system=S02')
   await page.locator('.document-tags').getByRole('link', { name: 'Manage tags' }).click()
-  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags&system=S02$/)
+  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=metadata&metadata=tags&system=S02$/)
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
   await page.reload()
   await expect(page.getByRole('textbox', { name: 'Rename Scoped tag' })).toBeVisible()
@@ -5379,8 +5465,9 @@ test('filing systems first named Apply invalidates unnamed reads and selects the
   await page.goto('/#/dashboard')
   await expect.poll(() => !!oldRecent).toBe(true)
   await expect(page.getByRole('combobox', { name: 'Current filing system' })).toHaveCount(0)
-  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=archive' })
-  await page.getByRole('button', { name: 'Import a file' }).click()
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=filing-tree' })
+  await page.getByRole('button', { name: 'Import or export' }).click()
+  await page.getByRole('button', { name: 'Import file' }).click()
   const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
   await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
   await importer.getByRole('combobox', { name: 'Serialization', exact: true }).selectOption('toml')
@@ -5570,8 +5657,9 @@ test('filing systems does not copy the selected system into a prefixed import bo
     calls.push(payload)
     return taxonomyPreview({ system_code: 'S02', system_name: 'Second cabinet', system_created: false, systems_introduced: false })
   } })
-  await page.goto('/#/settings?tab=archive&section=archive&system=S01')
-  await page.getByRole('button', { name: 'Import a file', exact: true }).click()
+  await page.goto('/#/settings?tab=archive&section=filing-tree&system=S01')
+  await page.getByRole('button', { name: 'Import or export' }).click()
+  await page.getByRole('button', { name: 'Import file', exact: true }).click()
   const importer = page.getByRole('region', { name: 'Import taxonomy', exact: true })
   await importer.getByLabel('Paste content', { exact: true }).fill(`system = \"S02\"\n${taxonomyContent}`)
   await importer.getByRole('button', { name: 'Preview', exact: true }).click()
@@ -5580,8 +5668,9 @@ test('filing systems does not copy the selected system into a prefixed import bo
   await expect(importer.getByRole('group', { name: 'First system import destination' })).toHaveCount(0)
   await chooseFilingSystem(page, 'S02')
   await expect(importer).toHaveCount(0)
-  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=archive&system=S01' })
-  await page.getByRole('button', { name: 'Import a file', exact: true }).click()
+  await page.evaluate(() => { location.hash = '#/settings?tab=archive&section=filing-tree&system=S01' })
+  await page.getByRole('button', { name: 'Import or export' }).click()
+  await page.getByRole('button', { name: 'Import file', exact: true }).click()
   await expect(importer.getByLabel('Paste content', { exact: true })).toHaveValue('')
   await expect(importer.getByRole('button', { name: 'Apply import', exact: true })).toBeDisabled()
 })

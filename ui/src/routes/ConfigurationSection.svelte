@@ -2,36 +2,23 @@
 <script>
   import { scopedHash as filingHref, systems } from '../lib/systems.svelte.js'
   import { untrack } from 'svelte'
-  import { setupState, adminListUsers, applyPreset,
+  import { adminListUsers,
            getLLMSettings, saveLLMSettings, testLLMSettings,
            saveResearchContextMode, saveClassificationAutoApply,
-           getPreferences, savePreferences, getIngestSettings, saveIngestSettings,
-           listPresets } from '../lib/api.js'
+           getPreferences, savePreferences, getIngestSettings, saveIngestSettings } from '../lib/api.js'
   import { isLocalEndpoint } from '../lib/net.js'
   import EmailAccounts from '../lib/EmailAccounts.svelte'
-  import TaxonomyImport from '../lib/TaxonomyImport.svelte'
 
-  let { section = 'archive', notify, onTaxonomyChanged } = $props()
-  // Server is the source of truth (GET /api/presets/); this list is
-  // only the offline fallback so the section never renders empty.
-  const FALLBACK_PRESETS = [
-    { id: 'solo', name: 'Solo', description: 'One person: life admin, money, health, home.', areas: [] },
-    { id: 'household', name: 'Household', description: 'A family: shared areas plus per-person categories.', areas: [] },
-    { id: 'freelance', name: 'Freelance', description: 'Clients, invoicing, taxes, contracts.', areas: [] },
-    { id: 'smb_billing', name: 'Small business', description: 'AP/AR heavy: vendors, invoices, compliance.', areas: [] },
-    { id: 'blank', name: 'Blank', description: 'No tree. Build your own from scratch.', blank: true, areas: [] },
-  ]
+  let { section, notify } = $props()
   const RESEARCH_CONTEXT_MODES = [
     { id: 'focused', label: 'Focused', bound: '1 matching passage · up to 1,600 characters', description: 'Less text for smaller local models and faster answers.' },
     { id: 'balanced', label: 'Balanced', bound: '2 matching passages · up to 3,200 characters', description: 'Recommended for most archives and models.' },
     { id: 'detailed', label: 'Detailed', bound: '3 matching passages · up to 4,800 characters', description: 'Checks more places in long documents; may be slower and send more text.' },
   ]
-  let presets = $state(FALLBACK_PRESETS)
   let loaded = $state(new Set())
   let loading = $state(new Set())
   let loadErrors = $state({})
   const LOAD_ERROR_MESSAGES = {
-    setup: 'Could not load the filing-tree settings.',
     users: 'Could not load archive users.',
     ingest: 'Could not load watched-folder settings.',
     llm: 'Could not load classification settings.',
@@ -60,10 +47,6 @@
 
   // Section form state.
   let mailUsers = $state([])
-  let preset = $state({ preset_id: 'solo', confirm_blank: false, refile: false, include_seeds: true })
-  let filingTreeChosen = $state(false)
-  let importOpen = $state(false)
-  let importBusy = $state(false)
   let llm = $state({
     enabled: false, endpoint_url: '', model: '', api_key: '', clear_api_key: false,
     egress_ack: false, confidence_threshold: 0.7,
@@ -79,20 +62,6 @@
   let prefs = $state({ backup_interval_hours: 24, ocr_languages: 'eng' })
   let ingest = $state({ fs_watch_dir: '', fs_watch_owner_email: '', fs_watch_system: '' })
 
-  async function loadPresets() {
-    try {
-      const result = await listPresets()
-      const rows = result?.results || result || []
-      if (rows.length) presets = rows
-    } catch {}
-  }
-
-  async function loadSetup() {
-    const state = await setupState()
-    filingTreeChosen = !!state?.filing_tree_chosen
-    const selected = state?.current_preset
-    if (selected) preset.preset_id = selected
-  }
 
   async function loadUsers() {
     const result = await adminListUsers()
@@ -106,16 +75,6 @@
     }
   }
 
-  async function saveArchive() {
-    const result = await applyPreset(preset)
-    filingTreeChosen = true
-    await onTaxonomyChanged?.()
-    return result
-  }
-
-  async function importedTree() {
-    await Promise.all([loadSetup(), onTaxonomyChanged?.()])
-  }
 
   async function loadLLM() {
     const st = await getLLMSettings()
@@ -148,14 +107,12 @@
     seedSourceOwner()
   }
   const loadFunctions = {
-    setup: loadSetup,
     users: loadUsers,
     ingest: loadIngest,
     llm: loadLLM,
     preferences: loadPreferences,
   }
   const requiredLoadKeys = $derived(({
-    archive: ['setup'],
     sources: ['users', 'ingest'],
     mail: ['users'],
     llm: ['llm'],
@@ -175,11 +132,9 @@
   }
 
   $effect(() => {
-    const selected = section
     const keys = requiredLoadKeys
     untrack(() => {
       for (const key of keys) loadOnce(key, loadFunctions[key])
-      if (selected === 'archive') loadOnce('presets', loadPresets)
     })
   })
 
@@ -324,55 +279,7 @@
   {:else}
     {#if err}<div class="err">{err}</div>{/if}
 
-    {#if section === 'archive'}
-      <h3>Filing tree</h3>
-      <p class="wiz-p">Add a filing tree to this archive. Later imports merge without overwriting existing categories or local rule choices.</p>
-      {#if !filingTreeChosen}
-        <div class="setup-requirement" role="note">
-          <b>Required for archive setup.</b>
-          <span>Apply a preset, import a filing tree, or explicitly confirm Blank to complete setup. Users, groups, and other settings can be managed later.</span>
-        </div>
-      {/if}
-        <div class="toolbar">
-          <button class="btn sm" disabled={busy || importBusy} onclick={() => { importOpen = !importOpen }}>{importOpen ? 'Back to presets' : 'Import a file'}</button>
-        </div>
-        {#if importOpen}
-          <TaxonomyImport {notify} bind:busy={importBusy} onApplied={importedTree} />
-        {:else}
-        <fieldset disabled={busy} style="border:0;padding:0;margin:0;min-width:0">
-        <div class="preset-grid">
-          {#each presets as p (p.id)}
-            <label class="preset" class:on={preset.preset_id === p.id}>
-              <input type="radio" bind:group={preset.preset_id} value={p.id} hidden />
-              <b>{p.name}</b><span class="sub">{p.description}</span>
-              {#if p.areas?.length}
-                <span class="preset-tree">
-                  {#each p.areas as a}<span class="chip" title={`${a.category_count} categories`}>{a.code}–{a.code + 9} {a.name}</span>{/each}
-                </span>
-              {/if}
-            </label>
-          {/each}
-        </div>
-        {#if presets.find(p => p.id === preset.preset_id)?.blank || preset.preset_id === 'blank'}
-          <label class="wiz-check"><input type="checkbox" bind:checked={preset.confirm_blank} />
-            I understand documents will pile up in the inbox until I build categories.</label>
-        {/if}
-        <label class="wiz-check"><input type="checkbox" bind:checked={preset.include_seeds} />
-          Install the preset's starter automations. Turn this off if you want to start from scratch.</label>
-        <label class="wiz-check"><input type="checkbox" bind:checked={preset.refile} />
-          Refile existing documents into the new tree now.</label>
-        <div class="toolbar">
-          <button class="btn primary sm" disabled={busy || (preset.preset_id === 'blank' && !preset.confirm_blank)}
-                  onclick={() => saveAnd(saveArchive, 'Filing tree updated')}>Apply filing tree</button>
-        </div>
-        </fieldset>
-        {/if}
-      <p class="migration-note">
-        Moving an existing archive? Large export bundles are safer through the CLI.
-        <a href="https://docs.suchi.page/guides/importer" target="_blank" rel="noopener">Read the migration guide</a>.
-      </p>
-
-    {:else if section === 'sources'}
+    {#if section === 'sources'}
       <h3>Watched folder</h3>
       <p class="wiz-p">Point suchi at a folder (a scanner target, a synced directory) and everything dropped there becomes a document. Uploads and the API work regardless.</p>
       <div class="field"><label for="i-dir">Watched directory (on the server)</label>
@@ -588,15 +495,6 @@
   .wiz-p { color: var(--muted); font-size: .92rem; margin: 6px 0 16px; max-width: 46em; }
   .wiz-check { display: flex; gap: 9px; align-items: baseline; font-size: .86rem; color: var(--muted); margin: 0 0 14px; }
   .wiz-check.attn { color: var(--warn); }
-  .setup-requirement {
-    display: grid; gap: 2px; margin: 0 0 14px; padding: 10px 12px;
-    border-left: 3px solid var(--warn); border-radius: var(--r-sm);
-    background: var(--warn-soft); font-size: .82rem; line-height: 1.45;
-  }
-  .setup-requirement b { color: var(--warn); }
-  .setup-requirement span { color: var(--muted); }
-  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  .migration-note { margin: 18px 0 0; color: var(--faint); font-size: .76rem; }
   .range { width: 100%; accent-color: var(--accent); }
   .test-result {
     display: flex; flex-direction: column; gap: 3px; border-left: 3px solid var(--ok);
@@ -641,18 +539,10 @@
   .option-save { margin-top: 14px; }
   .configuration-loading { display:grid;gap:12px;padding:8px 0; }
   .configuration-load-error .toolbar { margin-top:10px; }
-  @media (max-width: 640px) { .preset-grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) { .model-options { padding: 13px; } }
   @media (max-width: 760px) {
     .research-context { padding: 13px; }
     .research-context-heading { align-items: start; flex-direction: column; gap: 4px; }
     .context-presets { grid-template-columns: 1fr; }
   }
-  .preset {
-    display: flex; flex-direction: column; gap: 3px; cursor: pointer;
-    border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 12px 14px;
-  }
-  .preset .sub { font-size: .78rem; color: var(--muted); }
-  .preset-tree { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-  .preset.on { border-color: var(--accent); background: var(--tint); }
 </style>

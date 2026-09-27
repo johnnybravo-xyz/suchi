@@ -24,16 +24,17 @@ converge when repeated.
 
 ## Filing-tree changes
 
-Later imports and built-in preset applications merge additively; they do not
-reset filing or move existing documents to Inbox. Only safe unconfigured
-bootstrap setup may replace the initial tree. Preset `refile` cannot bypass
-merge protection or silently discard collisions; use custom import preview
-with explicit remaps/skips for conflicting categories.
+Custom taxonomy imports merge additively; they do not reset filing or move
+existing documents to Inbox. Reviewed built-in/composed changes may rename a
+category in place, preserving its row ID and every live or recoverable document
+reference. A proposed mapping can instead use a free same-decade code or skip the
+incoming category.
 
-Refile is a separate explicit operation over current configuration. It can
-rerun enabled filing automations and/or enqueue rendered paths; it is not a
-taxonomy reset or a new document version. Existing disabled preset originals
-and user-owned forks survive preset reapplication.
+Preset-owned rules from the previous tree are suspended during Apply, while
+target rules are activated; user-owned rules and edited forks remain independent.
+Refile then runs only enabled, active rules. It remains a separate explicit
+operation over current configuration and cannot bypass an unresolved mapping.
+It is not a taxonomy reset or a new document version.
 
 Default JD and flat filenames now begin with the document's recorded created
 date, falling back to added date and then `undated`, retaining title and ID

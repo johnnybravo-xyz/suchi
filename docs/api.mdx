@@ -35,7 +35,7 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Approvals               | `/api/approvals/…` ([guide](/approvals))                                                                                                                                              |
 | Groups + ACLs           | `/api/groups/…`, `/api/acls/{kind}/{id}` ([guide](/permissions))                                                                                                                      |
 | Share links             | `/api/share_links/…`, public `/s/{token}` + `/s/{token}/{doc_id}/download`. Multi-doc bundles: pass 1–200 `doc_ids` on POST, one token covers all of them.                            |
-| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}`          |
+| Admin                   | `/api/admin/users`, `GET /api/admin/setup/state`, `POST /api/admin/setup/preset/{preview,apply}`, `/api/admin/settings/{llm,preferences,ingest}`, `/api/admin/taxonomy/{import,export}` |
 
 ## Auth
 
@@ -1307,72 +1307,63 @@ re-render if the field is referenced in the template.
 Remove the value row for one live, change-authorized document and field pair.
 `204` on success; trashed documents return `404` without changing values or jobs.
 
-### `GET /api/presets/`
+### `GET /api/presets/` and `GET /api/filing-sets/`
 
-Admin-only preset catalog for Archive Configuration's filing-tree picker. Returns one row per
-built-in preset defined in `core/jd/presets.go`; the picker renders
-the area list as a tree preview so an operator can see what a preset
-actually contains before applying. No envelope — the population is
-bounded (five presets today).
-
-**200 OK**
-
-```json
-[
-  {
-    "id": "solo",
-    "name": "Solo filing",
-    "description": "One person's admin: ID, taxes, health, receipts. Compact 3-area tree.",
-    "areas": [
-      { "code": 10, "name": "Life admin", "category_count": 4 },
-      { "code": 20, "name": "Money", "category_count": 4 },
-      { "code": 30, "name": "Health", "category_count": 3 }
-    ]
-  },
-  ...
-]
-```
-
-`blank: true` marks the empty preset (no areas), which the picker
-gates behind an explicit confirm checkbox. Categories aren't included
-per row — they'd bloat the payload, and the picker doesn't render them.
-Once a preset is applied via
-`POST /api/admin/setup/preset`, the tree becomes visible through
-`/api/jd/categories/`.
-
-### `POST /api/admin/setup/preset`
-
-Session-admin-only. Applies one built-in preset additively to the selected filing
-system; API tokens cannot use it. Existing filing and locally edited rules are
-preserved according to the same merge rules as taxonomy import.
-
-**Request body**
+Session-admin-only catalogs for the Filing tree workspace. `/api/presets/`
+returns each ready-made tree with its `set_ids` and complete user
+areas/categories; generated System/49 is omitted. `/api/filing-sets/` returns:
 
 ```json
 {
-  "preset_id": "solo",
-  "confirm_blank": false,
+  "max_sets": 5,
+  "sets": [{
+    "id": "finance",
+    "name": "Money",
+    "description": "Investments, tax, credit, and receipts.",
+    "lane": 20,
+    "categories": [{ "code": 22, "name": "Investments" }]
+  }],
+  "recipes": {
+    "solo": ["life-admin", "finance", "health", "home"]
+  }
+}
+```
+
+The composer accepts at most one set per lane. System/49 is generated internally
+for every ready-made or composed target and is not selectable.
+
+### `POST /api/admin/setup/preset/preview`
+
+Session-admin-only. Preview a ready-made preset with `preset_id`, or a composed
+tree with `set_ids`. API tokens cannot use it.
+
+```json
+{
+  "preset_id": "smb_billing",
   "include_seeds": true,
-  "refile": false
+  "replacements": { "21": true },
+  "remaps": { "34": 36 }
 }
 ```
 
-`preset_id` is one of `solo`, `household`, `smb_billing`, `freelance`, or
-`blank`. `confirm_blank` must be true for `blank`. `include_seeds` defaults to
-true when omitted; false skips the preset's starter automations. `refile` runs
-the existing explicit refile sweep after the preset is applied.
+The response includes the complete target `user_areas`, `state_hash`, selected
+set IDs, rule additions/preservations, and each category collision. Collision
+rows include existing/incoming names, live/Trash document counts, automatic or
+suggested replacement state, and a proposed free same-decade code when one exists.
+A remap value of `0` skips the incoming category.
 
-**200 OK**
+### `POST /api/admin/setup/preset/apply`
 
-```json
-{
-  "preset_id": "solo",
-  "index_refresh_pending": true
-}
-```
+Uses the same target and mapping body plus the exact Preview
+`expected_state_hash`. Missing previews return `400`; a stale preview or
+unresolved collision returns `409` without partial mutation. `confirm_blank`
+must be true for a target with no user sets. `refile: true` runs the explicit
+post-Apply sweep and returns its document/rule/render counters.
 
-Unknown presets and unconfirmed Blank return `400`; unresolved merge collisions
-return `409` without a partial application.
+Reviewed replacement updates a category name/description in place so its row ID,
+documents and dependent local configuration survive. Source preset-owned rules
+are suspended and target rules activated; user-owned rules and edited forks are
+not taken over.
 
 ### `POST /api/admin/taxonomy/import`
 

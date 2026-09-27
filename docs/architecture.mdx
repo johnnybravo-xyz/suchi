@@ -445,17 +445,27 @@ them to a new state. Migration expires tasks from terminal or different states.
 `core/jd/presetfile` validates bounded offline HuML/TOML before expansion/generated
 System/49. `Marshal` reverses only validated generated rows and revalidates output;
 no YAML fallback, runtime catalog, passthrough fields or separate UI schema.
-`core/jd/importer` shares built-in/custom/CLI preview/apply. Its hash binds source,
-destination/first-import choice, memberships, options/remaps and relevant target
-state. Recheck active API admin and plan under the writer, resolve local symbols,
-preserve local/disabled rules and atomically commit systems/tree/provenance/jobs.
-Unrelated systems do not stale a plan; only a safe initially unconfigured archive
-replaces bootstrap, later imports merge, and refile stays explicit. Archive setup
-has no completion mutation: `core/settings.LoadSetupState` projects the first-admin
-time plus the selected system's preset and filing-tree choice. Preset selection,
-confirmed Blank and taxonomy Apply satisfy the same filing-tree invariant. The
-browser reads this projection through `GET /api/admin/setup/state`; the only
-setup-prefixed write retained is `POST /api/admin/setup/preset`.
+`core/jd/sets.go` owns the bounded built-in set catalog and deterministic composed
+trees. `core/jd/preset_change.go` resolves ready-made/composed targets, semantic
+replacement defaults, document counts and the selected system's current
+provenance. `core/jd/importer` remains the single preview/apply engine for those
+changes and custom/CLI import.
+
+The preview hash binds source, destination/first-import choice, memberships,
+seeds, remaps, replacements, source preset, selected sets and relevant target
+state. Apply rechecks the active API admin and plan under the writer, resolves
+local symbols, updates reviewed replacement categories in place, preserves IDs
+and local forks, suspends the source preset's owned rules, activates the target,
+and atomically commits tree/provenance/jobs. Unrelated systems do not stale a plan.
+Only a safe initially unconfigured archive replaces bootstrap. Custom imports
+later merge additively; reviewed built-in/composed changes may replace category
+meaning explicitly. Refile stays post-Apply and explicit.
+
+Archive setup has no completion mutation: `core/settings.LoadSetupState` projects
+the first-admin time plus the selected system's preset, selected set IDs and
+filing-tree choice. The browser reads it through `GET /api/admin/setup/state`.
+`POST /api/admin/setup/preset/preview` produces the bound review and
+`POST /api/admin/setup/preset/apply` consumes its `expected_state_hash`.
 
 `core/taxonomy/exporter` exports consistent `archive` revision-1 snapshots. Tree-only omits
 keywords/starters; seeded export rejects unrepresentable/disabled behavior and

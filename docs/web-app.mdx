@@ -148,8 +148,8 @@ rule, import or older version stays until explicitly removed; Trash, restore and
 rescan do not count as review.
 
 Admins can open **Manage tags** beside **Tags** on a document. This links directly
-to **Settings > Archive configuration > People and metadata > Metadata > Tags**,
-the only catalog editor. There, search names or slugs,
+to **Settings > Archive configuration > Metadata > Tags**, the only catalog
+editor. There, search names or slugs,
 select matching tags (at most 500), and confirm **Delete selected**. A row's
 Delete action uses the same confirmation. Deleting removes document-tag links,
 re-roots surviving child tags, and cannot be undone. Creating and renaming tags
@@ -231,30 +231,31 @@ connections stay under **API tokens**.
 
 Admins also have **Settings > Archive configuration**:
 
-| Group                    | Sections                                 |
-| ------------------------ | ---------------------------------------- |
-| **Structure and access** | **Filing tree**, **People and metadata** |
-| **Document intake**      | **Watched folder**, **Email intake**     |
-| **Processing**           | **Classification**, **Automations**      |
-| **Maintenance**          | **OCR and backups**                      |
+| Group                    | Sections                                           |
+| ------------------------ | -------------------------------------------------- |
+| **Structure and access** | **Filing tree**, **People**, **Metadata**           |
+| **Document intake**      | **Watched folder**, **Email intake**                |
+| **Processing**           | **Classification**, **Automations**                |
+| **Maintenance**          | **OCR and backups**                                |
 
 The configuration frame fills the available screen height. Long sections scroll
 inside the right pane without moving section navigation or the version footer.
 On narrow screens, section navigation becomes a horizontally scrolling rail.
 
-**People and metadata** contains Users, Groups, Metadata and Taxonomy. Metadata's
-type selector covers tags, correspondents, document types, storage paths and
-custom fields. Groups expands its members beside the selected group. User
-capabilities are under **Additional access**; hidden member choices are not saved
-when creating an admin. Archive Configuration reuses the same user-creation form.
-People and Metadata tabs and metadata types have navigable URLs: reload and
-Back/Forward restore the selected panel. The Tags catalog is scoped to the
-current filing system, while Users remains the default People and metadata tab.
+**People** contains Users and Groups. Groups expands its members beside the
+selected group. User capabilities are under **Additional access**; hidden member
+choices are not saved when creating an admin. Archive Configuration reuses the
+same user-creation form.
 
-**Taxonomy** imports/exports HuML or TOML filing-tree files. Preview precedes Apply;
-export explicitly offers starter rules or tree only. **What is included?** explains
-why neither replaces a [full backup](/backup-restore). Both **Automations** entry
-points open the same main editor.
+**Metadata** manages tags, correspondents, document types, storage paths and
+custom fields through one type selector. Metadata types have navigable URLs, so
+reload and Back/Forward restore the selected catalog. Metadata is scoped to the
+current filing system; People is server-wide.
+
+**Filing tree** imports and exports HuML or TOML taxonomy files. Preview precedes
+Apply; export explicitly offers starter rules or tree only. **What is included?**
+explains why neither replaces a [full backup](/backup-restore). Both
+**Automations** entry points open the same main editor.
 
 After introduction, **Filing system · CODE** edits a nonblank name of at most 80
 characters and the complete direct membership set, including off-page people.
@@ -285,9 +286,9 @@ manage only their own under **My account > Mailboxes**.
 
 A fresh archive has only System/Inbox, without an implicit preset or filing Index.
 Administrators complete archive setup in **Settings > Archive configuration**,
-whose shared sidebar exposes Filing tree, People and metadata, Watched folder,
-Email intake, Classification, Automations, OCR and backups, plus every other
-enabled option. Every section is usable before a tree is chosen.
+whose shared sidebar exposes Filing tree, People, Metadata, Watched folder, Email
+intake, Classification, Automations, OCR and backups, plus every other enabled
+option. Every section is usable before a tree is chosen.
 
 Filing tree is the only setup requirement. Apply a preset or import, or explicitly
 confirm **Blank** to start from scratch. That selection satisfies archive setup;
@@ -315,8 +316,8 @@ Configuration sections.
 
 ## Capabilities and sensitive documents
 
-Admins have all capabilities. Grant members additional access in
-**People and metadata > Users**:
+Admins have all capabilities. Grant members additional access in **People >
+Users**:
 
 | Interface label           | Stored key             |
 | ------------------------- | ---------------------- |

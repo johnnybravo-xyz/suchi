@@ -6,21 +6,24 @@
            listGroups, createGroup, deleteGroup, groupMembers, addGroupMember, removeGroupMember,
            listCustomFields, createCustomField, patchCustomField, deleteCustomField,
            listAllTags, listCorrespondents, listDocumentTypes, listStoragePaths,
-           createTaxon, patchTaxon, deleteTaxon, deleteTags, exportTaxonomy } from '../lib/api.js'
-  import TaxonomyImport from '../lib/TaxonomyImport.svelte'
+           createTaxon, patchTaxon, deleteTaxon, deleteTags } from '../lib/api.js'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import UserCreateForm from '../lib/UserCreateForm.svelte'
   import Icon from '../lib/Icon.svelte'
   import { USER_CAPABILITIES } from '../lib/capabilities.js'
   import { session } from '../lib/session.svelte.js'
 
-  let { notify, onTaxonomyChanged, initialPeople = '', initialMetadata = '' } = $props()
-  const PEOPLE_TABS = ['users', 'groups', 'metadata', 'files']
-  const tab = $derived(PEOPLE_TABS.includes(initialPeople) ? initialPeople : 'users')
+  let { notify, view = 'people', initialPeople = '', initialMetadata = '' } = $props()
+  const PEOPLE_TABS = ['users', 'groups']
+  const tab = $derived(view === 'metadata'
+    ? 'metadata'
+    : PEOPLE_TABS.includes(initialPeople) ? initialPeople : 'users')
 
   function navigatePeople(nextTab, nextMetadata = 'tags') {
     if (tagDeleteBusy || taxMutationBusy || tagDeleteRequest) return
-    const params = new URLSearchParams({ tab: 'archive', section: 'users', people: nextTab })
+    const section = nextTab === 'metadata' ? 'metadata' : 'users'
+    const params = new URLSearchParams({ tab: 'archive', section })
+    if (nextTab !== 'metadata') params.set('people', nextTab)
     if (nextTab === 'metadata') params.set('metadata', nextMetadata)
     go(`#/settings?${params}`)
   }
@@ -187,7 +190,7 @@
     catch (ex) { notify?.(ex.message || 'Could not delete') }
   }
 
-  // ---------- taxonomy ----------
+  // ---------- document metadata ----------
   const TAXA = [
     { kind: 'tags', label: 'Tags', singular: 'tag', description: 'Labels for finding and grouping documents across your filing tree.', load: listAllTags },
     { kind: 'correspondents', label: 'Correspondents', singular: 'correspondent', description: 'People and organizations you send documents to or receive them from.', load: listCorrespondents },
@@ -197,27 +200,6 @@
   ]
   const taxon = $derived(TAXA.some(t => t.kind === initialMetadata) ? initialMetadata : 'tags')
   const selectedTaxon = $derived(TAXA.find(t => t.kind === taxon))
-  let taxImpOpen = $state(false)
-  let taxImportBusy = $state(false)
-  let exportBusy = $state(false)
-  let exportFormat = $state('huml')
-  async function importedTaxonomy() {
-    await Promise.all([loadTaxa(), onTaxonomyChanged?.()])
-  }
-  async function doExport(skipSeeds) {
-    if (exportBusy || taxImportBusy) return
-    exportBusy = true
-    try {
-      const text = await exportTaxonomy(exportFormat, skipSeeds)
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
-      a.download = `${captureScope().code ? `${captureScope().code}.taxonomy` : `archive${skipSeeds ? '-tree' : ''}`}.${exportFormat}`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
-      notify?.(`Exported ${a.download}`)
-    } catch (ex) { notify?.(ex.message || 'Export failed') }
-    finally { exportBusy = false }
-  }
   let taxRows = $state([])
   let taxRowsLoaded = $state(false)
   let taxRowsKind = $state('')
@@ -382,12 +364,12 @@
   })
 </script>
 
-<nav class="people-nav" aria-label="People and metadata">
-  <button class:on={tab === 'users'} aria-pressed={tab === 'users'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('users')}>Users</button>
-  <button class:on={tab === 'groups'} aria-pressed={tab === 'groups'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('groups')}>Groups</button>
-  <button class:on={tab === 'metadata'} aria-pressed={tab === 'metadata'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('metadata')}>Metadata</button>
-  <button class:on={tab === 'files'} aria-pressed={tab === 'files'} disabled={taxImportBusy || exportBusy || tagDeleteBusy || taxMutationBusy || !!tagDeleteRequest} onclick={() => navigatePeople('files')}>Taxonomy</button>
-</nav>
+{#if view === 'people'}
+  <nav class="people-nav" aria-label="People">
+    <button class:on={tab === 'users'} aria-pressed={tab === 'users'} onclick={() => navigatePeople('users')}>Users</button>
+    <button class:on={tab === 'groups'} aria-pressed={tab === 'groups'} onclick={() => navigatePeople('groups')}>Groups</button>
+  </nav>
+{/if}
 
 <div class="people-content">
 {#if tab === 'users'}
@@ -618,44 +600,6 @@
       </div>
     {/if}
   </section>
-
-{:else if tab === 'files'}
-  <header class="panel-heading">
-    <h3>Filing-tree files</h3>
-    <p>Import or export a taxonomy file in HuML or TOML. This is separate from editing document metadata.</p>
-  </header>
-  <section class="card editor" aria-labelledby="import-heading">
-    <div class="import-heading">
-      <div><h4 id="import-heading">Import a filing tree</h4><p class="editor-description">Preview the changes before applying them to your archive.</p></div>
-      <button class="btn" disabled={exportBusy || taxImportBusy} onclick={() => { taxImpOpen = !taxImpOpen }} aria-expanded={taxImpOpen} aria-controls="people-taxonomy-import"><Icon name="upload" size={14} />{taxImpOpen ? 'Close import' : 'Import a file'}</button>
-    </div>
-    {#if taxImpOpen}
-      <fieldset id="people-taxonomy-import" class="import-body" disabled={exportBusy}>
-        <TaxonomyImport {notify} bind:busy={taxImportBusy} onApplied={importedTaxonomy} />
-      </fieldset>
-    {/if}
-  </section>
-  <section class="card editor" aria-labelledby="export-heading">
-    <h4 id="export-heading">Export the current filing tree</h4>
-    <p class="editor-description">Save a reusable snapshot, with supported starter rules or just the tree.</p>
-    <label class="field export-format">File format
-      <select class="input" bind:value={exportFormat} disabled={exportBusy || taxImportBusy}>
-        <option value="huml">HuML</option><option value="toml">TOML</option>
-      </select>
-    </label>
-    <div class="export-actions">
-      <button class="btn" disabled={exportBusy || taxImportBusy} onclick={() => doExport(false)}><Icon name="download" size={14} />Export with starter rules</button>
-      <button class="btn" disabled={exportBusy || taxImportBusy} onclick={() => doExport(true)}>Export tree only</button>
-    </div>
-    <div class="export-note">
-      <p>Filing-tree exports are not archive backups.</p>
-      <details>
-        <summary>What is included?</summary>
-        <p>Starter-rule exports include supported preset-owned rules only. Tree-only exports omit keywords and starter rules; they are a separate choice, not an automatic fallback if an export fails.</p>
-        <p>Documents, user-owned automations and forks, permissions, and review history require a <a href="https://docs.suchi.page/backup-restore" target="_blank" rel="noopener">full backup</a>.</p>
-      </details>
-    </div>
-  </section>
 {/if}
 </div>
 
@@ -708,15 +652,6 @@
   .member-add .btn { min-height: 42px; }
   .metadata-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
   .metadata-heading .field { flex: 0 0 210px; }
-  .import-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-  .import-heading .editor-description { margin-bottom: 0; }
-  .import-heading .btn { flex: none; }
-  .import-body { border: 0; border-top: 1px solid var(--line); padding: 18px 0 0; margin: 18px 0 0; min-width: 0; }
-  .export-format { max-width: 220px; }
-  .export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-  .export-note { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; color: color-mix(in srgb, var(--ink) 75%, var(--muted)); font-size: .78rem; }
-  .export-note p { margin: 0 0 8px; max-width: 65em; }
-  .export-note details p { margin: 10px 0 0; }
   .settings-load-state { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tag-management { display: grid; gap: 9px; margin: 0 0 14px; }
   .tag-search { display: grid; gap: 6px; max-width: 390px; }
@@ -731,12 +666,11 @@
     .people-nav { gap: 2px; }
     .people-nav button { flex: 1 1 auto; padding: 9px 10px; }
     .field-grid { grid-template-columns: minmax(0, 1fr); }
-    .metadata-heading, .import-heading { flex-direction: column; align-items: stretch; gap: 14px; }
+    .metadata-heading { flex-direction: column; align-items: stretch; gap: 14px; }
     .metadata-heading .field { flex: auto; }
-    .form-actions .btn, .export-actions .btn, .import-heading .btn { flex: 1 1 auto; justify-content: center; min-height: 42px; }
+    .form-actions .btn { flex: 1 1 auto; justify-content: center; min-height: 42px; }
     .user-row { flex-wrap: wrap; gap: 10px; }
     .user-row > .grow { flex-basis: 100%; }
-    .export-format { max-width: none; }
     .tag-selection .btn { flex: 1 1 auto; }
   }
 </style>
