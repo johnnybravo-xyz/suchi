@@ -1927,6 +1927,26 @@ test('resets document pagination when route filters change', async ({ page }) =>
   await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
 })
 
+test('filters Documents by active share links', async ({ page }) => {
+  await mockAPI(page, {
+    documents: [{ id: 42, title: 'Shared receipt', created_at: 1780000000, tags: [] }],
+  })
+  await page.goto('/#/documents?q=receipt&page=2')
+
+  const filtered = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname === '/api/documents/' &&
+      url.searchParams.get('q') === 'receipt' &&
+      url.searchParams.get('share_link') === 'active'
+  })
+  await page.getByLabel('Type or sharing').selectOption('active')
+  await filtered
+  await expect(page).toHaveURL(/#\/documents\?q=receipt&share_link=active$/)
+
+  await page.getByLabel('Type or sharing').selectOption('')
+  await expect(page).toHaveURL(/#\/documents\?q=receipt$/)
+})
+
 test('document pagination survives detail navigation, history and reload', async ({ page }, testInfo) => {
   await mockAPI(page, { documentsCount: 743 })
   await page.route('**/api/documents/?*', route => {
@@ -4097,7 +4117,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   await ask('inbox scope')
   expect(chatRequests.at(-1).scope).toMatchObject({ jd_category_id: 9, query: '' })
 
-  await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&document_type__id=4&sensitivity=internal')
+  await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&document_type__id=4&sensitivity=internal&share_link=active')
   await page.getByTitle('Added on or after').fill('2026-08-01')
   await page.getByTitle('Added on or before').fill('2026-08-30')
   await page.waitForTimeout(50)
@@ -4106,7 +4126,7 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
     query: 'needle', document_ids: [41, 42], jd_category_id: 6,
     sensitivity: 'internal', document_type_id: 4, tag_ids: [5, 8],
     correspondent_ids: [7], created_at_gte: 1785542400,
-    created_at_lte: 1788134399, language: '',
+    created_at_lte: 1788134399, language: '', share_link: 'active',
   })
 
   await page.goto('/#/search?q=lease&lang=de')

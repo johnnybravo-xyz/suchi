@@ -201,6 +201,10 @@ creator being active and able to enter it. Public requests return only still-
 shareable live documents. Revocation, removal of membership, or loss of the
 creator's authority cannot be bypassed using the bearer link.
 
+The Documents **My active shares** filter follows those same checks
+and only considers links created by the current user. It does not expose another
+user's sharing activity to administrators.
+
 Automations can change ownership but v0.1 does not include a general ACL-grant
 automation action. Approval definitions are governed by their own task and
 assignee rules rather than object ACLs.

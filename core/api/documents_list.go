@@ -21,6 +21,8 @@
 //   created_at__gte, __lte    — unix seconds inclusive.
 //   trashed                   — "1" / "true" to show only trashed
 //                               docs; anything else = live only.
+//   share_link               — "active" for documents in a current
+//                               share link created by the caller.
 //
 // Every caller is constrained to its selected system and document permissions.
 // The unnamed default demo archive retains its corpus exception.
@@ -122,7 +124,7 @@ func (s *Server) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "d.trashed_at IS NULL")
 	}
 
-	where, args = appendDocumentScopePredicates(where, args, scope)
+	where, args = appendDocumentScopePredicates(r.Context(), where, args, scope, p)
 
 	// Positive text starts from FTS; metadata filters remain additive.
 	where, args = appendFTSDrivenQueryPredicates(where, args, queryPlan)

@@ -226,7 +226,7 @@ func (s *Server) ListIntelligence(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "di.sort_value <= ?")
 		args = append(args, sortTo)
 	}
-	where, args = appendDocumentScopePredicates(where, args, scope)
+	where, args = appendDocumentScopePredicates(r.Context(), where, args, scope, p)
 	visibility, visibilityArgs, err := s.collectionVisibility(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "intelligence.visibility", err)

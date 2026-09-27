@@ -98,6 +98,7 @@ failures show **Retry** rather than an empty archive.
 | Correspondent                            | `correspondents__id__in` | `#/documents?correspondents__id__in=3`   |
 | Document type                            | `document_type__id`      | `#/documents?document_type__id=2`        |
 | Sensitivity                              | `sensitivity`            | `#/documents?sensitivity=confidential`   |
+| Active links created by the user         | `share_link`             | `#/documents?share_link=active`           |
 | Sort order                               | `ordering`               | `#/documents?ordering=title`             |
 | Page                                     | `page`                   | `#/documents?page=3`                     |
 | Added on/after (Unix seconds)            | `created_at__gte`        | `#/documents?created_at__gte=1788220800` |
@@ -116,6 +117,10 @@ Previous/Next; page one may omit `page`. Changing a filter/sort starts at page o
 explicit historical URLs restore their page. Invalid values become page one and
 out-of-range values become the last page without adding history. Only the newest
 request updates the screen.
+
+The **Type or sharing** filter includes **My active shares** alongside document types.
+It includes each document once while at least one link created by the current
+user is unexpired, unrevoked, and still permitted by current ownership and ACLs.
 
 Mouse/trackpad devices have hover quick actions; on touchscreens open the document
 for filing/Trash actions. Search and Documents share the [query language](/query-language):

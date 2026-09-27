@@ -567,10 +567,12 @@ Query params (all optional):
 | `q`                                  | [Rich query string](/query-language); Search and Documents share its matching plan.                                              |
 | `created_at__gte`, `created_at__lte` | Unix-seconds date range (inclusive).                                                                                        |
 | `lang`                               | Two- or three-letter language code. Input is trimmed and lowercased; exact stored language membership is required.           |
+| `share_link`                         | `active` returns live documents in an unexpired, unrevoked share link created by the caller. Current ACL and ownership rules still apply. |
 | `trashed`                            | `1` or `true` returns only trashed rows; default returns live.                                                              |
 
 Scope filters are additive. Malformed or oversized ID lists return a field-specific
-`400`; an invalid language token returns `400 bad_lang`.
+`400`; an invalid language token returns `400 bad_lang`; any `share_link` value
+other than `active` returns `400 bad_share_link`.
 
 Members see owned documents and explicit grants (direct or via group).
 Administrators bypass document ACLs within the selected system; the

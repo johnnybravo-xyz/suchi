@@ -76,6 +76,7 @@
       created_at_gte: scope.created_at_gte ?? null,
       created_at_lte: scope.created_at_lte ?? null,
       language: scope.language || '',
+      ...(scope.share_link ? { share_link: scope.share_link } : {}),
     }
   }
 

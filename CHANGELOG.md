@@ -4,6 +4,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Add a Documents filter for files currently available through an active share
+  link created by the signed-in user.
+
 ### Fixed
 
 - Display every date picker with stable ISO `yyyy-mm-dd` input, including the

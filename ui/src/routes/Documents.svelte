@@ -35,6 +35,8 @@
   const fType = $derived(route.query.get('document_type__id') || '')
   const fSens = $derived(route.query.get('sensitivity') || '')
   const fDocumentIDs = $derived(route.query.get('document_ids') || '')
+  const fShareLink = $derived(route.query.get('share_link') || '')
+  const typeOrShare = $derived(fShareLink === 'active' ? 'active' : fType)
   const ordering = $derived(route.query.get('ordering') || '-created_at')
   const dateFrom = $derived(dateFilterValue('created_at__gte'))
   const dateTo = $derived(dateFilterValue('created_at__lte'))
@@ -63,6 +65,19 @@
     const normalized = String(value ?? '').trim()
     if (normalized) params.set(key, normalized)
     else params.delete(key)
+    params.delete('page')
+    const query = params.toString()
+    go(`#${route.path}${query ? `?${query}` : ''}`)
+  }
+
+  function setTypeOrShare(value) {
+    queryAssistant.clear()
+    const params = new URLSearchParams(route.query)
+    params.delete('document_type__id')
+    params.delete('share_link')
+    const normalized = String(value ?? '').trim()
+    if (normalized === 'active') params.set('share_link', 'active')
+    else if (normalized) params.set('document_type__id', normalized)
     params.delete('page')
     const query = params.toString()
     go(`#${route.path}${query ? `?${query}` : ''}`)
@@ -120,6 +135,7 @@
         jd_category_id: isInbox ? inbox?.id : jdFilter,
         created_at__gte: dateFrom ? Math.floor(new Date(dateFrom) / 1000) : '',
         created_at__lte: dateTo ? Math.floor(new Date(dateTo) / 1000) + 86399 : '',
+        share_link: fShareLink,
       }
       const csvIDs = (value) => [...new Set(String(value || '').split(',')
         .map(item => Number(item.trim())).filter(item => Number.isInteger(item) && item > 0))]
@@ -135,6 +151,7 @@
         created_at_gte: params.created_at__gte === '' ? null : params.created_at__gte,
         created_at_lte: params.created_at__lte === '' ? null : params.created_at__lte,
         language: '',
+        share_link: params.share_link || '',
       })
       const res = await listDocuments(params, controller.signal)
       if (version !== loadVersion) return
@@ -526,8 +543,10 @@
       <option value="">All correspondents</option>
       {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
     </select>
-    <select class="input" value={fType} onchange={(e) => setRouteFilter('document_type__id', e.target.value)}>
+    <select class="input" aria-label="Type or sharing" value={typeOrShare}
+            onchange={(e) => setTypeOrShare(e.target.value)}>
       <option value="">All types</option>
+      <option value="active">My active shares</option>
       {#each types as t}<option value={t.id}>{t.name}</option>{/each}
     </select>
     <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
@@ -568,6 +587,8 @@
     <Icon name={isInbox ? 'inbox' : 'docs'} size={56} />
     {#if isInbox}
       <b>Inbox zero.</b><span>Everything is filed. New low-confidence documents will wait here.</span>
+    {:else if fShareLink === 'active'}
+      <b>No actively shared documents.</b><span>Documents appear here while one of your share links is active.</span>
     {:else}
       <b>No documents match.</b><span>Clear a filter, or <a href={filingHref("#/upload")}>upload the first one</a>.</span>
     {/if}

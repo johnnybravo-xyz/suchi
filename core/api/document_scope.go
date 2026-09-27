@@ -27,6 +27,7 @@ type documentScope struct {
 	CreatedAtGTE     *int64
 	CreatedAtLTE     *int64
 	Language         string
+	ShareLink        string
 }
 
 type documentScopeError struct {
@@ -68,6 +69,10 @@ func documentScopeFromQuery(values url.Values) (documentScope, error) {
 	}
 	if scope.Language, err = normalizedScopeLanguage(values.Get("lang")); err != nil {
 		return documentScope{}, &documentScopeError{Code: "bad_lang", Message: "lang must be a 2 or 3 letter language code"}
+	}
+	scope.ShareLink = strings.TrimSpace(values.Get("share_link"))
+	if scope.ShareLink != "" && scope.ShareLink != "active" {
+		return documentScope{}, &documentScopeError{Code: "bad_share_link", Message: `share_link must be "active"`}
 	}
 	return scope, nil
 }
@@ -111,7 +116,7 @@ func documentScopeFromSavedViewJSON(raw string) (documentScope, error) {
 	return scope, nil
 }
 
-func appendDocumentScopePredicates(where []string, args []any, scope documentScope) ([]string, []any) {
+func appendDocumentScopePredicates(ctx context.Context, where []string, args []any, scope documentScope, principal *pluginapi.Principal) ([]string, []any) {
 	if scope.JDCategoryID > 0 {
 		where = append(where, "d.jd_category_id = ?")
 		args = append(args, scope.JDCategoryID)
@@ -168,6 +173,22 @@ func appendDocumentScopePredicates(where []string, args []any, scope documentSco
 	if scope.Language != "" {
 		where = append(where, "d.languages LIKE ?")
 		args = append(args, "%,"+scope.Language+",%")
+	}
+	if scope.ShareLink == "active" {
+		where = append(where, "d.trashed_at IS NULL")
+		where = append(where, `d.id IN (
+			SELECT CAST(shared.value AS INTEGER)
+			FROM share_links sl
+			JOIN json_each(sl.doc_ids_json) shared
+			WHERE sl.system_id = ? AND sl.created_by = ?
+			  AND sl.revoked_at IS NULL
+			  AND (sl.expires_at IS NULL OR sl.expires_at > unixepoch())
+		)`)
+		args = append(args, collectionSystemID(ctx, principal), principal.UserID)
+		if principal.Role != "admin" {
+			where = append(where, "d.owner_id = ?")
+			args = append(args, principal.UserID)
+		}
 	}
 	return where, args
 }

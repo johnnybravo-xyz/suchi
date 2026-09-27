@@ -121,6 +121,7 @@ type ChatScope struct {
 	CreatedAtGTE     *int64  `json:"created_at_gte,omitempty"`
 	CreatedAtLTE     *int64  `json:"created_at_lte,omitempty"`
 	Language         string  `json:"language,omitempty"`
+	ShareLink        string  `json:"share_link,omitempty"`
 }
 
 type ChatRequest struct {
@@ -295,7 +296,8 @@ func (s *Server) PostChat(w http.ResponseWriter, r *http.Request) {
 	if len(in.Scope.Query) > searchquery.MaxQueryBytes || in.Scope.JDCategoryID < 0 ||
 		in.Scope.DocumentTypeID < 0 || (in.Scope.CreatedAtGTE != nil && *in.Scope.CreatedAtGTE < 0) ||
 		(in.Scope.CreatedAtLTE != nil && *in.Scope.CreatedAtLTE < 0) ||
-		(in.Scope.Sensitivity != "" && !SensitivityLevels[in.Scope.Sensitivity]) {
+		(in.Scope.Sensitivity != "" && !SensitivityLevels[in.Scope.Sensitivity]) ||
+		(in.Scope.ShareLink != "" && in.Scope.ShareLink != "active") {
 		s.writeError(w, http.StatusBadRequest, "bad_scope", "scope is invalid")
 		return
 	}
@@ -674,7 +676,7 @@ func (s *Server) chatSourceWhere(ctx context.Context, q sqlQueryer, scope ChatSc
 	visibility, visibilityArgs := documentVisibilityWhere(ctx, p, groups)
 	where = append(where, visibility)
 	args = append(args, visibilityArgs...)
-	where, args = appendDocumentScopePredicates(where, args, scope.documentScope())
+	where, args = appendDocumentScopePredicates(ctx, where, args, scope.documentScope(), p)
 	if scope.Query != "" {
 		plan, err := s.compileQueryWith(ctx, q, scope.Query)
 		if err != nil {
