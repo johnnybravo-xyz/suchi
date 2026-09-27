@@ -127,6 +127,25 @@ func TestBlobHandlersRequireDocumentReadScopeForTokens(t *testing.T) {
 			if got := allowed.Header().Get("Cache-Control"); got != wantCacheControl {
 				t.Fatalf("authenticated blob Cache-Control = %q, want %q", got, wantCacheControl)
 			}
+			if strings.HasPrefix(path, "/download/") {
+				rangeRec := httptest.NewRecorder()
+				rangeReq := httptest.NewRequest(http.MethodGet, path, nil)
+				rangeReq.SetPathValue("id", strconv.FormatInt(id, 10))
+				rangeReq.Header.Set("Range", "bytes=6-14")
+				rangeReq = rangeReq.WithContext(auth.WithPrincipal(context.Background(), &pluginapi.Principal{
+					Kind: "token", UserID: 1, Role: "admin", Scopes: []string{auth.ScopeDocumentsRead},
+				}))
+				s.Download(rangeRec, rangeReq)
+				if rangeRec.Code != http.StatusPartialContent || rangeRec.Body.String() != "protected" {
+					t.Fatalf("range response = %d %q", rangeRec.Code, rangeRec.Body.String())
+				}
+				if got := rangeRec.Header().Get("Content-Range"); got != "bytes 6-14/21" {
+					t.Fatalf("Content-Range = %q", got)
+				}
+				if got := rangeRec.Header().Get("Accept-Ranges"); got != "bytes" {
+					t.Fatalf("Accept-Ranges = %q", got)
+				}
+			}
 			if etag := allowed.Header().Get("ETag"); etag != "" {
 				revoked := request(nil, etag)
 				if revoked.Code != http.StatusForbidden {

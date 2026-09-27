@@ -22,6 +22,7 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/blob"
 )
 
 func shareMux(s *Server) *http.ServeMux {
@@ -212,6 +213,50 @@ func TestPublicShareUsesCurrentCreatorName(t *testing.T) {
 	}
 	if body := request("text/html"); !strings.Contains(body, "Shared from <strong>suchi.example.com</strong>") {
 		t.Fatalf("empty creator name should fall back to instance host: %s", body)
+	}
+}
+
+func TestPublicShareDownloadSupportsRanges(t *testing.T) {
+	s := newStatsServer(t)
+	var err error
+	s.CAS, err = blob.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := s.CAS.Put(strings.NewReader("shared immutable bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	category := seedStatsJDInbox(t, s.DB)
+	docID := seedStatsDoc(t, s.DB, 1, ref.SHA256, "Shared record.txt", category, false, 0)
+	if _, err := s.DB.ExecWrite(t.Context(),
+		`UPDATE documents SET original_size=?, mime_type='text/plain' WHERE id=?`, ref.Size, docID); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("a", 64)
+	if _, err := s.DB.ExecWrite(t.Context(), `
+		INSERT INTO share_links(system_id, token, doc_ids_json, created_by, created_at)
+		VALUES (1, ?, ?, 1, 0)`, token, "["+itoa(docID)+"]"); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /s/{token}/{doc_id}/download", s.GetSharePublicDownload)
+	req := httptest.NewRequest(http.MethodGet, "/s/"+token+"/"+itoa(docID)+"/download", nil)
+	req.Header.Set("Range", "bytes=7-15")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "immutable" {
+		t.Fatalf("range response = %d %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Range"); got != "bytes 7-15/22" {
+		t.Fatalf("Content-Range = %q", got)
+	}
+	if got := rec.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Fatalf("Accept-Ranges = %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
 	}
 }
 

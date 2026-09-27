@@ -46,6 +46,8 @@ Notable user-visible changes to Suchi are recorded here.
   printing help, and enumerate all taxonomy child commands.
 - Treat a matching blob installed by a concurrent writer as successful
   deduplication when Windows refuses to replace the destination.
+- Support HTTP byte ranges for authenticated and public-share document
+  downloads without bypassing their authorization checks.
 
 ### Security
 

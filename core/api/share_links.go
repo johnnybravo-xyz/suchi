@@ -728,15 +728,12 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 	// or decryption never fired).
 	var (
 		origBlob, decBlob sql.NullString
-		decSize           sql.NullInt64
 		title, mime       sql.NullString
-		origSize          int64
 	)
 	err = s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT original_blob, decrypted_blob, decrypted_size,
-		       title, COALESCE(mime_type, ''), original_size
+		SELECT original_blob, decrypted_blob, title, COALESCE(mime_type, '')
 		FROM documents WHERE id = ? AND trashed_at IS NULL AND system_id = ? AND (? OR owner_id = ?)
-	`, docID, link.systemID, link.creatorAdmin, link.createdBy).Scan(&origBlob, &decBlob, &decSize, &title, &mime, &origSize)
+	`, docID, link.systemID, link.creatorAdmin, link.createdBy).Scan(&origBlob, &decBlob, &title, &mime)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusNotFound, "not_found", "no such document")
 		return
@@ -745,19 +742,12 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		s.serverErr(w, "share_links.download.query", err)
 		return
 	}
-	var (
-		pick string
-		size int64
-	)
+	var pick string
 	switch {
 	case decBlob.Valid && decBlob.String != "":
 		pick = decBlob.String
-		if decSize.Valid {
-			size = decSize.Int64
-		}
 	case origBlob.Valid:
 		pick = origBlob.String
-		size = origSize
 	}
 	if pick == "" {
 		s.writeError(w, http.StatusNotFound, "not_found", "no blob for document")
@@ -769,20 +759,24 @@ func (s *Server) GetSharePublicDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer rc.Close()
+	content, ok := rc.(io.ReadSeeker)
+	if !ok {
+		s.serverErr(w, "share_links.download.seek", errors.New("CAS blob is not seekable"))
+		return
+	}
 	if mime.Valid && mime.String != "" {
 		w.Header().Set("Content-Type", mime.String)
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	if size > 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	}
+	name := "document"
 	if title.Valid {
+		name = title.String
 		w.Header().Set("Content-Disposition", stdmime.FormatMediaType("attachment", map[string]string{
 			"filename": title.String,
 		}))
 	}
-	_, _ = io.Copy(w, rc)
+	http.ServeContent(w, r, name, time.Time{}, content)
 }
 
 // ---------- internals ----------

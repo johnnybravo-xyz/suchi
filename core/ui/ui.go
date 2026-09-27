@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
@@ -553,16 +554,6 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 		http.NotFound(w, r)
 		return
 	}
-	stat, err := s.CAS.Stat(pick)
-	if err != nil {
-		if errors.Is(err, blob.ErrNotFound) {
-			s.Log.Warn("ui.serveBlob.missing", "doc_id", id, "sha256", pick)
-			http.NotFound(w, r)
-			return
-		}
-		s.serverError(w, r, err)
-		return
-	}
 	rc, err := s.CAS.Get(pick)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
@@ -574,6 +565,11 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 		return
 	}
 	defer rc.Close()
+	content, ok := rc.(io.ReadSeeker)
+	if !ok {
+		s.serverError(w, r, errors.New("CAS blob is not seekable"))
+		return
+	}
 
 	switch {
 	case servingArchive:
@@ -602,7 +598,6 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size, 10))
 	// Filename extension must match the bytes we're actually sending:
 	// archive_blob is always a PDF (post-ingest guarantee); original_blob
 	// keeps the doc's stored MIME. Hard-coding ".pdf" for both used to
@@ -618,9 +613,7 @@ func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, preferArchive
 	w.Header().Set("Content-Disposition", stdmime.FormatMediaType(disposition, map[string]string{
 		"filename": fname,
 	}))
-	if _, err := io.Copy(w, rc); err != nil {
-		s.Log.Warn("ui.serveBlob.copy", "err", err.Error())
-	}
+	http.ServeContent(w, r, fname, time.Time{}, content)
 }
 
 // ---------- render + helpers ----------
