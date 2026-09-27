@@ -48,6 +48,8 @@ Notable user-visible changes to Suchi are recorded here.
   deduplication when Windows refuses to replace the destination.
 - Support HTTP byte ranges for authenticated and public-share document
   downloads without bypassing their authorization checks.
+- Make the restore and AnyDoc ingestion drills run on macOS as well as Linux
+  by using the system temporary directory and portable shell utilities.
 
 ### Security
 

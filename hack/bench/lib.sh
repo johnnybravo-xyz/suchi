@@ -19,7 +19,9 @@ PORT="${PORT:-8765}"
 SUCHI_BIN="${SUCHI_BIN:-$REPO_ROOT/dist/suchi}"
 BENCH_DIR="$REPO_ROOT/hack/bench"
 TOOLS_DIR="$BENCH_DIR/tools"
-export PORT SUCHI_BIN BENCH_DIR TOOLS_DIR
+BENCH_TMPDIR="${TMPDIR:-/tmp}"
+BENCH_TMPDIR="${BENCH_TMPDIR%/}"
+export PORT SUCHI_BIN BENCH_DIR TOOLS_DIR BENCH_TMPDIR
 
 # ---------------------------------------------------------------------------
 # bench_setup_dirs — create a timestamped results dir and export RESULTS_DIR.
@@ -85,16 +87,16 @@ bench_boot_suchi() {
         echo "bench_boot_suchi: port $SUCHI_PORT already serves HTTP; choose another PORT" >&2
         return 1
     fi
-    DATA_DIR="$(mktemp -d -t suchi-bench-XXXXXXXX)"
+    DATA_DIR="$(mktemp -d "$BENCH_TMPDIR/suchi-bench.XXXXXX")"
     case "$DATA_DIR" in
-        /tmp/*) : ;;
-        *) echo "bench_boot_suchi: refusing DATA_DIR=$DATA_DIR (not under /tmp/)" >&2; return 1 ;;
+        "$BENCH_TMPDIR"/suchi-*) : ;;
+        *) echo "bench_boot_suchi: refusing unexpected DATA_DIR=$DATA_DIR" >&2; return 1 ;;
     esac
     SUCHI_LOG="$DATA_DIR/suchi.log"
     export SUCHI_PORT DATA_DIR SUCHI_LOG
     bench_start_suchi
 
-    for _ in $(seq 1 80); do
+    for ((attempt = 0; attempt < 80; attempt++)); do
         if ! kill -0 "$SUCHI_PID" 2>/dev/null; then break; fi
         if curl -sfS "http://127.0.0.1:$SUCHI_PORT/healthz" >/dev/null 2>&1; then
             echo "suchi up on :$SUCHI_PORT (pid=$SUCHI_PID data=$DATA_DIR)" >&2
@@ -119,9 +121,9 @@ bench_bootstrap_admin() {
     export ADMIN_EMAIL
 
     local token=""
-    for _ in $(seq 1 40); do
+    for ((attempt = 0; attempt < 40; attempt++)); do
         token="$(grep 'localauth.setup.token_minted' "$SUCHI_LOG" 2>/dev/null \
-            | grep -oP '"token":"\K[^"]+' | head -1 || true)"
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' | sed -n '1p' || true)"
         if [ -n "$token" ]; then break; fi
         sleep 0.25
     done
@@ -146,7 +148,7 @@ bench_bootstrap_admin() {
     ADMIN_TOKEN="$(curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/token/" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
         -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$password\"}" \
-        | grep -oP '"token":"\K[^"]+' | head -1)"
+        | jq -er '.token')"
     if [ -z "${ADMIN_TOKEN:-}" ]; then
         echo "bench_bootstrap_admin: /api/token/ returned no token" >&2
         return 1
@@ -173,12 +175,13 @@ bench_mint_member() {
     curl -sfS -X POST "http://127.0.0.1:$SUCHI_PORT/api/token/" \
         -H 'Accept: application/json' -H 'Content-Type: application/json' \
         -d "{\"email\":\"$email\",\"password\":\"$password\"}" \
-        | grep -oP '"token":"\K[^"]+' | head -1
+        | jq -er '.token'
 }
 
 # ---------------------------------------------------------------------------
 # bench_teardown — stop suchi, drop the datadir. Idempotent; safe to call
-# from EXIT traps even if boot failed. Hard-refuses to rm outside /tmp/.
+# from EXIT traps even if boot failed. Hard-refuses to rm outside the system
+# temporary directory.
 # ---------------------------------------------------------------------------
 bench_teardown() {
     if [ -n "${SAMPLER_PID:-}" ]; then
@@ -200,8 +203,8 @@ bench_teardown() {
 			return 0
 		fi
 		case "$DATA_DIR" in
-            /tmp/*) rm -rf "$DATA_DIR" ;;
-            *) echo "bench_teardown: refusing rm -rf $DATA_DIR (not under /tmp/)" >&2 ;;
+            "$BENCH_TMPDIR"/suchi-*) rm -rf -- "$DATA_DIR" ;;
+            *) echo "bench_teardown: refusing unexpected DATA_DIR=$DATA_DIR" >&2 ;;
         esac
         DATA_DIR=""
     fi
@@ -215,7 +218,7 @@ bench_wait_jobs_drain() {
     local timeout="${1:-300}"
     local db="$DATA_DIR/suchi.db"
     local n
-    for _ in $(seq 1 "$timeout"); do
+    for ((attempt = 0; attempt < timeout; attempt++)); do
 		n="$(sqlite3 "$db" "SELECT COUNT(*) FROM jobs WHERE state = 'running' OR (state = 'pending' AND next_run_at <= unixepoch())" 2>/dev/null || echo 999)"
         if [ "$n" = "0" ]; then return 0; fi
         sleep 1
@@ -236,7 +239,7 @@ bench_wait_job_done() {
     local timeout="${2:-300}"
     local db="$DATA_DIR/suchi.db"
     local state
-    for _ in $(seq 1 "$timeout"); do
+    for ((attempt = 0; attempt < timeout; attempt++)); do
         state="$(sqlite3 "$db" "SELECT state FROM jobs WHERE doc_id=$doc_id AND kind='post-ingest' ORDER BY id DESC LIMIT 1" 2>/dev/null || echo "")"
         case "$state" in
             done) return 0 ;;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the documented stopped-directory restore, including document bytes.
-# Requires a built SUCHI_BIN, curl, jq, and sqlite3. All state stays under /tmp.
+# Requires a built SUCHI_BIN, curl, jq, and sqlite3. All state stays under the
+# system temporary directory.
 set -euo pipefail
 
 # shellcheck source=hack/bench/lib.sh
@@ -10,7 +11,7 @@ cleanup() {
     bench_teardown
     if [ -n "$SOURCE_DIR" ]; then
         case "$SOURCE_DIR" in
-            /tmp/suchi-bench-*) rm -rf -- "$SOURCE_DIR" ;;
+            "$BENCH_TMPDIR"/suchi-*) rm -rf -- "$SOURCE_DIR" ;;
             *) echo "refusing unexpected source directory: $SOURCE_DIR" >&2; exit 1 ;;
         esac
     fi
@@ -30,7 +31,7 @@ DOC_ID="$(curl -fsS "$BASE/api/documents/" \
 bench_wait_job_done "$DOC_ID" 30
 
 # Preserve the database-only snapshot check alongside the full archive drill.
-for _ in $(seq 1 30); do
+for ((attempt = 0; attempt < 30; attempt++)); do
     snapshots=("$DATA_DIR"/backups/suchi-*.db)
     SNAPSHOT="${snapshots[0]}"
     if [ -f "$SNAPSHOT" ] && [ "$(sqlite3 "$SNAPSHOT" "SELECT count(*) FROM documents WHERE id=$DOC_ID AND content LIKE '%RESTOREMARKER%'")" = 1 ]; then
@@ -48,7 +49,7 @@ test "$(sqlite3 "$SNAPSHOT" "SELECT count(*) FROM documents WHERE id=$DOC_ID AND
 test "$(sqlite3 "$SNAPSHOT" 'PRAGMA user_version')" = "$(sqlite3 "$DATA_DIR/suchi.db" 'PRAGMA user_version')"
 
 SOURCE_DIR="$DATA_DIR"
-DATA_DIR="$(mktemp -d /tmp/suchi-restore-XXXXXXXX)"
+DATA_DIR="$(mktemp -d "$BENCH_TMPDIR/suchi-restore.XXXXXX")"
 cp -a "$SOURCE_DIR/." "$DATA_DIR/"
 cmp "$SOURCE_DIR/.decrypt-key" "$DATA_DIR/.decrypt-key"
 test "$(sqlite3 "$DATA_DIR/suchi.db" 'PRAGMA integrity_check')" = ok
@@ -56,7 +57,7 @@ test -z "$(sqlite3 "$DATA_DIR/suchi.db" 'PRAGMA foreign_key_check')"
 SUCHI_LOG="$DATA_DIR/suchi.log"
 ADMIN_COOKIES="$DATA_DIR/admin.cookies"
 bench_start_suchi
-for _ in $(seq 1 60); do
+for ((attempt = 0; attempt < 60; attempt++)); do
     if curl -fsS "$BASE/readyz" >/dev/null 2>&1; then break; fi
     if ! kill -0 "$SUCHI_PID" 2>/dev/null; then break; fi
     sleep 0.25

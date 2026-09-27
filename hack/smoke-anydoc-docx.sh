@@ -20,7 +20,9 @@ EMAIL="you@example.com"
 PASSWORD="local-smoke-passwd"
 MARKER="RUSTIC_FLAMINGO_QUANTUM_TROMBONE"  # unlikely-to-hit-elsewhere marker
 
-SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/suchi-smoke-anydoc.XXXXXX")"
+SMOKE_TMPDIR="${TMPDIR:-/tmp}"
+SMOKE_TMPDIR="${SMOKE_TMPDIR%/}"
+SMOKE_DIR="$(mktemp -d "$SMOKE_TMPDIR/suchi-smoke-anydoc.XXXXXX")"
 DATA_DIR="$SMOKE_DIR/data"
 STAGE="$SMOKE_DIR/docx"
 CONTAINER_NAME="suchi-smoke-anydoc-${SMOKE_DIR##*.}"
@@ -59,7 +61,7 @@ CONTAINER_ID=$(docker create --name "$CONTAINER_NAME" \
   "$IMAGE")
 docker start "$CONTAINER_ID" >/dev/null
 
-for _ in $(seq 1 60); do
+for ((attempt = 0; attempt < 60; attempt++)); do
   if curl -sf "$BASE/healthz" >/dev/null; then break; fi
   sleep 0.5
 done
@@ -88,7 +90,7 @@ echo
 echo "== bootstrap admin =="
 TOKEN=$(docker logs "$CONTAINER_ID" 2>&1 \
         | grep 'localauth.setup.token_minted' \
-        | grep -oP '"token":"\K[^"]+' | head -1)
+        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' | sed -n '1p')
 if [ -z "${TOKEN:-}" ]; then
   echo "setup token not found in log"; docker logs "$CONTAINER_ID" | tail -30; exit 1
 fi
@@ -105,7 +107,7 @@ API_TOKEN=$(curl -fsS -X POST "$BASE/api/tokens" \
     --cookie "$SMOKE_DIR/admin.cookies" \
     -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' \
     -d '{"name":"anydoc-smoke","scopes":"documents:read,documents:write"}' \
-    | grep -oP '"token":"\K[^"]+')
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')
 if [ -z "$API_TOKEN" ]; then
   echo "no API token"; exit 1
 fi
@@ -151,7 +153,7 @@ cat > "$STAGE/word/document.xml" <<EOF
 EOF
 
 (cd "$STAGE" && zip -qr "$DOCX" .)
-echo "wrote $DOCX ($(stat -c%s "$DOCX") bytes)"
+echo "wrote $DOCX ($(wc -c < "$DOCX" | tr -d '[:space:]') bytes)"
 
 echo
 echo "== upload =="
@@ -160,14 +162,14 @@ DOC_JSON=$(curl -sf -X POST "$BASE/api/documents/" \
   -F "document=@$DOCX" \
   -F "title=smoke.docx")
 echo "$DOC_JSON"
-DOC_ID=$(echo "$DOC_JSON" | grep -oP '"id":\s*\K[0-9]+' | head -1)
+DOC_ID=$(echo "$DOC_JSON" | python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')
 if [ -z "${DOC_ID:-}" ]; then
   echo "no doc id in response"; exit 1
 fi
 
 echo
 echo "== wait for post-ingest to drain =="
-for _ in $(seq 1 60); do
+for ((attempt = 0; attempt < 60; attempt++)); do
   # Check the jobs table via the API — nothing pending on this doc?
   PENDING=$(curl -sf "$BASE/api/tasks/?doc_id=$DOC_ID&state=pending" \
     -H "Authorization: Token $API_TOKEN" | grep -c '"kind"' || true)
