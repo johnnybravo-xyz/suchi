@@ -38,7 +38,7 @@ func runRefile(args []string) int {
 		systemCode      = fs.String("system", "", "system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	cfg, err := config.Load()

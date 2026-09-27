@@ -29,8 +29,7 @@ import (
 
 func runTaxonomy(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy <subcommand> [flags]")
-		fmt.Fprintln(os.Stderr, "subcommands: validate | import | export | merge")
+		printTaxonomyUsage(os.Stderr)
 		return 2
 	}
 	switch args[0] {
@@ -42,15 +41,33 @@ func runTaxonomy(args []string) int {
 		return runTaxonomyExport(args[1:])
 	case "merge":
 		return runTaxonomyMerge(args[1:])
+	case "help", "-h", "--help":
+		printTaxonomyUsage(os.Stderr)
+		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "unknown taxonomy subcommand %q\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown taxonomy subcommand %q\n\n", args[0])
+		printTaxonomyUsage(os.Stderr)
 		return 2
 	}
 }
 
+func printTaxonomyUsage(w io.Writer) {
+	fmt.Fprintln(w, `Usage: suchi taxonomy <command> [flags]
+
+Commands:
+  validate <file>  validate one HuML or TOML taxonomy offline
+  import <file>    preview or apply a taxonomy
+  export           write the selected filing tree
+  merge            preview or apply a taxonomy row merge`)
+}
+
 func runTaxonomyValidate(args []string) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Fprintln(os.Stderr, "Usage: suchi taxonomy validate <file>")
+		return 0
+	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy validate <file>")
+		fmt.Fprintln(os.Stderr, "Usage: suchi taxonomy validate <file>")
 		return 2
 	}
 	path := args[0]
@@ -95,8 +112,11 @@ func runTaxonomyImport(args []string) int {
 	fs.Var(&remaps, "remap", "merge collision as incoming:target or incoming:skip; repeatable")
 	path, err := parseTaxonomyImportArgs(fs, args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+		code := flagParseExit(err)
+		if code != 0 {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		return code
 	}
 	b, err := readTaxonomyFile(path)
 	if err != nil {
@@ -199,7 +219,7 @@ func runTaxonomyExport(args []string) int {
 	skipSeeds := fs.Bool("skip-seeds", false, "export the filing tree without keywords or starter rules")
 	systemCode := fs.String("system", "", "system code (default: original archive)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: suchi taxonomy export [--format huml|toml] [--skip-seeds]")
@@ -269,7 +289,7 @@ func runTaxonomyMerge(args []string) int {
 		systemCode = fs.String("system", "", "system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if *kind == "" || *from == "" || *into == "" {
 		fmt.Fprintln(os.Stderr, "--kind, --from-name, --into-name are all required")

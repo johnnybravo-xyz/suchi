@@ -41,6 +41,8 @@ Notable user-visible changes to Suchi are recorded here.
 - Cancel superseded document-change approvals when metadata changes and during
   the existing approval sweep, so obsolete suggestions leave the review queue.
 - Remove repetitive review guidance and score disclaimers from approval cards.
+- Return success for every CLI help request, bypass runtime configuration while
+  printing help, and enumerate all taxonomy child commands.
 
 ### Security
 

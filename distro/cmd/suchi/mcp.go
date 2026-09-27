@@ -58,7 +58,7 @@ func runMCP(args []string) int {
 		token    = fs.String("token", "", "suchi API token; overrides SUCHI_TOKEN env")
 	)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	// Auth + endpoint discovery. flags → env → error out cleanly.

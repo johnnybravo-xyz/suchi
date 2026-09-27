@@ -28,7 +28,7 @@ func runGC(args []string) int {
 		verbose = fs.Bool("verbose", false, "log every candidate + skipped blob (default is summary only)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	cfg, err := config.Load()

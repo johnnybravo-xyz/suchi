@@ -44,7 +44,7 @@ func runDemo(args []string) int {
 	corpusDirFlag := fs.String("corpus-dir", "", "path to an already-extracted corpus directory (skips tarball fetch + extract)")
 	fetchOnly := fs.Bool("fetch-only", false, "download + extract the corpus into the cache; do not seed the DB")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 
 	cfg, err := config.Load()

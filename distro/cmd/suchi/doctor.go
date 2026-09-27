@@ -50,7 +50,7 @@ func runDoctor(args []string) int {
 	scrubCAS := flags.Bool("scrub-cas", false, "hash CAS blobs and report missing or corrupt content")
 	quarantineCorrupt := flags.Bool("quarantine-corrupt", false, "move corrupt blobs out of the CAS; requires --scrub-cas")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "unexpected arguments: %s\n", strings.Join(flags.Args(), " "))

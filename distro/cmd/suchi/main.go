@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -47,7 +49,8 @@ func main() {
 	if command == "taxonomy" && len(os.Args) > 2 && os.Args[2] == "validate" {
 		os.Exit(runTaxonomyValidate(os.Args[3:]))
 	}
-	if command != "version" && command != "help" && command != "-h" && command != "--help" {
+	if command != "version" && command != "help" && command != "-h" && command != "--help" &&
+		!commandHelpRequested(os.Args[2:]) {
 		var err error
 		loadedConfigFile, err = config.LoadFile()
 		if err != nil {
@@ -57,8 +60,16 @@ func main() {
 	}
 	switch command {
 	case "serve":
+		if commandHelpRequested(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, "Usage: suchi serve")
+			return
+		}
 		os.Exit(runServe())
 	case "healthcheck":
+		if commandHelpRequested(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, "Usage: suchi healthcheck")
+			return
+		}
 		os.Exit(runHealthcheck())
 	case "import":
 		os.Exit(runImport(os.Args[2:]))
@@ -79,6 +90,10 @@ func main() {
 	case "rescan":
 		os.Exit(runRescan(os.Args[2:]))
 	case "version":
+		if commandHelpRequested(os.Args[2:]) {
+			fmt.Fprintln(os.Stderr, "Usage: suchi version")
+			return
+		}
 		printVersion()
 	case "-h", "--help", "help":
 		usage()
@@ -87,6 +102,25 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+func commandHelpRequested(args []string) bool {
+	if len(args) > 0 && args[0] == "help" {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func flagParseExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
 }
 
 func usage() {

@@ -36,7 +36,7 @@ func runImport(args []string) int {
 		systemCode = fs.String("system", "", "target system code (default: original archive)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagParseExit(err)
 	}
 	// --verify is orthogonal to the write modes (--flat/--map-jd/--auto-jd)
 	// because verify never writes and never resolves JD categories. It

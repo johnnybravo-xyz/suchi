@@ -117,10 +117,7 @@ func runExport(args []string) int {
 	force := fs.Bool("force", false, "atomically replace an existing output file")
 	allowIncomplete := fs.Bool("allow-incomplete", false, "publish an archive even when original blobs are missing")
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+		return flagParseExit(err)
 	}
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "suchi export: --out <path>.zip is required")
