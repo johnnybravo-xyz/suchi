@@ -332,6 +332,35 @@ func TestTokenHandlerIssuesGranularTokenWithoutSession(t *testing.T) {
 	if err != nil || tokenPrincipal == nil {
 		t.Fatalf("token authentication failed: principal=%v err=%v", tokenPrincipal, err)
 	}
+	recentUse := time.Now().Unix() - 30
+	if _, err := p.db.ExecWrite(context.Background(),
+		`UPDATE api_tokens SET last_used_at = ? WHERE id = ?`, recentUse, tokenPrincipal.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := p.Authenticate(tokenReq); err != nil || principal == nil {
+		t.Fatalf("repeat token authentication failed: principal=%v err=%v", principal, err)
+	}
+	var lastUsed int64
+	if err := p.db.Read.QueryRow(`SELECT last_used_at FROM api_tokens WHERE id = ?`, tokenPrincipal.TokenID).Scan(&lastUsed); err != nil {
+		t.Fatal(err)
+	}
+	if lastUsed != recentUse {
+		t.Fatalf("recent token use wrote last_used_at=%d, want unchanged %d", lastUsed, recentUse)
+	}
+	staleUse := time.Now().Unix() - 3700
+	if _, err := p.db.ExecWrite(context.Background(),
+		`UPDATE api_tokens SET last_used_at = ? WHERE id = ?`, staleUse, tokenPrincipal.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := p.Authenticate(tokenReq); err != nil || principal == nil {
+		t.Fatalf("stale token authentication failed: principal=%v err=%v", principal, err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT last_used_at FROM api_tokens WHERE id = ?`, tokenPrincipal.TokenID).Scan(&lastUsed); err != nil {
+		t.Fatal(err)
+	}
+	if lastUsed <= staleUse {
+		t.Fatalf("stale token use was not refreshed: got %d, prior %d", lastUsed, staleUse)
+	}
 
 	if _, err := p.db.ExecWrite(context.Background(), `UPDATE users SET disabled = 1 WHERE id = ?`, tokenPrincipal.UserID); err != nil {
 		t.Fatal(err)

@@ -314,9 +314,10 @@ func (p *Plugin) authToken(ctx context.Context, header string) (*pluginapi.Princ
 	if revoked.Valid {
 		return nil, errors.New("token revoked")
 	}
-	// Best-effort last_used_at update — a write error here must not fail auth.
-	_, _ = p.db.ExecWrite(ctx,
-		"UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?", tokenID)
+	// Best-effort telemetry update, capped at one write per token per hour.
+	// Authentication must not fail when this non-security timestamp cannot write.
+	_, _ = p.db.ExecWrite(ctx, `UPDATE api_tokens SET last_used_at = unixepoch()
+		WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= unixepoch() - 3600)`, tokenID)
 
 	kind := "token"
 	parsedScopes := strings.Split(scopes, ",")

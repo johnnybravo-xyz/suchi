@@ -22,6 +22,7 @@ Notable user-visible changes to Suchi are recorded here.
   Canonical fingerprints admit beta.1, beta.2, beta.3, and pre-stable schema 4;
   each beta archive is snapshotted mode 0600 and adopted atomically, while
   unknown or partial schemas fail before mutation.
+- Limit API-token last-use telemetry to one database write per token per hour.
 
 ### Fixed
 
