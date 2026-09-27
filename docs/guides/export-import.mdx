@@ -17,13 +17,21 @@ Run the command with the source instance's `DATA_DIR` configuration:
 suchi export --out /tmp/suchi-export.zip
 ```
 
-By default this selects original system 1 and its live documents owned by the first
-admin account. Choose the target and owner scope explicitly:
+Without a scope flag, Suchi selects the only owner with live documents. If
+multiple owners have live documents, the command stops and requires
+`--owner-id` or `--all`:
 
 ```sh
 suchi export --out /tmp/user-5.zip --owner-id 5
 suchi export --out /tmp/S02-all-users.zip --system S02 --all
 ```
+
+The destination must be outside `DATA_DIR`. Suchi writes a mode-0600 temporary
+archive beside the destination, syncs and closes it, then publishes it
+atomically. An existing destination is preserved unless `--force` is present.
+Missing original blobs fail the export and leave no partial output; use
+`--allow-incomplete` only for deliberate recovery, then inspect the manifest's
+`skipped` count.
 
 Trashed documents are excluded. Check the archive before moving it:
 

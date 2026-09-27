@@ -414,10 +414,17 @@ dumps, not a database restore graph. Sidecar format stays **1**, adding optional
 `jd_system` and `jd_address` describing the source. Document IDs can change on intake.
 
 ```sh
-suchi export --out /tmp/my-suchi.zip                 # this instance's default admin
-suchi export --out /tmp/user-5.zip --owner-id 5      # scope to one owner
-suchi export --out /tmp/S02.zip --system S02 --all   # every owner in S02 only
+suchi export --out /tmp/my-suchi.zip --owner-id 1
+suchi export --out /tmp/S02.zip --system S02 --all
+suchi export --out /tmp/recovery.zip --all --allow-incomplete
 ```
+
+Omitting the owner flag works only when one owner has live documents; ambiguous
+archives require `--owner-id` or `--all`. Output must be outside `DATA_DIR`.
+Suchi publishes a complete mode-0600 archive atomically, refuses an existing
+destination unless `--force` is set, and removes temporary output after any
+failure. Missing original blobs fail by default. `--allow-incomplete` is an
+explicit recovery override, and the manifest records its skipped originals.
 
 After extracting the zip, placing each original beside its sidecar in an
 fs-watch staging directory restores title, source date, correspondents, tags,

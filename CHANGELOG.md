@@ -48,6 +48,10 @@ Notable user-visible changes to Suchi are recorded here.
   manifest SHA-256. Guarded restore requires manifest membership, rejects
   traversal and corruption, fsyncs a temporary copy, atomically replaces the
   database, and removes stale WAL sidecars.
+- Publish native takeouts atomically with mode-0600 permissions, preserve
+  existing destinations unless `--force` is explicit, reject outputs inside
+  `DATA_DIR`, require unambiguous owner scope, and fail on missing originals
+  unless recovery uses `--allow-incomplete`.
 
 ## [0.1.0-beta.3] - 2026-09-24
 

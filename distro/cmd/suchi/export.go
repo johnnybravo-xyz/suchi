@@ -29,10 +29,10 @@
 //
 // Design decisions:
 //
-//   - **One archive per user by default.** `--owner-id 5` scopes to
-//     one owner; `--all` (admin only) dumps every doc. Default is
-//     the current DB's admin — a single-user instance gets its data
-//     out with zero flags.
+//   - **One archive per owner by default.** `--owner-id 5` scopes to
+//     one owner; `--all` dumps every owner. With one live owner the
+//     command needs no scope flag; ambiguous archives require an
+//     explicit choice.
 //   - **Original bytes only, not the archive_blob.** The archive
 //     PDF has an OCR'd text layer we generated; it's derived. The
 //     original is what the operator actually put in.
@@ -111,15 +111,24 @@ type exportCorrRole struct {
 func runExport(args []string) int {
 	fs := flag.NewFlagSet("suchi export", flag.ContinueOnError)
 	out := fs.String("out", "", "output zip path (required)")
-	ownerID := fs.Int64("owner-id", 0, "scope to one owner id (default: current admin)")
+	ownerID := fs.Int64("owner-id", 0, "scope to one owner id")
 	all := fs.Bool("all", false, "export every owner within the selected system")
 	systemCode := fs.String("system", "", "system code (default: original archive)")
+	force := fs.Bool("force", false, "atomically replace an existing output file")
+	allowIncomplete := fs.Bool("allow-incomplete", false, "publish an archive even when original blobs are missing")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "suchi export: --out <path>.zip is required")
 		fs.Usage()
+		return 2
+	}
+	if *ownerID < 0 || (*all && *ownerID != 0) {
+		fmt.Fprintln(os.Stderr, "suchi export: choose exactly one of --owner-id N or --all")
 		return 2
 	}
 
@@ -135,7 +144,22 @@ func runExport(args []string) int {
 		log.Error("export.datadir", "err", err.Error())
 		return 1
 	}
-	d, err := db.Open(ctx, cfg.DataDir+"/suchi.db")
+	target, err := exportTargetPath(*out, cfg.DataDir)
+	if err != nil {
+		log.Error("export.out.invalid", "err", err.Error())
+		return 1
+	}
+	if !*force {
+		if _, err := os.Lstat(target); err == nil {
+			log.Error("export.out.exists", "path", target, "hint", "pass --force to replace it")
+			return 1
+		} else if !errors.Is(err, os.ErrNotExist) {
+			log.Error("export.out.inspect", "err", err.Error())
+			return 1
+		}
+	}
+
+	d, err := db.Open(ctx, filepath.Join(cfg.DataDir, "suchi.db"))
 	if err != nil {
 		log.Error("export.db.open", "err", err.Error())
 		return 1
@@ -156,27 +180,37 @@ func runExport(args []string) int {
 		return 1
 	}
 
-	// Resolve scope. --all overrides --owner-id.
 	scope := *ownerID
-	if *all {
-		scope = 0 // sentinel: "no owner filter"
-	} else if scope == 0 {
-		// Default: newest admin. A one-user instance picks itself.
-		if err := d.Read.QueryRowContext(ctx,
-			"SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").Scan(&scope); err != nil {
-			log.Error("export.owner_default", "err", err.Error())
+	if !*all {
+		scope, err = resolveExportOwner(ctx, d, system.ID, scope)
+		if err != nil {
+			log.Error("export.owner", "err", err)
 			return 1
 		}
 	}
 
-	f, err := os.Create(*out)
+	f, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
 	if err != nil {
 		log.Error("export.out.create", "err", err.Error())
 		return 1
 	}
-	defer f.Close()
-	zw := zip.NewWriter(f)
-	defer zw.Close()
+	tempPath := f.Name()
+	published := false
+	var zw *zip.Writer
+	defer func() {
+		if !published {
+			if zw != nil {
+				_ = zw.Close()
+			}
+			_ = f.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := f.Chmod(0o600); err != nil {
+		log.Error("export.out.permissions", "err", err.Error())
+		return 1
+	}
+	zw = zip.NewWriter(f)
 
 	man := exportManifest{
 		Version:     "2",
@@ -201,6 +235,10 @@ func runExport(args []string) int {
 		log.Error("export.documents", "err", err.Error())
 		return 1
 	}
+	if skipped != 0 && !*allowIncomplete {
+		log.Error("export.incomplete", "missing_blobs", skipped, "hint", "repair the archive or pass --allow-incomplete")
+		return 1
+	}
 	man.Documents = docs
 	man.Skipped = skipped
 
@@ -219,13 +257,104 @@ func runExport(args []string) int {
 		log.Error("export.close", "err", err)
 		return 1
 	}
+	zw = nil
+	if err := f.Sync(); err != nil {
+		log.Error("export.sync", "err", err)
+		return 1
+	}
 	if err := f.Close(); err != nil {
 		log.Error("export.close", "err", err)
 		return 1
 	}
+	if err := publishExport(tempPath, target, *force); err != nil {
+		log.Error("export.publish", "err", err)
+		return 1
+	}
+	published = true
 	fmt.Fprintf(os.Stdout, "exported %d documents (%d skipped) → %s\n",
-		docs, skipped, *out)
+		docs, skipped, target)
 	return 0
+}
+
+func resolveExportOwner(ctx context.Context, d *db.DB, systemID, requested int64) (int64, error) {
+	if requested != 0 {
+		var exists bool
+		if err := d.Read.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=?)", requested).Scan(&exists); err != nil {
+			return 0, err
+		}
+		if !exists {
+			return 0, fmt.Errorf("owner %d does not exist", requested)
+		}
+		return requested, nil
+	}
+
+	var count int
+	var owner sql.NullInt64
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT count(*), min(owner_id)
+		  FROM (SELECT DISTINCT owner_id FROM documents
+		         WHERE system_id=? AND trashed_at IS NULL)`, systemID).Scan(&count, &owner); err != nil {
+		return 0, err
+	}
+	if count == 1 {
+		return owner.Int64, nil
+	}
+	if count > 1 {
+		return 0, errors.New("multiple owners have live documents; pass --owner-id N or --all")
+	}
+
+	if err := d.Read.QueryRowContext(ctx,
+		"SELECT count(*), min(id) FROM users WHERE role='admin' AND disabled=0").Scan(&count, &owner); err != nil {
+		return 0, err
+	}
+	if count != 1 {
+		return 0, errors.New("cannot infer an owner; pass --owner-id N or --all")
+	}
+	return owner.Int64, nil
+}
+
+func exportTargetPath(output, dataDir string) (string, error) {
+	target, err := filepath.Abs(output)
+	if err != nil {
+		return "", fmt.Errorf("resolve output: %w", err)
+	}
+	dataPath, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	resolvedData, err := filepath.EvalSymlinks(dataPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if errors.Is(err, os.ErrNotExist) {
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(target))
+		if parentErr != nil {
+			return "", fmt.Errorf("resolve output directory: %w", parentErr)
+		}
+		resolvedTarget = filepath.Join(parent, filepath.Base(target))
+	} else if err != nil {
+		return "", fmt.Errorf("resolve output: %w", err)
+	}
+	rel, err := filepath.Rel(resolvedData, resolvedTarget)
+	if err != nil {
+		return "", fmt.Errorf("compare output and data directory: %w", err)
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return "", errors.New("output must be outside DATA_DIR")
+	}
+	info, err := os.Stat(resolvedTarget)
+	if err == nil {
+		if info.IsDir() {
+			return "", errors.New("output path is a directory")
+		}
+		if dbInfo, dbErr := os.Stat(filepath.Join(resolvedData, "suchi.db")); dbErr == nil && os.SameFile(info, dbInfo) {
+			return "", errors.New("output aliases the active database")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect output: %w", err)
+	}
+	return target, nil
 }
 
 // dumpTaxonomy exports only the selected system's metadata, across all owners.
@@ -459,8 +588,9 @@ func safeExportName(title string, id int64, _ string) string {
 		return r
 	}
 	base = strings.Map(repl, base)
-	if len(base) > 60 {
-		base = base[:60]
+	baseRunes := []rune(base)
+	if len(baseRunes) > 60 {
+		base = string(baseRunes[:60])
 	}
 	return filepath.Clean(base + "-" + strconv.FormatInt(id, 10))
 }

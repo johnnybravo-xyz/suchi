@@ -24,6 +24,7 @@ func TestSafeExportName(t *testing.T) {
 		{"", 1, "document-1"},
 		{"   ", 2, "document-2"},
 		{strings.Repeat("x", 200), 3, strings.Repeat("x", 60) + "-3"},
+		{strings.Repeat("界", 61), 4, strings.Repeat("界", 60) + "-4"},
 	}
 	for _, c := range cases {
 		got := safeExportName(c.title, c.id, "")
