@@ -48,7 +48,7 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 	t.Helper()
 	inbox := seedStatsJDInbox(t, s.DB)
 	if _, err := s.DB.Write.ExecContext(context.Background(), `
-		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 20, 29, 'Finance', 1);
+		INSERT INTO jd_areas(system_id, code_start, code_end, name, position) VALUES (1, 20, 29, 'Money', 1);
 		INSERT INTO jd_categories(system_id, id, area_start, code, name) VALUES (1, 6, 20, 22, 'Investments');
 		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES
 			(1, 7, 'tax', 'tax', 0, 0),

@@ -1,87 +1,92 @@
 format = "suchi-taxonomy/v1"
 id = "smb_billing"
 version = 1
-name = "Small-business billing"
+name = "Small business"
 license = "CC0-1.0"
 market = "global"
 language = "en"
-story = "Shop / factory / SME admin: customer invoices, vendor bills, payroll, statutory compliance."
+story = "Customer, vendor, money, payroll, compliance, and marketing records for a small business."
 
 [[areas]]
 code = 10
 name = "Customers"
 
   [[areas.categories]]
-  code = 11
-  name = "Customer records"
-  keywords = ["kyc", "customer onboarding", "account opening"]
+  code = 12
+  name = "Quotes & contracts"
+  keywords = ["quote", "proposal", "customer contract", "sales agreement"]
 
   [[areas.categories]]
-  code = 12
+  code = 13
   name = "Invoices out"
   keywords = ["invoice", "tax invoice", "credit note"]
 
   [[areas.categories]]
-  code = 13
-  name = "Delivery notes"
-  keywords = ["delivery note", "goods receipt", "consignment"]
+  code = 14
+  name = "Collections & aging"
+  keywords = ["receivable", "aging", "ageing", "outstanding", "past due", "remittance"]
 
   [[areas.categories]]
-  code = 14
-  name = "Receivables"
-  keywords = ["receivable", "ageing", "outstanding"]
+  code = 15
+  name = "Correspondence"
+  keywords = ["customer letter", "customer email", "meeting notes"]
 
 [[areas]]
 code = 20
 name = "Vendors"
 
   [[areas.categories]]
-  code = 21
-  name = "Vendor records"
-  keywords = ["vendor onboarding", "supplier kyc"]
-
-  [[areas.categories]]
   code = 22
-  name = "Bills in"
-  keywords = ["vendor bill", "supplier invoice", "bill of supply"]
+  name = "Orders & contracts"
+  keywords = ["purchase order", "po number", "vendor agreement"]
 
   [[areas.categories]]
   code = 23
-  name = "Purchase orders"
-  keywords = ["purchase order", "po number"]
+  name = "Bills & purchases"
+  keywords = ["vendor bill", "supplier invoice", "bill of supply"]
 
   [[areas.categories]]
   code = 24
+  name = "Deliveries"
+  keywords = ["delivery note", "goods receipt", "consignment"]
+
+  [[areas.categories]]
+  code = 25
   name = "Payments"
   keywords = ["remittance advice", "payment voucher", "utr"]
 
 [[areas]]
 code = 30
-name = "Payroll & HR"
-
-  [[areas.categories]]
-  code = 31
-  name = "Employee records"
-  keywords = ["employee id", "kyc", "offer letter"]
+name = "Money"
 
   [[areas.categories]]
   code = 32
-  name = "Payslips"
-  keywords = ["payslip", "salary slip"]
+  name = "Expenses"
+  keywords = ["expense report", "travel expense", "receipt"]
 
   [[areas.categories]]
   code = 33
-  name = "Contracts"
-  keywords = ["employment contract", "nda"]
+  name = "Tax working papers"
+  keywords = ["tax working paper", "form 26as", "advance tax", "tax calculation"]
+
+  [[areas.categories]]
+  code = 34
+  name = "Employee records"
+  keywords = ["employee id", "offer letter", "employment contract"]
+
+  [[areas.categories]]
+  code = 35
+  name = "Payroll"
+  keywords = ["payslip", "salary slip", "payroll register"]
 
 [[areas]]
 code = 50
-name = "Compliance & tax"
+name = "Compliance"
 
   [[areas.categories]]
   code = 51
   name = "Tax filings"
-  keywords = ["gstr", "form 26as", "tds return", "itr", "tax return"]
+  keywords = ["tax filing", "tax return", "gstr", "itr"]
 
   [[areas.categories]]
   code = 52
@@ -96,32 +101,56 @@ name = "Compliance & tax"
   [[areas.categories]]
   code = 54
   name = "Licenses & permits"
-  keywords = ["licence", "permit", "trade licence"]
+  keywords = ["licence", "license", "permit", "trade licence"]
+
+[[areas]]
+code = 60
+name = "Portfolio & marketing"
+
+  [[areas.categories]]
+  code = 61
+  name = "Case studies"
+  keywords = ["case study", "customer story"]
+
+  [[areas.categories]]
+  code = 62
+  name = "Testimonials"
+  keywords = ["testimonial", "reference letter"]
+
+  [[areas.categories]]
+  code = 63
+  name = "Templates"
+  keywords = ["template", "boilerplate"]
+
+  [[areas.categories]]
+  code = 64
+  name = "Marketing assets"
+  keywords = ["brochure", "brand asset", "campaign", "marketing plan"]
 
 [seeds]
 
   [[seeds.automations]]
-  name = "File vendor invoices"
+  name = "Small business: file vendor bills"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)vendor invoice|supplier invoice|bill of supply"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
-    jd_category_code = 22
+    jd_category_code = 23
 
   [[seeds.automations]]
-  name = "File customer invoices"
+  name = "Small business: file customer invoices"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)tax invoice|invoice to customer|credit note"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
-    jd_category_code = 12
+    jd_category_code = 13
 
   [[seeds.automations]]
-  name = "File GST / statutory filings"
+  name = "Small business: file statutory returns"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)gstr[- ]?[0-9]|tds return|pf return|esi return"
@@ -131,11 +160,11 @@ name = "Compliance & tax"
     jd_category_code = 52
 
   [[seeds.automations]]
-  name = "File payslips"
+  name = "Small business: file payroll"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)payslip|salary slip|earnings statement|net pay"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
-    jd_category_code = 32
+    jd_category_code = 35

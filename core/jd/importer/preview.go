@@ -59,20 +59,26 @@ type SkippedRule struct {
 	Reason string `json:"reason"`
 }
 type MergeCollision struct {
-	Code         int    `json:"code"`
-	Existing     string `json:"existing"`
-	Incoming     string `json:"incoming"`
-	ProposedCode int    `json:"proposed_code,omitempty"`
-	Resolved     bool   `json:"resolved"`
+	Code             int    `json:"code"`
+	Existing         string `json:"existing"`
+	Incoming         string `json:"incoming"`
+	ProposedCode     int    `json:"proposed_code,omitempty"`
+	Resolved         bool   `json:"resolved"`
+	Replace          bool   `json:"replace,omitempty"`
+	SuggestedReplace bool   `json:"suggested_replace,omitempty"`
+	LiveDocuments    int    `json:"live_documents,omitempty"`
+	TrashedDocuments int    `json:"trashed_documents,omitempty"`
 }
 
 type importPlan struct {
-	destination destination
-	diff        Diff
-	codes       codeMap
-	categoryIDs map[int]int64
-	areas       map[int]bool
-	rules       []plannedRule
+	destination  destination
+	diff         Diff
+	codes        codeMap
+	categoryIDs  map[int]int64
+	areas        map[int]bool
+	replacements map[int]bool
+	switching    bool
+	rules        []plannedRule
 }
 type plannedRule struct {
 	seed     presetfile.SeedAutomation
@@ -110,13 +116,14 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 	if err != nil {
 		return nil, err
 	}
-	p := &importPlan{destination: dest, codes: codeMap{}, categoryIDs: map[int]int64{}, areas: map[int]bool{}, diff: Diff{
-		SystemCode: dest.Target.Code, SystemName: dest.Target.Name, SystemCreated: dest.Create,
-		SystemsIntroduced: dest.Introduce || dest.OriginalCode != "", ExistingSystemCode: dest.ExistingSystemCode,
-		Format: pf.Format, PresetID: pf.ID, PresetVersion: pf.Version, Name: pf.Name, Story: pf.Story,
-		ContentSHA256: opts.ContentSHA256, Mode: "merge", UserAreas: []presetfile.Area{}, GeneratedAreas: []presetfile.Area{},
-		CategoriesToAdd: []int{}, Collisions: []MergeCollision{}, RulesToAdd: []string{}, RulesPreserved: []PreservedRule{}, RulesSkipped: []SkippedRule{},
-	}}
+	p := &importPlan{destination: dest, codes: codeMap{}, categoryIDs: map[int]int64{}, areas: map[int]bool{},
+		replacements: opts.Replacements, switching: opts.SwitchFromPreset != "", diff: Diff{
+			SystemCode: dest.Target.Code, SystemName: dest.Target.Name, SystemCreated: dest.Create,
+			SystemsIntroduced: dest.Introduce || dest.OriginalCode != "", ExistingSystemCode: dest.ExistingSystemCode,
+			Format: pf.Format, PresetID: pf.ID, PresetVersion: pf.Version, Name: pf.Name, Story: pf.Story,
+			ContentSHA256: opts.ContentSHA256, Mode: "merge", UserAreas: []presetfile.Area{}, GeneratedAreas: []presetfile.Area{},
+			CategoriesToAdd: []int{}, Collisions: []MergeCollision{}, RulesToAdd: []string{}, RulesPreserved: []PreservedRule{}, RulesSkipped: []SkippedRule{},
+		}}
 	existing := map[int]string{}
 	for _, a := range current.Areas {
 		p.areas[a.Code] = true
@@ -176,6 +183,13 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		remapKeys = append(remapKeys, code)
 	}
 	sort.Ints(remapKeys)
+	replaceKeys := make([]int, 0, len(opts.Replacements))
+	for code, replace := range opts.Replacements {
+		if replace {
+			replaceKeys = append(replaceKeys, code)
+		}
+	}
+	sort.Ints(replaceKeys)
 	incoming := map[int]string{}
 	for _, a := range p.diff.UserAreas {
 		for _, c := range a.Categories {
@@ -183,6 +197,9 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		}
 	}
 	for _, code := range remapKeys {
+		if opts.Replacements[code] {
+			return nil, fmt.Errorf("category %d cannot be both replaced and remapped", code)
+		}
 		target := opts.Remaps[code]
 		name, declared := incoming[code]
 		old, exists := existing[code]
@@ -200,6 +217,13 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		}
 		claimed[target] = true
 	}
+	for _, code := range replaceKeys {
+		_, declared := incoming[code]
+		_, exists := existing[code]
+		if !declared || !exists {
+			return nil, fmt.Errorf("replacements.%d: only an incoming user-category code can replace the current meaning", code)
+		}
+	}
 	for _, a := range p.diff.UserAreas {
 		for _, c := range a.Categories {
 			old, exists := existing[c.Code]
@@ -213,8 +237,11 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 				continue
 			}
 			target, decided := opts.Remaps[c.Code]
-			collision := MergeCollision{Code: c.Code, Existing: old, Incoming: c.Name, Resolved: decided}
-			if decided {
+			replace := opts.Replacements[c.Code]
+			collision := MergeCollision{Code: c.Code, Existing: old, Incoming: c.Name, Resolved: decided || replace, Replace: replace}
+			if replace {
+				p.codes[c.Code] = c.Code
+			} else if decided {
 				if target != 0 {
 					p.codes[c.Code] = target
 					p.diff.CategoriesToAdd = append(p.diff.CategoriesToAdd, target)
@@ -290,12 +317,15 @@ func previewTx(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, opts 
 		Input             *presetfile.PresetFile
 		SkipSeeds         bool
 		Remaps            map[int]int
+		Replacements      map[int]bool
+		SwitchFromPreset  string
+		SetIDs            []string
 		Tree              *presetfile.PresetFile
 		IDs               map[int]int64
 		Filed, Configured bool
 		Rules             []automations.Automation
 		References        []string
-	}{dest, opts.ContentSHA256, pf, opts.SkipSeeds, opts.Remaps, current, p.categoryIDs, filed, configured, relevantRules, refs}
+	}{dest, opts.ContentSHA256, pf, opts.SkipSeeds, opts.Remaps, opts.Replacements, opts.SwitchFromPreset, opts.SetIDs, current, p.categoryIDs, filed, configured, relevantRules, refs}
 	b, err := json.Marshal(binding)
 	if err != nil {
 		return nil, err

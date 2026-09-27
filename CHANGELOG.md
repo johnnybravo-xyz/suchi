@@ -9,8 +9,14 @@ Notable user-visible changes to Suchi are recorded here.
 - Add a Documents filter for files currently available through an active share
   link created by the signed-in user.
 
+
 ### Fixed
 
+- Preview filing-tree transitions against the categories actually present, so
+  archives created with older preset revisions do not submit invalid
+  replacement codes.
+- Upgrade existing beta.3 archives before querying filing-rule suspension, so
+  opening the Filing tree no longer fails with a missing `suspended` column.
 - Keep full-width Documents search above one options row, combine added-date
   bounds behind **Any date**, and separate left-side filters from right-side
   display, refresh and sorting controls. Remove duplicate Trash and tag-catalog

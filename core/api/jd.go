@@ -35,14 +35,23 @@ func presetsView() []PresetRow {
 			Name:        p.Label,
 			Description: p.Description,
 			Blank:       p.Blank,
+			SetIDs:      jd.PresetSetIDs(p.ID),
 			Areas:       make([]PresetArea, 0, len(p.Tree.Areas)),
 		}
 		for _, a := range p.Tree.Areas {
-			row.Areas = append(row.Areas, PresetArea{
-				Code:          a.Start,
-				Name:          a.Name,
-				CategoryCount: len(a.Categories),
-			})
+			if a.Start == 40 {
+				continue
+			}
+			area := PresetArea{
+				Code: a.Start, Name: a.Name, CategoryCount: len(a.Categories),
+				Categories: make([]PresetCategory, 0, len(a.Categories)),
+			}
+			for _, category := range a.Categories {
+				area.Categories = append(area.Categories, PresetCategory{
+					Code: category.Code, Name: category.Name, Description: category.Description,
+				})
+			}
+			row.Areas = append(row.Areas, area)
 		}
 		out = append(out, row)
 	}
@@ -183,16 +192,21 @@ type PresetRow struct {
 	Name        string       `json:"name"`
 	Description string       `json:"description,omitempty"`
 	Blank       bool         `json:"blank,omitempty"`
+	SetIDs      []string     `json:"set_ids"`
 	Areas       []PresetArea `json:"areas"`
 }
 
-// PresetArea is the area-level summary the filing-tree picker needs — code
-// range for the header, name for the label, category_count so it
-// can show "12 categories" without hydrating the whole tree.
 type PresetArea struct {
-	Code          int    `json:"code"`
-	Name          string `json:"name"`
-	CategoryCount int    `json:"category_count"`
+	Code          int              `json:"code"`
+	Name          string           `json:"name"`
+	CategoryCount int              `json:"category_count"`
+	Categories    []PresetCategory `json:"categories"`
+}
+
+type PresetCategory struct {
+	Code        int    `json:"code"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // ListPresets — GET /api/presets/. Admin only. Sourced from
@@ -210,4 +224,43 @@ func (s *Server) ListPresets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, presetsView())
+}
+
+type filingSetCatalog struct {
+	MaxSets int                 `json:"max_sets"`
+	Sets    []filingSetRow      `json:"sets"`
+	Recipes map[string][]string `json:"recipes"`
+}
+
+type filingSetRow struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Lane        int              `json:"lane"`
+	Categories  []PresetCategory `json:"categories"`
+}
+
+func (s *Server) ListFilingSets(w http.ResponseWriter, r *http.Request) {
+	if s.requireAdmin(w, r) == nil {
+		return
+	}
+	sets := jd.FilingSets()
+	rows := make([]filingSetRow, 0, len(sets))
+	for _, set := range sets {
+		row := filingSetRow{
+			ID: set.ID, Name: set.Name, Description: set.Description, Lane: set.Lane,
+			Categories: make([]PresetCategory, 0, len(set.Categories)),
+		}
+		for _, category := range set.Categories {
+			row.Categories = append(row.Categories, PresetCategory{
+				Code: category.Code, Name: category.Name, Description: category.Description,
+			})
+		}
+		rows = append(rows, row)
+	}
+	recipes := map[string][]string{}
+	for _, preset := range jd.Presets() {
+		recipes[preset.ID] = jd.PresetSetIDs(preset.ID)
+	}
+	s.writeJSON(w, http.StatusOK, filingSetCatalog{MaxSets: jd.MaxFilingSets, Sets: rows, Recipes: recipes})
 }

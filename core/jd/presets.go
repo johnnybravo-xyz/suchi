@@ -20,16 +20,12 @@ package jd
 
 import (
 	"context"
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/presetfile"
-	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 )
 
 //go:embed presets/*.toml
@@ -155,25 +151,18 @@ type ApplyPresetOpts struct {
 	SkipSeeds bool
 }
 
-// ApplyPreset uses the same validated, additive application as file imports.
-// Choosing another built-in never resets filing or resurrects disabled rules.
+// ApplyPreset previews and applies the reviewed transition contract for legacy
+// callers that intentionally selected one built-in preset.
 func ApplyPreset(ctx context.Context, d *db.DB, log *slog.Logger, id string, opts ApplyPresetOpts) error {
-	pf, err := loadPresetFile(id)
-	if err != nil {
-		return fmt.Errorf("unknown preset %q: %w", id, err)
+	request := PresetChangeRequest{
+		PresetID: id, SkipSeeds: opts.SkipSeeds, ConfirmBlank: true,
+		SystemID: opts.SystemID, ActorID: opts.ActorID,
 	}
-	raw, err := presetFS.ReadFile("presets/" + id + ".toml")
-	if err != nil {
-		return err
-	}
-	target, err := systems.Get(ctx, d.Read, opts.SystemID)
+	preview, err := PreviewPresetChange(ctx, d, request)
 	if err != nil {
 		return err
 	}
-	hash := sha256.Sum256(raw)
-	_, err = importer.ImportForDB(ctx, d, log, pf, importer.Options{
-		SkipSeeds: opts.SkipSeeds, ContentSHA256: hex.EncodeToString(hash[:]),
-		TargetSystem: target.Code, ActorID: opts.ActorID,
-	})
+	request.ExpectedStateHash = preview.StateHash
+	_, err = ApplyPresetChange(ctx, d, log, request)
 	return err
 }

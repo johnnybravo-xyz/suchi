@@ -401,6 +401,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/jd/systems/{code}/members", s.PutSystemMembers)
 	mux.HandleFunc("PATCH /api/admin/jd/systems/{code}", s.PatchSystem)
 	mux.HandleFunc("GET /api/presets/", s.ListPresets)
+	mux.HandleFunc("GET /api/filing-sets/", s.ListFilingSets)
 
 	// Activity feed. Cursor over audit_events; the SPA and external
 	// integrations can read this. See events.go

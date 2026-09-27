@@ -5,7 +5,7 @@ name = "Solo filing"
 license = "CC0-1.0"
 market = "global"
 language = "en"
-story = "One person's admin: ID, taxes, health, receipts. Compact 3-area tree."
+story = "Personal records across life admin, money, health, and home."
 
 [[areas]]
 code = 10
@@ -14,33 +14,27 @@ name = "Life admin"
   [[areas.categories]]
   code = 11
   name = "Identity"
-  description = "ID, passport, driver's license"
+  description = "Identity cards, passports, and official identity records."
   keywords = ["passport", "aadhaar", "driver license", "national id"]
 
   [[areas.categories]]
   code = 12
-  name = "Housing"
-  description = "Rent, mortgage, utilities"
-  keywords = ["rent agreement", "lease", "mortgage", "electricity bill", "water bill", "gas bill", "internet bill"]
-
-  [[areas.categories]]
-  code = 13
   name = "Insurance"
   keywords = ["insurance policy", "premium", "sum insured", "policyholder"]
 
   [[areas.categories]]
-  code = 14
+  code = 13
   name = "Vehicles"
   keywords = ["vehicle registration", "driving licence", "rc book", "puc"]
+
+  [[areas.categories]]
+  code = 14
+  name = "Education & memberships"
+  keywords = ["certificate", "transcript", "membership", "course completion"]
 
 [[areas]]
 code = 20
 name = "Money"
-
-  [[areas.categories]]
-  code = 21
-  name = "Banking"
-  keywords = ["bank statement", "account statement", "cheque"]
 
   [[areas.categories]]
   code = 22
@@ -54,6 +48,11 @@ name = "Money"
 
   [[areas.categories]]
   code = 24
+  name = "Loans & credit"
+  keywords = ["loan statement", "emi", "credit card statement"]
+
+  [[areas.categories]]
+  code = 25
   name = "Receipts"
   keywords = ["receipt", "invoice", "purchase order"]
 
@@ -73,23 +72,42 @@ name = "Health"
 
   [[areas.categories]]
   code = 33
-  name = "Bills & claims"
+  name = "Medical billing"
   keywords = ["hospital bill", "medical claim", "reimbursement"]
+
+[[areas]]
+code = 50
+name = "Home"
+
+  [[areas.categories]]
+  code = 51
+  name = "Utilities"
+  keywords = ["electricity bill", "water bill", "gas bill", "internet bill", "broadband"]
+
+  [[areas.categories]]
+  code = 52
+  name = "Housing"
+  keywords = ["rent agreement", "lease", "mortgage", "property tax", "society maintenance"]
+
+  [[areas.categories]]
+  code = 54
+  name = "Warranties"
+  keywords = ["warranty", "guarantee", "proof of purchase"]
 
 [seeds]
 
   [[seeds.automations]]
-  name = "Tag utility bills"
+  name = "Solo: file utility bills"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)electricity bill|water bill|gas bill|internet bill|broadband"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
-    jd_category_code = 12
+    jd_category_code = 51
 
   [[seeds.automations]]
-  name = "File tax documents"
+  name = "Solo: file tax documents"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)form 16|form 26as|income tax return|itr[- ]?[1-7]|form w-?2|form 1099"
@@ -99,21 +117,31 @@ name = "Health"
     jd_category_code = 23
 
   [[seeds.automations]]
-  name = "File insurance documents"
+  name = "Solo: file insurance documents"
   [seeds.automations.trigger]
   type = 2
   filter_content_matching = "(?i)insurance policy|premium|sum insured|policyholder|policy number"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
-    jd_category_code = 13
+    jd_category_code = 12
 
   [[seeds.automations]]
-  name = "File prescriptions and medical bills"
+  name = "Solo: file prescriptions"
   [seeds.automations.trigger]
   type = 2
-  filter_content_matching = "(?i)prescription|rx no|dispensed|pharmacy|hospital bill|discharge summary"
+  filter_content_matching = "(?i)prescription|rx no|dispensed|pharmacy"
   [[seeds.automations.actions]]
   kind = "assign_jd_category"
     [seeds.automations.actions.params]
     jd_category_code = 32
+
+  [[seeds.automations]]
+  name = "Solo: file medical bills"
+  [seeds.automations.trigger]
+  type = 2
+  filter_content_matching = "(?i)hospital bill|medical claim|reimbursement|discharge summary"
+  [[seeds.automations.actions]]
+  kind = "assign_jd_category"
+    [seeds.automations.actions.params]
+    jd_category_code = 33

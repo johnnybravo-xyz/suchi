@@ -33,6 +33,9 @@ type Options struct {
 	ActorID            int64
 	SkipSeeds          bool
 	Remaps             map[int]int
+	Replacements       map[int]bool
+	SwitchFromPreset   string
+	SetIDs             []string
 	ContentSHA256      string
 	ExpectedStateHash  string
 }
@@ -87,6 +90,23 @@ func Apply(ctx context.Context, d *db.DB, log *slog.Logger, pf *presetfile.Prese
 		if err := applyTree(ctx, tx, pf, plan); err != nil {
 			return err
 		}
+		if opts.SwitchFromPreset != "" {
+			now := time.Now().Unix()
+			if _, err := tx.ExecContext(ctx, `UPDATE automations SET suspended=1,updated_at=? WHERE system_id=? AND preset_slug=?`,
+				now, systemID, opts.SwitchFromPreset); err != nil {
+				return err
+			}
+			for _, rule := range plan.diff.RulesPreserved {
+				if _, err := tx.ExecContext(ctx, `UPDATE automations SET preset_slug=?,suspended=0,updated_at=? WHERE system_id=? AND preset_slug=? AND name=?`,
+					pf.ID, now, systemID, opts.SwitchFromPreset, rule.Name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE automations SET suspended=0,updated_at=? WHERE system_id=? AND preset_slug=?`,
+				now, systemID, pf.ID); err != nil {
+				return err
+			}
+		}
 		// Resolve every surviving rule before materializing any rule. Named
 		// references use their existing owner and roll back with this transaction.
 		resolved := make([]automations.Automation, 0, len(plan.rules))
@@ -114,7 +134,7 @@ func Apply(ctx context.Context, d *db.DB, log *slog.Logger, pf *presetfile.Prese
 				return err
 			}
 		}
-		if err := writeImportProvenance(ctx, tx, systemID, pf, opts.ContentSHA256); err != nil {
+		if err := writeImportProvenance(ctx, tx, systemID, pf, opts.ContentSHA256, opts.SetIDs); err != nil {
 			return err
 		}
 		if err := index.Enqueue(ctx, tx, systemID); err != nil {
@@ -186,13 +206,26 @@ func applyTree(ctx context.Context, tx *sql.Tx, pf *presetfile.PresetFile, p *im
 				return err
 			}
 			position++
+		} else if p.switching && a.Code != 40 {
+			if _, err := tx.ExecContext(ctx, `UPDATE jd_areas SET name=? WHERE system_id=? AND code_start=?`, a.Name, systemID, a.Code); err != nil {
+				return err
+			}
 		}
 		for _, c := range a.Categories {
 			code, ok := p.codes[c.Code]
 			if a.Code == 40 {
 				code, ok = 49, true
 			}
-			if !ok || p.categoryIDs[code] != 0 {
+			if !ok {
+				continue
+			}
+			if existingID := p.categoryIDs[code]; existingID != 0 {
+				if p.replacements[c.Code] {
+					if _, err := tx.ExecContext(ctx, `UPDATE jd_categories SET name=?,description=? WHERE system_id=? AND id=?`,
+						c.Name, nullIfEmpty(c.Description), systemID, existingID); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			system := a.Code == 40
@@ -317,19 +350,20 @@ func insertRule(ctx context.Context, tx *sql.Tx, systemID int64, rule automation
 	return nil
 }
 
-func writeImportProvenance(ctx context.Context, tx *sql.Tx, systemID int64, pf *presetfile.PresetFile, hash string) error {
+func writeImportProvenance(ctx context.Context, tx *sql.Tx, systemID int64, pf *presetfile.PresetFile, hash string, setIDs []string) error {
 	authoring, err := json.Marshal(struct {
-		System     string `json:"system,omitempty"`
-		Format     string `json:"format"`
-		ID         string `json:"id"`
-		Version    int    `json:"version"`
-		Name       string `json:"name"`
-		Market     string `json:"market"`
-		Language   string `json:"language"`
-		Story      string `json:"story"`
-		Maintainer string `json:"maintainer,omitempty"`
-		License    string `json:"license,omitempty"`
-	}{pf.System, pf.Format, pf.ID, pf.Version, pf.Name, pf.Market, pf.Language, pf.Story, pf.Maintainer, pf.License})
+		System     string   `json:"system,omitempty"`
+		Format     string   `json:"format"`
+		ID         string   `json:"id"`
+		Version    int      `json:"version"`
+		Name       string   `json:"name"`
+		Market     string   `json:"market"`
+		Language   string   `json:"language"`
+		Story      string   `json:"story"`
+		Maintainer string   `json:"maintainer,omitempty"`
+		License    string   `json:"license,omitempty"`
+		SetIDs     []string `json:"set_ids,omitempty"`
+	}{pf.System, pf.Format, pf.ID, pf.Version, pf.Name, pf.Market, pf.Language, pf.Story, pf.Maintainer, pf.License, setIDs})
 	if err != nil {
 		return err
 	}

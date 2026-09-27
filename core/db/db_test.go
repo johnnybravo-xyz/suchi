@@ -167,6 +167,50 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 }
 
+func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "schema-three.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 4 {
+		t.Fatalf("migration count = %d, want 4", len(migs))
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := db.Migrate(ctx, d, migs[:3], log); err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaVersion(t, d, 3)
+	if _, err := d.ExecWrite(ctx, `
+		INSERT INTO automations(id,name,order_index,enabled,created_at,updated_at,preset_slug,system_id)
+		VALUES(1,'Existing preset rule',0,0,1,1,'solo',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+	assertSchemaVersion(t, d, 4)
+	var enabled, suspended int
+	if err := d.Read.QueryRowContext(ctx, `SELECT enabled,suspended FROM automations WHERE id=1`).Scan(&enabled, &suspended); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 || suspended != 0 {
+		t.Fatalf("migrated preset rule enabled=%d suspended=%d, want operator-disabled and active", enabled, suspended)
+	}
+	if _, err := d.ExecWrite(ctx, `UPDATE automations SET suspended=1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
 func TestBeta1UpgradeToBeta2(t *testing.T) {
 	ctx := context.Background()
 	migs, err := db.LoadMigrations(migrations.FS, ".")

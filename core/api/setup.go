@@ -31,7 +31,8 @@ func (s *Server) registerArchiveConfiguration(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/users", s.ListUsers)
 	mux.HandleFunc("POST /api/admin/users", s.CreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.PatchUser)
-	mux.HandleFunc("POST /api/admin/setup/preset", s.ApplyPreset)
+	mux.HandleFunc("POST /api/admin/setup/preset/preview", s.PreviewPresetChange)
+	mux.HandleFunc("POST /api/admin/setup/preset/apply", s.ApplyPresetChange)
 	mux.HandleFunc("GET /api/admin/settings/llm", s.GetLLMSettings)
 	mux.HandleFunc("PATCH /api/admin/settings/llm", s.PatchLLMSettings)
 	mux.HandleFunc("POST /api/admin/settings/llm", s.SaveLLMSettings)
@@ -162,15 +163,34 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------- Suchi Preset ----------
+// ---------- Filing tree changes ----------
 
-// ApplyPreset swaps the JD tree to one of the curated presets. Body:
-// {"preset_id":"solo","confirm_blank":false}. Refuses blank without
-// confirm_blank=true.
-//
-// A Suchi Preset is a preset following Suchi's Johnny.Decimal taxonomy —
-// the starter tree plus its seeded automations.
-func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
+type presetChangeBody struct {
+	PresetID          string       `json:"preset_id"`
+	SetIDs            []string     `json:"set_ids"`
+	Replacements      map[int]bool `json:"replacements"`
+	Remaps            map[int]int  `json:"remaps"`
+	ConfirmBlank      bool         `json:"confirm_blank"`
+	Refile            bool         `json:"refile"`
+	IncludeSeeds      *bool        `json:"include_seeds,omitempty"`
+	ExpectedStateHash string       `json:"expected_state_hash"`
+}
+
+type refileResult struct {
+	DocumentsScanned int64  `json:"documents_scanned"`
+	RulesApplied     int64  `json:"rules_applied"`
+	RendersQueued    int64  `json:"renders_queued"`
+	Errors           int64  `json:"errors"`
+	Elapsed          string `json:"elapsed"`
+}
+
+type presetChangeResponse struct {
+	*jd.PresetChange
+	Refile      *refileResult `json:"refile,omitempty"`
+	RefileError string        `json:"refile_error,omitempty"`
+}
+
+func (s *Server) PreviewPresetChange(w http.ResponseWriter, r *http.Request) {
 	principal := s.requireAdmin(w, r)
 	if principal == nil {
 		return
@@ -179,69 +199,82 @@ func (s *Server) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// IncludeSeeds is a pointer so we can distinguish "field omitted"
-	// (default true — the filing-tree form's on-by-default toggle state) from
-	// "explicitly false" (operator opted out of starter automations).
-	var body struct {
-		PresetID     string `json:"preset_id"`
-		ConfirmBlank bool   `json:"confirm_blank"`
-		// Refile runs the existing explicit sweep after a successful additive
-		// import. It does not authorize replacing or discarding the old tree.
-		Refile       bool  `json:"refile"`
-		IncludeSeeds *bool `json:"include_seeds,omitempty"`
-	}
+	var body presetChangeBody
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	p, ok := jd.PresetByID(body.PresetID)
+	change, err := jd.PreviewPresetChange(r.Context(), s.DB, body.request(systemID, principal.UserID))
+	if err != nil {
+		s.writePresetChangeError(w, "preset.preview", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, presetChangeResponse{PresetChange: change})
+}
+
+func (s *Server) ApplyPresetChange(w http.ResponseWriter, r *http.Request) {
+	principal := s.requireAdmin(w, r)
+	if principal == nil {
+		return
+	}
+	systemID, ok := s.requireSystem(w, r, principal)
 	if !ok {
-		s.writeError(w, http.StatusBadRequest, "unknown_preset",
-			`preset_id must be one of: solo, household, smb_billing, freelance, blank`)
 		return
 	}
-	if p.Blank && !body.ConfirmBlank {
-		s.writeError(w, http.StatusBadRequest, "blank_needs_confirm",
-			"blank preset requires confirm_blank=true; it's harder to migrate away from")
+	var body presetChangeBody
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	opts := jd.ApplyPresetOpts{
-		SystemID:  systemID,
-		ActorID:   principal.UserID,
-		SkipSeeds: body.IncludeSeeds != nil && !*body.IncludeSeeds,
-	}
-	if err := jd.ApplyPreset(r.Context(), s.DB, s.Log, body.PresetID, opts); err != nil {
-		var collisions *importer.UnresolvedCollisionsError
-		if errors.As(err, &collisions) {
-			s.writeJSON(w, http.StatusConflict, map[string]any{
-				"code": "collisions", "error": err.Error(), "collisions": collisions.Items,
-			})
-			return
-		}
-		if errors.Is(err, importer.ErrStalePreview) {
-			s.writeError(w, http.StatusConflict, "stale_preview", err.Error())
-			return
-		}
-		s.serverErr(w, "preset.apply", err)
+	if body.ExpectedStateHash == "" {
+		s.writeError(w, http.StatusBadRequest, "preview_required", "preview the filing-tree change before applying it")
 		return
 	}
+	change, err := jd.ApplyPresetChange(r.Context(), s.DB, s.Log, body.request(systemID, principal.UserID))
+	if err != nil {
+		s.writePresetChangeError(w, "preset.apply", err)
+		return
+	}
+	response := presetChangeResponse{PresetChange: change}
 	if body.Refile {
-		// Kick off the sweep synchronously so operators see the counters
-		// in the response. Long-running installs can hit the dedicated
-		// /api/admin/refile endpoint instead for the background flavor.
-		stats, err := refile.All(r.Context(), s.DB, s.Actions, s.Log, refile.Options{SystemID: systemID, ActorID: principal.UserID})
-		if err != nil {
-			s.Log.Warn("preset.refile.err", "err", err.Error())
+		stats, refileErr := refile.All(r.Context(), s.DB, s.Actions, s.Log, refile.Options{SystemID: systemID, ActorID: principal.UserID})
+		response.Refile = &refileResult{
+			DocumentsScanned: stats.DocsScanned, RulesApplied: stats.AutomationsApplied,
+			RendersQueued: stats.RenderEnqueued, Errors: stats.Errors, Elapsed: stats.Elapsed.String(),
 		}
-		if s.Jobs != nil {
-			s.Jobs.Nudge()
+		if refileErr != nil {
+			response.RefileError = refileErr.Error()
+			s.Log.Warn("preset.refile.err", "err", refileErr.Error())
 		}
-		_ = stats // captured in the log; response stays minimal for now
 	}
 	if s.Jobs != nil {
 		s.Jobs.Nudge()
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"preset_id": body.PresetID, "index_refresh_pending": true})
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (body presetChangeBody) request(systemID, actorID int64) jd.PresetChangeRequest {
+	return jd.PresetChangeRequest{
+		PresetID: body.PresetID, SetIDs: body.SetIDs, Replacements: body.Replacements, Remaps: body.Remaps,
+		SkipSeeds: body.IncludeSeeds != nil && !*body.IncludeSeeds, ConfirmBlank: body.ConfirmBlank,
+		ExpectedStateHash: body.ExpectedStateHash, SystemID: systemID, ActorID: actorID,
+	}
+}
+
+func (s *Server) writePresetChangeError(w http.ResponseWriter, operation string, err error) {
+	var collisions *importer.UnresolvedCollisionsError
+	switch {
+	case errors.As(err, &collisions):
+		s.writeJSON(w, http.StatusConflict, map[string]any{
+			"code": "collisions", "error": err.Error(), "collisions": collisions.Items,
+		})
+	case errors.Is(err, importer.ErrStalePreview):
+		s.writeError(w, http.StatusConflict, "stale_preview", err.Error())
+	case errors.Is(err, jd.ErrBlankPresetConfirmation):
+		s.writeError(w, http.StatusBadRequest, "blank_needs_confirm", err.Error())
+	default:
+		s.writeError(w, http.StatusBadRequest, "invalid_filing_tree", err.Error())
+	}
 }
 
 // ---------- LLM settings ----------

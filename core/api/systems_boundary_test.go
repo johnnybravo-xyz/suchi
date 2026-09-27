@@ -164,8 +164,19 @@ func TestSystemsBuiltinPresetAppliesOnlyToSelectedSystem(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	w := systemsBoundaryRequest(mux, "POST", "/api/admin/setup/preset?system=S02",
-		`{"preset_id":"household","include_seeds":false,"refile":true}`, adminPrincipal(1))
+	preview := systemsBoundaryRequest(mux, "POST", "/api/admin/setup/preset/preview?system=S02",
+		`{"preset_id":"household","include_seeds":false}`, adminPrincipal(1))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preset preview: %d %s", preview.Code, preview.Body.String())
+	}
+	var change struct {
+		StateHash string `json:"state_hash"`
+	}
+	if err := json.Unmarshal(preview.Body.Bytes(), &change); err != nil || change.StateHash == "" {
+		t.Fatalf("preset preview response: %v %s", err, preview.Body.String())
+	}
+	w := systemsBoundaryRequest(mux, "POST", "/api/admin/setup/preset/apply?system=S02",
+		`{"preset_id":"household","include_seeds":false,"refile":true,"expected_state_hash":"`+change.StateHash+`"}`, adminPrincipal(1))
 	if w.Code != http.StatusOK {
 		t.Fatalf("preset apply: %d %s", w.Code, w.Body.String())
 	}

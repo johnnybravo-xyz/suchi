@@ -149,9 +149,10 @@ func Delete(ctx context.Context, database *db.DB, key string) error {
 // SetupState is the minimal state needed by archive setup reminders and the
 // filing-tree configuration surface.
 type SetupState struct {
-	StartedAt        *int64 `json:"started_at,omitempty"` // first admin creation
-	CurrentPreset    string `json:"current_preset,omitempty"`
-	FilingTreeChosen bool   `json:"filing_tree_chosen"`
+	StartedAt        *int64   `json:"started_at,omitempty"` // first admin creation
+	CurrentPreset    string   `json:"current_preset,omitempty"`
+	CurrentSetIDs    []string `json:"current_set_ids,omitempty"`
+	FilingTreeChosen bool     `json:"filing_tree_chosen"`
 }
 
 // LoadSetupState reads global onboarding progress and the selected system's tree.
@@ -166,8 +167,18 @@ func LoadSetupState(ctx context.Context, database *db.DB, systemID int64) (*Setu
 		value := startedAt.Int64
 		s.StartedAt = &value
 	}
-	if err := database.Read.QueryRowContext(ctx, `SELECT COALESCE(preset_id, '') FROM jd_systems WHERE id = ?`, systemID).Scan(&s.CurrentPreset); err != nil {
+	var authoringJSON string
+	if err := database.Read.QueryRowContext(ctx, `SELECT COALESCE(preset_id, ''),COALESCE(authoring_json, '') FROM jd_systems WHERE id = ?`, systemID).
+		Scan(&s.CurrentPreset, &authoringJSON); err != nil {
 		return nil, err
+	}
+	var authoring struct {
+		SetIDs []string `json:"set_ids"`
+	}
+	if json.Unmarshal([]byte(authoringJSON), &authoring) == nil && authoring.SetIDs != nil {
+		s.CurrentSetIDs = authoring.SetIDs
+	} else {
+		s.CurrentSetIDs = []string{}
 	}
 	chosen, err := FilingTreeChosen(ctx, database, systemID)
 	if err != nil {

@@ -76,6 +76,7 @@ type Automation struct {
 	Name       string    `json:"name"`
 	OrderIndex int       `json:"order"`
 	Enabled    bool      `json:"enabled"`
+	Suspended  bool      `json:"suspended,omitempty"`
 	PresetSlug string    `json:"preset_slug,omitempty"`
 	Triggers   []Trigger `json:"triggers"`
 	Actions    []Action  `json:"actions"`

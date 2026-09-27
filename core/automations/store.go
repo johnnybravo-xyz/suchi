@@ -41,7 +41,7 @@ func (s *Store) List(ctx context.Context, systemID int64) ([]Automation, error) 
 // ListTx reads rules and their children from the caller's consistent snapshot.
 func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, name, order_index, enabled, COALESCE(preset_slug, ''),
+		SELECT id, name, order_index, enabled, suspended, COALESCE(preset_slug, ''),
 		       created_at, updated_at
 		FROM automations WHERE system_id = ?
 		ORDER BY order_index, id
@@ -54,13 +54,14 @@ func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, erro
 	var out []Automation
 	for rows.Next() {
 		var a Automation
-		var enabled int
-		if err := rows.Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled,
+		var enabled, suspended int
+		if err := rows.Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled, &suspended,
 			&a.PresetSlug,
 			&a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Enabled = enabled == 1
+		a.Suspended = suspended == 1
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -88,18 +89,19 @@ func ListTx(ctx context.Context, tx *sql.Tx, systemID int64) ([]Automation, erro
 // Get returns one automation by ID or sql.ErrNoRows.
 func (s *Store) Get(ctx context.Context, systemID, id int64) (*Automation, error) {
 	var a Automation
-	var enabled int
+	var enabled, suspended int
 	err := s.DB.Read.QueryRowContext(ctx, `
-		SELECT id, name, order_index, enabled, COALESCE(preset_slug, ''),
+		SELECT id, name, order_index, enabled, suspended, COALESCE(preset_slug, ''),
 		       created_at, updated_at
 		FROM automations WHERE system_id = ? AND id = ?
-	`, systemID, id).Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled,
+	`, systemID, id).Scan(&a.ID, &a.Name, &a.OrderIndex, &enabled, &suspended,
 		&a.PresetSlug,
 		&a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	a.Enabled = enabled == 1
+	a.Suspended = suspended == 1
 	if a.Triggers, err = listTriggers(ctx, s.DB.Read, id); err != nil {
 		return nil, err
 	}
@@ -492,14 +494,14 @@ func (s *Store) DeleteInTx(ctx context.Context, tx *sql.Tx, systemID, id int64) 
 	return nil
 }
 
-// ByTrigger returns enabled automations whose triggers include the given
+// ByTrigger returns enabled, active automations whose triggers include the given
 // type, ordered for evaluation. Used by the postingest hook.
 func (s *Store) ByTrigger(ctx context.Context, systemID int64, t TriggerType) ([]Automation, error) {
 	rows, err := s.DB.Read.QueryContext(ctx, `
 		SELECT DISTINCT a.id
 		FROM automations a
 		JOIN automation_triggers t ON t.automation_id = a.id
-		WHERE a.system_id = ? AND a.enabled = 1 AND t.type = ?
+		WHERE a.system_id = ? AND a.enabled = 1 AND a.suspended = 0 AND t.type = ?
 		ORDER BY a.order_index, a.id
 	`, systemID, string(t))
 	if err != nil {

@@ -39,27 +39,25 @@ in the same pull request. Write for operators and call out required migration
 steps directly.
 
 A release normally adds at most one numbered database migration; never rewrite a
-published migration. The current release target is **beta.3**, the final beta
-before stable v1.0. Beta.2 at schema 0002 is its published upgrade baseline. Published
-0001/0002 remain unchanged; all unreleased mobile and taxonomy changes stay
-consolidated in `0003_taxonomy_foundation.sql`, whose rebuild marker remains its
-first line. Migration 0003 creates exactly one `schema_lineage` row named
-`final-beta-schema-3` and leaves `user_version = 3`.
+published migration. Beta.3 shipped schema 3 as the final beta before stable
+v1.0. Its migrations 0001–0003, `final-beta-schema-3` lineage value, and release
+artifacts are frozen.
 
-Before tagging beta.3, verify fresh initialization, a populated **0002 →
-0003** upgrade, restart idempotence, preserved data, atomic failed-upgrade
-rollback, and restoration of a complete backup containing SQLite, blobs,
-credential key, and configuration. Release notes must state that beta.3 and
-stable v1 both accept beta.2 archives directly and require a complete pre-upgrade
-backup. Retain the beta.3 binaries, images, checksums, release notes, and exact
-migration hashes. Once tagged, migrations 0001–0003, the lineage value, and their
-release artifacts are frozen. Stable v1 replaces the active beta catalog with one
-declarative `0001_baseline.sql` for fresh databases and starts a new migration
-epoch at `user_version = 1`. It retains the exact frozen 0003 SQL only in a guarded
-beta.2 compatibility path; beta.3 uses the guarded adoption path directly. Both
-paths verify the expected source schema and finish at the same `stable-v1` lineage
-as a fresh install. Intermediate development schemas are not supported upgrade
-inputs. See
+The current unreleased catalog adds
+`0004_preset_rule_suspension.sql`, which upgrades beta.3 archives before
+filing-tree rules query their independent suspension state and leaves
+`user_version = 4`. Before release, verify fresh initialization, populated
+**0002 → 0003 → 0004** and **0003 → 0004** upgrades, restart idempotence,
+preserved data, atomic failed-upgrade rollback, and restoration of a complete
+backup containing SQLite, blobs, credential key, and configuration.
+
+Stable v1 replaces the active pre-stable catalog with one declarative
+`0001_baseline.sql` for fresh databases and starts a new migration epoch at
+`user_version = 1`. Its guarded compatibility path applies the frozen 0003 and
+0004 migrations to beta.2/schema 2, applies 0004 to beta.3/schema 3, and adopts
+schema 4 directly. Every path verifies the expected source schema and finishes
+at the same `stable-v1` lineage as a fresh install. Intermediate development
+schemas are not supported upgrade inputs. See
 [Architecture](/architecture#storage-and-transaction-invariants) and
 [Backup and restore](/backup-restore#upgrade-and-rollback).
 
