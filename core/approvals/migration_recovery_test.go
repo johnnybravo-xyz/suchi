@@ -11,7 +11,7 @@ import (
 
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	migrations "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 

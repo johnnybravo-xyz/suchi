@@ -265,21 +265,24 @@ without OCR/classifier/filing reruns. [Backup and restore](/backup-restore) requ
 all of `DATA_DIR`, including credential keys, with writers stopped or an atomic
 whole-directory snapshot; a database-only copy is incomplete.
 
-Migrations are embedded/ordered. Published beta migrations 0001–0003 stay byte-
-identical. Migration 0003 creates the one-row
-`schema_lineage = 'final-beta-schema-3'` marker and leaves
-`user_version = 3`; unreleased `0004_preset_rule_suspension.sql` advances existing
-archives to schema 4 before filing-tree rules query their independent suspension
-state. Stable v1 starts a new migration epoch with one squashed baseline for fresh
-databases. Its guarded compatibility path accepts beta.2/schema 2 by applying
-the frozen 0003 transition and 0004 before adoption, accepts beta.3/schema 3 by
-applying 0004 before adoption, and adopts schema 4 directly. These happen within
-one v1 startup; pre-stable SQL is not part of the active stable migration list.
-Intermediate development schemas remain unsupported. Validate all versions
-before touching the database; reject duplicates/nonpositive versions with names.
-The rebuild marker selects a dedicated writer, disables foreign keys outside the
-transaction, then uses an immediate transaction for rebuilds, foreign-key validation
-and version update. Restore enforcement even on failure.
+The active catalog in `core/db/migrations/` contains one declarative
+`0001_baseline.sql`: the complete v0.1.0 schema at `user_version = 1` with the
+one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL lives separately
+under `core/db/compatibility/`; the normal catalog cannot discover it.
+
+Startup classifies the archive before writing. Empty databases receive the
+baseline. Exact canonical `sqlite_schema` fingerprints admit beta.1/schema 1,
+beta.2/schema 2, beta.3/schema 3 with `final-beta-schema-3`, and pre-stable
+schema 4. Their compatibility paths apply 0002–0004, 0003–0004, 0004, or only
+the lineage adoption respectively. Stable-v1 is idempotent. Unknown, partial,
+spoofed, and future schemas fail without mutation.
+
+Every admitted beta archive gets an exclusive mode-0600 SQLite snapshot before
+adoption. The frozen steps, stable lineage, and stable user version commit in
+one immediate transaction through the sole writer. Integrity, foreign keys, and
+the final schema fingerprint must all pass; failures roll back and restore
+foreign-key enforcement while retaining the snapshot. Extension objects created
+after `_suchi_extension_migrations` are outside the core fingerprint.
 
 Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
 `PRAGMA user_version`. Each component supplies its complete ordered history from

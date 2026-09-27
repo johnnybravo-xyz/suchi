@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	migrations "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 )
 
 func TestTaxonomyMigrationBindsExistingApprovalWork(t *testing.T) {

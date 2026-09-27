@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	compatibility "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 )
@@ -58,7 +59,7 @@ func TestAutomaticPolicyMigrationPreservesExplicitOptOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	migs, err := db.LoadMigrations(migrations.FS, ".")
+	migs, err := db.LoadMigrations(compatibility.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}

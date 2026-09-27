@@ -141,12 +141,7 @@ func runTaxonomyImport(args []string) int {
 		return 1
 	}
 	defer d.Close()
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "migrations: %v\n", err)
-		return 1
-	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}
@@ -299,8 +294,7 @@ func runTaxonomyMerge(args []string) int {
 	}
 	defer d.Close()
 
-	migs, _ := db.LoadMigrations(migrations.FS, ".")
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		log.Error("taxonomy.migrate", "err", err.Error())
 		return 1
 	}

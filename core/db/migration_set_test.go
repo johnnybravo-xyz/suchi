@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 	"github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
 
@@ -172,19 +173,22 @@ func TestMigrationSetCannotChangeCoreSchemaVersion(t *testing.T) {
 
 func TestPublishedCoreOnlyDatabaseUpgradesWithMigrationSet(t *testing.T) {
 	d, log := openSetDB(t)
-	core, err := db.LoadMigrations(migrations.FS, ".")
+	beta, err := db.LoadMigrations(compatibility.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrate(t.Context(), d, core[:2], log); err != nil {
+	if err := db.Migrate(t.Context(), d, beta[:2], log); err != nil {
 		t.Fatal(err)
 	}
 	assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE name='_suchi_extension_migrations'`, 0)
-	if err := db.Migrate(t.Context(), d, core, log); err != nil {
+	if err := migrations.Prepare(t.Context(), d, log); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.MigrateSet(t.Context(), d, db.MigrationSet{Component: "example", Migrations: []db.Migration{{Version: 1, SQL: `CREATE TABLE example(system_id INTEGER REFERENCES jd_systems(id))`}}}, log); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, core[len(core)-1].Version)
+	if err := migrations.Prepare(t.Context(), d, log); err != nil {
+		t.Fatalf("stable schema with extension objects: %v", err)
+	}
+	assertSchemaVersion(t, d, db.StableSchemaVersion)
 }

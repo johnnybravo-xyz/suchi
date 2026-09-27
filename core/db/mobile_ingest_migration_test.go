@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	migrations "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 )
 
 func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
@@ -31,7 +31,7 @@ func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
 	}
 	// SHA-256 of exact files shipped in tag v0.1.0-beta.2.
 	for filename, want := range map[string]string{
-		"0001_baseline.sql":              "ab11d9ea4287c40853dd6a8f02bca12220c591606916776f14dff4bfddc217c4",
+		"0001_beta_baseline.sql":         "ab11d9ea4287c40853dd6a8f02bca12220c591606916776f14dff4bfddc217c4",
 		"0002_document_intelligence.sql": "4d36e4afe006bd7792bd335280349e8e09bbb6727ee6c46a02eb293db28e8277",
 	} {
 		data, err := migrations.FS.ReadFile(filename)

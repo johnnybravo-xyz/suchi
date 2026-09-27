@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	migrations "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 )
 
 func TestListEventsPreservesBeta2SkippedIntakeHistory(t *testing.T) {

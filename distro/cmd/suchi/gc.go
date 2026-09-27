@@ -51,12 +51,7 @@ func runGC(args []string) int {
 	}
 	defer d.Close()
 
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		log.Error("gc.migrations.load", "err", err.Error())
-		return 1
-	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		log.Error("gc.migrate", "err", err.Error())
 		return 1
 	}

@@ -39,26 +39,24 @@ in the same pull request. Write for operators and call out required migration
 steps directly.
 
 A release normally adds at most one numbered database migration; never rewrite a
-published migration. Beta.3 shipped schema 3 as the final beta before stable
-v1.0. Its migrations 0001–0003, `final-beta-schema-3` lineage value, and release
-artifacts are frozen.
+published migration. The signed beta.1–beta.3 SQL, tags, and release artifacts
+remain byte-identical. Stable v0.1.0 moves that SQL into the separately embedded
+compatibility package instead of rewriting history.
 
-The current unreleased catalog adds
-`0004_preset_rule_suspension.sql`, which upgrades beta.3 archives before
-filing-tree rules query their independent suspension state and leaves
-`user_version = 4`. Before release, verify fresh initialization, populated
-**0002 → 0003 → 0004** and **0003 → 0004** upgrades, restart idempotence,
-preserved data, atomic failed-upgrade rollback, and restoration of a complete
-backup containing SQLite, blobs, credential key, and configuration.
+The active v0.1.0 catalog contains only the declarative `0001_baseline.sql` and
+starts the stable schema epoch at `user_version = 1` with lineage `stable-v1`.
+The guarded compatibility path accepts only canonical fingerprints: beta.1
+applies frozen 0002–0004, beta.2 applies 0003–0004, beta.3 applies 0004, and
+schema 4 adopts the stable lineage directly. Every admitted beta database gets a
+mode-0600 pre-adoption snapshot and finishes at the same schema fingerprint as a
+fresh database. Intermediate, partial, spoofed, and future schemas are rejected
+before writes.
 
-Stable v1 replaces the active pre-stable catalog with one declarative
-`0001_baseline.sql` for fresh databases and starts a new migration epoch at
-`user_version = 1`. Its guarded compatibility path applies the frozen 0003 and
-0004 migrations to beta.2/schema 2, applies 0004 to beta.3/schema 3, and adopts
-schema 4 directly. Every path verifies the expected source schema and finishes
-at the same `stable-v1` lineage as a fresh install. Intermediate development
-schemas are not supported upgrade inputs. See
-[Architecture](/architecture#storage-and-transaction-invariants) and
+Before release, verify fresh initialization and restart, every signed beta path,
+schema-4 adoption, data preservation, snapshot failure, atomic rollback,
+foreign-key restoration, and final manifest equality. Keep the complete
+operator backup containing SQLite, blobs, credential key, and configuration.
+See [Architecture](/architecture#storage-and-transaction-invariants) and
 [Backup and restore](/backup-restore#upgrade-and-rollback).
 
 Suchi follows SemVer:

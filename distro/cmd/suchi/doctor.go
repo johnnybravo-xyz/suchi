@@ -37,7 +37,6 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/blob"
 	"github.com/johnnybravo-xyz/suchi/core/config"
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/gc"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
@@ -139,12 +138,7 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "  ✗ read user_version: %v\n", err)
 		return 1
 	}
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ✗ load migrations: %v\n", err)
-		return 1
-	}
-	target := migs[len(migs)-1].Version
+	target := db.StableSchemaVersion
 	if current == target {
 		fmt.Printf("  ✓ at version %d\n", current)
 	} else if current > target {

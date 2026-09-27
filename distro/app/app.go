@@ -120,13 +120,8 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer func() { cancel(); _ = d.Close() }()
 
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		log.Error("main.migrations.load", "err", err.Error())
-		return fmt.Errorf("main.migrations.load: %w", err)
-	}
-	targetSchemaVersion := migs[len(migs)-1].Version
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	targetSchemaVersion := db.StableSchemaVersion
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		log.Error("main.migrate", "err", err.Error())
 		return fmt.Errorf("main.migrate: %w", err)
 	}

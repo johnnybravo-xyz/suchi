@@ -141,12 +141,7 @@ func runExport(args []string) int {
 		return 1
 	}
 	defer d.Close()
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		log.Error("export.migrations", "err", err.Error())
-		return 1
-	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		log.Error("export.migrate", "err", err.Error())
 		return 1
 	}

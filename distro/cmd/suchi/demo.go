@@ -90,12 +90,7 @@ func runDemo(args []string) int {
 	}
 	defer func() { _ = d.Close() }()
 
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load migrations: %v\n", err)
-		return 1
-	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
 		return 1
 	}

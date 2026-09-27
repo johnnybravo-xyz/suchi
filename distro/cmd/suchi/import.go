@@ -91,12 +91,7 @@ func runImport(args []string) int {
 	}
 	defer d.Close()
 
-	migs, err := db.LoadMigrations(migrations.FS, ".")
-	if err != nil {
-		log.Error("import.migrations.load", "err", err.Error())
-		return 1
-	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := migrations.Prepare(ctx, d, log); err != nil {
 		log.Error("import.migrate", "err", err.Error())
 		return 1
 	}

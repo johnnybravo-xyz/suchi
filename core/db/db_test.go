@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	compatibility "github.com/johnnybravo-xyz/suchi/core/db/compatibility"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 )
 
@@ -174,7 +175,7 @@ func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	migs, err := db.LoadMigrations(migrations.FS, ".")
+	migs, err := db.LoadMigrations(compatibility.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,7 @@ func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
 
 func TestBeta1UpgradeToBeta2(t *testing.T) {
 	ctx := context.Background()
-	migs, err := db.LoadMigrations(migrations.FS, ".")
+	migs, err := db.LoadMigrations(compatibility.FS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}

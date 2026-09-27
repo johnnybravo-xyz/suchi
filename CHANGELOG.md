@@ -16,6 +16,13 @@ Notable user-visible changes to Suchi are recorded here.
   Banking and broad “records” catch-alls. Purpose-specific names distinguish
   Collections & aging, Briefs & plans, Approvals & sign-off, and Medical billing.
 
+### Changed
+
+- Start the stable database epoch from one declarative schema-1 baseline.
+  Canonical fingerprints admit beta.1, beta.2, beta.3, and pre-stable schema 4;
+  each beta archive is snapshotted mode 0600 and adopted atomically, while
+  unknown or partial schemas fail before mutation.
+
 ### Fixed
 
 - Bring a completed filing-tree review into view with focus and a brief visual
