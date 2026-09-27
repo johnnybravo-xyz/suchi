@@ -284,7 +284,8 @@ bench_stop_sampler() {
 # recent results/*/ if neither is set), compares each against
 # hack/bench/thresholds.json, prints a one-line-per-metric table, and
 # returns 0 if all metrics are at-or-below `hard` (warnings are non-fatal),
-# 2 if any metric exceeds `hard`. Missing scenario data is SKIPped.
+# 2 if any metric exceeds `hard` or the required Linux RSS measurement is
+# missing. Other missing scenario data is SKIPped.
 # ---------------------------------------------------------------------------
 bench_check_thresholds() {
     local results_dir="${1:-${RESULTS_DIR:-}}"
@@ -363,6 +364,12 @@ bench_check_thresholds() {
         band_fmt="$(printf '[target=%s soft=%s hard=%s]' "$target" "$soft" "$hard")"
 
         if [ -z "$val" ]; then
+            if [ "$key" = "idle_rss_mb_median" ]; then
+                printf "  %-22s %-${width}s %-32s ${red}FAIL (required)${reset}\n" \
+                    "$key:" "-" "$band_fmt"
+                overall_rc=2
+                return 0
+            fi
             printf "  %-22s %-${width}s %-32s ${yellow}SKIP${reset}\n" \
                 "$key:" "-" "$band_fmt"
             return 0

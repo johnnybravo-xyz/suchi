@@ -50,6 +50,10 @@ while [ $# -gt 0 ]; do
         *) echo "bench.sh: unknown flag: $1" >&2; print_help >&2; exit 2 ;;
     esac
 done
+if [ "$CHECK_THRESHOLDS" = "1" ] && [ "$(uname -s)" != "Linux" ]; then
+    echo "bench.sh: threshold checks require Linux /proc RSS measurements" >&2
+    exit 2
+fi
 
 export BENCH_KEEP="$KEEP"
 

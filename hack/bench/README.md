@@ -85,5 +85,7 @@ go tool pprof -http=:0 hack/bench/results/<timestamp>/07-heap-idle.pprof
   changes to PDF normalization, OCR, blank-page analysis, or splitting.
 
 The harness reads Linux `/proc`, so its memory and process measurements are not
-portable to macOS or Windows. Each scenario owns a temporary directory and
-process, and teardown verifies the temporary path before removal.
+portable to macOS or Windows. Threshold mode rejects non-Linux hosts and fails
+when the required idle RSS measurement is missing rather than reporting a skip.
+Each scenario owns a temporary directory and process, and teardown verifies the
+temporary path before removal.

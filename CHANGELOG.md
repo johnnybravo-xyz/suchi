@@ -50,6 +50,8 @@ Notable user-visible changes to Suchi are recorded here.
   downloads without bypassing their authorization checks.
 - Make the restore and AnyDoc ingestion drills run on macOS as well as Linux
   by using the system temporary directory and portable shell utilities.
+- Make benchmark threshold mode Linux-only and fail when its required idle RSS
+  measurement is missing instead of silently skipping the guardrail.
 
 ### Security
 
