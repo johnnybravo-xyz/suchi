@@ -42,6 +42,13 @@ Notable user-visible changes to Suchi are recorded here.
   the existing approval sweep, so obsolete suggestions leave the review queue.
 - Remove repetitive review guidance and score disclaimers from approval cards.
 
+### Security
+
+- Give every built-in SQLite snapshot an exclusive mode-0600 filename and a
+  manifest SHA-256. Guarded restore requires manifest membership, rejects
+  traversal and corruption, fsyncs a temporary copy, atomically replaces the
+  database, and removes stale WAL sidecars.
+
 ## [0.1.0-beta.3] - 2026-09-24
 
 ### Added

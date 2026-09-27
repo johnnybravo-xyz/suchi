@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,14 +51,22 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 
-	entries, err := os.ReadDir(filepath.Join(dataDir, "backups"))
+	manifest, err := readManifest(filepath.Join(dataDir, "backups"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 backup file, got %d", len(entries))
+	if len(manifest.Backups) != 1 {
+		t.Fatalf("manifest backups = %d, want 1", len(manifest.Backups))
 	}
-	backup := filepath.Join(dataDir, "backups", entries[0].Name())
+	entry := manifest.Backups[0]
+	backup := filepath.Join(dataDir, "backups", entry.ID)
+	digest, size, err := digestFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != entry.SHA256 || size != entry.Bytes {
+		t.Fatalf("manifest metadata = (%s,%d), file = (%s,%d)", entry.SHA256, entry.Bytes, digest, size)
+	}
 
 	// Backup must open as a valid SQLite database — this is the
 	// entire point of VACUUM INTO. Reject anything else as
@@ -76,6 +85,105 @@ func TestSnapshot(t *testing.T) {
 	}
 	if version != currentVersion || version == 0 {
 		t.Fatalf("snapshot schema version=%d, live=%d", version, currentVersion)
+	}
+}
+
+func TestSnapshotNamesAndRestoreAreGuarded(t *testing.T) {
+	d := newDB(t)
+	dataDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for range 2 {
+		if err := Snapshot(t.Context(), Config{DataDir: dataDir}, d, log); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, err := readManifest(backupDir(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Backups) != 2 || manifest.Backups[0].ID == manifest.Backups[1].ID {
+		t.Fatalf("backup ids are not exclusive: %+v", manifest.Backups)
+	}
+	for _, entry := range manifest.Backups {
+		info, err := os.Stat(filepath.Join(backupDir(dataDir), entry.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("backup %s mode=%o, want 600", entry.ID, info.Mode().Perm())
+		}
+	}
+	id := manifest.Backups[0].ID
+	if err := Restore(t.Context(), dataDir, "../suchi.db"); err == nil || !strings.Contains(err.Error(), "invalid backup id") {
+		t.Fatalf("path traversal error = %v", err)
+	}
+	if err := Restore(t.Context(), dataDir, "suchi-unlisted.db"); err == nil || !strings.Contains(err.Error(), "not listed") {
+		t.Fatalf("manifest membership error = %v", err)
+	}
+
+	target := filepath.Join(dataDir, "suchi.db")
+	if err := os.WriteFile(target, []byte("old database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.WriteFile(target+suffix, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Restore(t.Context(), dataDir, id); err != nil {
+		t.Fatal(err)
+	}
+	digest, size, err := digestFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != manifest.Backups[0].SHA256 || size != manifest.Backups[0].Bytes {
+		t.Fatalf("restored digest=(%s,%d), want (%s,%d)", digest, size, manifest.Backups[0].SHA256, manifest.Backups[0].Bytes)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(target + suffix); !os.IsNotExist(err) {
+			t.Fatalf("stale sidecar %s survived: %v", suffix, err)
+		}
+	}
+	verify, err := sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := verify.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if version != db.StableSchemaVersion {
+		t.Fatalf("restored user_version=%d, want %d", version, db.StableSchemaVersion)
+	}
+
+	before, _, err := digestFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(backupDir(dataDir), id)
+	file, err := os.OpenFile(backupPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("tampered"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(t.Context(), dataDir, id); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("tampered restore error = %v", err)
+	}
+	after, _, err := digestFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatal("failed restore changed live database")
 	}
 }
 
@@ -132,16 +240,12 @@ func TestSnapshotRetention(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := listSnapshots(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 2 {
-		names := []string{}
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Fatalf("expected 2 backups after Keep=2 prune, got %d: %v", len(entries), names)
+		t.Fatalf("expected 2 backups after Keep=2 prune, got %d: %v", len(entries), entries)
 	}
 }
 

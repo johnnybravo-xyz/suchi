@@ -50,18 +50,27 @@ back up its deployment directory separately when that path is used.
 ## Built-in database snapshots
 
 Every `BACKUP_INTERVAL` (default `24h`), Suchi creates a consistent SQLite
-snapshot at:
+snapshot and records it in:
 
 ```text
-$DATA_DIR/backups/suchi-<UTC timestamp>.db
+$DATA_DIR/backups/
+  manifest.json
+  suchi-<UTC timestamp>-<random suffix>.db
 ```
 
-It retains the newest `BACKUP_KEEP` snapshots, defaulting to seven.
+The directory is mode 0700 and each snapshot is mode 0600. Exclusive random
+names prevent a second snapshot in the same clock tick from replacing the first.
+`manifest.json` records each snapshot ID, byte count, creation time and SHA-256;
+retention updates that manifest before deleting old files. The digest detects
+accidental corruption but is not a signature: protect the manifest and snapshots
+together.
+
+Suchi retains the newest `BACKUP_KEEP` snapshots, defaulting to seven.
 `BACKUP_INTERVAL=0` disables the loop. These snapshots include only the
-database. A complete backup also needs document files, the credential key,
-and configuration. Offline GC consults the live database,
-not these older snapshots, so it can reclaim bytes that an older snapshot
-still references. Keep a complete backup for disaster recovery.
+database. A complete backup also needs document files, the credential key, and
+configuration. Offline GC consults the live database, not these older snapshots,
+so it can reclaim bytes that an older snapshot still references. Keep a complete
+backup for disaster recovery.
 
 ## Backup methods
 
@@ -107,6 +116,13 @@ chown -R suchi:suchi /var/lib/suchi
 chmod 600 /var/lib/suchi/.decrypt-key
 systemctl start suchi
 ```
+
+Built-in snapshot restore accepts only a manifest-listed snapshot ID. It rejects
+path traversal and non-regular files, verifies the recorded SHA-256 and size,
+copies to a mode-0600 temporary file in `DATA_DIR`, fsyncs it, removes stale
+`suchi.db-wal` and `suchi.db-shm`, then atomically renames it to `suchi.db`.
+Every archive writer must still be stopped. A database-only restore does not
+restore blobs, the credential key, or configuration.
 
 If `rendered/` was omitted or the data directory moved, queue link rebuilding
 with `suchi refile --skip-automations`; add `--system S01` for each additional

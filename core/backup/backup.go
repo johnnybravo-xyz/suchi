@@ -10,8 +10,13 @@ package backup
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -135,52 +140,46 @@ func stopTimer(timer *time.Timer) {
 	}
 }
 
-// Snapshot runs one VACUUM INTO into DataDir/backups/suchi-<ts>.db,
-// audit-logs the result, and prunes older snapshots per Keep. Exported
-// so `suchi backup` (a future CLI) and `suchi doctor` can call it too;
-// safe to invoke while the server is running (VACUUM INTO takes a
-// read snapshot).
+// Snapshot writes one immutable SQLite snapshot, records its SHA-256 digest in
+// the backup manifest, and prunes older snapshots per Keep.
 func Snapshot(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger) error {
-	if err := os.MkdirAll(backupDir(cfg.DataDir), 0o700); err != nil {
+	dir := backupDir(cfg.DataDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir backups: %w", err)
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("secure backups: %w", err)
+	}
 
-	// Timestamped path — UTC + seconds resolution. Nothing else in the
-	// tree collides at that granularity.
-	stamp := time.Now().UTC().Format("20060102T150405Z")
-	target := filepath.Join(backupDir(cfg.DataDir), "suchi-"+stamp+".db")
-
-	// VACUUM INTO takes the read snapshot from the Read pool so the
-	// single-writer conn stays available for real work while a large
-	// vacuum streams to disk. modernc/sqlite exposes VACUUM INTO via
-	// the standard Exec path.
 	start := time.Now()
-	if _, err := database.Read.ExecContext(ctx, `VACUUM INTO ?`, target); err != nil {
-		// Clean up a half-written target — VACUUM INTO leaves nothing
-		// on error per SQLite's docs, but the file may or may not
-		// exist depending on where the failure hit. Best-effort.
-		_ = os.Remove(target)
-		return fmt.Errorf("vacuum: %w", err)
+	entry, target, err := createBackupFile(ctx, dir, database)
+	if err != nil {
+		return err
 	}
 	elapsed := time.Since(start)
-
-	// Report the size for logs + audit.
-	fi, err := os.Stat(target)
-	if err != nil {
-		return fmt.Errorf("stat backup: %w", err)
+	manifest, err := readManifest(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(target)
+		return fmt.Errorf("read backup manifest: %w", err)
+	}
+	manifest.Version = 1
+	manifest.Backups = append(manifest.Backups, entry)
+	if err := writeManifest(dir, manifest); err != nil {
+		_ = os.Remove(target)
+		return fmt.Errorf("write backup manifest: %w", err)
 	}
 
 	log.Info("backup.written",
-		"path", target, "bytes", fi.Size(), "elapsed", elapsed)
+		"path", target, "bytes", entry.Bytes, "sha256", entry.SHA256, "elapsed", elapsed)
 	audit.Log(ctx, database, log, audit.Event{
 		Action: "backup.written", ObjectKind: "server",
 		After: map[string]any{
-			"path": target, "bytes": fi.Size(), "elapsed_ms": elapsed.Milliseconds(),
+			"path": target, "bytes": entry.Bytes, "sha256": entry.SHA256,
+			"elapsed_ms": elapsed.Milliseconds(),
 		},
 		RequestID: logx.RequestID(ctx),
 	})
 
-	// Retention: prune everything but the latest Keep files.
 	if cfg.Keep > 0 {
 		if pruned, err := pruneOld(cfg.DataDir, cfg.Keep); err != nil {
 			log.Warn("backup.prune.err", "err", err.Error())
@@ -189,6 +188,272 @@ func Snapshot(ctx context.Context, cfg Config, database *db.DB, log *slog.Logger
 		}
 	}
 	return nil
+}
+
+const manifestName = "manifest.json"
+
+type backupManifest struct {
+	Version int           `json:"version"`
+	Backups []backupEntry `json:"backups"`
+}
+
+type backupEntry struct {
+	ID        string `json:"id"`
+	SHA256    string `json:"sha256"`
+	Bytes     int64  `json:"bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+func createBackupFile(ctx context.Context, dir string, database *db.DB) (backupEntry, string, error) {
+	privateDir, err := os.MkdirTemp(dir, ".snapshot-")
+	if err != nil {
+		return backupEntry{}, "", err
+	}
+	defer os.RemoveAll(privateDir)
+	if err := os.Chmod(privateDir, 0o700); err != nil {
+		return backupEntry{}, "", err
+	}
+	temporary := filepath.Join(privateDir, "snapshot.db")
+	if _, err := database.Read.ExecContext(ctx, `VACUUM INTO ?`, temporary); err != nil {
+		return backupEntry{}, "", fmt.Errorf("vacuum: %w", err)
+	}
+	if err := os.Chmod(temporary, 0o600); err != nil {
+		return backupEntry{}, "", err
+	}
+	digest, size, err := digestFile(temporary)
+	if err != nil {
+		return backupEntry{}, "", err
+	}
+
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	for range 8 {
+		suffix := make([]byte, 8)
+		if _, err := rand.Read(suffix); err != nil {
+			return backupEntry{}, "", err
+		}
+		id := fmt.Sprintf("suchi-%s-%s.db", stamp, hex.EncodeToString(suffix))
+		target := filepath.Join(dir, id)
+		if err := os.Link(temporary, target); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return backupEntry{}, "", err
+		}
+		if err := syncDirectory(dir); err != nil {
+			_ = os.Remove(target)
+			return backupEntry{}, "", err
+		}
+		return backupEntry{
+			ID: id, SHA256: digest, Bytes: size,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}, target, nil
+	}
+	return backupEntry{}, "", errors.New("could not allocate a unique backup name")
+}
+
+func digestFile(path string) (string, int64, error) {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	hash := sha256.New()
+	size, copyErr := io.Copy(hash, file)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+func readManifest(dir string) (backupManifest, error) {
+	data, err := os.ReadFile(filepath.Join(dir, manifestName))
+	if err != nil {
+		return backupManifest{}, err
+	}
+	var manifest backupManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return backupManifest{}, err
+	}
+	if manifest.Version != 1 {
+		return backupManifest{}, fmt.Errorf("unsupported backup manifest version %d", manifest.Version)
+	}
+	seen := make(map[string]bool, len(manifest.Backups))
+	for _, entry := range manifest.Backups {
+		if !validBackupID(entry.ID) || seen[entry.ID] {
+			return backupManifest{}, fmt.Errorf("invalid or duplicate backup id %q", entry.ID)
+		}
+		seen[entry.ID] = true
+		digest, err := hex.DecodeString(entry.SHA256)
+		if err != nil || len(digest) != sha256.Size || entry.Bytes < 0 {
+			return backupManifest{}, fmt.Errorf("invalid backup metadata for %q", entry.ID)
+		}
+	}
+	sort.Slice(manifest.Backups, func(i, j int) bool { return manifest.Backups[i].ID < manifest.Backups[j].ID })
+	return manifest, nil
+}
+
+func writeManifest(dir string, manifest backupManifest) error {
+	sort.Slice(manifest.Backups, func(i, j int) bool { return manifest.Backups[i].ID < manifest.Backups[j].ID })
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	temporary, err := os.CreateTemp(dir, ".manifest-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := errors.Join(temporary.Sync(), temporary.Close()); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, filepath.Join(dir, manifestName)); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
+}
+
+// Restore replaces suchi.db with a manifest-listed snapshot. The caller must
+// stop every archive writer first.
+func Restore(ctx context.Context, dataDir, id string) error {
+	if !validBackupID(id) {
+		return fmt.Errorf("invalid backup id %q", id)
+	}
+	dir := backupDir(dataDir)
+	manifest, err := readManifest(dir)
+	if err != nil {
+		return fmt.Errorf("read backup manifest: %w", err)
+	}
+	var entry *backupEntry
+	for i := range manifest.Backups {
+		if manifest.Backups[i].ID == id {
+			entry = &manifest.Backups[i]
+			break
+		}
+	}
+	if entry == nil {
+		return fmt.Errorf("backup %q is not listed in the manifest", id)
+	}
+	sourcePath, err := containedBackupPath(dir, id)
+	if err != nil {
+		return err
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("backup %q is not a regular file", id)
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, source)
+	if err != nil {
+		return err
+	}
+	if size != entry.Bytes || hex.EncodeToString(hash.Sum(nil)) != entry.SHA256 {
+		return fmt.Errorf("backup %q failed SHA-256 verification", id)
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	temporary, err := os.CreateTemp(dataDir, ".suchi-restore-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	copied, copyErr := io.Copy(temporary, source)
+	if copyErr == nil && copied != entry.Bytes {
+		copyErr = fmt.Errorf("copied %d bytes, want %d", copied, entry.Bytes)
+	}
+	if err := errors.Join(copyErr, temporary.Sync(), temporary.Close()); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target := filepath.Join(dataDir, "suchi.db")
+	for _, stale := range []string{target + "-wal", target + "-shm"} {
+		if err := os.Remove(stale); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := os.Rename(temporaryPath, target); err != nil {
+		return err
+	}
+	return syncDirectory(dataDir)
+}
+
+func validBackupID(id string) bool {
+	if id == "" || id != filepath.Base(id) || strings.Contains(id, "..") ||
+		!strings.HasPrefix(id, "suchi-") || !strings.HasSuffix(id, ".db") {
+		return false
+	}
+	for _, char := range id {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' && char != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func containedBackupPath(dir, id string) (string, error) {
+	if !validBackupID(id) {
+		return "", fmt.Errorf("invalid backup id %q", id)
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.Abs(filepath.Join(root, id))
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative != id {
+		return "", fmt.Errorf("backup path escapes backup directory")
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("backup %q is not a regular file", id)
+	}
+	return target, nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 // LastSnapshotAge reports how long ago the newest snapshot in
@@ -232,7 +497,7 @@ func listSnapshots(dataDir string) ([]string, error) {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasPrefix(name, "suchi-") || !strings.HasSuffix(name, ".db") {
+		if !validBackupID(name) {
 			continue
 		}
 		out = append(out, name)
@@ -252,13 +517,36 @@ func pruneOld(dataDir string, keep int) ([]string, error) {
 		return nil, nil
 	}
 	drop := all[:len(all)-keep]
+	dropSet := make(map[string]bool, len(drop))
+	for _, name := range drop {
+		dropSet[name] = true
+	}
+	dir := backupDir(dataDir)
+	manifest, err := readManifest(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err == nil {
+		kept := manifest.Backups[:0]
+		for _, entry := range manifest.Backups {
+			if !dropSet[entry.ID] {
+				kept = append(kept, entry)
+			}
+		}
+		manifest.Backups = kept
+		if err := writeManifest(dir, manifest); err != nil {
+			return nil, err
+		}
+	}
 	pruned := make([]string, 0, len(drop))
 	for _, name := range drop {
-		p := filepath.Join(backupDir(dataDir), name)
-		if err := os.Remove(p); err != nil {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
 			return pruned, err
 		}
 		pruned = append(pruned, name)
+	}
+	if err := syncDirectory(dir); err != nil {
+		return pruned, err
 	}
 	return pruned, nil
 }
