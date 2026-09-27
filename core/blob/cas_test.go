@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/johnnybravo-xyz/suchi/core/blob"
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 func TestPutGetStatDelete(t *testing.T) {
@@ -89,6 +91,81 @@ func TestPutGetStatDelete(t *testing.T) {
 	}
 	if _, err := cas.Get(wantHex); err != blob.ErrNotFound {
 		t.Errorf("post-delete get: %v, want ErrNotFound", err)
+	}
+}
+
+type synchronizedReader struct {
+	data    []byte
+	offset  int
+	ready   *sync.WaitGroup
+	release <-chan struct{}
+}
+
+func (r *synchronizedReader) Read(p []byte) (int, error) {
+	if r.offset < len(r.data) {
+		n := copy(p, r.data[r.offset:])
+		r.offset += n
+		return n, nil
+	}
+	if r.ready != nil {
+		r.ready.Done()
+		r.ready = nil
+	}
+	<-r.release
+	return 0, io.EOF
+}
+
+func TestConcurrentDuplicatePuts(t *testing.T) {
+	root := t.TempDir()
+	cas, err := blob.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("one immutable payload")
+	const writers = 64
+	var ready sync.WaitGroup
+	ready.Add(writers)
+	release := make(chan struct{})
+	results := make(chan struct {
+		ref pluginapi.BlobRef
+		err error
+	}, writers)
+	for range writers {
+		go func() {
+			ref, err := cas.Put(&synchronizedReader{data: payload, ready: &ready, release: release})
+			results <- struct {
+				ref pluginapi.BlobRef
+				err error
+			}{ref: ref, err: err}
+		}()
+	}
+	ready.Wait()
+	close(release)
+
+	var want pluginapi.BlobRef
+	for range writers {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent put: %v", result.err)
+		}
+		if want.SHA256 == "" {
+			want = result.ref
+		} else if result.ref != want {
+			t.Fatalf("concurrent refs differ: %+v and %+v", want, result.ref)
+		}
+	}
+	rc, err := cas.Get(want.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil || !bytes.Equal(stored, payload) {
+		t.Fatalf("stored payload = %q, error = %v", stored, err)
+	}
+	partials, err := filepath.Glob(filepath.Join(root, "blobs", "sha256", ".put-*.tmp"))
+	if err != nil || len(partials) != 0 {
+		t.Fatalf("concurrent put partials = %v, error = %v", partials, err)
 	}
 }
 

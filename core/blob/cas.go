@@ -108,10 +108,12 @@ func (c *CAS) Put(r io.Reader) (pluginapi.BlobRef, error) {
 		// Fall through — rename below will replace the corrupt one.
 	}
 
-	if err := os.Rename(tmp.Name(), dst); err != nil {
+	if err := installBlob(tmp.Name(), dst, n); err != nil {
 		return pluginapi.BlobRef{}, fmt.Errorf("rename: %w", err)
 	}
-	tmpName = "" // rename consumed the temp
+	// A Windows rename loser leaves its temp in place; a successful rename does not.
+	_ = os.Remove(tmp.Name())
+	tmpName = ""
 
 	// Normalize permissions to 0640 — owner rw, group r. os.CreateTemp
 	// makes the file 0600; the chmod broadens to group so a sidecar
@@ -124,6 +126,19 @@ func (c *CAS) Put(r io.Reader) (pluginapi.BlobRef, error) {
 	}
 
 	return pluginapi.BlobRef{SHA256: sum, Size: n}, nil
+}
+
+func installBlob(temporaryPath, destination string, size int64) error {
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		// Windows does not replace an existing destination. Another Put may
+		// have won after our preflight stat; matching size is the same dedup
+		// condition used above.
+		if info, statErr := os.Stat(destination); statErr == nil && info.Size() == size {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // Get opens a blob for reading.

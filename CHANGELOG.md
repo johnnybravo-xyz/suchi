@@ -44,6 +44,8 @@ Notable user-visible changes to Suchi are recorded here.
 - Remove repetitive review guidance and score disclaimers from approval cards.
 - Return success for every CLI help request, bypass runtime configuration while
   printing help, and enumerate all taxonomy child commands.
+- Treat a matching blob installed by a concurrent writer as successful
+  deduplication when Windows refuses to replace the destination.
 
 ### Security
 
