@@ -55,6 +55,8 @@ Notable user-visible changes to Suchi are recorded here.
 - Correct container build documentation: pinned base images and verified sources
   bound major inputs, while live distro package repositories prevent a source
   tag from guaranteeing a byte-identical rebuild.
+- Report configured, available, and missing Tesseract language packs in
+  `suchi doctor`, with operator steps for installing and verifying extra packs.
 
 ### Security
 

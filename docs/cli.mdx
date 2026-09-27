@@ -198,6 +198,7 @@ One-shot diagnostic report. Prints:
 - Managed egress destinations for OIDC, enabled mailboxes, Microsoft OAuth,
   and the active LLM endpoint, with credentials removed
 - Presence of optional pipeline binaries on `PATH`; versions are not queried
+- Configured, installed, and missing Tesseract language packs
 - Database schema version compared with the embedded target
 - Imported taxonomy preset, version, and content hash per system when available
 - `$DATA_DIR` writability
@@ -217,10 +218,10 @@ walk.
 | `--scrub-cas`          | Stream and hash every CAS blob; report corrupt content and database references that are missing on disk.       |
 | `--quarantine-corrupt` | Move corrupt files to `$DATA_DIR/blobs/quarantine/`. Requires `--scrub-cas`; missing blobs are never modified. |
 
-Non-zero exit only on hard errors. Missing optional binaries print but
-don't fail — the ingest pipeline degrades gracefully. An explicit CAS
-scrub also exits non-zero on missing or corrupt content. Useful for air-gap
-verification and support tickets.
+Missing optional binaries or OCR language packs print but do not fail — the
+ingest pipeline degrades gracefully. An explicit CAS scrub exits non-zero on
+missing or corrupt content. Other hard errors also return non-zero. Useful for
+air-gap verification and support tickets.
 
 When `DATA_DIR` is unset and the `/data` default cannot be created, the
 doctor falls back to the current user's OS config directory (for example,

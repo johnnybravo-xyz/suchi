@@ -449,30 +449,25 @@ do not change the pipeline version, so a version-based stale rescan does not
 necessarily select affected documents. The empty-content filter also misses
 documents with partial OCR or decoded barcode text.
 
-`suchi doctor` checks OCR binaries, not language-pack availability. A successful
-upload or job alone does not establish that all requested languages were read.
-Multiple enabled languages add CPU and memory work; detected document-language
-metadata does not choose OCR packs.
+Run `suchi doctor` in the same host or container as the server before enabling
+additional languages. Its **OCR languages** section invokes the selected
+`tesseract` binary with the same process sandbox used by OCR jobs, then prints
+the configured packs, every available pack, and any configured code that is
+missing.
 
-#### Remaining language support work
+If a configured pack is missing:
 
-TODO(ocr-languages), tracked beside `Config.OCRLanguages` in code:
+1. Install the exact package or trained-data file for the `tesseract` binary
+   shown under **pipeline binaries**.
+2. Run `suchi doctor` again as the service user. Do not proceed until the
+   missing code appears in the available list.
+3. Upload a small representative document and inspect its extracted content.
+4. Only then use **Documents → Rescan** on existing documents that need the new
+   language.
 
-- Discover installed language packs and validate configured choices, with a
-  clear missing-pack error and available choices in OCR settings.
-- Add container smoke coverage for additional packs in both Docker targets.
-- Add synthetic image and PDF regression tests for mixed-script extraction,
-  including missing-pack behavior and rescans.
-- Deployment evaluation of local multilingual engines remains pending.
-  [PaddleOCR PP-OCRv5](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.html)
-  is the first candidate: its Devanagari recognizer supports Nepali and English
-  together. [EasyOCR](https://github.com/JaidedAI/EasyOCR) is another candidate.
-  Further evaluation covers text accuracy, CPU latency, peak memory, model size,
-  and offline deployment on printed scans and camera photos. Preliminary
-  CPU-only checks on five images found improvements in Devanagari and packaging
-  text, but both engines also missed text recovered by Tesseract and required
-  substantially larger runtimes. This small sample does not establish dependable
-  extraction across languages or document types. Neither dependency is integrated.
+A successful upload or job alone does not establish that all requested
+languages were read. Multiple enabled languages add CPU and memory work;
+detected document-language metadata does not choose OCR packs.
 
 OCR processing runs locally. The optional LLM classifier receives bounded
 extracted text rather than document images and does not act as an OCR fallback.

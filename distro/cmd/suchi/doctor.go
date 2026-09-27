@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/netutil"
+	"github.com/johnnybravo-xyz/suchi/core/sandbox"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/distro/internal/diagnostics"
 )
@@ -109,6 +111,7 @@ func runDoctor(args []string) int {
 
 	// Binary availability — same tools the pipeline shells out to.
 	fmt.Println("== pipeline binaries ==")
+	tesseractPath := ""
 	for _, bin := range []string{
 		"qpdf",
 		"pdftotext",
@@ -124,8 +127,30 @@ func runDoctor(args []string) int {
 	} {
 		if p, err := exec.LookPath(bin); err == nil {
 			fmt.Printf("  ✓ %-12s %s\n", bin, p)
+			if bin == "tesseract" {
+				tesseractPath = p
+			}
 		} else {
 			fmt.Printf("  ✗ %-12s (not on PATH)\n", bin)
+		}
+	}
+	fmt.Println()
+
+	fmt.Println("== OCR languages ==")
+	if tesseractPath == "" {
+		fmt.Printf("  ✗ cannot validate configured packs %s: tesseract is not on PATH\n",
+			strings.Join(runtimePrefs.OCRLanguages, ", "))
+	} else {
+		available, missing, err := inspectOCRLanguages(ctx, tesseractPath, runtimePrefs.OCRLanguages)
+		if err != nil {
+			fmt.Printf("  ✗ inspect installed packs: %v\n", err)
+		} else {
+			if len(missing) == 0 {
+				fmt.Printf("  ✓ configured packs available: %s\n", strings.Join(runtimePrefs.OCRLanguages, ", "))
+			} else {
+				fmt.Printf("  ✗ missing configured packs: %s\n", strings.Join(missing, ", "))
+			}
+			fmt.Printf("  available: %s\n", strings.Join(available, ", "))
 		}
 	}
 	fmt.Println()
@@ -347,6 +372,61 @@ func runDoctor(args []string) int {
 		}
 	}
 	return 0
+}
+
+func inspectOCRLanguages(ctx context.Context, tesseractPath string, configured []string) ([]string, []string, error) {
+	result, err := sandbox.Run(ctx, sandbox.Opts{
+		Args:      []string{tesseractPath, "--list-langs"},
+		Timeout:   5 * time.Second,
+		MaxStdout: 1 << 20,
+		MaxStderr: 64 << 10,
+	})
+	if err != nil {
+		detail := ""
+		if result != nil {
+			detail = strings.TrimSpace(string(result.Stderr))
+		}
+		if detail != "" {
+			return nil, nil, fmt.Errorf("%w: %s", err, detail)
+		}
+		return nil, nil, err
+	}
+	if result.StdoutTruncated {
+		return nil, nil, errors.New("tesseract language list exceeded 1 MiB")
+	}
+	return classifyOCRLanguages(result.Stdout, configured)
+}
+
+func classifyOCRLanguages(output []byte, configured []string) ([]string, []string, error) {
+	installed := make(map[string]struct{})
+	for _, line := range strings.Split(string(output), "\n") {
+		language := strings.TrimSpace(line)
+		if language == "" || strings.ContainsAny(language, " \t") {
+			continue
+		}
+		installed[language] = struct{}{}
+	}
+	if len(installed) == 0 {
+		return nil, nil, errors.New("tesseract returned no installed languages")
+	}
+	available := make([]string, 0, len(installed))
+	for language := range installed {
+		available = append(available, language)
+	}
+	sort.Strings(available)
+
+	missingSet := make(map[string]struct{})
+	for _, language := range configured {
+		if _, ok := installed[language]; !ok {
+			missingSet[language] = struct{}{}
+		}
+	}
+	missing := make([]string, 0, len(missingSet))
+	for language := range missingSet {
+		missing = append(missing, language)
+	}
+	sort.Strings(missing)
+	return available, missing, nil
 }
 
 // humanBytes formats a byte count with a single unit suffix, matching
