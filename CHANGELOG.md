@@ -52,6 +52,9 @@ Notable user-visible changes to Suchi are recorded here.
   by using the system temporary directory and portable shell utilities.
 - Make benchmark threshold mode Linux-only and fail when its required idle RSS
   measurement is missing instead of silently skipping the guardrail.
+- Correct container build documentation: pinned base images and verified sources
+  bound major inputs, while live distro package repositories prevent a source
+  tag from guaranteeing a byte-identical rebuild.
 
 ### Security
 

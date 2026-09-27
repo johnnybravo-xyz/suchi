@@ -169,6 +169,13 @@ GHCR images can be built and pushed directly when Actions is unavailable. Build
 from the release tag, never from a different branch with the release version
 injected: the image contents must agree with the Git tag.
 
+The Dockerfile pins base-image digests, the AnyDoc source commit and checked
+third-party archives. Go and Cargo dependency checksums verify downloaded source.
+Alpine and Debian runtime packages still resolve from their live repositories,
+so these controls provide traceable inputs, not byte-for-byte reproducibility
+from a source tag. The signed published image digest and its provenance/SBOM are
+the release artifacts to verify and deploy.
+
 Set the release coordinates on every build machine:
 
 ```sh

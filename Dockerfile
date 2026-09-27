@@ -2,7 +2,9 @@
 #   standard: broad format support with Tesseract OCR
 #   full:     the standard application plus OCRmyPDF archives
 #
-# Toolchain images are digest-pinned so a release can be rebuilt from its tag.
+# Base images are digest-pinned to bound the toolchain and runtime starting
+# points. Runtime packages still resolve from live Alpine and Debian repositories,
+# so a source tag alone does not guarantee a byte-for-byte identical rebuild.
 
 # Hold Rust until N-1 includes the 1.98.1 vtable-miscompilation fix.
 ARG RUST_IMAGE=rust:1.97.1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900
