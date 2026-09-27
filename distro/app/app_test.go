@@ -125,6 +125,160 @@ func (a runningApp) request(t *testing.T, method, path, body string, status int)
 	return data
 }
 
+func TestCompanionV1RoutesReachAssembledHandlers(t *testing.T) {
+	running := startApp(t, options(t))
+
+	pairingBody := running.request(t, http.MethodPost, "/api/mobile/pairing", `{"name":"Route test"}`, http.StatusCreated)
+	var pairing struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(pairingBody, &pairing); err != nil || pairing.Code == "" {
+		t.Fatalf("decode pairing: code=%q err=%v", pairing.Code, err)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	token := ""
+	request := func(method, path string, body io.Reader, contentType string, want ...int) []byte {
+		t.Helper()
+		if body == nil {
+			body = http.NoBody
+		}
+		req, err := http.NewRequest(method, running.url+path, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Token "+token)
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, status := range want {
+			if resp.StatusCode == status {
+				return data
+			}
+		}
+		t.Fatalf("%s %s: status=%d want=%v body=%s", method, path, resp.StatusCode, want, data)
+		return nil
+	}
+
+	handshake := request(http.MethodGet, "/api/handshake", nil, "", http.StatusOK)
+	if !bytes.Contains(handshake, []byte(`"suchi-companion-v1"`)) {
+		t.Fatalf("handshake does not advertise companion v1: %s", handshake)
+	}
+	passwordExchange := request(http.MethodPost, "/api/token/",
+		strings.NewReader(`{"email":"dev@suchi.local","password":"devdevdev"}`),
+		"application/json", http.StatusOK)
+	var passwordCredentials struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(passwordExchange, &passwordCredentials); err != nil || len(passwordCredentials.Token) != 64 {
+		t.Fatalf("decode password credentials: token length=%d err=%v", len(passwordCredentials.Token), err)
+	}
+	exchange := request(http.MethodPost, "/api/mobile/pairing/exchange",
+		strings.NewReader(fmt.Sprintf(`{"code":%q,"device_name":"Route test"}`, pairing.Code)),
+		"application/json", http.StatusOK)
+	var credentials struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(exchange, &credentials); err != nil || credentials.Token == "" {
+		t.Fatalf("decode credentials: token=%q err=%v", credentials.Token, err)
+	}
+	token = credentials.Token
+
+	request(http.MethodGet, "/api/whoami", nil, "", http.StatusOK)
+	request(http.MethodGet, "/api/documents/?page=1&page_size=50&ordering=-created_at", nil, "", http.StatusOK)
+	request(http.MethodGet, "/api/saved_views/?page=1&page_size=100", nil, "", http.StatusOK)
+	savedViewBody := request(http.MethodPost, "/api/saved_views/",
+		strings.NewReader(`{"name":"Route test","filter_json":"{}","display":"list","position":0,"shared":false}`),
+		"application/json", http.StatusCreated)
+	var savedView struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(savedViewBody, &savedView); err != nil || savedView.ID <= 0 {
+		t.Fatalf("decode saved view: id=%d err=%v", savedView.ID, err)
+	}
+	request(http.MethodDelete, fmt.Sprintf("/api/saved_views/%d", savedView.ID), nil, "", http.StatusNoContent)
+
+	tagBody := running.request(t, http.MethodPost, "/api/tags/", `{"name":"Route test"}`, http.StatusCreated)
+	var tag struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(tagBody, &tag); err != nil || tag.ID <= 0 {
+		t.Fatalf("decode tag: id=%d err=%v", tag.ID, err)
+	}
+
+	const documentBytes = "Companion route assembly marker."
+	var uploadBody bytes.Buffer
+	form := multipart.NewWriter(&uploadBody)
+	file, err := form.CreateFormFile("document", "companion-route.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(file, documentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploadRequest, err := http.NewRequest(http.MethodPost, running.url+"/api/documents/", &uploadBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadRequest.Header.Set("Authorization", "Token "+token)
+	uploadRequest.Header.Set("Content-Type", form.FormDataContentType())
+	uploadRequest.Header.Set("Idempotency-Key", "12345678-1234-4123-8123-123456789abc")
+	uploadResponse, err := client.Do(uploadRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadedBody, readErr := io.ReadAll(uploadResponse.Body)
+	_ = uploadResponse.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if uploadResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /api/documents/: status=%d body=%s", uploadResponse.StatusCode, uploadedBody)
+	}
+	var uploaded struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(uploadedBody, &uploaded); err != nil || uploaded.ID <= 0 {
+		t.Fatalf("decode upload: id=%d err=%v", uploaded.ID, err)
+	}
+	documentPath := fmt.Sprintf("/api/documents/%d", uploaded.ID)
+
+	request(http.MethodGet, documentPath+"?include_content=0", nil, "", http.StatusOK)
+	request(http.MethodGet, documentPath+"?include_content=1", nil, "", http.StatusOK)
+	request(http.MethodGet, "/api/search/?q=marker&page=1&page_size=25", nil, "", http.StatusOK)
+	request(http.MethodGet, "/api/jd/categories/?page=1&page_size=100", nil, "", http.StatusOK)
+	request(http.MethodGet, "/api/tags/?page=1&page_size=500", nil, "", http.StatusOK)
+	request(http.MethodPost, "/api/documents/bulk_edit",
+		strings.NewReader(fmt.Sprintf(`{"documents":[%d],"method":"add_tag","parameters":{"tag_id":%d}}`, uploaded.ID, tag.ID)),
+		"application/json", http.StatusOK)
+	request(http.MethodGet, fmt.Sprintf("/api/tasks/?doc_id=%d&kind=post-ingest&include=jobs&limit=50", uploaded.ID), nil, "", http.StatusOK)
+	request(http.MethodPatch, documentPath, strings.NewReader(`{"title":"Companion route document"}`), "application/json", http.StatusOK)
+	request(http.MethodGet, documentPath+"/preview", nil, "", http.StatusOK)
+	downloaded := request(http.MethodGet, documentPath+"/download", nil, "", http.StatusOK)
+	if !bytes.Equal(downloaded, []byte(documentBytes)) {
+		t.Fatalf("downloaded bytes=%q", downloaded)
+	}
+	request(http.MethodGet, documentPath+"/thumb?width=160", nil, "", http.StatusNotFound)
+	request(http.MethodDelete, documentPath, nil, "", http.StatusNoContent)
+	request(http.MethodPost, documentPath+"/restore", nil, "", http.StatusOK)
+	request(http.MethodPost, "/api/logout", nil, "", http.StatusNoContent)
+	request(http.MethodGet, "/api/whoami", nil, "", http.StatusUnauthorized)
+}
+
 func TestExternalAssemblyMigrationsActionsAndCommunityIsolation(t *testing.T) {
 	opts := options(t)
 	opts.MigrationSets = []db.MigrationSet{{Component: "example", Migrations: []db.Migration{{Version: 1, SQL: `CREATE TABLE example_receipts(doc_id INTEGER PRIMARY KEY REFERENCES documents(id),system_id INTEGER NOT NULL REFERENCES jd_systems(id));`}}}}
