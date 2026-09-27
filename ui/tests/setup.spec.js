@@ -20,6 +20,16 @@ test('shows password-unlocked status in lists, grids and detail', async ({ page 
   await expect(page.getByText('Password unlocked', { exact: true })).toBeVisible()
 })
 
+test('keeps the document refresh control aligned without duplicating Trash navigation', async ({ page }) => {
+  await mockAPI(page, { filingTreeChosen: true })
+  await page.goto('/#/documents')
+  const toolbar = page.locator('.document-toolbar')
+  await expect(toolbar.getByRole('link', { name: 'Open trash' })).toHaveCount(0)
+  const refresh = await toolbar.getByRole('button', { name: 'Refresh documents' }).boundingBox()
+  const viewToggle = await toolbar.locator('.seg').filter({ hasText: 'List' }).boundingBox()
+  expect(Math.abs(refresh.height - viewToggle.height)).toBeLessThanOrEqual(1)
+})
+
 test('clears account data and rejects late reads after signing in as another user', async ({ page }) => {
   await mockAPI(page, {
     documentsCount: 731,
@@ -1947,6 +1957,45 @@ test('filters Documents by active share links', async ({ page }) => {
   await expect(page).toHaveURL(/#\/documents\?q=receipt$/)
 })
 
+test('keeps full-width search above one wide-screen options row', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'wide-screen layout regression')
+  await page.setViewportSize({ width: 1568, height: 720 })
+  await mockAPI(page)
+  await page.goto('/#/documents')
+
+  const searchRow = page.getByRole('group', { name: 'Document search' })
+  const optionsRow = page.getByRole('group', { name: 'Document options' })
+  const displayActions = optionsRow.getByRole('group', { name: 'Document display' })
+  const search = searchRow.locator('input[type="search"]')
+  const sort = displayActions.getByRole('combobox', { name: 'Sort documents' })
+  const viewToggle = displayActions.locator('.seg')
+  const refresh = displayActions.getByRole('button', { name: 'Refresh documents' })
+  const typeOrShare = optionsRow.getByLabel('Type or sharing')
+  const dateRange = optionsRow.getByRole('button', { name: 'Any date', exact: true })
+  const heights = await Promise.all([search, sort, viewToggle, refresh, typeOrShare, dateRange]
+    .map(async selector => Math.round((await selector.boundingBox()).height)))
+  expect(new Set(heights).size).toBe(1)
+  await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
+
+  const [searchBox, searchRowBox, firstFilter, dateBox, viewBox, refreshBox, sortBox] = await Promise.all([
+    search.boundingBox(),
+    searchRow.boundingBox(),
+    optionsRow.getByRole('combobox').first().boundingBox(),
+    dateRange.boundingBox(),
+    viewToggle.boundingBox(),
+    refresh.boundingBox(),
+    sort.boundingBox(),
+  ])
+  expect(Math.abs(searchBox.width - searchRowBox.width)).toBeLessThanOrEqual(1)
+  const centers = [firstFilter, dateBox, viewBox, refreshBox, sortBox]
+    .map(box => box.y + box.height / 2)
+  expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1)
+  expect(viewBox.x - dateBox.x - dateBox.width).toBeGreaterThan(24)
+  expect(refreshBox.x).toBeGreaterThan(viewBox.x)
+  expect(sortBox.x).toBeGreaterThan(refreshBox.x)
+  expect(firstFilter.y).toBeGreaterThan(searchBox.y)
+})
+
 test('document pagination survives detail navigation, history and reload', async ({ page }, testInfo) => {
   await mockAPI(page, { documentsCount: 743 })
   await page.route('**/api/documents/?*', route => {
@@ -1999,6 +2048,7 @@ test('document pagination preserves dates and resets on filter or sort changes',
     documents: [{ id: 42, title: 'Receipt', created_at: 1780000000, tags: [] }],
   })
   await page.goto('/#/documents?page=3')
+  await page.getByRole('button', { name: 'Any date', exact: true }).click()
   const dateFrom = page.getByLabel('Added on or after', { exact: true })
   await expect(dateFrom).toHaveAttribute('type', 'text')
   await expect(dateFrom).toHaveAttribute('placeholder', 'yyyy-mm-dd')
@@ -2008,11 +2058,16 @@ test('document pagination preserves dates and resets on filter or sort changes',
   await expect(page).toHaveURL(/#\/documents\?created_at__gte=1788220800$/)
   await page.getByLabel('Added on or before', { exact: true }).fill('2026-09-30')
   await page.getByLabel('Added on or before', { exact: true }).press('Tab')
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
   const pager = page.getByRole('navigation', { name: 'Document pages' })
   await pager.getByRole('link', { name: 'Page 3', exact: true }).click()
   await page.reload()
+  const activeDateRange = page.getByRole('button', { name: '2026-09-01 – 2026-09-30', exact: true })
+  await expect(activeDateRange).toBeVisible()
+  await activeDateRange.click()
   await expect(page.getByLabel('Added on or after', { exact: true })).toHaveValue('2026-09-01')
   await expect(page.getByLabel('Added on or before', { exact: true })).toHaveValue('2026-09-30')
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
   await expect(pager).toContainText('Page 3 of 15')
   const sorted = page.waitForRequest(request => {
     const url = new URL(request.url())
@@ -2021,11 +2076,15 @@ test('document pagination preserves dates and resets on filter or sort changes',
       && url.searchParams.get('created_at__gte') === '1788220800'
       && url.searchParams.get('created_at__lte') === '1790812799'
   })
-  await page.locator('select').filter({ has: page.locator('option', { hasText: 'Title A–Z' }) }).selectOption('title')
+  await page.getByLabel('Sort documents').selectOption('title')
   await sorted
   await expect(pager).toContainText('Page 1 of 15')
   await page.goBack()
   await expect(pager).toContainText('Page 3 of 15')
+  await page.getByRole('button', { name: '2026-09-01 – 2026-09-30', exact: true }).click()
+  await page.getByRole('button', { name: 'Clear dates' }).click()
+  await expect(page).not.toHaveURL(/created_at__(?:gte|lte)=/)
+  await expect(page.getByRole('button', { name: 'Any date', exact: true })).toBeVisible()
 })
 
 test('document pagination corrects invalid and vanished pages without trapping history', async ({ page }) => {
@@ -2972,7 +3031,6 @@ test('bulk tag assignment retries partial failure without dropping the selection
     return route.fulfill({ json: { applied: 2, results: [{ id: 42, ok: true }, { id: 43, ok: true }] } })
   })
   await page.goto('/#/documents')
-  await expect(page.getByRole('link', { name: 'Manage tags' })).toBeVisible()
   await page.getByLabel('Select First invoice').check()
   await page.getByLabel('Select Second invoice').check()
   const bar = page.locator('.bulkbar')
@@ -2999,14 +3057,13 @@ test('bulk tag assignment retries partial failure without dropping the selection
 test('bulk tag assignment is available to members but not in Inbox', async ({ page }) => {
   await mockAPI(page, { userRole: 'member', documents: [{ id: 42, title: 'Member document', created_at: 1780000000 }] })
   await page.goto('/#/documents')
-  await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
   await page.getByLabel('Select Member document').check()
   await expect(page.locator('.bulkbar').getByRole('button', { name: 'Add tags' })).toBeVisible()
   await page.goto('/#/inbox')
   await expect(page.locator('.bulkbar').getByRole('button', { name: 'Add tags' })).toHaveCount(0)
 })
 
-test('tag management links navigate to the searchable Settings catalog', async ({ page }) => {
+test('tag management link navigates to the searchable Settings catalog', async ({ page }) => {
   await mockAPI(page)
   await page.route('**/api/tags/**', route => route.fulfill({ json: {
     results: [{ id: 5, name: 'Receipt', slug: 'receipt' }], next: null,
@@ -3026,9 +3083,6 @@ test('tag management links navigate to the searchable Settings catalog', async (
   await expect(page).toHaveURL(/people=metadata&metadata=correspondents$/)
   await page.goBack()
   await expect(page.getByRole('combobox', { name: 'Metadata type' })).toHaveValue('tags')
-  await page.goto('/#/documents')
-  await page.getByRole('link', { name: 'Manage tags' }).click()
-  await expect(page).toHaveURL(/#\/settings\?tab=archive&section=users&people=metadata&metadata=tags$/)
 })
 
 test('settings tag management confirms atomic selection across searches', async ({ page }) => {
@@ -4118,8 +4172,10 @@ test('publishes exact Inbox, Documents, and Search scopes to archive research', 
   expect(chatRequests.at(-1).scope).toMatchObject({ jd_category_id: 9, query: '' })
 
   await page.goto('/#/documents?q=needle&jd=6&document_ids=41,42&tags__id__in=5,8&correspondents__id__in=7&document_type__id=4&sensitivity=internal&share_link=active')
-  await page.getByTitle('Added on or after').fill('2026-08-01')
-  await page.getByTitle('Added on or before').fill('2026-08-30')
+  await page.getByRole('button', { name: 'Any date', exact: true }).click()
+  await page.getByLabel('Added on or after', { exact: true }).fill('2026-08-01')
+  await page.getByLabel('Added on or before', { exact: true }).fill('2026-08-30')
+  await page.getByLabel('Added on or before', { exact: true }).press('Tab')
   await page.waitForTimeout(50)
   await ask('full scope')
   expect(chatRequests.at(-1).scope).toEqual({

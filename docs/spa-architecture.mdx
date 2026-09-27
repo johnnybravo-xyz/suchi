@@ -211,8 +211,9 @@ filter. Detail edits one document immediately and keeps a refused query; when
 because the client cannot infer classifier ownership from slugs alone. Documents
 snapshots selected IDs for one `bulk_edit add_tag`, refreshes server-backed pills,
 and retains the selection on partial/total failure. Both invalidate late UI
-updates on route or system changes. Only admins see **Manage tags** links;
-document screens do not mutate the catalog.
+updates on route or system changes. Only admins see the **Manage tags** link
+beside a document's Tags; the Documents list stays limited to search, display and
+filter controls, and document screens do not mutate the catalog.
 
 `TaxonomyImport.svelte` is shared by the Filing tree and Taxonomy sections. It owns file/paste reads,
 HuML/TOML choice, seed/remap/destination choices and preview freshness; schema

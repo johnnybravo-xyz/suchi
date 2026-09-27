@@ -11,6 +11,10 @@ Notable user-visible changes to Suchi are recorded here.
 
 ### Fixed
 
+- Keep full-width Documents search above one options row, combine added-date
+  bounds behind **Any date**, and separate left-side filters from right-side
+  display, refresh and sorting controls. Remove duplicate Trash and tag-catalog
+  controls from the list toolbar.
 - Display every date picker with stable ISO `yyyy-mm-dd` input, including the
   date portion of mailbox sync timestamps.
 - Cancel superseded document-change approvals when metadata changes and during

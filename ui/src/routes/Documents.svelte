@@ -12,7 +12,6 @@
   import DocumentUnlockStatus from '../lib/DocumentUnlockStatus.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import TagPicker from '../lib/TagPicker.svelte'
-  import { TAGS_SETTINGS_HASH } from '../lib/configuration.js'
   import { createQueryAssistant } from '../lib/queryAssist.js'
   import { copyText } from '../lib/clipboard.js'
   import LinkQR from '../lib/LinkQR.svelte'
@@ -40,6 +39,15 @@
   const ordering = $derived(route.query.get('ordering') || '-created_at')
   const dateFrom = $derived(dateFilterValue('created_at__gte'))
   const dateTo = $derived(dateFilterValue('created_at__lte'))
+  let dateFilterOpen = $state(false)
+  let dateFilterBox = $state()
+  let dateFilterTrigger = $state()
+  const hasDateFilter = $derived(!!(dateFrom || dateTo))
+  const dateRangeLabel = $derived(
+    dateFrom && dateTo ? `${dateFrom} – ${dateTo}` :
+    dateFrom ? `From ${dateFrom}` :
+    dateTo ? `Through ${dateTo}` : 'Any date'
+  )
   let view = $state((() => { try { return localStorage.getItem('suchi.docs.view') || 'list' } catch { return 'list' } })())
   function setView(v) { view = v; try { localStorage.setItem('suchi.docs.view', v) } catch {} }
   const pageSize = 50
@@ -101,6 +109,28 @@
   function setDateFilter(key, value) {
     const timestamp = value ? Math.floor(new Date(value).getTime() / 1000) : ''
     setRouteFilter(key, timestamp === '' ? '' : timestamp + (key === 'created_at__lte' ? 86399 : 0))
+  }
+
+  function clearDateFilters() {
+    queryAssistant.clear()
+    const params = new URLSearchParams(route.query)
+    params.delete('created_at__gte')
+    params.delete('created_at__lte')
+    params.delete('page')
+    dateFilterOpen = false
+    const query = params.toString()
+    go(`#${route.path}${query ? `?${query}` : ''}`)
+  }
+
+  function closeDateFilter() {
+    dateFilterOpen = false
+    dateFilterTrigger?.focus()
+  }
+
+  function closeDateFilterOutside(event) {
+    if (dateFilterOpen && dateFilterBox && !dateFilterBox.contains(event.target)) {
+      dateFilterOpen = false
+    }
   }
 
   async function loadFacets() {
@@ -403,8 +433,9 @@
 
   // ---- keyboard: j/k move, x select, Enter open ----
   function onKey(e) {
-    // Handle modal Escape before ignoring focused inputs.
+    // Handle modal and popover Escape before ignoring focused inputs.
     if (bulkDecOpen && e.key === 'Escape') { bulkDecOpen = false; return }
+    if (dateFilterOpen && e.key === 'Escape') { e.preventDefault(); closeDateFilter(); return }
     if (e.target.closest('input,select,textarea') || e.metaKey || e.ctrlKey) return
     if (e.key === 'j' || e.key === 'k') {
       e.preventDefault()
@@ -441,7 +472,7 @@
   })
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onmousedown={closeDateFilterOutside} />
 
 {#if sel.size > 0}
   <div class="bulkbar">
@@ -520,58 +551,80 @@
 {#if err}<div class="err">{err}</div>{/if}
 
 {#if !isInbox}
-  <div class="toolbar" onchangecapture={(e) => { if (e.target.matches('select')) e.target.blur() }}>
-    <input class="input" type="search" value={fQuery} placeholder="Search or use jd:, tag:, from:…"
-           list="documents-query-suggestions"
-           oninput={(event) => queryAssistant.update(event.currentTarget.value)}
-           onchange={(e) => setRouteFilter('q', e.target.value)}
-           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setRouteFilter('q', e.currentTarget.value) } }}
-           style="min-width:180px" />
-    <datalist id="documents-query-suggestions">
-      {#each suggestions as suggestion (suggestion.query)}
-        <option value={suggestion.query}>{suggestion.value}</option>
-      {/each}
-    </datalist>
-    <select class="input" value={fTag} onchange={(e) => setRouteFilter('tags__id__in', e.target.value)}>
-      <option value="">All tags</option>
-      {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
-    </select>
-    {#if session.user?.role === 'admin'}
-      <a class="btn sm" href={filingHref(TAGS_SETTINGS_HASH)}>Manage tags</a>
-    {/if}
-    <select class="input" value={fCorr} onchange={(e) => setRouteFilter('correspondents__id__in', e.target.value)}>
-      <option value="">All correspondents</option>
-      {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
-    </select>
-    <select class="input" aria-label="Type or sharing" value={typeOrShare}
-            onchange={(e) => setTypeOrShare(e.target.value)}>
-      <option value="">All types</option>
-      <option value="active">My active shares</option>
-      {#each types as t}<option value={t.id}>{t.name}</option>{/each}
-    </select>
-    <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
-      <option value="">Any sensitivity</option>
-      {#each SENSITIVITY_OPTIONS as option (option.value)}
-        <option value={option.value}>{option.label}</option>
-      {/each}
-    </select>
-    <ISODateInput compact value={dateFrom} label="Added on or after"
-                  onchange={(value) => setDateFilter('created_at__gte', value)} />
-    <ISODateInput compact value={dateTo} label="Added on or before"
-                  onchange={(value) => setDateFilter('created_at__lte', value)} />
-    <span class="spacer"></span>
-    <span class="seg">
-      <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
-      <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
-    </span>
-    <button class="btn sm" onclick={load} title="Refresh" aria-label="Refresh documents"><Icon name="refresh" size={13} /></button>
-    <a class="btn sm" href={filingHref("#/trash")} title="Trash" aria-label="Open trash"><Icon name="trash" size={13} /></a>
-    <select class="input" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
-      <option value="-created_at">Newest first</option>
-      <option value="created_at">Oldest first</option>
-      <option value="title">Title A–Z</option>
-      <option value="-title">Title Z–A</option>
-    </select>
+  <div class="document-controls" onchangecapture={(e) => { if (e.target.matches('select')) e.target.blur() }}>
+    <div class="toolbar document-search-toolbar" role="group" aria-label="Document search">
+      <input class="input" type="search" value={fQuery} placeholder="Search or use jd:, tag:, from:…"
+             list="documents-query-suggestions"
+             oninput={(event) => queryAssistant.update(event.currentTarget.value)}
+             onchange={(e) => setRouteFilter('q', e.target.value)}
+             onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setRouteFilter('q', e.currentTarget.value) } }}
+             style="min-width:180px" />
+      <datalist id="documents-query-suggestions">
+        {#each suggestions as suggestion (suggestion.query)}
+          <option value={suggestion.query}>{suggestion.value}</option>
+        {/each}
+      </datalist>
+    </div>
+    <div class="toolbar document-toolbar document-options-toolbar" role="group" aria-label="Document options">
+      <select class="input" value={fTag} onchange={(e) => setRouteFilter('tags__id__in', e.target.value)}>
+        <option value="">All tags</option>
+        {#each tags as t}<option value={t.id}>{t.name}</option>{/each}
+      </select>
+      <select class="input" value={fCorr} onchange={(e) => setRouteFilter('correspondents__id__in', e.target.value)}>
+        <option value="">All correspondents</option>
+        {#each correspondents as c}<option value={c.id}>{c.name}</option>{/each}
+      </select>
+      <select class="input" aria-label="Type or sharing" value={typeOrShare}
+              onchange={(e) => setTypeOrShare(e.target.value)}>
+        <option value="">All types</option>
+        <option value="active">My active shares</option>
+        {#each types as t}<option value={t.id}>{t.name}</option>{/each}
+      </select>
+      <select class="input" value={fSens} onchange={(e) => setRouteFilter('sensitivity', e.target.value)}>
+        <option value="">Any sensitivity</option>
+        {#each SENSITIVITY_OPTIONS as option (option.value)}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
+      <div class="date-range-filter" bind:this={dateFilterBox}>
+        <button bind:this={dateFilterTrigger} type="button" class="date-range-trigger" class:on={hasDateFilter}
+                aria-expanded={dateFilterOpen} aria-controls="document-date-range"
+                onclick={() => (dateFilterOpen = !dateFilterOpen)}>
+          <span>{dateRangeLabel}</span><Icon name="calendar" size={15} />
+        </button>
+        {#if dateFilterOpen}
+          <div id="document-date-range" class="date-range-menu" role="group" aria-label="Added date range">
+            <div class="date-range-fields">
+              <label class="date-range-field"><span>From</span>
+                <ISODateInput value={dateFrom} label="Added on or after"
+                              onchange={(value) => setDateFilter('created_at__gte', value)} />
+              </label>
+              <label class="date-range-field"><span>To</span>
+                <ISODateInput value={dateTo} label="Added on or before"
+                              onchange={(value) => setDateFilter('created_at__lte', value)} />
+              </label>
+            </div>
+            <div class="date-range-actions">
+              <button class="btn sm" type="button" disabled={!hasDateFilter} onclick={clearDateFilters}>Clear dates</button>
+              <button class="btn primary sm" type="button" onclick={closeDateFilter}>Done</button>
+            </div>
+          </div>
+        {/if}
+      </div>
+      <span class="document-display-actions" role="group" aria-label="Document display">
+        <span class="seg">
+          <button class:on={view === 'list'} onclick={() => setView('list')}>List</button>
+          <button class:on={view === 'grid'} onclick={() => setView('grid')}>Grid</button>
+        </span>
+        <button class="btn sm document-refresh" onclick={load} title="Refresh" aria-label="Refresh documents"><Icon name="refresh" size={13} /></button>
+        <select class="input" aria-label="Sort documents" value={ordering} onchange={(e) => setRouteFilter('ordering', e.target.value === '-created_at' ? '' : e.target.value)}>
+          <option value="-created_at">Newest first</option>
+          <option value="created_at">Oldest first</option>
+          <option value="title">Title A–Z</option>
+          <option value="-title">Title Z–A</option>
+        </select>
+      </span>
+    </div>
   </div>
   {#if facetError}
     <div class="err" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
