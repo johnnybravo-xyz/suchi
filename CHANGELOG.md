@@ -4,6 +4,11 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Cancel superseded document-change approvals when metadata changes and during
+  the existing approval sweep, so obsolete suggestions leave the review queue.
+
 ## [0.1.0-beta.3] - 2026-09-24
 
 ### Added

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"strings"
@@ -302,6 +303,112 @@ func checkDocumentChange(ctx context.Context, tx *sql.Tx, docID int64, c Documen
 	return reason, nil
 }
 
+// ReconcileDocumentChanges cancels running reviews whose bound document state
+// can no longer authorize the proposed change.
+func (e *Engine) ReconcileDocumentChanges(ctx context.Context) (int, error) {
+	var cancelled int
+	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		cancelled, err = reconcileDocumentChangesInTx(ctx, tx, 0, nil)
+		return err
+	})
+	if err == nil && cancelled > 0 && e.log != nil {
+		e.log.Info("approvals.document_change.reconciled", "cancelled", cancelled)
+	}
+	return cancelled, err
+}
+
+// ReconcileDocumentChangesInTx applies the same lifecycle cleanup inside a
+// document mutation. systemID must identify the owning archive; an empty
+// document list checks every running document-change review in that archive.
+func ReconcileDocumentChangesInTx(ctx context.Context, tx *sql.Tx, systemID int64, documentIDs []int64) (int, error) {
+	if systemID <= 0 {
+		return 0, errors.New("approvals: document-change reconciliation requires a system")
+	}
+	return reconcileDocumentChangesInTx(ctx, tx, systemID, documentIDs)
+}
+
+type documentChangeRun struct {
+	id           int64
+	documentID   int64
+	currentState string
+	varsJSON     string
+	liveDocument bool
+}
+
+func reconcileDocumentChangesInTx(ctx context.Context, tx *sql.Tx, systemID int64, documentIDs []int64) (int, error) {
+	query := `SELECT r.id, r.doc_id, r.current_state, r.vars_json,
+		COALESCE((SELECT trashed_at IS NULL FROM documents WHERE id=r.doc_id), 0)
+		FROM approval_runs r
+		JOIN approval_defs d ON d.id=r.def_id
+		WHERE d.slug=? AND r.state='running' AND r.current_state='review'`
+	args := []any{DocumentChangeSlug}
+	if systemID > 0 {
+		query += ` AND r.system_id=?`
+		args = append(args, systemID)
+	}
+	if len(documentIDs) > 0 {
+		query += ` AND r.doc_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(documentIDs)), ",") + `)`
+		for _, id := range documentIDs {
+			args = append(args, id)
+		}
+	}
+
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	runs := []documentChangeRun{}
+	for rows.Next() {
+		var run documentChangeRun
+		if err := rows.Scan(&run.id, &run.documentID, &run.currentState, &run.varsJSON, &run.liveDocument); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	cancelled := 0
+	for _, run := range runs {
+		stale := !run.liveDocument
+		if !stale {
+			var vars map[string]any
+			if err := json.Unmarshal([]byte(run.varsJSON), &vars); err != nil {
+				stale = true
+			} else if change, err := documentChangeFromVars(vars); err != nil {
+				stale = true
+			} else if _, err := checkDocumentChange(ctx, tx, run.documentID, change, nil); err != nil {
+				if !errors.Is(err, ErrStaleProposal) && !errors.Is(err, ErrForbidden) {
+					return cancelled, fmt.Errorf("reconcile document-change run %d: %w", run.id, err)
+				}
+				stale = true
+			}
+		}
+		if !stale {
+			continue
+		}
+		if err := insertTransition(ctx, tx, run.id, run.currentState, run.currentState, "superseded", nil,
+			map[string]any{"reason": "bound document state changed"}); err != nil {
+			return cancelled, err
+		}
+		if err := expireOpenTasksForRun(ctx, tx, run.id); err != nil {
+			return cancelled, err
+		}
+		if err := finalizeRun(ctx, tx, run.id, "cancelled"); err != nil {
+			return cancelled, err
+		}
+		cancelled++
+	}
+	return cancelled, nil
+}
+
 func canReviewDocument(ctx context.Context, tx *sql.Tx, actor *pluginapi.Principal, systemID, docID int64, permission authz.Perm) error {
 	if actor == nil {
 		return ErrForbidden
@@ -504,6 +611,9 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 	}
 	if n != 1 {
 		return ErrStaleProposal
+	}
+	if _, err := ReconcileDocumentChangesInTx(ctx, tx, systemID, []int64{docID}); err != nil {
+		return err
 	}
 	return view.EnqueueMove(ctx, tx, docID)
 }

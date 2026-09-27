@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
@@ -148,10 +149,13 @@ func (s *Server) BulkEdit(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		switch body.Method {
-		case "trash", "delete", "restore", "rescan_enqueue":
+		case "restore", "rescan_enqueue":
 			return nil
+		case "trash", "delete":
+			_, err := approvals.ReconcileDocumentChangesInTx(r.Context(), tx, systemID, authorized)
+			return err
 		default:
-			return clearClassifierReviewTag(r.Context(), tx, authorized)
+			return reconcileClassifierReview(r.Context(), tx, systemID, authorized)
 		}
 	})
 	if err != nil {
@@ -323,9 +327,9 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 	return errBadMethod
 }
 
-// clearClassifierReviewTag resolves only classifier-owned needs-review
-// assignments after a human metadata edit, in the edit's transaction.
-func clearClassifierReviewTag(ctx context.Context, tx *sql.Tx, ids []int64) error {
+// reconcileClassifierReview closes classifier-owned review state in the same
+// transaction as the human metadata edit.
+func reconcileClassifierReview(ctx context.Context, tx *sql.Tx, systemID int64, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -333,9 +337,12 @@ func clearClassifierReviewTag(ctx context.Context, tx *sql.Tx, ids []int64) erro
 	for i, id := range ids {
 		args[i] = id
 	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM document_tags
+	if _, err := tx.ExecContext(ctx, `DELETE FROM document_tags
 		WHERE classifier_owned=1 AND document_id IN (`+strings.Repeat("?,", len(ids)-1)+`?)
-		  AND tag_id IN (SELECT id FROM tags WHERE slug='needs-review')`, args...)
+		  AND tag_id IN (SELECT id FROM tags WHERE slug='needs-review')`, args...); err != nil {
+		return err
+	}
+	_, err := approvals.ReconcileDocumentChangesInTx(ctx, tx, systemID, ids)
 	return err
 }
 

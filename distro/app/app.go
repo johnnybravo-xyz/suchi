@@ -407,6 +407,9 @@ func Run(ctx context.Context, opts Options) error {
 			log.Warn("main.rescan.detect", "system_id", systemID, "err", err)
 		}
 	}
+	if _, err := apvEngine.ReconcileDocumentChanges(ctx); err != nil {
+		log.Warn("main.document_change.reconcile", "err", err)
+	}
 	backupScheduler := backup.NewScheduler(backup.Config{
 		DataDir:            cfg.DataDir,
 		Interval:           runtimePrefs.BackupInterval,

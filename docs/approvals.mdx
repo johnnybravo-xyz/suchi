@@ -122,7 +122,9 @@ whole state machine inline.
 
 Entering a state with `timeout_sec` records a deadline. A recurring durable
 timeout sweep enqueues a `timeout` advancement for due runs and expires their
-open tasks. The definition must map `timeout` when timeout behavior is desired.
+open tasks. The same sweep cancels document-change reviews whose bound source,
+field, destination or access state is no longer valid. The definition must map
+`timeout` when timeout behavior is desired.
 
 Interrupted jobs are reclaimed on startup. Each queued advancement and task is
 bound to one visit to a state; stale retries cannot replay a choice on a later
@@ -174,9 +176,13 @@ and repeated resolution requests do not create duplicate applications.
 read-only. API tokens may resolve supported generic workflows, but cannot apply
 these built-in inference suggestions as if they were interactive human review.
 
-If the source or target changes before review, the card becomes read-only and
-the queued effect rejects the stale proposal. Dismiss the obsolete card; a
-later inference can create a fresh proposal bound to the current document.
+If the source or target changes before review, Suchi records a `superseded`
+transition, expires the task and cancels the run. Human metadata edits do this
+in their own transaction; startup and the existing approval sweep reconcile
+changes from other paths. The obsolete card leaves Approvals without requiring
+a dismissal. A later inference can create a fresh proposal bound to the current
+document. An effect already queued after an accepted decision still repeats all
+freshness and authorization checks before writing.
 
 This remains the extension pattern for future action workflows: a producer
 starts an approval in its existing transaction, and a typed handler performs

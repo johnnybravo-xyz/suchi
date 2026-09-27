@@ -429,17 +429,21 @@ func TestDocumentChangeRequiresBoundProposalAndHumanReview(t *testing.T) {
 	if err := e.TimeoutSweep(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Resolve(ctx, taskID, "apply", interactiveReviewer(t, e)); !errors.Is(err, approvals.ErrStaleProposal) {
-		t.Fatalf("same-value no-op must conflict: %v", err)
+	if err := e.Resolve(ctx, taskID, "apply", interactiveReviewer(t, e)); !errors.Is(err, approvals.ErrTaskResolved) {
+		t.Fatalf("superseded review remained actionable: %v", err)
 	}
-	if err := e.Resolve(ctx, taskID, "reject", adminPrincipal()); err != nil {
+	var runState, taskState, trigger string
+	if err := e.DB().Read.QueryRow(`SELECT state FROM approval_runs WHERE id=?`, runID).Scan(&runState); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Resolve(ctx, taskID, "reject", adminPrincipal()); !errors.Is(err, approvals.ErrTaskResolved) {
-		t.Fatalf("duplicate resolution: %v", err)
-	}
-	if err := e.Advance(ctx, runID, "reject"); err != nil {
+	if err := e.DB().Read.QueryRow(`SELECT status FROM approval_tasks WHERE id=?`, taskID).Scan(&taskState); err != nil {
 		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRow(`SELECT trigger FROM approval_transitions WHERE run_id=? ORDER BY id DESC LIMIT 1`, runID).Scan(&trigger); err != nil {
+		t.Fatal(err)
+	}
+	if runState != "cancelled" || taskState != "expired" || trigger != "superseded" {
+		t.Fatalf("run=%q task=%q trigger=%q", runState, taskState, trigger)
 	}
 	var count int
 	if err := e.DB().Read.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='document.suggestion_apply'`).Scan(&count); err != nil {
@@ -447,6 +451,77 @@ func TestDocumentChangeRequiresBoundProposalAndHumanReview(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("sweep or no-op recorded a successful apply")
+	}
+}
+
+func TestDocumentChangeReconciliationKeepsIndependentReviews(t *testing.T) {
+	e := newEngine(t)
+	seedDocumentForChange(t, e.DB())
+	ctx := context.Background()
+	titleRun, _ := proposeTitleReview(t, e)
+	languageRun, languageTask := proposeDocumentReview(t, e, approvals.DocumentChange{
+		Field: "language", Value: "eng", Confidence: .9, Source: "language-detector",
+	})
+	if _, err := e.DB().Write.Exec(`UPDATE documents SET title='Human title' WHERE id=10`); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := e.ReconcileDocumentChanges(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != 1 {
+		t.Fatalf("cancelled=%d, want 1", cancelled)
+	}
+	if again, err := e.ReconcileDocumentChanges(ctx); err != nil || again != 0 {
+		t.Fatalf("idempotent reconciliation cancelled=%d err=%v", again, err)
+	}
+	var titleState, languageState, languageTaskState string
+	if err := e.DB().Read.QueryRow(`SELECT state FROM approval_runs WHERE id=?`, titleRun).Scan(&titleState); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRow(`SELECT state FROM approval_runs WHERE id=?`, languageRun).Scan(&languageState); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRow(`SELECT status FROM approval_tasks WHERE id=?`, languageTask).Scan(&languageTaskState); err != nil {
+		t.Fatal(err)
+	}
+	if titleState != "cancelled" || languageState != "running" || languageTaskState != "open" {
+		t.Fatalf("title=%q language=%q language_task=%q", titleState, languageState, languageTaskState)
+	}
+}
+
+func TestAutomaticDocumentChangeCancelsCompetingReview(t *testing.T) {
+	e := newEngine(t)
+	seedDocumentForChange(t, e.DB())
+	ctx := context.Background()
+	runID, taskID := proposeTitleReview(t, e)
+	threshold := .7
+	change := approvals.DocumentChange{
+		Field: "title", Value: "Automatically classified", Confidence: .9,
+		Threshold: &threshold, Source: "llm", Baseline: changeBaseline(t, e),
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := e.DB().WriteTx(ctx, func(tx *sql.Tx) error {
+		applied, err := approvals.ApplyAutomaticDocumentChangeInTx(ctx, tx, log, 10, change)
+		if err == nil && !applied {
+			t.Fatal("automatic document change was not applied")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var title, runState, taskState string
+	if err := e.DB().Read.QueryRow(`SELECT title FROM documents WHERE id=10`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRow(`SELECT state FROM approval_runs WHERE id=?`, runID).Scan(&runState); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DB().Read.QueryRow(`SELECT status FROM approval_tasks WHERE id=?`, taskID).Scan(&taskState); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Automatically classified" || runState != "cancelled" || taskState != "expired" {
+		t.Fatalf("title=%q run=%q task=%q", title, runState, taskState)
 	}
 }
 

@@ -23,7 +23,13 @@ const SweepInterval = 30 * time.Second
 func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	now := time.Now().Unix()
 	var due []int64
+	cancelled := 0
 	err := e.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		cancelled, err = reconcileDocumentChangesInTx(ctx, tx, 0, nil)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM approval_runs
 			WHERE state = 'running' AND deadline_at IS NOT NULL AND deadline_at <= ?
@@ -57,8 +63,8 @@ func (e *Engine) TimeoutSweep(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if e.log != nil && len(due) > 0 {
-		e.log.Info("approvals.sweep.fired", "timeouts", len(due))
+	if e.log != nil && (len(due) > 0 || cancelled > 0) {
+		e.log.Info("approvals.sweep.fired", "timeouts", len(due), "superseded_document_changes", cancelled)
 	}
 	return e.rescheduleSweep(ctx)
 }

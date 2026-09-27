@@ -428,9 +428,11 @@ revision/status. Tasks retain originating
 revision so retries cannot reopen resolved visits. Accepted decisions/timeouts
 increment revision and clear deadlines before queued advancement;
 timeout selection, expiration and enqueue are one transaction. The periodic
-sweep handles only due workflow timeouts; it does not resolve filing suggestions.
-Document-change projections and resolutions recheck current source, field and
-access state, leaving stale proposals read-only until dismissed. See
+sweep also cancels superseded document-change reviews; it never accepts a filing
+suggestion. Human metadata writes reconcile affected reviews in the same
+transaction. Cancellation records a `superseded` transition and expires open
+tasks, while document-change resolutions and queued effects still recheck current
+source, field and access state. See
 [Approvals](/approvals#timeouts-and-recovery).
 
 Approval run/task IDs use AUTOINCREMENT; run allocation also skips retained legacy
@@ -495,6 +497,7 @@ field-update SQL. Machine policy and interactive human authorization remain
 distinct: automatic application never fabricates a reviewer or locks language.
 Within a multi-tag batch, successful automatic writes advance the application
 baseline without discarding the original snapshot checks against human races.
+Successful writes cancel competing reviews made stale by the new field generation.
 
 Metadata resolution stores the interactive principal's session digest and expiry,
 not a bearer cookie. `plugin-api.Principal` keeps these fields off the wire;

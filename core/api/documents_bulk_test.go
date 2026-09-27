@@ -191,6 +191,25 @@ func TestPatchDocumentClearsOnlyClassifierReviewTag(t *testing.T) {
 	`, automatic, manual); err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := documentstate.Load(t.Context(), s.DB.Read, automatic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := approvals.New(s.DB, s.Log)
+	if err := s.DB.WriteTx(t.Context(), func(tx *sql.Tx) error {
+		return approvals.ProposeDocumentChangeInTx(t.Context(), tx, automatic, approvals.DocumentChange{
+			Field: "title", Value: "Suggested title", Confidence: .9, Source: "llm", Baseline: &baseline,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var runID int64
+	if err := s.DB.Read.QueryRow(`SELECT id FROM approval_runs WHERE doc_id=?`, automatic).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Advance(t.Context(), runID, ""); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []int64{automatic, manual} {
 		req := httptest.NewRequest(http.MethodPatch, "/api/documents/"+strconv.FormatInt(id, 10),
 			bytes.NewBufferString(`{"title":"Reviewed"}`)).
@@ -210,6 +229,16 @@ func TestPatchDocumentClearsOnlyClassifierReviewTag(t *testing.T) {
 	}
 	if remaining != manual || owned != 0 {
 		t.Fatalf("review tag remains on document %d with classifier_owned=%d, want only manual document %d", remaining, owned, manual)
+	}
+	var runState, taskState string
+	if err := s.DB.Read.QueryRow(`SELECT state FROM approval_runs WHERE id=?`, runID).Scan(&runState); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Read.QueryRow(`SELECT status FROM approval_tasks WHERE run_id=?`, runID).Scan(&taskState); err != nil {
+		t.Fatal(err)
+	}
+	if runState != "cancelled" || taskState != "expired" {
+		t.Fatalf("superseded approval run=%q task=%q", runState, taskState)
 	}
 }
 

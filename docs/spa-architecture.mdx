@@ -338,10 +338,11 @@ under **Affected documents**. [Web app](/web-app) owns remaining interaction det
 proposed/current values, reasons, source freshness and permitted known actions.
 Producer/score details are disclosures, not authority badges. Hidden supporters
 are omitted server-side; sensitive quotes require local Reveal. Unknown actions
-stay read-only, stale dates cannot be accepted, and supported stale suggestions
-can be dismissed. Metadata resolution reports queued work rather than claiming
-the field changed. Date mutation results clear only successful rows; failures
-remain distinguishable and refreshable.
+stay read-only, stale dates cannot be accepted, and superseded metadata reviews
+are canceled server-side instead of becoming a special card state. Metadata
+resolution reports queued work rather than claiming the field changed. Date
+mutation results clear only successful rows; failures remain distinguishable and
+refreshable.
 
 `Calendar.svelte` preserves accepted facts and distinguishes reviewed, automatic
 and previously accepted legacy values. **Automatic** requires accepted status,
