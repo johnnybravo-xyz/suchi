@@ -4,7 +4,7 @@
   import { listTasks, resolveApprovalTask, retryDeadJob, dismissDeadJob, thumbPath,
            listIntelligence, resolveIntelligence } from '../lib/api.js'
   import { fmtDate } from '../lib/format.js'
-  import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewReason, reviewFailure } from '../lib/intelligence.js'
+  import { DATE_ROLES, formatIntelligenceValue, canReviewDate, reviewFailure } from '../lib/intelligence.js'
   import Icon from '../lib/Icon.svelte'
 
   let { notify, onCount, canReviewIntelligence = false } = $props()
@@ -311,7 +311,6 @@
           <span class="eyebrow">Dates needing review</span>
           <h2 id="intelligence-review-title">Check dates before they reach Calendar</h2>
           <p>{intelligence.length} date{intelligence.length === 1 ? '' : 's'} from {reviewGroups.length} document{reviewGroups.length === 1 ? '' : 's'} are waiting for your decision.</p>
-          <p class="review-guidance">Check each proposed date against its source, then select dates to add to Calendar without replacing existing dates. Scores are not measured accuracy and never select dates for you.</p>
         </div>
         <label class="select-all">
           <input type="checkbox" disabled={intelligenceBusy || !allIntelligence.available} checked={allIntelligence.all} use:indeterminate={allIntelligence.some}
@@ -363,8 +362,7 @@
                       <strong>Proposed: {formatIntelligenceValue(candidate)}</strong>
                       <span class="pill">{candidate.type === 'date' ? 'Date' : 'Read-only'}</span>
                     </div>
-                    <p class="gate-reason">{reviewReason(candidate.type === 'date' ? candidate.reason : 'unsupported')}</p>
-                    <small>{candidate.source_current === true ? 'Source checked at refresh; checked again when saving.' : 'Source is not current or could not be verified. Not available for acceptance.'}</small>
+                    {#if candidate.source_current === false}<span class="pill warn">Source changed</span>{/if}
                     {#if candidate.evidence_text}
                       <blockquote class="intelligence-evidence">“{candidate.evidence_text}”</blockquote>
                       <small>{candidate.source_current === true ? 'Exact text from the linked document' : 'Stored extraction quote; not verified against the current document'}{Number.isInteger(candidate.evidence_start) ? ` · UTF-8 byte ${candidate.evidence_start}` : ''}</small>
@@ -374,7 +372,7 @@
                     {#if typeof candidate.confidence === 'number'}
                       <details class="task-details">
                         <summary>Producer detail</summary>
-                        <p>Score: {candidate.confidence.toFixed(2)} · not measured accuracy.</p>
+                        <p>Score: {candidate.confidence.toFixed(2)}</p>
                         {#if candidate.extractor}<p>Producer: {candidate.extractor}</p>{/if}
                       </details>
                     {/if}
@@ -447,8 +445,6 @@
                   <div><dt>Current</dt><dd>{typeof t.vars.current_value === 'string' ? (t.vars.current_value || 'Not set') : 'Unavailable'}</dd></div>
                   <div><dt>Proposed</dt><dd>{suggestionValue(t.vars)}</dd></div>
                 </dl>
-                <p class="gate-reason">{reviewReason(t.vars.reason)}</p>
-                <p class="review-context">{t.vars.source_current === true ? 'Source checked at refresh; checked again before application.' : 'Source is not current or could not be verified.'}{t.vars.review_conflict ? ' The current value conflicts with this suggestion.' : ''}</p>
                 {#if t.vars.evidence_text}<blockquote class="intelligence-evidence">“{t.vars.evidence_text}”</blockquote>{/if}
                 {#if t.vars.sources?.length}
                   <ul class="review-sources">
@@ -460,14 +456,13 @@
                 {#if typeof t.vars.confidence === 'number'}
                   <details class="task-details">
                     <summary>Producer detail</summary>
-                    <p>Score: {t.vars.confidence.toFixed(2)} · not measured accuracy.</p>
+                    <p>Score: {t.vars.confidence.toFixed(2)}</p>
                     {#if t.vars.source === 'archive'}<p>Suggested from authorized archive sources.</p>
                     {:else if t.vars.source === 'llm'}<p>Suggested by the configured model.</p>{/if}
                   </details>
                 {/if}
               {/if}
               {#if taskErrors[t.id]}<p class="review-error" role="alert">{taskErrors[t.id]}</p>{/if}
-              {#if !taskChoices(t).length}<p class="review-context">Read-only: this action is not available for review here.</p>{/if}
               <div class="choices">
                 {#each taskChoices(t) as c, i}
                   <button class="btn sm" class:primary={i === 0} class:danger={/reject|deny|decline/i.test(c)}
@@ -531,7 +526,6 @@
   .intelligence-head .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: .63rem; font-weight: 700; }
   .intelligence-head h2 { font-size: 1.22rem; }
   .intelligence-head p { max-width: 780px; margin: 5px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
-  .intelligence-head .review-guidance { color: var(--ink); font-size: .76rem; }
   .select-all { display: flex; align-items: center; gap: 7px; flex: none; font-size: .75rem; font-weight: 650; cursor: pointer; }
   .approval-grid { display: grid; max-width: 820px; gap: 12px; align-items: start; }
   .intelligence-review .approval-grid { padding: 14px; }
@@ -578,7 +572,7 @@
   .operation-header small { color:var(--faint);font-size:.61rem }
   .operation-header b { font-size:.82rem }
   .operation-mark { display:grid;place-items:center;width:35px;height:35px;border:1px solid var(--line);border-radius:8px;color:var(--accent);background:var(--bg) }
-  .review-context, .rescan-context { color:var(--muted);font-size:.84rem;line-height:1.45;margin-top:10px }
+  .rescan-context { color:var(--muted);font-size:.84rem;line-height:1.45;margin-top:10px }
   .choices { display:flex;flex-wrap:wrap;gap:8px;margin-top:14px }
   .task-details { margin-top:10px;color:var(--muted);font-size:.75rem }
   .task-details summary { cursor:pointer;width:max-content }
@@ -593,7 +587,6 @@
   .metadata-values > div { display:grid;grid-template-columns:65px minmax(0,1fr);gap:10px }
   .metadata-values dt { color:var(--muted);font-size:.76rem }
   .metadata-values dd { margin:0;font-size:.84rem;overflow-wrap:anywhere }
-  .gate-reason { margin:6px 0;font-size:.8rem;line-height:1.45 }
   .intelligence-evidence { margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere }
   .review-sources { margin:8px 0;padding-left:18px;font-size:.78rem;overflow-wrap:anywhere }
   .review-error { color:var(--danger);font-size:.8rem;line-height:1.45;overflow-wrap:anywhere }

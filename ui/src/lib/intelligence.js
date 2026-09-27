@@ -70,23 +70,6 @@ export function canReviewDate(candidate) {
     ['important_fact', 'low_confidence', 'review_first'].includes(candidate.reason)
 }
 
-export function reviewReason(reason) {
-  return {
-    review_first: 'New inferred metadata needs your review.',
-    important_fact: 'Dates can affect important decisions. Check the source before adding this date.',
-    low_confidence: 'The classifier confidence is below the review threshold. Check the source carefully.',
-    source_changed: 'The source changed after this suggestion. Extract a fresh suggestion.',
-    source_unavailable: 'The source cannot currently be verified.',
-    human_changed: 'The current value changed after this suggestion. Review a fresh suggestion instead.',
-    human_unverified: 'The current value could not be verified.',
-    evidence_missing: 'Exact source evidence is unavailable.',
-    evidence_mismatch: 'The evidence no longer matches the source.',
-    invalid_candidate: 'This suggestion is not valid for review.',
-    consequential_effect: 'This action is not supported by metadata review.',
-    unsupported: 'This action is not supported here. Read-only.',
-  }[reason] || 'This suggestion could not be verified for review.'
-}
-
 export function reviewFailure(error) {
   const code = typeof error === 'string' ? error : error?.code
   if (['stale_source', 'stale_proposal', 'source_changed'].includes(code)) {

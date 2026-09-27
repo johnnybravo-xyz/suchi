@@ -8,6 +8,7 @@ Notable user-visible changes to Suchi are recorded here.
 
 - Cancel superseded document-change approvals when metadata changes and during
   the existing approval sweep, so obsolete suggestions leave the review queue.
+- Remove repetitive review guidance and score disclaimers from approval cards.
 
 ## [0.1.0-beta.3] - 2026-09-24
 

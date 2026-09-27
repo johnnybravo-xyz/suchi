@@ -543,7 +543,7 @@
               <input id="l-confidence" class="range" type="range" min="0.5" max="0.95" step="0.05"
                      bind:value={llm.confidence_threshold} disabled={!autoApply} aria-describedby="model-score-help" />
             </div>
-          <p id="model-score-help">Confidence is the model's self-reported score, not measured accuracy. Source and evidence checks still apply. Eligible suggestions that cannot apply automatically stay in Approvals.</p>
+          <p id="model-score-help">Confidence sets the automatic-apply threshold. Eligible suggestions below it stay in Approvals.</p>
           <h5>Calendar dates</h5>
           <p>Automatic mode adds eligible high-confidence dates to Calendar. In review-first mode, accept each new date in Approvals first. Existing decisions are preserved; saving settings or restarting Suchi does not accept pending dates.</p>
         </div>
