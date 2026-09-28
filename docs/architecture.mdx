@@ -270,19 +270,22 @@ The active catalog in `core/db/migrations/` contains one declarative
 one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL lives separately
 under `core/db/compatibility/`; the normal catalog cannot discover it.
 
-Startup classifies the archive before writing. Empty databases receive the
-baseline. Exact canonical `sqlite_schema` fingerprints admit beta.1/schema 1,
-beta.2/schema 2, beta.3/schema 3 with `final-beta-schema-3`, and pre-stable
-schema 4. Their compatibility paths apply 0002–0004, 0003–0004, 0004, or only
-the lineage adoption respectively. Stable-v1 is idempotent. Unknown, partial,
-spoofed, and future schemas fail without mutation.
+`migrations.Prepare` delegates core admission to `db.PrepareStable`, which
+classifies the database before writing. Empty databases receive the baseline;
+already-stable databases are no-ops. Every other accepted state must match its
+complete canonical `sqlite_schema` fingerprint and lineage, not merely a
+`user_version`. Unknown, partial, spoofed, corrupt and future states fail
+without mutation. The [release process compatibility table](/release-process#stable-v1-database-compatibility)
+is the sole authority for supported incoming states, frozen steps and the
+required release test matrix.
 
-Every admitted beta archive gets an exclusive mode-0600 SQLite snapshot before
-adoption. The frozen steps, stable lineage, and stable user version commit in
-one immediate transaction through the sole writer. Integrity, foreign keys, and
-the final schema fingerprint must all pass; failures roll back and restore
-foreign-key enforcement while retaining the snapshot. Extension objects created
-after `_suchi_extension_migrations` are outside the core fingerprint.
+Every admitted pre-stable archive passes integrity and foreign-key checks and
+gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining frozen
+steps, stable lineage and stable version commit in one immediate transaction
+through the sole writer. The final integrity, foreign keys and canonical schema
+fingerprint must match a fresh stable database; failures roll back while
+retaining the snapshot and restoring foreign-key enforcement. Extension objects
+created after `_suchi_extension_migrations` are outside the core fingerprint.
 
 Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
 `PRAGMA user_version`. Each component supplies its complete ordered history from
@@ -301,10 +304,9 @@ Core migrations and published SQL retain their existing versioning and behavior.
 Device OCR provenance, split origins, idempotency, pairing/token provenance precede
 taxonomy rebuilds. Existing credential hashes remain; unknown pairing provenance
 stays empty; default memberships/token bindings move to system 1 without issuing
-credentials. Tests pin published SQL, exercise populated beta.2/fresh startup and
-verify rollback/writer enforcement. The v1 baseline work must separately prove the
-beta.2/beta.3 adoption matrix. Runtime compatibility is a separate gate; see
-[Release process](/release-process).
+credentials. Tests pin published SQL, populated adoption behavior, rollback and
+writer enforcement; release acceptance remains owned by the linked compatibility
+matrix.
 
 ## HTTP and security boundaries
 

@@ -38,26 +38,8 @@ User-visible changes update the `[Unreleased]` section of
 in the same pull request. Write for operators and call out required migration
 steps directly.
 
-A release normally adds at most one numbered database migration; never rewrite a
-published migration. The signed beta.1–beta.3 SQL, tags, and release artifacts
-remain byte-identical. Stable v0.1.0 moves that SQL into the separately embedded
-compatibility package instead of rewriting history.
-
-The active v0.1.0 catalog contains only the declarative `0001_baseline.sql` and
-starts the stable schema epoch at `user_version = 1` with lineage `stable-v1`.
-The guarded compatibility path accepts only canonical fingerprints: beta.1
-applies frozen 0002–0004, beta.2 applies 0003–0004, beta.3 applies 0004, and
-schema 4 adopts the stable lineage directly. Every admitted beta database gets a
-mode-0600 pre-adoption snapshot and finishes at the same schema fingerprint as a
-fresh database. Intermediate, partial, spoofed, and future schemas are rejected
-before writes.
-
-Before release, verify fresh initialization and restart, every signed beta path,
-schema-4 adoption, data preservation, snapshot failure, atomic rollback,
-foreign-key restoration, and final manifest equality. Keep the complete
-operator backup containing SQLite, blobs, credential key, and configuration.
-See [Architecture](/architecture#storage-and-transaction-invariants) and
-[Backup and restore](/backup-restore#upgrade-and-rollback).
+A published core migration is immutable. A release normally adds at most one
+numbered core migration; never rewrite or renumber one that shipped.
 
 Suchi follows SemVer:
 
@@ -66,6 +48,49 @@ Suchi follows SemVer:
 - `PATCH`: fixes and internal changes
 
 Only the current pre-1.0 release is supported.
+
+## Stable-v1 database compatibility
+
+This section is the release authority for accepted core database states. The
+signed beta.1–beta.3 SQL, tags and release artifacts remain byte-identical.
+Stable v0.1.0 embeds that frozen SQL in `core/db/compatibility/`; the active
+catalog contains only the declarative `0001_baseline.sql` and identifies the
+stable epoch as `user_version = 1`, lineage `stable-v1`.
+
+Startup admits only these exact states:
+
+| Source database | Required identity | Stable-v1 startup action |
+| --- | --- | --- |
+| Empty | `user_version = 0`, no core objects or lineage | Apply the declarative baseline |
+| v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0004, adopt stable lineage |
+| v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0004, adopt stable lineage |
+| v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004, adopt stable lineage |
+| Pre-stable schema 4 | Canonical final schema with `final-beta-schema-3` | Snapshot and adopt stable lineage without more compatibility SQL |
+| Stable v1 | Canonical schema 1 with `stable-v1` | No-op |
+
+“Canonical” means the complete normalized core `sqlite_schema` fingerprint, not
+only the integer version or a claimed lineage row. Intermediate, partial,
+spoofed, corrupt and future schemas are rejected before mutation and do not get
+an adoption snapshot. Extension objects created after
+`_suchi_extension_migrations` are outside the core fingerprint and advance
+through their own ledgers.
+
+Every admitted pre-stable database passes integrity and foreign-key checks, gets
+an exclusive mode-0600 SQLite snapshot beside the live database, and applies
+the remaining frozen steps, stable lineage and stable version in one immediate
+writer transaction. Startup then checks integrity, foreign keys and equality
+with the fresh stable schema manifest. Failure rolls back the transaction and
+retains the snapshot. Fresh and already-stable databases do not create adoption
+snapshots.
+
+Before release, verify fresh initialization and restart, all four pre-stable
+paths, data preservation, snapshot creation and failure, fault-injected rollback,
+foreign-key restoration, invalid-state rejection without writes, and final
+manifest equality. Keep the operator's complete backup containing SQLite,
+blobs, the credential key and configuration; the adoption snapshot is
+database-only. See [Architecture](/architecture#storage-and-transaction-invariants)
+for runtime invariants and [Backup and restore](/backup-restore#upgrade-and-rollback)
+for operator procedure.
 
 ## Release checklist
 

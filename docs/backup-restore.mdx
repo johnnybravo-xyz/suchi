@@ -103,7 +103,8 @@ Do not copy only a live `suchi.db`, copy WAL files separately, or omit blobs.
 2. Move the existing `DATA_DIR` aside rather than deleting it immediately.
 3. Restore the database, blobs, credential key, and configuration into an empty directory.
 4. Set ownership and restrictive key permissions.
-5. Start Suchi. Newer binaries apply missing migrations automatically.
+5. Start the exact target Suchi version. It accepts only the source database
+   states in the [release compatibility table](/release-process#stable-v1-database-compatibility).
 6. Check `/readyz`, open known documents, run a search, and test one sealed
    integration such as a mailbox connection.
 
@@ -138,25 +139,29 @@ or external credentials; restore those into a scratch instance periodically.
 
 ## Upgrade and rollback
 
-Before an upgrade, take a complete backup using one of the methods above and
-keep the deployment pinned to an explicit version. Pull or install the new
-version, recreate or restart the single Suchi instance, then verify `/readyz`
-and run `suchi doctor`.
+Before an upgrade, confirm that the current database state appears in the
+[target release's compatibility table](/release-process#stable-v1-database-compatibility).
+Take a complete backup using one of the methods above, stop every archive
+writer, and keep the deployment pinned to an explicit version. Pull or install
+the target version, recreate or restart the single Suchi instance, then verify
+`/readyz` and run `suchi doctor`.
 
 Database migrations are one-way. To roll back after a migration, stop Suchi,
 restore the complete pre-upgrade data directory, install the previous binary or
 image, and verify readiness again. Do not run an older binary against a database
 opened by a newer release.
 
-Stable v1 accepts every supported beta baseline in one startup. From
-beta.2/schema 2 it applies the frozen 0003 compatibility transition and the 0004
-preset-rule suspension migration before adopting the stable lineage. From
-beta.3/schema 3 it applies 0004 before adoption; schema 4 needs only adoption.
-Fresh v1 databases use the squashed stable baseline instead of the beta migration
-chain. Before any upgrade, stop every archive writer and take a complete backup.
-Afterward, verify `/readyz` and `suchi doctor`, and retain the backup plus the
-previous binary or image until a restore drill succeeds. Never repair this
-transition by changing `user_version` manually.
+The first stable-v1 startup from a supported pre-stable database creates an
+exclusive mode-0600 database snapshot beside `suchi.db` before changing it.
+That snapshot is a last-resort database copy, not a complete backup: it does not
+contain blobs, the credential key or configuration. Retain the complete backup,
+the previous binary or image, and the adoption snapshot until a restore drill
+succeeds.
+
+If startup rejects the database, leave the original data directory stopped and
+inspect the error against the compatibility table. Do not change
+`PRAGMA user_version`, edit lineage rows, skip versions, or run repair SQL to
+force admission.
 
 ## Retention and garbage collection
 
