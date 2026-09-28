@@ -140,7 +140,7 @@ func (s *Server) PostSelfAvatar(w http.ResponseWriter, r *http.Request) {
 		After:  map[string]any{"avatar_sha": ref.SHA256, "size": len(encoded)},
 	})
 
-	self, err := loadSelf(r.Context(), s.DB.Read, p)
+	self, err := s.loadSelf(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "avatar.reload", err)
 		return

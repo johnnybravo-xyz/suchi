@@ -6,7 +6,7 @@ package api
 // display_name only, everything else rejected. Tests pin:
 //   - anonymous → 401
 //   - happy-path {display_name} updates the row + emits audit event
-//   - {email} refused with a targeted code
+//   - unknown fields, including email, are refused
 //   - empty body refused
 //   - overly long name refused
 
@@ -72,7 +72,7 @@ func TestPatchSelf_UpdatesDisplayName(t *testing.T) {
 	}
 }
 
-func TestPatchSelf_EmailRejected(t *testing.T) {
+func TestPatchSelf_EmailIsUnknownField(t *testing.T) {
 	d := openTestDB(t)
 	seedUser(t, d, 1)
 	s := &Server{DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
@@ -82,10 +82,11 @@ func TestPatchSelf_EmailRejected(t *testing.T) {
 		strings.NewReader(`{"email":"new@example.com"}`)).WithContext(ctx)
 	s.PatchSelf(rec, r)
 	if rec.Code != 400 {
-		t.Fatalf("email change status=%d, want 400", rec.Code)
+		t.Fatalf("email field status=%d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "email_change_unsupported") {
-		t.Errorf("expected email_change_unsupported code, got body=%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"code":"bad_json"`) ||
+		!strings.Contains(rec.Body.String(), "unknown field") {
+		t.Errorf("expected strict unknown-field error, got body=%s", rec.Body.String())
 	}
 }
 
@@ -159,5 +160,61 @@ func TestWhoami_ReturnsOnlyTokenScopes(t *testing.T) {
 	}
 	if self.SystemID != nil || self.SystemName != nil || self.SystemCode != nil {
 		t.Fatalf("session unexpectedly exposed a token system: (%v, %v, %v)", self.SystemID, self.SystemName, self.SystemCode)
+	}
+}
+
+func TestWhoamiRereadsCanonicalIdentityBeforeModeEvaluation(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	if _, err := d.Write.Exec(`
+		UPDATE users SET email='canonical@example.test', role='member', display_name='Canonical'
+		WHERE id=1
+	`); err != nil {
+		t.Fatal(err)
+	}
+	var evaluated pluginapi.Principal
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		EmailChangeModeFor: func(p *pluginapi.Principal) string {
+			evaluated = *p
+			return EmailChangeModePassword
+		},
+	}
+	stale := memberPrincipal(1)
+	stale.Email = "stale@example.test"
+	stale.Role = "admin"
+	code, self := doWhoami(t, s, stale)
+	if code != 200 {
+		t.Fatalf("status=%d", code)
+	}
+	if self.Email != "canonical@example.test" || self.Role != "member" ||
+		self.DisplayName != "Canonical" || self.EmailChangeMode != EmailChangeModePassword {
+		t.Fatalf("canonical self=%+v", self)
+	}
+	if evaluated.Email != self.Email || evaluated.Role != self.Role {
+		t.Fatalf("mode evaluator received stale identity: %+v", evaluated)
+	}
+}
+
+func TestWhoamiAllowsOnlyStatelessDemoFallback(t *testing.T) {
+	d := openTestDB(t)
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		EmailChangeModeFor: func(*pluginapi.Principal) string { return EmailChangeModeDisabled },
+	}
+	demo := &pluginapi.Principal{
+		Kind: PrincipalKindDemoAnon, Email: "visitor@demo.local",
+		Display: "Visitor", Role: "member", AuthNBy: "demo-anon",
+	}
+	code, self := doWhoami(t, s, demo)
+	if code != 200 || self.Email != demo.Email || self.DisplayName != demo.Display ||
+		self.Role != demo.Role || self.EmailChangeMode != EmailChangeModeDisabled {
+		t.Fatalf("demo fallback: status=%d self=%+v", code, self)
+	}
+
+	missing := memberPrincipal(999)
+	code, _ = doWhoami(t, s, missing)
+	if code != 500 {
+		t.Fatalf("row-backed missing user status=%d, want 500", code)
 	}
 }

@@ -6,6 +6,7 @@
   "instance_host": "suchi.example.com",
   "role": "member",
   "authn_by": "local-auth",
+  "email_change_mode": "password",
   "avatar_url": "/api/users/7/avatar",
   "system_id": 1,
   "system_name": "Archive",

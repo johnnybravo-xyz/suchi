@@ -20,6 +20,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
+
 	"github.com/johnnybravo-xyz/suchi/core/approvals"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/automations"
@@ -100,7 +102,10 @@ type Server struct {
 	// Build identity is injected by the executable, not frontend package metadata.
 	BuildVersion  string
 	BuildRevision string
-	decrypt       DecryptDeps
+	// EmailChangeModeFor is provided by distro/app because deployment mode and
+	// the fixed development identity are composition policy, not API state.
+	EmailChangeModeFor func(*pluginapi.Principal) string
+	decrypt            DecryptDeps
 	// PasswordHasher is set at boot by distro/app from the local-auth
 	// plugin so /api/admin/users can hash new passwords without this
 	// package importing plugins/*. Nil-check in handlers.

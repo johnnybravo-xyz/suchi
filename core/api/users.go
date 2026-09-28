@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// User profile endpoints. Email changes stay disabled until they can
-// require the current password and emit an audit event.
+// User profile and account identity endpoints.
 
 package api
 
@@ -26,6 +25,24 @@ import (
 
 var errLastActiveAdmin = errors.New("at least one active administrator is required")
 
+const (
+	EmailChangeModePassword = "password"
+	EmailChangeModeOIDC     = "oidc"
+	EmailChangeModeDisabled = "disabled"
+)
+
+func (s *Server) emailChangeMode(p *pluginapi.Principal) string {
+	if s.EmailChangeModeFor == nil {
+		return EmailChangeModeDisabled
+	}
+	switch mode := s.EmailChangeModeFor(p); mode {
+	case EmailChangeModePassword, EmailChangeModeOIDC, EmailChangeModeDisabled:
+		return mode
+	default:
+		return EmailChangeModeDisabled
+	}
+}
+
 func requireActiveAdminInTx(ctx context.Context, tx *sql.Tx, userID int64) error {
 	var allowed bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0 AND role='admin')`, userID).Scan(&allowed); err != nil {
@@ -39,21 +56,22 @@ func requireActiveAdminInTx(ctx context.Context, tx *sql.Tx, userID int64) error
 
 // UserSelf is returned by GET /api/whoami and PATCH /api/users/me.
 type UserSelf struct {
-	Kind          string   `json:"kind"`
-	UserID        int64    `json:"user_id"`
-	Email         string   `json:"email"`
-	DisplayName   string   `json:"display_name,omitempty"`
-	InstanceHost  string   `json:"instance_host,omitempty"`
-	BuildVersion  string   `json:"build_version,omitempty"`
-	BuildRevision string   `json:"build_revision,omitempty"`
-	Role          string   `json:"role"`
-	AuthNBy       string   `json:"authn_by,omitempty"`
-	AvatarURL     string   `json:"avatar_url,omitempty"`
-	SystemID      *int64   `json:"system_id,omitempty"`
-	SystemName    *string  `json:"system_name,omitempty"`
-	SystemCode    *string  `json:"system_code,omitempty"`
-	Capabilities  []string `json:"capabilities"`
-	Scopes        []string `json:"scopes"`
+	Kind            string   `json:"kind"`
+	UserID          int64    `json:"user_id"`
+	Email           string   `json:"email"`
+	DisplayName     string   `json:"display_name,omitempty"`
+	InstanceHost    string   `json:"instance_host,omitempty"`
+	BuildVersion    string   `json:"build_version,omitempty"`
+	BuildRevision   string   `json:"build_revision,omitempty"`
+	Role            string   `json:"role"`
+	AuthNBy         string   `json:"authn_by,omitempty"`
+	EmailChangeMode string   `json:"email_change_mode"`
+	AvatarURL       string   `json:"avatar_url,omitempty"`
+	SystemID        *int64   `json:"system_id,omitempty"`
+	SystemName      *string  `json:"system_name,omitempty"`
+	SystemCode      *string  `json:"system_code,omitempty"`
+	Capabilities    []string `json:"capabilities"`
+	Scopes          []string `json:"scopes"`
 }
 
 // Whoami serves GET /api/whoami. Reads the current user row so
@@ -64,7 +82,7 @@ func (s *Server) Whoami(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "auth required")
 		return
 	}
-	self, err := loadSelf(r.Context(), s.DB.Read, p)
+	self, err := s.loadSelf(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "whoami.load", err)
 		return
@@ -78,8 +96,7 @@ func (s *Server) Whoami(w http.ResponseWriter, r *http.Request) {
 //
 //	{ "display_name": "Ritesh S." }
 //
-// Rejects email + any other field with a clear code so a client
-// mistakenly sending them sees a targeted error, not a silent no-op.
+// Any other field is rejected by the strict JSON decoder.
 func (s *Server) PatchSelf(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	if p == nil {
@@ -89,19 +106,9 @@ func (s *Server) PatchSelf(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		DisplayName *string `json:"display_name,omitempty"`
-		Email       *string `json:"email,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
-		return
-	}
-	if body.Email != nil {
-		// email is an auth identifier — changing it needs a password
-		// check + audit event. Not wired yet; refuse loudly so the
-		// SPA renders a "email change unsupported" hint instead of
-		// silently accepting the no-op.
-		s.writeError(w, http.StatusBadRequest, "email_change_unsupported",
-			"email changes require a dedicated flow — not yet wired")
 		return
 	}
 	if body.DisplayName == nil {
@@ -148,7 +155,7 @@ func (s *Server) PatchSelf(w http.ResponseWriter, r *http.Request) {
 		After:  map[string]any{"display_name": name},
 	})
 
-	self, err := loadSelf(r.Context(), s.DB.Read, p)
+	self, err := s.loadSelf(r.Context(), p)
 	if err != nil {
 		s.serverErr(w, "patchself.reload", err)
 		return
@@ -537,33 +544,53 @@ func revokeSharedViewsFor(ctx context.Context, tx *sql.Tx, userID int64) (int64,
 	return res.RowsAffected()
 }
 
-// loadSelf reads users.display_name + avatar_sha + capabilities and composes
-// the UserSelf payload. Token scopes are request credentials, not user data.
-// Uses the read pool.
-func loadSelf(ctx context.Context, rdb *sql.DB, p *pluginapi.Principal) (UserSelf, error) {
+// loadSelf rereads canonical row-backed identity fields and composes the
+// UserSelf payload. Token scopes are request credentials, not user data.
+// Stateless demo-anon principals are the only identity allowed without a row.
+func (s *Server) loadSelf(ctx context.Context, p *pluginapi.Principal) (UserSelf, error) {
+	self := UserSelf{
+		Kind:            p.Kind,
+		UserID:          p.UserID,
+		Email:           p.Email,
+		DisplayName:     p.Display,
+		Role:            p.Role,
+		AuthNBy:         p.AuthNBy,
+		EmailChangeMode: EmailChangeModeDisabled,
+		Capabilities:    []string{},
+		Scopes:          []string{},
+	}
 	var (
+		email       string
+		role        string
 		displayName sql.NullString
 		avatarSha   sql.NullString
 		capsRaw     string
 	)
-	err := rdb.QueryRowContext(ctx,
-		"SELECT display_name, avatar_sha, COALESCE(capabilities, '[]') FROM users WHERE id = ?",
-		p.UserID).Scan(&displayName, &avatarSha, &capsRaw)
-	if err != nil && err != sql.ErrNoRows {
+	err := s.DB.Read.QueryRowContext(ctx, `
+		SELECT email, role, display_name, avatar_sha, COALESCE(capabilities, '[]')
+		FROM users WHERE id = ?
+	`, p.UserID).Scan(&email, &role, &displayName, &avatarSha, &capsRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		if p.Kind != PrincipalKindDemoAnon {
+			return UserSelf{}, err
+		}
+		self.EmailChangeMode = s.emailChangeMode(p)
+		return self, nil
+	}
+	if err != nil {
 		return UserSelf{}, err
 	}
-	self := UserSelf{
-		Kind:         p.Kind,
-		UserID:       p.UserID,
-		Email:        p.Email,
-		Role:         p.Role,
-		AuthNBy:      p.AuthNBy,
-		Capabilities: []string{},
-		Scopes:       []string{},
-	}
+	self.Email = email
+	self.Role = role
+	self.DisplayName = ""
+	canonical := *p
+	canonical.Email = email
+	canonical.Role = role
+	self.EmailChangeMode = s.emailChangeMode(&canonical)
+
 	if p.Kind == "token" {
 		self.Scopes = append(self.Scopes, p.Scopes...)
-		system, err := systems.Get(ctx, rdb, tokenSystemID(p))
+		system, err := systems.Get(ctx, s.DB.Read, tokenSystemID(p))
 		if err != nil {
 			return UserSelf{}, err
 		}
