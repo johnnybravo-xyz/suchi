@@ -22,12 +22,13 @@ const (
 	// StableSchemaVersion is the single stable-v1 core schema version.
 	StableSchemaVersion = 1
 
-	stableLineage        = "stable-v1"
-	finalBetaLineage     = "final-beta-schema-3"
-	stableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
-	betaOneFingerprint   = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
-	betaTwoFingerprint   = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
-	betaThreeFingerprint = "de0f8f20cfd5b2858051236a045cf67177ad4f32652d3bd646fe177ba462687b"
+	stableLineage                   = "stable-v1"
+	finalBetaLineage                = "final-beta-schema-3"
+	stableFingerprint               = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
+	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
+	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
+	canonicalBetaThreeFingerprint   = "de0f8f20cfd5b2858051236a045cf67177ad4f32652d3bd646fe177ba462687b"
+	legacyAgentBetaThreeFingerprint = "8cbc483c04442b2995eb0a8a76ca30430b15a63b01cdd0395b76031b690b20b1"
 )
 
 type schemaState struct {
@@ -40,8 +41,9 @@ type schemaState struct {
 }
 
 type betaProfile struct {
-	name        string
-	nextVersion int
+	name                  string
+	nextVersion           int
+	requiresEmptyWebhooks bool
 }
 
 type schemaQueryer interface {
@@ -82,6 +84,15 @@ func PrepareStable(ctx context.Context, d *DB, stable, compatibility []Migration
 			}
 		}
 		return fmt.Errorf("unsupported core schema: user_version=%d lineage=%q fingerprint=%s", state.version, lineage, state.fingerprint)
+	}
+	if profile.requiresEmptyWebhooks {
+		var webhooks int
+		if err := d.Write.QueryRowContext(ctx, `SELECT count(*) FROM agent_webhooks`).Scan(&webhooks); err != nil {
+			return fmt.Errorf("validate %s before adoption: count legacy agent webhooks: %w", profile.name, err)
+		}
+		if webhooks != 0 {
+			return fmt.Errorf("validate %s before adoption: legacy agent webhooks contain %d rows; refusing to discard them", profile.name, webhooks)
+		}
 	}
 	if err := checkIntegrity(ctx, d.Write); err != nil {
 		return fmt.Errorf("validate %s before adoption: %w", profile.name, err)
@@ -152,8 +163,10 @@ func classifyBeta(state schemaState) (betaProfile, bool) {
 		return betaProfile{name: "v0.1.0-beta.1/schema1", nextVersion: 2}, true
 	case state.version == 2 && !state.lineagePresent && state.fingerprint == betaTwoFingerprint:
 		return betaProfile{name: "v0.1.0-beta.2/schema2", nextVersion: 3}, true
-	case state.version == 3 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == betaThreeFingerprint:
+	case state.version == 3 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == canonicalBetaThreeFingerprint:
 		return betaProfile{name: "v0.1.0-beta.3/schema3", nextVersion: 4}, true
+	case state.version == 3 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == legacyAgentBetaThreeFingerprint:
+		return betaProfile{name: "v0.1.0-beta.3/legacy-agent-schema3", nextVersion: 4, requiresEmptyWebhooks: true}, true
 	case state.version == 4 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == stableFingerprint:
 		return betaProfile{name: "pre-stable/schema4", nextVersion: 5}, true
 	default:
@@ -211,6 +224,22 @@ func schemaFingerprint(ctx context.Context, q schemaQueryer) (string, int, error
 		  AND (
 			NOT EXISTS (SELECT 1 FROM sqlite_schema WHERE name='_suchi_extension_migrations')
 			OR rowid < (SELECT rowid FROM sqlite_schema WHERE name='_suchi_extension_migrations')
+			-- Stable adoption rebuilds these core objects after the extension
+			-- boundary. Keep them in the core manifest wherever their rowids land.
+			OR name IN (
+				'automation_actions',
+				'automation_triggers_filter_tag_id_insert',
+				'automation_triggers_filter_tag_id_update',
+				'document_tags_reference_insert',
+				'document_tags_reference_update',
+				'idx_automation_actions_aid',
+				'tags',
+				'tags_parent',
+				'tags_parent_insert',
+				'tags_parent_update',
+				'tags_system_immutable',
+				'tags_system_replace'
+			)
 		  )
 		ORDER BY type, name, tbl_name, COALESCE(sql, '')`)
 	if err != nil {

@@ -94,6 +94,156 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("schema3 with extension boundary", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "suchi.db")
+		d := openAdoptionDB(t, path)
+		if err := db.Migrate(t.Context(), d, beta[:3], log); err != nil {
+			t.Fatal(err)
+		}
+		set := db.MigrationSet{Component: "example", Migrations: []db.Migration{{
+			Version: 1,
+			Name:    "probe",
+			SQL:     `CREATE TABLE extension_probe(id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO extension_probe VALUES(1,'preserved')`,
+		}}}
+		if err := db.MigrateSet(t.Context(), d, set, log); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := migrations.Prepare(t.Context(), d, log); err != nil {
+			t.Fatal(err)
+		}
+		assertStableIdentity(t, d)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM extension_probe WHERE id=1 AND value='preserved'`, 1)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM _suchi_extension_migrations WHERE component='example' AND version=1`, 1)
+	})
+}
+
+func TestStableAdoptionLegacyAgentBetaThree(t *testing.T) {
+	beta, err := db.LoadMigrations(compatibility.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("empty legacy webhooks", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "suchi.db")
+		d := openAdoptionDB(t, path)
+		migrateLegacyAgentBetaThree(t, d, beta, log)
+		if _, err := d.ExecWrite(t.Context(), `
+			INSERT INTO automations(id,name,order_index,enabled,created_at,updated_at,system_id)
+			VALUES(42,'Preserved',0,1,1,1,1);
+			INSERT INTO automation_actions(id,automation_id,order_index,kind,params_json,created_at)
+			VALUES(43,42,0,'discard','{}',1)`); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := migrations.Prepare(t.Context(), d, log); err != nil {
+			t.Fatal(err)
+		}
+		assertStableIdentity(t, d)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM automation_actions WHERE id=43 AND automation_id=42 AND kind='discard'`, 1)
+		assertMigrationScalar(t, d, `SELECT count(*) FROM sqlite_schema WHERE name='agent_webhooks'`, 0)
+		if snapshots := adoptionSnapshots(t, path); len(snapshots) != 1 {
+			t.Fatalf("snapshots = %v, want one", snapshots)
+		}
+	})
+
+	t.Run("nonempty legacy webhooks", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "suchi.db")
+		d := openAdoptionDB(t, path)
+		migrateLegacyAgentBetaThree(t, d, beta, log)
+		if _, err := d.ExecWrite(t.Context(), `
+			INSERT INTO users(id,email,display_name,role,created_at,updated_at)
+			VALUES(42,'preserved@example.test','Preserved','member',1,1);
+			INSERT INTO agent_webhooks(id,owner_id,url,kind_prefix,secret_ciphertext,active,created_at)
+			VALUES(1,42,'https://example.test/hook','agent:',X'01',1,1)`); err != nil {
+			t.Fatal(err)
+		}
+		before := adoptionDBState(t, d)
+
+		err := migrations.Prepare(t.Context(), d, log)
+		if err == nil || !strings.Contains(err.Error(), "refusing to discard") {
+			t.Fatalf("error = %v, want legacy webhook rejection", err)
+		}
+		if after := adoptionDBState(t, d); after != before {
+			t.Fatalf("rejected database changed\nbefore: %s\nafter:  %s", before, after)
+		}
+		assertMigrationScalar(t, d, `SELECT count(*) FROM agent_webhooks WHERE id=1`, 1)
+		if snapshots := adoptionSnapshots(t, path); len(snapshots) != 0 {
+			t.Fatalf("rejected database created snapshots: %v", snapshots)
+		}
+	})
+}
+
+func migrateLegacyAgentBetaThree(t *testing.T, d *db.DB, beta []db.Migration, log *slog.Logger) {
+	t.Helper()
+	legacy := append([]db.Migration(nil), beta[:3]...)
+	legacy[2].SQL = strings.Replace(legacy[2].SQL,
+		"parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,",
+		"parent_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,", 1)
+	legacy[2].SQL = strings.Replace(legacy[2].SQL,
+		"-- Beta.3 publishes this transition. Stable v1 retains the frozen SQL only for\n-- its guarded beta.2 compatibility path before adopting the squashed baseline.\n",
+		"", 1)
+	if err := db.Migrate(t.Context(), d, legacy, log); err != nil {
+		t.Fatal(err)
+	}
+	rebuildLegacyAgentBetaThreeSchema(t, d)
+}
+
+func rebuildLegacyAgentBetaThreeSchema(t *testing.T, d *db.DB) {
+	t.Helper()
+	legacy := strings.ReplaceAll(`
+		DROP TABLE automation_actions;
+		CREATE TABLE automation_actions (
+		  id             INTEGER PRIMARY KEY,
+		  automation_id  INTEGER NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+		  order_index  INTEGER NOT NULL DEFAULT 0,
+		  -- assign_title | assign_tags | assign_correspondent | assign_document_type
+		  -- | assign_jd_category | assign_storage_path | assign_owner | assign_custom_field
+		  -- | create_agent_task | discard
+		  -- | remove_tags | remove_correspondents | remove_document_type
+		  -- | remove_storage_path | remove_custom_field
+		  kind         TEXT NOT NULL,
+		  -- Params live in a small JSON blob. Shape depends on kind:
+		  --   assign_title            {"template": "{{correspondent}} — {{title}}"}
+		  --   assign_tags             {"tag_ids": [1,2,3]}
+		  --   assign_correspondent    {"correspondent_id": 5}
+		  --   assign_document_type    {"document_type_id": 7}
+		  --   assign_jd_category      {"jd_category_id": 8}
+		  --   assign_storage_path     {"storage_path_id": 3}
+		  --   assign_owner            {"owner_id": 2}
+		  --   assign_custom_field     {"field_id": 4, "value": "..."}
+		  --   create_agent_task       {"kind": "agent:workload", "payload": {}}
+		  --   discard                 {}
+		  --   remove_tags             {"tag_ids": [1,2]}
+		  --   remove_correspondents   {"correspondent_ids": [5]}
+		  --   remove_document_type    {}
+		  --   remove_storage_path     {}
+		  --   remove_custom_field     {"field_id": 4}
+		  params_json  TEXT NOT NULL DEFAULT '{}',
+		  created_at   INTEGER NOT NULL
+		) STRICT;
+		CREATE INDEX idx_automation_actions_aid  ON automation_actions(automation_id, order_index);
+
+		CREATE TABLE agent_webhooks (
+		    id                 INTEGER PRIMARY KEY,
+		    owner_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    url                TEXT NOT NULL,
+		    kind_prefix        TEXT NOT NULL,     -- e.g. "agent:classify" or "agent:" for everything
+		    secret_ciphertext  BLOB NOT NULL,     -- AEAD-sealed HMAC secret
+		    label              TEXT,               -- optional operator-visible name
+		    active             INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+		    created_at         INTEGER NOT NULL,
+		    last_delivery_at   INTEGER,
+		    last_status        INTEGER,            -- last HTTP status code from the receiver
+		    last_error         TEXT                -- tail of the last error, if any
+		) STRICT;
+		CREATE INDEX agent_webhooks_owner_active
+		    ON agent_webhooks(owner_id, active) WHERE active = 1`, "\n\t\t", "\n")
+	if _, err := d.ExecWrite(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStableAdoptionRejectsUnknownSchemasWithoutWrites(t *testing.T) {

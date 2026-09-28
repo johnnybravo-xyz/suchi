@@ -33,6 +33,8 @@ Notable user-visible changes to Suchi are recorded here.
   replacement codes.
 - Upgrade existing beta.3 archives before querying filing-rule suspension, so
   opening the Filing tree no longer fails with a missing `suspended` column.
+- Adopt historical schema-3 archives left by pre-beta mutable baselines, while
+  refusing to discard any configured obsolete agent webhooks.
 - Keep full-width Documents search above one options row, combine added-date
   bounds behind **Any date**, and separate left-side filters from right-side
   display, refresh and sorting controls. Remove duplicate Trash and tag-catalog

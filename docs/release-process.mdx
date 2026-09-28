@@ -65,6 +65,7 @@ Startup admits only these exact states:
 | v0.1.0-beta.1 | Canonical beta.1 schema 1, no lineage table | Snapshot, apply frozen 0002–0004, adopt stable lineage |
 | v0.1.0-beta.2 | Canonical beta.2 schema 2, no lineage table | Snapshot, apply frozen 0003–0004, adopt stable lineage |
 | v0.1.0-beta.3 | Canonical schema 3 with `final-beta-schema-3` | Snapshot, apply frozen 0004, adopt stable lineage |
+| Historical schema 3 | Known pre-beta mutable-baseline fingerprint with `final-beta-schema-3`; obsolete `agent_webhooks` table must be empty | Snapshot, remove the empty obsolete table, normalize the schema and adopt stable lineage |
 | Pre-stable schema 4 | Canonical final schema with `final-beta-schema-3` | Snapshot and adopt stable lineage without more compatibility SQL |
 | Stable v1 | Canonical schema 1 with `stable-v1` | No-op |
 
@@ -72,8 +73,8 @@ Startup admits only these exact states:
 only the integer version or a claimed lineage row. Intermediate, partial,
 spoofed, corrupt and future schemas are rejected before mutation and do not get
 an adoption snapshot. Extension objects created after
-`_suchi_extension_migrations` are outside the core fingerprint and advance
-through their own ledgers.
+`_suchi_extension_migrations` are outside the core fingerprint; core objects
+rebuilt during adoption remain part of it regardless of their replacement rowids.
 
 Every admitted pre-stable database passes integrity and foreign-key checks, gets
 an exclusive mode-0600 SQLite snapshot beside the live database, and applies

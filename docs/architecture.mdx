@@ -286,6 +286,8 @@ through the sole writer. The final integrity, foreign keys and canonical schema
 fingerprint must match a fresh stable database; failures roll back while
 retaining the snapshot and restoring foreign-key enforcement. Extension objects
 created after `_suchi_extension_migrations` are outside the core fingerprint.
+Core objects rebuilt during adoption remain explicitly included even when SQLite
+places their replacement rows after that extension boundary.
 
 Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
 `PRAGMA user_version`. Each component supplies its complete ordered history from
