@@ -5,6 +5,7 @@ package localauth
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -436,6 +437,128 @@ func TestLoginHandlerCreatesOnlyBrowserSession(t *testing.T) {
 	}
 }
 
+func TestPreparedSessionRotationCommitsOrRollsBackAtomically(t *testing.T) {
+	for _, outcome := range []string{"commit", "rollback"} {
+		t.Run(outcome, func(t *testing.T) {
+			p := openTestPlugin(t)
+			if err := p.EnsureDevAdmin(t.Context(), DevAdminEmail, DevAdminPassword); err != nil {
+				t.Fatal(err)
+			}
+			loginRequest := httptest.NewRequest(http.MethodPost, "/api/login", nil)
+			first, err := p.IssueSession(t.Context(), 1, loginRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := p.IssueSession(t.Context(), 1, loginRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var token string
+			if err := p.db.WriteTx(t.Context(), func(tx *sql.Tx) error {
+				var err error
+				token, err = p.IssueAPIToken(t.Context(), tx, 1, 1, "rotation-test", auth.ScopeDocumentsRead, "")
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			rotationRequest := httptest.NewRequest(http.MethodPost, "/api/users/me/email", nil)
+			rotationRequest.Header.Set("User-Agent", "rotation-agent")
+			rotationRequest.RemoteAddr = "203.0.113.9:4321"
+			prepared, err := p.PrepareSession(rotationRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cookie := prepared.Cookie()
+			if cookie == nil || cookie.Name != CookieName || !cookie.HttpOnly ||
+				cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" ||
+				cookie.Expires.Unix() != prepared.expiresAt {
+				t.Fatalf("prepared cookie=%+v expires=%d", cookie, prepared.expiresAt)
+			}
+
+			rejected := errors.New("reject mutation")
+			var revoked int64
+			err = p.db.WriteTx(t.Context(), func(tx *sql.Tx) error {
+				var err error
+				revoked, err = prepared.Rotate(t.Context(), tx, 1)
+				if err != nil {
+					return err
+				}
+				if outcome == "rollback" {
+					return rejected
+				}
+				return nil
+			})
+			if outcome == "commit" && err != nil {
+				t.Fatal(err)
+			}
+			if outcome == "rollback" && !errors.Is(err, rejected) {
+				t.Fatalf("rollback error=%v", err)
+			}
+			if revoked != 2 {
+				t.Fatalf("revoked=%d, want 2", revoked)
+			}
+
+			var sessionCount, rawCount int
+			if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE user_id=1`).Scan(&sessionCount); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, cookie.Value).Scan(&rawCount); err != nil {
+				t.Fatal(err)
+			}
+			wantSessions := 1
+			if outcome == "rollback" {
+				wantSessions = 2
+			}
+			if sessionCount != wantSessions || rawCount != 0 {
+				t.Fatalf("sessions=%d raw_credential_rows=%d, want %d/0", sessionCount, rawCount, wantSessions)
+			}
+
+			for _, oldCookie := range []*http.Cookie{first, second} {
+				request := httptest.NewRequest(http.MethodGet, "/", nil)
+				request.AddCookie(oldCookie)
+				principal, err := p.Authenticate(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outcome == "commit" && principal != nil {
+					t.Fatal("old browser session survived committed rotation")
+				}
+				if outcome == "rollback" && (principal == nil || principal.UserID != 1) {
+					t.Fatal("old browser session was lost on rollback")
+				}
+			}
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.AddCookie(cookie)
+			principal, err := p.Authenticate(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome == "commit" {
+				if principal == nil || principal.UserID != 1 {
+					t.Fatal("committed replacement session did not authenticate")
+				}
+				var userAgent, ip string
+				if err := p.db.Read.QueryRow(`SELECT user_agent,ip FROM sessions WHERE id=?`, digest(cookie.Value)).
+					Scan(&userAgent, &ip); err != nil {
+					t.Fatal(err)
+				}
+				if userAgent != "rotation-agent" || ip != "203.0.113.9:4321" {
+					t.Fatalf("replacement metadata=%q/%q", userAgent, ip)
+				}
+			} else if principal != nil {
+				t.Fatal("rolled-back replacement session authenticated")
+			}
+
+			tokenRequest := httptest.NewRequest(http.MethodGet, "/api/documents/", nil)
+			tokenRequest.Header.Set("Authorization", "Token "+token)
+			if principal, err := p.Authenticate(tokenRequest); err != nil || principal == nil || principal.TokenID == 0 {
+				t.Fatalf("API token changed by browser rotation: principal=%+v err=%v", principal, err)
+			}
+		})
+	}
+}
+
 func TestPasswordWorkBoundRejectsBusyLoginAndHashing(t *testing.T) {
 	p := openTestPlugin(t)
 	if _, err := p.db.ExecWrite(t.Context(), `
@@ -463,6 +586,10 @@ func TestPasswordWorkBoundRejectsBusyLoginAndHashing(t *testing.T) {
 	}
 	if _, err := HashPassword("password"); !errors.Is(err, errPasswordWorkBusy) {
 		t.Fatalf("shared password hasher did not enforce the global bound: %v", err)
+	}
+	if !PasswordWorkBusy(errors.Join(errors.New("wrapped"), errPasswordWorkBusy)) ||
+		PasswordWorkBusy(errors.New("password mismatch")) {
+		t.Fatal("PasswordWorkBusy did not classify the saturation sentinel narrowly")
 	}
 	setupBody, err := json.Marshal(SetupRequest{
 		Token: p.SetupToken(), Email: "admin@example.test", Password: "password",

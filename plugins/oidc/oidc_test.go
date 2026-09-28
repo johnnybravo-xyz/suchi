@@ -148,7 +148,7 @@ func TestOIDCAndLocalTokenDispatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := request.Clone(context.Background())
 			r.Header.Set("Authorization", tc.header)
-			r.AddCookie(&http.Cookie{Name: localauth.CookieName, Value: session})
+			r.AddCookie(session)
 			principal, err := chain.Authenticate(r)
 			if tc.kind == "" {
 				if err == nil || principal != nil {

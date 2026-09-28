@@ -49,7 +49,7 @@ type Config struct {
 	// session table so the OIDC path and the local-password path both
 	// mint the same kind of cookie. Passing this as a func avoids a
 	// hard dep between the two plugin modules.
-	IssueSession func(ctx context.Context, userID int64, r *http.Request) (string, error)
+	IssueSession func(ctx context.Context, userID int64, r *http.Request) (*http.Cookie, error)
 }
 
 // Plugin implements pluginapi.Authenticator for OIDC bearer flows. The
@@ -222,21 +222,13 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user upsert failed", http.StatusInternalServerError)
 		return
 	}
-	sid, err := p.cfg.IssueSession(r.Context(), userID, r)
+	cookie, err := p.cfg.IssueSession(r.Context(), userID, r)
 	if err != nil {
 		p.log.Error("oidc.session.fail", "err", err.Error())
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "suchi_session",
-		Value:    sid,
-		Path:     "/",
-		Expires:  time.Now().Add(30 * 24 * time.Hour),
-		HttpOnly: true,
-		Secure:   p.cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, cookie)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

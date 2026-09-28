@@ -90,13 +90,13 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Auto-login: plant a session cookie so the operator lands on / as
 	// the admin they just created, no re-typing.
-	sid, err := p.IssueSession(r.Context(), userID, r)
+	cookie, err := p.IssueSession(r.Context(), userID, r)
 	if err != nil {
 		p.log.Error("localauth.setup.session_failed", "err", err.Error())
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	http.SetCookie(w, p.sessionCookie(sid))
+	http.SetCookie(w, cookie)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -210,12 +210,12 @@ func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sid, err := p.IssueSession(r.Context(), userID, r)
+	cookie, err := p.IssueSession(r.Context(), userID, r)
 	if err != nil {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, p.sessionCookie(sid))
+	http.SetCookie(w, cookie)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -321,12 +321,12 @@ func (p *Plugin) LoginFormHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sid, err := p.IssueSession(r.Context(), userID, r)
+	cookie, err := p.IssueSession(r.Context(), userID, r)
 	if err != nil {
 		http.Error(w, "session failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, p.sessionCookie(sid))
+	http.SetCookie(w, cookie)
 	next := r.URL.Query().Get("next")
 	if !safeLocalRedirect(next) {
 		next = "/"
@@ -397,10 +397,80 @@ func (p *Plugin) verifyCredentials(ctx context.Context, email, password string) 
 	return userID, nil
 }
 
-// IssueSession creates a fresh session row and returns its opaque id.
-// Exported because the OIDC plugin's callback delegates cookie-issuance
-// here — one code path mints all cookies.
-func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request) (string, error) {
+// PreparedSession holds a fresh opaque browser credential and the request
+// metadata needed to persist its digest. Prepare it before entering a writer
+// transaction; Cookie is safe to send only after that transaction commits.
+type PreparedSession struct {
+	cookie               http.Cookie
+	digest               string
+	createdAt, expiresAt int64
+	userAgent, ip        string
+}
+
+// Cookie returns a copy so callers cannot mutate the prepared credential.
+func (s *PreparedSession) Cookie() *http.Cookie {
+	if s == nil {
+		return nil
+	}
+	cookie := s.cookie
+	return &cookie
+}
+
+// Rotate deletes every browser session for userID and inserts this replacement
+// inside the caller's transaction. API tokens are intentionally untouched.
+func (s *PreparedSession) Rotate(ctx context.Context, tx *sql.Tx, userID int64) (int64, error) {
+	if s == nil {
+		return 0, errors.New("local-auth: nil prepared session")
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	if err != nil {
+		return 0, err
+	}
+	revoked, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := s.insert(ctx, tx, userID); err != nil {
+		return 0, err
+	}
+	return revoked, nil
+}
+
+func (s *PreparedSession) insert(ctx context.Context, tx *sql.Tx, userID int64) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, s.digest, userID, s.createdAt, s.expiresAt, s.createdAt, s.userAgent, s.ip)
+	return err
+}
+
+// PrepareSession creates a normal browser credential without taking the writer.
+func (p *Plugin) PrepareSession(r *http.Request) (*PreparedSession, error) {
+	return p.prepareSession(r, SessionTTL)
+}
+
+func (p *Plugin) prepareSession(r *http.Request, ttl time.Duration) (*PreparedSession, error) {
+	if r == nil || ttl <= 0 {
+		return nil, errors.New("local-auth: session requires a request and positive lifetime")
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, err
+	}
+	sid := hex.EncodeToString(raw[:])
+	now := time.Now()
+	expires := now.Add(ttl)
+	return &PreparedSession{
+		cookie:    p.sessionCookie(sid, expires),
+		digest:    digest(sid),
+		createdAt: now.Unix(), expiresAt: expires.Unix(),
+		userAgent: r.UserAgent(), ip: r.RemoteAddr,
+	}, nil
+}
+
+// IssueSession creates a fresh session row and returns its centrally-built
+// cookie. OIDC delegates here so every normal login uses identical attributes.
+func (p *Plugin) IssueSession(ctx context.Context, userID int64, r *http.Request) (*http.Cookie, error) {
 	return p.issueSession(ctx, userID, r, SessionTTL)
 }
 
@@ -410,44 +480,44 @@ func (p *Plugin) IssueDemoSession(w http.ResponseWriter, r *http.Request, userID
 	if !p.demoMode || ttl <= 0 {
 		return errors.New("demo session requires demo mode and a positive lifetime")
 	}
-	sid, err := p.issueSession(r.Context(), userID, r, ttl)
+	cookie, err := p.issueSession(r.Context(), userID, r, ttl)
 	if err != nil {
 		return err
 	}
-	cookie := p.sessionCookie(sid)
-	cookie.Expires = time.Now().Add(ttl)
 	http.SetCookie(w, cookie)
 	return nil
 }
 
-func (p *Plugin) issueSession(ctx context.Context, userID int64, r *http.Request, ttl time.Duration) (string, error) {
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
+func (p *Plugin) issueSession(ctx context.Context, userID int64, r *http.Request, ttl time.Duration) (*http.Cookie, error) {
+	prepared, err := p.prepareSession(r, ttl)
+	if err != nil {
+		return nil, err
 	}
-	sid := hex.EncodeToString(raw[:])
-	now := time.Now()
-	err := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
+	err = p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM sessions WHERE expires_at <= ?", now.Unix()); err != nil {
+			"DELETE FROM sessions WHERE expires_at <= ?", prepared.createdAt); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO sessions(id, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, digest(sid), userID, now.Unix(), now.Add(ttl).Unix(), now.Unix(),
-			r.UserAgent(), r.RemoteAddr)
-		return err
+		return prepared.insert(ctx, tx, userID)
 	})
-	return sid, err
+	if err != nil {
+		return nil, err
+	}
+	return prepared.Cookie(), nil
 }
 
-func (p *Plugin) sessionCookie(sid string) *http.Cookie {
-	return &http.Cookie{
+func (p *Plugin) sessionCookie(sid string, expires time.Time) http.Cookie {
+	return http.Cookie{
 		Name: CookieName, Value: sid, Path: "/",
-		Expires: time.Now().Add(SessionTTL), HttpOnly: true,
+		Expires: expires, HttpOnly: true,
 		Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
 	}
+}
+
+func (p *Plugin) expiredSessionCookie() *http.Cookie {
+	cookie := p.sessionCookie("", time.Unix(1, 0))
+	cookie.MaxAge = -1
+	return &cookie
 }
 
 // LogoutHandler revokes the active browser session and login-issued API token.
@@ -477,10 +547,7 @@ func (p *Plugin) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "logout failed", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: CookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: p.cookieSecure, SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, p.expiredSessionCookie())
 	if p.demoMode {
 		http.SetCookie(w, &http.Cookie{
 			Name: "suchi_demo_anon", Path: "/", MaxAge: -1,

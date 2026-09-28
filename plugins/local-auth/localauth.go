@@ -51,6 +51,12 @@ var (
 	passwordWorkSlots   = make(chan struct{}, maxConcurrentPasswordWork)
 )
 
+// PasswordWorkBusy reports whether password hashing or verification could not
+// start because the process-wide Argon2 work slots were full.
+func PasswordWorkBusy(err error) bool {
+	return errors.Is(err, errPasswordWorkBusy)
+}
+
 // Plugin is the runtime handle. Zero value not useful; construct with New.
 type Plugin struct {
 	db           *db.DB
