@@ -7,10 +7,10 @@ import (
 	"errors"
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
+	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -28,7 +28,7 @@ var (
 // identity, password hash, and initiating session inside the mutation.
 func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.emailChangeOriginAllowed(r) {
+	if !httpx.StrictSameOrigin(r, s.PublicURL) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "same-origin request provenance is required")
 		return
 	}
@@ -220,24 +220,4 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) emailChangeOriginAllowed(r *http.Request) bool {
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin":
-		return true
-	case "":
-	default:
-		return false
-	}
-	origin, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin")))
-	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.User != nil ||
-		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
-		return false
-	}
-	trusted, err := url.Parse(strings.TrimSpace(s.PublicURL))
-	if err != nil || trusted.Scheme == "" || trusted.Host == "" || trusted.User != nil {
-		return false
-	}
-	return origin.Scheme == trusted.Scheme && origin.Host == trusted.Host
 }

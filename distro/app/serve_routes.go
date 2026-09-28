@@ -27,6 +27,7 @@ func registerBaseRoutes(mux *http.ServeMux, cfg *config.Config, d *db.DB, cas *b
 	if oa != nil {
 		mux.HandleFunc("GET /oidc/login", oa.LoginHandler)
 		mux.HandleFunc("GET /oidc/callback", oa.CallbackHandler)
+		mux.HandleFunc("POST /oidc/email-change", oa.EmailChangeHandler)
 	}
 	if !oidcEnabled {
 		mux.HandleFunc("POST /setup", la.SetupHandler)

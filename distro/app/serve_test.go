@@ -130,6 +130,7 @@ func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
 		{path: "/api/mobile/pairing"},
 		{path: "/api/mobile/pairing/exchange"},
 		{path: "/api/users/me/email"},
+		{path: "/oidc/email-change"},
 		{path: "/api/demo/session", demo: true},
 		{path: "/api/demo/session/upgrade", demo: true},
 	} {
@@ -165,6 +166,9 @@ func TestBuildHTTPHandlerRateLimitsCredentialAndDemoAliases(t *testing.T) {
 				want := http.StatusNoContent
 				if tc.path == "/api/token" && i%3 == 2 {
 					want = http.StatusTemporaryRedirect
+				}
+				if tc.path == "/oidc/email-change" && i%3 != 0 {
+					want = http.StatusNotFound
 				}
 				if i >= 10 {
 					want = http.StatusTooManyRequests

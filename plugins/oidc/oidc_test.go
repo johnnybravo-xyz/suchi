@@ -19,12 +19,14 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
+	"github.com/johnnybravo-xyz/suchi/core/settings"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 	localauth "github.com/johnnybravo-xyz/suchi/plugins/local-auth"
 )
@@ -56,6 +58,8 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var tokenMu sync.Mutex
+	usedCodes := make(map[string]struct{})
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -72,9 +76,24 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB",
 			}}})
 		case "/token":
+			if r.FormValue("code_verifier") == "" {
+				http.Error(w, "PKCE verifier required", http.StatusBadRequest)
+				return
+			}
+			code := r.FormValue("code")
+			tokenMu.Lock()
+			_, reused := usedCodes[code]
+			if !reused {
+				usedCodes[code] = struct{}{}
+			}
+			tokenMu.Unlock()
+			if reused {
+				http.Error(w, "authorization code already used", http.StatusBadRequest)
+				return
+			}
 			// The test's authorization code carries its signed token fixture.
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "test-access", "token_type": "Bearer", "id_token": r.FormValue("code"),
+				"access_token": "test-access", "token_type": "Bearer", "id_token": code,
 			})
 		default:
 			http.NotFound(w, r)
@@ -88,7 +107,12 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 	}
 	p, err := New(t.Context(), Config{
 		IssuerURL: issuer.URL, ClientID: "test-client", ClientSecret: "test-secret",
-		PublicURL: "http://suchi.example.test", AdminEmail: " OWNER@Example.Test ", IssueSession: local.IssueSession,
+		PublicURL: "http://suchi.example.test", AdminEmail: " OWNER@Example.Test ",
+		IssueSession: local.IssueSession,
+		PrepareSession: func(r *http.Request) (PreparedSession, error) {
+			return local.PrepareSession(r)
+		},
+		EmailChangeAllowed: func(_, _ string) bool { return true },
 	}, database, log)
 	if err != nil {
 		t.Fatal(err)
@@ -121,14 +145,137 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 	}
 	return p, local, sign
 }
-func oidcCallback(t *testing.T, p *Plugin, rawIDToken string) *httptest.ResponseRecorder {
+
+type oidcTestFlow struct {
+	authorizationURL *url.URL
+	cookie           *http.Cookie
+}
+
+func readOIDCTestFlow(t *testing.T, start *httptest.ResponseRecorder) oidcTestFlow {
 	t.Helper()
+	if start.Code != http.StatusFound || start.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("start status=%d headers=%v body=%s", start.Code, start.Header(), start.Body.String())
+	}
+	authorizationURL, err := url.Parse(start.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := authorizationURL.Query()
+	if query.Get("state") == "" || query.Get("nonce") == "" ||
+		query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("authorization URL missing transaction binding: %s", authorizationURL)
+	}
+	var transactionCookie *http.Cookie
+	for _, cookie := range start.Result().Cookies() {
+		if cookie.Name == transactionCookieName {
+			transactionCookie = cookie
+		}
+	}
+	if transactionCookie == nil || !transactionCookie.HttpOnly ||
+		transactionCookie.Domain != "" || transactionCookie.Path != "/oidc" ||
+		transactionCookie.SameSite != http.SameSiteLaxMode ||
+		transactionCookie.MaxAge != int(stateTTL/time.Second) {
+		t.Fatalf("transaction cookie=%+v", transactionCookie)
+	}
+	return oidcTestFlow{authorizationURL: authorizationURL, cookie: transactionCookie}
+}
+
+func completeOIDCTestFlow(
+	t *testing.T,
+	p *Plugin,
+	flow oidcTestFlow,
+	rawIDToken string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	query := flow.authorizationURL.Query()
 	callback := httptest.NewRequest(http.MethodGet,
-		"/oidc/callback?state=test-state&code="+url.QueryEscape(rawIDToken), nil)
-	callback.AddCookie(&http.Cookie{Name: stateCookie, Value: "test-state"})
+		"/oidc/callback?state="+url.QueryEscape(query.Get("state"))+
+			"&code="+url.QueryEscape(rawIDToken), nil)
+	callback.AddCookie(flow.cookie)
 	response := httptest.NewRecorder()
 	p.CallbackHandler(response, callback)
 	return response
+}
+
+func oidcCallback(
+	t *testing.T,
+	p *Plugin,
+	sign func(map[string]any) string,
+	overrides map[string]any,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	start := httptest.NewRecorder()
+	p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+	flow := readOIDCTestFlow(t, start)
+	claims := make(map[string]any, len(overrides)+1)
+	for name, value := range overrides {
+		claims[name] = value
+	}
+	claims["nonce"] = flow.authorizationURL.Query().Get("nonce")
+	return completeOIDCTestFlow(t, p, flow, sign(claims))
+}
+func issueOIDCTestSession(
+	t *testing.T,
+	local *localauth.Plugin,
+	userID int64,
+) (*http.Cookie, *pluginapi.Principal) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "192.0.2.10:1234"
+	cookie, err := local.IssueSession(t.Context(), userID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	authRequest.AddCookie(cookie)
+	principal, err := local.Authenticate(authRequest)
+	if err != nil || principal == nil {
+		t.Fatalf("authenticate issued session: principal=%+v err=%v", principal, err)
+	}
+	return cookie, principal
+}
+
+func startOIDCEmailSync(
+	t *testing.T,
+	p *Plugin,
+	principal *pluginapi.Principal,
+) oidcTestFlow {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/oidc/email-change", nil)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request = request.WithContext(auth.WithPrincipal(request.Context(), principal))
+	response := httptest.NewRecorder()
+	p.EmailChangeHandler(response, request)
+	flow := readOIDCTestFlow(t, response)
+	if flow.authorizationURL.Query().Get("prompt") != "login" {
+		t.Fatalf("email synchronization did not force provider login: %s", flow.authorizationURL)
+	}
+	return flow
+}
+
+func completeOIDCTestClaims(
+	t *testing.T,
+	p *Plugin,
+	flow oidcTestFlow,
+	sign func(map[string]any) string,
+	overrides map[string]any,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	claims := make(map[string]any, len(overrides)+1)
+	for name, value := range overrides {
+		claims[name] = value
+	}
+	claims["nonce"] = flow.authorizationURL.Query().Get("nonce")
+	return completeOIDCTestFlow(t, p, flow, sign(claims))
+}
+
+func responseCookie(response *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	return nil
 }
 
 func TestOIDCAndLocalTokenDispatch(t *testing.T) {
@@ -216,7 +363,7 @@ func TestOIDCRequiresVerifiedEmailBeforeAccountBinding(t *testing.T) {
 				t.Fatalf("rejected claims admitted by bearer: principal=%+v err=%v", principal, err)
 			}
 
-			response := oidcCallback(t, p, raw)
+			response := oidcCallback(t, p, sign, tc.claims)
 			var session *http.Cookie
 			for _, cookie := range response.Result().Cookies() {
 				if cookie.Name == localauth.CookieName {
@@ -264,9 +411,9 @@ func TestOIDCBearerResolvesOnlyBoundSubjectAndUsesCanonicalProfile(t *testing.T)
 		principal.Role != "member" || principal.AuthNBy != Name {
 		t.Fatalf("principal used mutable claims instead of canonical row: %+v", principal)
 	}
-	response := oidcCallback(t, p, sign(map[string]any{
+	response := oidcCallback(t, p, sign, map[string]any{
 		"email": "different-claim@example.test", "name": "Different Claim",
-	}))
+	})
 	if response.Code != http.StatusFound {
 		t.Fatalf("existing-binding callback status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -301,9 +448,9 @@ func TestOIDCBearerResolvesOnlyBoundSubjectAndUsesCanonicalProfile(t *testing.T)
 
 func TestOIDCCallbackProvisionsUnusedSubjectAndRetainedBinding(t *testing.T) {
 	p, _, sign := newTestOIDC(t)
-	response := oidcCallback(t, p, sign(map[string]any{
+	response := oidcCallback(t, p, sign, map[string]any{
 		"sub": "new-subject", "email": " New@Example.Test ", "name": "New User",
-	}))
+	})
 	if response.Code != http.StatusFound {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -341,7 +488,7 @@ func TestOIDCCallbackNeverAdoptsOccupiedEmail(t *testing.T) {
 	if _, err := p.db.Write.Exec(`UPDATE users SET oidc_issuer=NULL,oidc_subject=NULL WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	response := oidcCallback(t, p, sign(nil))
+	response := oidcCallback(t, p, sign, nil)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -368,7 +515,7 @@ func TestOIDCAdminBootstrapRequiresNoExistingAdministrator(t *testing.T) {
 		if _, err := p.db.Write.Exec(`DELETE FROM users`); err != nil {
 			t.Fatal(err)
 		}
-		response := oidcCallback(t, p, sign(nil))
+		response := oidcCallback(t, p, sign, nil)
 		if response.Code != http.StatusFound {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
@@ -383,7 +530,7 @@ func TestOIDCAdminBootstrapRequiresNoExistingAdministrator(t *testing.T) {
 		if _, err := p.db.Write.Exec(`UPDATE users SET email='existing-admin@example.test' WHERE id=1`); err != nil {
 			t.Fatal(err)
 		}
-		response := oidcCallback(t, p, sign(map[string]any{"sub": "later-subject"}))
+		response := oidcCallback(t, p, sign, map[string]any{"sub": "later-subject"})
 		if response.Code != http.StatusFound {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
@@ -408,14 +555,475 @@ func TestOIDCProvisioningRollsBackWhenRetainedAuditFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	response := oidcCallback(t, p, sign(map[string]any{
+	response := oidcCallback(t, p, sign, map[string]any{
 		"sub": "rollback-subject", "email": "rollback@example.test",
-	}))
+	})
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var users int
 	if err := p.db.Read.QueryRow(`SELECT count(*) FROM users WHERE email='rollback@example.test'`).Scan(&users); err != nil || users != 0 {
 		t.Fatalf("rolled-back users=%d err=%v", users, err)
+	}
+}
+
+func TestOIDCEmailChangeStartRequiresStrictOriginAndLiveSession(t *testing.T) {
+	p, local, _ := newTestOIDC(t)
+	_, principal := issueOIDCTestSession(t, local, 1)
+	for _, tc := range []struct {
+		name, fetchSite, origin, authorization string
+		mutate                                 func(*pluginapi.Principal)
+		revoke                                 bool
+		want                                   int
+	}{
+		{name: "fetch metadata", fetchSite: "same-origin", want: http.StatusFound},
+		{name: "matching origin fallback", origin: "http://suchi.example.test", want: http.StatusFound},
+		{name: "missing provenance", want: http.StatusForbidden},
+		{name: "cross site", fetchSite: "cross-site", origin: "http://suchi.example.test", want: http.StatusForbidden},
+		{name: "expired proof", fetchSite: "same-origin", mutate: func(p *pluginapi.Principal) { p.AuthExpiresAt = 1 }, want: http.StatusUnauthorized},
+		{name: "token principal", fetchSite: "same-origin", mutate: func(p *pluginapi.Principal) { p.Kind = "token" }, want: http.StatusUnauthorized},
+		{name: "authorization header", fetchSite: "same-origin", authorization: "Bearer external", want: http.StatusUnauthorized},
+		{name: "revoked session", fetchSite: "same-origin", revoke: true, want: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := *principal
+			if tc.mutate != nil {
+				tc.mutate(&current)
+			}
+			if tc.revoke {
+				if _, err := p.db.Write.Exec(`DELETE FROM sessions WHERE id=?`, current.SessionID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := httptest.NewRequest(http.MethodPost, "/oidc/email-change", nil)
+			request.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			request.Header.Set("Origin", tc.origin)
+			request.Header.Set("Authorization", tc.authorization)
+			request = request.WithContext(auth.WithPrincipal(request.Context(), &current))
+			response := httptest.NewRecorder()
+			p.EmailChangeHandler(response, request)
+			if response.Code != tc.want || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+			}
+			if tc.want == http.StatusFound {
+				flow := readOIDCTestFlow(t, response)
+				if flow.authorizationURL.Query().Get("prompt") != "login" {
+					t.Fatalf("prompt=%q", flow.authorizationURL.Query().Get("prompt"))
+				}
+			}
+		})
+	}
+}
+
+func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing.T) {
+	p, local, sign := newTestOIDC(t)
+	firstCookie, principal := issueOIDCTestSession(t, local, 1)
+	secondCookie, _ := issueOIDCTestSession(t, local, 1)
+	var apiToken string
+	if err := p.db.WriteTx(t.Context(), func(tx *sql.Tx) error {
+		var err error
+		apiToken, err = local.IssueAPIToken(t.Context(), tx, 1, 1, "mobile", auth.ScopeDocumentsRead, "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, "owner@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	reloads := 0
+	p.cfg.FSWatchReloader = func(context.Context) error {
+		reloads++
+		return errors.New("reload warning")
+	}
+
+	flow := startOIDCEmailSync(t, p, principal)
+	response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+		"email": " Changed@Example.Test ",
+	})
+	if response.Code != http.StatusFound || response.Header().Get("Location") != accountNoticeChanged ||
+		response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d location=%q headers=%v body=%s",
+			response.Code, response.Header().Get("Location"), response.Header(), response.Body.String())
+	}
+	replacement := responseCookie(response, localauth.CookieName)
+	if replacement == nil || reloads != 1 {
+		t.Fatalf("replacement=%v reloads=%d", replacement, reloads)
+	}
+	authRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	authRequest.AddCookie(replacement)
+	replacementPrincipal, err := local.Authenticate(authRequest)
+	if err != nil || replacementPrincipal == nil || replacementPrincipal.UserID != 1 {
+		t.Fatalf("replacement principal=%+v err=%v", replacementPrincipal, err)
+	}
+
+	var email, owner string
+	if err := p.db.Read.QueryRow(`SELECT email FROM users WHERE id=1`).Scan(&email); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+		t.Fatal(err)
+	}
+	var sessions, tokens int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE user_id=1`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens WHERE user_id=1`).Scan(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	if email != "changed@example.test" || owner != email || sessions != 1 || tokens != 1 || apiToken == "" {
+		t.Fatalf("email=%q owner=%q sessions=%d tokens=%d api_token_empty=%v",
+			email, owner, sessions, tokens, apiToken == "")
+	}
+	for _, oldCookie := range []*http.Cookie{firstCookie, secondCookie} {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.AddCookie(oldCookie)
+		oldPrincipal, _ := local.Authenticate(request)
+		if oldPrincipal != nil {
+			t.Fatalf("old browser session survived rotation: %+v", oldPrincipal)
+		}
+	}
+
+	var retained int
+	var afterJSON string
+	if err := p.db.Read.QueryRow(`
+		SELECT retained,after_json FROM audit_events WHERE action='user.email_changed'
+	`).Scan(&retained, &afterJSON); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 || !strings.Contains(afterJSON, `"email":"changed@example.test"`) ||
+		!strings.Contains(afterJSON, `"revoked_sessions":2`) ||
+		!strings.Contains(afterJSON, `"source":"oidc"`) {
+		t.Fatalf("retained=%d after=%s", retained, afterJSON)
+	}
+}
+
+func TestOIDCEmailSyncLeavesUnchangedIdentityAndSessionAlone(t *testing.T) {
+	p, local, sign := newTestOIDC(t)
+	_, principal := issueOIDCTestSession(t, local, 1)
+	reloads := 0
+	p.cfg.FSWatchReloader = func(context.Context) error {
+		reloads++
+		return nil
+	}
+	flow := startOIDCEmailSync(t, p, principal)
+	response := completeOIDCTestClaims(t, p, flow, sign, nil)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != accountNoticeChecked {
+		t.Fatalf("status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	if responseCookie(response, localauth.CookieName) != nil || reloads != 0 {
+		t.Fatalf("unchanged identity rotated session or reloaded watcher: headers=%v reloads=%d", response.Header(), reloads)
+	}
+	var sessions, identityEvents int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, principal.SessionID).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`
+		SELECT count(*) FROM audit_events
+		WHERE action IN ('user.email_changed','user.oidc_bound')
+	`).Scan(&identityEvents); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 || identityEvents != 0 {
+		t.Fatalf("sessions=%d identity_events=%d", sessions, identityEvents)
+	}
+}
+
+func TestOIDCEmailSyncBindsEligibleUnboundCurrentUser(t *testing.T) {
+	p, local, sign := newTestOIDC(t)
+	if _, err := p.db.Write.Exec(`UPDATE users SET oidc_issuer=NULL,oidc_subject=NULL WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	_, principal := issueOIDCTestSession(t, local, 1)
+	flow := startOIDCEmailSync(t, p, principal)
+	response := completeOIDCTestClaims(t, p, flow, sign, nil)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != accountNoticeBound ||
+		responseCookie(response, localauth.CookieName) == nil {
+		t.Fatalf("status=%d location=%q headers=%v body=%s",
+			response.Code, response.Header().Get("Location"), response.Header(), response.Body.String())
+	}
+	var issuer, subject string
+	if err := p.db.Read.QueryRow(`SELECT oidc_issuer,oidc_subject FROM users WHERE id=1`).Scan(&issuer, &subject); err != nil {
+		t.Fatal(err)
+	}
+	var retained int
+	var afterJSON string
+	if err := p.db.Read.QueryRow(`
+		SELECT retained,after_json FROM audit_events WHERE action='user.oidc_bound'
+	`).Scan(&retained, &afterJSON); err != nil {
+		t.Fatal(err)
+	}
+	if issuer != p.cfg.IssuerURL || subject != "issuer-subject" || retained != 1 ||
+		!strings.Contains(afterJSON, `"new_user":false`) ||
+		strings.Contains(afterJSON, "issuer-subject") {
+		t.Fatalf("issuer=%q subject=%q retained=%d after=%s", issuer, subject, retained, afterJSON)
+	}
+}
+
+func TestOIDCEmailSyncRejectsConflictsPinnedOwnerAndStaleSession(t *testing.T) {
+	t.Run("different bound subject", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"sub": "attacker-subject", "email": "attacker@example.test",
+		})
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("occupied target email", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		if _, err := p.db.Write.Exec(`
+			INSERT INTO users(id,email,display_name,role,created_at,updated_at)
+			VALUES(2,'occupied@example.test','Occupied','member',0,0)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "occupied@example.test",
+		})
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("unbound email mismatch", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		if _, err := p.db.Write.Exec(`UPDATE users SET oidc_issuer=NULL,oidc_subject=NULL WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "different@example.test",
+		})
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var issuer sql.NullString
+		if err := p.db.Read.QueryRow(`SELECT oidc_issuer FROM users WHERE id=1`).Scan(&issuer); err != nil || issuer.Valid {
+			t.Fatalf("issuer=%v err=%v", issuer, err)
+		}
+	})
+
+	t.Run("pinned watched-folder owner", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		p.cfg.EmailChangeAllowed = func(_, _ string) bool { return false }
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "changed@example.test",
+		})
+		if response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("session revoked during provider round trip", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		if _, err := p.db.Write.Exec(`DELETE FROM sessions WHERE id=?`, principal.SessionID); err != nil {
+			t.Fatal(err)
+		}
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "changed@example.test",
+		})
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("account disabled during provider round trip", func(t *testing.T) {
+		p, local, sign := newTestOIDC(t)
+		_, principal := issueOIDCTestSession(t, local, 1)
+		flow := startOIDCEmailSync(t, p, principal)
+		if _, err := p.db.Write.Exec(`UPDATE users SET disabled=1 WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+			"email": "changed@example.test",
+		})
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestOIDCEmailSyncRollsBackWhenRequiredAuditFails(t *testing.T) {
+	p, local, sign := newTestOIDC(t)
+	_, principal := issueOIDCTestSession(t, local, 1)
+	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, "owner@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.db.Write.Exec(`
+		CREATE TRIGGER reject_oidc_email_audit
+		BEFORE INSERT ON audit_events
+		WHEN NEW.action='user.email_changed'
+		BEGIN SELECT RAISE(ABORT, 'email audit unavailable'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	flow := startOIDCEmailSync(t, p, principal)
+	response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
+		"email": "changed@example.test",
+	})
+	if response.Code != http.StatusInternalServerError ||
+		responseCookie(response, localauth.CookieName) != nil {
+		t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	var email, owner string
+	if err := p.db.Read.QueryRow(`SELECT email FROM users WHERE id=1`).Scan(&email); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+		t.Fatal(err)
+	}
+	var sessions int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, principal.SessionID).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if email != "owner@example.test" || owner != email || sessions != 1 {
+		t.Fatalf("rollback email=%q owner=%q sessions=%d", email, owner, sessions)
+	}
+}
+
+func TestOIDCTransactionCookieUsesConfiguredSecurePolicy(t *testing.T) {
+	p, _, _ := newTestOIDC(t)
+	p.cfg.CookieSecure = true
+	start := httptest.NewRecorder()
+	p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+	if flow := readOIDCTestFlow(t, start); !flow.cookie.Secure {
+		t.Fatal("transaction cookie is not Secure")
+	}
+}
+
+func TestOIDCAuthorizationTransactionRejectsTamperingExpiryStateAndNonce(t *testing.T) {
+	assertRejected := func(t *testing.T, response *httptest.ResponseRecorder) {
+		t.Helper()
+		if response.Code != http.StatusBadRequest || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+		}
+		expired := responseCookie(response, transactionCookieName)
+		if expired == nil || expired.MaxAge >= 0 || expired.Path != "/oidc" {
+			t.Fatalf("transaction cookie was not expired: %+v", expired)
+		}
+	}
+
+	t.Run("tampered cookie", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		start := httptest.NewRecorder()
+		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+		flow := readOIDCTestFlow(t, start)
+		tampered := *flow.cookie
+		if strings.HasSuffix(tampered.Value, "A") {
+			tampered.Value = tampered.Value[:len(tampered.Value)-1] + "B"
+		} else {
+			tampered.Value = tampered.Value[:len(tampered.Value)-1] + "A"
+		}
+		flow.cookie = &tampered
+		raw := sign(map[string]any{"nonce": flow.authorizationURL.Query().Get("nonce")})
+		assertRejected(t, completeOIDCTestFlow(t, p, flow, raw))
+	})
+
+	t.Run("state mismatch", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		start := httptest.NewRecorder()
+		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+		flow := readOIDCTestFlow(t, start)
+		changed := *flow.authorizationURL
+		query := changed.Query()
+		query.Set("state", "wrong-state")
+		changed.RawQuery = query.Encode()
+		flow.authorizationURL = &changed
+		raw := sign(map[string]any{"nonce": query.Get("nonce")})
+		assertRejected(t, completeOIDCTestFlow(t, p, flow, raw))
+	})
+
+	t.Run("expired transaction", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		now := time.Now()
+		transaction := authorizationTransaction{
+			Version: transactionVersion, Purpose: purposeLogin,
+			IssuedAt:  now.Add(-stateTTL - time.Second).Unix(),
+			ExpiresAt: now.Add(-time.Second).Unix(),
+			State:     "expired-state", Nonce: "expired-nonce", Verifier: "expired-verifier",
+		}
+		value, err := p.signTransaction(transaction)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flow := oidcTestFlow{
+			authorizationURL: &url.URL{Path: "/authorize", RawQuery: url.Values{
+				"state": []string{transaction.State}, "nonce": []string{transaction.Nonce},
+			}.Encode()},
+			cookie: &http.Cookie{Name: transactionCookieName, Value: value},
+		}
+		assertRejected(t, completeOIDCTestFlow(t, p, flow, sign(map[string]any{"nonce": transaction.Nonce})))
+	})
+
+	t.Run("process restart key", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		start := httptest.NewRecorder()
+		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+		flow := readOIDCTestFlow(t, start)
+		restarted := *p
+		restarted.transactionKey[0] ^= 0xff
+		raw := sign(map[string]any{"nonce": flow.authorizationURL.Query().Get("nonce")})
+		assertRejected(t, completeOIDCTestFlow(t, &restarted, flow, raw))
+	})
+
+	t.Run("nonce mismatch", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		start := httptest.NewRecorder()
+		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+		flow := readOIDCTestFlow(t, start)
+		assertRejected(t, completeOIDCTestFlow(t, p, flow, sign(map[string]any{"nonce": "wrong-nonce"})))
+	})
+
+	t.Run("provider error", func(t *testing.T) {
+		p, _, _ := newTestOIDC(t)
+		start := httptest.NewRecorder()
+		p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+		flow := readOIDCTestFlow(t, start)
+		callback := httptest.NewRequest(http.MethodGet,
+			"/oidc/callback?state="+url.QueryEscape(flow.authorizationURL.Query().Get("state"))+
+				"&error=access_denied", nil)
+		callback.AddCookie(flow.cookie)
+		response := httptest.NewRecorder()
+		p.CallbackHandler(response, callback)
+		assertRejected(t, response)
+	})
+}
+
+func TestOIDCDuplicateCallbackMutatesIdentityAtMostOnce(t *testing.T) {
+	p, _, sign := newTestOIDC(t)
+	start := httptest.NewRecorder()
+	p.LoginHandler(start, httptest.NewRequest(http.MethodGet, "/oidc/login", nil))
+	flow := readOIDCTestFlow(t, start)
+	raw := sign(map[string]any{
+		"nonce": flow.authorizationURL.Query().Get("nonce"),
+		"sub":   "one-use-subject", "email": "one-use@example.test",
+	})
+	first := completeOIDCTestFlow(t, p, flow, raw)
+	if first.Code != http.StatusFound {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := completeOIDCTestFlow(t, p, flow, raw)
+	if second.Code != http.StatusBadGateway {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	var users, audits int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM users WHERE email='one-use@example.test'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.oidc_bound'`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 || audits != 1 {
+		t.Fatalf("users=%d audits=%d", users, audits)
 	}
 }

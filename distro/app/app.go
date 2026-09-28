@@ -160,6 +160,13 @@ func Run(ctx context.Context, opts Options) error {
 	reportToolAvailability(log)
 
 	cookieSecure := strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://")
+	pinnedFSOwner, fsOwnerPinned := os.LookupEnv("INGEST_FS_OWNER_EMAIL")
+	pinnedFSOwner = strings.ToLower(strings.TrimSpace(pinnedFSOwner))
+	emailChangeAllowed := func(currentEmail, targetEmail string) bool {
+		return !fsOwnerPinned || pinnedFSOwner == "" || pinnedFSOwner != currentEmail ||
+			pinnedFSOwner == targetEmail
+	}
+	var reloadFSWatch func(context.Context) error
 	la, err := localauth.NewWithOptions(ctx, d, log, cookieSecure, cfg.DemoMode, localauth.Options{
 		DisableSetup: cfg.OIDCIssuerURL != "",
 	})
@@ -243,6 +250,16 @@ func Run(ctx context.Context, opts Options) error {
 			AdminEmail:   cfg.AdminEmail,
 			CookieSecure: cookieSecure,
 			IssueSession: la.IssueSession,
+			PrepareSession: func(r *http.Request) (oidcauth.PreparedSession, error) {
+				return la.PrepareSession(r)
+			},
+			EmailChangeAllowed: emailChangeAllowed,
+			FSWatchReloader: func(rctx context.Context) error {
+				if reloadFSWatch == nil {
+					return errors.New("fs-watch reloader is not ready")
+				}
+				return reloadFSWatch(rctx)
+			},
 		}, d, log)
 		if err != nil {
 			log.Error("main.oidc.new", "err", err.Error())
@@ -425,6 +442,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 	fsSupervisor := fswatch.NewSupervisor(ctx, d, cas, disp, log)
+	reloadFSWatch = func(rctx context.Context) error {
+		return fsSupervisor.Reload(rctx, resolveFSWatcher(rctx))
+	}
 
 	// The mail supervisor runs one worker per enabled database account.
 	var msalScopes []string
@@ -485,12 +505,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		return api.EmailChangeModePassword
 	}
-	pinnedFSOwner, fsOwnerPinned := os.LookupEnv("INGEST_FS_OWNER_EMAIL")
-	pinnedFSOwner = strings.ToLower(strings.TrimSpace(pinnedFSOwner))
-	apiSrv.EmailChangeAllowed = func(currentEmail, targetEmail string) bool {
-		return !fsOwnerPinned || pinnedFSOwner == "" || pinnedFSOwner != currentEmail ||
-			pinnedFSOwner == targetEmail
-	}
+	apiSrv.EmailChangeAllowed = emailChangeAllowed
 	apiSrv.LLMAEAD = decryptKey
 	apiSrv.ChatEnabled = llm.Enabled
 	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
@@ -532,9 +547,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		return api.FSWatchSettingsStatus{Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail, System: fresh.System}, nil
 	}
-	apiSrv.FSWatchReloader = func(rctx context.Context) error {
-		return fsSupervisor.Reload(rctx, resolveFSWatcher(rctx))
-	}
+	apiSrv.FSWatchReloader = reloadFSWatch
 	apiSrv.LLMStatusReader = func(rctx context.Context) (api.LLMSettingsStatus, error) {
 		fresh, err := settings.ResolveLLMConfig(rctx, d, envLLM, decryptKey)
 		if err != nil {

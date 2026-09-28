@@ -35,14 +35,15 @@ func buildHTTPHandler(mux *http.ServeMux, cfg *config.Config, authChain *auth.Ch
 	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			path := r.URL.Path
-			if strings.HasPrefix(path, "/api/") {
+			if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/oidc/email-change") {
 				// Match the decoded path used by API slash normalization,
 				// including an escaped trailing slash. Keep the request intact.
 				path = strings.TrimSuffix(path, "/")
 			}
 			switch path {
 			case "/setup", "/bootstrap", "/login", "/api/login", "/api/token",
-				"/api/mobile/pairing", "/api/mobile/pairing/exchange", "/api/users/me/email":
+				"/api/mobile/pairing", "/api/mobile/pairing/exchange", "/api/users/me/email",
+				"/oidc/email-change":
 				loginHandler.ServeHTTP(w, r)
 				return
 			case "/api/demo/session", "/api/demo/session/upgrade":

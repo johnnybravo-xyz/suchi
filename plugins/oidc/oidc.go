@@ -9,10 +9,7 @@ package oidcauth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,15 +23,14 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
-	"github.com/johnnybravo-xyz/suchi/core/logx"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
 const (
-	Name        = "oidc"
-	stateCookie = "suchi_oidc_state"
-	stateTTL    = 10 * time.Minute
-	exchangeTTL = 30 * time.Second
+	Name                  = "oidc"
+	transactionCookieName = "suchi_oidc_tx"
+	stateTTL              = 10 * time.Minute
+	exchangeTTL           = 30 * time.Second
 )
 
 var (
@@ -42,6 +38,13 @@ var (
 	errIdentityNotBound = errors.New("oidc: identity is not bound")
 	errIdentityConflict = errors.New("oidc: identity conflicts with an existing account")
 )
+
+// PreparedSession is generated outside the database writer and rotates every
+// browser session inside the caller's identity transaction.
+type PreparedSession interface {
+	Cookie() *http.Cookie
+	Rotate(context.Context, *sql.Tx, int64) (int64, error)
+}
 
 // Config carries everything New needs. All fields required.
 type Config struct {
@@ -51,21 +54,25 @@ type Config struct {
 	PublicURL    string // callback derived: PublicURL + "/oidc/callback"
 	AdminEmail   string
 	CookieSecure bool
-	// SessionIssuer wires session creation to the local-auth plugin's
-	// session table so the OIDC path and the local-password path both
-	// mint the same kind of cookie. Passing this as a func avoids a
-	// hard dep between the two plugin modules.
+	// IssueSession creates an ordinary browser session after normal login.
 	IssueSession func(ctx context.Context, userID int64, r *http.Request) (*http.Cookie, error)
+	// PrepareSession supplies atomic all-session rotation for identity changes.
+	PrepareSession func(*http.Request) (PreparedSession, error)
+	// EmailChangeAllowed refuses changes that would strand boot-pinned producers.
+	EmailChangeAllowed func(currentEmail, targetEmail string) bool
+	// FSWatchReloader applies a committed DB-managed owner change.
+	FSWatchReloader func(context.Context) error
 }
 
 // Plugin implements pluginapi.Authenticator for OIDC bearer flows. The
 // browser callback issues a cookie by delegating to Config.IssueSession.
 type Plugin struct {
-	cfg      Config
-	db       *db.DB
-	log      *slog.Logger
-	verifier *oidc.IDTokenVerifier
-	oauth    *oauth2.Config
+	cfg            Config
+	db             *db.DB
+	log            *slog.Logger
+	verifier       *oidc.IDTokenVerifier
+	oauth          *oauth2.Config
+	transactionKey [32]byte
 }
 
 // New performs OIDC discovery synchronously — a misconfigured issuer
@@ -79,8 +86,12 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 	if cfg.AdminEmail == "" {
 		return nil, errors.New("admin email required when OIDC is enabled")
 	}
-	if cfg.IssueSession == nil {
-		return nil, errors.New("IssueSession hook required")
+	if cfg.IssueSession == nil || cfg.PrepareSession == nil {
+		return nil, errors.New("IssueSession and PrepareSession hooks required")
+	}
+	transactionKey, err := newTransactionKey()
+	if err != nil {
+		return nil, fmt.Errorf("create OIDC transaction key: %w", err)
 	}
 
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
@@ -95,11 +106,12 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 		Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 	}
 	return &Plugin{
-		cfg:      cfg,
-		db:       d,
-		log:      log.With("plugin", Name),
-		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		oauth:    oauth,
+		cfg:            cfg,
+		db:             d,
+		log:            log.With("plugin", Name),
+		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		oauth:          oauth,
+		transactionKey: transactionKey,
 	}, nil
 }
 
@@ -147,111 +159,13 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 	}, nil
 }
 
-// LoginHandler redirects the browser to the IdP's authorize endpoint.
-func (p *Plugin) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	state, err := randHex(16)
-	if err != nil {
-		p.log.Error("oidc.state.fail", "err", err.Error())
-		http.Error(w, "sign-in unavailable", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookie,
-		Value:    state,
-		Path:     "/",
-		Expires:  time.Now().Add(stateTTL),
-		HttpOnly: true,
-		Secure:   p.cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
-	http.Redirect(w, r, p.oauth.AuthCodeURL(state), http.StatusFound)
-}
-
-// CallbackHandler completes the OIDC dance and plants a session cookie.
-func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	state := q.Get("state")
-	code := q.Get("code")
-	if q.Get("error") != "" {
-		p.log.Warn("oidc.callback.rejected", "error", q.Get("error"))
-		http.Error(w, "sign-in was not completed", http.StatusBadRequest)
-		return
-	}
-	c, err := r.Cookie(stateCookie)
-	if err != nil || state == "" || c.Value == "" ||
-		subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
-		http.Error(w, "state mismatch", http.StatusBadRequest)
-		return
-	}
-	// Burn the state cookie.
-	http.SetCookie(w, &http.Cookie{
-		Name: stateCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: p.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
-	})
-
-	if code == "" {
-		http.Error(w, "authorization code missing", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), exchangeTTL)
-	defer cancel()
-	tok, err := p.oauth.Exchange(ctx, code)
-	if err != nil {
-		p.log.Warn("oidc.exchange.fail", "err", err.Error())
-		http.Error(w, "token exchange failed", http.StatusBadGateway)
-		return
-	}
-	raw, ok := tok.Extra("id_token").(string)
-	if !ok || raw == "" {
-		http.Error(w, "no id_token in response", http.StatusBadGateway)
-		return
-	}
-	verifyCtx, verifyCancel := context.WithTimeout(r.Context(), exchangeTTL)
-	defer verifyCancel()
-	idTok, err := p.verifier.Verify(verifyCtx, raw)
-	if err != nil {
-		p.log.Warn("oidc.verify.fail", "err", err.Error())
-		http.Error(w, "identity token was rejected", http.StatusBadRequest)
-		return
-	}
-	claims, err := verifiedClaims(idTok)
-	if err != nil {
-		p.log.Warn("oidc.claims.fail", "err", err.Error())
-		http.Error(w, "identity claims were rejected", http.StatusBadRequest)
-		return
-	}
-	user, record, err := p.resolveOrProvisionUser(r.Context(), claims, logx.RequestID(r.Context()))
-	if err != nil {
-		p.log.Error("oidc.identity.fail", "err", err.Error())
-		switch {
-		case errors.Is(err, errUserDisabled):
-			http.Error(w, "account disabled", http.StatusForbidden)
-		case errors.Is(err, errIdentityConflict):
-			http.Error(w, "identity conflicts with an existing account", http.StatusConflict)
-		default:
-			http.Error(w, "identity resolution failed", http.StatusInternalServerError)
-		}
-		return
-	}
-	if record != nil {
-		record.Emit(r.Context(), p.log)
-	}
-	cookie, err := p.cfg.IssueSession(r.Context(), user.ID, r)
-	if err != nil {
-		p.log.Error("oidc.session.fail", "err", err.Error())
-		http.Error(w, "session failed", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, cookie)
-	http.Redirect(w, r, "/", http.StatusFound)
-}
-
 type identityClaims struct {
 	Issuer        string `json:"-"`
 	Subject       string `json:"-"`
 	Email         string `json:"email"`
 	Name          string `json:"name"`
 	EmailVerified bool   `json:"email_verified"`
+	Nonce         string `json:"nonce"`
 }
 
 type oidcUser struct {
@@ -397,12 +311,4 @@ func (p *Plugin) resolveOrProvisionUser(
 		return oidcUser{}, nil, err
 	}
 	return user, record, nil
-}
-
-func randHex(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

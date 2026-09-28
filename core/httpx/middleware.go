@@ -226,6 +226,29 @@ func SecFetchSite(next http.Handler) http.Handler {
 	})
 }
 
+// StrictSameOrigin validates provenance for credential-confirming endpoints.
+// Fetch Metadata is authoritative when present; older clients must provide an
+// Origin whose scheme and host exactly match the trusted public URL.
+func StrictSameOrigin(r *http.Request, publicURL string) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true
+	case "":
+	default:
+		return false
+	}
+	origin, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin")))
+	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.User != nil ||
+		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	trusted, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil || trusted.Scheme == "" || trusted.Host == "" || trusted.User != nil {
+		return false
+	}
+	return origin.Scheme == trusted.Scheme && origin.Host == trusted.Host
+}
+
 func allowsHeaderlessCredentialCreation(r *http.Request) bool {
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 		u, err := url.Parse(origin)
