@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fixed UUID test fixtures and a documentation placeholder; future findings remain fatal.
+80bea9f74179980b9d66312153e5c04bbb1d7f07:core/api/upload_idempotency_test.go:generic-api-key:23
+cd121b8e53f76fa0117ad1a9d9c5647753805318:core/api/upload_idempotency_test.go:generic-api-key:21
+3957150a1fc473ba3080ac0b204f530be31364a5:docs/llm-classifier.mdx:generic-api-key:107

@@ -9,6 +9,7 @@ GO_FILES = find . \( -name .git -o -name node_modules -o -name vendor \) -prune 
 UI_SRC_FILES = find ui/src -type f \( -name '*.js' -o -name '*.svelte' -o -name '*.css' \) -print0
 STATICCHECK_VERSION := v0.8.0
 GOVULNCHECK_VERSION := v1.7.0
+GITLEAKS_VERSION := v8.30.1
 MINT_VERSION := 4.2.874
 GITHUB_REMOTE ?= gh
 GITHUB_REPO ?= johnnybravo-xyz/suchi
@@ -25,7 +26,7 @@ help:
 	  '  fmt-check       Fail when a Go source file needs formatting.' \
 	  '  tidy            Run go mod tidy in every Go module.' \
 	  '  check           Run formatting, vet, tests, lint, and UI checks.' \
-	  '  security-check  Run govulncheck and the Bun dependency audit.' \
+	  '  security-check  Run vulnerability, dependency, and repository secret scans.' \
 	  '  run             Build and run a local server on port 8000.' \
 	  '  clean           Remove the built binary directory.' \
 	  '  smoke           Build and smoke-test server health endpoints.' \
@@ -91,8 +92,8 @@ license-check:
 
 check: fmt-check license-check vet test lint ui-check
 
-# Release-time advisory scan. Kept separate from `check` because it queries
-# external vulnerability databases and may install the pinned scanner.
+# Release-time advisory and secret scans. Kept separate from `check` because they
+# query external databases and may install pinned scanners.
 security-check:
 	@tool="$$(command -v govulncheck || printf '%s/bin/govulncheck' "$$(go env GOPATH)")"; \
 	  actual=""; go_version="$$(go env GOVERSION)"; \
@@ -101,6 +102,11 @@ security-check:
 	    *) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION);; esac; \
 	  "$$tool" ./...
 	@cd ui && bun audit
+	@tool="$$(command -v gitleaks || printf '%s/bin/gitleaks' "$$(go env GOPATH)")"; \
+	  want="$(patsubst v%,%,$(GITLEAKS_VERSION))"; actual=""; \
+	  test ! -x "$$tool" || actual="$$($$tool version 2>/dev/null || true)"; \
+	  test "$$actual" = "$$want" || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION); \
+	  "$$tool" git --redact --no-banner --no-color .
 
 # Convenience: build + smoke-test the running server.
 smoke: build
