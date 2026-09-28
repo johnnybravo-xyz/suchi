@@ -1,4 +1,4 @@
-.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-check bench-check release
+.PHONY: help build test vet lint fmt fmt-check license-check tidy check security-check run clean smoke smoke-ingest smoke-mail install-hooks ui ui-dev ui-check ui-e2e ui-clean docs-dev docs-metadata-check docs-check bench-check release
 
 .DEFAULT_GOAL := help
 
@@ -38,6 +38,7 @@ help:
 	  '  ui-clean        Remove UI dependencies and generated assets.' \
 	  '  docs-dev        Run the Mintlify documentation server.' \
 	  '  docs-check      Check documentation for broken links.' \
+	  '  docs-metadata-check Check documented versions and image channels.' \
 	  '  license-check   Verify every source file declares its licence.' \
 	  '  install-hooks   Install the tracked Git hooks.' \
 	  '  bench-check     Run benchmark scenarios against hard limits.' \
@@ -133,24 +134,29 @@ run: build
 clean:
 	rm -rf dist
 
-# Manually trigger the release workflow. Requires `gh` and an existing tag on
-# the GitHub remote (create with `git tag -s v0.1.0 && git push gh v0.1.0`).
+# Manually trigger the release workflow. Requires `gh` and an existing signed
+# annotated tag on the GitHub remote (create with
+# `git tag -s v0.1.0 && git push gh v0.1.0`).
 # `make release VERSION=v0.1.0` builds + publishes; `PUBLISH=false` runs
 # the artifacts-only smoke path. Pipeline proposal policy is committed in
 # distro/cmd/suchi/pipeline_proposals.go before the release tag is created.
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=v0.1.0 [PUBLISH=false]"; exit 1)
 	@command -v gh >/dev/null || (echo "gh CLI is required (https://cli.github.com)"; exit 1)
+	@./hack/verify-release-tag.sh "$(VERSION)"
 	@set -eu; \
-	  local_commit="$$(git rev-parse --verify "refs/tags/$(VERSION)^{}" 2>/dev/null)" || { \
-	    echo "tag $(VERSION) not found locally — create it first: git tag -s $(VERSION)"; exit 1; \
-	  }; \
+	  local_tag="$$(git rev-parse --verify "refs/tags/$(VERSION)")"; \
+	  local_commit="$$(git rev-parse --verify "refs/tags/$(VERSION)^{}")"; \
 	  remote_refs="$$(git ls-remote "$(GITHUB_REMOTE)" "refs/tags/$(VERSION)" "refs/tags/$(VERSION)^{}")" || { \
 	    echo "could not read tag $(VERSION) from GitHub remote $(GITHUB_REMOTE)"; exit 1; \
 	  }; \
+	  remote_tag="$$(printf '%s\n' "$$remote_refs" | awk -v ref="refs/tags/$(VERSION)" '$$2 == ref { print $$1; exit }')"; \
 	  remote_commit="$$(printf '%s\n' "$$remote_refs" | awk -v ref="refs/tags/$(VERSION)^{}" '$$2 == ref { print $$1; exit }')"; \
 	  test -n "$$remote_commit" || { \
-	    echo "annotated tag $(VERSION) is not on GitHub — run: git push $(GITHUB_REMOTE) $(VERSION)"; exit 1; \
+	    echo "signed annotated tag $(VERSION) is not on GitHub — run: git push $(GITHUB_REMOTE) $(VERSION)"; exit 1; \
+	  }; \
+	  test "$$remote_tag" = "$$local_tag" || { \
+	    echo "GitHub tag object $(VERSION) is $$remote_tag, local tag object is $$local_tag"; exit 1; \
 	  }; \
 	  test "$$remote_commit" = "$$local_commit" || { \
 	    echo "GitHub tag $(VERSION) resolves to $$remote_commit, local tag resolves to $$local_commit"; exit 1; \
@@ -184,7 +190,10 @@ ui-clean:
 docs-dev:
 	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) dev
 
-docs-check:
+docs-metadata-check:
+	@python3 hack/check-release-docs.py
+
+docs-check: docs-metadata-check
 	@cd docs && BUN_TMPDIR=$${BUN_TMPDIR:-/tmp} bunx mint@$(MINT_VERSION) broken-links
 
 smoke-ingest:

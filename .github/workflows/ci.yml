@@ -69,4 +69,5 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - run: make fmt-check
       - run: make license-check
+      - run: make docs-metadata-check
       - run: make lint

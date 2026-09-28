@@ -151,7 +151,7 @@ do not duplicate them here.
    ```sh
    export VERSION=v0.1.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
-   git tag -v "$VERSION"
+   ./hack/verify-release-tag.sh "$VERSION"
    git push gh main
    git push gh "refs/tags/$VERSION"
    ```
@@ -338,25 +338,31 @@ before calling the release complete.
 
 ## Automation
 
-- `checks.yml` is the single manual entry point for repository validation.
-- `ci.yml` runs formatting, tests, vet, lint, and UI checks when called by it.
+- `checks.yml` runs the complete repository validation graph on pushes to
+  `main`, pull requests and manual dispatch.
+- `ci.yml` runs formatting, tests, vet, lint, documentation release-metadata
+  checks, UI checks and browser tests when called by it.
 - `smoke.yml` tests the built images and ingest paths when called by it.
   Both variants are rebuilt with the exported AnyDoc context and an unusable
   Rust base to catch accidental recompilation; binary and license bytes must
   match the export before the usual ingestion checks run.
 - `restore-drill.yml` validates backup restoration when called by it.
-- `release.yml` publishes only when manually dispatched from an existing tag.
-  Its preflight runs fresh Go/UI checks, embedded bundle parity, and dependency
-  advisory scans. Images wait for both binary matrices before publication and
-  reuse the AnyDoc matrix's verified binaries rather than rebuilding them.
-  Release runs are serialized because moving image channels are shared mutable
-  state.
-  Artifacts-only branch runs use `snapshot-<commit>` names and skip signing
-  and publication; they still produce ordinary workflow artifacts and GHA caches.
+- `release.yml` publishes only when manually dispatched from an existing signed
+  annotated tag. Its preflight repeats the complete reusable validation graph,
+  race tests, security scans, local smoke and benchmark gates, Docker checks and
+  documentation validation. Only jobs that publish releases, packages or
+  keyless signatures receive the corresponding write permissions.
 
-Pushes, pull requests, and schedules do not start Actions. A maintainer chooses
-**checks** in the Actions tab and clicks **Run workflow** to run all validation
-jobs against the selected ref. Publishing remains a separate manual action.
+The release workflow verifies the tag with the public key pinned at
+`.github/release-signing-key.asc` and the expected full fingerprint in
+`hack/verify-release-tag.sh`. It rejects missing, lightweight, unsigned,
+wrong-key, locally divergent and remotely divergent tags.
+
+Images wait for both binary matrices before publication and reuse the AnyDoc
+matrix's verified binaries rather than rebuilding them. Release runs are
+serialized because moving image channels are shared mutable state.
+Artifacts-only branch runs use `snapshot-<commit>` names and skip signing and
+publication; they still produce ordinary workflow artifacts and GHA caches.
 
 For a security hotfix, branch from the affected tag, land the fix and changelog
 entry, publish the patch release, then merge the fix back into `main`.

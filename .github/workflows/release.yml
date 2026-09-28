@@ -27,19 +27,35 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # write to the GitHub release
-  packages: write   # push to ghcr.io
-  id-token: write   # keyless cosign signing via OIDC
+  contents: read
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}   # johnnybravo-xyz/suchi
 
 jobs:
+  quality:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  image-smoke:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/smoke.yml
+
+  restore-drill:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/restore-drill.yml
+
   preflight:
+    needs: [quality, image-smoke, restore-drill]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.work
@@ -47,8 +63,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.1
-      - name: verify candidate
-        run: make check security-check TEST_FLAGS='-count=1 -timeout 180s'
+      - name: run release-only gates
+        run: |
+          make test TEST_FLAGS='-race -count=1 -timeout 300s'
+          make security-check
+          make smoke
+          make bench-check
+          docker build --check .
+          docker compose config --quiet
+          make docs-check
+          git diff --check
       - name: validate publish ref
         if: inputs.publish == 'true'
         env:
@@ -66,6 +90,8 @@ jobs:
             echo "publishing requires a SemVer tag such as v0.1.0 or v0.1.0-beta.1" >&2
             exit 1
           fi
+
+          ./hack/verify-release-tag.sh "$REF_NAME"
 
           version=${REF_NAME#v}
           if [[ "$version" == *-* ]]; then
@@ -153,6 +179,10 @@ jobs:
   # -------------------------------------------------------------------
   images:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     needs: [notes, binaries, anydoc-binaries]
     outputs:
       standard_digest: ${{ steps.standard.outputs.digest }}
@@ -396,6 +426,9 @@ jobs:
   # -------------------------------------------------------------------
   collect:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     needs: [notes, images, binaries, anydoc-binaries]
     steps:
       - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
@@ -455,6 +488,9 @@ jobs:
   promote:
     if: inputs.publish == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs: [notes, images, collect]
     steps:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
