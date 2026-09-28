@@ -20,6 +20,8 @@ Optional integrations must preserve useful local operation.
 - Check `git status --short` and `git worktree list` first. Sibling `suchi/`
   directories may be different branches. Preserve local changes; commit only
   when asked, with concise messages and no contribution trailers.
+- Use Conventional Commits: `<type>(<scope>): brief imperative message` (scope
+  optional), then a blank line and concise `-` bullets covering behavior and verification.
 
 ## Licensing
 
@@ -84,9 +86,10 @@ Optional integrations must preserve useful local operation.
 - Preserve immutable original blobs, explicit egress consent, and human edits.
 - Keep schema changes in the current unreleased migration; never edit a
   migration already included in a published release.
-- Always choose the simplest complete design. Reuse direct existing paths,
-  delete obsolete code, and do not add abstractions, compatibility layers, or
-  general frameworks without a current concrete need.
+- No over-engineering. Start from first principles and choose the simplest
+  complete design. Prefer flat, explicit code over clever patterns, deep
+  hierarchies, or unnecessary indirection. Add abstractions only for a current
+  concrete need.
 - Delete unused code before adding abstractions. Keep ACL, recovery, retry,
   and wire-contract tests; prefer observable assertions over source-text checks.
 - Update the relevant public guide and changelog for user-visible changes.
