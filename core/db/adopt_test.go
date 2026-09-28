@@ -28,8 +28,8 @@ func TestStableCatalogAndBetaAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(beta) != 4 {
-		t.Fatalf("compatibility migrations = %d, want 4", len(beta))
+	if len(beta) != 5 {
+		t.Fatalf("compatibility migrations = %d, want 5", len(beta))
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 

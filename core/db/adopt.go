@@ -24,7 +24,8 @@ const (
 
 	stableLineage                   = "stable-v1"
 	finalBetaLineage                = "final-beta-schema-3"
-	stableFingerprint               = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
+	stableFingerprint               = "cb74332fa9ea8b6b2496440a3ddb5fe5ef5592287bc4cfbd26e7c25fcb9abee5"
+	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
 	canonicalBetaThreeFingerprint   = "de0f8f20cfd5b2858051236a045cf67177ad4f32652d3bd646fe177ba462687b"
@@ -119,8 +120,8 @@ func validateStableCatalogs(stable, compatibility []Migration) ([]Migration, err
 	}
 	beta := append([]Migration(nil), compatibility...)
 	sort.Slice(beta, func(i, j int) bool { return beta[i].Version < beta[j].Version })
-	if len(beta) != 4 {
-		return nil, fmt.Errorf("beta compatibility catalog has %d migrations, want 4", len(beta))
+	if len(beta) != 5 {
+		return nil, fmt.Errorf("beta compatibility catalog has %d migrations, want 5", len(beta))
 	}
 	for i, migration := range beta {
 		if migration.Version != i+1 {
@@ -167,8 +168,8 @@ func classifyBeta(state schemaState) (betaProfile, bool) {
 		return betaProfile{name: "v0.1.0-beta.3/schema3", nextVersion: 4}, true
 	case state.version == 3 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == legacyAgentBetaThreeFingerprint:
 		return betaProfile{name: "v0.1.0-beta.3/legacy-agent-schema3", nextVersion: 4, requiresEmptyWebhooks: true}, true
-	case state.version == 4 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == stableFingerprint:
-		return betaProfile{name: "pre-stable/schema4", nextVersion: 5}, true
+	case state.version == 4 && state.lineageValid && state.lineage == finalBetaLineage && state.fingerprint == preIdentityStableFingerprint:
+		return betaProfile{name: "pre-identity/schema4", nextVersion: 5}, true
 	default:
 		return betaProfile{}, false
 	}
@@ -227,6 +228,13 @@ func schemaFingerprint(ctx context.Context, q schemaQueryer) (string, int, error
 			-- Stable adoption rebuilds these core objects after the extension
 			-- boundary. Keep them in the core manifest wherever their rowids land.
 			OR name IN (
+				'audit_actor',
+				'audit_events',
+				'audit_events_system_immutable',
+				'audit_events_system_replace',
+				'audit_object',
+				'audit_system',
+				'audit_ts',
 				'automation_actions',
 				'automation_triggers_filter_tag_id_insert',
 				'automation_triggers_filter_tag_id_update',
@@ -238,7 +246,11 @@ func schemaFingerprint(ctx context.Context, q schemaQueryer) (string, int, error
 				'tags_parent_insert',
 				'tags_parent_update',
 				'tags_system_immutable',
-				'tags_system_replace'
+				'tags_system_replace',
+				'users',
+				'users_default_system_demotion',
+				'users_default_system_insert',
+				'users_oidc_identity'
 			)
 		  )
 		ORDER BY type, name, tbl_name, COALESCE(sql, '')`)

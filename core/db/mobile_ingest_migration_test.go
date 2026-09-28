@@ -23,11 +23,11 @@ func TestTaxonomyMigrationReleaseBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := migrationVersions(migs); !reflect.DeepEqual(got, []int{1, 2, 3, 4}) {
-		t.Fatalf("embedded migration versions = %v, want published beta schemas [1 2 3] and preset suspension 4", got)
+	if got := migrationVersions(migs); !reflect.DeepEqual(got, []int{1, 2, 3, 4, 5}) {
+		t.Fatalf("embedded migration versions = %v, want published beta schemas [1 2 3], preset suspension 4, and account identity 5", got)
 	}
-	if !migs[2].RebuildTables {
-		t.Fatal("migration 0003 must use the atomic table-rebuild runner")
+	if !migs[2].RebuildTables || !migs[4].RebuildTables {
+		t.Fatal("migrations 0003 and 0005 must use the atomic table-rebuild runner")
 	}
 	// SHA-256 of exact files shipped in tag v0.1.0-beta.2.
 	for filename, want := range map[string]string{
@@ -138,7 +138,7 @@ func TestMobileIngestMigrationUpgradesPopulatedBeta2(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, 4)
+	assertSchemaVersion(t, d, 5)
 	assertFinalBetaLineage(t, d)
 	assertBeta2Schema(t, d)
 	var pairingCount int
@@ -223,7 +223,7 @@ func TestMobileIngestMigrationCreatesFreshSchema(t *testing.T) {
 	if err := db.Migrate(ctx, d, migs, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, 4)
+	assertSchemaVersion(t, d, 5)
 	assertFinalBetaLineage(t, d)
 	execMigrationFixture(t, d, `
 		INSERT INTO users(id,email,display_name,role,created_at,updated_at)
@@ -309,7 +309,7 @@ func TestMobileTokenMigrationPreservesPublishedBeta2Credentials(t *testing.T) {
 	if err := db.Migrate(t.Context(), d, migs, log); err != nil {
 		t.Fatal(err)
 	}
-	assertSchemaVersion(t, d, 4)
+	assertSchemaVersion(t, d, 5)
 	var name, hash, scopes, source string
 	var created, used int64
 	if err := d.Read.QueryRow(`SELECT name,token_hash,scopes,created_at,last_used_at,source FROM api_tokens`).
@@ -385,7 +385,7 @@ func TestTaxonomySystemsPreservePopulatedBeta2(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	assertSchemaVersion(t, d, 4)
+	assertSchemaVersion(t, d, 5)
 	assertMigrationScalar(t, d, `SELECT count(*) FROM documents WHERE system_id=1`, 5)
 	assertMigrationScalar(t, d, `SELECT count(*) FROM documents WHERE content_source='' AND device_content_confidence IS NULL AND device_ocr_language='' AND device_content_received_at IS NULL AND split_origin_id=0`, 5)
 	assertMigrationScalar(t, d, `SELECT count(*) FROM mobile_pairings`, 0)
@@ -525,7 +525,7 @@ func TestTaxonomyMigrationFailureRestoresPublishedBeta2(t *testing.T) {
 			if err := db.Migrate(t.Context(), d, migs, log); err != nil {
 				t.Fatalf("retry after failed upgrade: %v", err)
 			}
-			assertSchemaVersion(t, d, 4)
+			assertSchemaVersion(t, d, 5)
 			assertFinalBetaLineage(t, d)
 			assertMigrationScalar(t, d, `SELECT count(*) FROM documents WHERE system_id=1 AND id=147 AND original_blob='retained'`, 1)
 		})

@@ -179,8 +179,8 @@ func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migs) != 4 {
-		t.Fatalf("migration count = %d, want 4", len(migs))
+	if len(migs) != 5 {
+		t.Fatalf("migration count = %d, want 5", len(migs))
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := db.Migrate(ctx, d, migs[:3], log); err != nil {
@@ -193,7 +193,7 @@ func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := db.Migrate(ctx, d, migs[:4], log); err != nil {
 		t.Fatal(err)
 	}
 	assertSchemaVersion(t, d, 4)
@@ -207,7 +207,7 @@ func TestPresetRuleSuspensionMigrationUpgradesSchemaThree(t *testing.T) {
 	if _, err := d.ExecWrite(ctx, `UPDATE automations SET suspended=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrate(ctx, d, migs, log); err != nil {
+	if err := db.Migrate(ctx, d, migs[:4], log); err != nil {
 		t.Fatalf("repeat migration: %v", err)
 	}
 }

@@ -83,7 +83,8 @@ CREATE TABLE "audit_events" (
     before_json  TEXT,
     after_json   TEXT,
     request_id   TEXT,
-    system_id INTEGER REFERENCES jd_systems(id)
+    system_id INTEGER REFERENCES jd_systems(id),
+    retained     INTEGER NOT NULL DEFAULT 0 CHECK (retained IN (0,1))
 ) STRICT;
 
 CREATE TABLE automation_actions (
@@ -586,7 +587,14 @@ CREATE TABLE users (
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL,
     avatar_sha   TEXT,
-    capabilities TEXT NOT NULL DEFAULT '[]'
+    capabilities TEXT NOT NULL DEFAULT '[]',
+    oidc_issuer  TEXT,
+    oidc_subject TEXT,
+    CHECK (
+        (oidc_issuer IS NULL AND oidc_subject IS NULL)
+        OR (oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL
+            AND length(oidc_issuer) > 0 AND length(oidc_subject) > 0)
+    )
 ) STRICT;
 
 -- ---- initial rows ----
@@ -609,6 +617,9 @@ CREATE INDEX audit_object ON audit_events(object_kind, object_id);
 CREATE INDEX audit_system ON audit_events(system_id,id);
 
 CREATE INDEX audit_ts ON audit_events(ts);
+
+CREATE UNIQUE INDEX users_oidc_identity
+    ON users(oidc_issuer, oidc_subject) WHERE oidc_issuer IS NOT NULL;
 
 CREATE INDEX dcfv_field ON document_custom_field_values(field_id);
 
