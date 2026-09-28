@@ -2,9 +2,9 @@ name: suchi
 
 services:
   suchi:
-    # The moving beta tag is a local/evaluation default. Production operators
+    # The moving latest tag is a local/evaluation default. Production operators
     # must set SUCHI_IMAGE to the selected release's published image digest.
-    image: ${SUCHI_IMAGE:-ghcr.io/johnnybravo-xyz/suchi:beta}
+    image: ${SUCHI_IMAGE:-ghcr.io/johnnybravo-xyz/suchi:latest}
     restart: unless-stopped
     read_only: true
     tmpfs:

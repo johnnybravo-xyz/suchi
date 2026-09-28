@@ -5,7 +5,7 @@ description: "Install Suchi and complete the first-run setup."
 
 ## Docker
 
-The moving standard beta image is a convenient local evaluation starting point:
+The versioned standard image is a convenient local evaluation starting point:
 
 ```sh
 docker volume create suchi-data
@@ -14,17 +14,16 @@ docker run -d --name suchi --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -e PUBLIC_URL=http://127.0.0.1:8000 \
   -v suchi-data:/data \
-  ghcr.io/johnnybravo-xyz/suchi:beta
+  ghcr.io/johnnybravo-xyz/suchi:v0.1.0
 docker logs suchi 2>&1 | grep token_minted
 ```
 
 Open `http://127.0.0.1:8000`, enter the one-time setup token from the log, and
 create the first administrator.
 
-This command accepts connections from the local machine only. The moving
-`beta` tag is for evaluation, not a production pin. A production server,
-including one reached by the mobile app, must use HTTPS and the published image
-digest for the selected release.
+This command accepts connections from the local machine only and pins v0.1.0.
+A production server, including one reached by the mobile app, must use HTTPS and
+the published image digest for the selected release.
 
 Open **Settings > Archive configuration > Filing tree** and compare every
 built-in tree, or choose **Import a file** for HuML/TOML, preview the named tree
@@ -85,10 +84,10 @@ Use one application replica because SQLite has one writer.
 
 ## Image choice
 
-- `beta` is the moving standard Alpine evaluation image. It indexes scanned
-  PDFs with Tesseract and includes the supported office, email, image, and
-  archive extractors.
-- `beta-full` is the moving full evaluation image. It adds OCRmyPDF so scanned
+- `v0.1.0` / `latest` is the standard Alpine image. It indexes scanned PDFs
+  with Tesseract and includes the supported office, email, image, and archive
+  extractors.
+- `v0.1.0-full` / `latest-full` is the full image. It adds OCRmyPDF so scanned
   PDF downloads can retain a searchable text layer.
 
 The Suchi application is otherwise the same. Use the published digest for the

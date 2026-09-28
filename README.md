@@ -27,8 +27,8 @@ create another copy, and database rows can retain stable content while filing
 paths are rebuilt as views. It is not encryption or an access-control boundary;
 SQLite metadata and the API still decide who can see each document.
 
-Status: **v0.1.0-beta.3**, suitable for evaluation but not yet critical
-archives. The API and storage layout are stabilising but not frozen.
+Current source line: **v0.1.0**. Back up before upgrades, test restore for
+critical archives, and follow the documented stable-v1 compatibility policy.
 
 [Container images](https://github.com/johnnybravo-xyz/suchi/pkgs/container/suchi) ·
 [Releases](https://github.com/johnnybravo-xyz/suchi/releases) ·
@@ -66,7 +66,7 @@ tradeoffs.
 
 ## Quick Start
 
-The moving `beta` image is a convenient standard build for local evaluation:
+The versioned standard image is a convenient local evaluation starting point:
 
 ```sh
 docker volume create suchi-data
@@ -74,7 +74,7 @@ docker run -d --name suchi --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -e PUBLIC_URL=http://127.0.0.1:8000 \
   -v suchi-data:/data \
-  ghcr.io/johnnybravo-xyz/suchi:beta
+  ghcr.io/johnnybravo-xyz/suchi:v0.1.0
 docker logs suchi 2>&1 | grep token_minted
 ```
 
@@ -91,16 +91,15 @@ configuration > Filing tree**. This is the only required archive setup step;
 the reminder remains until a preset, imported tree, or explicit Blank choice is
 saved.
 
-This quick start is bound to loopback and the moving `beta` tag is for
-evaluation only. A production server, including one reached by the mobile app,
-must use HTTPS and pin the selected release by its published image digest.
+This quick start is bound to loopback and pins the v0.1.0 image. A production
+server, including one reached by the mobile app, must use HTTPS and pin the
+selected release by its published image digest.
 
 ## Images
 
-- `v0.1.0-beta.3` / `beta` / `beta-standard`: Alpine. Supports all listed formats
-  and indexes scanned PDFs with Tesseract. The beta channel tags resolve to the
-  current beta's standard image.
-- `v0.1.0-beta.3-full` / `beta-full`: Debian. Adds OCRmyPDF so downloaded scanned
+- `v0.1.0` / `latest`: Alpine. Supports all listed formats and indexes scanned
+  PDFs with Tesseract.
+- `v0.1.0-full` / `latest-full`: Debian. Adds OCRmyPDF so downloaded scanned
   PDFs can retain a searchable text layer.
 
 Both images include anydoc, DjVu, HEIC/HEIF, and Outlook MSG support. The full

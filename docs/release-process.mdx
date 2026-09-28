@@ -149,7 +149,7 @@ do not duplicate them here.
    the exact commit and tag to GitHub:
 
    ```sh
-   export VERSION=v0.1.0-beta.3
+   export VERSION=v0.1.0
    git tag -s "$VERSION" -m "suchi ${VERSION#v}"
    git tag -v "$VERSION"
    git push gh main
@@ -209,7 +209,7 @@ the release artifacts to verify and deploy.
 Set the release coordinates on every build machine:
 
 ```sh
-export VERSION=v0.1.0-beta.3
+export VERSION=v0.1.0
 export IMAGE=ghcr.io/johnnybravo-xyz/suchi
 export CACHE_AMD64="$IMAGE:buildcache-amd64"
 export CACHE_ARM64="$IMAGE:buildcache-arm64"
@@ -300,22 +300,21 @@ docker pull --platform linux/arm64 "$IMAGE:$VERSION"
 
 Build and verify the full image the same way under `$IMAGE:$VERSION-full`.
 Complete image signing, checksums, SBOMs, release artifacts, and the GitHub
-Release before changing a moving channel. Only then promote the versioned
-manifests; for a beta:
+Release before changing a moving channel. Only then promote the stable versioned
+manifests:
 
 ```sh
 docker buildx imagetools create \
-  --tag "$IMAGE:beta" \
-  --tag "$IMAGE:beta-standard" \
+  --tag "$IMAGE:latest" \
   "$IMAGE:$VERSION"
 docker buildx imagetools create \
-  --tag "$IMAGE:beta-full" \
+  --tag "$IMAGE:latest-full" \
   "$IMAGE:$VERSION-full"
 ```
 
-Stable releases promote `latest` / `latest-full`; release candidates promote
-`rc` / `rc-full`. Never create a moving alias in the same command that first
-publishes the version manifest.
+Release candidates promote `rc` / `rc-full`; beta releases promote `beta` /
+`beta-standard` and `beta-full`. Never create a moving alias in the same command
+that first publishes the version manifest.
 
 The first successful native build seeds its architecture's registry cache.
 Later local releases import those caches, while the release workflow imports
@@ -328,9 +327,7 @@ retain incremental work in the local BuildKit builder when a compile is
 interrupted before its image layer can be exported.
 
 The `full` image uses `--target full` and temporary tags ending in
-`-full-amd64` and `-full-arm64`. `beta-standard` is an explicit alias for the
-standard `beta` image and is useful where the selected image variant should be
-obvious from configuration alone.
+`-full-amd64` and `-full-arm64`.
 
 The first command-line push creates a private, unlinked GHCR package by
 default. In the package settings, make it public, connect it to the Suchi

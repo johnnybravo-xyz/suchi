@@ -346,7 +346,7 @@ curl -fL --output nep.traineddata \
 For the Alpine-based **standard** image, `Dockerfile.ocr` contains:
 
 ```dockerfile
-ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:beta
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.1.0
 FROM ${SUCHI_BASE}
 USER root
 RUN apk add --no-cache tesseract-ocr-data-deu
@@ -359,7 +359,7 @@ USER 65532:65532
 For the Debian-based **full** image, the equivalent file contains:
 
 ```dockerfile
-ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:beta-full
+ARG SUCHI_BASE=ghcr.io/johnnybravo-xyz/suchi:v0.1.0-full
 FROM ${SUCHI_BASE}
 USER root
 RUN apt-get update \
