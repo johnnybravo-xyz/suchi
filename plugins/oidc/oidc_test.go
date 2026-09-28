@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -80,9 +81,14 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 		}
 	}))
 	t.Cleanup(issuer.Close)
+	if _, err := database.Write.Exec(`
+		UPDATE users SET oidc_issuer=?, oidc_subject='issuer-subject' WHERE id=1
+	`, issuer.URL); err != nil {
+		t.Fatal(err)
+	}
 	p, err := New(t.Context(), Config{
 		IssuerURL: issuer.URL, ClientID: "test-client", ClientSecret: "test-secret",
-		PublicURL: "http://suchi.example.test", AdminEmail: "owner@example.test", IssueSession: local.IssueSession,
+		PublicURL: "http://suchi.example.test", AdminEmail: " OWNER@Example.Test ", IssueSession: local.IssueSession,
 	}, database, log)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +120,15 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 		return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature)
 	}
 	return p, local, sign
+}
+func oidcCallback(t *testing.T, p *Plugin, rawIDToken string) *httptest.ResponseRecorder {
+	t.Helper()
+	callback := httptest.NewRequest(http.MethodGet,
+		"/oidc/callback?state=test-state&code="+url.QueryEscape(rawIDToken), nil)
+	callback.AddCookie(&http.Cookie{Name: stateCookie, Value: "test-state"})
+	response := httptest.NewRecorder()
+	p.CallbackHandler(response, callback)
+	return response
 }
 
 func TestOIDCAndLocalTokenDispatch(t *testing.T) {
@@ -176,6 +191,8 @@ func TestOIDCRequiresVerifiedEmailBeforeAccountBinding(t *testing.T) {
 		{"string_true", map[string]any{"email_verified": "true"}, false, false},
 		{"missing_email", map[string]any{"email": nil}, false, false},
 		{"unverified_new_account", map[string]any{"email": "new@example.test", "email_verified": false}, false, false},
+		{"missing_subject", map[string]any{"sub": nil}, false, false},
+		{"empty_subject", map[string]any{"sub": "  "}, false, false},
 		{"wrong_audience", map[string]any{"aud": "another-client"}, false, false},
 		{"expired", map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}, false, false},
 		{"disabled", nil, true, false},
@@ -199,10 +216,7 @@ func TestOIDCRequiresVerifiedEmailBeforeAccountBinding(t *testing.T) {
 				t.Fatalf("rejected claims admitted by bearer: principal=%+v err=%v", principal, err)
 			}
 
-			callback := httptest.NewRequest(http.MethodGet, "/oidc/callback?state=test-state&code="+url.QueryEscape(raw), nil)
-			callback.AddCookie(&http.Cookie{Name: stateCookie, Value: "test-state"})
-			response := httptest.NewRecorder()
-			p.CallbackHandler(response, callback)
+			response := oidcCallback(t, p, raw)
 			var session *http.Cookie
 			for _, cookie := range response.Result().Cookies() {
 				if cookie.Name == localauth.CookieName {
@@ -227,5 +241,181 @@ func TestOIDCRequiresVerifiedEmailBeforeAccountBinding(t *testing.T) {
 				t.Fatalf("unexpected account created: users=%d err=%v", users, err)
 			}
 		})
+	}
+}
+func TestOIDCBearerResolvesOnlyBoundSubjectAndUsesCanonicalProfile(t *testing.T) {
+	p, _, sign := newTestOIDC(t)
+	if _, err := p.db.Write.Exec(`
+		UPDATE users
+		SET email='canonical@example.test', display_name='Canonical', role='member'
+		WHERE id=1
+	`); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+	request.Header.Set("Authorization", "Bearer "+sign(map[string]any{
+		"email": "claim@example.test", "name": "Claim Name",
+	}))
+	principal, err := p.Authenticate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.Email != "canonical@example.test" || principal.Display != "Canonical" ||
+		principal.Role != "member" || principal.AuthNBy != Name {
+		t.Fatalf("principal used mutable claims instead of canonical row: %+v", principal)
+	}
+	response := oidcCallback(t, p, sign(map[string]any{
+		"email": "different-claim@example.test", "name": "Different Claim",
+	}))
+	if response.Code != http.StatusFound {
+		t.Fatalf("existing-binding callback status=%d body=%s", response.Code, response.Body.String())
+	}
+	var canonicalEmail, canonicalDisplay string
+	if err := p.db.Read.QueryRow(`SELECT email,display_name FROM users WHERE id=1`).
+		Scan(&canonicalEmail, &canonicalDisplay); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalEmail != "canonical@example.test" || canonicalDisplay != "Canonical" {
+		t.Fatalf("callback silently synchronized profile: email=%q display=%q",
+			canonicalEmail, canonicalDisplay)
+	}
+
+	request.Header.Set("Authorization", "Bearer "+sign(map[string]any{
+		"sub": "unknown-subject", "email": "unused@example.test",
+	}))
+	principal, err = p.Authenticate(request)
+	if !errors.Is(err, errIdentityNotBound) || principal != nil {
+		t.Fatalf("unknown bearer provisioned or resolved: principal=%+v err=%v", principal, err)
+	}
+	var users, bindingAudits int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM users`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.oidc_bound'`).Scan(&bindingAudits); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 || bindingAudits != 0 {
+		t.Fatalf("resolution-only bearer wrote state: users=%d audits=%d", users, bindingAudits)
+	}
+}
+
+func TestOIDCCallbackProvisionsUnusedSubjectAndRetainedBinding(t *testing.T) {
+	p, _, sign := newTestOIDC(t)
+	response := oidcCallback(t, p, sign(map[string]any{
+		"sub": "new-subject", "email": " New@Example.Test ", "name": "New User",
+	}))
+	if response.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var userID int64
+	var email, display, role, issuer, subject string
+	var password sql.NullString
+	if err := p.db.Read.QueryRow(`
+		SELECT id,email,display_name,role,oidc_issuer,oidc_subject,password_hash
+		FROM users WHERE oidc_subject='new-subject'
+	`).Scan(&userID, &email, &display, &role, &issuer, &subject, &password); err != nil {
+		t.Fatal(err)
+	}
+	if email != "new@example.test" || display != "New User" || role != "member" ||
+		issuer != p.cfg.IssuerURL || subject != "new-subject" || password.Valid {
+		t.Fatalf("provisioned identity=(%d,%q,%q,%q,%q,%q,%v)",
+			userID, email, display, role, issuer, subject, password)
+	}
+	var retained int
+	var afterJSON string
+	if err := p.db.Read.QueryRow(`
+		SELECT retained,after_json FROM audit_events
+		WHERE action='user.oidc_bound' AND object_id=?
+	`, userID).Scan(&retained, &afterJSON); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 || !strings.Contains(afterJSON, `"email":"new@example.test"`) ||
+		!strings.Contains(afterJSON, `"new_user":true`) ||
+		strings.Contains(afterJSON, "new-subject") {
+		t.Fatalf("binding audit retained=%d after=%s", retained, afterJSON)
+	}
+}
+
+func TestOIDCCallbackNeverAdoptsOccupiedEmail(t *testing.T) {
+	p, _, sign := newTestOIDC(t)
+	if _, err := p.db.Write.Exec(`UPDATE users SET oidc_issuer=NULL,oidc_subject=NULL WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	response := oidcCallback(t, p, sign(nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var issuer, subject sql.NullString
+	if err := p.db.Read.QueryRow(`SELECT oidc_issuer,oidc_subject FROM users WHERE id=1`).Scan(&issuer, &subject); err != nil {
+		t.Fatal(err)
+	}
+	var users, audits int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM users`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.oidc_bound'`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if issuer.Valid || subject.Valid || users != 1 || audits != 0 {
+		t.Fatalf("occupied email was rebound: issuer=%v subject=%v users=%d audits=%d",
+			issuer, subject, users, audits)
+	}
+}
+
+func TestOIDCAdminBootstrapRequiresNoExistingAdministrator(t *testing.T) {
+	t.Run("first administrator", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		if _, err := p.db.Write.Exec(`DELETE FROM users`); err != nil {
+			t.Fatal(err)
+		}
+		response := oidcCallback(t, p, sign(nil))
+		if response.Code != http.StatusFound {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var role string
+		if err := p.db.Read.QueryRow(`SELECT role FROM users WHERE email='owner@example.test'`).Scan(&role); err != nil || role != "admin" {
+			t.Fatalf("role=%q err=%v", role, err)
+		}
+	})
+
+	t.Run("existing administrator prevents reassignment", func(t *testing.T) {
+		p, _, sign := newTestOIDC(t)
+		if _, err := p.db.Write.Exec(`UPDATE users SET email='existing-admin@example.test' WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		response := oidcCallback(t, p, sign(map[string]any{"sub": "later-subject"}))
+		if response.Code != http.StatusFound {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var role string
+		if err := p.db.Read.QueryRow(`SELECT role FROM users WHERE oidc_subject='later-subject'`).Scan(&role); err != nil || role != "member" {
+			t.Fatalf("role=%q err=%v", role, err)
+		}
+		var admins int
+		if err := p.db.Read.QueryRow(`SELECT count(*) FROM users WHERE role='admin'`).Scan(&admins); err != nil || admins != 1 {
+			t.Fatalf("administrators=%d err=%v", admins, err)
+		}
+	})
+}
+
+func TestOIDCProvisioningRollsBackWhenRetainedAuditFails(t *testing.T) {
+	p, _, sign := newTestOIDC(t)
+	if _, err := p.db.Write.Exec(`
+		CREATE TRIGGER reject_oidc_binding_audit
+		BEFORE INSERT ON audit_events
+		WHEN NEW.action='user.oidc_bound'
+		BEGIN SELECT RAISE(ABORT, 'binding audit unavailable'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	response := oidcCallback(t, p, sign(map[string]any{
+		"sub": "rollback-subject", "email": "rollback@example.test",
+	}))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var users int
+	if err := p.db.Read.QueryRow(`SELECT count(*) FROM users WHERE email='rollback@example.test'`).Scan(&users); err != nil || users != 0 {
+		t.Fatalf("rolled-back users=%d err=%v", users, err)
 	}
 }

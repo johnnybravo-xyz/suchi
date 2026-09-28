@@ -2,9 +2,9 @@
 
 // Package oidcauth is the generic OpenID Connect authenticator plugin.
 //
-// The configured issuer must provide verified email claims in signed ID tokens.
-// Suchi trusts that issuer to control account-email assignment; first login
-// binds a users row by verified email, with AdminEmail selecting the initial role.
+// Provider identities are keyed only by the verified issuer and subject.
+// Email is profile data: it can seed a new callback-provisioned account, but
+// it never resolves or silently rebinds an existing identity.
 package oidcauth
 
 import (
@@ -23,8 +23,10 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/johnnybravo-xyz/suchi/core/audit"
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/db"
+	"github.com/johnnybravo-xyz/suchi/core/logx"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -35,7 +37,11 @@ const (
 	exchangeTTL = 30 * time.Second
 )
 
-var errUserDisabled = errors.New("oidc: user disabled")
+var (
+	errUserDisabled     = errors.New("oidc: user disabled")
+	errIdentityNotBound = errors.New("oidc: identity is not bound")
+	errIdentityConflict = errors.New("oidc: identity conflicts with an existing account")
+)
 
 // Config carries everything New needs. All fields required.
 type Config struct {
@@ -69,6 +75,7 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.PublicURL == "" {
 		return nil, errors.New("issuer, client id, client secret, and public URL are required")
 	}
+	cfg.AdminEmail = strings.ToLower(strings.TrimSpace(cfg.AdminEmail))
 	if cfg.AdminEmail == "" {
 		return nil, errors.New("admin email required when OIDC is enabled")
 	}
@@ -125,16 +132,17 @@ func (p *Plugin) Authenticate(r *http.Request) (*pluginapi.Principal, error) {
 	if err != nil {
 		return nil, err
 	}
-	userID, role, display, err := p.upsertUser(r.Context(), claims.Email, claims.Name)
+	user, err := p.resolveUser(r.Context(), claims)
 	if err != nil {
 		return nil, err
 	}
 	return &pluginapi.Principal{
 		Kind:          "user",
-		UserID:        userID,
-		Email:         claims.Email,
-		Display:       display,
-		Role:          role,
+		UserID:        user.ID,
+		Email:         user.Email,
+		Display:       user.Display,
+		Role:          user.Role,
+		AuthNBy:       Name,
 		AuthExpiresAt: idTok.Expiry.Unix(),
 	}, nil
 }
@@ -212,17 +220,23 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity claims were rejected", http.StatusBadRequest)
 		return
 	}
-	userID, _, _, err := p.upsertUser(r.Context(), claims.Email, claims.Name)
+	user, record, err := p.resolveOrProvisionUser(r.Context(), claims, logx.RequestID(r.Context()))
 	if err != nil {
-		p.log.Error("oidc.upsert.fail", "err", err.Error())
-		if errors.Is(err, errUserDisabled) {
+		p.log.Error("oidc.identity.fail", "err", err.Error())
+		switch {
+		case errors.Is(err, errUserDisabled):
 			http.Error(w, "account disabled", http.StatusForbidden)
-			return
+		case errors.Is(err, errIdentityConflict):
+			http.Error(w, "identity conflicts with an existing account", http.StatusConflict)
+		default:
+			http.Error(w, "identity resolution failed", http.StatusInternalServerError)
 		}
-		http.Error(w, "user upsert failed", http.StatusInternalServerError)
 		return
 	}
-	cookie, err := p.cfg.IssueSession(r.Context(), userID, r)
+	if record != nil {
+		record.Emit(r.Context(), p.log)
+	}
+	cookie, err := p.cfg.IssueSession(r.Context(), user.ID, r)
 	if err != nil {
 		p.log.Error("oidc.session.fail", "err", err.Error())
 		http.Error(w, "session failed", http.StatusInternalServerError)
@@ -233,68 +247,156 @@ func (p *Plugin) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type identityClaims struct {
+	Issuer        string `json:"-"`
+	Subject       string `json:"-"`
 	Email         string `json:"email"`
 	Name          string `json:"name"`
 	EmailVerified bool   `json:"email_verified"`
 }
 
-// Both login paths must establish verified address control before email binding.
+type oidcUser struct {
+	ID      int64
+	Email   string
+	Role    string
+	Display string
+}
+
+// Both login paths must establish verified address control before using email
+// as profile data. Signature, issuer, audience, and expiry are verified by the
+// provider verifier before this function runs.
 func verifiedClaims(token *oidc.IDToken) (identityClaims, error) {
 	var claims identityClaims
 	if err := token.Claims(&claims); err != nil {
 		return claims, fmt.Errorf("read identity claims: %w", err)
 	}
+	claims.Issuer = token.Issuer
+	claims.Subject = token.Subject
 	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
+	claims.Name = strings.TrimSpace(claims.Name)
+	if claims.Issuer == "" || strings.TrimSpace(claims.Subject) == "" {
+		return claims, errors.New("id token requires issuer and subject")
+	}
 	if claims.Email == "" || !claims.EmailVerified {
 		return claims, errors.New("id token requires email and email_verified=true")
 	}
 	return claims, nil
 }
 
-// upsertUser binds the OIDC identity to a users row. First-time bind for
-// AdminEmail creates an admin; other first-timers are members.
-func (p *Plugin) upsertUser(ctx context.Context, email, displayName string) (userID int64, role, display string, err error) {
-	role = "member"
-	if strings.EqualFold(email, p.cfg.AdminEmail) {
-		role = "admin"
+// resolveUser is deliberately read-only. Bearer authentication can use an
+// established provider binding but can never provision or mutate an account.
+func (p *Plugin) resolveUser(ctx context.Context, claims identityClaims) (oidcUser, error) {
+	var (
+		user     oidcUser
+		disabled bool
+	)
+	err := p.db.Read.QueryRowContext(ctx, `
+		SELECT id, email, role, display_name, disabled
+		FROM users
+		WHERE oidc_issuer = ? AND oidc_subject = ?
+	`, claims.Issuer, claims.Subject).Scan(
+		&user.ID, &user.Email, &user.Role, &user.Display, &disabled,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return oidcUser{}, errIdentityNotBound
 	}
-	if displayName == "" {
-		displayName = email
+	if err != nil {
+		return oidcUser{}, err
 	}
-	err = p.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().Unix()
-		row := tx.QueryRowContext(ctx,
-			"SELECT id, role, display_name, disabled FROM users WHERE email = ?", email)
-		var existingRole, existingDisplay string
+	if disabled {
+		return oidcUser{}, errUserDisabled
+	}
+	return user, nil
+}
+
+// resolveOrProvisionUser is the browser-callback identity boundary. A missing
+// issuer/subject binding may create a new row only when its verified email is
+// unused; it never adopts an email-matched row.
+func (p *Plugin) resolveOrProvisionUser(
+	ctx context.Context,
+	claims identityClaims,
+	requestID string,
+) (oidcUser, *audit.Record, error) {
+	var (
+		user   oidcUser
+		record *audit.Record
+	)
+	err := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var disabled bool
-		errRow := row.Scan(&userID, &existingRole, &existingDisplay, &disabled)
-		if errRow == nil {
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, email, role, display_name, disabled
+			FROM users
+			WHERE oidc_issuer = ? AND oidc_subject = ?
+		`, claims.Issuer, claims.Subject).Scan(
+			&user.ID, &user.Email, &user.Role, &user.Display, &disabled,
+		)
+		if err == nil {
 			if disabled {
 				return errUserDisabled
 			}
-			role = existingRole
-			display = existingDisplay
 			return nil
 		}
-		if errRow != sql.ErrNoRows {
-			return errRow
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
-		res, insErr := tx.ExecContext(ctx, `
-			INSERT INTO users(email, display_name, role, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, email, displayName, role, now, now)
-		if insErr != nil {
-			return insErr
+
+		var emailOccupied bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)`,
+			claims.Email,
+		).Scan(&emailOccupied); err != nil {
+			return err
 		}
-		id, idErr := res.LastInsertId()
-		if idErr != nil {
-			return idErr
+		if emailOccupied {
+			return errIdentityConflict
 		}
-		userID = id
-		display = displayName
+
+		user.Email, user.Display, user.Role = claims.Email, claims.Name, "member"
+		if user.Display == "" {
+			user.Display = user.Email
+		}
+		if claims.Email == p.cfg.AdminEmail {
+			var adminExists bool
+			if err := tx.QueryRowContext(ctx,
+				`SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin')`,
+			).Scan(&adminExists); err != nil {
+				return err
+			}
+			if !adminExists {
+				user.Role = "admin"
+			}
+		}
+
+		now := time.Now().Unix()
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO users(
+				email, display_name, role, oidc_issuer, oidc_subject, created_at, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, user.Email, user.Display, user.Role, claims.Issuer, claims.Subject, now, now)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return fmt.Errorf("%w: %v", errIdentityConflict, err)
+			}
+			return err
+		}
+		user.ID, err = result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		auditRecord, err := audit.RecordInTx(ctx, tx, audit.OIDCBoundEvent(
+			nil, user.ID, claims.Issuer, claims.Subject, user.Email, user.Role,
+			true, requestID, 0,
+		))
+		if err != nil {
+			return err
+		}
+		record = &auditRecord
 		return nil
 	})
-	return
+	if err != nil {
+		return oidcUser{}, nil, err
+	}
+	return user, record, nil
 }
 
 func randHex(n int) (string, error) {

@@ -165,6 +165,33 @@ func TestCreateUserReturnsRetryableErrorWhenPasswordHashingIsUnavailable(t *test
 		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
+func TestCreateUserRejectsLocalAccountsInOIDCMode(t *testing.T) {
+	d := openTestDB(t)
+	seedUser(t, d, 1)
+	hashCalls := 0
+	s := &Server{
+		DB: d, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		EmailChangeModeFor: func(*pluginapi.Principal) string {
+			return EmailChangeModeOIDC
+		},
+		PasswordHasher: func(string) (string, error) {
+			hashCalls++
+			return "must-not-be-used", nil
+		},
+	}
+	rec := doAdmin(t, s, http.MethodPost, "/api/admin/users",
+		`{"email":"provider-user@example.test","password":"password","role":"member"}`, adminPrincipal(1))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"oidc_managed"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if hashCalls != 0 {
+		t.Fatalf("OIDC-managed creation performed %d password hashes", hashCalls)
+	}
+	var users int
+	if err := d.Read.QueryRow(`SELECT count(*) FROM users`).Scan(&users); err != nil || users != 1 {
+		t.Fatalf("users=%d err=%v", users, err)
+	}
+}
 
 func TestPatchUser_cannot_disable_self(t *testing.T) {
 	d := openTestDB(t)

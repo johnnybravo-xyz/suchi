@@ -78,6 +78,11 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
+	if s.emailChangeMode(p) == EmailChangeModeOIDC {
+		s.writeError(w, http.StatusConflict, "oidc_managed",
+			"accounts are provisioned by the configured identity provider")
+		return
+	}
 	if s.PasswordHasher == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "no_hasher",
 			"password hasher not wired — this is a boot-time misconfiguration")
