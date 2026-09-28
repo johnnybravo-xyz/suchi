@@ -203,13 +203,29 @@ with `.dirty` for modified source or **revision unavailable** when missing.
 Tagged releases show only their version. Include this offline status in bug
 reports; it performs no update check.
 
-**Settings > My account** contains Profile, Mobile app,
-API tokens, Saved decryption passwords, and Mailboxes for capable members.
-**Profile** saves your display name/photo; sign-in email is read-only.
-Demo visitors see a read-only profile without account tools.
-Profile fields sit side by side on wide screens and stack on phones. The account
-pane scrolls with clearance between its content and scrollbar, while the Settings
-tabs and version footer stay visible.
+**Settings > My account** contains Profile, Mobile app, API tokens, Saved
+decryption passwords, and Mailboxes for capable members. **Profile** saves the
+display name/photo and shows the canonical sign-in email and method.
+
+For a local-password account, **Change email** opens a focused dialog for the
+new address, exact confirmation, and current password. The change is immediate:
+Suchi sends no confirmation, recovery, or old-address notification email. It is
+the same numeric account, so documents, memberships, permissions, API tokens,
+and connected mobile apps stay attached. Every old browser session is revoked
+and the current browser receives a replacement session.
+
+For an OIDC-managed account, Suchi accepts no typed address or local password.
+**Sync from identity provider** submits a same-origin request and forces a fresh
+provider login. It can bind an eligible unbound account, adopt a changed
+provider email for an already bound issuer/subject, or confirm that nothing
+changed. A successful binding or email change rotates browser sessions just
+like the local flow. Identity/email conflicts fail closed instead of merging
+accounts.
+
+Demo visitors and the fixed development account have a read-only email with no
+mutation control. Profile fields sit side by side on wide screens and stack on
+phones. The account pane scrolls with clearance between its content and
+scrollbar, while the Settings tabs and version footer stay visible.
 
 **Pair mobile app** generates a private, single-use QR code that expires in five
 minutes. Scan it in Suchi and confirm the server address. A new code replaces the
@@ -246,6 +262,11 @@ On narrow screens, section navigation becomes a horizontally scrolling rail.
 selected group. User capabilities are under **Additional access**; hidden member
 choices are not saved when creating an admin. Archive Configuration reuses the
 same user-creation form.
+
+When OIDC is configured, People cannot create password accounts: users
+self-provision through browser sign-in only when their verified provider email
+is unused. `ADMIN_EMAIL` can grant the first matching provisioned identity the
+administrator role; it does not find or merge a returning account.
 
 **Metadata** manages tags, correspondents, document types, storage paths and
 custom fields through one type selector. Metadata types have navigable URLs, so

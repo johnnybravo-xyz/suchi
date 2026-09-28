@@ -97,6 +97,25 @@ do not count; promote or enable another administrator before demoting the last
 active one. The API enforces this inside the write transaction, including when
 administrators make concurrent changes. Rejected updates leave all fields unchanged.
 
+Email changes are self-service identity operations, not administrator account
+edits. A local-password user must re-enter the current password; an OIDC user
+must complete forced provider reauthentication from the current live session.
+Administrators cannot change another user's email, bind a provider identity,
+merge colliding accounts, or transfer ownership through an email edit.
+
+OIDC browser sign-in may self-provision a new member only when its verified
+email is unused. `ADMIN_EMAIL` grants the administrator role only to the first
+matching provisioned identity when no administrator exists. OIDC Bearer tokens
+cannot provision users, and an email collision never adopts the existing row.
+
+Every successful change preserves the numeric `users.id`. Document ownership,
+system memberships, ACL principals, mailboxes, shares, capabilities, tasks, and
+other user references therefore stay attached to the same account. Binding or
+changing email revokes all of that user's browser sessions and issues one
+replacement for the initiating browser; API and mobile tokens remain valid
+under their existing scope and system boundaries. The identity audit row is
+required for the transaction and retained outside ordinary audit pruning.
+
 ## Capabilities
 
 Administrators grant optional capabilities to individual members under

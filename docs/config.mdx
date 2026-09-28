@@ -125,7 +125,7 @@ environment overrides a file-side secret-file path.
 | `BODY_LIMIT`                      | `500M`                   | Request-body and fs-watch file-size cap. `0` disables the cap. Accepts `K`/`M`/`G` suffixes or raw bytes. |
 | `BACKUP_INTERVAL`                 | `24h`                    | `VACUUM INTO` snapshot cadence as a Go duration such as `30m`, `24h`, or `168h`. Writes `$DATA_DIR/backups/suchi-<ts>.db`; `0` disables. |
 | `BACKUP_KEEP`                     | `7`                      | Retention — after each snapshot, prune all-but-the-latest N. `0` keeps everything (documented; not the default).                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `AUDIT_RETENTION_DAYS`            | `20`                     | Sliding window over `audit_events`. Rows older than this get pruned on the same tick as the backup snapshot. Range `0–100`; `0` disables (audit log grows forever). Directly bounds the storage growth path the `GET /api/events/` feed sits on.                                                                                                                                                                                                                                                                                |
+| `AUDIT_RETENTION_DAYS`            | `20`                     | Sliding window over ordinary `audit_events`. Non-retained rows older than this are pruned on the backup tick; retained identity-security rows are excluded and require deliberate operator deletion. Range `0–100`; `0` disables pruning. Directly bounds the ordinary storage growth path behind `GET /api/events/`. |
 | `OCR_LANGUAGES`                   | `eng`                    | Comma-separated Tesseract language codes handed to every OCR call. The matching packs must be installed separately; see [Adding OCR languages](/formats#additional-ocr-languages). Each enabled pack adds processing work and memory use. Detected document languages are stored on `documents.languages`; they do not change this operator setting. Common Indian scripts include `hin`, `kan`, `tam`, `tel`, `ben`, `mar`, `guj`, `pan`, `mal`, and `urd`. |
 | `DEVICE_OCR_MIN_CONFIDENCE`       | `0.65`                   | Finite `[0,1]` threshold for promoting submitted mobile OCR to provisional searchable content. Confidence/language/receipt-time provenance is retained below the threshold, but the submitted text is discarded. Native PDF text remains authoritative; accepted device text avoids duplicate OCR only for image-only PDFs. |
 | `PDF_MAX_CONTENT_BYTES`           | `8M`                     | Cap on pdftotext output length written to `documents.content`. Truncation is silent + logged at Warn — the doc still lands, FTS still indexes what fit.                                                                                                                                                                                                                                                                                                                                                                         |
@@ -298,12 +298,12 @@ normal boot also refuses this data directory until the public
 
 All-or-nothing group. Set the whole set or none:
 
-| Env var                                           | Purpose                                                                                                           |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `OIDC_ISSUER_URL`                                 | e.g. `https://id.example.com`                                                                                     |
-| `OIDC_CLIENT_ID`                                  | From your IdP.                                                                                                    |
-| `OIDC_CLIENT_SECRET` or `OIDC_CLIENT_SECRET_FILE` | The secret. `_FILE` variant reads from disk (docker/k8s secrets).                                                 |
-| `ADMIN_EMAIL`                                     | Required when OIDC is enabled. The email that gets admin role on first login. Everyone else defaults to `member`. |
+| Env var                                           | Purpose                                                                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `OIDC_ISSUER_URL`                                 | e.g. `https://id.example.com`                                                                                                         |
+| `OIDC_CLIENT_ID`                                  | From your IdP.                                                                                                                        |
+| `OIDC_CLIENT_SECRET` or `OIDC_CLIENT_SECRET_FILE` | The secret. `_FILE` variant reads from disk (docker/k8s secrets).                                                                     |
+| `ADMIN_EMAIL`                                     | Required with OIDC. Role bootstrap only: the first matching browser-provisioned identity becomes admin when no administrator exists. |
 
 The provider must support discovery and return a signed ID token containing
 `email` and the boolean `email_verified: true`. Suchi requests `openid email
@@ -312,12 +312,27 @@ available only from UserInfo are not sufficient. Missing, false, or non-boolean
 verification claims are rejected in both browser and bearer sign-in. A provider
 that cannot truthfully supply verified-email claims is not supported.
 
-Suchi binds this verified email to its local account, including existing accounts
-and `ADMIN_EMAIL`. Only configure an issuer you trust to control email assignment;
-never map arbitrary user-editable attributes to verified email. Email can change
-or be reassigned and is not a stable OIDC subject identifier, so review account
-ownership before changing issuers or reassigning an address. See the
+Suchi stores the verified issuer and subject as the stable OIDC account key.
+Verified email remains a current provider-managed attribute, not the returning
+identity lookup. A browser callback with an unknown issuer/subject can create a
+new account only when its verified email is unused. It never adopts an existing
+email-matched row, and direct Bearer authentication never provisions or mutates
+an account. `ADMIN_EMAIL` does not locate, bind, or merge returning users.
+
+To bind a pre-existing unbound account after enabling OIDC, preserve one live
+browser session and choose **Sync from identity provider**. The forced provider
+login must return the same verified email before Suchi records the
+issuer/subject pair. Without that live session, ordinary login sees the occupied
+email as a conflict rather than risking an account takeover. Changing issuer,
+subject assignment, or verified-email ownership likewise fails closed; Suchi
+has no provider-migration or account-merge fallback. Only configure an issuer
+you trust to control email assignment, and never map arbitrary user-editable
+attributes to verified email. See the
 [OIDC standard claims and identity limits](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability).
+
+OIDC binding and account-email changes create retained security audit rows.
+Ordinary `AUDIT_RETENTION_DAYS` pruning does not remove them; an operator must
+deliberately delete them.
 
 When OIDC is configured, it owns interactive sign-in: anonymous browser entry
 points redirect to the provider, and local bootstrap/password-login endpoints
@@ -337,11 +352,24 @@ ID tokens. Invalid credentials never fall back to a browser session.
 | `INGEST_FS_DIR`         | `$DATA_DIR/staging` when owner is set | Watch dir. Files landed here (via move, scp, drag-drop) become docs. Sidecars (`<name>.json`) apply metadata. Failed files land in `<dir>/errors/`. |
 | `INGEST_FS_SYSTEM` | (unset = original system 1) | Existing target code, for example S02. Does not create a system. The owner must be active and able to enter it. |
 
-Archive Configuration exposes the same values as database-backed overrides. Saving a
-new directory, owner or system validates the destination, stops the old watcher,
-drains the new directory, and starts watching immediately. Intake rechecks owner
-entry; sidecars cannot redirect the configured system. Optional sidecar `jd_system`
-must agree, and `jd_address` never allocates or routes a document.
+Archive Configuration exposes the same values as database-backed overrides.
+Saving a new directory, owner, or system validates the destination, stops the
+old watcher, drains the new directory, and starts watching immediately. Intake
+rechecks owner entry; sidecars cannot redirect the configured system. Optional
+sidecar `jd_system` must agree, and `jd_address` never allocates or routes a
+document.
+
+A database-managed watched-folder owner that exactly matches an account's old
+email follows that account's successful local or OIDC email change in the same
+transaction; the watcher reloads afterward. A reload failure is logged as a
+post-commit warning and does not undo the completed identity change.
+
+`INGEST_FS_OWNER_EMAIL` is a boot-time pin. If it identifies the account being
+changed and does not already equal the target email, Suchi rejects the change
+with `fs_watch_owner_pinned`. Update the external configuration and restart so
+the effective pin already names the target before retrying. Import
+`--owner-email` is separate invocation-time input and must use the account's
+current address on every future run.
 
 ## Email ingest (IMAP polling)
 

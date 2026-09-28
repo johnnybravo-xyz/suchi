@@ -20,8 +20,8 @@ carry it into bug reports. See [Errors](#errors) for the JSON error contract.
 | Health / metrics        | `/healthz`, `/readyz`, `/metrics`                                                                                                                                                     |
 | Client compatibility     | `GET /api/handshake` (public; no credentials)                                                                                                                                         |
 | Mobile pairing           | `POST/DELETE /api/mobile/pairing` (session), `POST /api/mobile/pairing/exchange` (one-time code)                                                                                         |
-| Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `/oidc/login` and `/oidc/callback`                                                                                                               |
-| Auth (JSON)             | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`                                                                          |
+| Auth (browser)          | `/login`, `/bootstrap`, `/setup`, OIDC `GET /oidc/login`, `GET /oidc/callback`, and `POST /oidc/email-change`                                                                            |
+| Auth and account JSON   | `POST /api/login`, `POST /api/logout`, `POST /api/token/`, `GET/POST/DELETE /api/tokens/`, `GET /api/whoami`, `PATCH /api/users/me`, `POST /api/users/me/email`                          |
 | Documents               | `POST /api/documents/`, `GET/PATCH/DELETE /api/documents/{id}`, `POST /api/documents/{id}/restore`, `GET/DELETE /api/trash/`, `DELETE /api/trash/{id}`                                      |
 | Doc extras              | `/correspondents/`, `/versions/`, `/custom_fields/{field}`, `/decrypt`, `/decrypt-batch`, `/pending-decryption`                                                                       |
 | Taxonomy                | `/api/correspondents/`, `/api/document_types/`, `/api/storage_paths/`, `/api/tags/`, `/api/tags/{id}/parent`, `/api/custom_fields/`, `/api/jd/categories/`                            |
@@ -231,11 +231,40 @@ creation uses the same bound and returns a retryable **503** when unavailable.
 Credential routes and demo session creation share their respective rate-limit
 buckets across plain, trailing-slash and percent-encoded slash paths.
 
-### `GET /oidc/login` / `GET /oidc/callback`
+### `GET /oidc/login` / `GET /oidc/callback` / `POST /oidc/email-change`
 
-OIDC login flow. Only registered when OIDC is configured. State token
-is a signed cookie; the callback plants a session cookie via
-`local-auth`'s `IssueSession` (one code path mints all cookies).
+OIDC routes exist only when OIDC is configured. Login and explicit email
+synchronization use a ten-minute, versioned, HMAC-authenticated transaction
+cookie with a fixed purpose, state, nonce, PKCE S256 verifier and expiry. The
+cookie is HttpOnly, SameSite=Lax, Secure for HTTPS deployments, process-local,
+and expired before every callback outcome is handled. Every response is
+`Cache-Control: no-store`.
+
+A browser callback resolves a returning account only by the exact verified
+issuer/subject pair. If that pair is unknown, browser login may provision a new
+account only when the verified email is unused; it never adopts an existing
+email-matched row. Direct OIDC Bearer authentication is resolution-only and
+cannot provision, bind, or change an account. `ADMIN_EMAIL` grants the first
+matching browser-provisioned user the administrator role only when no
+administrator exists.
+
+`POST /oidc/email-change` requires a live browser session, strict same-origin
+provenance, OIDC account mode, and no `Authorization` header. It forces provider
+reauthentication with `prompt=login` and binds the transaction to that exact
+user and session. The callback then:
+
+- binds an eligible unbound row only when the fresh verified email still equals
+  its canonical email;
+- updates a bound row's email only when issuer and subject still match; or
+- makes no identity write when the provider email is unchanged.
+
+A binding or email change preserves `users.id`, rotates every browser session,
+plants one replacement cookie, preserves API/mobile tokens, and requires a
+retained audit row in the same transaction. Email changes also update a
+matching database-managed watched-folder owner. Conflicts, a stale session,
+a disabled mode, a pinned owner, or an audit failure leave identity and
+sessions unchanged. Success redirects only to the fixed Settings notices
+`identity_bound`, `email_changed`, or `email_checked`.
 
 ### `POST /api/logout`
 
@@ -265,6 +294,7 @@ read-only fields are not user profile settings.
   "build_revision": "1234567890ab",
   "role": "admin|member",
   "authn_by": "local-auth|oidc",
+  "email_change_mode": "password|oidc|disabled",
   "avatar_url": "/api/users/1/avatar?v=<sha256>",
   "system_id": 1,
   "system_name": "Archive",
@@ -276,13 +306,25 @@ read-only fields are not user profile settings.
 
 `display_name` + `avatar_url` are omitted when unset. `instance_host` comes
 from the configured `PUBLIC_URL` and lets the SPA preview the identity shown on
-public share pages. **401** if anonymous.
-`scopes` copies the authenticated API token's granted scopes. Cookie/OIDC
-sessions return `[]`; clients must not infer token grants from user role or
-capabilities. Token responses also include the credential's filing-system
-`system_id`, `system_name`, and `system_code`. These fields are omitted for
-cookie/OIDC sessions. `system_code` remains present but may be empty before the
-original archive is assigned a permanent code.
+public share pages. **401** if anonymous. Row-backed responses reread canonical
+email, role, display name, and avatar state from `users`; stateless demo
+principals retain their constrained fallback identity.
+
+`email_change_mode` is the authority for account-email controls:
+
+- `password` — a row-backed local account may use `POST /api/users/me/email`;
+- `oidc` — the configured provider owns the email and the account may use
+  `POST /oidc/email-change`; and
+- `disabled` — tokens, demo identities, and the fixed development account have
+  no email mutation path.
+
+Do not infer email authority from `authn_by`; it remains authentication/audit
+metadata. `scopes` copies the authenticated API token's granted scopes.
+Cookie/OIDC sessions return `[]`; clients must not infer token grants from user
+role or capabilities. Token responses also include the credential's
+filing-system `system_id`, `system_name`, and `system_code`. These fields are
+omitted for cookie/OIDC sessions. `system_code` remains present but may be empty
+before the original archive is assigned a permanent code.
 
 ### `POST /api/mobile/pairing`
 
@@ -365,22 +407,50 @@ a failed request.
 
 ### `PATCH /api/users/me`
 
-Update the caller's profile. Body accepts `display_name` only in the
-current pass:
+Update only the caller's display name:
 
 ```json
 { "display_name": "Ritesh S." }
 ```
 
-- `display_name` — trimmed, 1–120 chars.
-- `email` — refused with `400 {"code": "email_change_unsupported"}`.
-  Email is the local-auth identifier; changing it needs a password
-  challenge + a dedicated flow (not yet wired).
-- Empty body → `400 {"code": "no_fields"}`.
+`display_name` is trimmed and must contain 1–120 characters. The strict decoder
+rejects `email` and every other unknown field with **400** `bad_json`; an empty
+body returns **400** `no_fields`. Successful writes emit
+`user.display_name_changed` and return the fresh `UserSelf` shape.
 
-Successful writes emit an audit event
-(`user.display_name_changed`, old→new) and return the fresh
-`UserSelf` shape.
+### `POST /api/users/me/email`
+
+Change a local-password account's sign-in email:
+
+```json
+{ "email": "new@example.com", "current_password": "correct horse battery staple" }
+```
+
+This route requires `email_change_mode: "password"`, a live browser session,
+strict same-origin provenance, and no `Authorization` header. It is unavailable
+to API tokens, OIDC accounts, demo identities, and the fixed development
+account. The target is trimmed and lowercased. The current password is verified
+outside the writer through the bounded Argon2 worker; saturation returns **503**
+`password_hash_unavailable` with `Retry-After: 1`.
+
+The writer rechecks the canonical email, password hash, mode, enabled account,
+and initiating session. It then preserves `users.id`, changes the email,
+updates a matching database-managed watched-folder owner, rotates every browser
+session, and inserts retained `user.email_changed` as one transaction. Failure
+rolls back all of those effects. **204 No Content** plants the replacement
+cookie; every old browser cookie is invalid, while API/mobile tokens, document
+ownership, memberships, permissions, and other numeric user references remain
+unchanged. The watcher reload happens after commit; a reload warning does not
+roll back the completed identity change.
+
+Expected failures include:
+
+| Status | Codes |
+| --- | --- |
+| 400 | `bad_json`, `bad_email` |
+| 401 | `session_required`, `reauthentication_failed` |
+| 409 | `email_unchanged`, `email_taken`, `oidc_managed`, `email_change_disabled`, `password_hash_unavailable`, `fs_watch_owner_pinned` |
+| 503 | `password_hash_unavailable` |
 
 ### `POST /api/users/me/avatar`
 
@@ -418,6 +488,9 @@ Admin creation (`POST /api/admin/users`) and updates normalize stored
 `capabilities` to `[]` when the resulting role is `admin`; supplied slugs are
 still validated. Demotion to `member` starts with no capabilities unless the
 request explicitly supplies them, so legacy hidden grants cannot reappear.
+
+When OIDC is configured, `POST /api/admin/users` returns **409**
+`oidc_managed`; browser sign-in provisions unused verified identities instead.
 Revocation hooks compare effective access: promotion preserves resources the
 administrator can still use, while demotion revokes access not explicitly retained.
 
@@ -1608,13 +1681,14 @@ new server versions and appear here as they arrive):
 `since_id` on the next call. The server intentionally stores no per-consumer
 cursor.
 
-**Feed horizon.** Audit rows are pruned on the backup ticker per
-`AUDIT_RETENTION_DAYS` (default `20`, cap `100`). `since_id` stays
-valid across purges — IDs only grow — but a client that comes back
-after the retention window has elapsed sees a clean empty diff, not
-"the history it missed." This feed is a near-term change stream, not
-a permanent record. Long-horizon consumers should read `audit_events`
-via a SIEM sink instead.
+**Feed horizon.** Ordinary audit rows are pruned on the backup ticker per
+`AUDIT_RETENTION_DAYS` (default `20`, cap `100`). Retained identity-security
+rows survive that pruning but are instance-wide records, not part of this
+filing-system feed. `since_id` stays valid across purges — IDs only grow — but a
+client that comes back after the ordinary retention window has elapsed sees a
+clean empty diff, not "the history it missed." This feed is a near-term change
+stream, not a permanent record. Long-horizon consumers should read
+`audit_events` or use a configured audit sink instead.
 
 ### `GET /api/tasks/`
 

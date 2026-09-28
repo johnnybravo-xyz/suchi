@@ -155,8 +155,11 @@ it after errors or panics, including when callers recover.
 
 Keep network calls, subprocesses and long processing outside write transactions.
 Enqueue required work with the state change, never as a later best-effort write.
-Audit persistence/delivery is best-effort and usually post-commit; it is not the
-transactional job outbox. Audit failures remain logged.
+Ordinary audit persistence/delivery remains best-effort and is not the
+transactional job outbox. Identity binding and account-email changes are the
+narrow exception: `core/audit.RecordInTx` is required inside their state
+transaction, so an insertion failure rolls back identity, watched-owner, and
+session changes. Sink fan-out still happens only after commit and cannot undo it.
 
 `core/jd/systems` is the leaf owner of identity, membership, target resolution and
 address syntax. System 1 stays hidden until first prefixed import atomically names
@@ -195,6 +198,12 @@ receipt replay from authorization. Users/groups, roles/capabilities, sessions,
 built-in catalog, server/OCR/LLM settings and full backups are instance-wide.
 Admins and host/backup operators remain trusted; system codes do not create
 separate infrastructure or keys.
+
+Account identity also remains instance-wide. Numeric `users.id` is the durable
+owner/principal key; email is a mutable sign-in attribute, and OIDC returning
+identity is the unique non-null `(oidc_issuer, oidc_subject)` pair stored directly
+on that row. Email changes do not rewrite document owners, memberships, ACLs,
+tokens, or other numeric user references.
 
 Original/derived bytes are SHA-256-addressed:
 
@@ -267,27 +276,34 @@ whole-directory snapshot; a database-only copy is incomplete.
 
 The active catalog in `core/db/migrations/` contains one declarative
 `0001_baseline.sql`: the complete v0.1.0 schema at `user_version = 1` with the
-one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL lives separately
-under `core/db/compatibility/`; the normal catalog cannot discover it.
+one-row `schema_lineage = 'stable-v1'` identity. Frozen beta SQL and the final
+account-identity rebuild live separately as compatibility migrations
+`0002`–`0005`; the normal catalog cannot discover them.
 
 `migrations.Prepare` delegates core admission to `db.PrepareStable`, which
 classifies the database before writing. Empty databases receive the baseline;
 already-stable databases are no-ops. Every other accepted state must match its
 complete canonical `sqlite_schema` fingerprint and lineage, not merely a
 `user_version`. Unknown, partial, spoofed, corrupt and future states fail
-without mutation. The [release process compatibility table](/release-process#stable-v1-database-compatibility)
+without mutation. The exact pre-identity schema-4 fingerprint is an explicit
+compatibility boundary that runs only `0005`; a schema claiming the stable
+lineage with the older fingerprint is deliberately rejected for reviewed manual
+recovery. The [release process compatibility table](/release-process#stable-v1-database-compatibility)
 is the sole authority for supported incoming states, frozen steps and the
 required release test matrix.
 
 Every admitted pre-stable archive passes integrity and foreign-key checks and
-gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining frozen
-steps, stable lineage and stable version commit in one immediate transaction
-through the sole writer. The final integrity, foreign keys and canonical schema
-fingerprint must match a fresh stable database; failures roll back while
-retaining the snapshot and restoring foreign-key enforcement. Extension objects
-created after `_suchi_extension_migrations` are outside the core fingerprint.
-Core objects rebuilt during adoption remain explicitly included even when SQLite
-places their replacement rows after that extension boundary.
+gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining
+compatibility steps, stable lineage and stable version commit in one immediate
+transaction through the sole writer. `0005` rebuilds `users` and `audit_events`
+to add provider identity and retained-event metadata while copying primary keys
+and every dependent reference unchanged. The final integrity, foreign keys and
+canonical schema fingerprint must match a fresh stable database; failures roll
+back while retaining the snapshot and restoring foreign-key enforcement.
+Extension objects created after `_suchi_extension_migrations` are outside the
+core fingerprint. Core objects rebuilt during adoption remain explicitly
+included even when SQLite places their replacement rows after that extension
+boundary.
 
 Compiled extensions use `core/db.MigrationSet` and `MigrateSet`, independently of
 `PRAGMA user_version`. Each component supplies its complete ordered history from
@@ -320,17 +336,21 @@ the normalized mux. Credential/pairing and demo POST limiters classify the
 slash and escaped aliases receive the same policy without rewriting the request.
 Share routes use matched mux patterns. Test the assembled handler.
 Local password hashing and verification share a process-wide two-slot bound
-across account creation, shares, login, and token exchange. Login takes a slot
-before the account lookup, so overload fails quickly and identically for known
-and unknown accounts while limiting Argon2 working memory.
+across account creation, shares, login, token exchange, and account-email
+reauthentication. Login takes a slot before the account lookup, so overload
+fails quickly and identically for known and unknown accounts while limiting
+Argon2 working memory. Email change returns the same retryable saturation
+contract without entering the writer.
 
 These gates remain distinct:
 
-- **Authentication:** `core/auth` checks OIDC before local auth and anonymous demo
-  last. OIDC delegates Suchi's exact API-token shape to local auth; invalid
-  credentials cannot fall back to session cookies. Both OIDC login paths require
-  signed verified-email claims. The issuer remains trusted for email assignment;
-  email is not a stable subject identifier.
+- **Authentication:** `core/auth` checks OIDC before local auth and anonymous
+  demo last. OIDC delegates Suchi's exact API-token shape to local auth; invalid
+  credentials cannot fall back to session cookies. Both OIDC paths require
+  signed verified-email claims, but returning users resolve only by exact issuer
+  and subject. Browser callbacks alone may provision an unused verified email;
+  direct Bearer authentication is resolution-only. Existing unbound rows require
+  an explicit live-session synchronization rather than email fallback.
 - **Token authority:** `distro/app/serve_token_policy.go` lists routes/scopes for local API
   tokens and restricted demo scratch identities. Unlisted routes stay session-only,
   including for admins. Public `documents:read`, `documents:write` and `events:read`
@@ -356,15 +376,26 @@ These gates remain distinct:
   Rollback preserves flows; re-enable/readmission/start cannot overtake invalidation.
   Logs, sink delivery and supervisor reload stay outside the writer. See
   [Account safeguards](/permissions#account-safeguards).
+- **Account identity:** `distro/app` supplies one mode evaluator to self
+  responses and both mutation paths. Password verification, random replacement
+  session preparation, and OIDC network exchange happen before the writer.
+  Inside one write transaction the handler rechecks the canonical user, mode,
+  initiating session, and local password hash or OIDC binding; updates the same
+  user ID and matching database-managed watched-owner setting; rotates browser
+  sessions when identity changed; and writes the retained audit event. A
+  no-change OIDC check performs no rotation or false audit write. The replacement
+  cookie, audit sinks, and watched-folder reload happen after commit. API/mobile
+  tokens are intentionally not rotated.
 - **Objects:** `core/authz` checks existence, explicit/token system boundary,
   active-user system entry, then owner/admin/direct/group permission. Admins bypass
   membership/ACL only. Lists/counts/search/similarity filter system and visibility
   in SQL before pagination.
 - **Browser origin:** cookie mutations reject sibling-origin `same-site` and
-  `cross-site` Fetch Metadata requests. Headerless anonymous form logins require a
-  same-host `Origin`; headerless JSON credential routes require
-  `application/json`. Authenticated headerless compatibility remains, and explicit
-  token/bearer integrations are exempt. CORS alone is insufficient.
+  `cross-site` Fetch Metadata requests. Headerless anonymous form logins require
+  a same-host `Origin`; headerless JSON credential routes require
+  `application/json`. Both account-email POSTs additionally require exact
+  same-origin provenance and a live browser session, with no bearer-header
+  exemption. CORS alone is insufficient.
 
 Sessions select `?system=CODE`, defaulting to original system 1; token binding is
 its default and ceiling. Unqualified numeric objects resolve their actual system.

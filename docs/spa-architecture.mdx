@@ -286,9 +286,36 @@ transactional `/api/tags/` DELETE enforces ownership and child re-rooting; UI
 selection is not an authorization boundary. Verify with
 `cd ui && bun run e2e --grep 'document tag|bulk tag|tag management|settings tag'`.
 
-`AccountSettings.svelte` sends only `display_name` for profile saves; sign-in email
-is read-only. One token list separates owned `mobile_pairing` rows from manual/
-legacy credentials. Reads are ordered, abortable, bounded, generation-checked and
+`AccountSettings.svelte` sends only `display_name` for profile saves and derives
+email controls exclusively from `whoami.email_change_mode`, never `authn_by`.
+Password mode opens the focused native `EmailChangeDialog.svelte`; OIDC mode
+uses a native same-origin POST form to `/oidc/email-change`; disabled/demo mode
+is read-only and exposes no mutation request path.
+
+The password dialog owns new-email, exact confirmation, and current-password
+validation. It traps focus, focuses the first field, closes with Escape, exposes
+inline errors with `role=alert`, and disables fields/close while the request is
+busy. Password memory is cleared on invalid input, mismatch, server failure,
+close, account change, destroy, and before the successful state transition.
+`api.js:changeMyEmail` advances the session/request generation only after a
+successful rotation response, so pending pre-change GETs cannot repopulate the
+new account scope; failure leaves unrelated requests valid.
+
+After success, the screen reloads `/api/whoami`, waits for the principal/scope
+reset tick, and uses the shell's separate account notification channel. That
+channel is deliberately outside the filing-scoped subtree, so **Sign-in email
+changed** survives account/system reset and is announced with `role=status` and
+`aria-live=polite`. Scoped token, pairing, mailbox, and vault feedback continues
+through the ordinary notifier.
+
+`App.svelte` allowlists only `identity_bound`, `email_changed`, and
+`email_checked` from the OIDC callback's `account_notice` query parameter. It
+renders fixed local copy, removes that one parameter with
+`history.replaceState`, and preserves every other query parameter and the hash.
+Unknown values are removed without rendering provider-controlled text.
+
+One token list still separates owned `mobile_pairing` rows from manual/legacy
+credentials. Reads are ordered, abortable, bounded, generation-checked and
 refresh every two seconds while pairing is open, on close and on window focus.
 Account/system changes clear the list; unmount stops polling; revoke reloads so
 older polls cannot restore a credential. Demo kinds receive a read-only profile
@@ -336,6 +363,9 @@ creation handoff, not a copy of the at-rest credential.
 Vocabularies come from focused endpoints; local fallbacks keep forms usable without
 becoming authoritative. Reversible optimistic changes restore state on failure.
 Use semantic controls, visible focus, icon labels and stable responsive layouts.
+Account-email controls follow the same semantic rule: native labels and inputs,
+visible focus, a trapped modal, live error/status regions, and layouts with no
+horizontal overflow at desktop, Pixel 7 width, or enlarged root text.
 Approval cards show decision context, not internal IDs; rescan document links live
 under **Affected documents**. [Web app](/web-app) owns remaining interaction detail.
 
@@ -358,12 +388,14 @@ These screens reuse the existing tasks, intelligence and document APIs.
 
 ## Security
 
-Login/demo authentication uses HttpOnly cookies. The SPA does not persist session,
-mailbox or provider credentials; freshly issued tokens/pairing secrets remain in
-memory for their explicit handoff. Concurrent demo writes share one upgrade;
-login/logout invalidate reads/retries and abort unfinished upgrades. Scratch
-identity remains restricted for API and direct resources. Cookie mutations pass
-server same-origin/Fetch Metadata checks.
+Login/demo authentication uses HttpOnly cookies. The SPA does not persist
+session, mailbox, provider, or account-password credentials; freshly issued
+tokens/pairing secrets remain in memory for their explicit handoff. The email
+dialog's password exists only in component memory for one attempt and is erased
+across every exit and failure path. Concurrent demo writes share one upgrade;
+login/logout and successful email rotation invalidate reads/retries and abort
+unfinished work. Scratch identity remains restricted for API and direct
+resources. Cookie mutations pass server same-origin/Fetch Metadata checks.
 
 Serve previews through dedicated endpoints with restrictive CSP. Render ordinary
 text through Svelte escaping; sanitize marked-up search snippets before display.
@@ -385,7 +417,7 @@ Additional verification:
 cd ui
 bun run check
 bun test src
-bun run e2e --grep 'filing systems'
+bun run e2e --grep 'password-managed|email-change secret|provider reauthentication|disabled account email|enlarged mobile viewport'
 PLAYWRIGHT_PRODUCTION=1 bun run e2e
 ```
 

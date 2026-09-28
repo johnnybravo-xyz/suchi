@@ -70,6 +70,25 @@ document text. Audit events record metadata changes and request IDs, not
 document content or plaintext credentials. Health and metrics endpoints expose
 operational state, not archive content.
 
+OIDC accounts store the provider issuer and opaque subject on the `users` row
+because that pair is the returning identity key. Retained
+`user.email_changed` audit metadata contains the old/new addresses, source, and
+revoked-browser-session count. Retained `user.oidc_bound` metadata contains the
+issuer, email, role, new-user flag, revoked-session count, and SHA-256 of the
+NUL-delimited issuer/subject pair; it does not copy the opaque subject itself.
+Both kinds also retain the request ID and numeric account reference.
+
+These identity-security rows are excluded from ordinary
+`AUDIT_RETENTION_DAYS` pruning. They remain visible to database/backup operators
+and configured audit sinks until deliberately removed; they are instance-wide,
+not part of the filing-system Activity feed. Sink delivery remains
+post-commit/best-effort and is not a tamper-evident ledger.
+
+Account-email changes add no SMTP service, recovery mail, old-address
+notification, or new egress destination. OIDC synchronization contacts only
+the already configured identity provider through the ordinary authorization
+flow.
+
 HTTP access logs record matched route patterns, not raw paths or query strings;
 share-link credentials are omitted from audit payloads and downstream sinks.
 Older builds recorded share bearers in access logs and creation audit records.
@@ -133,6 +152,11 @@ document, and removes rendered files. Original and derived CAS bytes remain
 on disk until the operator runs offline garbage collection with all archive
 writers stopped. Database snapshots and external backups may retain deleted
 data until their separate backup lifecycle expires.
+
+Retained identity events and user issuer/subject bindings are account-security
+metadata, not document-owned data. Document purge and ordinary audit retention
+do not remove them. Whole-directory snapshots and external backups may retain
+both current and historical addresses according to their separate lifecycle.
 
 Share links are random, revocable bearer tokens containing documents from one
 system. Public requests recheck that the creator is active, can still enter that
