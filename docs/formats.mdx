@@ -24,10 +24,9 @@ shows up.
 | `message/rfc822` (`.eml` files)                        | Parse via net/mail; headers → title/date/correspondent, body text → content, each attachment becomes its own document linked via `email_parent_id`                       | none (pure Go)                                                      |                  ✅                  |                   ✅                   |
 | `application/vnd.ms-outlook` (`.msg` files)            | `msgconvert` transforms the CFB binary into RFC 822; falls through to the `.eml` path so Message-Id dedup + attachment fanout + correspondent inheritance work unchanged | `msgconvert` (Email::Outlook::Message)                              |                  ✅                  |                   ✅                   |
 
-Anything else lands as a doc with empty content — the original bytes
-are safe in the CAS, dedup + metadata still work, but there's no text
-index. Add a converter (or wait for a future ingester) to fill in
-`documents.content` later.
+Anything else lands as a document with empty content. The original bytes remain
+safe in the CAS and deduplication and metadata still work, but text indexing
+requires an external converter.
 
 ## PDF pipeline in detail
 
@@ -179,7 +178,7 @@ pre-consume decrypt.
 
 - `title` ← Subject (RFC 2047 encoded-word decoded)
 - `created_at` ← Date header (unix epoch)
-- `email_message_id` ← Message-Id (for future dedup on re-syncs)
+- `email_message_id` ← Message-Id provenance used for re-sync deduplication
 - Sender (`From: Name <email>`) upserts into the `correspondents`
   table and attaches to the doc under `role=sender`.
 
@@ -549,9 +548,8 @@ from the anydoc repo into a static musl binary and installs it as
 It's an example — the argv shape could shift between anydoc releases.
 As of `v0.2.3` it's `convert <file> [-f <fmt>] [-o <out>]
 [--assets <dir>]`. suchi shells out with just `anydoc <file>`, reading
-stdout for Markdown. If a future upstream tag changes this shape,
-suchi's extractor at `core/pipeline/anydoc/anydoc.go` needs a matching
-update; symptoms would be silent Skipped=true with non-zero exit and
+stdout for Markdown. If an upstream tag changes this shape, Suchi's extractor at
+`core/pipeline/anydoc/anydoc.go` needs a matching update; symptoms would be
 "unrecognized argument" in `res.StderrTail`.
 
 **The bump procedure** — enforced by `hack/pin-bumper.sh` and the

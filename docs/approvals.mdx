@@ -184,7 +184,7 @@ a dismissal. A later inference can create a fresh proposal bound to the current
 document. An effect already queued after an accepted decision still repeats all
 freshness and authorization checks before writing.
 
-This remains the extension pattern for future action workflows: a producer
+This remains the extension pattern for action workflows: a producer
 starts an approval in its existing transaction, and a typed handler performs
 the approved write. Reviewable extracted facts use the deliberately separate
 `document_intelligence` ledger because they are bulk metadata decisions, not

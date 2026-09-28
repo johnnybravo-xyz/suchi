@@ -74,7 +74,7 @@ extension options are needed for a complete local archive.
 server configuration. Zero fields create no new processing-update reminders.
 A compiled distribution that opts in supplies checked-in per-pipeline
 recommendation thresholds no greater than the pipeline revisions in that build;
-invalid future thresholds stop startup. Keep this policy in the tagged source so
+thresholds newer than the compiled pipeline revisions stop startup. Keep this policy in the tagged source so
 the same tag cannot produce artifacts with different proposal behavior.
 
 `Services` contains only the instance's `DB`, HTTP `Mux`, durable `Jobs`

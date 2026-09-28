@@ -184,7 +184,7 @@ incompatibility from release numbers. Redirects are not compatibility responses
 and must not receive credentials. Pairing clients use the current exchange shape,
 including `device_name`.
 
-`api_version` remains available for future general API consumers. It does not
+`api_version` remains available to general API consumers. It does not
 determine Companion compatibility; mobile clients use the declared wire profile
 instead of requiring an exact API or app release number.
 
@@ -707,9 +707,8 @@ the category's own `code` encodes the area (e.g. 31 → area 30–39).
 
 `languages` is a CSV of ISO-639-1 codes detected by the LLM classifier or
 provided through metadata; it is empty when nothing was detected.
-`languages_locked` is `true` once a user
-has set the value via PATCH — future automatic detection won't
-overwrite it. Set `languages` (as CSV string or JSON array) via
+`languages_locked` is `true` once a user has set the value via PATCH, preventing
+later automatic detection from overwriting it. Set `languages` (as CSV string or JSON array) via
 `PATCH /api/documents/{id}` to correct the detection; passing an
 empty value clears both the value and the lock.
 
@@ -943,7 +942,7 @@ Requires permission to change the document and `documents:write` for API tokens.
 - `password` — required. The user password for the PDF.
 - `remember` — optional. When `true`, the password is AEAD-sealed with the
   server's `.decrypt-key` and stored in `decryption_passwords` for the
-  doc's owner and system. Future encrypted uploads by that owner in that system auto-try it.
+  doc's owner and system. Subsequent encrypted uploads by that owner in that system auto-try it.
 - `label` — optional operator-visible tag ("BofA 2024") attached to
   the stored password.
 
@@ -1314,8 +1313,7 @@ Ordinary metadata values cannot reference another system, even when the actor
 enters both. An authenticated `documentlink` write may cross systems only when
 the actor can change the source and view the live target, including entry to both,
 checked in the source write transaction. Actorless handler/automation writes
-accept only same-system live targets. Future value reads must recheck target
-visibility and redact inaccessible links; that read capability is not implemented.
+accept only same-system live targets.
 
 **Body:** `{"value": <T>}` where `<T>` matches the field's `data_type`:
 
