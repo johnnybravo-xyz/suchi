@@ -17,9 +17,9 @@ Run the command with the source instance's `DATA_DIR` configuration:
 suchi export --out /tmp/suchi-export.zip
 ```
 
-Without a scope flag, Suchi selects the only owner with live documents. If
-multiple owners have live documents, the command stops and requires
-`--owner-id` or `--all`:
+Without a scope flag, Suchi selects the only owner with live documents. For an
+empty selected system, it falls back only when the instance has one enabled
+admin. Every other case stops and requires `--owner-id` or `--all`:
 
 ```sh
 suchi export --out /tmp/user-5.zip --owner-id 5

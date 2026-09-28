@@ -16,6 +16,8 @@ link** when the camera is unavailable. Confirm the displayed server address and
 device name before connecting. The code expires after five minutes and works
 once. See [Web app pairing](/web-app#settings) and the
 [pairing API](/api#post-apimobilepairing) for the complete contract.
+Profile and release builds require an HTTPS server. Debug builds alone accept
+HTTP on localhost or a private literal IP for explicit local development.
 
 One Companion installation keeps one active pairing. The account screen displays
 the filing system bound to it. Captures, shared files, uploads, saved searches,

@@ -420,8 +420,10 @@ suchi export --out /tmp/S02.zip --system S02 --all
 suchi export --out /tmp/recovery.zip --all --allow-incomplete
 ```
 
-Omitting the owner flag works only when one owner has live documents; ambiguous
-archives require `--owner-id` or `--all`. Output must be outside `DATA_DIR`.
+Without an owner flag, Suchi selects the only owner with live documents. An
+empty selected system falls back only when the instance has one enabled admin.
+Every other case requires `--owner-id` or `--all`. Output must be outside
+`DATA_DIR`.
 Suchi publishes a complete mode-0600 archive atomically, refuses an existing
 destination unless `--force` is set, and removes temporary output after any
 failure. Missing original blobs fail by default. `--allow-incomplete` is an

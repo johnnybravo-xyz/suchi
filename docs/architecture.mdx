@@ -380,9 +380,11 @@ sessions; mobile reads use existing ACL-filtered API projections.
 
 `core/api/mobile_pairing.go` transfers a browser/OIDC identity to a device.
 Creation binds the short-lived code to configured `PUBLIC_URL`, never forwarded
-hosts, using the mobile HTTPS/local-HTTP boundary (localhost/loopback/private
-literal IPs, excluding broader local DNS/link-local egress allowances). Validate
-before replacing pending state; store only code digest, owner/system, fallback
+hosts. The server permits HTTPS or its narrow local-HTTP pairing boundary
+(localhost/loopback/private literal IPs, excluding broader local DNS/link-local
+egress allowances); Companion permits that HTTP subset only in debug builds.
+Origin validation runs before replacing pending state; storage keeps only the
+code digest, owner/system, fallback
 name and expiry. Exchange validates optional device naming before consumption,
 then consumes the code, rechecks enabled-user system entry and calls `TokenIssuer`
 in one writer transaction. Token digest, fixed read/write scopes and server-selected

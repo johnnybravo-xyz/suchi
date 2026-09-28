@@ -131,9 +131,10 @@ proven compatibility with existing Paperless mobile clients; v0.1 is an early re
 
 - **Paperless-ngx to suchi:** `suchi import --from <dir>` consumes a compatible
   Paperless export bundle.
-- **suchi takeout:** `suchi export --out FILE.zip --system S02` writes a partial
-  manifest-v2 export of one existing system's originals, sidecars and taxonomy.
-  Omission targets the original system; `--all` includes all owners only there.
+- **suchi takeout:** `suchi export --out FILE.zip --system S02 --all` writes a
+  partial manifest-v2 export of that one system's originals, sidecars and
+  taxonomy for every owner there. Without `--system`, the original system is
+  selected; without an owner flag, owner inference must be unambiguous.
   Reingestion can allocate new IDs and does not restore membership or ACLs.
 - **suchi backup:** preserve the whole SQLite/CAS/key set for an exact restore
   of systems, memberships, IDs and relationships; see [Backup and restore](/backup-restore).
