@@ -136,7 +136,7 @@ func TestListTasksCountsUseTheRequestedJobFilters(t *testing.T) {
 	if len(response.Results) != 1 || response.Results[0].ID != 201 {
 		t.Fatalf("results=%+v, want only pending post-ingest", response.Results)
 	}
-	if response.Counts["pending"] != 1 || response.Counts["done"] != 1 || response.Counts["dead"] != 0 {
+	if response.Counts["pending"] != 1 || response.Counts["done"] != 0 || response.Counts["dead"] != 0 {
 		t.Fatalf("filtered counts=%+v", response.Counts)
 	}
 
@@ -150,6 +150,19 @@ func TestListTasksCountsUseTheRequestedJobFilters(t *testing.T) {
 	}
 	if response.Counts["pending"] != 1 || response.Counts["done"] != 0 {
 		t.Fatalf("state-filtered counts=%+v", response.Counts)
+	}
+
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/tasks/?state=done&doc_id=101&kind=post-ingest&include=jobs", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), memberPrincipal(5)))
+	rec = httptest.NewRecorder()
+	s.ListTasks(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || response.Results[0].ID != 203 ||
+		response.Counts["done"] != 1 || response.Counts["pending"] != 0 {
+		t.Fatalf("explicit done response=%+v", response)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/tasks/?include=approvals", nil)

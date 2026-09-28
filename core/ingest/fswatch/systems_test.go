@@ -58,7 +58,7 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	watchers := make([]*Watcher, 2)
 	ids := make([]int64, 2)
 	for i, code := range []string{"S01", "S02"} {
-		watchers[i], err = New(ctx, Config{Dir: dir, OwnerEmail: "owner@example.test", System: code}, d, cas, nil, log)
+		watchers[i], err = New(ctx, Config{Dir: dir, OwnerID: 1, System: code}, d, cas, nil, log)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,12 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 		t.Fatal("cross-system upload reused document identity")
 	}
 	var sharedBlob, metadataIsolated bool
-	if err := d.Read.QueryRowContext(ctx, `SELECT a.original_blob = b.original_blob, a.correspondent_id != b.correspondent_id FROM documents a, documents b WHERE a.id = ? AND b.id = ?`, ids[0], ids[1]).Scan(&sharedBlob, &metadataIsolated); err != nil {
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT a.original_blob = b.original_blob,
+		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=a.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1) !=
+		       (SELECT correspondent_id FROM document_correspondents WHERE document_id=b.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1)
+		FROM documents a, documents b
+		WHERE a.id = ? AND b.id = ?`, ids[0], ids[1]).Scan(&sharedBlob, &metadataIsolated); err != nil {
 		t.Fatal(err)
 	}
 	if !sharedBlob || !metadataIsolated {
@@ -85,7 +90,7 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{Version: 1, JDSystem: "S02", JDAddress: "S02.49.123"}); err == nil {
 		t.Fatal("sidecar routed or replayed across configured system")
 	}
-	if _, err := New(ctx, Config{Dir: dir, OwnerEmail: "owner@example.test", System: "S99"}, d, cas, nil, log); err == nil {
+	if _, err := New(ctx, Config{Dir: dir, OwnerID: 1, System: "S99"}, d, cas, nil, log); err == nil {
 		t.Fatal("unknown configured destination was accepted")
 	}
 	if _, _, err := watchers[0].ingest(ctx, path, &sidecar.V1{Version: 1, JDSystem: "S99", Correspondent: "Must not exist"}); err == nil {
@@ -159,7 +164,8 @@ func TestIntakeSystemIsolationAndWriterMembership(t *testing.T) {
 			SELECT 1 FROM documents d
 			JOIN document_sources s ON s.document_id = d.id
 			JOIN jobs j ON j.doc_id = d.id AND j.system_id = d.system_id
-			JOIN correspondents c ON c.id = d.correspondent_id AND c.system_id = d.system_id
+			JOIN document_correspondents dc ON dc.document_id=d.id AND dc.role='sender'
+			JOIN correspondents c ON c.id = dc.correspondent_id AND c.system_id = d.system_id
 			JOIN document_tags dt ON dt.document_id = d.id
 			JOIN tags t ON t.id = dt.tag_id AND t.system_id = d.system_id
 			WHERE d.id = ? AND d.system_id = 1 AND c.name = 'Atomic sender' AND t.name = 'Atomic tag'

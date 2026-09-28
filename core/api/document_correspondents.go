@@ -36,9 +36,7 @@ type DocCorrespondent struct {
 
 // AddDocCorrespondent — POST /api/documents/{id}/correspondents/. Body:
 // {"name": "...", "role": "sender|recipient|cc|other"}. Upserts the
-// correspondent by name and adds the junction row (or updates the
-// primary FK when role=sender is the first sender for the doc, so
-// existing code paths still see something reasonable).
+// correspondent by name and appends the canonical junction relation.
 func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -96,24 +94,10 @@ func (s *Server) AddDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 			`SELECT name FROM correspondents WHERE id = ?`, corID).Scan(&canonicalName); err != nil {
 			return err
 		}
-		// Junction row — no-op on duplicate role.
-		if _, err := tx.ExecContext(r.Context(), `
-			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role)
-			VALUES (?, ?, ?)
-		`, docID, corID, req.Role); err != nil {
+		if err := taxonomy.AppendCorrespondent(
+			r.Context(), tx, docID, corID, taxonomy.CorrespondentRole(req.Role),
+		); err != nil {
 			return err
-		}
-		// If role=sender AND doc has no primary sender yet, mirror to
-		// the FK so existing single-correspondent code paths still
-		// find the sender.
-		if req.Role == RoleSender {
-			if _, err := tx.ExecContext(r.Context(), `
-				UPDATE documents
-				SET correspondent_id = ?, updated_at = ?
-				WHERE id = ? AND correspondent_id IS NULL
-			`, corID, now, docID); err != nil {
-				return err
-			}
 		}
 		// Enqueue a storage-path re-render — correspondent is a
 		// template-visible field, so the symlink may need to move.
@@ -190,9 +174,7 @@ func (s *Server) ListDocCorrespondents(w http.ResponseWriter, r *http.Request) {
 }
 
 // RemoveDocCorrespondent — DELETE /api/documents/{id}/correspondents/{cid}/{role}.
-// Removes exactly one junction row. Does NOT clear
-// documents.correspondent_id — if you remove the sender, the primary
-// FK stays as a historical reference until a new sender is added.
+// Removes exactly one canonical junction row.
 func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) {
 	if !auth.RequireScope(w, r, auth.ScopeDocumentsWrite) {
 		return
@@ -216,22 +198,18 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, "bad_role", "invalid role")
 		return
 	}
-	var affected int64
+	var affected bool
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if allowed, err := s.authorized(r.Context(), tx, p, authz.KindDocument, docID, authz.PermChange); err != nil {
 			return err
 		} else if !allowed {
 			return errSystemUnavailable
 		}
-		res, err := tx.ExecContext(r.Context(), `
-			DELETE FROM document_correspondents
-			WHERE document_id = ? AND correspondent_id = ? AND role = ?
-		`, docID, cid, role)
-		if err != nil {
-			return err
-		}
-		affected, err = res.RowsAffected()
-		if err != nil || affected == 0 {
+		var err error
+		affected, err = taxonomy.RemoveCorrespondentRole(
+			r.Context(), tx, docID, cid, taxonomy.CorrespondentRole(role),
+		)
+		if err != nil || !affected {
 			return err
 		}
 		return view.EnqueueMove(r.Context(), tx, docID)
@@ -240,7 +218,7 @@ func (s *Server) RemoveDocCorrespondent(w http.ResponseWriter, r *http.Request) 
 		s.serverErr(w, "correspondents.remove", err)
 		return
 	}
-	if affected == 0 {
+	if !affected {
 		s.writeError(w, http.StatusNotFound, "not_found", "no such junction row")
 		return
 	}

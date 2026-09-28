@@ -155,7 +155,7 @@ const MinPasswordLen = 8
 // browser. The password is argon2-hashed at boot; the plaintext lives
 // only in this constant and in the one boot-log line.
 const (
-	DevAdminEmail    = "dev@suchi.local"
+	DevAdminEmail    = auth.ReservedDevEmail
 	DevAdminPassword = "devdevdev"
 )
 
@@ -210,10 +210,11 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	}
 	now := time.Now().Unix()
 	_, err = p.db.ExecWrite(ctx, `
-		INSERT INTO users(email, display_name, role, password_hash, created_at, updated_at)
-		VALUES (?, ?, 'admin', ?, ?, ?)
+		INSERT INTO users(email, display_name, role, password_hash, dev_seeded, created_at, updated_at)
+		VALUES (?, ?, 'admin', ?, 1, ?, ?)
 		ON CONFLICT(email) DO UPDATE SET
 			password_hash = excluded.password_hash,
+			dev_seeded    = 1,
 			updated_at    = excluded.updated_at
 	`, email, email, hash, now, now)
 	if err != nil {
@@ -226,22 +227,37 @@ func (p *Plugin) EnsureDevAdmin(ctx context.Context, email, password string) err
 	return nil
 }
 
-// RefuseEnabledDevAdmin prevents a data directory armed with the public
-// development credential from being reused by a normal server. Operators can
-// deliberately quarantine the account by disabling it before a non-dev boot;
-// disabled users also cannot authenticate with their previously issued tokens.
+// RefuseEnabledDevAdmin prevents a data directory armed with public
+// development credentials from being reused by a normal server. A durable
+// marker survives email changes; the hash check recognizes archives seeded
+// before that marker existed. Disabled accounts are deliberately quarantined.
 func (p *Plugin) RefuseEnabledDevAdmin(ctx context.Context) error {
-	var disabled bool
-	err := p.db.Read.QueryRowContext(ctx,
-		`SELECT disabled FROM users WHERE email = ?`, DevAdminEmail).Scan(&disabled)
-	if errors.Is(err, sql.ErrNoRows) {
+	var marked int
+	if err := p.db.Read.QueryRowContext(ctx,
+		`SELECT count(*) FROM users WHERE dev_seeded = 1 AND disabled = 0`,
+	).Scan(&marked); err != nil {
+		return fmt.Errorf("localauth: inspect marked development admins: %w", err)
+	}
+	if marked > 0 {
+		return fmt.Errorf("localauth: %d enabled public development account(s) remain in this data directory", marked)
+	}
+
+	var passwordHash string
+	err := p.db.Read.QueryRowContext(ctx, `
+		SELECT COALESCE(password_hash, '')
+		FROM users
+		WHERE email = ? AND role = 'admin' AND disabled = 0 AND dev_seeded = 0
+	`, DevAdminEmail).Scan(&passwordHash)
+	if errors.Is(err, sql.ErrNoRows) || passwordHash == "" {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("localauth: inspect development admin: %w", err)
+		return fmt.Errorf("localauth: inspect legacy development admin: %w", err)
 	}
-	if !disabled {
-		return fmt.Errorf("localauth: enabled public development admin %q remains in this data directory", DevAdminEmail)
+	if err := VerifyPassword(passwordHash, DevAdminPassword); err == nil {
+		return fmt.Errorf("localauth: enabled legacy public development admin %q remains in this data directory", DevAdminEmail)
+	} else if PasswordWorkBusy(err) {
+		return fmt.Errorf("localauth: verify legacy development admin: %w", err)
 	}
 	return nil
 }

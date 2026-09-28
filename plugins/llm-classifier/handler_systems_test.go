@@ -73,7 +73,11 @@ func TestClassifierOffersOnlyDocumentSystemWithoutCreatingVocabulary(t *testing.
 		t.Fatalf("wrong second-system offerings: %s", prompt)
 	}
 	var categoryID, correspondentID, inferredTags int64
-	if err := d.Read.QueryRow(`SELECT d.jd_category_id,COALESCE(d.correspondent_id,0),(SELECT COUNT(*) FROM document_tags WHERE document_id=d.id AND tag_id=900) FROM documents d WHERE d.id=900`).Scan(&categoryID, &correspondentID, &inferredTags); err != nil {
+	if err := d.Read.QueryRow(`
+		SELECT d.jd_category_id,
+		       COALESCE((SELECT correspondent_id FROM document_correspondents WHERE document_id=d.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1),0),
+		       (SELECT COUNT(*) FROM document_tags WHERE document_id=d.id AND tag_id=900)
+		FROM documents d WHERE d.id=900`).Scan(&categoryID, &correspondentID, &inferredTags); err != nil {
 		t.Fatal(err)
 	}
 	if categoryID != 901 || correspondentID != 0 || inferredTags != 0 {

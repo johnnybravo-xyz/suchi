@@ -107,15 +107,13 @@ func compileFilter(clause ResolvedClause) Predicate {
 	case "from":
 		if clause.Negated {
 			return Predicate{
-				SQL: "(d.correspondent_id IS NULL OR d.correspondent_id != ?) AND " +
-					"NOT EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?)",
-				Args: []any{clause.ID, clause.ID},
+				SQL:  "NOT EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?)",
+				Args: []any{clause.ID},
 			}
 		}
 		return Predicate{
-			SQL: "(d.correspondent_id = ? OR " +
-				"EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?))",
-			Args: []any{clause.ID, clause.ID},
+			SQL:  "EXISTS (SELECT 1 FROM document_correspondents sq_dc WHERE sq_dc.document_id = d.id AND sq_dc.correspondent_id = ?)",
+			Args: []any{clause.ID},
 		}
 	case "type":
 		if clause.Negated {

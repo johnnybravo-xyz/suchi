@@ -41,7 +41,7 @@ func (s *Supervisor) Reload(ctx context.Context, cfg Config) error {
 	defer s.mu.Unlock()
 
 	if s.configured && cfg == s.current {
-		if cfg.OwnerEmail == "" || (s.cancel != nil && !closed(s.done)) {
+		if cfg.OwnerID == 0 || (s.cancel != nil && !closed(s.done)) {
 			return nil
 		}
 	}

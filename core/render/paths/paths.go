@@ -137,6 +137,27 @@ func Render(tpl string, ctx Context) (string, error) {
 	return out.String(), nil
 }
 
+// UsesVariable reports whether tpl contains an exact variable placeholder.
+// Stored templates are validated when configured; this deliberately ignores
+// unrelated malformed text so metadata changes never become less atomic.
+func UsesVariable(tpl, name string) bool {
+	for {
+		open := strings.Index(tpl, "{{")
+		if open < 0 {
+			return false
+		}
+		tpl = tpl[open+2:]
+		close := strings.Index(tpl, "}}")
+		if close < 0 {
+			return false
+		}
+		if strings.TrimSpace(tpl[:close]) == name {
+			return true
+		}
+		tpl = tpl[close+2:]
+	}
+}
+
 func appendBounded(out *strings.Builder, value string) error {
 	if out.Len()+len(value) > maxRenderedBytes {
 		return fmt.Errorf("paths: rendered path exceeds %d bytes", maxRenderedBytes)

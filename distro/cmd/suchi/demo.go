@@ -258,14 +258,12 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO documents(
 					system_id, owner_id, original_blob, original_size, title, mime_type,
-					jd_category_id, correspondent_id, document_type_id,
-					sensitivity, languages,
+					jd_category_id, document_type_id, sensitivity, languages,
 					added_at, created_at, updated_at
-				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT DO NOTHING RETURNING id
 			`, ownerID, ref.SHA256, ref.Size, title, mimeType,
-				jdCatID, corrID, dtID,
-				nullString(f.Sensitivity), f.Language,
+				jdCatID, dtID, nullString(f.Sensitivity), f.Language,
 				now, now, now).Scan(&docID)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
@@ -274,6 +272,11 @@ func makeFixtureIngest(d *db.DB, cas *blob.CAS, ownerID int64, now int64) func(c
 				return err
 			}
 			created = true
+			if corrID.Valid {
+				if err := taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, corrID.Int64); err != nil {
+					return err
+				}
+			}
 
 			for _, name := range f.Tags {
 				tagID, err := upsertTag(ctx, tx, name, now)

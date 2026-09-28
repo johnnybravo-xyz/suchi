@@ -32,10 +32,12 @@ import (
 // PATCH next_run_at/attempts inside their own transaction; the dispatcher
 // only owns the baseline.
 const (
-	MaxAttempts  = 5
-	BaseBackoff  = 5 * time.Second
-	MaxBackoff   = 30 * time.Minute
-	PollInterval = 5 * time.Second
+	MaxAttempts       = 5
+	BaseBackoff       = 5 * time.Second
+	MaxBackoff        = 30 * time.Minute
+	PollInterval      = 5 * time.Second
+	DoneRetention     = 7 * 24 * time.Hour
+	donePruneInterval = 24 * time.Hour
 )
 
 // ErrTerminal is the sentinel a Subscriber wraps around an error the
@@ -170,6 +172,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	t := time.NewTicker(PollInterval)
 	defer t.Stop()
 
+	nextPrune := time.Time{}
+
 	d.log.Info("jobs.dispatcher.start", "kinds", d.kindList())
 	for {
 		select {
@@ -180,6 +184,17 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			d.log.Info("jobs.dispatcher.stop", "reason", "stop")
 			return
 		default:
+		}
+
+		now := time.Now()
+		if !now.Before(nextPrune) {
+			pruned, err := d.pruneDone(ctx, now)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				d.log.Warn("jobs.done_prune_failed", "err", err.Error())
+			} else if pruned > 0 {
+				d.log.Info("jobs.done_pruned", "count", pruned)
+			}
+			nextPrune = now.Add(donePruneInterval)
 		}
 
 		batch, err := d.claim(ctx)
@@ -201,6 +216,24 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		case <-d.nudge:
 		}
 	}
+}
+
+// pruneDone removes successful jobs strictly older than the retention
+// boundary. Rows exactly seven days old remain observable.
+func (d *Dispatcher) pruneDone(ctx context.Context, now time.Time) (int64, error) {
+	var pruned int64
+	err := d.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`DELETE FROM jobs WHERE state = 'done' AND updated_at < ?`,
+			now.Add(-DoneRetention).Unix(),
+		)
+		if err != nil {
+			return err
+		}
+		pruned, err = result.RowsAffected()
+		return err
+	})
+	return pruned, err
 }
 
 // Stop signals the loop to exit and waits for it. Safe to call multiple

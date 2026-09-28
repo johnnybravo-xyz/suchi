@@ -282,8 +282,13 @@ func loadSnapshot(ctx context.Context, d *db.DB, docID int64) (*docSnapshot, err
 	var s docSnapshot
 	var content sql.NullString
 	err := d.Read.QueryRowContext(ctx, `
-		SELECT COALESCE(title, ''), content, correspondent_id, document_type_id
-		FROM documents WHERE id = ?
+		SELECT COALESCE(d.title, ''), d.content,
+		       (SELECT dc.correspondent_id
+		        FROM document_correspondents dc
+		        WHERE dc.document_id=d.id AND dc.role='sender'
+		        ORDER BY dc.position,dc.correspondent_id LIMIT 1),
+		       d.document_type_id
+		FROM documents d WHERE d.id = ?
 	`, docID).Scan(&s.Title, &content, &s.CorrespondentID, &s.DocumentTypeID)
 	if err != nil {
 		return nil, err
@@ -346,10 +351,15 @@ func expandTitle(ctx context.Context, tx *sql.Tx, docID int64, tpl string) (stri
 		createdAt                 int64
 	)
 	if err := tx.QueryRowContext(ctx, `
-		SELECT d.title, c.name, t.name, d.created_at
+		SELECT d.title,
+		       (SELECT c.name
+		        FROM document_correspondents dc
+		        JOIN correspondents c ON c.id=dc.correspondent_id
+		        WHERE dc.document_id=d.id AND dc.role='sender'
+		        ORDER BY dc.position,dc.correspondent_id LIMIT 1),
+		       t.name, d.created_at
 		FROM documents d
-		LEFT JOIN correspondents c   ON c.id = d.correspondent_id
-		LEFT JOIN document_types t   ON t.id = d.document_type_id
+		LEFT JOIN document_types t ON t.id = d.document_type_id
 		WHERE d.id = ?`, docID).Scan(&title, &corrName, &typeName, &createdAt); err != nil {
 		return "", fmt.Errorf("assign_title: load document: %w", err)
 	}

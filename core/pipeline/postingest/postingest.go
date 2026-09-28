@@ -1091,16 +1091,9 @@ func (h *Handler) attachEmailCorrespondent(ctx context.Context, docID int64, e *
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role)
-			VALUES (?, ?, 'sender')
-		`, docID, corID); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `
-			UPDATE documents SET correspondent_id = COALESCE(correspondent_id, ?) WHERE id = ?
-		`, corID, docID)
-		return err
+		return taxonomy.AppendCorrespondent(
+			ctx, tx, docID, corID, taxonomy.CorrespondentSender,
+		)
 	})
 }
 
@@ -1175,25 +1168,8 @@ func (h *Handler) createEmailAttachmentChild(ctx context.Context, log *slog.Logg
 		// recipients that got upserted). Without this, every attachment
 		// PDF renders with a blank "From" field even though the email
 		// itself is correctly attributed.
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO document_correspondents (document_id, correspondent_id, role, position)
-			SELECT ?, correspondent_id, role, position
-			FROM document_correspondents WHERE document_id = ?
-		`, childID, parentID); err != nil {
+		if err := taxonomy.CopyCorrespondents(ctx, tx, parentID, childID); err != nil {
 			return fmt.Errorf("inherit correspondents: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE documents
-			SET correspondent_id = (
-				SELECT correspondent_id
-				FROM document_correspondents
-				WHERE document_id = ? AND role = 'sender'
-				ORDER BY position, correspondent_id
-				LIMIT 1
-			)
-			WHERE id = ? AND correspondent_id IS NULL
-		`, childID, childID); err != nil {
-			return fmt.Errorf("inherit primary correspondent: %w", err)
 		}
 		payload, _ := json.Marshal(postIngestPayload{
 			SHA256: ref.SHA256, Size: ref.Size, MIME: mime,

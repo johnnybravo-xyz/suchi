@@ -68,7 +68,6 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 		UPDATE documents
 		SET content = 'Distribution advice for the annual report',
 		    jd_category_id = 6,
-		    correspondent_id = 9,
 		    document_type_id = 10,
 		    sensitivity = 'internal',
 		    languages = ',de,',
@@ -76,6 +75,11 @@ func seedRichQueryData(t *testing.T, s *Server) (matchingID, otherID int64) {
 		    encryption_state = 'encrypted'
 		WHERE id = ?`,
 		time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC).Unix(), matchingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Write.ExecContext(context.Background(), `
+		INSERT INTO document_correspondents(document_id, correspondent_id, role)
+		VALUES (?, 9, 'sender')`, matchingID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Write.ExecContext(context.Background(),

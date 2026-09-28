@@ -427,3 +427,61 @@ func TestLiveDocumentListUsesCreatedIndex(t *testing.T) {
 		t.Fatalf("default document page still sorts:\n%s", plan)
 	}
 }
+
+func TestCorrespondentQueriesUseRelationIndexes(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "correspondent-index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	migs, err := db.LoadMigrations(migrations.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := db.Migrate(ctx, d, migs, log); err != nil {
+		t.Fatal(err)
+	}
+
+	explain := func(query string, arg int64) string {
+		t.Helper()
+		rows, err := d.Read.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, arg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var details strings.Builder
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			details.WriteString(detail)
+			details.WriteByte('\n')
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return details.String()
+	}
+
+	primaryPlan := explain(`
+		SELECT correspondent_id
+		FROM document_correspondents
+		WHERE document_id=? AND role='sender'
+		ORDER BY position,correspondent_id
+		LIMIT 1`, 1)
+	if !strings.Contains(primaryPlan, "USING INDEX document_correspondents_doc") {
+		t.Fatalf("primary correspondent hydration lost its document index:\n%s", primaryPlan)
+	}
+
+	searchPlan := explain(`
+		SELECT DISTINCT document_id
+		FROM document_correspondents
+		WHERE correspondent_id=?`, 1)
+	if !strings.Contains(searchPlan, "USING INDEX document_correspondents_corr") {
+		t.Fatalf("correspondent search lost its reverse index:\n%s", searchPlan)
+	}
+}

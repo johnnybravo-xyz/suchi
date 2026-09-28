@@ -45,7 +45,7 @@ func TestSupervisorReloadsWatcherWithoutRestart(t *testing.T) {
 	s := NewSupervisor(ctx, d, cas, jobs.New(d, log), log)
 	t.Cleanup(s.Stop)
 
-	first := Config{Dir: filepath.Join(t.TempDir(), "first"), OwnerEmail: "owner@example.test"}
+	first := Config{Dir: filepath.Join(t.TempDir(), "first"), OwnerID: 1}
 	if err := s.Reload(ctx, first); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSupervisorReloadsWatcherWithoutRestart(t *testing.T) {
 		t.Fatal("unchanged configuration restarted the watcher")
 	}
 
-	second := Config{Dir: filepath.Join(t.TempDir(), "second"), OwnerEmail: "owner@example.test"}
+	second := Config{Dir: filepath.Join(t.TempDir(), "second"), OwnerID: 1}
 	if err := s.Reload(ctx, second); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSupervisorReloadsWatcherWithoutRestart(t *testing.T) {
 		t.Fatal("replacement watcher did not start")
 	}
 
-	bad := Config{Dir: filepath.Join(t.TempDir(), "missing"), OwnerEmail: "missing@example.test"}
+	bad := Config{Dir: filepath.Join(t.TempDir(), "missing"), OwnerID: 999}
 	if err := s.Reload(ctx, bad); !errors.Is(err, ErrOwnerNotFound) {
 		t.Fatalf("missing owner error = %v", err)
 	}

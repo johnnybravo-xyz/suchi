@@ -28,24 +28,28 @@ import (
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
-func TestEmailPattern(t *testing.T) {
-	good := []string{
-		"a@b.co", "user@example.com", "u+tag@e.io",
-		"first.last@sub.domain.tld", "u-y@z.co",
+func TestEmailNormalization(t *testing.T) {
+	good := map[string]string{
+		"a@b.co":                           "a@b.co",
+		" USER@Example.COM ":               "user@example.com",
+		"u+tag@e.io":                       "u+tag@e.io",
+		"first.last@sub.domain.tld":        "first.last@sub.domain.tld",
+		strings.Repeat("a", 249) + "@b.co": strings.Repeat("a", 249) + "@b.co",
 	}
 	bad := []string{
 		"", "no-at-sign", "@nope.com", "user@", "user@host",
 		"has space@e.com", "\"quoted\"@e.com", "back\\slash@e.com",
-		"<inline>@e.com", "user;drop@e.com",
+		"<inline>@e.com", "user;drop@e.com", auth.ReservedDevEmail,
+		auth.ReservedDemoCorpusEmail, strings.Repeat("a", 250) + "@b.co",
 	}
-	for _, e := range good {
-		if !emailPattern.MatchString(e) {
-			t.Errorf("expected valid: %q", e)
+	for input, want := range good {
+		if got, err := auth.NormalizeEmail(input); err != nil || got != want {
+			t.Errorf("NormalizeEmail(%q)=(%q,%v), want (%q,nil)", input, got, err, want)
 		}
 	}
-	for _, e := range bad {
-		if emailPattern.MatchString(e) {
-			t.Errorf("expected invalid: %q", e)
+	for _, input := range bad {
+		if got, err := auth.NormalizeEmail(input); err == nil {
+			t.Errorf("NormalizeEmail(%q)=(%q,nil), want error", input, got)
 		}
 	}
 }
@@ -643,7 +647,8 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 	fsGet = fsGet.WithContext(auth.WithPrincipal(fsGet.Context(), admin))
 	fsGetRec := httptest.NewRecorder()
 	s.GetIngestSettings(fsGetRec, fsGet)
-	if fsGetRec.Code != http.StatusOK || !strings.Contains(fsGetRec.Body.String(), "/tmp/suchi-inbox") {
+	if fsGetRec.Code != http.StatusOK || !strings.Contains(fsGetRec.Body.String(), "/tmp/suchi-inbox") ||
+		!strings.Contains(fsGetRec.Body.String(), `"fs_watch_owner_email":"u1@t.local"`) {
 		t.Fatalf("fs-watch readback status=%d body=%s", fsGetRec.Code, fsGetRec.Body.String())
 	}
 
@@ -657,7 +662,7 @@ func TestSetupRuntimeSettingsApplyLiveAndReadBack(t *testing.T) {
 		t.Fatalf("failed reload status=%d body=%s", badRec.Code, badRec.Body.String())
 	}
 	rolledBack := settings.ResolveFSWatchConfig(context.Background(), s.DB, settings.FSWatchConfig{})
-	if rolledBack.Dir != "/tmp/suchi-inbox" || rolledBack.OwnerEmail != "u1@t.local" {
+	if rolledBack.Dir != "/tmp/suchi-inbox" || rolledBack.OwnerID != 1 {
 		t.Fatalf("failed reload persisted invalid settings: %+v", rolledBack)
 	}
 }

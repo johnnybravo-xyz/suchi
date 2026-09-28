@@ -16,6 +16,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/db"
 	"github.com/johnnybravo-xyz/suchi/core/settings"
 	"github.com/johnnybravo-xyz/suchi/core/similar"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 func seedSimilarCluster(t *testing.T, ctx context.Context, d *db.DB, corrID int64, n int) []int64 {
@@ -55,14 +56,7 @@ func TestApplyFromArchiveReviewsUnanimousMatch(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 
-	var got sql.NullInt64
-	if err := d.Read.QueryRow(
-		`SELECT correspondent_id FROM documents WHERE id = ?`, targetID).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Valid {
-		t.Errorf("unreviewed correspondent_id = %v, want NULL", got)
-	}
+	assertArchiveCorrespondent(t, d, targetID, 0)
 	assertArchiveProposals(t, d, targetID, "correspondent", acme, 1)
 	var confidence float64
 	if err := d.Read.QueryRow(`SELECT json_extract(vars_json, '$.confidence') FROM approval_runs WHERE doc_id = ?`, targetID).Scan(&confidence); err != nil {
@@ -171,27 +165,14 @@ func TestApplyFromArchiveHonorsLiveDisable(t *testing.T) {
 	if err := automations.ApplyFromArchive(ctx, d, log, targetID); err != nil {
 		t.Fatalf("apply disabled: %v", err)
 	}
-	var got sql.NullInt64
-	if err := d.Read.QueryRow(
-		`SELECT correspondent_id FROM documents WHERE id = ?`, targetID).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Valid {
-		t.Fatalf("disabled classifier wrote correspondent_id = %d", got.Int64)
-	}
+	assertArchiveCorrespondent(t, d, targetID, 0)
 	assertArchiveProposals(t, d, targetID, "correspondent", acme, 0)
 
 	saveArchiveConfig(t, ctx, d, true)
 	if err := automations.ApplyFromArchive(ctx, d, log, targetID); err != nil {
 		t.Fatalf("apply enabled: %v", err)
 	}
-	if err := d.Read.QueryRow(
-		`SELECT correspondent_id FROM documents WHERE id = ?`, targetID).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Valid {
-		t.Errorf("after enabling: unreviewed correspondent_id = %v, want NULL", got)
-	}
+	assertArchiveCorrespondent(t, d, targetID, 0)
 	assertArchiveProposals(t, d, targetID, "correspondent", acme, 1)
 }
 
@@ -253,11 +234,11 @@ func TestArchiveRejectsChangedRetrievalEvidence(t *testing.T) {
 	}{
 		{"supporter source ABA", `UPDATE documents SET content = content WHERE id = ?`, false},
 		{"supporter title ABA", `UPDATE documents SET title = title WHERE id = ?`, false},
-		{"supporter metadata ABA", `UPDATE documents SET correspondent_id = correspondent_id WHERE id = ?`, false},
+		{"supporter metadata ABA", `UPDATE document_correspondents SET position = position WHERE document_id = ? AND role = 'sender'`, false},
 		{"supporter owner", `UPDATE documents SET owner_id = 2 WHERE id = ?`, false},
 		{"supporter trash", `UPDATE documents SET trashed_at = 1 WHERE id = ?`, false},
 		{"target source ABA", `UPDATE documents SET content = content WHERE id = ?`, true},
-		{"target human clear ABA", `UPDATE documents SET correspondent_id = NULL WHERE id = ?`, true},
+		{"target correspondent ABA", `UPDATE documents SET correspondent_revision = correspondent_revision + 1 WHERE id = ?`, true},
 		{"target owner", `UPDATE documents SET owner_id = 2 WHERE id = ?`, true},
 		{"target owner disabled", `UPDATE users SET disabled = 1 WHERE id = (SELECT owner_id FROM documents WHERE id = ?)`, true},
 	} {
@@ -401,9 +382,7 @@ func TestArchiveProposalCannotActivateConsequentialRules(t *testing.T) {
 			}
 			// The same explicit rule still acts on metadata actually assigned by
 			// a user/source, rather than an inference proposal.
-			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = ? WHERE id = ?`, corrID, targetID); err != nil {
-				t.Fatal(err)
-			}
+			setTestPrimaryCorrespondent(t, ctx, d, targetID, corrID)
 			must(t, automations.ApplyOnDocumentAdded(ctx, d, testActions(t), log, targetID))
 			must(t, d.Read.QueryRow(`SELECT owner_id, trashed_at FROM documents WHERE id = ?`, targetID).Scan(&ownerID, &trashed))
 			if (action.Kind == "discard" && !trashed.Valid) || (action.Kind == "assign_owner" && ownerID != 2) {
@@ -485,9 +464,7 @@ func TestArchiveReviewThresholdRemainsCandidateFloor(t *testing.T) {
 	second := seedCorrespondent(t, ctx, d, "Second")
 	cluster := seedSimilarCluster(t, ctx, d, first, 6)
 	for _, id := range cluster[:3] {
-		if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = ? WHERE id = ?`, second, id); err != nil {
-			t.Fatal(err)
-		}
+		setTestPrimaryCorrespondent(t, ctx, d, id, second)
 	}
 	targetID := seedDoc(t, ctx, d, "Policy renewal", "policy renewal premium insurance annual coverage")
 	must(t, automations.ApplyFromArchive(ctx, d, log, targetID))
@@ -497,10 +474,10 @@ func TestArchiveReviewThresholdRemainsCandidateFloor(t *testing.T) {
 
 func assertArchiveCorrespondent(t *testing.T, d *db.DB, docID, want int64) {
 	t.Helper()
-	var got int64
-	must(t, d.Read.QueryRow(`SELECT COALESCE(correspondent_id,0) FROM documents WHERE id = ?`, docID).Scan(&got))
-	if got != want {
-		t.Fatalf("document %d correspondent = %d, want %d", docID, got, want)
+	got, err := taxonomy.PrimaryCorrespondentID(t.Context(), d.Read, docID)
+	must(t, err)
+	if (!got.Valid && want != 0) || (got.Valid && got.Int64 != want) {
+		t.Fatalf("document %d correspondent = %v, want %d", docID, got, want)
 	}
 }
 
@@ -530,8 +507,7 @@ func TestArchiveAutomaticThresholdBoundaries(t *testing.T) {
 			corrID := seedCorrespondent(t, ctx, d, "Insurance")
 			cluster := seedSimilarCluster(t, ctx, d, corrID, tc.neighbours)
 			for _, id := range cluster[tc.supporters:] {
-				_, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = NULL WHERE id = ?`, id)
-				must(t, err)
+				setTestPrimaryCorrespondent(t, ctx, d, id, 0)
 			}
 			targetID := seedDoc(t, ctx, d, "Policy renewal", "policy renewal premium insurance annual coverage")
 			must(t, automations.ApplyFromArchive(ctx, d, log, targetID))
@@ -633,8 +609,7 @@ func TestArchiveAutomaticThresholdIsInclusive(t *testing.T) {
 	seedUser(t, ctx, d)
 	corrID := seedCorrespondent(t, ctx, d, "Insurance")
 	cluster := seedSimilarCluster(t, ctx, d, corrID, 4)
-	_, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = NULL WHERE id = ?`, cluster[0])
-	must(t, err)
+	setTestPrimaryCorrespondent(t, ctx, d, cluster[0], 0)
 	targetID := seedDoc(t, ctx, d, "Policy renewal", "policy renewal premium insurance annual coverage")
 	neighbours, err := similar.TopDocs(ctx, d, targetID, 10, &similar.Principal{UserID: 1, Role: "user", SystemID: 1})
 	must(t, err)

@@ -103,6 +103,13 @@ A failed step leaves earlier completed versions intact and rolls back its own
 schema, data and applied record. See [Backend architecture](/architecture) for
 storage and boot ownership.
 
+Each extension owns the explicit tables declared by its migration set; there is
+no generic core `plugin_kv` store. During a core compatibility table rebuild,
+Suchi preserves extension-created indexes and triggers attached to core tables
+by temporarily removing them and replaying their exact DDL. A dependency on a
+retired core object aborts adoption atomically rather than dropping extension
+data or schema.
+
 This is one compile-time composition callback, not runtime plugin loading or a
 general registration framework. It does not expose the CAS, API server or a
 service lookup mechanism. The lower-level subscriber/authenticator/sink

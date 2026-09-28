@@ -58,7 +58,6 @@ import (
 // Defaults. Per-attachment size cap is overridable via
 // SUCHI_EMAIL_MAX_ATTACH (byte-suffixed, e.g. "50M").
 const (
-	PluginName         = "email-ingest" // plugin_kv namespace for msg-id dedup
 	imapCommandTimeout = 30 * time.Second
 	// Bound even sparse, ten-digit UIDs below IMAP command-size limits.
 	imapFetchBatchSize = 50

@@ -116,6 +116,14 @@ replacement for the initiating browser; API and mobile tokens remain valid
 under their existing scope and system boundaries. The identity audit row is
 required for the transaction and retained outside ordinary audit pruning.
 
+Account and watched-owner email inputs share one normalization boundary: trim,
+lowercase, validate a maximum 254-byte address, and reject the reserved
+`dev@suchi.local` and `corpus@demo.suchi.page` identities. Development mode marks
+its ensured administrator durably. That marked account cannot change identity,
+and a normal boot refuses any enabled marked account as well as the legacy
+public development email/password pair. Disable the development account or use
+a separate data directory before running a normal server.
+
 ## Capabilities
 
 Administrators grant optional capabilities to individual members under
@@ -154,12 +162,12 @@ Removing a capability also closes the access it granted:
 - Removing `share_views` makes the member's shared views private. The saved
   views remain available to their owner.
 
-The database revocations and account change succeed or fail together. A concurrent
-promotion or regrant cannot cause an older revocation to remove resources created
-after access was restored. Successfully stored capability audit records follow
-committed transition order. Audit persistence remains best-effort; failed writes
-are logged without rejecting account updates. Rejected disables do not discard
-pending Microsoft sign-ins.
+The database revocations, account change and required capability audit records
+succeed or fail together. A concurrent promotion or regrant cannot cause an
+older revocation to remove resources created after access was restored.
+Persisted capability events follow committed transition order; an audit
+insertion failure rolls back the transition. Post-commit audit-sink delivery
+remains best effort. Rejected disables do not discard pending Microsoft sign-ins.
 
 ## Groups
 

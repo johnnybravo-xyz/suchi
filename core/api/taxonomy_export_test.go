@@ -93,12 +93,17 @@ func TestTaxonomyExportPreservesNamedAndTitleFilters(t *testing.T) {
 				{"Statement", true, "Statement"},
 				{"Invoice", false, "Invoice"},
 			} {
-				res, err := dest.Write.Exec(`INSERT INTO documents(system_id,owner_id,title,content,original_blob,original_size,jd_category_id,correspondent_id,document_type_id,created_at,added_at,updated_at) VALUES(1,1,?,'electricity',?,1,(SELECT id FROM jd_categories WHERE code=49),(SELECT id FROM correspondents WHERE name='Utility company'),(SELECT id FROM document_types WHERE name='Bill'),0,0,0)`, tc.title, fmt.Sprintf("source-%d", i))
+				res, err := dest.Write.Exec(`INSERT INTO documents(system_id,owner_id,title,content,original_blob,original_size,jd_category_id,document_type_id,created_at,added_at,updated_at) VALUES(1,1,?,'electricity',?,1,(SELECT id FROM jd_categories WHERE code=49),(SELECT id FROM document_types WHERE name='Bill'),0,0,0)`, tc.title, fmt.Sprintf("source-%d", i))
 				if err != nil {
 					t.Fatal(err)
 				}
 				id, err := res.LastInsertId()
 				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := dest.Write.Exec(`
+					INSERT INTO document_correspondents(document_id,correspondent_id,role)
+					VALUES(?,(SELECT id FROM correspondents WHERE name='Utility company'),'sender')`, id); err != nil {
 					t.Fatal(err)
 				}
 				if tc.tag {

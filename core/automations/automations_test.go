@@ -20,6 +20,7 @@ import (
 	migrations "github.com/johnnybravo-xyz/suchi/core/db/migrations"
 	"github.com/johnnybravo-xyz/suchi/core/documentstate"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -227,8 +228,8 @@ func TestTargetedCorrespondentRemovalInvalidatesQueuedProposal(t *testing.T) {
 	if err := engine.Advance(ctx, runID, ""); !errors.Is(err, approvals.ErrStaleProposal) {
 		t.Fatalf("queued correspondent survived explicit removal: %v", err)
 	}
-	var correspondent sql.NullInt64
-	must(t, d.Read.QueryRowContext(ctx, `SELECT correspondent_id FROM documents WHERE id=?`, docID).Scan(&correspondent))
+	correspondent, err := taxonomy.PrimaryCorrespondentID(ctx, d.Read, docID)
+	must(t, err)
 	if correspondent.Valid {
 		t.Fatalf("explicit removal restored correspondent %d", correspondent.Int64)
 	}
@@ -664,22 +665,31 @@ func seedDocWithCorr(t *testing.T, ctx context.Context, d *db.DB, title, content
 	inbox, _ := jd.InboxCategoryID(ctx, d, 1)
 	var id int64
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
-		var corr sql.NullInt64
-		if corrID > 0 {
-			corr = sql.NullInt64{Int64: corrID, Valid: true}
-		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents(system_id, owner_id, original_blob, original_size, title, content,
-			                      correspondent_id, jd_category_id, created_at, updated_at)
-			VALUES (1, 1, ?, 0, ?, ?, ?, ?, 0, 0)`,
-			"sha_"+title, title, content, corr, inbox)
+			                      jd_category_id, created_at, updated_at)
+			VALUES (1, 1, ?, 0, ?, ?, ?, 0, 0)`,
+			"sha_"+title, title, content, inbox)
 		if err != nil {
 			return err
 		}
 		id, err = res.LastInsertId()
-		return err
+		if err != nil {
+			return err
+		}
+		if corrID > 0 {
+			return taxonomy.SetPrimaryCorrespondent(ctx, tx, id, corrID)
+		}
+		return nil
 	}))
 	return id
+}
+
+func setTestPrimaryCorrespondent(t *testing.T, ctx context.Context, d *db.DB, documentID, correspondentID int64) {
+	t.Helper()
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return taxonomy.SetPrimaryCorrespondent(ctx, tx, documentID, correspondentID)
+	}))
 }
 
 func must(t *testing.T, err error) {

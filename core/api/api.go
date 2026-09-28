@@ -128,9 +128,6 @@ type Server struct {
 	// PrepareBrowserSession generates a replacement before the API enters the
 	// single writer. Rotation itself remains atomic with the account mutation.
 	PrepareBrowserSession func(*http.Request) (PreparedBrowserSession, error)
-	// EmailChangeAllowed protects boot-pinned producer ownership. Nil means no
-	// external owner pin; false refuses the identity transition before writes.
-	EmailChangeAllowed func(currentEmail, targetEmail string) bool
 	// LLMReloader is called after /api/admin/settings/llm writes so the
 	// running classifier picks up the new config without a restart.
 	// Main.go closes over the plugin instance; api/* doesn't import

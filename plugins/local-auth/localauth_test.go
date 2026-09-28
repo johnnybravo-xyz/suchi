@@ -214,12 +214,14 @@ func TestEnsureDevAdmin_HappyPathInsertsAndBurnsToken(t *testing.T) {
 		t.Fatal("setup token should be burned after EnsureDevAdmin succeeds")
 	}
 	var role string
+	var devSeeded bool
 	if err := p.db.Read.QueryRowContext(ctx,
-		`SELECT role FROM users WHERE email = ?`, DevAdminEmail).Scan(&role); err != nil {
+		`SELECT role,dev_seeded FROM users WHERE email = ?`, DevAdminEmail,
+	).Scan(&role, &devSeeded); err != nil {
 		t.Fatal(err)
 	}
-	if role != "admin" {
-		t.Fatalf("want admin role, got %q", role)
+	if role != "admin" || !devSeeded {
+		t.Fatalf("development account role=%q dev_seeded=%t", role, devSeeded)
 	}
 }
 
@@ -277,15 +279,60 @@ func TestRefuseEnabledDevAdminAfterDevDataReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.RefuseEnabledDevAdmin(ctx); err == nil || !strings.Contains(err.Error(), "enabled public development admin") {
-		t.Fatalf("normal boot guard error = %v, want enabled development admin refusal", err)
+	if err := p.RefuseEnabledDevAdmin(ctx); err == nil || !strings.Contains(err.Error(), "enabled public development account") {
+		t.Fatalf("normal boot guard error = %v, want enabled development account refusal", err)
 	}
 	if _, err := p.db.ExecWrite(ctx,
-		`UPDATE users SET disabled = 1 WHERE email = ?`, DevAdminEmail); err != nil {
+		`UPDATE users SET email = 'renamed@example.test' WHERE dev_seeded = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RefuseEnabledDevAdmin(ctx); err == nil || !strings.Contains(err.Error(), "enabled public development account") {
+		t.Fatalf("renamed marked account guard error = %v", err)
+	}
+	if _, err := p.db.ExecWrite(ctx,
+		`UPDATE users SET disabled = 1 WHERE dev_seeded = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.RefuseEnabledDevAdmin(ctx); err != nil {
 		t.Fatalf("disabled development admin blocked normal boot: %v", err)
+	}
+}
+
+func TestRefuseEnabledDevAdminRecognizesLegacyPublicCredential(t *testing.T) {
+	publicHash, err := HashPassword(DevAdminPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryHash, err := HashPassword("private-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		hash      string
+		wantError bool
+	}{
+		{name: "public credential", hash: publicHash, wantError: true},
+		{name: "different credential", hash: ordinaryHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := openTestPlugin(t)
+			if _, err := p.db.ExecWrite(t.Context(), `
+				INSERT INTO users(
+					email,display_name,role,password_hash,dev_seeded,created_at,updated_at
+				) VALUES(?, 'Legacy', 'admin', ?, 0, 1, 1)
+			`, DevAdminEmail, test.hash); err != nil {
+				t.Fatal(err)
+			}
+			err := p.RefuseEnabledDevAdmin(t.Context())
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "legacy public development admin") {
+					t.Fatalf("legacy development guard error=%v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("ordinary legacy account rejected: %v", err)
+			}
+		})
 	}
 }
 

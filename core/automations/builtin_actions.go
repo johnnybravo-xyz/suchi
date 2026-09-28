@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/johnnybravo-xyz/suchi/core/customfield"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // BuiltinActions returns fresh definitions for the community action vocabulary.
@@ -70,9 +71,7 @@ func BuiltinActions() []ActionDefinition {
 				if id == 0 {
 					return errors.New("assign_correspondent: correspondent_id required")
 				}
-				_, err := tx.ExecContext(ctx,
-					`UPDATE documents SET correspondent_id = ? WHERE id = ?`, id, target.DocID)
-				return err
+				return taxonomy.SetPrimaryCorrespondent(ctx, tx, target.DocID, id)
 			},
 		},
 		{Kind: "assign_document_type",
@@ -196,34 +195,12 @@ func BuiltinActions() []ActionDefinition {
 				return validateReferences(ctx, d, systemID, "correspondents", ids)
 			},
 			Execute: func(ctx context.Context, tx *sql.Tx, target ActionTarget, params map[string]any) error {
-				// The doc has one primary correspondent_id column and, via
-				// document_correspondents, zero or more secondary correspondents
-				// with roles. This action clears both — matches the "remove all"
-				// intent the config typically wants.
 				ids := intList(params["correspondent_ids"])
-				if len(ids) == 0 {
-					// No ids given → clear the primary and every junction row.
-					if _, err := tx.ExecContext(ctx,
-						`UPDATE documents SET correspondent_id = NULL WHERE id = ?`, target.DocID); err != nil {
-						return err
-					}
-					_, err := tx.ExecContext(ctx,
-						`DELETE FROM document_correspondents WHERE document_id = ?`, target.DocID)
+				if err := taxonomy.RemoveCorrespondents(ctx, tx, target.DocID, ids); err != nil {
 					return err
 				}
-				// With ids: unset primary if it matches; drop junction rows for
-				// those correspondent ids.
-				for _, id := range ids {
-					if _, err := tx.ExecContext(ctx,
-						`UPDATE documents SET correspondent_id = NULL WHERE id = ? AND correspondent_id = ?`,
-						target.DocID, id); err != nil {
-						return err
-					}
-					if _, err := tx.ExecContext(ctx,
-						`DELETE FROM document_correspondents WHERE document_id = ? AND correspondent_id = ?`,
-						target.DocID, id); err != nil {
-						return err
-					}
+				if len(ids) == 0 {
+					return nil
 				}
 				// A targeted removal is explicit intent even if both links were absent.
 				_, err := tx.ExecContext(ctx,

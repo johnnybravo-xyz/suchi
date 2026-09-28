@@ -511,7 +511,7 @@ func TestSystemsForeignMetadataRejectsWithoutPartialWritesOrOutbox(t *testing.T)
 				t.Fatalf("rejection: %d %s", w.Code, w.Body.String())
 			}
 			var unchanged int
-			if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM documents WHERE id IN (101,103) AND jd_category_id=101 AND correspondent_id IS NULL AND document_type_id IS NULL AND storage_path_id IS NULL AND updated_at=0`).Scan(&unchanged); err != nil || unchanged != 2 {
+			if err := s.DB.Read.QueryRow(`SELECT COUNT(*) FROM documents WHERE id IN (101,103) AND jd_category_id=101 AND document_type_id IS NULL AND storage_path_id IS NULL AND updated_at=0`).Scan(&unchanged); err != nil || unchanged != 2 {
 				t.Fatalf("partial document mutation: count=%d err=%v", unchanged, err)
 			}
 			for _, table := range []string{"document_tags", "document_correspondents", "document_custom_field_values", "jobs", "render_moves"} {
@@ -547,7 +547,13 @@ func TestSystemsCorrespondentNameUpsertUsesIntrinsicDocumentSystem(t *testing.T)
 		t.Fatalf("scoped upsert: %d %s", w.Code, w.Body.String())
 	}
 	var system, primary int64
-	if err := s.DB.Read.QueryRow(`SELECT c.system_id,d.correspondent_id FROM correspondents c JOIN documents d ON d.correspondent_id=c.id WHERE d.id=101`).Scan(&system, &primary); err != nil || system != 1 || primary != correspondent.ID {
+	if err := s.DB.Read.QueryRow(`
+		SELECT c.system_id,dc.correspondent_id
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id=dc.correspondent_id
+		WHERE dc.document_id=101 AND dc.role='sender'
+		ORDER BY dc.position,dc.correspondent_id
+		LIMIT 1`).Scan(&system, &primary); err != nil || system != 1 || primary != correspondent.ID {
 		t.Fatalf("foreign upsert relation: system=%d primary=%d err=%v", system, primary, err)
 	}
 	w = systemsBoundaryRequest(mux, "GET", "/api/documents/101/correspondents/", "", memberPrincipal(5))

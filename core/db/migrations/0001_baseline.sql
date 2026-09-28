@@ -282,7 +282,6 @@ CREATE TABLE "documents" (
     trashed_at     INTEGER,
     content              TEXT,
     mime_type            TEXT,
-    correspondent_id     INTEGER REFERENCES correspondents(id) ON DELETE SET NULL,
     document_type_id     INTEGER REFERENCES document_types(id) ON DELETE SET NULL,
     storage_path_id      INTEGER REFERENCES storage_paths(id) ON DELETE SET NULL,
     added_at             INTEGER,
@@ -462,13 +461,6 @@ CREATE TABLE object_acls (
   UNIQUE (object_kind, object_id, principal_kind, principal_id)
 ) STRICT;
 
-CREATE TABLE plugin_kv (
-    plugin_name TEXT NOT NULL,
-    key         TEXT NOT NULL,
-    value_json  TEXT NOT NULL,
-    updated_at  INTEGER NOT NULL,
-    PRIMARY KEY (plugin_name, key)
-) STRICT;
 
 CREATE TABLE render_moves (
     id           INTEGER PRIMARY KEY,
@@ -582,6 +574,7 @@ CREATE TABLE users (
     display_name TEXT NOT NULL,
     role         TEXT NOT NULL CHECK (role IN ('admin','member')),
     disabled     INTEGER NOT NULL DEFAULT 0,
+    dev_seeded   INTEGER NOT NULL DEFAULT 0 CHECK (dev_seeded IN (0,1)),
     -- Local-auth stores an argon2id hash here. OIDC-only users have this NULL.
     password_hash TEXT,
     created_at   INTEGER NOT NULL,
@@ -646,7 +639,6 @@ CREATE INDEX document_tags_tag ON document_tags(tag_id);
 CREATE UNIQUE INDEX documents_asn_uniq
     ON documents(system_id, archive_serial_number) WHERE archive_serial_number IS NOT NULL;
 
-CREATE INDEX documents_correspondent ON documents(correspondent_id);
 
 CREATE INDEX documents_document_type ON documents(document_type_id);
 
@@ -748,8 +740,6 @@ CREATE INDEX jobs_system ON jobs(system_id,id);
 
 CREATE INDEX notes_document ON notes(document_id);
 
-CREATE INDEX object_acls_lookup
-  ON object_acls(object_kind, object_id, principal_kind, principal_id);
 
 CREATE INDEX object_acls_principal
   ON object_acls(principal_kind, principal_id, object_kind);
@@ -961,16 +951,6 @@ BEGIN SELECT RAISE(ABORT,'system ownership is immutable'); END;
 CREATE TRIGGER documents_category_revision AFTER UPDATE OF jd_category_id ON documents
 BEGIN UPDATE documents SET category_revision=category_revision+1 WHERE id=NEW.id; END;
 
-CREATE TRIGGER documents_correspondent_id_insert BEFORE INSERT ON documents
-WHEN NEW.correspondent_id IS NOT NULL AND NEW.system_id IS NOT (SELECT system_id FROM correspondents WHERE id=NEW.correspondent_id)
-BEGIN SELECT RAISE(ABORT,'cross-system correspondent id'); END;
-
-CREATE TRIGGER documents_correspondent_id_update BEFORE UPDATE OF system_id,correspondent_id ON documents
-WHEN NEW.correspondent_id IS NOT NULL AND NEW.system_id IS NOT (SELECT system_id FROM correspondents WHERE id=NEW.correspondent_id)
-BEGIN SELECT RAISE(ABORT,'cross-system correspondent id'); END;
-
-CREATE TRIGGER documents_correspondent_revision AFTER UPDATE OF correspondent_id ON documents
-BEGIN UPDATE documents SET correspondent_revision=correspondent_revision+1 WHERE id=NEW.id; END;
 
 CREATE TRIGGER documents_document_type_id_insert BEFORE INSERT ON documents
 WHEN NEW.document_type_id IS NOT NULL AND NEW.system_id IS NOT (SELECT system_id FROM document_types WHERE id=NEW.document_type_id)

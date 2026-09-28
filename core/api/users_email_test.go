@@ -68,13 +68,11 @@ type emailChangeTestRig struct {
 	principal    *pluginapi.Principal
 	rotation     *emailChangeTestRotation
 	mode         string
-	allowed      bool
 	verifyErr    error
 	verifyHook   func()
 	verifyCalls  int
 	prepareCalls int
 	reloadCalls  int
-	reloadErr    error
 }
 
 func newEmailChangeTestRig(t *testing.T) *emailChangeTestRig {
@@ -101,7 +99,7 @@ func newEmailChangeTestRig(t *testing.T) *emailChangeTestRig {
 	`, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Set(t.Context(), d, settings.KeyFSWatchOwnerEmail, emailTestOld); err != nil {
+	if err := settings.Set(t.Context(), d, settings.KeyFSWatchOwnerID, int64(1)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,14 +112,12 @@ func newEmailChangeTestRig(t *testing.T) *emailChangeTestRig {
 		rotation: &emailChangeTestRotation{cookie: &http.Cookie{
 			Name: "suchi_session", Value: "replacement-cookie", Path: "/", HttpOnly: true,
 		}},
-		mode:    EmailChangeModePassword,
-		allowed: true,
+		mode: EmailChangeModePassword,
 	}
 	rig.s = &Server{
 		DB: d, PublicURL: "https://archive.example",
 		Log:                slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmailChangeModeFor: func(*pluginapi.Principal) string { return rig.mode },
-		EmailChangeAllowed: func(_, _ string) bool { return rig.allowed },
 		PasswordVerifier: func(encoded, password string) error {
 			rig.verifyCalls++
 			if rig.verifyHook != nil {
@@ -142,7 +138,7 @@ func newEmailChangeTestRig(t *testing.T) *emailChangeTestRig {
 		},
 		FSWatchReloader: func(context.Context) error {
 			rig.reloadCalls++
-			return rig.reloadErr
+			return nil
 		},
 	}
 	return rig
@@ -164,9 +160,8 @@ func validEmailChangeBody(email string) string {
 	return string(payload)
 }
 
-func TestPostSelfEmailCommitsIdentitySessionsSettingAndRetainedAudit(t *testing.T) {
+func TestPostSelfEmailCommitsIdentitySessionsAndRetainedAudit(t *testing.T) {
 	rig := newEmailChangeTestRig(t)
-	rig.reloadErr = errors.New("watcher temporarily unavailable")
 	rec := rig.request(validEmailChangeBody("  NEW@EXAMPLE.TEST  "))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -197,12 +192,12 @@ func TestPostSelfEmailCommitsIdentitySessionsSettingAndRetainedAudit(t *testing.
 	if replacement != 1 || sessions != 1 || tokens != 1 {
 		t.Fatalf("replacement=%d sessions=%d tokens=%d", replacement, sessions, tokens)
 	}
-	var owner string
-	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+	var ownerID int64
+	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerID, &ownerID); err != nil {
 		t.Fatal(err)
 	}
-	if owner != emailTestNew {
-		t.Fatalf("watched-folder owner=%q", owner)
+	if ownerID != 1 {
+		t.Fatalf("watched-folder owner ID=%d", ownerID)
 	}
 
 	var retained int
@@ -224,25 +219,68 @@ func TestPostSelfEmailCommitsIdentitySessionsSettingAndRetainedAudit(t *testing.
 		after["email"] != emailTestNew || after["source"] != EmailChangeModePassword || after["revoked_sessions"] != float64(2) {
 		t.Fatalf("audit retained=%d request=%q before=%v after=%v", retained, requestID, before, after)
 	}
-	if rig.verifyCalls != 1 || rig.prepareCalls != 1 || rig.reloadCalls != 1 {
+	if rig.verifyCalls != 1 || rig.prepareCalls != 1 || rig.reloadCalls != 0 {
 		t.Fatalf("verify=%d prepare=%d reload=%d", rig.verifyCalls, rig.prepareCalls, rig.reloadCalls)
 	}
 }
-func TestPostSelfEmailLeavesUnrelatedWatchedFolderOwner(t *testing.T) {
+
+func TestPostSelfEmailRerendersOnlyExactOwnerTemplates(t *testing.T) {
 	rig := newEmailChangeTestRig(t)
-	if err := settings.Set(t.Context(), rig.d, settings.KeyFSWatchOwnerEmail, "other@example.test"); err != nil {
+	seedUser(t, rig.d, 2)
+	if _, err := rig.d.ExecWrite(t.Context(), `
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position)
+		VALUES(1,90,99,'Email test',1);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		VALUES(1,901,90,99,'Email test',0);
+		INSERT INTO storage_paths(id,name,slug,path,created_at,updated_at,system_id) VALUES
+			(10,'Owner path','owner-path','{{ owner }}/{{ title }}',1,1,1),
+			(11,'Different variable','different-variable','{{ owner_name }}/{{ title }}',1,1,1),
+			(12,'Literal owner','literal-owner','owner/{{ title }}',1,1,1),
+			(13,'Compact owner','compact-owner','{{owner}}/{{ title }}',1,1,1);
+		INSERT INTO documents(
+			id,owner_id,original_blob,original_size,title,jd_category_id,
+			storage_path_id,created_at,updated_at,trashed_at,system_id
+		) VALUES
+			(201,1,'email-owner-201',1,'Exact',901,10,1,1,NULL,1),
+			(202,1,'email-owner-202',1,'Different',901,11,1,1,NULL,1),
+			(203,1,'email-owner-203',1,'Literal',901,12,1,1,NULL,1),
+			(204,1,'email-owner-204',1,'Default',901,NULL,1,1,NULL,1),
+			(205,1,'email-owner-205',1,'Trashed',901,10,1,1,2,1),
+			(206,2,'email-owner-206',1,'Other owner',901,10,1,1,NULL,1),
+			(207,1,'email-owner-207',1,'Compact',901,13,1,1,NULL,1)
+	`); err != nil {
 		t.Fatal(err)
 	}
 	rec := rig.request(validEmailChangeBody(emailTestNew))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var owner string
-	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+	var jobs string
+	if err := rig.d.Read.QueryRow(`
+		SELECT group_concat(doc_id, ',')
+		FROM (SELECT doc_id FROM jobs WHERE kind='render' ORDER BY doc_id)`,
+	).Scan(&jobs); err != nil {
 		t.Fatal(err)
 	}
-	if owner != "other@example.test" {
-		t.Fatalf("unrelated watched-folder owner changed to %q", owner)
+	if jobs != "201,207" {
+		t.Fatalf("owner-template rerender jobs=%q, want exact placeholders only", jobs)
+	}
+}
+func TestPostSelfEmailLeavesUnrelatedWatchedFolderOwner(t *testing.T) {
+	rig := newEmailChangeTestRig(t)
+	if err := settings.Set(t.Context(), rig.d, settings.KeyFSWatchOwnerID, int64(2)); err != nil {
+		t.Fatal(err)
+	}
+	rec := rig.request(validEmailChangeBody(emailTestNew))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var ownerID int64
+	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerID, &ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if ownerID != 2 {
+		t.Fatalf("unrelated watched-folder owner changed to %d", ownerID)
 	}
 }
 
@@ -374,7 +412,7 @@ func TestPostSelfEmailRechecksCredentialAndSessionSnapshots(t *testing.T) {
 	}
 }
 
-func TestPostSelfEmailRejectsUniqueAndPinnedOwners(t *testing.T) {
+func TestPostSelfEmailRejectsUniqueAndSeededDevelopmentAccounts(t *testing.T) {
 	t.Run("unique email", func(t *testing.T) {
 		rig := newEmailChangeTestRig(t)
 		seedUser(t, rig.d, 2)
@@ -387,15 +425,17 @@ func TestPostSelfEmailRejectsUniqueAndPinnedOwners(t *testing.T) {
 		}
 	})
 
-	t.Run("boot-pinned watched-folder owner", func(t *testing.T) {
+	t.Run("seeded development account", func(t *testing.T) {
 		rig := newEmailChangeTestRig(t)
-		rig.allowed = false
+		if _, err := rig.d.Write.Exec(`UPDATE users SET dev_seeded=1 WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
 		rec := rig.request(validEmailChangeBody(emailTestNew))
-		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"fs_watch_owner_pinned"`) {
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"dev_seeded_account"`) {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
 		if rig.verifyCalls != 0 || rig.prepareCalls != 0 {
-			t.Fatalf("pinned owner performed credential work: verify=%d prepare=%d", rig.verifyCalls, rig.prepareCalls)
+			t.Fatalf("seeded account performed credential work: verify=%d prepare=%d", rig.verifyCalls, rig.prepareCalls)
 		}
 	})
 }
@@ -427,13 +467,13 @@ func TestPostSelfEmailRollsBackOnRequiredAuditFailure(t *testing.T) {
 	if err := rig.d.Read.QueryRow(`SELECT count(*) FROM audit_events WHERE action='user.email_changed'`).Scan(&auditRows); err != nil {
 		t.Fatal(err)
 	}
-	var owner string
-	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+	var ownerID int64
+	if err := settings.Get(t.Context(), rig.d, settings.KeyFSWatchOwnerID, &ownerID); err != nil {
 		t.Fatal(err)
 	}
-	if email != emailTestOld || owner != emailTestOld || sessions != 2 || auditRows != 0 ||
+	if email != emailTestOld || ownerID != 1 || sessions != 2 || auditRows != 0 ||
 		rec.Header().Get("Set-Cookie") != "" || rig.reloadCalls != 0 {
-		t.Fatalf("rollback email=%q owner=%q sessions=%d audit=%d headers=%v reload=%d",
-			email, owner, sessions, auditRows, rec.Header(), rig.reloadCalls)
+		t.Fatalf("rollback email=%q owner_id=%d sessions=%d audit=%d headers=%v reload=%d",
+			email, ownerID, sessions, auditRows, rec.Header(), rig.reloadCalls)
 	}
 }

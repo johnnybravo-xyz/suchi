@@ -28,6 +28,84 @@ type Migration struct {
 	RebuildTables bool
 }
 
+// coreAfterExtensionObjects are core indexes, triggers, and rebuilt tables
+// whose sqlite_schema rowids may land after the extension ledger. They remain
+// part of the core fingerprint and must never be mistaken for extension DDL.
+var coreAfterExtensionObjects = []string{
+	"audit_actor",
+	"audit_events",
+	"audit_events_system_immutable",
+	"audit_events_system_replace",
+	"audit_object",
+	"audit_system",
+	"audit_ts",
+	"automation_actions",
+	"automation_triggers_filter_tag_id_insert",
+	"automation_triggers_filter_tag_id_update",
+	"document_correspondents_revision_delete",
+	"document_correspondents_revision_insert",
+	"document_correspondents_revision_update",
+	"document_tags_reference_insert",
+	"document_tags_reference_update",
+	"documents",
+	"documents_asn_uniq",
+	"documents_category_revision",
+	"documents_document_type",
+	"documents_document_type_id_insert",
+	"documents_document_type_id_update",
+	"documents_document_type_revision",
+	"documents_email_message_id",
+	"documents_email_parent",
+	"documents_email_parent_id_insert",
+	"documents_email_parent_id_update",
+	"documents_encryption_state",
+	"documents_fts_ad",
+	"documents_fts_ai",
+	"documents_fts_au",
+	"documents_jd",
+	"documents_language_revision",
+	"documents_languages",
+	"documents_legacy_id_uniq",
+	"documents_live_created",
+	"documents_owner",
+	"documents_owner_original_blob",
+	"documents_previous_version",
+	"documents_previous_version_id_insert",
+	"documents_previous_version_id_update",
+	"documents_source_revision",
+	"documents_split_origin_insert",
+	"documents_split_origin_part",
+	"documents_split_origin_update",
+	"documents_split_parent_id_insert",
+	"documents_split_parent_id_update",
+	"documents_split_parent_part",
+	"documents_storage_path",
+	"documents_storage_path_id_insert",
+	"documents_storage_path_id_update",
+	"documents_system_immutable",
+	"documents_system_live",
+	"documents_system_replace",
+	"documents_title_revision",
+	"idx_automation_actions_aid",
+	"tags",
+	"tags_parent",
+	"tags_parent_insert",
+	"tags_parent_update",
+	"tags_system_immutable",
+	"tags_system_replace",
+	"users",
+	"users_default_system_demotion",
+	"users_default_system_insert",
+	"users_oidc_identity",
+}
+
+type extensionSchemaObject struct {
+	typ       string
+	name      string
+	tableName string
+	sql       string
+}
+
 // Migrate applies every migration with Version > current PRAGMA user_version,
 // each in its own transaction. The complete version list is validated before
 // touching the database. Idempotent: safe to run at every boot.
@@ -135,7 +213,25 @@ func rebuildTx(ctx context.Context, db *sql.DB, apply func(*sql.Tx) error) (err 
 	if _, err = tx.ExecContext(ctx, "ROLLBACK; BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
+	extensionObjects, err := captureExtensionSchemaObjects(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("capture extension schema objects: %w", err)
+	}
+	for _, object := range extensionObjects {
+		if objectDependsOnPluginKV(object) {
+			// Compatibility migration 0005 must see this object and abort
+			// rather than silently discard a plugin_kv dependency.
+			continue
+		}
+		if _, err = tx.ExecContext(ctx,
+			"DROP "+strings.ToUpper(object.typ)+" "+quoteSQLiteIdentifier(object.name)); err != nil {
+			return fmt.Errorf("temporarily remove extension %s %q: %w", object.typ, object.name, err)
+		}
+	}
 	if err = apply(tx); err != nil {
+		return err
+	}
+	if err = replayExtensionSchemaObjects(ctx, tx, extensionObjects); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
@@ -157,6 +253,77 @@ func rebuildTx(ctx context.Context, db *sql.DB, apply func(*sql.Tx) error) (err 
 		return err
 	}
 	return tx.Commit()
+}
+func captureExtensionSchemaObjects(ctx context.Context, tx *sql.Tx) ([]extensionSchemaObject, error) {
+	var boundary int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT rowid FROM sqlite_schema WHERE name = '_suchi_extension_migrations'`,
+	).Scan(&boundary); errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(coreAfterExtensionObjects)), ",")
+	args := make([]any, 0, len(coreAfterExtensionObjects)+1)
+	args = append(args, boundary)
+	for _, name := range coreAfterExtensionObjects {
+		args = append(args, name)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT type, name, tbl_name, sql
+		FROM sqlite_schema
+		WHERE rowid > ?
+		  AND type IN ('index', 'trigger')
+		  AND sql IS NOT NULL
+		  AND name NOT IN (`+placeholders+`)
+		ORDER BY rowid`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []extensionSchemaObject
+	for rows.Next() {
+		var object extensionSchemaObject
+		if err := rows.Scan(&object.typ, &object.name, &object.tableName, &object.sql); err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, rows.Err()
+}
+
+func replayExtensionSchemaObjects(ctx context.Context, tx *sql.Tx, objects []extensionSchemaObject) error {
+	for _, object := range objects {
+		var current extensionSchemaObject
+		err := tx.QueryRowContext(ctx, `
+			SELECT type, name, tbl_name, sql
+			FROM sqlite_schema
+			WHERE name = ? AND type IN ('index', 'trigger')`,
+			object.name,
+		).Scan(&current.typ, &current.name, &current.tableName, &current.sql)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := tx.ExecContext(ctx, object.sql); err != nil {
+				return fmt.Errorf("replay extension %s %q: %w", object.typ, object.name, err)
+			}
+		case err != nil:
+			return fmt.Errorf("inspect extension %s %q: %w", object.typ, object.name, err)
+		case current != object:
+			return fmt.Errorf("extension %s %q was recreated incompatibly", object.typ, object.name)
+		}
+	}
+	return nil
+}
+
+func objectDependsOnPluginKV(object extensionSchemaObject) bool {
+	return object.tableName == "plugin_kv" ||
+		strings.Contains(strings.ToLower(object.sql), "plugin_kv")
+}
+
+func quoteSQLiteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // LoadMigrations parses an embedded FS of files named NNNN_name.sql into

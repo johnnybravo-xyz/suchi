@@ -294,7 +294,12 @@ func TestBundleResumeAndVerifyStayInTargetSystem(t *testing.T) {
 	}
 	var sameBlobs, isolatedMetadata int
 	err = d.Read.QueryRowContext(ctx, `
-		SELECT SUM(a.original_blob = b.original_blob), SUM(a.correspondent_id != b.correspondent_id)
+		SELECT SUM(a.original_blob = b.original_blob),
+		       SUM(
+		         (SELECT correspondent_id FROM document_correspondents WHERE document_id=a.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1)
+		         !=
+		         (SELECT correspondent_id FROM document_correspondents WHERE document_id=b.id AND role='sender' ORDER BY position,correspondent_id LIMIT 1)
+		       )
 		FROM documents a JOIN documents b ON b.legacy_id = a.legacy_id AND b.system_id = 2
 		WHERE a.system_id = 1
 	`).Scan(&sameBlobs, &isolatedMetadata)

@@ -272,8 +272,12 @@ func loadNeighbourMetadata(ctx context.Context, tx *sql.Tx, systemID int64, ids 
 	out := make(map[int64]neighbourMD, len(ids))
 	placeholders, args := placeholderList(ids)
 	args = append(args, systemID)
-	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(jd_category_id,0), COALESCE(correspondent_id,0), COALESCE(document_type_id,0)
-		FROM documents WHERE id IN (`+placeholders+`) AND system_id = ? AND trashed_at IS NULL`, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT d.id, COALESCE(d.jd_category_id,0),
+		COALESCE((SELECT dc.correspondent_id FROM document_correspondents dc
+		          WHERE dc.document_id=d.id AND dc.role='sender'
+		          ORDER BY dc.position,dc.correspondent_id LIMIT 1),0),
+		COALESCE(d.document_type_id,0)
+		FROM documents d WHERE d.id IN (`+placeholders+`) AND d.system_id = ? AND d.trashed_at IS NULL`, args...)
 	if err != nil {
 		return nil, err
 	}

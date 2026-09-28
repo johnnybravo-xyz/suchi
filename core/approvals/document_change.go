@@ -431,7 +431,7 @@ func validateDestination(ctx context.Context, tx *sql.Tx, docID, systemID int64,
 			return err
 		}
 	case "correspondent":
-		if err := tx.QueryRowContext(ctx, `SELECT correspondent_id IS NULL AND NOT EXISTS(SELECT 1 FROM document_correspondents WHERE document_id=documents.id AND role='sender') FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM document_correspondents WHERE document_id=documents.id AND role='sender') FROM documents WHERE id=?`, docID).Scan(&eligible); err != nil {
 			return err
 		}
 	case "document_type":
@@ -585,7 +585,9 @@ func writeDocumentChangeValue(ctx context.Context, tx *sql.Tx, docID, systemID i
 	case "jd_category":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET jd_category_id=?,updated_at=? WHERE id=? AND jd_category_id<>?`, c.ValueID, now, docID, c.ValueID)
 	case "correspondent":
-		result, err = tx.ExecContext(ctx, `UPDATE documents SET correspondent_id=?,updated_at=? WHERE id=? AND correspondent_id IS NULL`, c.ValueID, now, docID)
+		if err = taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, c.ValueID); err == nil {
+			result, err = tx.ExecContext(ctx, `UPDATE documents SET updated_at=? WHERE id=?`, now, docID)
+		}
 	case "document_type":
 		result, err = tx.ExecContext(ctx, `UPDATE documents SET document_type_id=?,updated_at=? WHERE id=? AND document_type_id IS NULL`, c.ValueID, now, docID)
 	case "title":
@@ -648,7 +650,7 @@ func DocumentChangeProjection(ctx context.Context, q systems.Queryer, docID int6
 	out["source_current"] = fresh
 	out["review_conflict"] = !fresh || current.FieldRevision(c.Field) != c.Baseline.FieldRevision(c.Field) || c.PolicyVersion != ReviewPolicyVersion
 	var currentValue string
-	err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE(c.name,'') WHEN 'document_type' THEN COALESCE(dt.name,'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN correspondents c ON c.id=d.correspondent_id LEFT JOIN document_types dt ON dt.id=d.document_type_id LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
+	err = q.QueryRowContext(ctx, `SELECT CASE ? WHEN 'title' THEN d.title WHEN 'language' THEN trim(d.languages,',') WHEN 'correspondent' THEN COALESCE((SELECT c.name FROM document_correspondents dc JOIN correspondents c ON c.id=dc.correspondent_id WHERE dc.document_id=d.id AND dc.role='sender' ORDER BY dc.position,dc.correspondent_id LIMIT 1),'') WHEN 'document_type' THEN COALESCE(dt.name,'') WHEN 'jd_category' THEN COALESCE(j.name,'') WHEN 'tag' THEN COALESCE((SELECT group_concat(t.name,', ') FROM document_tags link JOIN tags t ON t.id=link.tag_id WHERE link.document_id=d.id AND link.classifier_owned=0),'') END FROM documents d LEFT JOIN document_types dt ON dt.id=d.document_type_id LEFT JOIN jd_categories j ON j.id=d.jd_category_id WHERE d.id=?`, c.Field, docID).Scan(&currentValue)
 	if err != nil {
 		return nil, err
 	}

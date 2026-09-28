@@ -29,8 +29,8 @@
 //     OnSuccess=keep is set. Failure moves the file into an
 //     `errors/` subdirectory with a companion `.err` note so the
 //     operator can see what went wrong.
-//   - Files whose owner-email isn't resolvable OR whose sidecar
-//     fails to parse land in `errors/` — never silently dropped.
+//   - Files whose configured owner is no longer active OR whose sidecar fails
+//     to parse land in `errors/` — never silently dropped.
 package fswatch
 
 import (
@@ -70,11 +70,10 @@ type Config struct {
 	// Dir is the staging directory. Created if missing.
 	Dir string
 
-	// OwnerEmail resolves to a users row at startup. Files land under
-	// that user. Empty disables the watcher entirely — the design
-	// treats "no owner configured" as "producer is idle" (visible in
-	// the egress-surface-style boot log).
-	OwnerEmail string
+	// OwnerID is the durable users row that owns ingested files. Zero disables
+	// the watcher. Email is resolved only at configuration boundaries so an
+	// account rename cannot strand a running producer.
+	OwnerID int64
 
 	// System selects an existing filing system by code; empty means original system 1.
 	System string
@@ -104,15 +103,17 @@ type Watcher struct {
 	systemID int64
 }
 
-// New validates cfg + resolves the owner. Returns nil, nil when
-// disabled (empty OwnerEmail) — the caller treats nil as "not enabled".
+// New validates cfg and its numeric owner. Returns nil, nil when disabled.
 func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Dispatcher, log *slog.Logger) (*Watcher, error) {
-	if cfg.OwnerEmail == "" {
-		log.Info("fswatch.disabled", "reason", "INGEST_FS_OWNER_EMAIL not set")
+	if cfg.OwnerID == 0 {
+		log.Info("fswatch.disabled", "reason", "owner not configured")
 		return nil, nil
 	}
+	if cfg.OwnerID < 0 {
+		return nil, errors.New("fswatch: OwnerID must be positive")
+	}
 	if cfg.Dir == "" {
-		return nil, errors.New("fswatch: Dir is required when OwnerEmail is set")
+		return nil, errors.New("fswatch: Dir is required when OwnerID is set")
 	}
 	if cfg.Settle == 0 {
 		cfg.Settle = 250 * time.Millisecond
@@ -124,15 +125,15 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		return nil, fmt.Errorf("fswatch: mkdir errors: %w", err)
 	}
 
-	var ownerID int64
+	var active int
 	err := d.Read.QueryRowContext(ctx,
-		`SELECT id FROM users WHERE email = ? AND disabled = 0`,
-		cfg.OwnerEmail).Scan(&ownerID)
+		`SELECT 1 FROM users WHERE id = ? AND disabled = 0`,
+		cfg.OwnerID).Scan(&active)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s", ErrOwnerNotFound, cfg.OwnerEmail)
+		return nil, fmt.Errorf("%w: user %d", ErrOwnerNotFound, cfg.OwnerID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("fswatch: resolve owner %q: %w", cfg.OwnerEmail, err)
+		return nil, fmt.Errorf("fswatch: resolve owner %d: %w", cfg.OwnerID, err)
 	}
 	target, err := systems.Get(ctx, d.Read, systems.DefaultID)
 	if cfg.System != "" {
@@ -141,7 +142,7 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 	if err != nil {
 		return nil, fmt.Errorf("fswatch: resolve system: %w", err)
 	}
-	allowed, err := systems.CanEnter(ctx, d.Read, ownerID, target.ID)
+	allowed, err := systems.CanEnter(ctx, d.Read, cfg.OwnerID, target.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,9 +154,9 @@ func New(ctx context.Context, cfg Config, d *db.DB, cas *blob.CAS, disp *jobs.Di
 		cfg:      cfg,
 		db:       d,
 		cas:      cas,
-		log:      log.With("component", "fswatch", "dir", cfg.Dir, "owner", cfg.OwnerEmail),
+		log:      log.With("component", "fswatch", "dir", cfg.Dir, "owner_id", cfg.OwnerID),
 		disp:     disp,
-		ownerID:  ownerID,
+		ownerID:  cfg.OwnerID,
 		systemID: target.ID,
 	}, nil
 }
@@ -518,36 +519,24 @@ func applySidecar(ctx context.Context, tx *sql.Tx, docID int64, s *sidecar.V1, o
 	if len(corrs) == 0 && s.Correspondent != "" {
 		corrs = []sidecar.Correspondent{{Name: s.Correspondent, Role: "sender"}}
 	}
-	seenSender := false
-	for i, c := range corrs {
+	for _, c := range corrs {
 		name := strings.TrimSpace(c.Name)
 		if name == "" {
 			continue
 		}
 		role := c.Role
 		if role == "" {
-			role = "sender"
+			role = string(taxonomy.CorrespondentSender)
 		}
 		corID, err := taxonomy.UpsertByName(ctx, tx, systemID, taxonomy.TableCorrespondents,
 			name, now)
 		if err != nil {
 			return fmt.Errorf("upsert correspondent: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO document_correspondents(document_id, correspondent_id, role, position)
-			VALUES (?, ?, ?, ?)
-		`, docID, corID, role, i); err != nil {
+		if err := taxonomy.AppendCorrespondent(
+			ctx, tx, docID, corID, taxonomy.CorrespondentRole(role),
+		); err != nil {
 			return err
-		}
-		// First sender also becomes the primary FK so single-correspondent
-		// consumers (UI list view, importer round-trip, existing rules
-		// that key on correspondent) still find the sender.
-		if role == "sender" && !seenSender {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE documents SET correspondent_id = ? WHERE id = ?`, corID, docID); err != nil {
-				return err
-			}
-			seenSender = true
 		}
 	}
 

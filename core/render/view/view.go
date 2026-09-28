@@ -399,7 +399,10 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 	err := r.db.Read.QueryRowContext(ctx, `
 		SELECT
 			d.title,
-			c.name,
+			(SELECT c.name FROM document_correspondents dc
+			 JOIN correspondents c ON c.id=dc.correspondent_id
+			 WHERE dc.document_id=d.id AND dc.role='sender'
+			 ORDER BY dc.position,dc.correspondent_id LIMIT 1),
 			dt.name,
 			sp.path, sp.name,
 			d.archive_blob, d.original_blob,
@@ -408,7 +411,6 @@ func (r *Renderer) buildContext(ctx context.Context, docID int64) (string, paths
 			jc.code, jc.name,
 			ja.code_start, ja.code_end, ja.name, js.code, js.name, js.taxonomy
 		FROM documents d
-		LEFT JOIN correspondents  c  ON c.id  = d.correspondent_id
 		LEFT JOIN document_types  dt ON dt.id = d.document_type_id
 		LEFT JOIN storage_paths   sp ON sp.id = d.storage_path_id
 		LEFT JOIN users           u  ON u.id  = d.owner_id

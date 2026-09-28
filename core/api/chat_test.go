@@ -382,8 +382,9 @@ func TestChatAppliesCompleteDocumentScope(t *testing.T) {
 		INSERT INTO tags(system_id, id, name, slug, created_at, updated_at) VALUES (1, 5, 'scope-tag', 'scope-tag', 0, 0);
 		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at) VALUES (1, 6, 'Scope Person', 'scope-person', 0, 0);
 		INSERT INTO document_types(system_id, id, name, slug, created_at, updated_at) VALUES (1, 7, 'scope-type', 'scope-type', 0, 0);
-		UPDATE documents SET document_type_id = 7, correspondent_id = 6, languages = ',de,', created_at = 100 WHERE id = 50;
-		INSERT INTO document_tags(document_id, tag_id) VALUES (50, 5)
+		UPDATE documents SET document_type_id = 7, languages = ',de,', created_at = 100 WHERE id = 50;
+		INSERT INTO document_tags(document_id, tag_id) VALUES (50, 5);
+		INSERT INTO document_correspondents(document_id, correspondent_id, role) VALUES (50, 6, 'sender')
 	`); err != nil {
 		t.Fatal(err)
 	}

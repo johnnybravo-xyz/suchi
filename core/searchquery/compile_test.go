@@ -55,7 +55,7 @@ func TestResolveAndCompile(t *testing.T) {
 	if got := plan.Predicates[0].Args; !reflect.DeepEqual(got, []any{int64(6)}) {
 		t.Errorf("jd args=%v", got)
 	}
-	if !strings.HasPrefix(plan.Predicates[2].SQL, "(d.correspondent_id IS NULL") {
+	if !strings.HasPrefix(plan.Predicates[2].SQL, "NOT EXISTS (SELECT 1 FROM document_correspondents") {
 		t.Errorf("negated correspondent SQL=%q", plan.Predicates[2].SQL)
 	}
 	added := plan.Predicates[6]

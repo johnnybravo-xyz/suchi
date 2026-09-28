@@ -324,7 +324,7 @@ func (s *Server) mutateDeadJob(r *http.Request, id int64, dismiss bool) (deadJob
 // and visibility filters as Results. A count never describes jobs the caller
 // did not ask for or cannot see.
 func (s *Server) taskCounts(r *http.Request, filters taskFilters, visibility string, visibilityArgs []any) (map[string]int, error) {
-	from, where, args := taskQuery(filters, visibility, visibilityArgs, false)
+	from, where, args := taskQuery(filters, visibility, visibilityArgs, true)
 	rows, err := s.DB.Read.QueryContext(r.Context(),
 		"SELECT j.state, COUNT(*) "+from+where+" GROUP BY j.state", args...)
 	if err != nil {

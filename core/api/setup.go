@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/importer"
@@ -65,11 +66,6 @@ func (s *Server) SetupState(w http.ResponseWriter, r *http.Request) {
 
 // ---------- user creation ----------
 
-// emailPattern is intentionally permissive: contains an @, no
-// whitespace, no shell metachars. Full RFC 5322 is overkill for a
-// self-hosted DMS and rejects legitimate addresses.
-var emailPattern = regexp.MustCompile(`^[^\s@<>"'\\;]+@[^\s@<>"'\\;]+\.[^\s@<>"'\\;]+$`)
-
 // CreateUser adds a new user. Admin-only. Password hashed via
 // local-auth's argon2id helper (imported lazily via a hook set from
 // main.go — see Server.PasswordHasher).
@@ -99,11 +95,12 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
-	if !emailPattern.MatchString(body.Email) {
-		s.writeError(w, http.StatusBadRequest, "bad_email", "email format invalid")
+	normalizedEmail, err := auth.NormalizeEmail(body.Email)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_email", "email format invalid or reserved")
 		return
 	}
+	body.Email = normalizedEmail
 	if len(body.Password) < 8 {
 		s.writeError(w, http.StatusBadRequest, "weak_password", "password must be at least 8 characters")
 		return
@@ -692,6 +689,12 @@ func (s *Server) SavePreferences(w http.ResponseWriter, r *http.Request) {
 // path itself; this is belt-and-braces.
 var fsPath = regexp.MustCompile(`^/[A-Za-z0-9 ._\-/]{0,255}$`)
 
+var (
+	errFSWatchSystemUnavailable = errors.New("filesystem watcher system is unavailable")
+	errFSWatchOwnerUnavailable  = errors.New("filesystem watcher owner is unavailable")
+	errFSWatchOwnerCannotEnter  = errors.New("filesystem watcher owner cannot enter system")
+)
+
 func (s *Server) GetIngestSettings(w http.ResponseWriter, r *http.Request) {
 	if s.requireAdmin(w, r) == nil {
 		return
@@ -706,6 +709,15 @@ func (s *Server) GetIngestSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := settings.ResolveFSWatchConfig(r.Context(), s.DB, settings.FSWatchConfig{})
+	ownerEmail := cfg.OwnerEmail
+	if cfg.OwnerID > 0 {
+		if err := s.DB.Read.QueryRowContext(r.Context(),
+			`SELECT email FROM users WHERE id = ? AND disabled = 0`, cfg.OwnerID,
+		).Scan(&ownerEmail); err != nil {
+			s.serverErr(w, "settings.fswatch.owner", err)
+			return
+		}
+	}
 	sys, err := systems.Get(r.Context(), s.DB.Read, systems.DefaultID)
 	if cfg.System != "" {
 		sys, err = systems.ByCode(r.Context(), s.DB.Read, cfg.System)
@@ -714,13 +726,14 @@ func (s *Server) GetIngestSettings(w http.ResponseWriter, r *http.Request) {
 		s.serverErr(w, "settings.fswatch.system", err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, FSWatchSettingsStatus{Dir: cfg.Dir, OwnerEmail: cfg.OwnerEmail, System: sys.Code})
+	s.writeJSON(w, http.StatusOK, FSWatchSettingsStatus{Dir: cfg.Dir, OwnerEmail: ownerEmail, System: sys.Code})
 }
 
 // SaveIngestSettings persists fs-watch dir + owner and replaces the running
 // watcher after the new configuration validates.
 func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
-	if s.requireAdmin(w, r) == nil {
+	actor := s.requireAdmin(w, r)
+	if actor == nil {
 		return
 	}
 	var body struct {
@@ -733,14 +746,19 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.FSWatchDir = strings.TrimSpace(body.FSWatchDir)
-	body.FSWatchOwnerEmail = strings.TrimSpace(strings.ToLower(body.FSWatchOwnerEmail))
+	body.FSWatchSystem = strings.TrimSpace(body.FSWatchSystem)
+	body.FSWatchOwnerEmail = strings.TrimSpace(body.FSWatchOwnerEmail)
+	if body.FSWatchOwnerEmail != "" {
+		normalized, err := auth.NormalizeEmail(body.FSWatchOwnerEmail)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_email", "fs_watch_owner_email invalid or reserved")
+			return
+		}
+		body.FSWatchOwnerEmail = normalized
+	}
 	if body.FSWatchDir != "" && !fsPath.MatchString(body.FSWatchDir) {
 		s.writeError(w, http.StatusBadRequest, "bad_dir",
 			"fs_watch_dir must be an absolute path with safe characters")
-		return
-	}
-	if body.FSWatchOwnerEmail != "" && !emailPattern.MatchString(body.FSWatchOwnerEmail) {
-		s.writeError(w, http.StatusBadRequest, "bad_email", "fs_watch_owner_email invalid")
 		return
 	}
 	if (body.FSWatchDir == "") != (body.FSWatchOwnerEmail == "") {
@@ -748,73 +766,97 @@ func (s *Server) SaveIngestSettings(w http.ResponseWriter, r *http.Request) {
 			"fs_watch_dir and fs_watch_owner_email are both required")
 		return
 	}
-	sys, err := systems.Get(r.Context(), s.DB.Read, systems.DefaultID)
-	if body.FSWatchSystem != "" {
-		sys, err = systems.ByCode(r.Context(), s.DB.Read, body.FSWatchSystem)
+
+	keys := []string{
+		settings.KeyFSWatchDir,
+		settings.KeyFSWatchOwnerID,
+		settings.KeyFSWatchSystem,
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		s.writeError(w, http.StatusBadRequest, "bad_system", "filing system is unavailable")
-		return
-	}
-	if err != nil {
-		s.serverErr(w, "settings.fswatch.system", err)
-		return
-	}
-	if body.FSWatchOwnerEmail != "" {
-		var ownerID int64
-		err := s.DB.Read.QueryRowContext(r.Context(),
-			`SELECT id FROM users WHERE email = ? AND disabled = 0`, body.FSWatchOwnerEmail).Scan(&ownerID)
+	var (
+		previous map[string]settings.RawValue
+		written  map[string]settings.RawValue
+	)
+	err := s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := requireActiveAdminInTx(r.Context(), tx, actor.UserID); err != nil {
+			return err
+		}
+		sys, err := systems.Get(r.Context(), tx, systems.DefaultID)
+		if body.FSWatchSystem != "" {
+			sys, err = systems.ByCode(r.Context(), tx, body.FSWatchSystem)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
+			return errFSWatchSystemUnavailable
+		}
+		if err != nil {
+			return err
+		}
+
+		var ownerID int64
+		if body.FSWatchOwnerEmail != "" {
+			err := tx.QueryRowContext(r.Context(),
+				`SELECT id FROM users WHERE email = ? AND disabled = 0`,
+				body.FSWatchOwnerEmail,
+			).Scan(&ownerID)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errFSWatchOwnerUnavailable
+			}
+			if err != nil {
+				return err
+			}
+			allowed, err := systems.CanEnter(r.Context(), tx, ownerID, sys.ID)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return errFSWatchOwnerCannotEnter
+			}
+		}
+
+		previous, err = settings.SnapshotInTx(r.Context(), tx, keys)
+		if err != nil {
+			return err
+		}
+		written, err = settings.SetManyInTx(r.Context(), tx, map[string]any{
+			settings.KeyFSWatchDir:     body.FSWatchDir,
+			settings.KeyFSWatchOwnerID: ownerID,
+			settings.KeyFSWatchSystem:  sys.Code,
+		}, time.Now().Unix())
+		return err
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, errFSWatchSystemUnavailable):
+			s.writeError(w, http.StatusBadRequest, "bad_system", "filing system is unavailable")
+		case errors.Is(err, errFSWatchOwnerUnavailable):
 			s.writeError(w, http.StatusBadRequest, "owner_not_found", "fs-watch owner is not an active user")
-			return
-		}
-		if err != nil {
-			s.serverErr(w, "settings.fswatch.owner", err)
-			return
-		}
-		allowed, err := systems.CanEnter(r.Context(), s.DB.Read, ownerID, sys.ID)
-		if err != nil {
-			s.serverErr(w, "settings.fswatch.owner_system", err)
-			return
-		}
-		if !allowed {
+		case errors.Is(err, errFSWatchOwnerCannotEnter):
 			s.writeError(w, http.StatusBadRequest, "owner_unavailable", "fs-watch owner cannot enter the filing system")
-			return
+		case errors.Is(err, errSystemUnavailable):
+			s.writeError(w, http.StatusConflict, "admin_changed", "administrator is no longer active")
+		default:
+			s.serverErr(w, "settings.fswatch", err)
 		}
-	}
-	previous := settings.FSWatchConfig{}
-	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchDir, &previous.Dir); err != nil && !errors.Is(err, settings.ErrNotFound) {
-		s.serverErr(w, "settings.fswatch.previous_dir", err)
 		return
 	}
-	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchOwnerEmail, &previous.OwnerEmail); err != nil && !errors.Is(err, settings.ErrNotFound) {
-		s.serverErr(w, "settings.fswatch.previous_owner", err)
-		return
-	}
-	if err := settings.Get(r.Context(), s.DB, settings.KeyFSWatchSystem, &previous.System); err != nil && !errors.Is(err, settings.ErrNotFound) {
-		s.serverErr(w, "settings.fswatch.previous_system", err)
-		return
-	}
-	if err := settings.SetMany(r.Context(), s.DB, map[string]any{
-		settings.KeyFSWatchDir:        body.FSWatchDir,
-		settings.KeyFSWatchOwnerEmail: body.FSWatchOwnerEmail,
-		settings.KeyFSWatchSystem:     sys.Code,
-	}); err != nil {
-		s.serverErr(w, "settings.fswatch", err)
-		return
-	}
+
 	if s.FSWatchReloader != nil {
 		if err := s.FSWatchReloader(r.Context()); err != nil {
-			rollbackErr := settings.SetMany(r.Context(), s.DB, map[string]any{
-				settings.KeyFSWatchDir:        previous.Dir,
-				settings.KeyFSWatchOwnerEmail: previous.OwnerEmail,
-				settings.KeyFSWatchSystem:     previous.System,
-			})
+			restored, rollbackErr := settings.RestoreManyIfCurrent(
+				r.Context(), s.DB, written, previous,
+			)
 			if rollbackErr != nil {
 				s.Log.Error("api.settings.fswatch.rollback", "err", rollbackErr.Error())
+			} else if !restored {
+				s.Log.Info("api.settings.fswatch.rollback_skipped",
+					"reason", "settings changed after failed reload")
 			}
-			s.writeError(w, http.StatusUnprocessableEntity, "apply_failed",
-				"ingest source could not be applied; previous settings restored")
+			message := "ingest source could not be applied"
+			if restored {
+				message += "; previous settings restored"
+			} else {
+				message += "; newer settings were preserved"
+			}
+			s.writeError(w, http.StatusUnprocessableEntity, "apply_failed", message)
 			return
 		}
 	}

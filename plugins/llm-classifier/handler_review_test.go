@@ -42,7 +42,10 @@ func TestOptedOutMetadataRemainsReviewOnly(t *testing.T) {
 			}
 			var title, language string
 			var correspondent, vocabulary int
-			if err := d.Read.QueryRow(`SELECT title, COALESCE(languages, ''), COALESCE(correspondent_id, 0) FROM documents WHERE id=?`, docID).Scan(&title, &language, &correspondent); err != nil {
+			if err := d.Read.QueryRow(`
+				SELECT title, COALESCE(languages, ''),
+				       EXISTS(SELECT 1 FROM document_correspondents WHERE document_id=documents.id AND role='sender')
+				FROM documents WHERE id=?`, docID).Scan(&title, &language, &correspondent); err != nil {
 				t.Fatal(err)
 			}
 			if err := d.Read.QueryRow(`SELECT (SELECT COUNT(*) FROM correspondents WHERE name='Model sender') + (SELECT COUNT(*) FROM tags WHERE name='model-tag')`).Scan(&vocabulary); err != nil {
@@ -104,7 +107,10 @@ func TestAutomaticMetadataUsesThresholdWithoutLockingLanguage(t *testing.T) {
 	var category int64
 	var locked bool
 	if err := d.Read.QueryRow(`SELECT d.title,d.languages,d.languages_locked,c.name,d.jd_category_id
-		FROM documents d JOIN correspondents c ON c.id=d.correspondent_id WHERE d.id=?`, docID).Scan(&title, &language, &locked, &correspondent, &category); err != nil {
+		FROM documents d
+		JOIN document_correspondents dc ON dc.document_id=d.id AND dc.role='sender'
+		JOIN correspondents c ON c.id=dc.correspondent_id
+		WHERE d.id=? ORDER BY dc.position,dc.correspondent_id LIMIT 1`, docID).Scan(&title, &language, &locked, &correspondent, &category); err != nil {
 		t.Fatal(err)
 	}
 	if title != "Model title" || lang.Primary(language) != "de" || locked || correspondent != "Model sender" || category != categoryID {

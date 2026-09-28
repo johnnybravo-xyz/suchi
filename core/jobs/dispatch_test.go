@@ -99,3 +99,64 @@ func TestRunDrainsReadyJobsBeforeWaiting(t *testing.T) {
 		})
 	}
 }
+
+func TestDoneRetentionBoundaryAndStartupPrune(t *testing.T) {
+	d := openDB(t)
+	now := time.Unix(2_000_000_000, 0)
+	if _, err := d.ExecWrite(t.Context(), `
+		INSERT INTO jobs(id,kind,state,next_run_at,created_at,updated_at) VALUES
+			(1,'retention','done',0,1,?),
+			(2,'retention','done',0,1,?),
+			(3,'retention','done',0,1,?),
+			(4,'retention','pending',0,1,1)`,
+		now.Add(-DoneRetention-time.Second).Unix(),
+		now.Add(-DoneRetention).Unix(),
+		now.Add(-DoneRetention+time.Second).Unix(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	disp := New(d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pruned, err := disp.pruneDone(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned=%d, want only the job older than seven days", pruned)
+	}
+	var ids string
+	if err := d.Read.QueryRowContext(t.Context(), `
+		SELECT group_concat(id, ',')
+		FROM (SELECT id FROM jobs ORDER BY id)`).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if ids != "2,3,4" {
+		t.Fatalf("retained job ids=%q, want boundary, recent, and pending jobs", ids)
+	}
+
+	if _, err := d.ExecWrite(t.Context(), `
+		INSERT INTO jobs(id,kind,state,next_run_at,created_at,updated_at)
+		VALUES(5,'retention','done',0,1,unixepoch()-691200)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	go disp.Run(ctx)
+	t.Cleanup(disp.Stop)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		var count int
+		if err := d.Read.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE id=5`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count == 0 {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("dispatcher did not prune old done job at startup")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	disp.Stop()
+}

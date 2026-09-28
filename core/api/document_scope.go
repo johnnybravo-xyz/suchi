@@ -148,16 +148,11 @@ func appendDocumentScopePredicates(ctx context.Context, where []string, args []a
 		args = append(args, len(scope.TagIDs))
 	}
 	if len(scope.CorrespondentIDs) > 0 {
-		where = append(where, `(
-			d.correspondent_id IN (`+placeholders(len(scope.CorrespondentIDs))+`)
-			OR EXISTS (
-				SELECT 1 FROM document_correspondents dc
-				WHERE dc.document_id = d.id AND dc.correspondent_id IN (`+placeholders(len(scope.CorrespondentIDs))+`)
-			)
+		where = append(where, `EXISTS (
+			SELECT 1 FROM document_correspondents dc
+			WHERE dc.document_id = d.id
+			  AND dc.correspondent_id IN (`+placeholders(len(scope.CorrespondentIDs))+`)
 		)`)
-		for _, id := range scope.CorrespondentIDs {
-			args = append(args, id)
-		}
 		for _, id := range scope.CorrespondentIDs {
 			args = append(args, id)
 		}

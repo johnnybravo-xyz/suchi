@@ -282,7 +282,7 @@ func hydrateTagsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow,
 	return nil
 }
 
-// Junction rows take precedence over the singular correspondent_id fallback.
+// hydrateCorrespondentsForList reads every canonical correspondent relation.
 func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []DocumentListRow, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
@@ -293,12 +293,11 @@ func hydrateCorrespondentsForList(ctx context.Context, rdb *sql.DB, out []Docume
 		args[i] = id
 	}
 	rows, err := rdb.QueryContext(ctx, `
-		SELECT d.id, c.name
-		  FROM documents d
-		  LEFT JOIN document_correspondents dc ON dc.document_id = d.id
-		  JOIN correspondents c ON c.id = COALESCE(dc.correspondent_id, d.correspondent_id)
-		 WHERE d.id IN (`+placeholders+`)
-		 ORDER BY d.id, c.name`, args...)
+		SELECT dc.document_id, c.name
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id = dc.correspondent_id
+		WHERE dc.document_id IN (`+placeholders+`)
+		ORDER BY dc.document_id, c.name`, args...)
 	if err != nil {
 		return err
 	}

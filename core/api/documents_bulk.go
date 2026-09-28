@@ -40,6 +40,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/authz"
 	"github.com/johnnybravo-xyz/suchi/core/rescan"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 	"github.com/johnnybravo-xyz/suchi/core/trash"
 )
 
@@ -212,11 +213,39 @@ func (s *Server) applyBulkEdit(r *http.Request, tx *sql.Tx, systemID int64, meth
 	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
 	args := make([]any, 0, len(ids)+2)
 	switch method {
-	case "set_correspondent", "set_document_type", "set_storage_path", "set_jd_category":
+	case "set_correspondent":
+		value, err := paramInt64(params, "correspondent_id")
+		if err != nil {
+			return err
+		}
+		if value != 0 {
+			var exists bool
+			if err := tx.QueryRowContext(r.Context(),
+				`SELECT EXISTS (SELECT 1 FROM correspondents WHERE id=? AND system_id=?)`,
+				value, systemID,
+			).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("%w: correspondent_id is unavailable in this filing system", errBadParams)
+			}
+		}
+		for _, id := range ids {
+			if err := taxonomy.SetPrimaryCorrespondent(r.Context(), tx, id, value); err != nil {
+				return err
+			}
+		}
+		for _, id := range ids {
+			args = append(args, id)
+		}
+		_, err = tx.ExecContext(r.Context(),
+			"UPDATE documents SET updated_at=? WHERE id IN ("+placeholders+")",
+			append([]any{now}, args...)...,
+		)
+		return err
+	case "set_document_type", "set_storage_path", "set_jd_category":
 		var column, table string
 		switch method {
-		case "set_correspondent":
-			column, table = "correspondent_id", "correspondents"
 		case "set_document_type":
 			column, table = "document_type_id", "document_types"
 		case "set_storage_path":

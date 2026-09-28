@@ -13,6 +13,7 @@ import (
 	"database/sql"
 
 	"github.com/johnnybravo-xyz/suchi/core/jobs"
+	"github.com/johnnybravo-xyz/suchi/core/render/paths"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -26,6 +27,61 @@ func EnqueueMove(ctx context.Context, tx *sql.Tx, docID int64) error {
 		return err
 	}
 	return jobs.Enqueue(ctx, tx, Kind, docID, systemID, "{}")
+}
+
+// EnqueueOwnerTemplateMoves queues every live document whose selected storage
+// template reads the owner's email. It runs inside the identity mutation so a
+// committed email and its rendered projection can never diverge permanently.
+func EnqueueOwnerTemplateMoves(ctx context.Context, tx *sql.Tx, ownerID int64) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT d.id, d.system_id, COALESCE(sp.path, ''), js.taxonomy
+		FROM documents AS d
+		JOIN jd_systems AS js ON js.id = d.system_id
+		LEFT JOIN storage_paths AS sp ON sp.id = d.storage_path_id
+		WHERE d.owner_id = ? AND d.trashed_at IS NULL
+		ORDER BY d.id`, ownerID)
+	if err != nil {
+		return err
+	}
+	type target struct {
+		docID    int64
+		systemID int64
+	}
+	var targets []target
+	for rows.Next() {
+		var (
+			target   target
+			template string
+			taxonomy string
+		)
+		if err := rows.Scan(&target.docID, &target.systemID, &template, &taxonomy); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if template == "" {
+			if taxonomy == "flat" {
+				template = DefaultTemplateFlat
+			} else {
+				template = DefaultTemplateJD
+			}
+		}
+		if paths.UsesVariable(template, "owner") {
+			targets = append(targets, target)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if err := jobs.Enqueue(ctx, tx, Kind, target.docID, target.systemID, "{}"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Kind is the job kind mutators enqueue when they change any metadata

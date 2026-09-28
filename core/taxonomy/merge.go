@@ -20,16 +20,15 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/render/view"
 )
 
-// affectedDocs returns every document id whose reference to the source
-// row will be rewritten by the pending merge. For tags this is the
-// junction table; for the FK kinds it's documents.<fkcol>.
+// affectedDocs returns every document id whose reference to the source row
+// will be rewritten by the pending merge.
 func affectedDocs(ctx context.Context, tx *sql.Tx, kind string, fromID int64) ([]int64, error) {
 	var q string
 	switch kind {
 	case KindTag:
 		q = `SELECT document_id FROM document_tags WHERE tag_id = ?`
 	case KindCorrespondent:
-		q = `SELECT id FROM documents WHERE correspondent_id = ?`
+		q = `SELECT DISTINCT document_id FROM document_correspondents WHERE correspondent_id = ?`
 	case KindDocumentType:
 		q = `SELECT id FROM documents WHERE document_type_id = ?`
 	default:
@@ -108,13 +107,21 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 
 	// Count what would move, for the report + dry-run visibility.
 	var docsMoved int64
-	if opts.Kind == KindTag {
+	switch opts.Kind {
+	case KindTag:
 		if err := d.Read.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM `+junction+` WHERE tag_id = ?`, fromID,
 		).Scan(&docsMoved); err != nil {
 			return nil, err
 		}
-	} else {
+	case KindCorrespondent:
+		if err := d.Read.QueryRowContext(ctx,
+			`SELECT COUNT(DISTINCT document_id) FROM document_correspondents WHERE correspondent_id = ?`,
+			fromID,
+		).Scan(&docsMoved); err != nil {
+			return nil, err
+		}
+	default:
 		col := fkColFor(opts.Kind)
 		if err := d.Read.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM documents WHERE `+col+` = ?`, fromID,
@@ -146,9 +153,8 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 		if present != 2 {
 			return errors.New("taxonomy: merge targets changed")
 		}
-		// Snapshot the affected doc IDs BEFORE mutating so we can enqueue
-		// render jobs afterward. For tag merges the source is the
-		// junction; for FK merges the source is documents.<fkcol>.
+		// Snapshot the affected document IDs before mutating so render jobs
+		// can be enqueued in the same transaction.
 		affected, err := affectedDocs(ctx, tx, opts.Kind, fromID)
 		if err != nil {
 			return err
@@ -168,10 +174,14 @@ func Merge(ctx context.Context, d *db.DB, opts Options) (*Result, error) {
 				`DELETE FROM document_tags WHERE tag_id = ?`, fromID); err != nil {
 				return err
 			}
+		} else if opts.Kind == KindCorrespondent {
+			for _, docID := range affected {
+				if err := mergeCorrespondent(ctx, tx, docID, fromID, intoID); err != nil {
+					return err
+				}
+			}
 		} else {
 			col := fkColFor(opts.Kind)
-			// FK rewrite. Straight UPDATE — no junction table for the
-			// singular-reference kinds.
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE documents SET `+col+` = ? WHERE `+col+` = ?`,
 				intoID, fromID); err != nil {
@@ -305,10 +315,7 @@ func tableFor(kind string) (table NamedTable, junction string, err error) {
 }
 
 func fkColFor(kind string) string {
-	switch kind {
-	case KindCorrespondent:
-		return "correspondent_id"
-	case KindDocumentType:
+	if kind == KindDocumentType {
 		return "document_type_id"
 	}
 	return ""

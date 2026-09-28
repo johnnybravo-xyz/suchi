@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -171,12 +172,6 @@ func Run(ctx context.Context, opts Options) error {
 	reportToolAvailability(log)
 
 	cookieSecure := strings.HasPrefix(strings.ToLower(cfg.PublicURL), "https://")
-	pinnedFSOwner, fsOwnerPinned := os.LookupEnv("INGEST_FS_OWNER_EMAIL")
-	pinnedFSOwner = strings.ToLower(strings.TrimSpace(pinnedFSOwner))
-	emailChangeAllowed := func(currentEmail, targetEmail string) bool {
-		return !fsOwnerPinned || pinnedFSOwner == "" || pinnedFSOwner != currentEmail ||
-			pinnedFSOwner == targetEmail
-	}
 	var reloadFSWatch func(context.Context) error
 	emailChangeModeFor := func(p *pluginapi.Principal) string {
 		return accountEmailChangeMode(cfg, p)
@@ -267,15 +262,8 @@ func Run(ctx context.Context, opts Options) error {
 			PrepareSession: func(r *http.Request) (oidcauth.PreparedSession, error) {
 				return la.PrepareSession(r)
 			},
-			EmailChangeAllowed: emailChangeAllowed,
 			EmailSyncAllowed: func(p *pluginapi.Principal) bool {
 				return emailChangeModeFor(p) == api.EmailChangeModeOIDC
-			},
-			FSWatchReloader: func(rctx context.Context) error {
-				if reloadFSWatch == nil {
-					return errors.New("fs-watch reloader is not ready")
-				}
-				return reloadFSWatch(rctx)
 			},
 		}, d, log)
 		if err != nil {
@@ -451,16 +439,39 @@ func Run(ctx context.Context, opts Options) error {
 		OwnerEmail: cfg.IngestFSOwnerEmail,
 		System:     cfg.IngestFSSystem,
 	}
-	resolveFSWatcher := func(rctx context.Context) fswatch.Config {
+	resolveFSWatcher := func(rctx context.Context) (fswatch.Config, string, error) {
 		fresh := settings.ResolveFSWatchConfig(rctx, d, envFSWatch)
-		return fswatch.Config{
-			Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail, System: fresh.System,
-			MaxBytes: cfg.BodyLimit,
+		ownerID := fresh.OwnerID
+		ownerEmail := strings.ToLower(strings.TrimSpace(fresh.OwnerEmail))
+		var err error
+		switch {
+		case ownerID > 0:
+			err = d.Read.QueryRowContext(rctx,
+				`SELECT email FROM users WHERE id = ? AND disabled = 0`, ownerID,
+			).Scan(&ownerEmail)
+		case ownerEmail != "":
+			err = d.Read.QueryRowContext(rctx,
+				`SELECT id, email FROM users WHERE email = ? AND disabled = 0`, ownerEmail,
+			).Scan(&ownerID, &ownerEmail)
 		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return fswatch.Config{}, "", fmt.Errorf("%w: configured owner", fswatch.ErrOwnerNotFound)
+		}
+		if err != nil {
+			return fswatch.Config{}, "", fmt.Errorf("resolve filesystem watcher owner: %w", err)
+		}
+		return fswatch.Config{
+			Dir: fresh.Dir, OwnerID: ownerID, System: fresh.System,
+			MaxBytes: cfg.BodyLimit,
+		}, ownerEmail, nil
 	}
 	fsSupervisor := fswatch.NewSupervisor(ctx, d, cas, disp, log)
 	reloadFSWatch = func(rctx context.Context) error {
-		return fsSupervisor.Reload(rctx, resolveFSWatcher(rctx))
+		fresh, _, err := resolveFSWatcher(rctx)
+		if err != nil {
+			return err
+		}
+		return fsSupervisor.Reload(rctx, fresh)
 	}
 
 	// The mail supervisor runs one worker per enabled database account.
@@ -513,7 +524,6 @@ func Run(ctx context.Context, opts Options) error {
 		return la.PrepareSession(r)
 	}
 	apiSrv.EmailChangeModeFor = emailChangeModeFor
-	apiSrv.EmailChangeAllowed = emailChangeAllowed
 	apiSrv.LLMAEAD = decryptKey
 	apiSrv.ChatEnabled = llm.Enabled
 	apiSrv.ChatRuntimeInfo = llm.RuntimeInfo
@@ -545,7 +555,10 @@ func Run(ctx context.Context, opts Options) error {
 		return nil
 	}
 	apiSrv.FSWatchSettingsReader = func(rctx context.Context) (api.FSWatchSettingsStatus, error) {
-		fresh := settings.ResolveFSWatchConfig(rctx, d, envFSWatch)
+		fresh, ownerEmail, err := resolveFSWatcher(rctx)
+		if err != nil {
+			return api.FSWatchSettingsStatus{}, err
+		}
 		if fresh.System == "" {
 			system, err := systems.Get(rctx, d.Read, systems.DefaultID)
 			if err != nil {
@@ -553,7 +566,7 @@ func Run(ctx context.Context, opts Options) error {
 			}
 			fresh.System = system.Code
 		}
-		return api.FSWatchSettingsStatus{Dir: fresh.Dir, OwnerEmail: fresh.OwnerEmail, System: fresh.System}, nil
+		return api.FSWatchSettingsStatus{Dir: fresh.Dir, OwnerEmail: ownerEmail, System: fresh.System}, nil
 	}
 	apiSrv.FSWatchReloader = reloadFSWatch
 	apiSrv.LLMStatusReader = func(rctx context.Context) (api.LLMSettingsStatus, error) {
@@ -664,7 +677,11 @@ func Run(ctx context.Context, opts Options) error {
 	defer func() { cancel(); disp.Stop() }()
 	go trashService.Run(ctx)
 	go backupScheduler.Run(ctx, d, log)
-	if err := fsSupervisor.Reload(ctx, resolveFSWatcher(ctx)); err != nil {
+	freshFSWatch, _, err := resolveFSWatcher(ctx)
+	if err == nil {
+		err = fsSupervisor.Reload(ctx, freshFSWatch)
+	}
+	if err != nil {
 		if errors.Is(err, fswatch.ErrOwnerNotFound) {
 			log.Warn("main.fswatch.disabled", "reason", err.Error())
 		} else {

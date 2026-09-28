@@ -60,10 +60,6 @@ type Config struct {
 	PrepareSession func(*http.Request) (PreparedSession, error)
 	// EmailSyncAllowed applies the application's per-principal account mode.
 	EmailSyncAllowed func(*pluginapi.Principal) bool
-	// EmailChangeAllowed refuses changes that would strand boot-pinned producers.
-	EmailChangeAllowed func(currentEmail, targetEmail string) bool
-	// FSWatchReloader applies a committed DB-managed owner change.
-	FSWatchReloader func(context.Context) error
 }
 
 // Plugin implements pluginapi.Authenticator for OIDC bearer flows. The
@@ -84,10 +80,11 @@ func New(ctx context.Context, cfg Config, d *db.DB, log *slog.Logger) (*Plugin, 
 	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.PublicURL == "" {
 		return nil, errors.New("issuer, client id, client secret, and public URL are required")
 	}
-	cfg.AdminEmail = strings.ToLower(strings.TrimSpace(cfg.AdminEmail))
-	if cfg.AdminEmail == "" {
-		return nil, errors.New("admin email required when OIDC is enabled")
+	adminEmail, err := auth.NormalizeEmail(cfg.AdminEmail)
+	if err != nil {
+		return nil, errors.New("valid non-reserved admin email required when OIDC is enabled")
 	}
+	cfg.AdminEmail = adminEmail
 	if cfg.IssueSession == nil || cfg.PrepareSession == nil || cfg.EmailSyncAllowed == nil {
 		return nil, errors.New("IssueSession, PrepareSession, and EmailSyncAllowed hooks required")
 	}
@@ -193,14 +190,18 @@ func verifiedClaims(token *oidc.IDToken) (identityClaims, error) {
 	}
 	claims.Issuer = token.Issuer
 	claims.Subject = token.Subject
-	claims.Email = strings.ToLower(strings.TrimSpace(claims.Email))
 	claims.Name = strings.TrimSpace(claims.Name)
 	if claims.Issuer == "" || strings.TrimSpace(claims.Subject) == "" {
 		return claims, errors.New("id token requires issuer and subject")
 	}
-	if claims.Email == "" || !claims.EmailVerified {
-		return claims, errors.New("id token requires email and email_verified=true")
+	if !claims.EmailVerified {
+		return claims, errors.New("id token requires email_verified=true")
 	}
+	email, err := auth.NormalizeEmail(claims.Email)
+	if err != nil {
+		return claims, fmt.Errorf("id token email: %w", err)
+	}
+	claims.Email = email
 	return claims, nil
 }
 

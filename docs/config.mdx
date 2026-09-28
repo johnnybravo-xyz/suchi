@@ -353,21 +353,23 @@ ID tokens. Invalid credentials never fall back to a browser session.
 | `INGEST_FS_SYSTEM` | (unset = original system 1) | Existing target code, for example S02. Does not create a system. The owner must be active and able to enter it. |
 
 Archive Configuration exposes the same values as database-backed overrides.
-Saving a new directory, owner, or system validates the destination, stops the
-old watcher, drains the new directory, and starts watching immediately. Intake
-rechecks owner entry; sidecars cannot redirect the configured system. Optional
-sidecar `jd_system` must agree, and `jd_address` never allocates or routes a
-document.
+Saving a new directory, owner, or system validates all three and stores the
+resolved owner's numeric user ID in one transaction. It then stops the old
+watcher, drains the new directory, and starts watching immediately. If the
+runtime reload fails, Suchi restores the exact prior settings only when no newer
+save has replaced them. Intake rechecks owner entry; sidecars cannot redirect
+the configured system. Optional sidecar `jd_system` must agree, and `jd_address`
+never allocates or routes a document.
 
-A database-managed watched-folder owner that exactly matches an account's old
-email follows that account's successful local or OIDC email change in the same
-transaction; the watcher reloads afterward. A reload failure is logged as a
-post-commit warning and does not undo the completed identity change.
+The API and UI continue to accept and display the owner's current email, but the
+database setting is `ingest.fs_watch_owner_id`. Because the running watcher owns
+files by user ID, a successful local or OIDC email change neither rewrites this
+setting nor reloads the watcher.
 
-`INGEST_FS_OWNER_EMAIL` is a boot-time pin. If it identifies the account being
-changed and does not already equal the target email, Suchi rejects the change
-with `fs_watch_owner_pinned`. Update the external configuration and restart so
-the effective pin already names the target before retrying. Import
+`INGEST_FS_OWNER_EMAIL` remains an address-shaped boot configuration boundary.
+Suchi resolves it to an active user ID before starting the watcher. An email
+change keeps the running watcher attached to that ID; update an old external
+email value before the next restart, when it will be resolved again. Import
 `--owner-email` is separate invocation-time input and must use the account's
 current address on every future run.
 
@@ -489,7 +491,7 @@ reload after a successful save; pinned fields retain their boot value.
 | Key                                                                                                   | Purpose                                                                                                      |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `backup.interval_hours`                                                                               | Backup cadence in hours when `BACKUP_INTERVAL` is not configured.                                            |
-| `ingest.fs_watch_dir` / `ingest.fs_watch_owner` / `ingest.fs_watch_system` | Archive Configuration watcher destination values for fields not pinned at boot. |
+| `ingest.fs_watch_dir` / `ingest.fs_watch_owner_id` / `ingest.fs_watch_system` | Archive Configuration watcher destination values for fields not pinned at boot; the owner is a durable numeric user ID. |
 | `classification.auto_apply` | Shared automatic application mode; missing means enabled, malformed values fail closed. Saved independently of model configuration. |
 | `classification.archive_enabled` / `classification.archive_auto_threshold` / `classification.archive_review_threshold` | Live local matching, automatic threshold (default `0.90`) and minimum review-suggestion score (default `0.50`). Application also requires the shared mode and current guards. |
 | `llm.endpoint_url` / `llm.model` / `llm.api_key_sealed` / `llm.egress_ack` / `llm.confidence_threshold` / `llm.disabled` | Live model configuration. `_sealed` is AEAD-encrypted with the settings key. |

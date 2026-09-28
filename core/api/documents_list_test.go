@@ -138,7 +138,7 @@ func TestListDocuments_OrderingHasStableIDTieBreak(t *testing.T) {
 	}
 }
 
-func TestListDocuments_CorrespondentsPreferJunctionAndPreserveFallback(t *testing.T) {
+func TestListDocuments_ReadsAllCorrespondentRelations(t *testing.T) {
 	s := newListServer(t)
 	inbox := seedStatsJDInbox(t, s.DB)
 	fallback := seedStatsDoc(t, s.DB, 1, "corr-fallback", "singular", inbox, false, 100)
@@ -148,14 +148,10 @@ func TestListDocuments_CorrespondentsPreferJunctionAndPreserveFallback(t *testin
 	if _, err := s.DB.Write.ExecContext(t.Context(), `
 		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at) VALUES
 			(1, 1, 'Alpha', 'alpha', 0, 0), (1, 2, 'Beta', 'beta', 0, 0), (1, 3, 'Gamma', 'gamma', 0, 0);
-		UPDATE documents SET correspondent_id = 1 WHERE id IN (?, ?)
-	`, fallback, junction); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DB.Write.ExecContext(t.Context(), `
 		INSERT INTO document_correspondents(document_id, correspondent_id, role) VALUES
+			(?, 1, 'sender'),
 			(?, 3, 'recipient'), (?, 2, 'sender'), (?, 2, 'recipient'), (?, 2, 'sender')
-	`, junction, junction, junction, junctionOnly); err != nil {
+	`, fallback, junction, junction, junction, junctionOnly); err != nil {
 		t.Fatal(err)
 	}
 

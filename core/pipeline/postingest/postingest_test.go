@@ -350,7 +350,10 @@ func TestHandleEmailFilesOnlyDoesNotPopulateTrash(t *testing.T) {
 	var title, mime string
 	var parentRef, primaryCorrespondent sql.NullInt64
 	if err := d.Read.QueryRowContext(ctx, `
-		SELECT id, title, mime_type, email_parent_id, correspondent_id
+		SELECT id, title, mime_type, email_parent_id,
+		       (SELECT correspondent_id FROM document_correspondents
+		        WHERE document_id=documents.id AND role='sender'
+		        ORDER BY position,correspondent_id LIMIT 1)
 		FROM documents
 	`).Scan(&childID, &title, &mime, &parentRef, &primaryCorrespondent); err != nil {
 		t.Fatal(err)
@@ -878,7 +881,8 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			if _, err := d.Write.ExecContext(ctx, `
 				INSERT INTO correspondents(id, system_id, name, slug, created_at, updated_at)
 				VALUES (1, 1, 'sender@example.com', 'sender-example-com', 0, 0);
-				UPDATE documents SET correspondent_id = 1 WHERE id = ?;
+				INSERT INTO document_correspondents(document_id,correspondent_id,role)
+				VALUES (?,1,'sender');
 			`, originalID); err != nil {
 				t.Fatal(err)
 			}
@@ -962,7 +966,13 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			}
 			if mode != "split" {
 				var correspondentSystem int64
-				if err := d.Read.QueryRowContext(ctx, `SELECT c.system_id FROM documents d JOIN correspondents c ON c.id = d.correspondent_id WHERE d.id = ?`, childID).Scan(&correspondentSystem); err != nil {
+				if err := d.Read.QueryRowContext(ctx, `
+					SELECT c.system_id
+					FROM document_correspondents dc
+					JOIN correspondents c ON c.id=dc.correspondent_id
+					WHERE dc.document_id=? AND dc.role='sender'
+					ORDER BY dc.position,dc.correspondent_id LIMIT 1`,
+					childID).Scan(&correspondentSystem); err != nil {
 					t.Fatal(err)
 				}
 				if correspondentSystem != 2 {
@@ -983,7 +993,9 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET jd_category_id = 1 WHERE id = ?`, childID); err == nil {
 				t.Fatal("child accepted foreign category")
 			}
-			if _, err := d.Write.ExecContext(ctx, `UPDATE documents SET correspondent_id = 1 WHERE id = ?`, childID); err == nil {
+			if _, err := d.Write.ExecContext(ctx, `
+				INSERT INTO document_correspondents(document_id,correspondent_id,role)
+				VALUES (?,1,'sender')`, childID); err == nil {
 				t.Fatal("child accepted foreign correspondent")
 			}
 			parentColumn := "email_parent_id"
@@ -996,7 +1008,11 @@ func TestChildrenRetainSystemAcrossFanoutAndStagingDeletion(t *testing.T) {
 			var childBlob, originalBlob, originalTitle string
 			var originalCategory, originalCorrespondent int64
 			if err := d.Read.QueryRowContext(ctx, `
-				SELECT original_blob, title, jd_category_id, correspondent_id FROM documents WHERE id = ?
+				SELECT original_blob, title, jd_category_id,
+				       (SELECT correspondent_id FROM document_correspondents
+				        WHERE document_id=documents.id AND role='sender'
+				        ORDER BY position,correspondent_id LIMIT 1)
+				FROM documents WHERE id = ?
 			`, originalID).Scan(&originalBlob, &originalTitle, &originalCategory, &originalCorrespondent); err != nil {
 				t.Fatal(err)
 			}

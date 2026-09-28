@@ -266,8 +266,9 @@ func buildFilters(opts Options) (string, []any) {
 		args = append(args, opts.Tag)
 	}
 	if opts.Correspondent != "" {
-		b.WriteString(` AND EXISTS (SELECT 1 FROM correspondents c
-			WHERE c.id = d.correspondent_id AND c.name = ?)`)
+		b.WriteString(` AND EXISTS (SELECT 1 FROM document_correspondents dc
+			JOIN correspondents c ON c.id = dc.correspondent_id
+			WHERE dc.document_id = d.id AND c.name = ?)`)
 		args = append(args, opts.Correspondent)
 	}
 	if opts.OlderThan > 0 {

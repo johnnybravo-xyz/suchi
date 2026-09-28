@@ -39,9 +39,9 @@ const (
 	KeyBackupIntervalHours = "backup.interval_hours"
 	KeyOCRLanguages        = "ocr.languages" // JSON array of ISO codes
 
-	KeyFSWatchDir        = "ingest.fs_watch_dir"
-	KeyFSWatchOwnerEmail = "ingest.fs_watch_owner"
-	KeyFSWatchSystem     = "ingest.fs_watch_system"
+	KeyFSWatchDir     = "ingest.fs_watch_dir"
+	KeyFSWatchOwnerID = "ingest.fs_watch_owner_id"
+	KeyFSWatchSystem  = "ingest.fs_watch_system"
 )
 
 type ResearchContextMode string
@@ -105,68 +105,132 @@ func Set(ctx context.Context, database *db.DB, key string, value any) error {
 	return SetMany(ctx, database, map[string]any{key: value})
 }
 
+// RawValue is an exact settings row snapshot used for compare-and-swap
+// restoration after a runtime reload fails.
+type RawValue struct {
+	ValueJSON string
+	UpdatedAt int64
+	Present   bool
+}
+
 // SetMany writes all values in one transaction.
 func SetMany(ctx context.Context, database *db.DB, values map[string]any) error {
+	return database.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := SetManyInTx(ctx, tx, values, time.Now().Unix())
+		return err
+	})
+}
+
+// SnapshotInTx reads exact rows through the caller's writer transaction.
+func SnapshotInTx(ctx context.Context, tx *sql.Tx, keys []string) (map[string]RawValue, error) {
+	out := make(map[string]RawValue, len(keys))
+	for _, key := range keys {
+		var value RawValue
+		err := tx.QueryRowContext(ctx,
+			`SELECT value_json, updated_at FROM settings WHERE key = ?`, key,
+		).Scan(&value.ValueJSON, &value.UpdatedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			out[key] = value
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", key, err)
+		}
+		value.Present = true
+		out[key] = value
+	}
+	return out, nil
+}
+
+// SetManyInTx validates JSON encoding before writing all values through the
+// caller's transaction. The returned exact rows are the CAS expectation.
+func SetManyInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	values map[string]any,
+	now int64,
+) (map[string]RawValue, error) {
+	payloads, keys, err := marshalValues(values)
+	if err != nil {
+		return nil, err
+	}
+	written := make(map[string]RawValue, len(keys))
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `
+				INSERT INTO settings (key, value_json, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value_json = excluded.value_json,
+					updated_at = excluded.updated_at
+			`, key, payloads[key], now); err != nil {
+			return nil, err
+		}
+		written[key] = RawValue{ValueJSON: payloads[key], UpdatedAt: now, Present: true}
+	}
+	return written, nil
+}
+
+// RestoreManyIfCurrent restores previous rows only when every current row
+// still exactly matches the failed write. A concurrent successful save wins.
+func RestoreManyIfCurrent(
+	ctx context.Context,
+	database *db.DB,
+	expected map[string]RawValue,
+	previous map[string]RawValue,
+) (bool, error) {
+	restored := false
+	err := database.WriteTx(ctx, func(tx *sql.Tx) error {
+		keys := make([]string, 0, len(expected))
+		for key := range expected {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		current, err := SnapshotInTx(ctx, tx, keys)
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if current[key] != expected[key] {
+				return nil
+			}
+		}
+		for _, key := range keys {
+			before := previous[key]
+			if !before.Present {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO settings(key, value_json, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value_json = excluded.value_json,
+					updated_at = excluded.updated_at
+			`, key, before.ValueJSON, before.UpdatedAt); err != nil {
+				return err
+			}
+		}
+		restored = true
+		return nil
+	})
+	return restored, err
+}
+
+func marshalValues(values map[string]any) (map[string]string, []string, error) {
 	payloads := make(map[string]string, len(values))
 	keys := make([]string, 0, len(values))
 	for key, value := range values {
 		payload, err := json.Marshal(value)
 		if err != nil {
-			return fmt.Errorf("marshal %s: %w", key, err)
+			return nil, nil, fmt.Errorf("marshal %s: %w", key, err)
 		}
 		payloads[key] = string(payload)
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-
-	return database.WriteTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().Unix()
-		for _, key := range keys {
-			if _, err := tx.ExecContext(ctx, `
-					INSERT INTO settings (key, value_json, updated_at)
-					VALUES (?, ?, ?)
-					ON CONFLICT(key) DO UPDATE SET
-						value_json = excluded.value_json,
-						updated_at = excluded.updated_at
-				`, key, payloads[key], now); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// ReplaceStringInTx updates a string setting only when its stored JSON value
-// exactly matches oldValue. It lets a larger security-sensitive transaction
-// move producer ownership without overwriting a concurrent or boot-managed
-// choice.
-func ReplaceStringInTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	key, oldValue, newValue string,
-	now int64,
-) (bool, error) {
-	oldJSON, err := json.Marshal(oldValue)
-	if err != nil {
-		return false, fmt.Errorf("marshal old %s: %w", key, err)
-	}
-	newJSON, err := json.Marshal(newValue)
-	if err != nil {
-		return false, fmt.Errorf("marshal new %s: %w", key, err)
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE settings
-		SET value_json = ?, updated_at = ?
-		WHERE key = ? AND value_json = ?
-	`, string(newJSON), now, key, string(oldJSON))
-	if err != nil {
-		return false, fmt.Errorf("replace %s: %w", key, err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("replace %s rows affected: %w", key, err)
-	}
-	return changed == 1, nil
+	return payloads, keys, nil
 }
 
 // Delete removes a key. No-op if absent.
@@ -426,11 +490,13 @@ func envSet(keys ...string) bool {
 	return false
 }
 
-// FSWatchConfig mirrors the fs-watch runtime knobs Archive Configuration
-// can override.
+// FSWatchConfig mirrors the filesystem watcher knobs that archive
+// configuration can override. OwnerEmail exists only for the environment
+// boundary; database-managed ownership is always OwnerID.
 type FSWatchConfig struct {
 	Dir        string
 	OwnerEmail string
+	OwnerID    int64
 	System     string
 }
 
@@ -444,10 +510,11 @@ func ResolveFSWatchConfig(ctx context.Context, database *db.DB, fb FSWatchConfig
 			out.Dir = s
 		}
 	}
-	s = ""
 	if !envSet("INGEST_FS_OWNER_EMAIL") {
-		if err := Get(ctx, database, KeyFSWatchOwnerEmail, &s); err == nil && s != "" {
-			out.OwnerEmail = s
+		var ownerID int64
+		if err := Get(ctx, database, KeyFSWatchOwnerID, &ownerID); err == nil && ownerID > 0 {
+			out.OwnerID = ownerID
+			out.OwnerEmail = ""
 		}
 	}
 	s = ""

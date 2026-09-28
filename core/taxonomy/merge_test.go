@@ -137,12 +137,144 @@ func TestMergeCorrespondents(t *testing.T) {
 	}
 	var n int
 	if err := d.Read.QueryRow(`
-		SELECT COUNT(*) FROM documents WHERE correspondent_id IN
-		(SELECT id FROM correspondents WHERE name = 'A Corporation')`).Scan(&n); err != nil {
+		SELECT COUNT(DISTINCT dc.document_id)
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id=dc.correspondent_id
+		WHERE c.name='A Corporation' AND dc.role='sender'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 2 {
 		t.Errorf("both docs should be under A Corporation; got %d", n)
+	}
+}
+
+func TestCorrespondentRelationMutations(t *testing.T) {
+	ctx := t.Context()
+	d := setup(t, ctx)
+	seedUser(t, ctx, d)
+	for _, name := range []string{"A", "B", "C"} {
+		seedCorrespondent(t, ctx, d, name)
+	}
+	docID := seedDoc(t, ctx, d, "Relations")
+	ids := make(map[string]int64)
+	rows, err := d.Read.QueryContext(ctx, `SELECT name,id FROM correspondents`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var name string
+		var id int64
+		if err := rows.Scan(&name, &id); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		ids[name] = id
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		for _, relation := range []struct {
+			id   int64
+			role taxonomy.CorrespondentRole
+		}{
+			{id: ids["A"], role: taxonomy.CorrespondentRecipient},
+			{id: ids["B"], role: taxonomy.CorrespondentSender},
+			{id: ids["A"], role: taxonomy.CorrespondentSender},
+			{id: ids["A"], role: taxonomy.CorrespondentSender},
+			{id: ids["C"], role: taxonomy.CorrespondentCC},
+		} {
+			if err := taxonomy.AppendCorrespondent(ctx, tx, docID, relation.id, relation.role); err != nil {
+				return err
+			}
+		}
+		return taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, ids["A"])
+	}))
+	assertCorrespondentRelations(t, d, docID,
+		"cc:C:0|recipient:A:0|sender:A:0|sender:B:1")
+
+	primary, err := taxonomy.PrimaryCorrespondentID(ctx, d.Read, docID)
+	if err != nil || !primary.Valid || primary.Int64 != ids["A"] {
+		t.Fatalf("primary after promotion=%v err=%v", primary, err)
+	}
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, ids["B"])
+	}))
+	assertCorrespondentRelations(t, d, docID,
+		"cc:C:0|recipient:A:0|sender:B:0|sender:A:1")
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, 0)
+	}))
+	assertCorrespondentRelations(t, d, docID, "cc:C:0|recipient:A:0")
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := taxonomy.AppendCorrespondent(ctx, tx, docID, ids["B"], taxonomy.CorrespondentOther); err != nil {
+			return err
+		}
+		return taxonomy.RemoveCorrespondents(ctx, tx, docID, []int64{ids["A"]})
+	}))
+	assertCorrespondentRelations(t, d, docID, "cc:C:0|other:B:0")
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		removed, err := taxonomy.RemoveCorrespondentRole(
+			ctx, tx, docID, ids["C"], taxonomy.CorrespondentCC,
+		)
+		if err != nil {
+			return err
+		}
+		if !removed {
+			t.Error("existing role relation was not removed")
+		}
+		return nil
+	}))
+	assertCorrespondentRelations(t, d, docID, "other:B:0")
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		return taxonomy.RemoveCorrespondents(ctx, tx, docID, nil)
+	}))
+	assertCorrespondentRelations(t, d, docID, "")
+	primary, err = taxonomy.PrimaryCorrespondentID(ctx, d.Read, docID)
+	if err != nil || primary.Valid {
+		t.Fatalf("primary after clearing=%v err=%v", primary, err)
+	}
+
+	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := taxonomy.AppendCorrespondent(ctx, tx, docID, ids["B"], taxonomy.CorrespondentSender); err != nil {
+			return err
+		}
+		if err := taxonomy.AppendCorrespondent(ctx, tx, docID, ids["A"], taxonomy.CorrespondentSender); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE document_correspondents SET position=5
+			WHERE document_id=? AND role='sender'`, docID)
+		return err
+	}))
+	primary, err = taxonomy.PrimaryCorrespondentID(ctx, d.Read, docID)
+	if err != nil || !primary.Valid || primary.Int64 != ids["A"] {
+		t.Fatalf("deterministic tied primary=%v err=%v", primary, err)
+	}
+}
+
+func assertCorrespondentRelations(t *testing.T, d *db.DB, docID int64, want string) {
+	t.Helper()
+	var got string
+	if err := d.Read.QueryRow(`
+		SELECT COALESCE(group_concat(role || ':' || name || ':' || position, '|'), '')
+		FROM (
+			SELECT dc.role,c.name,dc.position,dc.correspondent_id
+			FROM document_correspondents AS dc
+			JOIN correspondents AS c ON c.id=dc.correspondent_id
+			WHERE dc.document_id=?
+			ORDER BY dc.role,dc.position,dc.correspondent_id
+		)`, docID,
+	).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("correspondent relations=%q, want %q", got, want)
 	}
 }
 
@@ -224,10 +356,13 @@ func tagJunction(t *testing.T, ctx context.Context, d *db.DB, docID int64, tagNa
 func setCorrespondent(t *testing.T, ctx context.Context, d *db.DB, docID int64, name string) {
 	t.Helper()
 	must(t, d.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE documents SET correspondent_id =
-			(SELECT id FROM correspondents WHERE name = ?) WHERE id = ?`, name, docID)
-		return err
+		var correspondentID int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id FROM correspondents WHERE name = ?`, name,
+		).Scan(&correspondentID); err != nil {
+			return err
+		}
+		return taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, correspondentID)
 	}))
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/jd"
 	"github.com/johnnybravo-xyz/suchi/core/jd/systems"
 	"github.com/johnnybravo-xyz/suchi/core/slug"
+	"github.com/johnnybravo-xyz/suchi/core/taxonomy"
 )
 
 // Options carries CLI flags to Run. Every field is documented; see
@@ -518,11 +519,9 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 			archiveBlob = archRef.SHA256
 			archiveSize = archRef.Size
 		}
-		var correspondentID any
+		var correspondentID int64
 		if in.Fields.Correspondent != nil {
-			if v, ok := in.CorMap[*in.Fields.Correspondent]; ok {
-				correspondentID = v
-			}
+			correspondentID = in.CorMap[*in.Fields.Correspondent]
 		}
 		var documentTypeID any
 		if in.Fields.DocumentType != nil {
@@ -552,13 +551,13 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO documents (
 				system_id, owner_id, original_blob, original_size, archive_blob, archive_size,
-				title, content, mime_type, correspondent_id, document_type_id, storage_path_id,
+				title, content, mime_type, document_type_id, storage_path_id,
 				jd_category_id, legacy_id, archive_serial_number,
 				added_at, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			opts.SystemID, in.OwnerID, origRef.SHA256, origRef.Size, archiveBlob, archiveSize,
-			in.Fields.Title, content, mime, correspondentID, documentTypeID, storagePathID,
+			in.Fields.Title, content, mime, documentTypeID, storagePathID,
 			in.InboxCat, in.LegacyID, asn,
 			added, created, updated,
 		)
@@ -568,6 +567,11 @@ func importDoc(ctx context.Context, d *db.DB, cas *blob.CAS, log *slog.Logger, o
 		docID, err := res.LastInsertId()
 		if err != nil {
 			return err
+		}
+		if correspondentID > 0 {
+			if err := taxonomy.SetPrimaryCorrespondent(ctx, tx, docID, correspondentID); err != nil {
+				return fmt.Errorf("correspondent junction: %w", err)
+			}
 		}
 		if err := ingestmeta.RecordSource(ctx, tx, docID, ingestmeta.SourceImport,
 			"Paperless-ngx import", in.Fields.OriginalFilename, time.Now().Unix()); err != nil {

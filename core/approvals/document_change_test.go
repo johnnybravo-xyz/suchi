@@ -837,7 +837,13 @@ func TestDocumentChangeCreatesNamedMetadataOnlyAfterReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	var name string
-	if err := e.DB().Read.QueryRow(`SELECT c.name FROM documents d JOIN correspondents c ON c.id=d.correspondent_id WHERE d.id=10`).Scan(&name); err != nil {
+	if err := e.DB().Read.QueryRow(`
+		SELECT c.name
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id=dc.correspondent_id
+		WHERE dc.document_id=10 AND dc.role='sender'
+		ORDER BY dc.position,dc.correspondent_id
+		LIMIT 1`).Scan(&name); err != nil {
 		t.Fatal(err)
 	}
 	if name != "New correspondent" {

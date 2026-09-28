@@ -260,10 +260,12 @@ user and session. The callback then:
 
 A binding or email change preserves `users.id`, rotates every browser session,
 plants one replacement cookie, preserves API/mobile tokens, and requires a
-retained audit row in the same transaction. Email changes also update a
-matching database-managed watched-folder owner. Conflicts, a stale session,
-a disabled mode, a pinned owner, or an audit failure leave identity and
-sessions unchanged. Success redirects only to the fixed Settings notices
+retained audit row in the same transaction. An email change also enqueues
+rerenders for custom storage paths that use the exact `owner` template variable.
+The numeric watched-folder owner remains attached to the same user without a
+watcher reload. Invalid or reserved email, a collision, a stale session, a
+disabled mode, a development-seeded account, or an audit failure leaves identity
+and sessions unchanged. Success redirects only to the fixed Settings notices
 `identity_bound`, `email_changed`, or `email_checked`.
 
 ### `POST /api/logout`
@@ -428,20 +430,21 @@ Change a local-password account's sign-in email:
 
 This route requires `email_change_mode: "password"`, a live browser session,
 strict same-origin provenance, and no `Authorization` header. It is unavailable
-to API tokens, OIDC accounts, demo identities, and the fixed development
-account. The target is trimmed and lowercased. The current password is verified
-outside the writer through the bounded Argon2 worker; saturation returns **503**
-`password_hash_unavailable` with `Retry-After: 1`.
+to API tokens, OIDC accounts, demo identities, and development-seeded accounts.
+The target passes the shared trim/lowercase, 254-byte, syntax and reserved-email
+validation. The current password is verified outside the writer through the
+bounded Argon2 worker; saturation returns **503** `password_hash_unavailable`
+with `Retry-After: 1`.
 
-The writer rechecks the canonical email, password hash, mode, enabled account,
-and initiating session. It then preserves `users.id`, changes the email,
-updates a matching database-managed watched-folder owner, rotates every browser
-session, and inserts retained `user.email_changed` as one transaction. Failure
-rolls back all of those effects. **204 No Content** plants the replacement
-cookie; every old browser cookie is invalid, while API/mobile tokens, document
-ownership, memberships, permissions, and other numeric user references remain
-unchanged. The watcher reload happens after commit; a reload warning does not
-roll back the completed identity change.
+The writer rechecks the canonical email, password hash, mode, development marker,
+enabled account and initiating session. It then preserves `users.id`, changes
+the email, queues rerenders for custom storage paths that use the exact `owner`
+template variable, rotates every browser session, and inserts retained
+`user.email_changed` as one transaction. Failure rolls back all of those
+effects. **204 No Content** plants the replacement cookie; every old browser
+cookie is invalid, while API/mobile tokens, document ownership, memberships,
+permissions, watched-folder ownership and other numeric user references remain
+unchanged. No watcher reload is needed.
 
 Expected failures include:
 
@@ -449,7 +452,7 @@ Expected failures include:
 | --- | --- |
 | 400 | `bad_json`, `bad_email` |
 | 401 | `session_required`, `reauthentication_failed` |
-| 409 | `email_unchanged`, `email_taken`, `oidc_managed`, `email_change_disabled`, `password_hash_unavailable`, `fs_watch_owner_pinned` |
+| 409 | `email_unchanged`, `email_taken`, `oidc_managed`, `email_change_disabled`, `dev_seeded_account`, `password_hash_unavailable` |
 | 503 | `password_hash_unavailable` |
 
 ### `POST /api/users/me/avatar`
@@ -501,14 +504,15 @@ administrator can still use, while demotion revokes access not explicitly retain
 
 The active-administrator check and role/capability normalization use the current
 row inside the write transaction. Local mailbox, share-link and shared-view
-revocations use the same transaction. Capability audit writes also occur there:
-successfully stored records follow committed transition order. Audit persistence
-remains best-effort; failed audit writes are logged without rejecting an otherwise
-valid update. Rejected patches and cascade failures leave the user and resources
-unchanged; cascade failures return **500**. Later promotions or regrants cannot be
-overtaken by older revocations. OAuth flows are invalidated only after a disable
-commits; rejected disables preserve them. Resource logs, audit failure reports,
-external audit delivery and runtime reloads happen after commit.
+revocations use the same transaction. Capability audit records are also
+required there: successfully stored records follow committed transition order,
+while an audit insertion failure rejects and rolls back the user change and all
+dependent revocations. Rejected patches and cascade failures likewise leave the
+user and resources unchanged and return **500** for an internal write failure.
+Later promotions or regrants cannot be overtaken by older revocations. OAuth
+flows are invalidated only after a disable commits; rejected disables preserve
+them. Resource logs, external audit delivery and runtime reloads happen after
+commit.
 
 ### Public-demo surface: `/api/demo/*`
 

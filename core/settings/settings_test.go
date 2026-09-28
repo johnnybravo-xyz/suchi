@@ -5,6 +5,7 @@ package settings_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"os"
@@ -174,6 +175,106 @@ func TestSetMany_RollsBackOnError(t *testing.T) {
 	var got string
 	if err := settings.Get(ctx, d, "good", &got); !errors.Is(err, settings.ErrNotFound) {
 		t.Fatalf("batch partially committed: value=%q err=%v", got, err)
+	}
+}
+
+func TestRestoreManyIfCurrentPreservesConcurrentSave(t *testing.T) {
+	d := setupDB(t)
+	ctx := t.Context()
+	if err := settings.Set(ctx, d, "watch.dir", "before"); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"watch.dir", "watch.owner"}
+	var previous, written map[string]settings.RawValue
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		previous, err = settings.SnapshotInTx(ctx, tx, keys)
+		if err != nil {
+			return err
+		}
+		written, err = settings.SetManyInTx(ctx, tx, map[string]any{
+			"watch.dir":   "failed reload",
+			"watch.owner": int64(1),
+		}, 2)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.SetMany(ctx, d, map[string]any{
+		"watch.dir":   "concurrent save",
+		"watch.owner": int64(2),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := settings.RestoreManyIfCurrent(ctx, d, written, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored {
+		t.Fatal("stale failed reload overwrote a concurrent save")
+	}
+	var dir string
+	var owner int64
+	if err := settings.Get(ctx, d, "watch.dir", &dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Get(ctx, d, "watch.owner", &owner); err != nil {
+		t.Fatal(err)
+	}
+	if dir != "concurrent save" || owner != 2 {
+		t.Fatalf("settings after stale rollback = (%q,%d)", dir, owner)
+	}
+}
+
+func TestRestoreManyIfCurrentRestoresExactPriorRows(t *testing.T) {
+	d := setupDB(t)
+	ctx := t.Context()
+	if _, err := d.ExecWrite(ctx, `
+		INSERT INTO settings(key,value_json,updated_at)
+		VALUES('watch.dir','"before"',7)`); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"watch.dir", "watch.owner"}
+	var previous, written map[string]settings.RawValue
+	if err := d.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		previous, err = settings.SnapshotInTx(ctx, tx, keys)
+		if err != nil {
+			return err
+		}
+		written, err = settings.SetManyInTx(ctx, tx, map[string]any{
+			"watch.dir":   "failed reload",
+			"watch.owner": int64(1),
+		}, 8)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := settings.RestoreManyIfCurrent(ctx, d, written, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored {
+		t.Fatal("unchanged failed write was not restored")
+	}
+	assertRawSetting(t, d, "watch.dir", `"before"`, 7)
+	var owner int64
+	if err := settings.Get(ctx, d, "watch.owner", &owner); !errors.Is(err, settings.ErrNotFound) {
+		t.Fatalf("previously absent owner survived rollback: owner=%d err=%v", owner, err)
+	}
+}
+
+func assertRawSetting(t *testing.T, d *db.DB, key, valueJSON string, updatedAt int64) {
+	t.Helper()
+	var gotJSON string
+	var gotUpdatedAt int64
+	if err := d.Read.QueryRow(`
+		SELECT value_json,updated_at FROM settings WHERE key=?`, key,
+	).Scan(&gotJSON, &gotUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if gotJSON != valueJSON || gotUpdatedAt != updatedAt {
+		t.Fatalf("%s=(%q,%d), want (%q,%d)", key, gotJSON, gotUpdatedAt, valueJSON, updatedAt)
 	}
 }
 
@@ -426,6 +527,18 @@ func TestResolveFSWatchConfig_Precedence(t *testing.T) {
 	}
 	if got.OwnerEmail != "env@e.com" {
 		t.Errorf("unset owner should stay env, got %q", got.OwnerEmail)
+	}
+	if err := settings.Set(ctx, d, settings.KeyFSWatchOwnerID, int64(42)); err != nil {
+		t.Fatal(err)
+	}
+	got = settings.ResolveFSWatchConfig(ctx, d, envFB)
+	if got.OwnerID != 42 || got.OwnerEmail != "" {
+		t.Fatalf("database owner should resolve by id: %+v", got)
+	}
+	t.Setenv("INGEST_FS_OWNER_EMAIL", envFB.OwnerEmail)
+	got = settings.ResolveFSWatchConfig(ctx, d, envFB)
+	if got.OwnerID != 0 || got.OwnerEmail != envFB.OwnerEmail {
+		t.Fatalf("configured owner email should remain a boundary value: %+v", got)
 	}
 	t.Setenv("INGEST_FS_DIR", envFB.Dir)
 	got = settings.ResolveFSWatchConfig(ctx, d, envFB)

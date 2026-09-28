@@ -429,8 +429,7 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 	}
 	rows, err := d.Read.QueryContext(ctx, `
 		SELECT id, title, original_blob, mime_type, created_at,
-		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0),
-		       COALESCE(correspondent_id, 0)
+		       COALESCE(sensitivity, ''), COALESCE(jd_category_id, 0)
 		  FROM documents `+where+`
 		 ORDER BY id`, args...)
 	if err != nil {
@@ -448,9 +447,8 @@ func dumpDocuments(ctx context.Context, zw *zip.Writer, d *db.DB, cas *blob.CAS,
 			created     int64
 			sensitivity string
 			jdCatID     int64
-			corrID      int64
 		)
-		if err := rows.Scan(&id, &title, &blobSHA, &mime, &created, &sensitivity, &jdCatID, &corrID); err != nil {
+		if err := rows.Scan(&id, &title, &blobSHA, &mime, &created, &sensitivity, &jdCatID); err != nil {
 			return written, skipped, err
 		}
 
@@ -546,10 +544,12 @@ func loadDocTags(ctx context.Context, d *db.DB, docID int64) ([]string, error) {
 
 func loadDocCorrespondents(ctx context.Context, d *db.DB, docID int64) ([]exportCorrRole, error) {
 	rows, err := d.Read.QueryContext(ctx, `
-		SELECT c.name, COALESCE(dc.role, 'sender')
+		SELECT c.name, dc.role
 		  FROM document_correspondents dc
 		  JOIN correspondents c ON c.id = dc.correspondent_id
-		 WHERE dc.document_id = ?`, docID)
+		 WHERE dc.document_id = ?
+		 ORDER BY CASE dc.role WHEN 'sender' THEN 0 WHEN 'recipient' THEN 1 WHEN 'cc' THEN 2 ELSE 3 END,
+		          dc.position, dc.correspondent_id`, docID)
 	if err != nil {
 		return nil, err
 	}

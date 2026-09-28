@@ -123,6 +123,9 @@ func TestBeta2ApprovalRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := d.ExecWrite(t.Context(), `UPDATE jobs SET updated_at=9999999999`); err != nil {
+				t.Fatal(err)
+			}
 			if err := db.Migrate(t.Context(), d, migs, log); err != nil {
 				t.Fatal(err)
 			}

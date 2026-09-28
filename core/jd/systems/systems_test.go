@@ -187,7 +187,6 @@ func TestNamespaceIntegrityAndStableCodes(t *testing.T) {
 		`UPDATE jd_categories SET system=0 WHERE id=1`,
 		`UPDATE documents SET system_id=2 WHERE id=147`,
 		`UPDATE documents SET jd_category_id=2 WHERE id=147`,
-		`UPDATE documents SET correspondent_id=2 WHERE id=147`,
 		`UPDATE documents SET document_type_id=2 WHERE id=147`,
 		`UPDATE documents SET storage_path_id=2 WHERE id=147`,
 		`UPDATE documents SET previous_version_id=148 WHERE id=147`,
@@ -209,10 +208,11 @@ func TestNamespaceIntegrityAndStableCodes(t *testing.T) {
 			t.Errorf("accepted invalid namespace operation: %s", query)
 		}
 	}
-	// Nullable reference deletion must not attempt to null immutable ownership.
-	exec(t, d, `UPDATE documents SET correspondent_id=1,document_type_id=1,storage_path_id=1 WHERE id=147;
+	// Deleting nullable metadata removes the relation without changing ownership.
+	exec(t, d, `UPDATE documents SET document_type_id=1,storage_path_id=1 WHERE id=147;
 		DELETE FROM correspondents WHERE id=1;
 		DELETE FROM document_types WHERE id=1;
 		DELETE FROM storage_paths WHERE id=1;`)
-	count(t, d, `SELECT count(*) FROM documents WHERE id=147 AND system_id=1 AND correspondent_id IS NULL AND document_type_id IS NULL AND storage_path_id IS NULL`, 1)
+	count(t, d, `SELECT count(*) FROM documents WHERE id=147 AND system_id=1 AND document_type_id IS NULL AND storage_path_id IS NULL`, 1)
+	count(t, d, `SELECT count(*) FROM document_correspondents WHERE document_id=147`, 0)
 }

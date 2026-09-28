@@ -23,7 +23,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
-	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	pluginapi "github.com/johnnybravo-xyz/suchi/plugin-api"
 )
 
@@ -41,7 +41,7 @@ var (
 	errInvalidTransaction = errors.New("oidc: invalid authorization transaction")
 	errSyncSession        = errors.New("oidc: synchronization session is not active")
 	errSyncModeDisabled   = errors.New("oidc: email synchronization is disabled")
-	errFSOwnerPinned      = errors.New("oidc: watched-folder owner is pinned")
+	errDevSeededAccount   = errors.New("oidc: development account identity is immutable")
 )
 
 type authorizationTransaction struct {
@@ -57,10 +57,9 @@ type authorizationTransaction struct {
 }
 
 type emailSyncResult struct {
-	notice       string
-	record       *audit.Record
-	cookie       *http.Cookie
-	emailChanged bool
+	notice string
+	record *audit.Record
+	cookie *http.Cookie
 }
 
 func newTransactionKey() ([32]byte, error) {
@@ -293,8 +292,8 @@ func (p *Plugin) completeEmailSync(
 		switch {
 		case errors.Is(err, errSyncSession), errors.Is(err, errUserDisabled):
 			http.Error(w, "browser session is no longer active", http.StatusUnauthorized)
-		case errors.Is(err, errFSOwnerPinned):
-			http.Error(w, "watched-folder owner is pinned by server configuration", http.StatusConflict)
+		case errors.Is(err, errDevSeededAccount):
+			http.Error(w, "development account identity cannot be changed", http.StatusConflict)
 		case errors.Is(err, errSyncModeDisabled):
 			http.Error(w, "email synchronization is disabled", http.StatusConflict)
 		case errors.Is(err, errIdentityConflict):
@@ -309,11 +308,6 @@ func (p *Plugin) completeEmailSync(
 	}
 	if result.cookie != nil {
 		http.SetCookie(w, result.cookie)
-	}
-	if result.emailChanged && p.cfg.FSWatchReloader != nil {
-		if err := p.cfg.FSWatchReloader(r.Context()); err != nil {
-			p.log.Warn("oidc.email_change.fswatch_reload_failed", "err", err.Error())
-		}
 	}
 	http.Redirect(w, r, result.notice, http.StatusFound)
 }
@@ -332,19 +326,24 @@ func (p *Plugin) synchronizeIdentity(
 			currentEmail, role, display string
 			issuer, subject             sql.NullString
 			sessionExpiry               int64
+			devSeeded                   bool
 		)
 		err := tx.QueryRowContext(ctx, `
-			SELECT u.email, u.role, u.display_name, u.oidc_issuer, u.oidc_subject, s.expires_at
+			SELECT u.email, u.role, u.display_name, u.oidc_issuer, u.oidc_subject,
+			       s.expires_at, u.dev_seeded
 			FROM users u JOIN sessions s ON s.user_id = u.id
 			WHERE u.id = ? AND u.disabled = 0 AND s.id = ? AND s.expires_at > ?
 		`, transaction.UserID, transaction.SessionID, time.Now().Unix()).Scan(
-			&currentEmail, &role, &display, &issuer, &subject, &sessionExpiry,
+			&currentEmail, &role, &display, &issuer, &subject, &sessionExpiry, &devSeeded,
 		)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errSyncSession
 		}
 		if err != nil {
 			return err
+		}
+		if devSeeded {
+			return errDevSeededAccount
 		}
 		actor := &pluginapi.Principal{
 			Kind: "user", UserID: transaction.UserID, Email: currentEmail,
@@ -364,13 +363,9 @@ func (p *Plugin) synchronizeIdentity(
 			if currentEmail == claims.Email {
 				return nil
 			}
-			if p.cfg.EmailChangeAllowed != nil &&
-				!p.cfg.EmailChangeAllowed(currentEmail, claims.Email) {
-				return errFSOwnerPinned
-			}
 			update, err := tx.ExecContext(ctx, `
 				UPDATE users SET email = ?, updated_at = ?
-				WHERE id = ? AND disabled = 0 AND email = ?
+				WHERE id = ? AND disabled = 0 AND dev_seeded = 0 AND email = ?
 				  AND oidc_issuer = ? AND oidc_subject = ?
 			`, claims.Email, now, transaction.UserID, currentEmail, claims.Issuer, claims.Subject)
 			if isIdentityUniqueViolation(err) {
@@ -386,8 +381,7 @@ func (p *Plugin) synchronizeIdentity(
 			if rows != 1 {
 				return errIdentityConflict
 			}
-			if _, err := settings.ReplaceStringInTx(ctx, tx, settings.KeyFSWatchOwnerEmail,
-				currentEmail, claims.Email, now); err != nil {
+			if err := view.EnqueueOwnerTemplateMoves(ctx, tx, transaction.UserID); err != nil {
 				return err
 			}
 			revoked, err := prepared.Rotate(ctx, tx, transaction.UserID)
@@ -403,7 +397,6 @@ func (p *Plugin) synchronizeIdentity(
 			result.notice = accountNoticeChanged
 			result.record = &auditRecord
 			result.cookie = preparedCookie
-			result.emailChanged = true
 			return nil
 
 		case !issuer.Valid && !subject.Valid:

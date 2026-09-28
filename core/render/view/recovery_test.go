@@ -363,8 +363,8 @@ func TestTwoSystemsResolveIdenticalFilingCodesUsingTheirOwnMode(t *testing.T) {
  INSERT INTO jd_areas(system_id,code_start,code_end,name,position) VALUES(2,10,19,'Other records',0);
  INSERT INTO jd_categories(system_id,id,area_start,code,name,system) VALUES(2,2,10,13,'Tax',0);
  INSERT INTO correspondents(system_id,id,name,slug,created_at,updated_at) VALUES(1,1,'Same client','same-client',0,0),(2,2,'Same client','same-client',0,0);
- UPDATE documents SET correspondent_id=1 WHERE id=147;
- INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,jd_category_id,correspondent_id,created_at,updated_at) SELECT 2,148,owner_id,original_blob,original_size,title,2,2,created_at,updated_at FROM documents WHERE id=147;`)
+ INSERT INTO documents(system_id,id,owner_id,original_blob,original_size,title,jd_category_id,created_at,updated_at) SELECT 2,148,owner_id,original_blob,original_size,title,2,created_at,updated_at FROM documents WHERE id=147;
+ INSERT INTO document_correspondents(document_id,correspondent_id,role) VALUES(147,1,'sender'),(148,2,'sender');`)
 	if err != nil {
 		t.Fatal(err)
 	}

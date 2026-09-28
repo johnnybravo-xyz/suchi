@@ -112,8 +112,7 @@ func newTestOIDC(t *testing.T) (*Plugin, *localauth.Plugin, func(map[string]any)
 		PrepareSession: func(r *http.Request) (PreparedSession, error) {
 			return local.PrepareSession(r)
 		},
-		EmailSyncAllowed:   func(*pluginapi.Principal) bool { return true },
-		EmailChangeAllowed: func(_, _ string) bool { return true },
+		EmailSyncAllowed: func(*pluginapi.Principal) bool { return true },
 	}, database, log)
 	if err != nil {
 		t.Fatal(err)
@@ -639,13 +638,25 @@ func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, "owner@example.test"); err != nil {
+	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerID, int64(1)); err != nil {
 		t.Fatal(err)
 	}
-	reloads := 0
-	p.cfg.FSWatchReloader = func(context.Context) error {
-		reloads++
-		return errors.New("reload warning")
+	if _, err := p.db.ExecWrite(t.Context(), `
+		INSERT INTO jd_areas(system_id,code_start,code_end,name,position)
+		VALUES(1,90,99,'Email test',1);
+		INSERT INTO jd_categories(system_id,id,area_start,code,name,system)
+		VALUES(1,901,90,99,'Email test',0);
+		INSERT INTO storage_paths(id,name,slug,path,created_at,updated_at,system_id) VALUES
+			(10,'Owner path','owner-path','{{ owner }}/{{ title }}',1,1,1),
+			(11,'Different variable','different-variable','{{ owner_name }}/{{ title }}',1,1,1);
+		INSERT INTO documents(
+			id,owner_id,original_blob,original_size,title,jd_category_id,
+			storage_path_id,created_at,updated_at,system_id
+		) VALUES
+			(201,1,'oidc-owner-201',1,'Exact',901,10,1,1,1),
+			(202,1,'oidc-owner-202',1,'Different',901,11,1,1,1)
+	`); err != nil {
+		t.Fatal(err)
 	}
 
 	flow := startOIDCEmailSync(t, p, principal)
@@ -658,8 +669,8 @@ func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing
 			response.Code, response.Header().Get("Location"), response.Header(), response.Body.String())
 	}
 	replacement := responseCookie(response, localauth.CookieName)
-	if replacement == nil || reloads != 1 {
-		t.Fatalf("replacement=%v reloads=%d", replacement, reloads)
+	if replacement == nil {
+		t.Fatal("email change did not issue a replacement session")
 	}
 	authRequest := httptest.NewRequest(http.MethodGet, "/", nil)
 	authRequest.AddCookie(replacement)
@@ -668,11 +679,12 @@ func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing
 		t.Fatalf("replacement principal=%+v err=%v", replacementPrincipal, err)
 	}
 
-	var email, owner string
+	var email string
+	var ownerID int64
 	if err := p.db.Read.QueryRow(`SELECT email FROM users WHERE id=1`).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerID, &ownerID); err != nil {
 		t.Fatal(err)
 	}
 	var sessions, tokens int
@@ -682,9 +694,19 @@ func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing
 	if err := p.db.Read.QueryRow(`SELECT count(*) FROM api_tokens WHERE user_id=1`).Scan(&tokens); err != nil {
 		t.Fatal(err)
 	}
-	if email != "changed@example.test" || owner != email || sessions != 1 || tokens != 1 || apiToken == "" {
-		t.Fatalf("email=%q owner=%q sessions=%d tokens=%d api_token_empty=%v",
-			email, owner, sessions, tokens, apiToken == "")
+	if email != "changed@example.test" || ownerID != 1 || sessions != 1 || tokens != 1 || apiToken == "" {
+		t.Fatalf("email=%q owner_id=%d sessions=%d tokens=%d api_token_empty=%v",
+			email, ownerID, sessions, tokens, apiToken == "")
+	}
+	var renderJobs string
+	if err := p.db.Read.QueryRow(`
+		SELECT group_concat(doc_id, ',')
+		FROM (SELECT doc_id FROM jobs WHERE kind='render' ORDER BY doc_id)`,
+	).Scan(&renderJobs); err != nil {
+		t.Fatal(err)
+	}
+	if renderJobs != "201" {
+		t.Fatalf("owner-template rerender jobs=%q, want exact placeholder only", renderJobs)
 	}
 	for _, oldCookie := range []*http.Cookie{firstCookie, secondCookie} {
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -712,18 +734,13 @@ func TestOIDCEmailSyncChangesEmailAtomicallyAndRotatesBrowserSessions(t *testing
 func TestOIDCEmailSyncLeavesUnchangedIdentityAndSessionAlone(t *testing.T) {
 	p, local, sign := newTestOIDC(t)
 	_, principal := issueOIDCTestSession(t, local, 1)
-	reloads := 0
-	p.cfg.FSWatchReloader = func(context.Context) error {
-		reloads++
-		return nil
-	}
 	flow := startOIDCEmailSync(t, p, principal)
 	response := completeOIDCTestClaims(t, p, flow, sign, nil)
 	if response.Code != http.StatusFound || response.Header().Get("Location") != accountNoticeChecked {
 		t.Fatalf("status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
 	}
-	if responseCookie(response, localauth.CookieName) != nil || reloads != 0 {
-		t.Fatalf("unchanged identity rotated session or reloaded watcher: headers=%v reloads=%d", response.Header(), reloads)
+	if responseCookie(response, localauth.CookieName) != nil {
+		t.Fatalf("unchanged identity rotated session: headers=%v", response.Header())
 	}
 	var sessions, identityEvents int
 	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, principal.SessionID).Scan(&sessions); err != nil {
@@ -771,7 +788,7 @@ func TestOIDCEmailSyncBindsEligibleUnboundCurrentUser(t *testing.T) {
 	}
 }
 
-func TestOIDCEmailSyncRejectsConflictsPinnedOwnerAndStaleSession(t *testing.T) {
+func TestOIDCEmailSyncRejectsConflictsSeededAccountAndStaleSession(t *testing.T) {
 	t.Run("different bound subject", func(t *testing.T) {
 		p, local, sign := newTestOIDC(t)
 		_, principal := issueOIDCTestSession(t, local, 1)
@@ -821,15 +838,18 @@ func TestOIDCEmailSyncRejectsConflictsPinnedOwnerAndStaleSession(t *testing.T) {
 		}
 	})
 
-	t.Run("pinned watched-folder owner", func(t *testing.T) {
+	t.Run("seeded development account", func(t *testing.T) {
 		p, local, sign := newTestOIDC(t)
-		p.cfg.EmailChangeAllowed = func(_, _ string) bool { return false }
+		if _, err := p.db.Write.Exec(`UPDATE users SET dev_seeded=1 WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
 		_, principal := issueOIDCTestSession(t, local, 1)
 		flow := startOIDCEmailSync(t, p, principal)
 		response := completeOIDCTestClaims(t, p, flow, sign, map[string]any{
 			"email": "changed@example.test",
 		})
-		if response.Code != http.StatusConflict {
+		if response.Code != http.StatusConflict ||
+			!strings.Contains(response.Body.String(), "development account identity cannot be changed") {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
 	})
@@ -881,7 +901,7 @@ func TestOIDCEmailSyncRejectsConflictsPinnedOwnerAndStaleSession(t *testing.T) {
 func TestOIDCEmailSyncRollsBackWhenRequiredAuditFails(t *testing.T) {
 	p, local, sign := newTestOIDC(t)
 	_, principal := issueOIDCTestSession(t, local, 1)
-	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, "owner@example.test"); err != nil {
+	if err := settings.Set(t.Context(), p.db, settings.KeyFSWatchOwnerID, int64(1)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.db.Write.Exec(`
@@ -900,19 +920,20 @@ func TestOIDCEmailSyncRollsBackWhenRequiredAuditFails(t *testing.T) {
 		responseCookie(response, localauth.CookieName) != nil {
 		t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
 	}
-	var email, owner string
+	var email string
+	var ownerID int64
 	if err := p.db.Read.QueryRow(`SELECT email FROM users WHERE id=1`).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerEmail, &owner); err != nil {
+	if err := settings.Get(t.Context(), p.db, settings.KeyFSWatchOwnerID, &ownerID); err != nil {
 		t.Fatal(err)
 	}
 	var sessions int
 	if err := p.db.Read.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, principal.SessionID).Scan(&sessions); err != nil {
 		t.Fatal(err)
 	}
-	if email != "owner@example.test" || owner != email || sessions != 1 {
-		t.Fatalf("rollback email=%q owner=%q sessions=%d", email, owner, sessions)
+	if email != "owner@example.test" || ownerID != 1 || sessions != 1 {
+		t.Fatalf("rollback email=%q owner_id=%d sessions=%d", email, ownerID, sessions)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"github.com/johnnybravo-xyz/suchi/core/auth"
 	"github.com/johnnybravo-xyz/suchi/core/httpx"
 	"github.com/johnnybravo-xyz/suchi/core/logx"
-	"github.com/johnnybravo-xyz/suchi/core/settings"
+	"github.com/johnnybravo-xyz/suchi/core/render/view"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +21,7 @@ var (
 	errEmailModeDisabled    = errors.New("email change mode is disabled")
 	errEmailModeOIDC        = errors.New("email is managed by OIDC")
 	errEmailTaken           = errors.New("email is already in use")
+	errEmailDevSeeded       = errors.New("development account identity is immutable")
 )
 
 // PostSelfEmail serves POST /api/users/me/email. The credential check happens
@@ -41,18 +42,25 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var currentEmail, passwordHash, currentRole string
+	var (
+		currentEmail, passwordHash, currentRole string
+		devSeeded                               bool
+	)
 	err := s.DB.Read.QueryRowContext(r.Context(), `
-		SELECT email, COALESCE(password_hash, ''), role
+		SELECT email, COALESCE(password_hash, ''), role, dev_seeded
 		FROM users
 		WHERE id = ? AND disabled = 0
-	`, p.UserID).Scan(&currentEmail, &passwordHash, &currentRole)
+	`, p.UserID).Scan(&currentEmail, &passwordHash, &currentRole, &devSeeded)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.writeError(w, http.StatusUnauthorized, "session_required", "a current browser session is required")
 		return
 	}
 	if err != nil {
 		s.serverErr(w, "users.email.snapshot", err)
+		return
+	}
+	if devSeeded {
+		s.writeError(w, http.StatusConflict, "dev_seeded_account", "development account identity cannot be changed")
 		return
 	}
 	actor := *p
@@ -75,9 +83,9 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	targetEmail := strings.ToLower(strings.TrimSpace(body.Email))
-	if !emailPattern.MatchString(targetEmail) {
-		s.writeError(w, http.StatusBadRequest, "bad_email", "email is invalid")
+	targetEmail, err := auth.NormalizeEmail(body.Email)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_email", "email is invalid or reserved")
 		return
 	}
 	if targetEmail == currentEmail {
@@ -86,10 +94,6 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	if passwordHash == "" {
 		s.writeError(w, http.StatusConflict, "password_hash_unavailable", "account does not have a local password")
-		return
-	}
-	if s.EmailChangeAllowed != nil && !s.EmailChangeAllowed(currentEmail, targetEmail) {
-		s.writeError(w, http.StatusConflict, "fs_watch_owner_pinned", "the watched-folder owner is pinned by server configuration")
 		return
 	}
 	if s.PasswordVerifier == nil {
@@ -127,12 +131,15 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		revoked int64
 	)
 	err = s.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		var liveEmail, liveHash, liveRole string
+		var (
+			liveEmail, liveHash, liveRole string
+			liveDevSeeded                 bool
+		)
 		if err := tx.QueryRowContext(r.Context(), `
-			SELECT email, COALESCE(password_hash, ''), role
+			SELECT email, COALESCE(password_hash, ''), role, dev_seeded
 			FROM users
 			WHERE id = ? AND disabled = 0
-		`, p.UserID).Scan(&liveEmail, &liveHash, &liveRole); err != nil {
+		`, p.UserID).Scan(&liveEmail, &liveHash, &liveRole, &liveDevSeeded); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return errEmailSessionRequired
 			}
@@ -140,6 +147,9 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		}
 		if liveEmail != currentEmail || liveHash != passwordHash {
 			return errEmailReauthenticate
+		}
+		if liveDevSeeded {
+			return errEmailDevSeeded
 		}
 		liveActor := actor
 		liveActor.Email, liveActor.Role = liveEmail, liveRole
@@ -180,8 +190,7 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 		if rows != 1 {
 			return errEmailReauthenticate
 		}
-		if _, err := settings.ReplaceStringInTx(r.Context(), tx, settings.KeyFSWatchOwnerEmail,
-			currentEmail, targetEmail, changedAt); err != nil {
+		if err := view.EnqueueOwnerTemplateMoves(r.Context(), tx, p.UserID); err != nil {
 			return err
 		}
 		revoked, err = prepared.Rotate(r.Context(), tx, p.UserID)
@@ -206,6 +215,8 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, "oidc_managed", "email is managed by your identity provider")
 		case errors.Is(err, errEmailModeDisabled):
 			s.writeError(w, http.StatusConflict, "email_change_disabled", "email changes are disabled for this account")
+		case errors.Is(err, errEmailDevSeeded):
+			s.writeError(w, http.StatusConflict, "dev_seeded_account", "development account identity cannot be changed")
 		default:
 			s.serverErr(w, "users.email.write", err)
 		}
@@ -214,10 +225,5 @@ func (s *Server) PostSelfEmail(w http.ResponseWriter, r *http.Request) {
 
 	record.Emit(r.Context(), s.Log)
 	http.SetCookie(w, cookie)
-	if s.FSWatchReloader != nil {
-		if err := s.FSWatchReloader(r.Context()); err != nil && s.Log != nil {
-			s.Log.Warn("api.users.email.fswatch_reload_failed", "err", err.Error())
-		}
-	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -24,7 +25,7 @@ const (
 
 	stableLineage                   = "stable-v1"
 	finalBetaLineage                = "final-beta-schema-3"
-	stableFingerprint               = "cb74332fa9ea8b6b2496440a3ddb5fe5ef5592287bc4cfbd26e7c25fcb9abee5"
+	stableFingerprint               = "9d2a6320eae1582b0f294caa6ed518b5a73ab3dbe6597c9ca1a36cc563e03240"
 	preIdentityStableFingerprint    = "5d6ac98308eb644b030092178792a46f36e6f8f5041411f020ed2dcf216f46c2"
 	betaOneFingerprint              = "68089660de648a4fcc136bcefc105edc5d29dc4de59dad482124914ea626fb2b"
 	betaTwoFingerprint              = "a341b731c93a7270e3440a18f58911df80b2289bf44cd3baeecff4a2b2b0071c"
@@ -218,6 +219,11 @@ func verifyStableSchema(ctx context.Context, q schemaQueryer) error {
 }
 
 func schemaFingerprint(ctx context.Context, q schemaQueryer) (string, int, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(coreAfterExtensionObjects)), ",")
+	args := make([]any, 0, len(coreAfterExtensionObjects))
+	for _, name := range coreAfterExtensionObjects {
+		args = append(args, name)
+	}
 	rows, err := q.QueryContext(ctx, `
 		SELECT type, name, tbl_name, COALESCE(sql, '')
 		FROM sqlite_schema
@@ -227,33 +233,9 @@ func schemaFingerprint(ctx context.Context, q schemaQueryer) (string, int, error
 			OR rowid < (SELECT rowid FROM sqlite_schema WHERE name='_suchi_extension_migrations')
 			-- Stable adoption rebuilds these core objects after the extension
 			-- boundary. Keep them in the core manifest wherever their rowids land.
-			OR name IN (
-				'audit_actor',
-				'audit_events',
-				'audit_events_system_immutable',
-				'audit_events_system_replace',
-				'audit_object',
-				'audit_system',
-				'audit_ts',
-				'automation_actions',
-				'automation_triggers_filter_tag_id_insert',
-				'automation_triggers_filter_tag_id_update',
-				'document_tags_reference_insert',
-				'document_tags_reference_update',
-				'idx_automation_actions_aid',
-				'tags',
-				'tags_parent',
-				'tags_parent_insert',
-				'tags_parent_update',
-				'tags_system_immutable',
-				'tags_system_replace',
-				'users',
-				'users_default_system_demotion',
-				'users_default_system_insert',
-				'users_oidc_identity'
-			)
+			OR name IN (`+placeholders+`)
 		  )
-		ORDER BY type, name, tbl_name, COALESCE(sql, '')`)
+		ORDER BY type, name, tbl_name, COALESCE(sql, '')`, args...)
 	if err != nil {
 		return "", 0, err
 	}

@@ -592,10 +592,9 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 	if _, err := d.Write.ExecContext(ctx, `
 		INSERT INTO correspondents(system_id, id, name, slug, created_at, updated_at)
 		VALUES (1, 1, 'Header Sender', 'header-sender', 0, 0);
-		UPDATE documents SET correspondent_id = 1 WHERE id = ?;
 		INSERT INTO document_correspondents(document_id, correspondent_id, role)
 		VALUES (?, 1, 'sender');
-	`, docID, docID); err != nil {
+	`, docID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -614,9 +613,12 @@ func TestHandlerDoesNotAddCompetingCorrespondent(t *testing.T) {
 
 	var primary string
 	if err := d.Read.QueryRowContext(ctx, `
-		SELECT c.name FROM documents d
-		JOIN correspondents c ON c.id = d.correspondent_id
-		WHERE d.id = ?
+		SELECT c.name
+		FROM document_correspondents dc
+		JOIN correspondents c ON c.id=dc.correspondent_id
+		WHERE dc.document_id=? AND dc.role='sender'
+		ORDER BY dc.position,dc.correspondent_id
+		LIMIT 1
 	`, docID).Scan(&primary); err != nil {
 		t.Fatal(err)
 	}
@@ -663,8 +665,12 @@ func TestHandlerPreservesJunctionOnlySenderWithoutModelMutation(t *testing.T) {
 	}
 
 	var primaryID, attached, correspondents int64
-	if err := d.Read.QueryRowContext(ctx,
-		`SELECT COALESCE(correspondent_id, 0) FROM documents WHERE id = ?`, docID,
+	if err := d.Read.QueryRowContext(ctx, `
+		SELECT COALESCE((
+			SELECT correspondent_id FROM document_correspondents
+			WHERE document_id=documents.id AND role='sender'
+			ORDER BY position,correspondent_id LIMIT 1
+		),0) FROM documents WHERE id = ?`, docID,
 	).Scan(&primaryID); err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +690,7 @@ func TestHandlerPreservesJunctionOnlySenderWithoutModelMutation(t *testing.T) {
 	).Scan(&canonicalUpdated); err != nil {
 		t.Fatal(err)
 	}
-	if primaryID != 0 || attached != 1 || correspondents != 1 || canonicalUpdated != 0 {
+	if primaryID != 1 || attached != 1 || correspondents != 1 || canonicalUpdated != 0 {
 		t.Fatalf("primary=%d attached=%d correspondents=%d canonical updated_at=%d",
 			primaryID, attached, correspondents, canonicalUpdated)
 	}

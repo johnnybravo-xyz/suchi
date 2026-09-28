@@ -156,10 +156,11 @@ it after errors or panics, including when callers recover.
 Keep network calls, subprocesses and long processing outside write transactions.
 Enqueue required work with the state change, never as a later best-effort write.
 Ordinary audit persistence/delivery remains best-effort and is not the
-transactional job outbox. Identity binding and account-email changes are the
-narrow exception: `core/audit.RecordInTx` is required inside their state
-transaction, so an insertion failure rolls back identity, watched-owner, and
-session changes. Sink fan-out still happens only after commit and cannot undo it.
+transactional job outbox. Identity binding, account-email changes and capability
+transitions are narrow exceptions: `core/audit.RecordInTx` is required inside
+their state transaction. An insertion failure rolls back the identity or
+capability change, dependent resource revocations, queued render work and session
+rotation. Sink fan-out still happens only after commit and cannot undo it.
 
 `core/jd/systems` is the leaf owner of identity, membership, target resolution and
 address syntax. System 1 stays hidden until first prefixed import atomically names
@@ -295,9 +296,13 @@ required release test matrix.
 Every admitted pre-stable archive passes integrity and foreign-key checks and
 gets an exclusive mode-0600 SQLite snapshot before adoption. Remaining
 compatibility steps, stable lineage and stable version commit in one immediate
-transaction through the sole writer. `0005` rebuilds `users` and `audit_events`
-to add provider identity and retained-event metadata while copying primary keys
-and every dependent reference unchanged. The final integrity, foreign keys and
+transaction through the sole writer. `0005` rebuilds `users`, `documents` and
+`audit_events`; adds provider identity, a durable development-account marker and
+retained-event metadata; moves the singular correspondent into the role-bearing
+junction; and preserves primary keys, revision values and dependent references.
+It also resolves the watched-folder owner email setting to a numeric user ID,
+drops the empty obsolete `plugin_kv` table and redundant ACL index, and removes
+successful jobs older than seven days. The final integrity, foreign keys and
 canonical schema fingerprint must match a fresh stable database; failures roll
 back while retaining the snapshot and restoring foreign-key enforcement.
 Extension objects created after `_suchi_extension_migrations` are outside the
@@ -318,6 +323,14 @@ as the record. `RebuildTables` uses the same foreign-key restoration/checking
 boundary as core migrations. Extension SQL is trusted compiled code and must not
 control transactions, core `user_version`, or the reserved `_suchi_` namespace.
 Core migrations and published SQL retain their existing versioning and behavior.
+
+Extension tables remain owned by the component that declared them; core provides
+no generic plugin key/value table. Before a compatibility migration rebuilds a
+core table, adoption temporarily removes extension-created indexes and triggers
+from after the extension-ledger boundary, then replays their exact DDL. A
+dependency on a retired object such as `plugin_kv`, or an incompatible object
+recreated by core, aborts the migration atomically instead of silently discarding
+extension state.
 
 Device OCR provenance, split origins, idempotency, pairing/token provenance precede
 taxonomy rebuilds. Existing credential hashes remain; unknown pairing provenance
@@ -366,11 +379,12 @@ These gates remain distinct:
   Updates read current role/capabilities there, reject self-disable/last-admin loss,
   store no hidden member grants on admins and derive revocations from effective
   access. Promotion must not quarantine still-authorized resources, nor demotion
-  revive hidden grants. Local mailbox/share/view revocations and capability audit
-  writes share the transaction; cascade failure rolls back the transition.
-  `core/audit.RecordInTx` captures outcomes without logging/fan-out; `Record.Emit`
-  logs failures or delivers committed events afterward. Persisted rows retain writer
-  order; post-commit sink delivery can interleave.
+  revive hidden grants. Local mailbox/share/view revocations and required
+  capability audit writes share the transaction; either cascade or audit failure
+  rolls back the transition. `core/audit.RecordInTx` captures outcomes without
+  logging/fan-out; `Record.Emit` logs failures or delivers committed events
+  afterward. Persisted rows retain writer order; post-commit sink delivery can
+  interleave.
   Disable/membership OAuth invalidation occurs only after successful commit, with
   the flow-store mutex spanning commit/invalidation in writer-to-flow lock order.
   Rollback preserves flows; re-enable/readmission/start cannot overtake invalidation.
@@ -381,11 +395,13 @@ These gates remain distinct:
   session preparation, and OIDC network exchange happen before the writer.
   Inside one write transaction the handler rechecks the canonical user, mode,
   initiating session, and local password hash or OIDC binding; updates the same
-  user ID and matching database-managed watched-owner setting; rotates browser
-  sessions when identity changed; and writes the retained audit event. A
-  no-change OIDC check performs no rotation or false audit write. The replacement
-  cookie, audit sinks, and watched-folder reload happen after commit. API/mobile
-  tokens are intentionally not rotated.
+  user ID; queues rerenders for that user's custom storage paths that use the
+  exact `owner` template variable; rotates browser sessions when identity
+  changed; and writes the retained audit event. Watched-folder ownership is a
+  numeric user ID, so an email change neither rewrites its setting nor reloads
+  the watcher. A no-change OIDC check performs no rotation or false audit write.
+  The replacement cookie and audit sinks run after commit. API/mobile tokens are
+  intentionally not rotated.
 - **Objects:** `core/authz` checks existence, explicit/token system boundary,
   active-user system entry, then owner/admin/direct/group permission. Admins bypass
   membership/ACL only. Lists/counts/search/similarity filter system and visibility
@@ -609,6 +625,12 @@ cancellation-aware and keep payload contracts with their owner. Register before
 enable targeted rescans. Separately committed proposal thresholds decide which
 older successful results merit an automatic **Processing update** reminder;
 approval still enqueues the current processing implementation.
+
+Successful jobs are hidden from the default task list and counts but remain
+available through an explicit `state=done` query for seven days. The dispatcher
+prunes older successful rows at startup and once per day in its existing loop;
+this adds no cleanup goroutine, setting or schema. Pending, running, retry and
+dead work is never removed by this retention pass.
 
 Document/namespace jobs and audit retain system ownership even after a document
 disappears; instance-wide work uses NULL. Documentless `taxonomy_index` carries

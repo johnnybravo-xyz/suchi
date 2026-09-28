@@ -104,10 +104,14 @@ func (p *Plugin) SetupFormHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the created user id + a friendly error suitable for either
 // JSON or a query-string redirect.
 func (p *Plugin) applySetup(ctx context.Context, req SetupRequest) (int64, error) {
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	if req.Token == "" || req.Email == "" || req.Password == "" {
+	if req.Token == "" || strings.TrimSpace(req.Email) == "" || req.Password == "" {
 		return 0, errSetupMissing
 	}
+	normalizedEmail, err := auth.NormalizeEmail(req.Email)
+	if err != nil {
+		return 0, errSetupInvalidEmail
+	}
+	req.Email = normalizedEmail
 	if len(req.Password) < MinPasswordLen {
 		return 0, errSetupWeakPassword
 	}
@@ -175,10 +179,11 @@ var (
 	errSetupWeakPassword = &setupErr{
 		msg: "password must be at least 8 characters", code: http.StatusBadRequest,
 	}
-	errSetupMint     = &setupErr{msg: "token generation failed", code: http.StatusInternalServerError}
-	errSetupHashBusy = &setupErr{msg: "password hashing temporarily busy", code: http.StatusServiceUnavailable}
-	errSetupHash     = &setupErr{msg: "password hashing failed", code: http.StatusInternalServerError}
-	errSetupInsert   = &setupErr{msg: "account creation failed", code: http.StatusInternalServerError}
+	errSetupInvalidEmail = &setupErr{msg: "email address is invalid or reserved", code: http.StatusBadRequest}
+	errSetupMint         = &setupErr{msg: "token generation failed", code: http.StatusInternalServerError}
+	errSetupHashBusy     = &setupErr{msg: "password hashing temporarily busy", code: http.StatusServiceUnavailable}
+	errSetupHash         = &setupErr{msg: "password hashing failed", code: http.StatusInternalServerError}
+	errSetupInsert       = &setupErr{msg: "account creation failed", code: http.StatusInternalServerError}
 )
 
 type setupErr struct {

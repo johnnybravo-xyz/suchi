@@ -63,6 +63,13 @@ func options(t *testing.T) app.Options {
 
 func startApp(t *testing.T, opts app.Options) runningApp {
 	t.Helper()
+	a := startAppWithoutLogin(t, opts)
+	a.request(t, "POST", "/api/login", `{"email":"dev@suchi.local","password":"devdevdev"}`, 204)
+	return a
+}
+
+func startAppWithoutLogin(t *testing.T, opts app.Options) runningApp {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx, opts) }()
@@ -87,7 +94,6 @@ func startApp(t *testing.T, opts app.Options) runningApp {
 		defer resp.Body.Close()
 		return resp.StatusCode == 200
 	})
-	a.request(t, "POST", "/api/login", `{"email":"dev@suchi.local","password":"devdevdev"}`, 204)
 	return a
 }
 
@@ -320,7 +326,7 @@ func TestDevelopmentIdentityEmailChangeIsDisabledAndOriginProtected(t *testing.T
 			if resp.StatusCode != tc.want {
 				t.Fatalf("status=%d want=%d body=%s", resp.StatusCode, tc.want, body)
 			}
-			if tc.want == http.StatusConflict && !strings.Contains(string(body), `"code":"email_change_disabled"`) {
+			if tc.want == http.StatusConflict && !strings.Contains(string(body), `"code":"dev_seeded_account"`) {
 				t.Fatalf("body=%s", body)
 			}
 		})

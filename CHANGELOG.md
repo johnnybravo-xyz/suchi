@@ -4,6 +4,8 @@ Notable user-visible changes to Suchi are recorded here.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-28
+
 ### Added
 
 - Add a Documents filter for files currently available through an active share
@@ -15,13 +17,37 @@ Notable user-visible changes to Suchi are recorded here.
   lanes; all four trees call their money-management lane Money and omit generic
   Banking and broad “records” catch-alls. Purpose-specific names distinguish
   Collections & aging, Briefs & plans, Approvals & sign-off, and Medical billing.
+- Add self-service sign-in email changes under **My account**: local users
+  reauthenticate with their password, while OIDC users force a provider
+  reauthentication. Changes are immediate without confirmation/recovery mail,
+  preserve the account's documents and permissions, revoke old browser sessions,
+  and rotate the current browser.
 
 ### Changed
 
 - Start the stable database epoch from one declarative schema-1 baseline.
-  Canonical fingerprints admit beta.1, beta.2, beta.3, and pre-stable schema 4;
-  each beta archive is snapshotted mode 0600 and adopted atomically, while
-  unknown or partial schemas fail before mutation.
+  Canonical fingerprints admit beta.1, beta.2, beta.3, and pre-identity schema
+  4; each beta archive is snapshotted mode 0600 and adopted atomically through
+  compatibility migration 0005. The migration preserves numeric user IDs,
+  extension DDL, correspondent revisions and all dependent references while
+  adding stable OIDC identity, a development-account marker and retained
+  security-audit metadata. It resolves watched-folder ownership to a user ID,
+  moves legacy singular correspondents into role-bearing relations, removes
+  empty obsolete schema, and prunes successful jobs older than seven days.
+  Unknown, partial, prior untagged-0005 and already-adopted old stable
+  fingerprints fail before mutation. Operators with an already-adopted
+  pre-identity archive must follow the reviewed
+  quiescent-backup/manual-0005 path. Existing unbound OIDC accounts require a
+  preserved live session for explicit provider binding.
+- Keep watched-folder ownership attached to a durable user ID across account
+  email changes. Identity changes no longer rewrite or reload watcher settings;
+  owner-based custom storage paths rerender in the identity transaction.
+- Treat all correspondent reads and writes as ordered, role-bearing relations.
+  Singular sender edits promote or clear only the sender role, while explicit
+  multi-party edits retain recipients, CCs and other relations.
+- Hide successful background jobs from default task lists and counts, retain
+  explicit completed results for seven days, and prune them in the existing
+  dispatcher loop.
 - Limit API-token last-use telemetry to one database write per token per hour.
 
 ### Fixed
@@ -66,6 +92,17 @@ Notable user-visible changes to Suchi are recorded here.
   manifest SHA-256. Guarded restore requires manifest membership, rejects
   traversal and corruption, fsyncs a temporary copy, atomically replaces the
   database, and removes stale WAL sidecars.
+- Bind OIDC accounts by verified issuer/subject instead of mutable email.
+  Browser callbacks alone can provision an unused verified email; Bearer
+  authentication is resolution-only and collisions never merge accounts.
+  Purpose-bound signed transactions use PKCE and nonce verification, identity
+  changes require a retained audit row, and all browser sessions rotate while
+  API/mobile tokens remain valid.
+- Reject reserved development/demo identities at every public account boundary,
+  durably mark development-seeded administrators, and refuse normal startup
+  while an enabled marked or legacy public-credential administrator remains.
+- Make capability audit insertion part of the user-update transaction, so an
+  audit failure rolls back the capability change and dependent revocations.
 - Publish native takeouts atomically with mode-0600 permissions, preserve
   existing destinations unless `--force` is explicit, reject outputs inside
   `DATA_DIR`, require unambiguous owner scope, and fail on missing originals
@@ -441,7 +478,8 @@ Notable user-visible changes to Suchi are recorded here.
   and saved document passwords are sealed at rest.
 - Setup, demo isolation, error responses, and capability removal fail closed.
 
-[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.3...HEAD
+[Unreleased]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.3...v0.1.0
 [0.1.0-beta.3]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.2...v0.1.0-beta.3
 [0.1.0-beta.2]: https://github.com/johnnybravo-xyz/suchi/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/johnnybravo-xyz/suchi/releases/tag/v0.1.0-beta.1
